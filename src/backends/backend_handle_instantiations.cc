@@ -17,7 +17,7 @@ BATCHLAS_FOR_EACH_SCALAR_TYPE(BACKEND_MATRIX_HANDLE_INSTANTIATE_DENSE)
 BATCHLAS_FOR_EACH_SCALAR_TYPE(BACKEND_MATRIX_HANDLE_INSTANTIATE_CSR)
 
 #define CREATE_BACKEND_HANDLE_INSTANTIATE(fp, fmt) \
-template std::shared_ptr<BackendMatrixHandle<BATCHLAS_UNPAREN fp, fmt>> createBackendHandle<BATCHLAS_UNPAREN fp, fmt>(const Matrix<BATCHLAS_UNPAREN fp, fmt>& matrix);
+template std::shared_ptr<BackendMatrixHandle<BATCHLAS_UNPAREN fp, fmt>> createBackendHandle<BATCHLAS_UNPAREN fp, fmt>(const MatrixView<BATCHLAS_UNPAREN fp, fmt>& view);
 
 #define CREATE_BACKEND_HANDLE_INSTANTIATE_DENSE(fp) \
 	CREATE_BACKEND_HANDLE_INSTANTIATE(fp, MatrixFormat::Dense)

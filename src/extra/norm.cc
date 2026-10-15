@@ -27,25 +27,25 @@ namespace batchlas
         const int batch_size = A.batch_size();
 
         Matrix<T, MatrixFormat::Dense> A_copy(A.rows(), A.cols(), A.batch_size(), A.ld(), A.stride());
-        Event copy_e = MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy.view(), A);
+        Event copy_e = MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
         ctx.enqueue(copy_e);
         if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
-            A_copy.view().hermitize(ctx, Uplo::Lower).wait();
+            A_copy.hermitize(ctx, Uplo::Lower).wait();
         } else {
-            A_copy.view().symmetrize(ctx, Uplo::Lower).wait();
+            A_copy.symmetrize(ctx, Uplo::Lower).wait();
         }
 
         UnifiedVector<Real> eigenvalues(static_cast<size_t>(batch_size) * n);
         auto eigen_span = eigenvalues.to_span();
 
         const size_t ws_bytes = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                        A_copy.view(),
+                                                                        A_copy,
                                                                         eigen_span,
                                                                         JobType::NoEigenVectors,
                                                                         Uplo::Lower);
         auto workspace = ctx.workspace(ws_bytes);
         Event e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx,
-                                             A_copy.view(),
+                                             A_copy,
                                              eigen_span,
                                              JobType::NoEigenVectors,
                                              Uplo::Lower,

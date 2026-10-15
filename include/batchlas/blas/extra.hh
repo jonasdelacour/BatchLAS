@@ -212,14 +212,9 @@ namespace batchlas
 
     /// @}
 
-    // norm/transpose are not Backend-templated, hence the _NB spelling. The
-    // random_*_with_log10_cond_metric generators are deliberately absent: their T
-    // is non-deduced, so either macro would be an overload that never applies.
-    // evidence: docs/design/api-conventions.md#api-conventions-generators-without-a-dispatch-or-owning-overload
-    BATCHLAS_ACCEPT_OWNING(cond)
-    BATCHLAS_ACCEPT_OWNING(cond_buffer_size)
-    BATCHLAS_ACCEPT_OWNING_NB(norm)
-    BATCHLAS_ACCEPT_OWNING_NB(transpose)
+    // The random_*_with_log10_cond_metric generators are deliberately absent: their T
+    // is non-deduced, so the macro would be an overload that never applies.
+    // evidence: docs/design/api-conventions.md#api-conventions-generators-without-a-dispatch-overload
 
     BATCHLAS_DISPATCH_ON_QUEUE(cond)
     BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)

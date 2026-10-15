@@ -14,12 +14,12 @@ static void BM_ORGQR(minibench::State& state) {
     auto A = Matrix<T>::Random(m, n, false, batch);
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     UnifiedVector<T> tau(m * batch);
-    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A, tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    (void)geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*q, A, tau.to_span(), ws_geqrf.to_span());
     q->wait();
 
-    size_t org_ws = orgqr_buffer_size(*q, A.view(), tau.to_span());
+    size_t org_ws = orgqr_buffer_size(*q, A, tau.to_span());
     UnifiedVector<std::byte> ws(org_ws);
 
     state.SetKernel(q,

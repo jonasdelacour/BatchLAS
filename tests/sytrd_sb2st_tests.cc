@@ -259,7 +259,7 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     Spectra eig_ref;
-    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+    ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
     // Under test: SB2ST on band storage.
     Vector<Real> d_out(n, batch);
@@ -267,9 +267,9 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     Vector<T> tau_out(std::max(0, n - 1), batch);
 
     UnifiedVector<std::byte> ws(
-        sytrd_sb2st_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
+        sytrd_sb2st_buffer_size(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
     try {
-        sytrd_sb2st(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
+        sytrd_sb2st(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
     } catch (const std::exception& ex) {
         if (std::strstr(ex.what(), "sub_group_size=32") != nullptr) {
             GTEST_SKIP() << ex.what();
@@ -315,7 +315,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     // Copy input AB to validate that band reduction does not mutate the input storage.
     Matrix<T, MatrixFormat::Dense> AB_before(kd + 1, n, batch);
@@ -328,7 +328,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     }
 
     Spectra eig_ref;
-    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+    ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
     // Under test: BANDR1-style band reduction on band storage.
     Vector<Real> d_out(n, batch);
@@ -336,9 +336,9 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     Vector<T> tau_out(std::max(0, n - 1), batch);
 
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
+        sytrd_band_reduction_buffer_size(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
 
-    sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
+    sytrd_band_reduction(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
     // BANDR1 implementation uses internal workspace; input AB should remain unchanged.
     ASSERT_TRUE(expect_lower_band_unchanged<T>(AB_before, AB, n, kd));
@@ -355,8 +355,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
     params.kd_work = 3 * kd;
 
     UnifiedVector<std::byte> ws2(
-        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, params));
-    sytrd_band_reduction(ctx, AB.view(), d_out2.view(), e_out2.view(), tau_out2.view(), Uplo::Lower, kd, ws2.to_span(), params).wait();
+        sytrd_band_reduction_buffer_size(ctx, AB, d_out2, e_out2, tau_out2, Uplo::Lower, kd, params));
+    sytrd_band_reduction(ctx, AB, d_out2, e_out2, tau_out2, Uplo::Lower, kd, ws2.to_span(), params).wait();
 
     // The LAPACKE eigenvalues of each returned tridiagonal (d,e) must be those of A0.
     auto check_spectrum = [&](Vector<Real>& d_vec, Vector<Real>& e_vec, const char* label) -> ::testing::AssertionResult {
@@ -398,17 +398,17 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {
             }
 
             Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-            fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+            fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
             Spectra eig_ref;
-            ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+            ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
             Vector<Real> d_out(n, batch);
             Vector<Real> e_out(std::max(0, n - 1), batch);
             Vector<T> tau_out(std::max(0, n - 1), batch);
             UnifiedVector<std::byte> ws(
-                sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
-            sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
+                sytrd_band_reduction_buffer_size(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
+            sytrd_band_reduction(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
 
             Spectra tri;
             ASSERT_TRUE(tridiagonal_spectra(d_out, e_out, n, batch, tri))
@@ -442,7 +442,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepBandContainment) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
@@ -453,8 +453,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepBandContainment) {
     params.d_seq = {0};
 
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB, ABw, Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB, ABw, Uplo::Lower, kd, ws.to_span(), params).wait();
 
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
@@ -493,17 +493,17 @@ TYPED_TEST(SytrdSb2stTest, BandReductionDumpEvolution64) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     using Real = typename base_type<T>::type;
     Vector<Real> d_out(n, batch);
     Vector<Real> e_out(std::max(0, n - 1), batch);
     Vector<T> tau_out(std::max(0, n - 1), batch);
     UnifiedVector<std::byte> ws(
-        sytrd_band_reduction_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, block_size));
+        sytrd_band_reduction_buffer_size(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, block_size));
 
     // Intended for debug-dump visualization; correctness is covered elsewhere.
-    sytrd_band_reduction(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), block_size).wait();
+    sytrd_band_reduction(ctx, AB, d_out, e_out, tau_out, Uplo::Lower, kd, ws.to_span(), block_size).wait();
     SUCCEED();
 }
 
@@ -532,10 +532,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     Spectra eig_ref;
-    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+    ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
     // Run exactly one BANDR1 chase step and reconstruct dense A_after.
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
@@ -546,8 +546,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     params.d_seq = {0};
 
     UnifiedVector<std::byte> ws_step(
-        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB, ABw, Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
     std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
     for (int b = 0; b < batch; ++b) {
@@ -575,7 +575,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionSingleStepSpectrumPreservation) {
     }
 
     Spectra eig_after;
-    ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
+    ASSERT_TRUE(dense_spectra(A_after, eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
     ASSERT_TRUE(spectra_match<T>(eig_after, eig_ref, n));
 }
@@ -605,10 +605,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     Spectra eig_ref;
-    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+    ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
@@ -622,8 +622,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
         params.max_steps = k;
 
         UnifiedVector<std::byte> ws_step(
-            sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
-        sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
+            sytrd_band_reduction_single_step_buffer_size(ctx, AB, ABw, Uplo::Lower, kd, params));
+        sytrd_band_reduction_single_step(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
         std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
         for (int b = 0; b < batch; ++b) {
@@ -651,7 +651,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
         }
 
         Spectra eig_after;
-        ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
+        ASSERT_TRUE(dense_spectra(A_after, eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
         int max_b = 0;
         const double err = spectra_error(eig_after, eig_ref, &max_b);
@@ -662,7 +662,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMultiStepSpectrumPreservation) {
             ScopedEnvVar dump_on("BATCHLAS_DUMP_BANDR1_STEP", "1");
             ScopedEnvVar dump_batch("BATCHLAS_DUMP_BANDR1_BATCH", std::to_string(max_b).c_str());
             ScopedEnvVar dump_dir("BATCHLAS_DUMP_BANDR1_DIR", dir.c_str());
-            sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
+            sytrd_band_reduction_single_step(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
             ADD_FAILURE() << "Spectrum not preserved after k=" << k
                           << " chase steps. error=" << err << " in batch=" << max_b
@@ -741,10 +741,10 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     }
 
     Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
-    fill_lower_band_from_dense<T>(A0.view(), AB, n, kd);
+    fill_lower_band_from_dense<T>(A0, AB, n, kd);
 
     Spectra eig_ref;
-    ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+    ASSERT_TRUE(dense_spectra(A0, eig_ref)) << "LAPACKE reference failed";
 
     Matrix<T, MatrixFormat::Dense> ABw(kd_work + 1, n, batch);
 
@@ -758,8 +758,8 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     ASSERT_GT(params.max_steps, 0) << "unexpected: sweep step count is 0";
 
     UnifiedVector<std::byte> ws_step(
-        sytrd_band_reduction_single_step_buffer_size(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, params));
-    sytrd_band_reduction_single_step(ctx, AB.view(), ABw.view(), Uplo::Lower, kd, ws_step.to_span(), params).wait();
+        sytrd_band_reduction_single_step_buffer_size(ctx, AB, ABw, Uplo::Lower, kd, params));
+    sytrd_band_reduction_single_step(ctx, AB, ABw, Uplo::Lower, kd, ws_step.to_span(), params).wait();
 
     std::vector<T> ABw_host(static_cast<size_t>(batch) * static_cast<size_t>(kd_work + 1) * static_cast<size_t>(n));
     for (int b = 0; b < batch; ++b) {
@@ -787,7 +787,7 @@ TYPED_TEST(SytrdSb2stTest, BandReductionOneSweepSpectrumPreservation) {
     }
 
     Spectra eig_after;
-    ASSERT_TRUE(dense_spectra(A_after.view(), eig_after)) << "LAPACKE spectrum of the reduced band failed";
+    ASSERT_TRUE(dense_spectra(A_after, eig_after)) << "LAPACKE spectrum of the reduced band failed";
 
     ASSERT_TRUE(spectra_match<T>(eig_after, eig_ref, n)) << "after one full sweep";
 }

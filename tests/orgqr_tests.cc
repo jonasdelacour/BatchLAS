@@ -38,16 +38,16 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
     UnifiedVector<T> tau(n);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
-    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)orgqr(*this->ctx, A, tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A.view()));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A));
 }
 
 TYPED_TEST(OrgqrTest, BatchedMatrices) {
@@ -58,16 +58,16 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
     UnifiedVector<T> tau(n * batch);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
-    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)orgqr(*this->ctx, A, tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A.view(), A.view().all_items()));
+    EXPECT_VERIFY(T, verify::Check::orthogonality, A.rows(), MV::orthogonality(*this->ctx, A, A.all_items()));
 }
 
 
@@ -122,7 +122,7 @@ TYPED_TEST(OrgqrTest, QIsOrthonormalAndReconstructsAAtEveryBatchItem) {
         UnifiedVector<T*> ptrs(static_cast<size_t>(s.batch), nullptr);
         MV V(buf.data(), s.m, s.n, ld, stride, s.batch, ptrs.data());
         const auto R = Matrix<T, MatrixFormat::Dense>::Random(s.m, s.n, false, s.batch, 4242u + 13u * unsigned(s.m) + unsigned(s.n));
-        MV::copy(*this->ctx, V, R.view()).wait();
+        MV::copy(*this->ctx, V, R).wait();
         UnifiedVector<T> A0(buf);
         UnifiedVector<T> tau(static_cast<size_t>(std::min(s.m, s.n)) * s.batch, MV::make(-12345.0, -12345.0));
 
@@ -179,7 +179,7 @@ TYPED_TEST(OrgqrTest, OutOfOrderQueueGeqrfThenOrgqrVendor) {
     UnifiedVector<T*> fptrs(batch, nullptr), qptrs(batch, nullptr);
     const MV A0v(a0.data(), m, n, ld, stride, batch), Fv(f.data(), m, n, ld, stride, batch, fptrs.data()),
         Qv(q.data(), m, n, ld, stride, batch, qptrs.data());
-    MV::copy(*this->ctx, A0v, R.view()).wait();
+    MV::copy(*this->ctx, A0v, R).wait();
     MV::copy(*this->ctx, Fv, A0v).wait();
     UnifiedVector<T> tau_ref(static_cast<size_t>(n) * batch), tau(static_cast<size_t>(n) * batch);
     UnifiedVector<std::byte> wg(std::max<size_t>(1, geqrf_buffer_size<B, T>(*this->ctx, Fv, tau_ref.to_span())));

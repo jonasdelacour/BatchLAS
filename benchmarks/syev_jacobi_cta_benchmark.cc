@@ -82,7 +82,7 @@ static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
     SteqrParams<T> params;
     params.cta_wg_size_multiplier = wg_mult;
 
-    const size_t ws_size = syev_cta_buffer_size(*q, A.view(), jobz, params);
+    const size_t ws_size = syev_cta_buffer_size(*q, A, jobz, params);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,

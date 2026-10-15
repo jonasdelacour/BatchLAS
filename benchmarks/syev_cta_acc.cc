@@ -53,9 +53,9 @@ void run_syev_cta(miniacc::State& state, const char* impl_name) {
 
         try {
             UnifiedVector<std::byte> ws(
-                syev_cta_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, params));
+                syev_cta_buffer_size<B, Real>(*q, A_work, JobType::EigenVectors, params));
             (void)syev_cta<B, Real>(*q,
-                              A_work.view(),
+                              A_work,
                               eigvals.to_span(),
                               JobType::EigenVectors,
                               Uplo::Lower,
@@ -69,7 +69,7 @@ void run_syev_cta(miniacc::State& state, const char* impl_name) {
         }
 
         VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
-        auto conds = cond<B>(*q, A.view(), NormType::Spectral);
+        auto conds = cond<B>(*q, A, NormType::Spectral);
         q->wait();
         miniacc_acc::record_eigensolver_metrics<B, Real>(
             state,

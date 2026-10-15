@@ -194,9 +194,9 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
+		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
 	}
 }
 
@@ -213,7 +213,7 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyLeavesMatrixUntouched) {
 	Matrix<Scalar, MatrixFormat::Dense> A = A0;
 	auto W = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+	syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
 	for (int b = 0; b < batch; ++b) {
 		for (int j = 0; j < n; ++j) {
@@ -244,11 +244,11 @@ TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
 			auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-			syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, uplo).wait();
+			syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
 
-			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, A0.view().all_items());
+			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
 		}
 	}
 }
@@ -272,11 +272,11 @@ TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_jac, n, false, A0.view().all_items());
+		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, A0.view().all_items());
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
 	}
 }
 
@@ -299,8 +299,8 @@ TYPED_TEST(SyevJacobiCtaTest, DescendingSortOrder) {
 	JacobiParams<Scalar> p_desc;
 	p_desc.sort_order = SortOrder::Descending;
 
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A_asc.view(), W_asc.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A_desc.view(), W_desc.to_span(), JobType::EigenVectors, Uplo::Lower,
+	syev_jacobi_cta<B, Scalar>(*this->ctx, A_asc, W_asc.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+	syev_jacobi_cta<B, Scalar>(*this->ctx, A_desc, W_desc.to_span(), JobType::EigenVectors, Uplo::Lower,
 							   Span<std::byte>(), p_desc).wait();
 
 	test_utils::expect_eigenvalues_agree<Scalar>(W_desc, W_asc, n, batch, /*reversed=*/true);
@@ -326,14 +326,14 @@ TYPED_TEST(SyevJacobiCtaTest, NearDegenerateResidualAndOrtho) {
 		SCOPED_TRACE(::testing::Message() << "n=" << n);
 
 		Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
-		A0.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/static_cast<unsigned>(1337 + n)).wait();
+		A0.fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/static_cast<unsigned>(1337 + n)).wait();
 		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
 		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac.view(), W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A_jac.view(), W_jac, n, 0);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, 0);
 	}
 }
 
@@ -352,7 +352,7 @@ TYPED_TEST(SyevJacobiCtaTest, RepeatedRunsDoNotHang) {
 
 	for (int t = 0; t < iters; ++t) {
 		Matrix<Scalar, MatrixFormat::Dense> A = A0;
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+		syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 	}
 }
 
@@ -373,10 +373,10 @@ TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
 			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
 			JacobiParams<Scalar> params{};
 			params.sort_order = order;
-			syev_jacobi_cta<B, Scalar>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
+			syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
 			for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
 			const std::vector<int> clean{1, 2, 3};
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W, n, /*sorted_copy=*/true, clean);
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W, n, /*sorted_copy=*/true, clean);
 		}
 	}
 }
@@ -425,7 +425,7 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 		}
 
 		auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-		syev_jacobi_cta(ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+		syev_jacobi_cta(ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
 		double max_abs = 0.0;
 		for (int i = 0; i < n; ++i) {
@@ -498,7 +498,7 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 	}
 
 	auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-	syev_jacobi_cta(ctx, A_jac.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+	syev_jacobi_cta(ctx, A_jac, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
 	double max_rel = 0.0;
 	for (int i = 0; i < n; ++i) {
@@ -530,8 +530,8 @@ TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 		auto W_tri = UnifiedVector<float>(static_cast<std::size_t>(n));
 		SteqrParams<float> sp;
 		auto ws = UnifiedVector<std::byte>(
-			syev_cta_buffer_size(ctx, A_tri.view(), JobType::NoEigenVectors, sp));
-		syev_cta(ctx, A_tri.view(), W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+			syev_cta_buffer_size(ctx, A_tri, JobType::NoEigenVectors, sp));
+		syev_cta(ctx, A_tri, W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
 						   ws.to_span(), sp).wait();
 
 		std::vector<float> w_tri(W_tri.begin(), W_tri.begin() + n);

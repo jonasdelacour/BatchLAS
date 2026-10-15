@@ -167,13 +167,9 @@ BATCHLAS_API bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, 
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend(). See
+// BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
-BATCHLAS_ACCEPT_OWNING(syev)
-BATCHLAS_ACCEPT_OWNING(syev_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)

@@ -38,7 +38,7 @@ struct PermutedCopyParams {
 
 template <typename T, typename K>
 Event permuted_copy(Queue& ctx, const Matrix<T, MatrixFormat::Dense>& src, const Matrix<T, MatrixFormat::Dense>& dst, const Vector<K>& indices, const PermutedCopyParams& params = {}){
-    return permuted_copy(ctx, src.view(), dst.view(), VectorView<K>(indices), params);
+    return permuted_copy(ctx, src, dst, VectorView<K>(indices), params);
 }
 
 template <typename T, typename K>

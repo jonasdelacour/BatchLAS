@@ -147,7 +147,7 @@ double residual(Queue& ctx, const Inv<T>& p, const std::vector<int>& items) {
         std::copy_n(p.a0.data() + std::size_t(rep) * n * n, std::size_t(n) * n, a.data().data() + std::size_t(k) * n * n);
     }
     const auto c = MVof<T>(const_cast<T*>(p.mem.data()) + p.coff, n, n, p.ldc, p.sc, p.s.batch).template astype<T>(items);
-    return MVof<T>::solve_residual(ctx, a.view(), c.view(), MVof<T>(nullptr, 0, 0, 1), a.view().all_items());
+    return MVof<T>::solve_residual(ctx, a, c, MVof<T>(nullptr, 0, 0, 1), a.all_items());
 }
 
 std::string label(const Spec& s) { return "n=" + std::to_string(s.n) + " batch=" + std::to_string(s.batch); }
@@ -518,7 +518,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     UnifiedVector<int> act(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b;
-    const auto het = A.view().with_active_dims(act.to_span(), act.to_span());
+    const auto het = A.with_active_dims(act.to_span(), act.to_span());
     ASSERT_TRUE(het.is_heterogeneous());
     EXPECT_FALSE(this->pin_accepted(C{gi::Blocked{}}, het));
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
@@ -804,10 +804,10 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
             for (int i = 0; i < n; ++i) A(i, j, b) = MVof<T>::make(RealOf<T>(i == j ? n + 1 : 0.25), RealOf<T>(0.1));
     UnifiedVector<int64_t> piv(std::size_t(n) * batch);
     auto call = [&] {
-        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, A.view())));
-        (void)getrf<B, T>(*this->ctx, A.view(), piv.to_span(), fws.to_span());
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getri_buffer_size<B, T>(*this->ctx, A.view())));
-        (void)getri<B, T>(*this->ctx, A.view(), Ai.view(), piv.to_span(), ws.to_span());
+        UnifiedVector<std::byte> fws(std::max<std::size_t>(1, getrf_buffer_size<B, T>(*this->ctx, A)));
+        (void)getrf<B, T>(*this->ctx, A, piv.to_span(), fws.to_span());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(1, getri_buffer_size<B, T>(*this->ctx, A)));
+        (void)getri<B, T>(*this->ctx, A, Ai, piv.to_span(), ws.to_span());
         this->ctx->wait();
     };
     if constexpr (batchlas::select::factorization_vendor_available<B>) EXPECT_EQ(traced_choice(call), "vendor");

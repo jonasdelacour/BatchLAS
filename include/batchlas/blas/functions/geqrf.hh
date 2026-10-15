@@ -128,8 +128,6 @@ BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
-BATCHLAS_ACCEPT_OWNING(geqrf)
-BATCHLAS_ACCEPT_OWNING(geqrf_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(geqrf)
 BATCHLAS_DISPATCH_ON_QUEUE(geqrf_buffer_size)

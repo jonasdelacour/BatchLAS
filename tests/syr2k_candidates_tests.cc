@@ -213,9 +213,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     Cm.fill(T(1));
     UnifiedVector<int> rows(batch), cols(batch);
     for (int b = 0; b < batch; ++b) rows[b] = n - b, cols[b] = k - (b % 2);
-    const auto hA = A.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hB = Bm.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hC = Cm.view().with_active_dims(rows.to_span(), rows.to_span());
+    const auto hA = A.with_active_dims(rows.to_span(), cols.to_span());
+    const auto hB = Bm.with_active_dims(rows.to_span(), cols.to_span());
+    const auto hC = Cm.with_active_dims(rows.to_span(), rows.to_span());
     ASSERT_TRUE(hA.is_heterogeneous() && hB.is_heterogeneous() && hC.is_heterogeneous());
     struct Case { const char* what; MVof<T> a, b, c; };
     const Case cases[] = {{"A heterogeneous", hA, Bm.view(), Cm.view()},
@@ -525,9 +525,9 @@ TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
     Cm.fill(T(1));
     UnifiedVector<int> rows(batch), cols(batch), crows(batch);
     for (int b = 0; b < batch; ++b) rows[b] = n - b, cols[b] = k, crows[b] = n - b;
-    const auto hetA = A.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hetB = Bm.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hetC = Cm.view().with_active_dims(crows.to_span(), crows.to_span());
+    const auto hetA = A.with_active_dims(rows.to_span(), cols.to_span());
+    const auto hetB = Bm.with_active_dims(rows.to_span(), cols.to_span());
+    const auto hetC = Cm.with_active_dims(crows.to_span(), crows.to_span());
     struct Case { const char* what; MVof<T> a, b, c; };
     const Case cases[] = {{"A heterogeneous", hetA, Bm.view(), Cm.view()},
                           {"B heterogeneous", A.view(), hetB, Cm.view()},

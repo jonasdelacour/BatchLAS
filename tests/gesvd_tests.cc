@@ -144,32 +144,32 @@ TYPED_TEST(GesvdTest, ValuesOnlyMatchesLapacke) {
 
     Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 1337);
     Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
     UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
     Matrix<Scalar, MatrixFormat::Dense> U_dummy(n, n, batch);
     Matrix<Scalar, MatrixFormat::Dense> Vh_dummy(n, n, batch);
 
     const size_t ws_bytes = gesvd_buffer_size(*this->ctx,
-                                                  A.view(),
+                                                  A,
                                                   s.to_span(),
-                                                  U_dummy.view(),
-                                                  Vh_dummy.view(),
+                                                  U_dummy,
+                                                  Vh_dummy,
                                                   SvdVectors::None,
                                                   SvdVectors::None);
     UnifiedVector<std::byte> ws(ws_bytes);
 
     auto evt = gesvd(*this->ctx,
-                        A.view(),
+                        A,
                         s.to_span(),
-                        U_dummy.view(),
-                        Vh_dummy.view(),
+                        U_dummy,
+                        Vh_dummy,
                         SvdVectors::None,
                         SvdVectors::None,
                         ws.to_span());
     evt.wait();
 
-    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+    test_utils::expect_singular_values_match_lapacke(A_ref, s);
 #endif
 }
 
@@ -213,36 +213,36 @@ std::string run_gesvd_with_provider(Queue& ctx,
     try {
         const size_t ws_bytes = hermitian_uplo.has_value()
             ? gesvd_buffer_size(ctx,
-                                   A.view(),
+                                   A,
                                    s.to_span(),
-                                   U.view(),
-                                   Vh.view(),
+                                   U,
+                                   Vh,
                                    jobu,
                                    jobvh,
                                    *hermitian_uplo)
             : gesvd_buffer_size(ctx,
-                                   A.view(),
+                                   A,
                                    s.to_span(),
-                                   U.view(),
-                                   Vh.view(),
+                                   U,
+                                   Vh,
                                    jobu,
                                    jobvh);
         UnifiedVector<std::byte> ws(ws_bytes);
         auto evt = hermitian_uplo.has_value()
             ? gesvd(ctx,
-                       A.view(),
+                       A,
                        s.to_span(),
-                       U.view(),
-                       Vh.view(),
+                       U,
+                       Vh,
                        jobu,
                        jobvh,
                        *hermitian_uplo,
                        ws.to_span())
             : gesvd(ctx,
-                       A.view(),
+                       A,
                        s.to_span(),
-                       U.view(),
-                       Vh.view(),
+                       U,
+                       Vh,
                        jobu,
                        jobvh,
                        ws.to_span());
@@ -293,7 +293,7 @@ template <typename Scalar>
 void expect_orthonormal_columns(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dense>& M,
                                 batchlas::verify::Slack slack = {1.0, "-"}) {
     using Real = typename base_type<Scalar>::type;
-    const double err = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, M.view(), M.view().all_items());
+    const double err = MatrixView<Scalar, MatrixFormat::Dense>::orthogonality(ctx, M, M.all_items());
     if (std::is_same_v<Real, float> && gesvd_bidiag_is_normal_equations()) {
         const batchlas::verify::Slack normal{0.5, "BATCHLAS_GESVD_BIDIAG=normal squares the condition number: measured once, ThinTallUnderNormalEquationsBidiag n=48, c 7.18 (2.05e-5); a whole-binary sweep under BIDIAG=normal is not measured. Accepted bound 128 n eps (0.5x of c=256)"};
         // A tighter slack the caller passed wins, with its own reason.
@@ -311,8 +311,8 @@ void expect_orthonormal_rows(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dens
                              batchlas::verify::Slack slack = {1.0, "-"}) {
     Matrix<Scalar, MatrixFormat::Dense> Mh(M.cols(), M.rows(), M.batch_size());
     for (int b = 0; b < M.batch_size(); ++b) {
-        auto Mb = M.view().batch_item(b);
-        auto Hb = Mh.view().batch_item(b);
+        auto Mb = M.batch_item(b);
+        auto Hb = Mh.batch_item(b);
         for (int j = 0; j < M.cols(); ++j) {
             for (int i = 0; i < M.rows(); ++i) {
                 Hb(j, i, 0) = MatrixView<Scalar, MatrixFormat::Dense>::conj(Mb(i, j, 0));
@@ -332,7 +332,7 @@ void expect_reconstruction(Queue& ctx, const Matrix<Scalar, MatrixFormat::Dense>
     using MV = MatrixView<Scalar, MatrixFormat::Dense>;
     const int m = A_ref.rows(), n = A_ref.cols(), k = std::min(m, n);
     const VectorView<Real> sv(const_cast<Real*>(s.data()), k, A_ref.batch_size());
-    const double err = MV::svd_residual(ctx, A_ref.view(), U.view(), sv, Vh.view(), A_ref.view().all_items());
+    const double err = MV::svd_residual(ctx, A_ref, U, sv, Vh, A_ref.all_items());
     EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, std::max(m, n), err);
 }
 
@@ -349,34 +349,34 @@ TYPED_TEST(GesvdHermitianComplexTest, ValuesOnlyMatchesLapacke) {
 
     Matrix<Scalar, MatrixFormat::Dense> A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 4242);
     Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
     UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
     Matrix<Scalar, MatrixFormat::Dense> U_dummy(1, 1, batch);
     Matrix<Scalar, MatrixFormat::Dense> Vh_dummy(1, 1, batch);
 
     const size_t ws_bytes = gesvd_buffer_size(*this->ctx,
-                                                 A.view(),
+                                                 A,
                                                  s.to_span(),
-                                                 U_dummy.view(),
-                                                 Vh_dummy.view(),
+                                                 U_dummy,
+                                                 Vh_dummy,
                                                  SvdVectors::None,
                                                  SvdVectors::None,
                                                  Uplo::Lower);
     UnifiedVector<std::byte> ws(ws_bytes);
 
     auto evt = gesvd(*this->ctx,
-                        A.view(),
+                        A,
                         s.to_span(),
-                        U_dummy.view(),
-                        Vh_dummy.view(),
+                        U_dummy,
+                        Vh_dummy,
                         SvdVectors::None,
                         SvdVectors::None,
                         Uplo::Lower,
                         ws.to_span());
     evt.wait();
 
-    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+    test_utils::expect_singular_values_match_lapacke(A_ref, s);
 #endif
 }
 
@@ -392,7 +392,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 5151);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -409,7 +409,7 @@ TYPED_TEST(GesvdHermitianComplexTest, BlockedProviderFullVectorsMatchHermitianSv
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -428,7 +428,7 @@ TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 6161);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -445,7 +445,7 @@ TYPED_TEST(GesvdHermitianComplexTest, CtaProviderFullVectorsMatchHermitianSvd) {
                                                                    Uplo::Lower);
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -467,7 +467,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_repeated_tiny_spectrum_matrix(int n, in
     if (n > 3) diag[static_cast<size_t>(n - 1)] = Real(1e-7);
 
     for (int b = 0; b < batch; ++b) {
-        auto Ab = A.view().batch_item(b);
+        auto Ab = A.batch_item(b);
         const int shift = (3 * b) % std::max(1, n);
         for (int i = 0; i < n; ++i) {
             const int src = (i + shift) % std::max(1, n);
@@ -509,7 +509,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
 
             auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 4000u + static_cast<unsigned>(case_idx));
             Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
             UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
             Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -525,7 +525,7 @@ TYPED_TEST(GesvdTest, BlockedProviderCoversAllJobCombinations) {
                                                                        "blocked");
             ASSERT_TRUE(err.empty()) << err;
 
-            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+            test_utils::expect_singular_values_match_lapacke(A_ref, s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U);
             }
@@ -555,7 +555,7 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
 
             auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, batch, 5000u + static_cast<unsigned>(case_idx));
             Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
             UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
             Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -571,7 +571,7 @@ TYPED_TEST(GesvdTest, CtaProviderCoversAllJobCombinations) {
                                                                        "cta");
             ASSERT_TRUE(err.empty()) << err;
 
-            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+            test_utils::expect_singular_values_match_lapacke(A_ref, s);
             if (job.jobu == SvdVectors::All) {
                 expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
             }
@@ -598,7 +598,7 @@ TYPED_TEST(GesvdTest, BlockedProviderHandlesRepeatedAndTinySingularValues) {
 
         auto A = make_repeated_tiny_spectrum_matrix<Scalar>(n, batch);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -644,7 +644,7 @@ TYPED_TEST(GesvdTest, CtaProviderHandlesRepeatedAndTinySingularValues) {
 
         auto A = make_repeated_tiny_spectrum_matrix<Scalar>(n, batch);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
@@ -690,7 +690,7 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 7001);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, m, batch);
@@ -706,7 +706,7 @@ TYPED_TEST(GesvdTest, BlockedProviderTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -732,7 +732,7 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < m; ++i) A.view()(i, j, b) *= tiny;
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MV::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MV::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, m, batch);
@@ -742,12 +742,12 @@ TYPED_TEST(GesvdTest, BlockedUniformlyTinyInput) {
                                                                    SvdVectors::All, "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         const VectorView<Real> sv(s.to_span(), n, batch, 1, n);
         EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, m,
-                      MV::svd_residual(*this->ctx, A_ref.view(), U.view(), sv, Vh.view(), A_ref.view().all_items()));
+                      MV::svd_residual(*this->ctx, A_ref, U, sv, Vh, A_ref.all_items()));
     }
 }
 
@@ -764,7 +764,7 @@ TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 7002);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(m) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, m, batch);
@@ -780,7 +780,7 @@ TYPED_TEST(GesvdTest, CtaProviderWideRectangularFullVectors) {
                                                                    "cta");
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U, gesvd_cta_slack<typename TestFixture::Real>());
         expect_orthonormal_rows(*this->ctx, Vh, gesvd_cta_slack<typename TestFixture::Real>());
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -801,7 +801,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 7003);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<typename base_type<Scalar>::type> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, m, batch);
@@ -817,7 +817,7 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
                                                                    "blocked");
         ASSERT_TRUE(err.empty()) << err;
 
-        test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+        test_utils::expect_singular_values_match_lapacke(A_ref, s);
         expect_orthonormal_columns(*this->ctx, U);
         expect_orthonormal_rows(*this->ctx, Vh);
         expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -887,7 +887,7 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
             v[static_cast<size_t>(i)] /= nv;
         }
 
-        auto Ab = A.view().batch_item(b);
+        auto Ab = A.batch_item(b);
         for (int i = 0; i < n; ++i) {
             for (int j = 0; j < n; ++j) {
                 double acc = 0.0;
@@ -979,7 +979,7 @@ TYPED_TEST(GesvdTest, ThinTallRectangular) {
 
     auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8101);
     Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
     UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
     Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch);      // thin: m x k, not m x m
@@ -991,7 +991,7 @@ TYPED_TEST(GesvdTest, ThinTallRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+    test_utils::expect_singular_values_match_lapacke(A_ref, s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
     expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -1011,7 +1011,7 @@ TYPED_TEST(GesvdTest, ThinWideRectangular) {
 
     auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8102);
     Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
     UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
     Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch);      // k == m here, so this is full
@@ -1023,7 +1023,7 @@ TYPED_TEST(GesvdTest, ThinWideRectangular) {
                                                                nullptr);
     ASSERT_TRUE(err.empty()) << err;
 
-    test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+    test_utils::expect_singular_values_match_lapacke(A_ref, s);
     expect_orthonormal_columns(*this->ctx, U);
     expect_orthonormal_rows(*this->ctx, Vh);
     expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -1052,13 +1052,13 @@ TYPED_TEST(GesvdTest, ThinWorkspaceIsSmallerThanFull) {
         Matrix<Scalar, MatrixFormat::Dense> U_full(m, m, batch);
         Matrix<Scalar, MatrixFormat::Dense> Vh_full(n, n, batch);
         const size_t ws_full = gesvd_buffer_size<B, Scalar>(
-            *this->ctx, A.view(), s.to_span(), U_full.view(), Vh_full.view(),
+            *this->ctx, A, s.to_span(), U_full, Vh_full,
             SvdVectors::All, SvdVectors::All);
 
         Matrix<Scalar, MatrixFormat::Dense> U_thin(m, k, batch);
         Matrix<Scalar, MatrixFormat::Dense> Vh_thin(k, n, batch);
         const size_t ws_thin = gesvd_buffer_size<B, Scalar>(
-            *this->ctx, A.view(), s.to_span(), U_thin.view(), Vh_thin.view(),
+            *this->ctx, A, s.to_span(), U_thin, Vh_thin,
             SvdVectors::Thin, SvdVectors::Thin);
 
         EXPECT_LT(ws_thin, ws_full)
@@ -1079,7 +1079,7 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
 
     auto A_full = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8103);
     Matrix<Scalar, MatrixFormat::Dense> A_thin(m, n, batch);
-    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_thin.view(), A_full.view()).wait();
+    MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_thin, A_full).wait();
 
     UnifiedVector<Real> s_full(static_cast<size_t>(k) * static_cast<size_t>(batch));
     Matrix<Scalar, MatrixFormat::Dense> U_full(m, m, batch), Vh_full(n, n, batch);
@@ -1095,8 +1095,8 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
 
     expect_singular_values_agree(s_thin, s_full, k, batch);
     for (int b = 0; b < batch; ++b) {
-        auto Uf = U_full.view().batch_item(b);
-        auto Ut = U_thin.view().batch_item(b);
+        auto Uf = U_full.batch_item(b);
+        auto Ut = U_thin.batch_item(b);
         for (int c = 0; c < k; ++c) {
             // |<u_thin, u_full>| == 1: a singular vector's sign/phase is not
             // determined, so an entrywise comparison would be wrong.
@@ -1129,21 +1129,21 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
         const int m = 32, n = 8, k = 8, batch = 2;
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8104);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch), Vh(k, n, batch);
 
         EXPECT_THROW(
-            (gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A.view(), s.to_span(),
-                                              U.view(), Vh.view(),
+            (gesvd_cta_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(),
+                                              U, Vh,
                                               SvdVectors::Thin, SvdVectors::Thin)),
             std::invalid_argument);
 
         const std::string pinned = run_gesvd_with_provider<Scalar, B>(
             *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, "cta");
         EXPECT_NE(pinned.find("cannot run this shape"), std::string::npos) << pinned;
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A.view(), A_ref.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A, A_ref).wait();
         const std::string err = run_gesvd_with_provider<Scalar, B>(
             *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
         ASSERT_TRUE(err.empty()) << err;
@@ -1171,7 +1171,7 @@ TYPED_TEST(GesvdTest, ThinTallUnderNormalEquationsBidiag) {
 
         auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 8105);
         Matrix<Scalar, MatrixFormat::Dense> A_ref(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
         UnifiedVector<Real> s(static_cast<size_t>(k) * static_cast<size_t>(batch));
         Matrix<Scalar, MatrixFormat::Dense> U(m, k, batch), Vh(k, n, batch);
@@ -1215,7 +1215,7 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
 
             auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(sh.m, sh.n, false, batch, 9101);
             Matrix<Scalar, MatrixFormat::Dense> A_ref(sh.m, sh.n, batch);
-            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
             UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
             Matrix<Scalar, MatrixFormat::Dense> U(sh.m, k, batch);
@@ -1226,7 +1226,7 @@ TYPED_TEST(GesvdTest, TallNarrowBelowCtaCap) {
                 *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
             ASSERT_TRUE(err.empty()) << err;
 
-            test_utils::expect_singular_values_match_lapacke(A_ref.view(), s);
+            test_utils::expect_singular_values_match_lapacke(A_ref, s);
             expect_orthonormal_columns(*this->ctx, U);
             expect_orthonormal_rows(*this->ctx, Vh);
             expect_reconstruction(*this->ctx, A_ref, s, U, Vh);
@@ -1249,8 +1249,8 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
 
         auto A_ref = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, 9102);
         Matrix<Scalar, MatrixFormat::Dense> A_blk(m, n, batch), A_unb(m, n, batch);
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_blk.view(), A_ref.view()).wait();
-        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_unb.view(), A_ref.view()).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_blk, A_ref).wait();
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_unb, A_ref).wait();
 
         UnifiedVector<Real> s_blk(static_cast<size_t>(k) * batch), s_unb(static_cast<size_t>(k) * batch);
         Matrix<Scalar, MatrixFormat::Dense> U_blk(m, k, batch), Vh_blk(k, n, batch);
@@ -1310,7 +1310,7 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveThirtyTwo) {
             // hermitian=false: this is the GENERAL path, not the Hermitian one.
             auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(sh.m, sh.n, false, batch, 6161);
             Matrix<Scalar, MatrixFormat::Dense> A_ref(sh.m, sh.n, batch);
-            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref.view(), A.view()).wait();
+            MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A_ref, A).wait();
 
             UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
             Matrix<Scalar, MatrixFormat::Dense> U(sh.m, sh.m, batch);
@@ -1431,7 +1431,7 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
     const int batch = 8;
 
     Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
-    fill_diagonal_svd_matrix<Scalar>(A.view());
+    fill_diagonal_svd_matrix<Scalar>(A);
     Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch), Vh(n, n, batch);
     UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
@@ -1440,10 +1440,10 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
     // itself, so a surviving -1 is a defect and not a missing write.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
-    const size_t bytes = gesvd_buffer_size<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(),
-                                                      Vh.view(), SvdVectors::All, SvdVectors::All);
+    const size_t bytes = gesvd_buffer_size<B, Scalar>(*this->ctx, A, s.to_span(), U,
+                                                      Vh, SvdVectors::All, SvdVectors::All);
     UnifiedVector<std::byte> ws(bytes);
-    (void)gesvd<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh, SvdVectors::All,
                      SvdVectors::All, ws.to_span(), info.to_span());
     this->ctx->wait();
 
@@ -1484,14 +1484,14 @@ TYPED_TEST(GesvdTest, OutOfOrderQueueGesvdVendorVhSmoke) {
         this->ctx->wait();
         Queue ooo(*this->ctx, false);
         UnifiedVector<std::byte> ws(std::max<size_t>(
-            1, backend::gesvd_vendor_buffer_size<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(),
+            1, backend::gesvd_vendor_buffer_size<B, Scalar>(ooo, A, s.to_span(), U, Vh,
                                                             SvdVectors::All, SvdVectors::All)));
-        (void)backend::gesvd_vendor<B, Scalar>(ooo, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+        (void)backend::gesvd_vendor<B, Scalar>(ooo, A, s.to_span(), U, Vh, SvdVectors::All,
                                                SvdVectors::All, ws.to_span());
         ooo.wait();
         EXPECT_VERIFY(Scalar, verify::Check::factorization, n,
-                      MV::svd_residual(*this->ctx, A0.view(), U.view(), VectorView<Real>(s, n, batch, 1, n), Vh.view(),
-                                       A0.view().all_items()));
+                      MV::svd_residual(*this->ctx, A0, U, VectorView<Real>(s, n, batch, 1, n), Vh,
+                                       A0.all_items()));
     }
 }
 
@@ -1506,23 +1506,23 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     const int batch = 4;
 
     Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch), A1(n, n, batch);
-    fill_diagonal_svd_matrix<Scalar>(A0.view());
-    fill_diagonal_svd_matrix<Scalar>(A1.view());
+    fill_diagonal_svd_matrix<Scalar>(A0);
+    fill_diagonal_svd_matrix<Scalar>(A1);
     Matrix<Scalar, MatrixFormat::Dense> U0(n, n, batch), Vh0(n, n, batch);
     Matrix<Scalar, MatrixFormat::Dense> U1(n, n, batch), Vh1(n, n, batch);
     UnifiedVector<Real> s0(static_cast<size_t>(n) * batch), s1(static_cast<size_t>(n) * batch);
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     const size_t bytes_a = gesvd_buffer_size<B, Scalar>(
-        *this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All, SvdVectors::All);
+        *this->ctx, A0, s0.to_span(), U0, Vh0, SvdVectors::All, SvdVectors::All);
     const size_t bytes_b = gesvd_buffer_size<B, Scalar>(
-        *this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All, SvdVectors::All);
+        *this->ctx, A1, s1.to_span(), U1, Vh1, SvdVectors::All, SvdVectors::All);
     EXPECT_EQ(bytes_a, bytes_b);
 
     UnifiedVector<std::byte> ws0(bytes_a), ws1(bytes_a);
-    (void)gesvd<B, Scalar>(*this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A0, s0.to_span(), U0, Vh0, SvdVectors::All,
                      SvdVectors::All, ws0.to_span(), info.to_span());
-    (void)gesvd<B, Scalar>(*this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A1, s1.to_span(), U1, Vh1, SvdVectors::All,
                      SvdVectors::All, ws1.to_span(), Span<int32_t>{});
     this->ctx->wait();
 
@@ -1582,14 +1582,14 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
         // items are held to, and it is the SAME tier on the SAME input, so a
         // difference can only come from the cap.
         Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
-        fill_mixed_svd_matrices<Scalar>(A_ref.view(), 20260909u);
+        fill_mixed_svd_matrices<Scalar>(A_ref, 20260909u);
         Matrix<Scalar, MatrixFormat::Dense> U_ref(n, n, batch), Vh_ref(n, n, batch);
         UnifiedVector<Real> s_ref(static_cast<size_t>(n) * batch);
         UnifiedVector<int32_t> info_ref(batch, int32_t(-1));
 
         GesvdjParams<Scalar> full;
-        (void)gesvdj_cta<B, Scalar>(*this->ctx, A_ref.view(), s_ref.to_span(), U_ref.view(),
-                              Vh_ref.view(), SvdVectors::All, SvdVectors::All, Span<std::byte>{},
+        (void)gesvdj_cta<B, Scalar>(*this->ctx, A_ref, s_ref.to_span(), U_ref,
+                              Vh_ref, SvdVectors::All, SvdVectors::All, Span<std::byte>{},
                               full, info_ref.to_span());
         this->ctx->wait();
         for (int b = 0; b < batch; ++b) {
@@ -1600,14 +1600,14 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
         }
 
         Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
-        fill_mixed_svd_matrices<Scalar>(A.view(), 20260909u);
+        fill_mixed_svd_matrices<Scalar>(A, 20260909u);
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch), Vh(n, n, batch);
         UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
         UnifiedVector<int32_t> info(batch, int32_t(-1));
 
         GesvdjParams<Scalar> capped;
         capped.max_sweeps = 2;
-        (void)gesvdj_cta<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+        (void)gesvdj_cta<B, Scalar>(*this->ctx, A, s.to_span(), U, Vh,
                               SvdVectors::All, SvdVectors::All, Span<std::byte>{}, capped,
                               info.to_span());
         this->ctx->wait();

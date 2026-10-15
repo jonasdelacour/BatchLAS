@@ -128,7 +128,7 @@ UnifiedVector<float> lapacke_ssyev_eigs(const MatrixView<float, MatrixFormat::De
     for (int b = 0; b < batch; ++b) {
         auto a = A.astype<float>(std::span<const int>(&b, 1));
         const lapack_int info =
-            LAPACKE_ssyev(LAPACK_COL_MAJOR, 'N', 'L', n, a.view().data_ptr(), n, out.data() + static_cast<std::size_t>(b) * n);
+            LAPACKE_ssyev(LAPACK_COL_MAJOR, 'N', 'L', n, a.data_ptr(), n, out.data() + static_cast<std::size_t>(b) * n);
         if (info != 0)
             for (int i = 0; i < n; ++i) out[static_cast<std::size_t>(i + b * n)] = std::numeric_limits<float>::quiet_NaN();
     }
@@ -276,7 +276,7 @@ int run_accuracy(const Options& opt) {
             target_log10s[static_cast<std::size_t>(b)] = target_log10;
             auto A_b = random_hermitian_tridiagonal_with_log10_cond_metric<B, Real>(
                 *q, n, static_cast<Real>(target_log10), NormType::Spectral, 1, opt.seed + static_cast<unsigned int>(sample_id + b));
-            MatrixView<Real, MatrixFormat::Dense>::copy(*q, dense_A_view.batch_item(b), A_b.view().batch_item(0)).wait();
+            MatrixView<Real, MatrixFormat::Dense>::copy(*q, dense_A_view.batch_item(b), A_b.batch_item(0)).wait();
         }
         q->wait();
         accuracy::share_inputs(opt.inputs, sample_id, dense_A_view);
@@ -329,8 +329,8 @@ int run_accuracy(const Options& opt) {
             auto dense_vendor = dense_A.clone();
             auto eigs_span = eigs_cuda.data();
             UnifiedVector<std::byte> ws(
-                batchlas::ops::syev::detail::syev_vendor_buffer_size_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower));
-            (void)batchlas::ops::syev::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
+                batchlas::ops::syev::detail::syev_vendor_buffer_size_or_throw<Backend::CUDA, Real>(*q, dense_vendor, eigs_span, JobType::NoEigenVectors, Uplo::Lower));
+            (void)batchlas::ops::syev::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor, eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         }
         if (run_stedc) {
             UnifiedVector<std::byte> ws(
@@ -361,14 +361,14 @@ int run_accuracy(const Options& opt) {
         if (run_netlib_sterf) call_lapack_variant(eigs_netlib_sterf, "LAPACKE_xsterf", call_lapack_sterf<Real>);
         if (run_netlib_stedc) call_lapack_variant(eigs_netlib_stedc, "LAPACKE_xstedc", call_lapack_stedc<Real>);
 
-        const auto ref_eigs = lapacke_ref_eigs(dense_A.view());
+        const auto ref_eigs = lapacke_ref_eigs(dense_A);
         UnifiedVector<float> eigs_ssyev32;
         if constexpr (std::is_same_v<Real, float>) {
             if (run_netlib32) {
-                eigs_ssyev32 = lapacke_ssyev_eigs(dense_A.view());
+                eigs_ssyev32 = lapacke_ssyev_eigs(dense_A);
             }
         }
-        const auto conds = cond<B>(*q, dense_A.view(), NormType::Spectral);
+        const auto conds = cond<B>(*q, dense_A, NormType::Spectral);
         q->wait();
 
         for (int b = 0; b < cur_batch; ++b) {

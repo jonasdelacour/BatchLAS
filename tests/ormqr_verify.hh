@@ -19,12 +19,12 @@ double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::Matrix<T, batchla
     const int n = A_fact.rows();
     double worst = 0;
     for (int b = 0; b < C.batch_size(); ++b) {
-        const auto Q = MV::form_q(ctx, A_fact.view(), tau, b, n);
-        const auto C0b = C0.view().batch_item(b).template astype<D>();
-        const auto Cb = C.view().batch_item(b).template astype<D>();
+        const auto Q = MV::form_q(ctx, A_fact, tau, b, n);
+        const auto C0b = C0.batch_item(b).template astype<D>();
+        const auto Cb = C.batch_item(b).template astype<D>();
         const double err = side == batchlas::Side::Left
-            ? DV::gemm_backward_error(ctx, Q.view(), trans, C0b.view(), batchlas::Transpose::NoTrans, C0b.view(), Cb.view(), D(1), D(0))
-            : DV::gemm_backward_error(ctx, C0b.view(), batchlas::Transpose::NoTrans, Q.view(), trans, C0b.view(), Cb.view(), D(1), D(0));
+            ? DV::gemm_backward_error(ctx, Q, trans, C0b, batchlas::Transpose::NoTrans, C0b, Cb, D(1), D(0))
+            : DV::gemm_backward_error(ctx, C0b, batchlas::Transpose::NoTrans, Q, trans, C0b, Cb, D(1), D(0));
         worst = batchlas::verify::nanmax(worst, err);
     }
     return worst;
@@ -42,13 +42,13 @@ double ormqr_q_error(batchlas::Queue& ctx, const batchlas::Matrix<T, batchlas::M
     batchlas::Matrix<T, batchlas::MatrixFormat::Dense> qh(n, n, 1);
     double worst = 0;
     for (int b = 0; b < C.batch_size(); ++b) {
-        MV Q = C.view().batch_item(b);
+        MV Q = C.batch_item(b);
         if (trans != batchlas::Transpose::NoTrans) {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i) qh(i, j, 0) = MV::conj(C.view()(j, i, b));
             Q = qh.view();
         }
-        worst = batchlas::verify::nanmax(worst, MV::qr_reconstruction(ctx, A0.view().batch_item(b), Q, F.view().batch_item(b)));
+        worst = batchlas::verify::nanmax(worst, MV::qr_reconstruction(ctx, A0.batch_item(b), Q, F.batch_item(b)));
     }
     return worst;
 }

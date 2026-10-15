@@ -85,8 +85,8 @@ size_t ritz_values_buffer_size(Queue& ctx,
                                const VectorView<typename base_type<T>::type>& ritz_vals);
 ```
 
-Both are also reachable without the backend (`BATCHLAS_DISPATCH_ON_QUEUE`) and with owning
-arguments (`BATCHLAS_ACCEPT_OWNING`). For sparse \f$A\f$ pass a CSR matrix, e.g.
+Both are also reachable without the backend (`BATCHLAS_DISPATCH_ON_QUEUE`) and take owning
+`Matrix` arguments directly. For sparse \f$A\f$ pass a CSR matrix, e.g.
 `auto As = A.convert_to<MatrixFormat::CSR>();`.
 
 ## Parameters and layout

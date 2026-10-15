@@ -47,7 +47,7 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
     auto q = std::make_shared<Queue>(Device("gpu"), B, /*in_order=*/true);
 
     const size_t ws_bytes = sytrd_blocked_buffer_size(*q,
-                                                           A.view(),
+                                                           A,
                                                            VectorView<T>(d),
                                                            VectorView<T>(e),
                                                            VectorView<T>(tau),

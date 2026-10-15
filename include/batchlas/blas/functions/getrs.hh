@@ -145,8 +145,6 @@ BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
-BATCHLAS_ACCEPT_OWNING(getrs)
-BATCHLAS_ACCEPT_OWNING(getrs_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(getrs)
 BATCHLAS_DISPATCH_ON_QUEUE(getrs_buffer_size)

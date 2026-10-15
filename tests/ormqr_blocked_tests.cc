@@ -105,8 +105,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+        (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -114,25 +114,25 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span()));
+        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
     {
         const int32_t block_size = get_block_size_or_default(32);
         UnifiedVector<std::byte> ws_blk(ormqr_blocked_buffer_size<B, T>(*this->ctx,
-                                                                        A.view(),
-                                                                        Q_blk.view(),
+                                                                        A,
+                                                                        Q_blk,
                                                                         Side::Left,
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A, Q_blk, Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk)));
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_blk, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_blk";
@@ -153,8 +153,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+        (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -162,25 +162,25 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, this->trans_h(), tau.to_span()));
+        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
     {
         const int32_t block_size = get_block_size_or_default(32);
         UnifiedVector<std::byte> ws_blk(ormqr_blocked_buffer_size<B, T>(*this->ctx,
-                                                                        A.view(),
-                                                                        Q_blk.view(),
+                                                                        A,
+                                                                        Q_blk,
                                                                         Side::Left,
                                                                         this->trans_h(),
                                                                         tau.to_span(),
                                                                         block_size));
-        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A, Q_blk, Side::Left, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk)));
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_blk, this->trans_h()),
                         recon_slack<T>())
         << "Q_blk";
@@ -201,8 +201,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+        (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -210,25 +210,25 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, Transpose::NoTrans, tau.to_span()));
+        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
     {
         const int32_t block_size = get_block_size_or_default(32);
         UnifiedVector<std::byte> ws_blk(ormqr_blocked_buffer_size<B, T>(*this->ctx,
-                                                                        A.view(),
-                                                                        Q_blk.view(),
+                                                                        A,
+                                                                        Q_blk,
                                                                         Side::Right,
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A, Q_blk, Side::Right, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk)));
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_blk, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_blk";
@@ -249,8 +249,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+        (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -259,25 +259,25 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
 
     {
         UnifiedVector<std::byte> ws_ref(
-            batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
+            batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, this->trans_h(), tau.to_span()));
+        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
     {
         const int32_t block_size = get_block_size_or_default(32);
         UnifiedVector<std::byte> ws_blk(ormqr_blocked_buffer_size<B, T>(*this->ctx,
-                                                                        A.view(),
-                                                                        Q_blk.view(),
+                                                                        A,
+                                                                        Q_blk,
                                                                         Side::Right,
                                                                         this->trans_h(),
                                                                         tau.to_span(),
                                                                         block_size));
-        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A, Q_blk, Side::Right, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk)));
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_blk, this->trans_h()),
                         recon_slack<T>())
         << "Q_blk";
@@ -298,8 +298,8 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     {
-        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+        (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -307,25 +307,25 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
     Matrix<T, MatrixFormat::Dense> Q_blk = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
 
     {
-        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        UnifiedVector<std::byte> ws_ref(batchlas::ops::ormqr::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span()));
+        (void)batchlas::ops::ormqr::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A, Q_ref, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
     {
         const int32_t block_size = get_block_size_or_default(32);
         UnifiedVector<std::byte> ws_blk(ormqr_blocked_buffer_size<B, T>(*this->ctx,
-                                                                        A.view(),
-                                                                        Q_blk.view(),
+                                                                        A,
+                                                                        Q_blk,
                                                                         Side::Left,
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A, Q_blk, Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q_blk)));
     EXPECT_VERIFY_SLACK(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q_blk, Transpose::NoTrans),
                         recon_slack<T>())
         << "Q_blk";

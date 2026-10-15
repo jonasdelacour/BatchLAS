@@ -122,12 +122,12 @@ TEST(BackendDispatch, DeducedCallMatchesExplicitBackendCall) {
     auto B = make_matrix(n, batch, 0.5f);
     Matrix<float, MatrixFormat::Dense> C_deduced(n, n, batch);
     Matrix<float, MatrixFormat::Dense> C_explicit(n, n, batch);
-    (void)C_deduced.view().fill_zeros(q);
-    (void)C_explicit.view().fill_zeros(q);
+    (void)C_deduced.fill_zeros(q);
+    (void)C_explicit.fill_zeros(q);
     q.wait();
 
     // Deduced from the queue.
-    (void)gemm(q, A.view(), B.view(), C_deduced.view(), 1.0f, 0.0f,
+    (void)gemm(q, A, B, C_deduced, 1.0f, 0.0f,
          Transpose::NoTrans, Transpose::NoTrans);
     q.wait();
 
@@ -135,13 +135,13 @@ TEST(BackendDispatch, DeducedCallMatchesExplicitBackendCall) {
     switch (resolved_backend(q)) {
 #if BATCHLAS_HAS_CUDA_BACKEND
         case Backend::CUDA:
-            (void)gemm<Backend::CUDA>(q, A.view(), B.view(), C_explicit.view(), 1.0f, 0.0f,
+            (void)gemm<Backend::CUDA>(q, A, B, C_explicit, 1.0f, 0.0f,
                                 Transpose::NoTrans, Transpose::NoTrans);
             break;
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
         case Backend::NETLIB:
-            (void)gemm<Backend::NETLIB>(q, A.view(), B.view(), C_explicit.view(), 1.0f, 0.0f,
+            (void)gemm<Backend::NETLIB>(q, A, B, C_explicit, 1.0f, 0.0f,
                                   Transpose::NoTrans, Transpose::NoTrans);
             break;
 #endif
@@ -153,9 +153,9 @@ TEST(BackendDispatch, DeducedCallMatchesExplicitBackendCall) {
     for (int b = 0; b < batch; ++b) {
         for (int j = 0; j < n; ++j) {
             for (int i = 0; i < n; ++i) {
-                const auto idx = b * C_deduced.view().stride() + j * C_deduced.view().ld() + i;
-                ASSERT_FLOAT_EQ(C_deduced.view().data_ptr()[idx],
-                                C_explicit.view().data_ptr()[idx])
+                const auto idx = b * C_deduced.stride() + j * C_deduced.ld() + i;
+                ASSERT_FLOAT_EQ(C_deduced.data_ptr()[idx],
+                                C_explicit.data_ptr()[idx])
                     << "mismatch at (" << i << "," << j << ") batch " << b;
             }
         }
@@ -170,18 +170,18 @@ TEST(BackendDispatch, DeducedBufferSizeMatchesExplicit) {
     auto A = make_matrix(24, 2, 1.0f);
     UnifiedVector<float> tau(24 * 2);
 
-    const size_t deduced = geqrf_buffer_size(q, A.view(), tau.to_span());
+    const size_t deduced = geqrf_buffer_size(q, A, tau.to_span());
 
     size_t explicit_size = 0;
     switch (resolved_backend(q)) {
 #if BATCHLAS_HAS_CUDA_BACKEND
         case Backend::CUDA:
-            explicit_size = geqrf_buffer_size<Backend::CUDA>(q, A.view(), tau.to_span());
+            explicit_size = geqrf_buffer_size<Backend::CUDA>(q, A, tau.to_span());
             break;
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
         case Backend::NETLIB:
-            explicit_size = geqrf_buffer_size<Backend::NETLIB>(q, A.view(), tau.to_span());
+            explicit_size = geqrf_buffer_size<Backend::NETLIB>(q, A, tau.to_span());
             break;
 #endif
         default:
@@ -201,16 +201,16 @@ TEST(BackendDispatch, OwningMatricesBindThroughDispatch) {
     auto B = make_matrix(n, batch, 0.75f);
     Matrix<float, MatrixFormat::Dense> C_owning(n, n, batch);
     Matrix<float, MatrixFormat::Dense> C_view(n, n, batch);
-    (void)C_owning.view().fill_zeros(q);
-    (void)C_view.view().fill_zeros(q);
+    (void)C_owning.fill_zeros(q);
+    (void)C_view.fill_zeros(q);
     q.wait();
 
     (void)gemm(q, A, B, C_owning, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
-    (void)gemm(q, A.view(), B.view(), C_view.view(), 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    (void)gemm(q, A, B, C_view, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     q.wait();
 
     for (int i = 0; i < n * n * batch; ++i) {
-        ASSERT_FLOAT_EQ(C_owning.view().data_ptr()[i], C_view.view().data_ptr()[i]) << "at " << i;
+        ASSERT_FLOAT_EQ(C_owning.data_ptr()[i], C_view.data_ptr()[i]) << "at " << i;
     }
 }
 
@@ -223,19 +223,19 @@ TEST(BackendDispatch, DefaultArgumentsSurviveForwarding) {
     auto B = make_matrix(n, batch, 0.25f);
     Matrix<float, MatrixFormat::Dense> C_short(n, n, batch);
     Matrix<float, MatrixFormat::Dense> C_full(n, n, batch);
-    (void)C_short.view().fill_zeros(q);
-    (void)C_full.view().fill_zeros(q);
+    (void)C_short.fill_zeros(q);
+    (void)C_full.fill_zeros(q);
     q.wait();
 
     // gemm's last parameter, ComputePrecision, is defaulted in the declaration.
-    (void)gemm(q, A.view(), B.view(), C_short.view(), 1.0f, 0.0f,
+    (void)gemm(q, A, B, C_short, 1.0f, 0.0f,
          Transpose::NoTrans, Transpose::NoTrans);
-    (void)gemm(q, A.view(), B.view(), C_full.view(), 1.0f, 0.0f,
+    (void)gemm(q, A, B, C_full, 1.0f, 0.0f,
          Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
     q.wait();
 
     for (int i = 0; i < n * n; ++i) {
-        ASSERT_FLOAT_EQ(C_short.view().data_ptr()[i], C_full.view().data_ptr()[i]) << "at " << i;
+        ASSERT_FLOAT_EQ(C_short.data_ptr()[i], C_full.data_ptr()[i]) << "at " << i;
     }
 }
 

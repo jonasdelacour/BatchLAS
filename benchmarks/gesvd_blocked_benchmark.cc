@@ -88,10 +88,10 @@ static void BM_GESVD_BLOCKED(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> s(k * batch);
 
     const size_t ws_size = gesvd_blocked_buffer_size(*q,
-                                                            A.view(),
+                                                            A,
                                                             s.to_span(),
-                                                            U.view(),
-                                                            Vh.view(),
+                                                            U,
+                                                            Vh,
                                                             jobu,
                                                             jobvh);
     UnifiedVector<std::byte> workspace(ws_size);

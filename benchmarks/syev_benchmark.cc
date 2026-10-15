@@ -83,7 +83,7 @@ static void BM_SYEV(minibench::State& state) {
     auto A = Matrix<T>::Random(n, n, true, batch);
     UnifiedVector<typename base_type<T>::type> W(n * batch);
 
-    size_t ws_size = syev_buffer_size(*q, A.view(), W.to_span(),
+    size_t ws_size = syev_buffer_size(*q, A, W.to_span(),
                                       jobz, uplo);
     UnifiedVector<std::byte> workspace(ws_size);
 

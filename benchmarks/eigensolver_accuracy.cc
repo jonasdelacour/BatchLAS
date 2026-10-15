@@ -180,10 +180,10 @@ UnifiedVector<typename base_type<Real>::type> residual_residuals(
     const int batch = A.batch_size();
     auto R = Matrix<Real>::Zeros(n, m, batch);
 
-    (void)gemm<B>(q, A.view(), Z.view(), R.view(), {.alpha = Real(1), .beta = Real(0)});
+    (void)gemm<B>(q, A, Z, R, {.alpha = Real(1), .beta = Real(0)});
 
     auto r_view = R.kernel_view();
-    auto z_view = Z.view().kernel_view();
+    auto z_view = Z.kernel_view();
     auto lambda_ptr = evals.data_ptr();
     const int lambda_inc = evals.inc();
     const int lambda_stride = evals.stride();
@@ -201,7 +201,7 @@ UnifiedVector<typename base_type<Real>::type> residual_residuals(
                     });
     q.wait();
 
-    return norm(q, R.view(), NormType::Frobenius);
+    return norm(q, R, NormType::Frobenius);
 }
 
 double max_relative_eig_error(const std::vector<double>& ref_sorted,
@@ -253,12 +253,12 @@ void emit_metrics_rows(std::ofstream& out,
     const int batch = A.batch_size();
 
     const auto residual_num = residual_residuals<B, Real>(q, A, Z, evals);
-    const auto a_norm = norm(q, A.view(), NormType::Spectral);
+    const auto a_norm = norm(q, A, NormType::Spectral);
     q.wait();
     const auto ortho_num = orthogonality_residuals<B, Real>(q, Z);
 
     const double n_scale = static_cast<double>(n);
-    const auto in_hash = accuracy::input_hashes(A.view());
+    const auto in_hash = accuracy::input_hashes(A);
 
     for (int b = 0; b < batch; ++b) {
         const double cond = static_cast<double>(conds[static_cast<size_t>(b)]);
@@ -394,14 +394,14 @@ int run_accuracy(const Options& opt) {
                 cur_batch,
                 opt.seed + static_cast<unsigned int>(sample_id));
             q->wait();
-            accuracy::share_inputs(opt.inputs, sample_id, A.view());
+            accuracy::share_inputs(opt.inputs, sample_id, A);
 
-            const auto conds = cond<B>(*q, A.view(), NormType::Spectral);
+            const auto conds = cond<B>(*q, A, NormType::Spectral);
             q->wait();
 
             Vector<Real> d_ref(n, Real(0), cur_batch);
             Vector<Real> e_ref(std::max(0, n - 1), Real(0), cur_batch);
-            extract_tridiagonal(*q, A.view(), d_ref, e_ref);
+            extract_tridiagonal(*q, A, d_ref, e_ref);
 
             std::vector<std::vector<double>> ref_eigs_sorted(static_cast<size_t>(cur_batch), std::vector<double>(static_cast<size_t>(n), std::numeric_limits<double>::quiet_NaN()));
             std::vector<char> ref_ok(static_cast<size_t>(cur_batch), 0);
@@ -423,7 +423,7 @@ int run_accuracy(const Options& opt) {
                 try {
                     Vector<Real> d_work(n, Real(0), cur_batch);
                     Vector<Real> e_work(std::max(0, n - 1), Real(0), cur_batch);
-                    extract_tridiagonal(*q, A.view(), d_work, e_work);
+                    extract_tridiagonal(*q, A, d_work, e_work);
 
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
@@ -474,7 +474,7 @@ int run_accuracy(const Options& opt) {
                 try {
                     Vector<Real> d_work(n, Real(0), cur_batch);
                     Vector<Real> e_work(std::max(0, n - 1), Real(0), cur_batch);
-                    extract_tridiagonal(*q, A.view(), d_work, e_work);
+                    extract_tridiagonal(*q, A, d_work, e_work);
 
                     auto eigvals = Vector<Real>::zeros(n, cur_batch);
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
@@ -529,9 +529,9 @@ int run_accuracy(const Options& opt) {
                     params.cta_shift_strategy = parse_shift_strategy(opt.cta_shift);
 
                     UnifiedVector<std::byte> ws(
-                        syev_cta_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, params));
+                        syev_cta_buffer_size<B, Real>(*q, A_work, JobType::EigenVectors, params));
                     (void)syev_cta<B, Real>(*q,
-                                      A_work.view(),
+                                      A_work,
                                       eigvals.to_span(),
                                       JobType::EigenVectors,
                                       Uplo::Lower,
@@ -569,11 +569,11 @@ int run_accuracy(const Options& opt) {
 
                     UnifiedVector<std::byte> ws(
                         syev_blocked_buffer_size<B, Real>(*q,
-                                                          A_work.view(),
+                                                          A_work,
                                                           JobType::EigenVectors,
                                                           Uplo::Lower));
                     (void)syev_blocked<B, Real>(*q,
-                                          A_work.view(),
+                                          A_work,
                                           eigvals.to_span(),
                                           JobType::EigenVectors,
                                           Uplo::Lower,
@@ -609,11 +609,11 @@ int run_accuracy(const Options& opt) {
 
                     UnifiedVector<std::byte> ws(
                         syev_buffer_size<B, Real>(*q,
-                                                  A_work.view(),
+                                                  A_work,
                                                   eigvals.to_span(),
                                                   JobType::EigenVectors,
                                                   Uplo::Lower));
-                    (void)syev<B>(*q, A_work.view(), eigvals.to_span(), {}, ws.to_span());
+                    (void)syev<B>(*q, A_work, eigvals.to_span(), {}, ws.to_span());
                     q->wait();
 
                     VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
@@ -658,20 +658,20 @@ int run_accuracy(const Options& opt) {
 
                     UnifiedVector<std::byte> ws(
                         syevx_buffer_size(*q,
-                                             A_work.view(),
+                                             A_work,
                                              eigvals.to_span(),
                                              static_cast<size_t>(neigs),
                                              JobType::EigenVectors,
-                                             V.view(),
+                                             V,
                                              params));
 
                     (void)syevx(*q,
-                             A_work.view(),
+                             A_work,
                              eigvals.to_span(),
                              static_cast<size_t>(neigs),
                              ws.to_span(),
                              JobType::EigenVectors,
-                             V.view(),
+                             V,
                              params);
                     q->wait();
 

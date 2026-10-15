@@ -19,8 +19,8 @@
 using namespace batchlas;
 
 Queue ctx(Device::default_device());          // the backend comes from the device
-gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});
-potrf(ctx, S.view(), PotrfOptions{.uplo = Uplo::Upper});
+gemm(ctx, A, B, C, {.alpha = 2.0f});
+potrf(ctx, S, PotrfOptions{.uplo = Uplo::Upper});
 ctx.wait();                                   // nothing is readable before this
 ```
 

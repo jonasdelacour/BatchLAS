@@ -165,7 +165,7 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
     double norm2 = 0;
     const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.end()), batch, norm2);
     expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
-    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
+    expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues));
 }
 
 TYPED_TEST(SteqrTest, BatchedMatrices) {
@@ -203,8 +203,8 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
 
     double norm2 = 0;
     const auto ref = repeated(expected, batch, norm2);
-    expect_values(VectorView<float_type>(c), ref, norm2, n, std::nullopt, dense_A.view().all_items());
-    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(c));
+    expect_values(VectorView<float_type>(c), ref, norm2, n, std::nullopt, dense_A.all_items());
+    expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(c));
 }
 
 
@@ -220,7 +220,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     Vector<float_type> sub_diag = Vector<float_type>::random(n - 1, batch);
     Vector<float_type> eigenvalues = Vector<float_type>::zeros(n, batch);
     auto dense_A = Matrix<float_type>::Zeros(n, n, batch);
-    dense_A.view().fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
+    dense_A.fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
 
 
     auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
@@ -237,12 +237,12 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
     this->ctx->wait();
 
     double norm2 = 0;
-    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    const auto ref = lapacke_spectra(dense_A, norm2);
     // Diagonal and off-diagonal are uniform [0, 1) (||T||_2 ~ 2.5): the kind's bound is 11x the old
     // absolute 500 machine eps (1000 u), so the Slack keeps the old power.
     expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n,
-                  verify::Slack{0.1, "old bound 500 machine eps absolute = 1000 u, ||T||_2 ~ 2.5"}, dense_A.view().all_items());
-    expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), dense_A.view().all_items());
+                  verify::Slack{0.1, "old bound 500 machine eps absolute = 1000 u, ||T||_2 ~ 2.5"}, dense_A.all_items());
+    expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues), dense_A.all_items());
 }
 
 TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
@@ -256,7 +256,7 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
     Vector<float_type> sub_diag = Vector<float_type>::random(n - 1, batch);
 
     auto dense_A = Matrix<float_type>::Zeros(n, n, batch);
-    dense_A.view().fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
+    dense_A.fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
 
     // --- Reference steqr ---
     Vector<float_type> evals_ref = Vector<float_type>::zeros(n, batch);
@@ -298,8 +298,8 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
         UnifiedVector<float_type> w_cta(n * batch), w_ref(n * batch);
         for (int i = 0; i < n * batch; ++i) w_cta[i] = evals_cta(i % n, i / n), w_ref[i] = evals_ref(i % n, i / n);
         test_utils::expect_eigenvalues_agree<float_type>(w_cta, w_ref, n, batch);
-        expect_pairs(*this->ctx, dense_A.view(), eigvects_ref.view(), VectorView<float_type>(evals_ref));
-        expect_pairs(*this->ctx, dense_A.view(), eigvects_cta.view(), VectorView<float_type>(evals_cta));
+        expect_pairs(*this->ctx, dense_A, eigvects_ref, VectorView<float_type>(evals_ref));
+        expect_pairs(*this->ctx, dense_A, eigvects_cta, VectorView<float_type>(evals_cta));
     }
 }
 
@@ -347,7 +347,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16));
 
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(b), batch);
-        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues));
+        expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues));
     }
 }
 
@@ -394,11 +394,11 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
 
         double norm2 = 0;
         const auto ref = repeated(std::vector<double>(expected_eigenvalues.begin(), expected_eigenvalues.begin() + n), batch, norm2);
-        const auto all = eigvects.view().all_items();
+        const auto all = eigvects.all_items();
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, float_slack<float_type>(kClosedFormN16), all);
 
         auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(a), float_type(b), float_type(c), batch);
-        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
+        expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -417,7 +417,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
         Vector<float_type> eigenvalues = Vector<float_type>::zeros(n, batch);
 
         auto dense_A = Matrix<float_type>::Zeros(n, n, batch);
-        dense_A.view().fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
+        dense_A.fill_tridiag(*this->ctx, sub_diag, diag, sub_diag).wait();
 
         auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
         SteqrParams<float_type> params = {};
@@ -436,10 +436,10 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
 
         SCOPED_TRACE(::testing::Message() << "n " << n);
         double norm2 = 0;
-        const auto ref = lapacke_spectra(dense_A.view(), norm2);
-        const auto all = eigvects.view().all_items();
+        const auto ref = lapacke_spectra(dense_A, norm2);
+        const auto all = eigvects.all_items();
         expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, all);
-        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<float_type>(eigenvalues), all);
+        expect_pairs(*this->ctx, dense_A, eigvects, VectorView<float_type>(eigenvalues), all);
     }
 }
 
@@ -467,7 +467,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
         }
     }
 
-    auto conds = cond<B>(*this->ctx, dense_A.view(), NormType::Spectral);
+    auto conds = cond<B>(*this->ctx, dense_A, NormType::Spectral);
     this->ctx->wait();
     for (int b = 0; b < batch; ++b) {
         EXPECT_GE(std::log10(conds[b]), log10_cond - float_type(0.5)) << "Batch " << b;
@@ -499,7 +499,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
         for (double l : d) norm2 = verify::nanmax(norm2, std::fabs(l));
         ref[b] = std::move(d);
     }
-    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, eigvects.view().all_items());
+    expect_values(VectorView<float_type>(eigenvalues), ref, norm2, n, std::nullopt, eigvects.all_items());
 }
 
 namespace {
@@ -583,10 +583,10 @@ void stress_run_case(Queue& ctx,
     auto dense_A = Matrix<Real>::Zeros(n, n, batch);
 
     stress_debug_log("stress_run_case: fill_tridiag");
-    dense_A.view().fill_tridiag(ctx, sub, diag, sub).wait();
+    dense_A.fill_tridiag(ctx, sub, diag, sub).wait();
 
     double norm2 = 0;
-    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    const auto ref = lapacke_spectra(dense_A, norm2);
 
     // steqr: eigenvalues only.
     {
@@ -640,7 +640,7 @@ void stress_run_case(Queue& ctx,
         std::sort(ste.begin() + j * n, ste.begin() + (j + 1) * n);
         std::sort(cta.begin() + j * n, cta.begin() + (j + 1) * n);
     }
-    const auto all = dense_A.view().all_items();
+    const auto all = dense_A.all_items();
     if (check_steqr_against_ref) expect_values(VectorView<Real>(ste.data(), n, batch), ref, norm2, n, std::nullopt, all);
     if (check_cta_against_ref) expect_values(VectorView<Real>(cta.data(), n, batch), ref, norm2, n, std::nullopt, all);
 }
@@ -1092,7 +1092,7 @@ TEST(SteqrLegacy, GradedEndsConvergeInBothOrientations) {
     StedcParams<double> params;
     auto ws = UnifiedVector<std::byte>(stedc_buffer_size<Backend::NETLIB, double>(ctx, n, batch, JobType::EigenVectors, params));
     auto Z = Matrix<double>::Zeros(n, n, batch);
-    (void)stedc<Backend::NETLIB, double>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, Z.view());
+    (void)stedc<Backend::NETLIB, double>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, Z);
     ctx.wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -1137,8 +1137,8 @@ bool tridiag_item_ok(Queue& ctx, const std::vector<long double>& hd, const std::
     for (int i = 0; i < n; ++i) wd[i] = evals(i, b);
     const std::vector<std::vector<double>> r{std::vector<double>(ref.begin(), ref.end())};
     const double ev_err = MatrixView<Real, MatrixFormat::Dense>::values_error(w, r, tnorm);
-    const double res = MD::eigen_residual(ctx, MD(T.data(), n, n, n), Zd.view(), VectorView<double>(wd.data(), n));
-    const double orth = MD::orthogonality(ctx, Zd.view());
+    const double res = MD::eigen_residual(ctx, MD(T.data(), n, n, n), Zd, VectorView<double>(wd.data(), n));
+    const double orth = MD::orthogonality(ctx, Zd);
     why = "eigenvalue error " + std::to_string(ev_err) + " (bound " +
           std::to_string(batchlas::verify::bound<Real>(Check::values, n)) + "), residual " + std::to_string(res) +
           " (bound " + std::to_string(batchlas::verify::bound<Real>(Check::eigen_residual, n)) + "), orthogonality " +
@@ -1445,7 +1445,7 @@ TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
         }
     }
     Matrix<Real> Qbuf(ld, n, batch);
-    const MatrixView<Real, MatrixFormat::Dense> Q(Qbuf.view().data_ptr(), n, n, ld, ld * n, batch);
+    const MatrixView<Real, MatrixFormat::Dense> Q(Qbuf.data_ptr(), n, n, ld, ld * n, batch);
     UnifiedVector<std::byte> ws(tridiagonal_solver_buffer_size<B, Real>(*this->ctx, n, batch, JobType::EigenVectors));
     (void)tridiagonal_solver<B, Real>(*this->ctx, diag.data(), sub.data(), w.data(), ws.to_span(),
                                       JobType::EigenVectors, Q, n, batch);
@@ -1468,9 +1468,9 @@ TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
     }
     std::sort(got.begin(), got.end());
     for (int i = 0; i < n; ++i) w_sorted(i, 0) = got[i];
-    dense_A.view().fill_tridiag(*this->ctx, e0, d0, e0).wait();
+    dense_A.fill_tridiag(*this->ctx, e0, d0, e0).wait();
     double norm2 = 0;
-    const auto ref = lapacke_spectra(dense_A.view(), norm2);
+    const auto ref = lapacke_spectra(dense_A, norm2);
     expect_values(VectorView<Real>(w_sorted), ref, norm2, n);
     // expect_values is norm-relative, blind to the small end: each eigenvalue against the Sturm
     // oracle, relative (verification.md, "Kept outside").
@@ -1481,8 +1481,8 @@ TYPED_TEST(SteqrTest, TridiagSolverGradedAndSaturatingBatch) {
     const double rel_tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
     for (int i = 0; i < n; ++i)
         EXPECT_LE(double(std::fabs(got[i] - sturm[i]) / std::fabs(sturm[i])), rel_tol) << "eigenvalue " << i;
-    const MatrixView<Real, MatrixFormat::Dense> Q0(Qbuf.view().data_ptr(), n, n, ld, ld * n, 1);
-    expect_pairs(*this->ctx, dense_A.view(), Q0, VectorView<Real>(w).batch_item(0));
+    const MatrixView<Real, MatrixFormat::Dense> Q0(Qbuf.data_ptr(), n, n, ld, ld * n, 1);
+    expect_pairs(*this->ctx, dense_A, Q0, VectorView<Real>(w).batch_item(0));
 }
 
 // sort() cannot permute eigenvalues with inc != 1: it throws its own error before enqueuing anything
@@ -1528,7 +1528,7 @@ TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
     Vector<Real> sub = Vector<Real>::random(n - 1, batch);
     Vector<Real> evals = Vector<Real>::zeros(n, batch);
     auto dense_A = Matrix<Real>::Zeros(n, n, batch);
-    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    dense_A.fill_tridiag(*this->ctx, sub, diag, sub).wait();
     auto eigvects = Matrix<Real>::Zeros(n, n, batch);
     for (const bool transposed : {false, true}) {
         SteqrParams<Real> params = {};
@@ -1542,9 +1542,9 @@ TYPED_TEST(SteqrTest, SteqrWgExactWorkspaceInPoisonedArena) {
         (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
         double norm2 = 0;
-        const auto ref = lapacke_spectra(dense_A.view(), norm2);
-        expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.view().all_items());
-        expect_pairs(*this->ctx, dense_A.view(), eigvects.view(), VectorView<Real>(evals), dense_A.view().all_items());
+        const auto ref = lapacke_spectra(dense_A, norm2);
+        expect_values(VectorView<Real>(evals), ref, norm2, n, std::nullopt, dense_A.all_items());
+        expect_pairs(*this->ctx, dense_A, eigvects, VectorView<Real>(evals), dense_A.all_items());
     }
 }
 
@@ -1559,7 +1559,7 @@ TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
     UnifiedVector<Real> evals_buf(std::size_t(stride) * batch, Real(0));
     const VectorView<Real> evals(evals_buf.data(), n, batch, 1, stride);
     auto dense_A = Matrix<Real>::Zeros(n, n, batch);
-    dense_A.view().fill_tridiag(*this->ctx, sub, diag, sub).wait();
+    dense_A.fill_tridiag(*this->ctx, sub, diag, sub).wait();
     SteqrParams<Real> params = {};
     params.max_sweeps = 10;
     params.sort = true;
@@ -1569,6 +1569,6 @@ TYPED_TEST(SteqrTest, SteqrWgSortScratchIgnoresEigenvaluePadding) {
                          MatrixView<Real, MatrixFormat::Dense>(nullptr, 0, 0));
     this->ctx->wait();
     double norm2 = 0;
-    const auto ref = lapacke_spectra(dense_A.view(), norm2);
-    expect_values(evals, ref, norm2, n, std::nullopt, dense_A.view().all_items());
+    const auto ref = lapacke_spectra(dense_A, norm2);
+    expect_values(evals, ref, norm2, n, std::nullopt, dense_A.all_items());
 }

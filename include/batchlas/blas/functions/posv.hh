@@ -131,8 +131,6 @@ inline Event posv(Queue& ctx,
     return posv<Back, T>(ctx, A, B, uplo, work_space, Span<int32_t>{});
 }
 
-BATCHLAS_ACCEPT_OWNING(posv)
-BATCHLAS_ACCEPT_OWNING(posv_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(posv)
 BATCHLAS_DISPATCH_ON_QUEUE(posv_buffer_size)

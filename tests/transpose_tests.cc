@@ -27,26 +27,26 @@ TYPED_TEST(TransposeTest, OrthoTransposeIdentity) {
     constexpr int batch_size = 2;
 
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, false, batch_size);
-    size_t ws = ortho_buffer_size(*this->ctx, A.view(), Transpose::NoTrans, OrthoAlgorithm::SVQB);
+    size_t ws = ortho_buffer_size(*this->ctx, A, Transpose::NoTrans, OrthoAlgorithm::SVQB);
     UnifiedVector<std::byte> workspace(ws);
-    (void)ortho(*this->ctx, A.view(), Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::SVQB);
+    (void)ortho(*this->ctx, A, Transpose::NoTrans, workspace.to_span(), OrthoAlgorithm::SVQB);
     this->ctx->wait();
 
-    Matrix<T, MatrixFormat::Dense> At = transpose(*this->ctx, A.view());
+    Matrix<T, MatrixFormat::Dense> At = transpose(*this->ctx, A);
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Prod(k, k, batch_size);
-    (void)gemm(*this->ctx, At.view(), A.view(), Prod.view(), {});
+    (void)gemm(*this->ctx, At, A, Prod, {});
     this->ctx->wait();
 
     // Three facts make Prod the identity: the copy is exactly A^T, the gemm of the two is right, and
     // A is orthonormal (SVQB orthogonalizes the given columns directly, so Check::orthogonality).
     using MV = MatrixView<T, MatrixFormat::Dense>;
-    const auto items = A.view().all_items();
+    const auto items = A.all_items();
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, m,
-                  MV::gemm_backward_error(*this->ctx, At.view(), Transpose::NoTrans, A.view(), Transpose::NoTrans, Prod.view(),
-                                          Prod.view(), 1.0, 0.0, items));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, A.view(), items));
+                  MV::gemm_backward_error(*this->ctx, At, Transpose::NoTrans, A, Transpose::NoTrans, Prod,
+                                          Prod, 1.0, 0.0, items));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, m, MV::orthogonality(*this->ctx, A, items));
     for (int b = 0; b < batch_size; ++b)
         for (int i = 0; i < m; ++i)
             for (int j = 0; j < k; ++j) ASSERT_EQ(At(j, i, b), A(i, j, b)) << "batch " << b << " (" << i << "," << j << ")";
@@ -61,7 +61,7 @@ TYPED_TEST(TransposeTest, SimpleTranspose) {
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(m, k, false, batch_size);
     this->ctx->wait();
 
-    Matrix<T, MatrixFormat::Dense> At = transpose(*this->ctx, A.view());
+    Matrix<T, MatrixFormat::Dense> At = transpose(*this->ctx, A);
     this->ctx->wait();
 
     ASSERT_EQ(At.rows(), k);

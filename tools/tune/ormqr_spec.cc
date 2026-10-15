@@ -79,9 +79,9 @@ struct OrmqrProblem {
         auto Q = MV::form_q(q, A0v, VectorView<T>(tau.data(), k, batch, 1, k), items, m);
         auto c0 = C0v.template astype<P>(items), c = Cv.template astype<P>(items);
         const Transpose nt = Transpose::NoTrans;
-        const auto all = Q.view().all_items();
-        return {side == Side::Left ? PV::gemm_backward_error(q, Q.view(), trans, c0.view(), nt, c0.view(), c.view(), P(1), P(0), all)
-                                   : PV::gemm_backward_error(q, c0.view(), nt, Q.view(), trans, c0.view(), c.view(), P(1), P(0), all),
+        const auto all = Q.all_items();
+        return {side == Side::Left ? PV::gemm_backward_error(q, Q, trans, c0, nt, c0, c, P(1), P(0), all)
+                                   : PV::gemm_backward_error(q, c0, nt, Q, trans, c0, c, P(1), P(0), all),
                 0};
     }
 };

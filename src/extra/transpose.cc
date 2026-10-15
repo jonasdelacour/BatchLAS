@@ -68,7 +68,7 @@ namespace batchlas {
         Matrix<T, MF> result(A.cols(), A.rows(), A.batch_size());
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)transpose_impl(ctx, A, result.view());
+        (void)transpose_impl(ctx, A, result);
         return result;
     }
 

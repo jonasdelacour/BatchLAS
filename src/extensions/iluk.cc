@@ -1150,7 +1150,7 @@ void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
     M.u_rows = to_unified(u.rows);
     M.u_level_ptr = to_unified(u.level_ptr);
     M.u_levels = u.levels;
-    M.u_diagonals_usable = u_diagonals_are_usable(M.lu.view().data().data(), M.diag_positions.data(),
+    M.u_diagonals_usable = u_diagonals_are_usable(M.lu.data().data(), M.diag_positions.data(),
                                                   M.n, M.batch_size, M.diagonal_shift);
 }
 

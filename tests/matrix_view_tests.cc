@@ -147,7 +147,7 @@ TEST(MatrixViewTest, DenseCopyHandlesTallSkinnyViewsWithPadding) {
     }
 
     Queue ctx(Device::default_device());
-    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), src.view()).wait();
+    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst, src).wait();
     ctx.wait_and_throw();
 
     for (int b = 0; b < batch; ++b) {
@@ -182,7 +182,7 @@ TEST(MatrixViewTest, DenseCopyHandlesContiguousMatricesWithDifferentBatchStrides
     }
 
     Queue ctx(Device::default_device());
-    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst.view(), src.view()).wait();
+    MatrixView<float, MatrixFormat::Dense>::copy(ctx, dst, src).wait();
     ctx.wait_and_throw();
 
     for (int b = 0; b < batch; ++b) {

@@ -83,16 +83,16 @@ inline UnifiedVector<typename base_type<Real>::type> residual_residuals(
     auto R = Matrix<Real>::Zeros(n, m, batch);
 
     (void)gemm<B, Real>(q,
-                  A.view(),
-                  Z.view(),
-                  R.view(),
+                  A,
+                  Z,
+                  R,
                   Real(1),
                   Real(0),
                   Transpose::NoTrans,
                   Transpose::NoTrans);
 
     auto r_view = R.kernel_view();
-    auto z_view = Z.view().kernel_view();
+    auto z_view = Z.kernel_view();
     auto lambda_ptr = evals.data_ptr();
     const int lambda_inc = evals.inc();
     const int lambda_stride = evals.stride();
@@ -110,7 +110,7 @@ inline UnifiedVector<typename base_type<Real>::type> residual_residuals(
                     });
     q.wait();
 
-    return norm(q, R.view(), NormType::Frobenius);
+    return norm(q, R, NormType::Frobenius);
 }
 
 inline double max_relative_eig_error(const std::vector<double>& ref_sorted,

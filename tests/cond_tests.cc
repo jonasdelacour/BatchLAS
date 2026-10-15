@@ -102,14 +102,14 @@ TYPED_TEST(CondTest, IdentityMatrix) {
     auto mat = Matrix<T, MatrixFormat::Dense>::Identity(n, batch_size);
 
     for (auto nt : {NormType::One, NormType::Inf, NormType::Max}) {
-        auto conds = cond<B>(*this->ctx, mat.view(), nt);
+        auto conds = cond<B>(*this->ctx, mat, nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_VERIFY(T, verify::Check::blas, this->reduction_length(nt, n), this->cond_error(conds[b], real_t(1)));
         }
     }
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
     for (int b = 0; b < batch_size; ++b) {
         EXPECT_VERIFY(T, verify::Check::blas, n * n, this->cond_error(conds[b], real_t(n)));
@@ -133,7 +133,7 @@ TYPED_TEST(CondTest, DiagonalMatrix) {
 
     for (auto nt : {NormType::Frobenius, NormType::One, NormType::Inf, NormType::Max}) {
         real_t expected = this->expected_cond_diagonal(diag, nt);
-        auto conds = cond<B>(*this->ctx, mat.view(), nt);
+        auto conds = cond<B>(*this->ctx, mat, nt);
         this->ctx->wait();
         for (int b = 0; b < batch_size; ++b) {
             EXPECT_VERIFY(T, verify::Check::blas, this->reduction_length(nt, n), this->cond_error(conds[b], expected));
@@ -154,7 +154,7 @@ TYPED_TEST(CondTest, RandomMatrixLogCondFrobenius) {
     // Expected Frobenius condition number from the requested conditioning metric.
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -175,7 +175,7 @@ TYPED_TEST(CondTest, RandomHermitianLogCondFrobenius) {
     auto mat = random_hermitian_with_log10_cond_metric<B, T>(*this->ctx, n, log10_cond, NormType::Frobenius, batch_size, /*seed=*/321);
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -195,7 +195,7 @@ TYPED_TEST(CondTest, RandomHermitianLogCondSpectral) {
 
     auto mat = random_hermitian_with_log10_cond_metric<B, T>(*this->ctx, n, log10_cond, NormType::Spectral, batch_size, /*seed=*/456);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Spectral);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Spectral);
     this->ctx->wait();
 
     const real_t tol_log10 = std::is_same_v<real_t, float> ? real_t(1.0f) : real_t(2.0);
@@ -218,7 +218,7 @@ TYPED_TEST(CondTest, RandomBandedLogCondFrobenius) {
     auto mat = random_banded_with_log10_cond_metric<B, T>(*this->ctx, n, kd, log10_cond, NormType::Frobenius, batch_size, /*seed=*/7);
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -251,7 +251,7 @@ TYPED_TEST(CondTest, RandomHermitianBandedLogCondFrobenius) {
     auto mat = random_hermitian_banded_with_log10_cond_metric<B, T>(*this->ctx, n, kd, log10_cond, NormType::Frobenius, batch_size, /*seed=*/11);
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -285,7 +285,7 @@ TYPED_TEST(CondTest, RandomTridiagonalLogCondFrobenius) {
     auto mat = random_tridiagonal_with_log10_cond_metric<B, T>(*this->ctx, n, log10_cond, NormType::Frobenius, batch_size, /*seed=*/9);
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -317,7 +317,7 @@ TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondFrobenius) {
     auto mat = random_hermitian_tridiagonal_with_log10_cond_metric<B, T>(*this->ctx, n, log10_cond, NormType::Frobenius, batch_size, /*seed=*/13);
     const real_t expected = this->expected_cond_frobenius_target(log10_cond);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Frobenius);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Frobenius);
     this->ctx->wait();
 
     const real_t rel_tol = std::is_same_v<real_t, float> ? real_t(2e-4f) : real_t(1e-8);
@@ -350,7 +350,7 @@ TYPED_TEST(CondTest, RandomHermitianTridiagonalLogCondSpectral) {
 
     auto mat = random_hermitian_tridiagonal_with_log10_cond_metric<B, T>(*this->ctx, n, log10_cond, NormType::Spectral, batch_size, /*seed=*/17);
 
-    auto conds = cond<B>(*this->ctx, mat.view(), NormType::Spectral);
+    auto conds = cond<B>(*this->ctx, mat, NormType::Spectral);
     this->ctx->wait();
 
     const real_t tol_log10 = real_t(0.5);

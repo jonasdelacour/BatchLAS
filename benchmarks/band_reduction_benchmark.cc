@@ -159,7 +159,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     const double total_flops = double(n) * double(kd) * double(kd) * double(sweep_count) * double(batch);
 
     const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
-                                                                   ab_in.view(),
+                                                                   ab_in,
                                                                    VectorView<Real>(d),
                                                                    VectorView<Real>(e),
                                                                    VectorView<T>(tau),

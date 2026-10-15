@@ -73,7 +73,7 @@ TYPED_TEST(SyevCtaFusedTest, EigenvectorsAllSizesBothTrianglesResidualAndOrtho) 
 			auto A = A0;
 			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 
-			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, uplo).wait();
+			syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, uplo).wait();
 
 			for (int b = 0; b < batch; ++b) {
 				// Sorted ascending by default.
@@ -82,7 +82,7 @@ TYPED_TEST(SyevCtaFusedTest, EigenvectorsAllSizesBothTrianglesResidualAndOrtho) 
 							  W[static_cast<std::size_t>(b) * n + i])
 						<< "eigenvalues not ascending at i=" << i;
 				}
-				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, b);
+				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, b);
 			}
 		}
 	}
@@ -102,12 +102,12 @@ TYPED_TEST(SyevCtaFusedTest, EigenvaluesOnlyMatchesNetlib) {
 
 	auto W_fused = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 
-	syev_cta_fused<B, Scalar>(*this->ctx, A_fused.view(), W_fused.to_span(), JobType::NoEigenVectors,
+	syev_cta_fused<B, Scalar>(*this->ctx, A_fused, W_fused.to_span(), JobType::NoEigenVectors,
 							  Uplo::Lower)
 		.wait();
 
 	// Every item against LAPACKE in double (not a BatchLAS syev on this queue).
-	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W_fused, n, false, A0.view().all_items());
+	test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_fused, n, false, A0.all_items());
 
 	// jobz == NoEigenVectors must leave A alone (unlike syev_cta, which leaves
 	// the reduction's reflectors behind).
@@ -143,12 +143,12 @@ TYPED_TEST(SyevCtaFusedTest, AgreesWithPartitionedSyevCta) {
 
 		SteqrParams<Scalar> p;
 		auto ws = UnifiedVector<std::byte>(
-			syev_cta_buffer_size<B, Scalar>(*this->ctx, A_pipe.view(), JobType::EigenVectors, p));
-		syev_cta<B, Scalar>(*this->ctx, A_pipe.view(), W_pipe.to_span(), JobType::EigenVectors,
+			syev_cta_buffer_size<B, Scalar>(*this->ctx, A_pipe, JobType::EigenVectors, p));
+		syev_cta<B, Scalar>(*this->ctx, A_pipe, W_pipe.to_span(), JobType::EigenVectors,
 							Uplo::Lower, ws.to_span(), p)
 			.wait();
 
-		syev_cta_fused<B, Scalar>(*this->ctx, A_fused.view(), W_fused.to_span(), JobType::EigenVectors,
+		syev_cta_fused<B, Scalar>(*this->ctx, A_fused, W_fused.to_span(), JobType::EigenVectors,
 								  Uplo::Lower)
 			.wait();
 
@@ -165,13 +165,13 @@ TYPED_TEST(SyevCtaFusedTest, NearDegenerateSpectrum) {
 	const int batch = 4;
 
 	Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
-	A0.view().fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/1337).wait();
+	A0.fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/1337).wait();
 	auto A = A0;
 	auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 
-	syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+	syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, A0.view().all_items());
+	test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, A0.all_items());
 }
 
 // Descending order and the work-group multiplier are both wired through to the
@@ -195,7 +195,7 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 		SteqrParams<Scalar> p;
 		p.sort_order = SortOrder::Descending;
 
-		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+		syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower,
 								  Span<std::byte>(), p, mult)
 			.wait();
 
@@ -205,7 +205,7 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 					<< "eigenvalues not descending at i=" << i;
 			}
 		}
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, 0);
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, 0);
 	}
 }
 
@@ -229,13 +229,13 @@ TYPED_TEST(SyevCtaFusedTest, WgMultiplierIsClampedToLocalMemoryInWholeSteps) {
 			auto A = A0;
 			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 			auto run = [&] {
-				syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+				syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower,
 				                          Span<std::byte>(), SteqrParams<Scalar>{}, mult)
 					.wait();
 			};
 			ASSERT_NO_THROW(run());
 			const int items[] = {0, batch / 2, batch - 1};
-			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, items);
+			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, items);
 		}
 	}
 }
@@ -269,9 +269,9 @@ TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
 		auto A = A0;
 		auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 
-		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+		syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, A0.view().all_items());
+		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, A0.all_items());
 	}
 }
 
@@ -298,7 +298,7 @@ TYPED_TEST(SyevCtaFusedTest, RaggedTailBatch) {
 			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
 			auto info = UnifiedVector<int32_t>(static_cast<std::size_t>(batch), int32_t(0));
 
-			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+			syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower,
 									  Span<std::byte>(), SteqrParams<Scalar>{}, static_cast<size_t>(mult),
 									  info.to_span())
 				.wait();
@@ -306,7 +306,7 @@ TYPED_TEST(SyevCtaFusedTest, RaggedTailBatch) {
 			for (int b : {0, 1, batch - 2, batch - 1}) {
 				SCOPED_TRACE(::testing::Message() << "item " << b);
 				EXPECT_EQ(info[static_cast<std::size_t>(b)], 0);
-				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0.view(), A.view(), W, n, b);
+				test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A, W, n, b);
 			}
 		}
 	}
@@ -317,7 +317,7 @@ TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
 	constexpr Backend B = TestFixture::BackendType;
 
 	auto A = Matrix<Scalar, MatrixFormat::Dense>::Random(8, 8, /*hermitian=*/true, 2, /*seed=*/5);
-	const size_t ws_bytes = syev_cta_fused_buffer_size<B, Scalar>(*this->ctx, A.view(), JobType::EigenVectors);
+	const size_t ws_bytes = syev_cta_fused_buffer_size<B, Scalar>(*this->ctx, A, JobType::EigenVectors);
 	EXPECT_EQ(ws_bytes, 0u);
 }
 
@@ -339,10 +339,10 @@ TYPED_TEST(SyevCtaFusedTest, NaNInputLeavesNoStaleSlot) {
 			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
 			SteqrParams<Scalar> params{};
 			params.sort_order = order;
-			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
+			syev_cta_fused<B, Scalar>(*this->ctx, A, W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
 			for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
 			const std::vector<int> clean{1, 2, 3};
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0.view(), W, n, /*sorted_copy=*/true, clean);
+			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W, n, /*sorted_copy=*/true, clean);
 		}
 	}
 }

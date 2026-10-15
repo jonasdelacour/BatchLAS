@@ -71,7 +71,7 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
                     const int cols = side == Side::Left ? shape.m : n;
 
                     auto A_clean = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, shape.batch, 17);
-                    A_clean.view().hermitize(*(this->ctx), uplo).wait();
+                    A_clean.hermitize(*(this->ctx), uplo).wait();
                     auto A_poisoned = A_clean.clone();
 
                     auto B = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, shape.batch, 19);
@@ -101,20 +101,20 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
                     this->ctx->wait();
 
                     Matrix<T, MatrixFormat::Dense> C(rows, cols, shape.batch);
-                    MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+                    MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
-                    hemm(*(this->ctx), A_poisoned.view(), B.view(), C.view(),
+                    hemm(*(this->ctx), A_poisoned, B, C,
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
                     using MV = MatrixView<T, MatrixFormat::Dense>;
                     auto A_mirror = A_poisoned.clone();
-                    A_mirror.view().hermitize(*(this->ctx), uplo).wait();
+                    A_mirror.hermitize(*(this->ctx), uplo).wait();
                     const double err =
                         side == Side::Left
-                            ? MV::gemm_backward_error(*(this->ctx), A_mirror.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans,
-                                                      C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items())
-                            : MV::gemm_backward_error(*(this->ctx), B.view(), Transpose::NoTrans, A_mirror.view(), Transpose::NoTrans,
-                                                      C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items());
+                            ? MV::gemm_backward_error(*(this->ctx), A_mirror, Transpose::NoTrans, B, Transpose::NoTrans,
+                                                      C0, C, MV::up(alpha), MV::up(beta), C.all_items())
+                            : MV::gemm_backward_error(*(this->ctx), B, Transpose::NoTrans, A_mirror, Transpose::NoTrans,
+                                                      C0, C, MV::up(alpha), MV::up(beta), C.all_items());
                     EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
                         << "hemm read storage it must not touch: " << route << " route, n=" << n
                         << ", side=" << (side == Side::Left ? "Left" : "Right")
@@ -149,19 +149,19 @@ TYPED_TEST(HemmTest, ExpandBatchAboveGridFallsBack) {
         const int n = 8, m = 6, batch = 65536;
         const T alpha = T(0.5, -1.25), beta = T(0.75, 0.5);
         auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);
-        A.view().hermitize(*(this->ctx), Uplo::Lower).wait();
+        A.hermitize(*(this->ctx), Uplo::Lower).wait();
         auto B = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 43);
         auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 47);
         this->ctx->wait();
         auto C = C0.clone();
         this->ctx->wait();
-        ASSERT_NO_THROW((hemm(*(this->ctx), A.view(), B.view(), C.view(),
+        ASSERT_NO_THROW((hemm(*(this->ctx), A, B, C,
                               {.alpha = alpha, .beta = beta, .side = Side::Left, .uplo = Uplo::Lower})
                              .wait()));
         using MV = MatrixView<T, MatrixFormat::Dense>;
         EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
-                      MV::gemm_backward_error(*(this->ctx), A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans,
-                                              C0.view(), C.view(), MV::up(alpha), MV::up(beta), C.view().all_items()));
+                      MV::gemm_backward_error(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans,
+                                              C0, C, MV::up(alpha), MV::up(beta), C.all_items()));
     }
 }
 
@@ -189,13 +189,13 @@ TYPED_TEST(HemmTest, OptionStructMatchesPositional) {
     }
     this->ctx->wait();
 
-    (void)hemm(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
-    (void)hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
+    (void)hemm(*(this->ctx), A, B, C_defaults, {});
+    (void)hemm<Ba, T>(*(this->ctx), A, B, C_defaults_pos,
                 T(1), T(0), Side::Left, Uplo::Lower);
 
-    (void)hemm(*(this->ctx), A.view(), B.view(), C_named.view(),
+    (void)hemm(*(this->ctx), A, B, C_named,
          {.alpha = T(1.5, 0.25), .side = Side::Right, .uplo = Uplo::Upper});
-    (void)hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
+    (void)hemm<Ba, T>(*(this->ctx), A, B, C_named_pos,
                 T(1.5, 0.25), T(0), Side::Right, Uplo::Upper);
     this->ctx->wait();
 
@@ -227,12 +227,12 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
         auto X = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 13);
         Matrix<T, MatrixFormat::Dense> AX(n, n, batch);
         Matrix<T, MatrixFormat::Dense> XhAX(n, n, batch);
-        (void)AX.view().fill_zeros(*(this->ctx));
-        (void)XhAX.view().fill_zeros(*(this->ctx));
+        (void)AX.fill_zeros(*(this->ctx));
+        (void)XhAX.fill_zeros(*(this->ctx));
         this->ctx->wait();
 
-        hemm(*(this->ctx), A.view(), X.view(), AX.view(), {.uplo = uplo}).wait();
-        gemm(*(this->ctx), X.view(), AX.view(), XhAX.view(),
+        hemm(*(this->ctx), A, X, AX, {.uplo = uplo}).wait();
+        gemm(*(this->ctx), X, AX, XhAX,
              {.transA = Transpose::ConjTrans}).wait();
 
         // Imaginary diagonal over the largest denominator of X^H (AX): two products of length n, k = 2n.
@@ -240,17 +240,17 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
         for (int b = 0; b < batch; ++b) {
             double worst = 0;
             for (int i = 0; i < n; ++i) worst = batchlas::verify::nanmax(worst, std::abs(double(XhAX(i, i, b).imag())));
-            const double scale = MV::gemm_max_denominator(*(this->ctx), X.view(), Transpose::ConjTrans, AX.view(), Transpose::NoTrans,
-                                                          XhAX.view(), 1.0, 0.0, std::span<const int>(&b, 1));
+            const double scale = MV::gemm_max_denominator(*(this->ctx), X, Transpose::ConjTrans, AX, Transpose::NoTrans,
+                                                          XhAX, 1.0, 0.0, std::span<const int>(&b, 1));
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * n, worst / scale)
                 << "x^H A x is not real, so the expansion lost the conjugate: uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper")
                 << ", batch=" << b;
         }
         auto A_mirror = A.clone();
-        A_mirror.view().hermitize(*(this->ctx), uplo).wait();
+        A_mirror.hermitize(*(this->ctx), uplo).wait();
         EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
-                      MV::gemm_backward_error(*(this->ctx), A_mirror.view(), Transpose::NoTrans, X.view(), Transpose::NoTrans, AX.view(),
-                                              AX.view(), 1.0, 0.0, AX.view().all_items()))
+                      MV::gemm_backward_error(*(this->ctx), A_mirror, Transpose::NoTrans, X, Transpose::NoTrans, AX,
+                                              AX, 1.0, 0.0, AX.all_items()))
             << "uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper");
     }
 }

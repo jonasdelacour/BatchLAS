@@ -20,10 +20,10 @@ int main() {
     Queue ctx(Device::default_device());      // backend resolved from the device
     Matrix<float> A(n, n, batch), B(n, n, batch), C(n, n, batch);
 
-    A.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
-    B.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+    A.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+    B.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
 
-    gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});   // C := 2 A B
+    gemm(ctx, A, B, C, {.alpha = 2.0f});   // C := 2 A B
     ctx.wait();                               // nothing is readable before this
 
     float c00 = C(0, 0, 0);                   // Matrix owns USM shared memory
@@ -191,8 +191,8 @@ diagonal, `hermitize(ctx, uplo)` its conjugate (the right one for `herk`/`her2k`
 kernel on a square `MatrixView` and return an `Event`.
 
 ```cpp
-syrk(ctx, A.view(), C.view(), {.uplo = Uplo::Lower}).wait();
-C.view().symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
+syrk(ctx, A, C, {.uplo = Uplo::Lower}).wait();
+C.symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
 ```
 
 - `gemm` handles a heterogeneous batch (differing `active_rows`/`active_cols`) on every backend.
@@ -225,20 +225,20 @@ to a `Span` would drop the stride and read wrong elements.
 | you hold | parameter is `Span<T>` | parameter is `VectorView<T>` |
 | --- | --- | --- |
 | `UnifiedVector<T>` | pass directly, or `.to_span()` | `VectorView<T>(v, size, batch, Inc{i}, Stride{s})` |
-| `Vector<T>` | `.data()`: the whole allocation, so only when `inc == 1` and packed | `.view()` |
+| `Vector<T>` | `.data()`: the whole allocation, so only when `inc == 1` and packed | pass directly |
 | raw pointer | `Span<T>(p, n)` | `VectorView<T>(p, size, batch, Inc{i}, Stride{s})` |
 
-Every entry point accepts owning `Matrix`/`Vector` arguments where a view is expected (a generated
-forwarder, `BATCHLAS_ACCEPT_OWNING` in `blas/queue-dispatch.hh`). Two forms fail to compile: a bare
-`{}` in any argument position (name the type: `OrthoOptions{}`), and explicit template arguments for
-some parameters with deduction for others (`spmm<Backend::CUDA, float>(ctx, A, ...)` with an owning
-`A`; write `spmm<Backend::CUDA>(ctx, A, ...)`).
+A `Matrix` is a `MatrixView` and a `Vector` a `VectorView`, so owning arguments go wherever a view
+is expected, and every view member (`fill_random()`, `batch_item()`, `symmetrize()`, ...) is
+called on the owning object directly. Pass `.view()` only to a generic parameter (`auto`, a
+template `T`), which would otherwise copy the matrix. A bare `{}` in an argument position does not
+compile: name the type (`OrthoOptions{}`).
 
 ```cpp
 UnifiedVector<int64_t> pivots(n * batch);
 UnifiedVector<float>   W(n * batch);            // real, even for complex A
 Vector<float> x(n, /*batch_size=*/batch), y(m, batch);
-gemv(ctx, A.view(), x.view(), y.view(), {.alpha = 1.0f});
+gemv(ctx, A, x, y, {.alpha = 1.0f});
 ```
 
 > **Warning:** `Vector` names `inc` and `stride`; `VectorView` also takes them positionally, in the
@@ -252,9 +252,9 @@ gemv(ctx, A.view(), x.view(), y.view(), {.alpha = 1.0f});
 Most entry points take an option struct, so you write only what differs:
 
 ```cpp
-gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f, .transA = Transpose::Trans});
-syev(ctx, A.view(), W, {.jobz = JobType::NoEigenVectors});
-getrs(ctx, LU.view(), X.view(), pivots, {.trans = Transpose::Trans});
+gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
+syev(ctx, A, W, {.jobz = JobType::NoEigenVectors});
+getrs(ctx, LU, X, pivots, {.trans = Transpose::Trans});
 ```
 
 The structs are in `batchlas/blas/options.hh` (group @ref api_options): `GemmOptions<T>`,
@@ -306,9 +306,9 @@ replaces the `int32_t block_size` argument.
   with_backend(ctx, [&](auto Back) {
       constexpr Backend Bk = Back.value;
       auto ws = ctx.workspace(gesvd_buffer_size<Bk, float>(
-                                  ctx, A.view(), S, U.view(), Vh.view(),
+                                  ctx, A, S, U, Vh,
                                   SvdVectors::All, SvdVectors::All));
-      gesvd<Bk, float>(ctx, A.view(), S, U.view(), Vh.view(),
+      gesvd<Bk, float>(ctx, A, S, U, Vh,
                        SvdVectors::All, SvdVectors::All, ws.span());
   });
   ```
@@ -319,7 +319,7 @@ replaces the `int32_t block_size` argument.
   required argument: `stebz_buffer_size(ctx, n, batch, StebzParams<float>{})`.
 
 With an empty option struct *and* an explicit workspace, name the type:
-`potrf(ctx, A.view(), PotrfOptions{}, ws)`. `T` is deduced from the matrix arguments, never from the
+`potrf(ctx, A, PotrfOptions{}, ws)`. `T` is deduced from the matrix arguments, never from the
 option struct: write `syev<B>(ctx, ...)` or `syev(ctx, ...)` on the option-struct spelling and
 `syev<B, float>(ctx, ...)` on the positional one.
 
@@ -443,7 +443,7 @@ matrix you own, the `fill_*` family on `MatrixView` writes in place and returns 
 > same `(i, j, b)`); `fill_triangular_random` keys on the index within a matrix, so every batch item
 > of a `RandomTriangular` result is the same matrix.
 
-View-to-view copy is asynchronous: `MatrixView<float>::copy(ctx, dst.view(), src.view())`. Host
+View-to-view copy is asynchronous: `MatrixView<float>::copy(ctx, dst, src)`. Host
 element access is one indexed store into managed memory per element: use it for a handful of entries
 and tests, not to load a batch. `MatrixView` never owns.
 
@@ -520,7 +520,7 @@ existing `std::` handlers still catch it (and Python raises the same type as bef
 #include <batchlas/error.hh>
 
 try {
-    syev(ctx, A.view(), W.to_span());
+    syev(ctx, A, W.to_span());
 } catch (const batchlas::workspace_error& e) {
     // the recoverable one: re-query *_buffer_size, or halve the batch and retry
 } catch (const batchlas::exception& e) {
@@ -580,8 +580,8 @@ status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status. It
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
-potrf(ctx, A.view(), {.uplo = Uplo::Lower, .info = info.to_span()});
-getrf(ctx, A.view(), pivots.to_span(), info.to_span());
+potrf(ctx, A, {.uplo = Uplo::Lower, .info = info.to_span()});
+getrf(ctx, A, pivots.to_span(), info.to_span());
 ctx.wait();
 if (info[37] != 0) { /* item 37 is rank-deficient; everything downstream is noise */ }
 ```
@@ -598,7 +598,7 @@ in a batch of 16384 is invisible: the call and `ctx.wait()` return normally.
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
-syev<Backend::CUDA>(ctx, A.view(), W.to_span(),
+syev<Backend::CUDA>(ctx, A, W.to_span(),
                     JobType::EigenVectors, Uplo::Lower, ws.to_span(), info.to_span());
 ctx.wait();
 for (int b = 0; b < batch; ++b) if (info[b] != 0) { /* item b's eigenvalues are not to be trusted */ }
@@ -624,7 +624,7 @@ Every entry point enqueues work and returns an `Event`. Contents of a `Matrix`, 
 `UnifiedVector` are not readable until the work finishes:
 
 ```cpp
-Event e = gemm(ctx, A.view(), B.view(), C.view(), GemmOptions<float>{});
+Event e = gemm(ctx, A, B, C, GemmOptions<float>{});
 e.wait();                    // wait on this call, or
 ctx.wait();                  // wait on everything enqueued on the queue
 ctx.wait_and_throw();        // ... and rethrow asynchronous errors
@@ -665,7 +665,7 @@ runtime choice into one:
 ```cpp
 with_backend(ctx, [&](auto Back) {
     constexpr Backend Bk = Back.value;
-    gemm<Bk>(ctx, A.view(), B.view(), C.view(), 1.0f, 0.0f,
+    gemm<Bk>(ctx, A, B, C, 1.0f, 0.0f,
              Transpose::NoTrans, Transpose::NoTrans);
 });
 ```
@@ -784,7 +784,7 @@ LAPACK-style entry points need scratch. Leaving the workspace argument out lease
 per-`Queue` arena, sized by the matching `*_buffer_size`:
 
 ```cpp
-potrf(ctx, A.view(), {.uplo = Uplo::Lower});   // workspace leased and returned
+potrf(ctx, A, {.uplo = Uplo::Lower});   // workspace leased and returned
 ```
 
 To size and own the buffer yourself:
@@ -792,8 +792,8 @@ To size and own the buffer yourself:
 ```cpp
 with_backend(ctx, [&](auto Back) {
     constexpr Backend Bk = Back.value;
-    UnifiedVector<std::byte> ws(potrf_buffer_size<Bk, float>(ctx, A.view(), Uplo::Lower));
-    potrf<Bk, float>(ctx, A.view(), Uplo::Lower, ws.to_span());
+    UnifiedVector<std::byte> ws(potrf_buffer_size<Bk, float>(ctx, A, Uplo::Lower));
+    potrf<Bk, float>(ctx, A, Uplo::Lower, ws.to_span());
     ctx.wait();                                // ws must outlive the kernels
 });
 ```
@@ -807,7 +807,7 @@ with_backend(ctx, [&](auto Back) {
   (released when `lease` goes out of scope).
 
 When to keep managing the workspace yourself (pass a span explicitly, e.g.
-`potrf(ctx, A.view(), {.uplo = Uplo::Lower}, my_span)`):
+`potrf(ctx, A, {.uplo = Uplo::Lower}, my_span)`):
 
 - **On an out-of-order queue, pass your own span.** A lease's bytes go to the next borrower on
   return; in order that borrower is ordered behind this call, out of order nothing orders them, so
@@ -842,7 +842,7 @@ batchlas::event_from_sycl(sycl::event) -> Event
 sycl::event mine = my_queue.submit(/* ... */);
 Event e = batchlas::event_from_sycl(mine);
 ctx.enqueue(e);                                       // `enqueue` takes an lvalue
-batchlas::potrf(ctx, A.view(), {.uplo = Uplo::Lower}); // waits for `mine`
+batchlas::potrf(ctx, A, {.uplo = Uplo::Lower}); // waits for `mine`
 
 // ... and in the other direction:
 my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
@@ -859,10 +859,10 @@ elementwise free functions; there are no operator overloads. Each takes its back
 and workspace from the arena.
 
 ```cpp
-auto C = linalg::matmul(ctx, A.view(), B.view());   // allocates and returns C
-auto L = linalg::cholesky(ctx, A.view());           // A is not modified
-auto X = linalg::solve(ctx, A.view(), B.view());    // A X = B
-auto e = linalg::eigh(ctx, A.view());               // e.values, e.vectors
+auto C = linalg::matmul(ctx, A, B);   // allocates and returns C
+auto L = linalg::cholesky(ctx, A);    // A is not modified
+auto X = linalg::solve(ctx, A, B);    // A X = B
+auto e = linalg::eigh(ctx, A);        // e.values, e.vectors
 ctx.wait();                                         // required before reading any of them
 ```
 

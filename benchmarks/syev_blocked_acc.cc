@@ -49,9 +49,9 @@ void run_syev_blocked(miniacc::State& state) {
 
         try {
             UnifiedVector<std::byte> ws(
-                syev_blocked_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, Uplo::Lower));
+                syev_blocked_buffer_size<B, Real>(*q, A_work, JobType::EigenVectors, Uplo::Lower));
             (void)syev_blocked<B, Real>(*q,
-                                  A_work.view(),
+                                  A_work,
                                   eigvals.to_span(),
                                   JobType::EigenVectors,
                                   Uplo::Lower,
@@ -64,7 +64,7 @@ void run_syev_blocked(miniacc::State& state) {
         }
 
         VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
-        auto conds = cond<B>(*q, A.view(), NormType::Spectral);
+        auto conds = cond<B>(*q, A, NormType::Spectral);
         q->wait();
         miniacc_acc::record_eigensolver_metrics<B, Real>(
             state,

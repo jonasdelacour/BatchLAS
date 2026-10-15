@@ -133,9 +133,9 @@ struct GesvdProblem {
         auto vh = Vhv.template astype<T>(items);
         Matrix<T, MatrixFormat::Dense> vhh(vcols, vrows, int(items.size()));
         auto eye = Matrix<T, MatrixFormat::Dense>::Identity(vrows, int(items.size()));
-        (void)MV::product(q, vh.view(), Transpose::ConjTrans, eye.view(), Transpose::NoTrans, vhh.view());
+        (void)MV::product(q, vh, Transpose::ConjTrans, eye, Transpose::NoTrans, vhh);
         q.wait();
-        const double ov = MV::orthogonality(q, vhh.view(), vhh.view().all_items()) /
+        const double ov = MV::orthogonality(q, vhh, vhh.all_items()) /
                           verify::bound<T>(verify::Check::orthogonality_rotations, vrows);
         worst = verify::nanmax(worst, verify::nanmax(rec, verify::nanmax(ou, ov)));
         return {worst, bad};

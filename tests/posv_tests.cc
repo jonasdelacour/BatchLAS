@@ -152,11 +152,11 @@ MatrixView<T, MatrixFormat::Dense> b_view(Sys<T>& p) {
 template <typename T>
 double solve_residual(Queue& ctx, const Sys<T>& p, int item, Uplo uplo) {
     Matrix<T> af(p.n, p.n, 1);  // a0 holds only the uplo triangle: mirror it onto a copy
-    MV<T>::copy(ctx, af.view(), MV<T>(const_cast<T*>(p.a0.data()) + size_t(item) * p.stra, p.n, p.n, p.lda)).wait();
-    if constexpr (is_std_complex_v<T>) af.view().hermitize(ctx, uplo);
-    else af.view().symmetrize(ctx, uplo);
+    MV<T>::copy(ctx, af, MV<T>(const_cast<T*>(p.a0.data()) + size_t(item) * p.stra, p.n, p.n, p.lda)).wait();
+    if constexpr (is_std_complex_v<T>) af.hermitize(ctx, uplo);
+    else af.symmetrize(ctx, uplo);
     ctx.wait();
-    return MV<T>::solve_residual(ctx, af.view(), MV<T>(const_cast<T*>(p.b.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
+    return MV<T>::solve_residual(ctx, af, MV<T>(const_cast<T*>(p.b.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb),
                                  MV<T>(const_cast<T*>(p.b0.data()) + size_t(item) * p.strb, p.n, p.nrhs, p.ldb));
 }
 
@@ -444,8 +444,8 @@ TYPED_TEST(PosvTest, LinalgSolveSpdLeavesItsInputsAlone) {
         for (int k = 0; k < p.nrhs; ++k)
             for (int i = 0; i < n; ++i)
                 p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] =
-                    X.view().data_ptr()[size_t(bi) * X.view().stride() +
-                                        size_t(k) * X.view().ld() + i];
+                    X.data_ptr()[size_t(bi) * X.stride() +
+                                        size_t(k) * X.ld() + i];
     for (int item : {0, p.batch - 1})
         EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(*this->ctx, p, item, Uplo::Lower));
 }

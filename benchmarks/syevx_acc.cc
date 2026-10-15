@@ -73,19 +73,19 @@ void run_syevx(miniacc::State& state) {
             try {
                 UnifiedVector<std::byte> ws(
                     syevx_buffer_size(*q,
-                                         A_work.view(),
+                                         A_work,
                                          eigvals.to_span(),
                                          static_cast<size_t>(neigs),
                                          JobType::EigenVectors,
-                                         V.view(),
+                                         V,
                                          params));
                 (void)syevx(*q,
-                         A_work.view(),
+                         A_work,
                          eigvals.to_span(),
                          static_cast<size_t>(neigs),
                          ws.to_span(),
                          JobType::EigenVectors,
-                         V.view(),
+                         V,
                          params);
                 q->wait_and_throw();
             } catch (const std::exception& ex) {
@@ -95,7 +95,7 @@ void run_syevx(miniacc::State& state) {
             }
 
             VectorView<Real> evals_view(eigvals.to_span(), neigs, cur_batch, 1, neigs);
-            auto conds = cond<B>(*q, A_dense.view(), NormType::Spectral);
+            auto conds = cond<B>(*q, A_dense, NormType::Spectral);
             q->wait_and_throw();
             miniacc_acc::record_eigensolver_metrics<B, Real>(
                 state,

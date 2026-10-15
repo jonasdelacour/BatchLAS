@@ -74,17 +74,17 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
     UnifiedVector<T> tau_storage(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     // Build reflectors via QR once (outside timed region).
-    size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau_storage.to_span());
+    size_t geqrf_ws = geqrf_buffer_size(*q, A, tau_storage.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf(*q, A.view(), tau_storage.to_span(), ws_geqrf.to_span()).wait();
+    geqrf(*q, A, tau_storage.to_span(), ws_geqrf.to_span()).wait();
     q->wait();
 
     // Apply to identity to avoid numerical blow-up across iterations.
     auto C = Matrix<T>::Identity(n, batch);
 
     size_t ws_bytes = ormqr_blocked_buffer_size<B, T>(*q,
-                                                     A.view(),
-                                                     C.view(),
+                                                     A,
+                                                     C,
                                                      side,
                                                      trans,
                                                      tau_storage.to_span(),
@@ -104,8 +104,8 @@ static void BM_ORMQR_BLOCKED(minibench::State& state) {
                       Transpose trans,
                       int block_size) {
         return ormqr_blocked<B, T>(*q,
-                                  A.view(),
-                                  C.view(),
+                                  A,
+                                  C,
                                   side,
                                   trans,
                                   tau_storage.to_span(),

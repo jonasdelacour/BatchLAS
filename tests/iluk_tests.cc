@@ -224,13 +224,13 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
         params.levels_of_fill = k;
         auto M = iluk_factorize(*ctx, A, params);
 
-        (void)iluk_apply(*ctx, M, rhs.view(), out.view());
+        (void)iluk_apply(*ctx, M, rhs, out);
         ctx->wait_and_throw();
 
         // A diagonal A factors exactly at every fill level, so applying M is solving A X = rhs.
         EXPECT_VERIFY(float, verify::Check::solve, n,
-                      (MatrixView<float, MatrixFormat::Dense>::solve_residual(*ctx, A_dense.view(), out.view(), rhs.view(),
-                                                                              A_dense.view().all_items())))
+                      (MatrixView<float, MatrixFormat::Dense>::solve_residual(*ctx, A_dense, out, rhs,
+                                                                              A_dense.all_items())))
             << "k=" << k;
     }
 }
@@ -342,7 +342,7 @@ TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
     rhs(0, 0, 0) = 1.0f;
     rhs(1, 0, 0) = 2.0f;
 
-    EXPECT_THROW(((void)iluk_apply(*ctx, M, rhs.view(), out.view())), std::runtime_error);
+    EXPECT_THROW(((void)iluk_apply(*ctx, M, rhs, out)), std::runtime_error);
 }
 
 TEST_F(ILUKTests, DropToleranceRemovesTinyOffDiagonalEntries) {
@@ -485,10 +485,10 @@ TEST_F(ILUKTests, InverseResidualIsNearZeroForExactTridiagonalFactorization) {
     auto identity = make_identity_matrix<float>(n, batch);
     Matrix<float, MatrixFormat::Dense> approx_inverse(n, n, batch);
 
-    (void)iluk_apply(*ctx, M, identity.view(), approx_inverse.view());
+    (void)iluk_apply(*ctx, M, identity, approx_inverse);
     ctx->wait_and_throw();
 
-    const double residual = inverse_residual_frobenius(A, approx_inverse.view());
+    const double residual = inverse_residual_frobenius(A, approx_inverse);
     EXPECT_LT(residual, 1e-4) << "Expected ILU(0) to reproduce the exact inverse on a tridiagonal system";
 }
 
@@ -525,12 +525,12 @@ TEST_F(ILUKTests, HigherFillImprovesApproximateInverseResidualOnLargeSparseMatri
     auto M0 = iluk_factorize(*ctx, A, params_k0);
     auto M4 = iluk_factorize(*ctx, A, params_k4);
 
-    (void)iluk_apply(*ctx, M0, identity.view(), approx_inverse_k0.view());
-    (void)iluk_apply(*ctx, M4, identity.view(), approx_inverse_k4.view());
+    (void)iluk_apply(*ctx, M0, identity, approx_inverse_k0);
+    (void)iluk_apply(*ctx, M4, identity, approx_inverse_k4);
     ctx->wait_and_throw();
 
-    const double residual_k0 = inverse_residual_frobenius(A, approx_inverse_k0.view());
-    const double residual_k4 = inverse_residual_frobenius(A, approx_inverse_k4.view());
+    const double residual_k0 = inverse_residual_frobenius(A, approx_inverse_k0);
+    const double residual_k4 = inverse_residual_frobenius(A, approx_inverse_k4);
     const double normalized_residual_k4 = residual_k4 / std::sqrt(static_cast<double>(n));
 
     EXPECT_LT(residual_k4, residual_k0)
@@ -1101,14 +1101,14 @@ TEST_F(ILUKTests, DISABLED_SyevxVsSyevThreshold) {
         bool have_syev = false;
         try {
             UnifiedVector<std::byte> ws(syev_buffer_size(
-                *ctx, dense_work.view(), W_full, JobType::NoEigenVectors, Uplo::Lower));
+                *ctx, dense_work, W_full, JobType::NoEigenVectors, Uplo::Lower));
             std::vector<double> samples;
             for (int r = 0; r < reps + 1; ++r) {  // first pass is a discarded warm-up
-                (void)MatrixView<float, MatrixFormat::Dense>::copy(*ctx, dense_work.view(), dense_ref.view());
+                (void)MatrixView<float, MatrixFormat::Dense>::copy(*ctx, dense_work, dense_ref);
                 ctx->wait_and_throw();
                 const auto t0 = std::chrono::steady_clock::now();
                 (void)syev(*ctx,
-                                              dense_work.view(),
+                                              dense_work,
                                               W_full,
                                               {.jobz = JobType::NoEigenVectors},
                                               ws);
@@ -1304,7 +1304,7 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
         const auto ta = std::chrono::steady_clock::now();
         constexpr int apply_reps = 10;
         for (int r = 0; r < apply_reps; ++r) {
-            (void)iluk_apply(*ctx, M, rhs.view(), out.view());
+            (void)iluk_apply(*ctx, M, rhs, out);
         }
         ctx->wait_and_throw();
         const double apply_s = seconds_since(ta) / apply_reps;
@@ -1343,7 +1343,7 @@ TEST_F(ILUKTests, DISABLED_FactorLevelStructure) {
         for (const auto& s : shapes) {
             auto csr = csr_generators::random_sparse_hermitian_csr<float>(s.n, s.density, s.batch, 1234u, 2.0f, true);
             ILUKParams<float> p; p.levels_of_fill = level;
-            auto M = iluk_factorize(*ctx, csr.view(), p);
+            auto M = iluk_factorize(*ctx, csr, p);
             auto lu = M.lu.view();
             auto ro = lu.row_offsets(); auto ci = lu.col_indices();
             const int n = s.n;

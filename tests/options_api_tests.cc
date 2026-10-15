@@ -140,15 +140,15 @@ TEST(OptionsApi, DefaultsMatchPositionalDefaults) {
     auto B = filled(n, batch, 0.5f);
 
     Matrix<float, MatrixFormat::Dense> C_opts(n, n, batch), C_pos(n, n, batch);
-    (void)C_opts.view().fill_zeros(q);
-    (void)C_pos.view().fill_zeros(q);
+    (void)C_opts.fill_zeros(q);
+    (void)C_pos.fill_zeros(q);
     q.wait();
 
-    (void)gemm(q, A.view(), B.view(), C_opts.view(), GemmOptions<float>{});
-    (void)gemm(q, A.view(), B.view(), C_pos.view(), 1.0f, 0.0f, Transpose::NoTrans,
+    (void)gemm(q, A, B, C_opts, GemmOptions<float>{});
+    (void)gemm(q, A, B, C_pos, 1.0f, 0.0f, Transpose::NoTrans,
          Transpose::NoTrans, ComputePrecision::Default);
     q.wait();
-    expect_same(C_opts.view(), C_pos.view(), n, batch, "gemm defaults");
+    expect_same(C_opts, C_pos, n, batch, "gemm defaults");
 }
 
 TEST(OptionsApi, DesignatedInitialisersSetOnlyWhatTheyName) {
@@ -158,16 +158,16 @@ TEST(OptionsApi, DesignatedInitialisersSetOnlyWhatTheyName) {
     auto B = filled(n, batch, 0.75f);
 
     Matrix<float, MatrixFormat::Dense> C_opts(n, n, batch), C_pos(n, n, batch);
-    (void)C_opts.view().fill_zeros(q);
-    (void)C_pos.view().fill_zeros(q);
+    (void)C_opts.fill_zeros(q);
+    (void)C_pos.fill_zeros(q);
     q.wait();
 
-    (void)gemm(q, A.view(), B.view(), C_opts.view(),
+    (void)gemm(q, A, B, C_opts,
          {.alpha = 2.5f, .transA = Transpose::Trans});
-    (void)gemm(q, A.view(), B.view(), C_pos.view(), 2.5f, 0.0f, Transpose::Trans,
+    (void)gemm(q, A, B, C_pos, 2.5f, 0.0f, Transpose::Trans,
          Transpose::NoTrans, ComputePrecision::Default);
     q.wait();
-    expect_same(C_opts.view(), C_pos.view(), n, batch, "gemm with designated initialisers");
+    expect_same(C_opts, C_pos, n, batch, "gemm with designated initialisers");
 }
 
 TEST(OptionsApi, Blas3OptionsMatchPositional) {
@@ -178,48 +178,48 @@ TEST(OptionsApi, Blas3OptionsMatchPositional) {
 
     {   // symm
         Matrix<float, MatrixFormat::Dense> Co(n, n, batch), Cp(n, n, batch);
-        (void)Co.view().fill_zeros(q); (void)Cp.view().fill_zeros(q); q.wait();
-        (void)symm(q, A.view(), B.view(), Co.view(), {.alpha = 1.5f, .side = Side::Right, .uplo = Uplo::Upper});
-        (void)symm(q, A.view(), B.view(), Cp.view(), 1.5f, 0.0f, Side::Right, Uplo::Upper);
+        (void)Co.fill_zeros(q); (void)Cp.fill_zeros(q); q.wait();
+        (void)symm(q, A, B, Co, {.alpha = 1.5f, .side = Side::Right, .uplo = Uplo::Upper});
+        (void)symm(q, A, B, Cp, 1.5f, 0.0f, Side::Right, Uplo::Upper);
         q.wait();
-        expect_same(Co.view(), Cp.view(), n, batch, "symm");
+        expect_same(Co, Cp, n, batch, "symm");
     }
     {   // syrk
         Matrix<float, MatrixFormat::Dense> Co(n, n, batch), Cp(n, n, batch);
-        (void)Co.view().fill_zeros(q); (void)Cp.view().fill_zeros(q); q.wait();
-        (void)syrk(q, A.view(), Co.view(), {.alpha = 0.5f, .uplo = Uplo::Upper});
-        (void)syrk(q, A.view(), Cp.view(), 0.5f, 0.0f, Uplo::Upper, Transpose::NoTrans);
+        (void)Co.fill_zeros(q); (void)Cp.fill_zeros(q); q.wait();
+        (void)syrk(q, A, Co, {.alpha = 0.5f, .uplo = Uplo::Upper});
+        (void)syrk(q, A, Cp, 0.5f, 0.0f, Uplo::Upper, Transpose::NoTrans);
         q.wait();
-        expect_same(Co.view(), Cp.view(), n, batch, "syrk");
+        expect_same(Co, Cp, n, batch, "syrk");
     }
     {   // syr2k
         Matrix<float, MatrixFormat::Dense> Co(n, n, batch), Cp(n, n, batch);
-        (void)Co.view().fill_zeros(q); (void)Cp.view().fill_zeros(q); q.wait();
-        (void)syr2k(q, A.view(), B.view(), Co.view(), {.alpha = 0.25f});
-        (void)syr2k(q, A.view(), B.view(), Cp.view(), 0.25f, 0.0f, Uplo::Lower, Transpose::NoTrans);
+        (void)Co.fill_zeros(q); (void)Cp.fill_zeros(q); q.wait();
+        (void)syr2k(q, A, B, Co, {.alpha = 0.25f});
+        (void)syr2k(q, A, B, Cp, 0.25f, 0.0f, Uplo::Lower, Transpose::NoTrans);
         q.wait();
-        expect_same(Co.view(), Cp.view(), n, batch, "syr2k");
+        expect_same(Co, Cp, n, batch, "syr2k");
     }
     {   // trmm
         auto Bo = filled(n, batch, 0.6f);
         auto Bp = filled(n, batch, 0.6f);
         Matrix<float, MatrixFormat::Dense> Co(n, n, batch), Cp(n, n, batch);
-        (void)Co.view().fill_zeros(q); (void)Cp.view().fill_zeros(q); q.wait();
-        (void)trmm(q, A.view(), Bo.view(), Co.view(), {.alpha = 2.0f, .diag = Diag::Unit});
-        (void)trmm(q, A.view(), Bp.view(), Cp.view(), 2.0f, Side::Left, Uplo::Lower,
+        (void)Co.fill_zeros(q); (void)Cp.fill_zeros(q); q.wait();
+        (void)trmm(q, A, Bo, Co, {.alpha = 2.0f, .diag = Diag::Unit});
+        (void)trmm(q, A, Bp, Cp, 2.0f, Side::Left, Uplo::Lower,
              Transpose::NoTrans, Diag::Unit);
         q.wait();
-        expect_same(Co.view(), Cp.view(), n, batch, "trmm");
+        expect_same(Co, Cp, n, batch, "trmm");
     }
     {   // trsm writes into B, so give each call its own copy
         auto Bo = filled(n, batch, 0.6f);
         auto Bp = filled(n, batch, 0.6f);
         auto Tri = spd(n, batch);
-        (void)trsm(q, Tri.view(), Bo.view(), {.alpha = 1.0f, .diag = Diag::NonUnit});
-        (void)trsm(q, Tri.view(), Bp.view(), 1.0f, Side::Left, Uplo::Lower, Transpose::NoTrans,
+        (void)trsm(q, Tri, Bo, {.alpha = 1.0f, .diag = Diag::NonUnit});
+        (void)trsm(q, Tri, Bp, 1.0f, Side::Left, Uplo::Lower, Transpose::NoTrans,
              Diag::NonUnit);
         q.wait();
-        expect_same(Bo.view(), Bp.view(), n, batch, "trsm");
+        expect_same(Bo, Bp, n, batch, "trsm");
     }
 }
 
@@ -230,21 +230,21 @@ TEST(OptionsApi, OmittedWorkspaceMatchesExplicitWorkspace) {
     {   // potrf
         auto Ao = spd(n, batch);
         auto Ap = spd(n, batch);
-        (void)potrf(q, Ao.view(), {.uplo = Uplo::Lower});
-        auto ws = q.workspace(potrf_buffer_size(q, Ap.view(), Uplo::Lower));
-        (void)potrf(q, Ap.view(), {.uplo = Uplo::Lower}, ws.span());
+        (void)potrf(q, Ao, {.uplo = Uplo::Lower});
+        auto ws = q.workspace(potrf_buffer_size(q, Ap, Uplo::Lower));
+        (void)potrf(q, Ap, {.uplo = Uplo::Lower}, ws.span());
         q.wait();
-        expect_same(Ao.view(), Ap.view(), n, batch, "potrf");
+        expect_same(Ao, Ap, n, batch, "potrf");
     }
     {   // geqrf
         auto Ao = filled(n, batch, 1.0f);
         auto Ap = filled(n, batch, 1.0f);
         UnifiedVector<float> tau_o(n * batch), tau_p(n * batch);
-        (void)geqrf(q, Ao.view(), tau_o.to_span());
-        auto ws = q.workspace(geqrf_buffer_size(q, Ap.view(), tau_p.to_span()));
-        (void)geqrf(q, Ap.view(), tau_p.to_span(), ws.span());  // positional: caller-managed
+        (void)geqrf(q, Ao, tau_o.to_span());
+        auto ws = q.workspace(geqrf_buffer_size(q, Ap, tau_p.to_span()));
+        (void)geqrf(q, Ap, tau_p.to_span(), ws.span());  // positional: caller-managed
         q.wait();
-        expect_same(Ao.view(), Ap.view(), n, batch, "geqrf");
+        expect_same(Ao, Ap, n, batch, "geqrf");
         for (size_t i = 0; i < tau_o.size(); ++i)
             ASSERT_FLOAT_EQ(tau_o[i], tau_p[i]) << "geqrf tau at " << i;
     }
@@ -252,10 +252,10 @@ TEST(OptionsApi, OmittedWorkspaceMatchesExplicitWorkspace) {
         auto Ao = spd(n, batch);
         auto Ap = spd(n, batch);
         UnifiedVector<float> Wo(n * batch), Wp(n * batch);
-        (void)syev(q, Ao.view(), Wo.to_span(), {.jobz = JobType::NoEigenVectors});
+        (void)syev(q, Ao, Wo.to_span(), {.jobz = JobType::NoEigenVectors});
         auto ws = q.workspace(
-            syev_buffer_size(q, Ap.view(), Wp.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-        (void)syev(q, Ap.view(), Wp.to_span(), {.jobz = JobType::NoEigenVectors}, ws.span());
+            syev_buffer_size(q, Ap, Wp.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+        (void)syev(q, Ap, Wp.to_span(), {.jobz = JobType::NoEigenVectors}, ws.span());
         q.wait();
         for (size_t i = 0; i < Wo.size(); ++i)
             ASSERT_NEAR(Wo[i], Wp[i], 1e-4f) << "syev eigenvalue at " << i;
@@ -267,13 +267,13 @@ TEST(OptionsApi, ArenaBackedCallsDoNotLeak) {
     const int n = 20, batch = 2;
     auto A = spd(n, batch);
 
-    (void)potrf(q, A.view());
+    (void)potrf(q, A);
     q.wait();
     const size_t settled = q.workspace_capacity();
 
     for (int i = 0; i < 24; ++i) {
         auto Ai = spd(n, batch);
-        (void)potrf(q, Ai.view());
+        (void)potrf(q, Ai);
         q.wait();
     }
     EXPECT_EQ(q.workspace_capacity(), settled);
@@ -286,17 +286,17 @@ TEST(OptionsApi, CoexistsWithPositionalAndExplicitBackendSpellings) {
     auto A = filled(n, batch, 1.0f);
     auto B = filled(n, batch, 0.5f);
     Matrix<float, MatrixFormat::Dense> C(n, n, batch);
-    (void)C.view().fill_zeros(q);
+    (void)C.fill_zeros(q);
     q.wait();
 
     // option struct
-    (void)gemm(q, A.view(), B.view(), C.view(), {.alpha = 1.0f});
+    (void)gemm(q, A, B, C, {.alpha = 1.0f});
     // positional, backend from the queue
-    (void)gemm(q, A.view(), B.view(), C.view(), 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    (void)gemm(q, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     // positional, backend named
 #if BATCHLAS_HAS_CUDA_BACKEND
     if (q.backend() == Backend::CUDA) {
-        (void)gemm<Backend::CUDA>(q, A.view(), B.view(), C.view(), 1.0f, 0.0f,
+        (void)gemm<Backend::CUDA>(q, A, B, C, 1.0f, 0.0f,
                             Transpose::NoTrans, Transpose::NoTrans);
     }
 #endif
@@ -318,7 +318,7 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
     // capacity is the observable difference, so assert on that.
     const size_t before = q.workspace_capacity();
     try {
-        (void)potrf(q, A.view(), {.uplo = Uplo::Lower}, Span<std::byte>{});
+        (void)potrf(q, A, {.uplo = Uplo::Lower}, Span<std::byte>{});
         q.wait();
     } catch (const std::exception&) {
         // A backend is entitled to refuse a zero-sized workspace.
@@ -329,7 +329,7 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
     Queue fresh;
     auto A2 = spd(n, batch);
     const size_t fresh_before = fresh.workspace_capacity();
-    (void)potrf(fresh, A2.view(), {.uplo = Uplo::Lower});
+    (void)potrf(fresh, A2, {.uplo = Uplo::Lower});
     fresh.wait();
     EXPECT_GT(fresh.workspace_capacity(), fresh_before)
         << "omitting the workspace should lease one from the queue's arena";
@@ -344,11 +344,11 @@ TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
     Queue q;
     Matrix<float, MatrixFormat::Dense> oblong(8, 5, 2);
 
-    EXPECT_THROW(potrf_buffer_size(q, oblong.view(), Uplo::Lower),
+    EXPECT_THROW(potrf_buffer_size(q, oblong, Uplo::Lower),
                  std::invalid_argument)
         << "the buffer-size query reads A.rows()/A.cols() too";
 
-    EXPECT_THROW((void)potrf(q, oblong.view(), Uplo::Lower, Span<std::byte>{},
+    EXPECT_THROW((void)potrf(q, oblong, Uplo::Lower, Span<std::byte>{},
                        Span<int32_t>{}),
                  std::invalid_argument)
         << "the POSITIONAL overload is the one that had no validation at all";
@@ -357,9 +357,9 @@ TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
     // above could pass for a reason unrelated to squareness.
     auto square = spd(8, 2);
     size_t bytes = 0;
-    EXPECT_NO_THROW(bytes = potrf_buffer_size(q, square.view(), Uplo::Lower));
+    EXPECT_NO_THROW(bytes = potrf_buffer_size(q, square, Uplo::Lower));
     auto ws = q.workspace(bytes);
-    EXPECT_NO_THROW((void)potrf(q, square.view(), Uplo::Lower, ws.span(), Span<int32_t>{}));
+    EXPECT_NO_THROW((void)potrf(q, square, Uplo::Lower, ws.span(), Span<int32_t>{}));
     q.wait();
 }
 
@@ -377,16 +377,16 @@ TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
 
     with_backend(q, [&](auto Back) {
         constexpr Backend B = Back.value;
-        auto w1 = q.workspace(potrf_buffer_size<B, float>(q, A_named.view(), Uplo::Lower));
-        auto w2 = q.workspace(potrf_buffer_size<B, float>(q, A_uplo.view(), Uplo::Lower));
-        auto w3 = q.workspace(potrf_buffer_size<B, float>(q, A_upper.view(), Uplo::Upper));
-        (void)potrf<B>(q, A_named.view(), PotrfOptions{}, w1.span());
-        (void)potrf<B>(q, A_uplo.view(), Uplo::Lower, w2.span());
-        (void)potrf<B>(q, A_upper.view(), Uplo::Upper, w3.span());
+        auto w1 = q.workspace(potrf_buffer_size<B, float>(q, A_named, Uplo::Lower));
+        auto w2 = q.workspace(potrf_buffer_size<B, float>(q, A_uplo, Uplo::Lower));
+        auto w3 = q.workspace(potrf_buffer_size<B, float>(q, A_upper, Uplo::Upper));
+        (void)potrf<B>(q, A_named, PotrfOptions{}, w1.span());
+        (void)potrf<B>(q, A_uplo, Uplo::Lower, w2.span());
+        (void)potrf<B>(q, A_upper, Uplo::Upper, w3.span());
     });
     q.wait();
 
-    expect_same(A_named.view(), A_uplo.view(), n, batch, "PotrfOptions{} == Uplo::Lower");
+    expect_same(A_named, A_uplo, n, batch, "PotrfOptions{} == Uplo::Lower");
 
     bool differs = false;
     for (int b = 0; b < batch && !differs; ++b)
@@ -412,35 +412,27 @@ static_assert(!std::is_convertible_v<Uplo, detail::EmptyBracesAreAmbiguous>,
               "Uplo must not convert to the trap type, or the positional "
               "spelling would become ambiguous too");
 
-// BATCHLAS_ACCEPT_OWNING (blas/queue-dispatch.hh) replaced ~80 hand-written owning-
-// argument twins with one forwarder per name. These pin the two properties that
-// replacement has to preserve and the one it adds. Compile-time only on purpose: what
-// is at stake is overload resolution, and a runtime call could not tell "resolved to
-// the right overload" from "resolved at all".
+// A Matrix is a MatrixView and a Vector a VectorView, so owning arguments reach the view
+// primaries by derived-to-base deduction. Compile-time only on purpose: what is at stake
+// is overload resolution, and a runtime call could not tell "resolved to the right
+// overload" from "resolved at all".
 using MDense = Matrix<float, MatrixFormat::Dense>;
 using VDense = MatrixView<float, MatrixFormat::Dense>;
+static_assert(std::is_base_of_v<VDense, MDense>);
+static_assert(std::is_base_of_v<VectorView<float>, Vector<float>>);
 
-// Preserved: every owning spelling the twins accepted still resolves, with the backend
-// explicit and with it taken from the queue.
-static_assert(requires(Queue& q, MDense& A, Span<std::byte> ws) {
+// Owning, view and mixed arguments, with the backend explicit or taken from the queue.
+static_assert(requires(Queue& q, MDense& A, VDense& V, Span<std::byte> ws) {
     gemm<Backend::CUDA>(q, A, A, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     gemm(q, A, A, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    gemm(q, A, V, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     potrf<Backend::CUDA>(q, A, Uplo::Lower, ws);
 });
 
-// Added: mixing owning and view arguments in one call. No twin covered this -- each was
-// written with every matrix parameter owning -- so it was a compile error before, which
-// is why nothing in the tree spells it.
-static_assert(requires(Queue& q, MDense& A, VDense& V) {
-    gemm(q, A, V, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+// Partly explicit template arguments: unreachable for the old owning forwarder.
+static_assert(requires(Queue& q, MDense& A, Span<std::byte> ws) {
+    potrf<Backend::CUDA, float>(q, A, Uplo::Lower, ws);
 });
-
-// Unchanged: an all-view call must not reach the forwarder at all. AnyOwning is the gate
-// that keeps it out of overload resolution, so the checked convenience overloads still win.
-static_assert(!detail::AnyOwning<VDense, Span<std::byte>>);
-static_assert(detail::AnyOwning<VDense, MDense>);
-static_assert(detail::is_owning_arg_v<Vector<float>>);
-static_assert(!detail::is_owning_arg_v<VectorView<float>>);
 
 // Per-item factorisation status (issue #73): potrf, getrf and getri dropped LAPACK's
 // `info`, so a batch with one rank-deficient item was indistinguishable from a clean
@@ -488,7 +480,7 @@ TEST(OptionsApi, FactorisationsReportPerItemStatus) {
     {   // potrf: item 1 is not positive definite
         auto A = spd_then_negative_definite(n);
         UnifiedVector<int32_t> info(batch, kNeverWritten);
-        (void)potrf(q, A.view(), {.uplo = Uplo::Lower, .info = info.to_span()});
+        (void)potrf(q, A, {.uplo = Uplo::Lower, .info = info.to_span()});
         q.wait();
         EXPECT_EQ(info[0], 0) << "potrf reported failure on a positive definite item";
         EXPECT_NE(info[0], kNeverWritten) << "potrf never wrote info at all";
@@ -499,7 +491,7 @@ TEST(OptionsApi, FactorisationsReportPerItemStatus) {
         auto A = nonsingular_then_singular(n);
         UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
         UnifiedVector<int32_t> info(batch, kNeverWritten);
-        (void)getrf(q, A.view(), pivots.to_span(), info.to_span());
+        (void)getrf(q, A, pivots.to_span(), info.to_span());
         q.wait();
         EXPECT_EQ(info[0], 0) << "getrf reported failure on a nonsingular item";
         EXPECT_NE(info[0], kNeverWritten) << "getrf never wrote info at all";
@@ -511,8 +503,8 @@ TEST(OptionsApi, FactorisationsReportPerItemStatus) {
         Matrix<float, MatrixFormat::Dense> Ainv(n, n, batch);
         UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
         UnifiedVector<int32_t> info(batch, kNeverWritten);
-        (void)getrf(q, A.view(), pivots.to_span());
-        (void)getri(q, A.view(), Ainv.view(), pivots.to_span(), info.to_span());
+        (void)getrf(q, A, pivots.to_span());
+        (void)getri(q, A, Ainv, pivots.to_span(), info.to_span());
         q.wait();
         EXPECT_EQ(info[0], 0) << "getri reported failure on an invertible item";
         EXPECT_NE(info[0], kNeverWritten) << "getri never wrote info at all";
@@ -527,21 +519,21 @@ TEST(OptionsApi, FactorisationsStillWorkWithoutAnInfoSpan) {
     constexpr int batch = 2;
 
     auto A = spd(n, batch);
-    (void)potrf(q, A.view(), {.uplo = Uplo::Lower});
+    (void)potrf(q, A, {.uplo = Uplo::Lower});
     auto Aw = spd(n, batch);
     with_backend(q, [&](auto Back) {
         constexpr Backend Bk = Back.value;
-        auto ws = q.workspace(potrf_buffer_size<Bk, float>(q, Aw.view(), Uplo::Lower));
+        auto ws = q.workspace(potrf_buffer_size<Bk, float>(q, Aw, Uplo::Lower));
         // The four-argument positional spelling: the arity that had to survive.
-        (void)potrf<Bk, float>(q, Aw.view(), Uplo::Lower, ws.span());
+        (void)potrf<Bk, float>(q, Aw, Uplo::Lower, ws.span());
     });
 
     auto B = nonsingular_then_singular(n);
     UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
-    (void)getrf(q, B.view(), pivots.to_span());
+    (void)getrf(q, B, pivots.to_span());
 
     Matrix<float, MatrixFormat::Dense> Binv(n, n, batch);
-    (void)getri(q, B.view(), Binv.view(), pivots.to_span());
+    (void)getri(q, B, Binv, pivots.to_span());
     q.wait();
     SUCCEED();
 }
@@ -557,14 +549,14 @@ TEST(OptionsApi, ShortInfoSpanIsRejected) {
 
     auto A = spd(n, batch);
     UnifiedVector<int32_t> too_short(batch - 1, 0);
-    EXPECT_THROW((void)potrf(q, A.view(), {.uplo = Uplo::Lower, .info = too_short.to_span()}),
+    EXPECT_THROW((void)potrf(q, A, {.uplo = Uplo::Lower, .info = too_short.to_span()}),
                  std::invalid_argument);
 
     UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
-    EXPECT_THROW((void)getrf(q, A.view(), pivots.to_span(), too_short.to_span()),
+    EXPECT_THROW((void)getrf(q, A, pivots.to_span(), too_short.to_span()),
                  std::invalid_argument);
 
-    EXPECT_NO_THROW((void)potrf(q, A.view(), {.uplo = Uplo::Lower, .info = Span<int32_t>{}}));
+    EXPECT_NO_THROW((void)potrf(q, A, {.uplo = Uplo::Lower, .info = Span<int32_t>{}}));
     q.wait();
 }
 
@@ -588,7 +580,7 @@ TEST(OptionsShapeChecks, OrdinarySpellingRejectsShortOutputs) {
     Span<int32_t> short_info(info.data(), batch - 1);
     Span<std::byte> ws = scratch.to_span();
     Matrix<float, MatrixFormat::Dense> wide(n, n, batch);
-    MatrixView<float, MatrixFormat::Dense> oblong(wide.view().data_ptr(), n, n - 3, n, n * n, batch);
+    MatrixView<float, MatrixFormat::Dense> oblong(wide.data_ptr(), n, n - 3, n, n * n, batch);
 
     EXPECT_THROW((void)syev(q, A, short_out, SyevOptions{}), batchlas::invalid_argument);
     EXPECT_THROW((void)ormqr(q, A, C, short_out, OrmqrOptions{}), batchlas::invalid_argument);
@@ -667,7 +659,7 @@ TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
     const int n = 4;
 
     Matrix<float, MatrixFormat::Dense> owned(n, n, 1);
-    EXPECT_TRUE(q.is_device_accessible(owned.view().data_ptr()));
+    EXPECT_TRUE(q.is_device_accessible(owned.data_ptr()));
     EXPECT_FALSE(q.is_device_accessible(nullptr));
 
     Matrix<float, MatrixFormat::Dense> B(n, n, 1), C(n, n, 1);

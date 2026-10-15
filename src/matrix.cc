@@ -212,9 +212,12 @@ inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
-Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
-    : rows_(rows), cols_(cols), batch_size_(batch_size),
-      ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols) {
+Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride) {
+    rows_ = rows;
+    cols_ = cols;
+    batch_size_ = batch_size;
+    ld_ = ld > 0 ? ld : rows;
+    stride_ = stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols;
     // The layout invariant the whole class assumes: ld >= rows, stride holds a full item.
     // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     {
@@ -244,15 +247,16 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     }
 
     // Allocate memory for the matrix data
-    data_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
+    values_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
     
     // If batched, set up the data pointers
     if (batch_size > 1) {
-        data_ptrs_.resize(batch_size);
+        ptrs_.resize(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            data_ptrs_[i] = data_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
+            ptrs_[i] = values_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
         }
     }
+    bind();
 }
 
 // Constructor from existing data (copies the data)
@@ -262,33 +266,36 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
-                        int stride, int batch_size)
-    : rows_(rows), cols_(cols), batch_size_(batch_size),
-      ld_(ld > 0 ? ld : rows), stride_((ld > 0 ? ld : rows) * cols) {
+                        int stride, int batch_size) {
+    rows_ = rows;
+    cols_ = cols;
+    batch_size_ = batch_size;
+    ld_ = ld > 0 ? ld : rows;
+    stride_ = ld_ * cols;
     const auto src = dense_source_layout("Matrix(const T* data, rows, cols, ld, stride, batch_size)",
                                          data != nullptr, rows, cols, ld, stride, batch_size);
 
     // Allocate memory in the destination layout and copy the data
     const std::size_t dst_stride = static_cast<std::size_t>(ld_) * static_cast<std::size_t>(cols);
     const std::size_t dst_size = dst_stride * static_cast<std::size_t>(batch_size);
-    data_.resize(dst_size);
+    values_.resize(dst_size);
 
     if (src.ld == rows && src.stride == dst_stride) {
         // Source and destination are both packed, we can copy all at once
-        std::copy(data, data + dst_size, data_.data());
+        std::copy(data, data + dst_size, values_.data());
     } else {
         // The source columns are padded and/or the batch items are separated by gaps.
         // Copy column by column so that neither the padding (which need not be part of
         // the caller's allocation) nor the gaps are read.
         if (ld_ > rows) {
-            std::fill(data_.data(), data_.data() + dst_size, T{});
+            std::fill(values_.data(), values_.data() + dst_size, T{});
         }
         for (int b = 0; b < batch_size; ++b) {
             for (int j = 0; j < cols; ++j) {
                 const T* src_col = data + static_cast<std::size_t>(b) * src.stride +
                                           static_cast<std::size_t>(j) * static_cast<std::size_t>(src.ld);
                 std::copy(src_col, src_col + rows,
-                          data_.data() + static_cast<std::size_t>(b) * dst_stride +
+                          values_.data() + static_cast<std::size_t>(b) * dst_stride +
                                          static_cast<std::size_t>(j) * static_cast<std::size_t>(ld_));
             }
         }
@@ -296,11 +303,12 @@ Matrix<T, MType>::Matrix(const T* data, int rows, int cols, int ld,
 
     // If batched, set up the data pointers
     if (batch_size > 1) {
-        data_ptrs_.resize(batch_size);
+        ptrs_.resize(batch_size);
         for (int i = 0; i < batch_size; ++i) {
-            data_ptrs_[i] = data_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
+            ptrs_[i] = values_.data() + static_cast<std::ptrdiff_t>(i) * stride_;
         }
     }
+    bind();
 }
 
 // Constructor from an existing span (copies the data, and checks the span length)
@@ -320,13 +328,16 @@ Matrix<T, MType>::Matrix(Span<const T> data, int rows, int cols, int ld,
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires CsrMatrixFormat<M>
-Matrix<T, MType>::Matrix(int rows, int cols, NonZeros nnz, int batch_size)
-    : rows_(rows), cols_(cols), nnz_(nnz.value), batch_size_(batch_size),
-      matrix_stride_(nnz.value), offset_stride_(rows + 1) {
-    // Allocate memory
-    data_.resize(static_cast<size_t>(nnz.value) * batch_size);
-    row_offsets_.resize(static_cast<size_t>(rows + 1) * batch_size);
-    col_indices_.resize(static_cast<size_t>(nnz.value) * batch_size);
+Matrix<T, MType>::Matrix(int rows, int cols, NonZeros nnz, int batch_size) {
+    rows_ = rows;
+    cols_ = cols;
+    batch_size_ = batch_size;
+    nnz_ = matrix_stride_ = nnz.value;
+    offset_stride_ = rows + 1;
+    values_.resize(static_cast<size_t>(nnz.value) * batch_size);
+    row_offsets_store_.resize(static_cast<size_t>(rows + 1) * batch_size);
+    col_indices_store_.resize(static_cast<size_t>(nnz.value) * batch_size);
+    bind();
 }
 
 // Constructor from existing data (copies the data)
@@ -335,18 +346,21 @@ template <typename U, MatrixFormat M>
     requires CsrMatrixFormat<M>
 Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col_indices,
                         int rows, int cols, NonZeros nnz, int matrix_stride,
-                        int offset_stride, int batch_size)
-    : rows_(rows), cols_(cols), nnz_(nnz.value), batch_size_(batch_size),
-      matrix_stride_(matrix_stride > 0 ? matrix_stride : nnz.value),
-      offset_stride_(offset_stride > 0 ? offset_stride : rows + 1) {
-    // Allocate and copy data
-    data_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
-    row_offsets_.resize(static_cast<size_t>(offset_stride_) * batch_size);
-    col_indices_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
+                        int offset_stride, int batch_size) {
+    rows_ = rows;
+    cols_ = cols;
+    batch_size_ = batch_size;
+    nnz_ = nnz.value;
+    matrix_stride_ = matrix_stride > 0 ? matrix_stride : nnz.value;
+    offset_stride_ = offset_stride > 0 ? offset_stride : rows + 1;
+    values_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
+    row_offsets_store_.resize(static_cast<size_t>(offset_stride_) * batch_size);
+    col_indices_store_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
     
-    std::copy(values, values + static_cast<size_t>(matrix_stride_) * batch_size, data_.data());
-    std::copy(row_offsets, row_offsets + static_cast<size_t>(offset_stride_) * batch_size, row_offsets_.data());
-    std::copy(col_indices, col_indices + static_cast<size_t>(matrix_stride_) * batch_size, col_indices_.data());
+    std::copy(values, values + static_cast<size_t>(matrix_stride_) * batch_size, values_.data());
+    std::copy(row_offsets, row_offsets + static_cast<size_t>(offset_stride_) * batch_size, row_offsets_store_.data());
+    std::copy(col_indices, col_indices + static_cast<size_t>(matrix_stride_) * batch_size, col_indices_store_.data());
+    bind();
 }
 
 //----------------------------------------------------------------------
@@ -616,18 +630,6 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 }
 
 
-// Destructor
-template <typename T, MatrixFormat MType>
-Matrix<T, MType>::~Matrix() {
-    // The UnifiedVector destructors will handle memory cleanup
-}
-
-// Create a view of the entire matrix
-template <typename T, MatrixFormat MType>
-MatrixView<T, MType> Matrix<T, MType>::view() const {
-    return MatrixView<T, MType>(*this);
-}
-
 // Create a view of a subset of the matrix
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
@@ -672,7 +674,7 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
         // a batch stride gets in the way. A dense layout is always a set of
         // contiguous column segments, so there is no case left for an
         // element-at-a-time loop.
-        T* dst_ptr = data_.data();
+        T* dst_ptr = values_.data();
         const T* src_ptr = src.data().data();
         const std::size_t dst_stride = static_cast<std::size_t>(stride_);
         const std::size_t src_stride = static_cast<std::size_t>(src.stride());
@@ -693,36 +695,10 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
         }
     } else if constexpr (MType == MatrixFormat::CSR) {
         // For CSR format, just copy all data directly if structure matches
-        std::copy(src.data().begin(), src.data().end(), data_.begin());
-        std::copy(src.row_offsets().begin(), src.row_offsets().end(), row_offsets_.begin());
-        std::copy(src.col_indices().begin(), src.col_indices().end(), col_indices_.begin());
+        std::copy(src.data().begin(), src.data().end(), values_.begin());
+        std::copy(src.row_offsets().begin(), src.row_offsets().end(), row_offsets_store_.begin());
+        std::copy(src.col_indices().begin(), src.col_indices().end(), col_indices_store_.begin());
     }
-}
-
-// Initialize backend - make backend_handle_ mutable so it can be modified in const methods
-template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::init() const {
-    // No-op if we already have a backend handle
-    if (backend_handle_) return;
-    backend_handle_ = createBackendHandle(*this);
-}
-
-// Operator-> to access backend handle
-template <typename T, MatrixFormat MType>
-BackendMatrixHandle<T, MType>* Matrix<T, MType>::operator->() {
-    if (!backend_handle_) {
-        init();
-    }
-    return backend_handle_.get();
-}
-
-// Operator* to access backend handle
-template <typename T, MatrixFormat MType>
-BackendMatrixHandle<T, MType>& Matrix<T, MType>::operator*() {
-    if (!backend_handle_) {
-        init();
-    }
-    return *backend_handle_;
 }
 
 //----------------------------------------------------------------------
@@ -740,7 +716,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Queue q;
     
     // Get pointer to the matrix data
-    T* data_ptr = result.data_.data();
+    T* data_ptr = result.values_.data();
     
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
@@ -777,7 +753,7 @@ template <typename U, MatrixFormat M>
 Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value,
                                              T non_diagonal_value, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    result.view().fill_triangular(uplo, diagonal_value, non_diagonal_value).wait();
+    result.fill_triangular(uplo, diagonal_value, non_diagonal_value).wait();
     return result;
 }
 
@@ -1018,7 +994,7 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Random(int rows, int cols, bool hermitian, int batch_size, unsigned int seed) {
     Matrix<T, MType> result(rows, cols, batch_size);
-    result.view().fill_random(hermitian, seed).wait();
+    result.fill_random(hermitian, seed).wait();
     return result;
 }
 
@@ -1032,7 +1008,7 @@ Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) {
     Matrix<T, MType> result(n, n, NonZeros{csr_random_nnz_per_matrix(n, density)}, batch_size);
-    result.view().fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern).wait();
+    result.fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern).wait();
     return result;
 }
 
@@ -1598,7 +1574,7 @@ Matrix<T, MType> Matrix<T, MType>::Diagonal(const Span<T>& diag_values, int batc
     // Ensure the returned matrix is fully initialized before returning.
     // The fill_diagonal(Span<...>) convenience overload uses an internal Queue;
     // without waiting here, callers can race when they immediately use a different Queue.
-    result.view().template fill_diagonal<MType>(diag_values).wait();
+    result.template fill_diagonal<MType>(diag_values).wait();
 
     return result;
 }
@@ -1689,7 +1665,7 @@ template <typename U, MatrixFormat M>
 Matrix<T, MType> Matrix<T, MType>::TriDiagToeplitz(int n, T diag, T sub, T super, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     // Ensure the returned matrix is fully initialized before returning.
-    result.view().template fill_tridiag_toeplitz<MType>(diag, sub, super).wait();
+    result.template fill_tridiag_toeplitz<MType>(diag, sub, super).wait();
     return result;
 }
 
@@ -1815,14 +1791,14 @@ Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pit
     const size_t src_pitch = checked_row_major_pitch(row_pitch, rows_, cols_,
                                                      static_cast<size_t>(ld_),
                                                      static_cast<size_t>(stride_), batch_size_,
-                                                     data_.size());
+                                                     values_.size());
 
     // The destination is packed in the target major: ld = rows, stride = rows * cols.
     Matrix<T, MType> col_major(rows_, cols_, batch_size_);
 
     // Get pointers to source and destination data
-    const T* src_ptr = data_.data();
-    T* dst_ptr = col_major.data_.data();
+    const T* src_ptr = values_.data();
+    T* dst_ptr = col_major.values_.data();
 
     // Capture dimensions for kernel
     int rows = rows_;
@@ -1872,7 +1848,7 @@ template <typename U, MatrixFormat M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
     // The source is read column-major with this matrix' own ld_/stride_.
     check_column_major_extent(rows_, cols_, static_cast<size_t>(ld_),
-                              static_cast<size_t>(stride_), batch_size_, data_.size());
+                              static_cast<size_t>(stride_), batch_size_, values_.size());
 
     // The destination holds packed row-major data (row pitch cols, batch stride
     // rows * cols). The Matrix it is handed back in keeps the class' usual
@@ -1882,8 +1858,8 @@ Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
     Matrix<T, MType> row_major(rows_, cols_, batch_size_);
 
     // Get pointers to source and destination data
-    const T* src_ptr = data_.data();
-    T* dst_ptr = row_major.data_.data();
+    const T* src_ptr = values_.data();
+    T* dst_ptr = row_major.values_.data();
 
     // Capture dimensions for kernel
     int rows = rows_;
@@ -1992,40 +1968,6 @@ MatrixView<T, MType>::MatrixView(T* data, int* row_offsets, int* col_indices,
 // Common MatrixView implementations (for both Dense and CSR)
 //----------------------------------------------------------------------
 
-// Constructor from Matrix object - fix access to private members
-template <typename T, MatrixFormat MType>
-MatrixView<T, MType>::MatrixView(const Matrix<T, MType>& matrix)
-    : rows_(matrix.rows_), cols_(matrix.cols_), batch_size_(matrix.batch_size_),
-    data_(matrix.data()),
-    // NOTE: Matrix stores an optional UnifiedVector<T*> of per-batch base pointers.
-    // Be careful: passing (Span, offset) would create a subspan and can silently
-    // produce a zero-length view; we want a view over the whole pointer array.
-    data_ptrs_(matrix.data_ptrs_.data(), matrix.data_ptrs_.size()) {
-      
-    // Format-specific initializations
-    if constexpr (MType == MatrixFormat::Dense) {
-        ld_ = matrix.template ld<MType>();
-        stride_ = matrix.template stride<MType>();
-        active_rows_ = matrix.active_rows();
-        active_cols_ = matrix.active_cols();
-        
-        // Try to reuse the backend handle
-        backend_handle_ = matrix.backend_handle();
-        
-        // Don't try to access private data_ptrs_ directly
-        // The data pointers will be created on-demand if needed
-    } else if constexpr (MType == MatrixFormat::CSR) {
-        row_offsets_ = matrix.template row_offsets<MType>();
-        col_indices_ = matrix.template col_indices<MType>();
-        nnz_ = matrix.template nnz<MType>();
-        matrix_stride_ = matrix.template matrix_stride<MType>();
-        offset_stride_ = matrix.template offset_stride<MType>();
-        
-        // Try to reuse the backend handle
-        backend_handle_ = matrix.backend_handle();
-    }
-}
-
 // Constructor for a submatrix view from a Matrix object
 template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
@@ -2052,11 +1994,6 @@ MatrixView<T, MType>::MatrixView(
     }
 }
 
-template <typename T, MatrixFormat MType>
-template <typename U, MatrixFormat M>
-    requires DenseMatrixFormat<M>
-MatrixView<T, MType>::MatrixView(
-    const Matrix<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : MatrixView<T, MType>(matrix.view(), rows, cols, ld, stride, batch_size) {}
 
 
 // Element access (for dense matrices)
@@ -2452,11 +2389,6 @@ void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) cons
     }).wait();
 }
 
-template <typename T, MatrixFormat MType>
-void Matrix<T, MType>::init_data_ptr_array(Queue& ctx) const {
-    this->view().data_ptrs(ctx);
-}
-
 // Operator-> to access backend handle
 template <typename T, MatrixFormat MType>
 BackendMatrixHandle<T, MType>* MatrixView<T, MType>::operator->() const{
@@ -2717,20 +2649,6 @@ template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
 template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
     const VectorView<std::complex<double>>&, VectorOrientation);
 
-
-template MatrixView<float, MatrixFormat::Dense>::MatrixView(
-    const Matrix<float, MatrixFormat::Dense>&, int, int, int, int, int);
-template MatrixView<double, MatrixFormat::Dense>::MatrixView(
-    const Matrix<double, MatrixFormat::Dense>&, int, int, int, int, int);
-template MatrixView<std::complex<float>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::complex<float>, MatrixFormat::Dense>&, int, int, int, int, int);
-template MatrixView<std::complex<double>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::complex<double>, MatrixFormat::Dense>&, int, int, int, int, int);
-
-template MatrixView<std::array<float, 2>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::array<float, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
-template MatrixView<std::array<double, 2>, MatrixFormat::Dense>::MatrixView(
-    const Matrix<std::array<double, 2>, MatrixFormat::Dense>&, int, int, int, int, int);
 
 template MatrixView<float, MatrixFormat::Dense>::MatrixView(
     const MatrixView<float, MatrixFormat::Dense>&, int, int, int, int, int);

@@ -150,11 +150,11 @@ double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
     const MV B0 = at0(p.b), C0 = at0(p.c);
     const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
     Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
-    MV::copy(ctx, A0.view(), at0(p.a)).wait();
-    A0.view().triangularize(ctx, s.uplo, s.diag).wait();
+    MV::copy(ctx, A0, at0(p.a)).wait();
+    A0.triangularize(ctx, s.uplo, s.diag).wait();
     if (s.side == Side::Left)
-        return MV::gemm_backward_error(ctx, A0.view(), s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
-    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0.view(), s.trans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
+        return MV::gemm_backward_error(ctx, A0, s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
+    return MV::gemm_backward_error(ctx, B0, Transpose::NoTrans, A0, s.trans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
 }
 
 // Residuals of the checked items, every element outside C bit for bit (A's poison included),
@@ -236,9 +236,9 @@ void expect_heterogeneous_has_no_route(Queue& ctx) {
     Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
-    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
-    const auto hetC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hetA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hetB = Bm.with_active_dims(act.to_span(), cols.to_span());
+    const auto hetC = Cm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous());
     auto call = [&] {
         (void)trmm<B, T>(ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit);

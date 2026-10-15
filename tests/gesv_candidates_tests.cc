@@ -456,8 +456,8 @@ TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
-    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hetA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hetB = Bm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous());
     ASSERT_TRUE(hetB.is_heterogeneous());
     struct Case { const char* what; MatrixView<T, MatrixFormat::Dense> a, b; };
@@ -535,11 +535,11 @@ TYPED_TEST(GesvCandidates, UnknownPinsThrow) {
                              // removed aliases (phase 5): each must stay an error
                              "native:tiny", "native:blocked"}) {
         const Pin pin("gesv", std::string_view(word));
-        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view())), std::invalid_argument) << word;
+        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm)), std::invalid_argument) << word;
     }
     for (const C& c : gs::candidates<T>()) {
         const Pin pin("gesv", c);
-        EXPECT_NO_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view()))) << select::to_string(c);
+        EXPECT_NO_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm))) << select::to_string(c);
     }
 }
 
@@ -552,7 +552,7 @@ TYPED_TEST(GesvCandidates, CanRunFalsePinsThrow) {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1), Bm(n, nrhs, 1);
         const Pin pin("gesv", C{gs::Tiny{}});
         try {
-            (void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view());
+            (void)gesv_buffer_size<B, T>(*this->ctx, A, Bm);
             ADD_FAILURE() << this->name(gs::Tiny{}, n, nrhs) << " was accepted";
         } catch (const std::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos)
@@ -607,7 +607,7 @@ TYPED_TEST(GesvCandidates, ScopedPinBeatsTheEnvironment) {
     const ScopedEnvVar env("BATCHLAS_GESV_ROUTE", "tiny");
     {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1), Bm(n, 1, 1);
-        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view())), std::invalid_argument)
+        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm)), std::invalid_argument)
             << "the environment pin was not read, so nothing below proves it lost";
     }
     std::vector<int32_t> info;
@@ -745,12 +745,12 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
     for (auto [n, nrhs, batch] : {std::tuple{0, 1, 1}, std::tuple{4, 0, 1}}) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
         const Pin pin("gesv", C{gs::Blocked{}});
-        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view())), batchlas::internal_error)
+        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm)), batchlas::internal_error)
             << n << " " << nrhs << " " << batch;
     }
     Matrix<T, MatrixFormat::Dense> A(4, 4, 0), Bm(4, 1, 0);
     const Pin pin("gesv", C{gs::Blocked{}});
-    EXPECT_EQ((gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view())), 0u);
+    EXPECT_EQ((gesv_buffer_size<B, T>(*this->ctx, A, Bm)), 0u);
 }
 
 // The sm_89 transcribed rows, read with Table::nearest directly so every device checks them: the
@@ -803,7 +803,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
         Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
         const Pin tiny("gesv", C{gs::Tiny{}});
         try {
-            (void)gesv_buffer_size<B, T>(*q, A.view(), Bm.view());
+            (void)gesv_buffer_size<B, T>(*q, A, Bm);
             ADD_FAILURE() << dev << ": a Tiny pin was accepted on NETLIB";
         } catch (const std::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << dev << e.what();

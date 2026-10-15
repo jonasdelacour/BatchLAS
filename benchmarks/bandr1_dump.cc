@@ -121,7 +121,7 @@ int run_one(const std::string& dump_dir,
     auto AB = Matrix<T, MatrixFormat::Dense>::Zeros(kd + 1, n, batch);
     {
         Matrix<T, MatrixFormat::Dense> AB0(kd + 1, n, /*batch=*/1);
-        fill_lower_band_from_dense<T>(A0.view(), AB0.view(), n, kd);
+        fill_lower_band_from_dense<T>(A0, AB0, n, kd);
         for (int b = 0; b < batch; ++b) {
             for (int j = 0; j < n; ++j) {
                 for (int r = 0; r <= kd; ++r) {
@@ -143,7 +143,7 @@ int run_one(const std::string& dump_dir,
     params.kd_work = kd_work;
 
     const size_t ws_bytes = sytrd_band_reduction_buffer_size(*q,
-                                                                   AB.view(),
+                                                                   AB,
                                                                    VectorView<Real>(dvec),
                                                                    VectorView<Real>(e),
                                                                    VectorView<T>(tau),
@@ -151,7 +151,7 @@ int run_one(const std::string& dump_dir,
                                                                    kd,
                                                                    params);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    sytrd_band_reduction(*q, AB.view(), VectorView<Real>(dvec), VectorView<Real>(e), VectorView<T>(tau), Uplo::Lower, kd, ws.to_span(), params).wait();
+    sytrd_band_reduction(*q, AB, VectorView<Real>(dvec), VectorView<Real>(e), VectorView<T>(tau), Uplo::Lower, kd, ws.to_span(), params).wait();
 
     return 0;
 }

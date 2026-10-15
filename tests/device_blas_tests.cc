@@ -240,8 +240,8 @@ void expect_symm_close(Queue& ctx, const DenseView<T>& a, Side side, Uplo uplo, 
     using MV = DenseView<T>;
     const MV c_before = c0.view();
     Matrix<T> sym(a.rows(), a.cols());
-    MV::copy(ctx, sym.view(), a).wait();
-    sym.view().symmetrize(ctx, uplo).wait();
+    MV::copy(ctx, sym, a).wait();
+    sym.symmetrize(ctx, uplo).wait();
     const MV s = sym.view();
     const auto nt = Transpose::NoTrans;
     const double err = side == Side::Left
@@ -259,8 +259,8 @@ void expect_trmm_close(Queue& ctx, const DenseView<T>& a, Side side, Uplo uplo, 
     using MV = DenseView<T>;
     const MV c_before = c0.view();
     Matrix<T> tri_m(a.rows(), a.cols());
-    MV::copy(ctx, tri_m.view(), a).wait();
-    tri_m.view().triangularize(ctx, uplo, diag).wait();
+    MV::copy(ctx, tri_m, a).wait();
+    tri_m.triangularize(ctx, uplo, diag).wait();
     const MV tri = tri_m.view();
     const auto nt = Transpose::NoTrans;
     const double err = side == Side::Left
@@ -353,10 +353,10 @@ void run_trmm_nd_item_case(Queue& ctx, size_t local_size) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto workspace_elements = batchlas::device::trmm_workspace_elements<float,
                                                                                batchlas::device::DeviceBlasPolicy::Auto,
@@ -371,7 +371,7 @@ void run_trmm_nd_item_case(Queue& ctx, size_t local_size) {
             item, a_view, b_view, c_view, 0.9f, -0.2f, workspace);
     });
 
-    expect_trmm_close(ctx, a.view(), SideValue, UploValue, TransValue, DiagValue, b.view(), c0, c.view(), 0.9f, -0.2f, 0.0001);
+    expect_trmm_close(ctx, a, SideValue, UploValue, TransValue, DiagValue, b, c0, c, 0.9f, -0.2f, 0.0001);
 }
 
 template <typename T>
@@ -458,7 +458,7 @@ TEST(DeviceBlasTest, GemvNoTransposeMatchesReference) {
     y(1) = -1.0f;
     y(2) = 4.0f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = 1.5f;
@@ -497,7 +497,7 @@ TEST(DeviceBlasTest, GemvTransposeMatchesReference) {
     y(2) = 2.5f;
     y(3) = -3.5f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = -2.0f;
@@ -549,7 +549,7 @@ TEST(DeviceBlasTest, GemxvComputesMultipleVectorsInOnePass) {
     y1_parent(1, 1) = 5.0f;
     y1_parent(2, 1) = 7.0f;
 
-    auto a_view = a_parent.view().kernel_view().batch_item(1);
+    auto a_view = a_parent.kernel_view().batch_item(1);
     auto x0 = VectorView<float>(x0_parent).batch_item(1);
     auto x1 = VectorView<float>(x1_parent).batch_item(1);
     auto y0 = VectorView<float>(y0_parent).batch_item(1);
@@ -609,7 +609,7 @@ TEST(DeviceBlasTest, TrmvLowerNoTransposeMatchesReference) {
     y(1) = -1.0f;
     y(2) = 2.0f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = 0.75f;
@@ -660,7 +660,7 @@ TEST(DeviceBlasTest, TrmvUpperTransposeUnitDiagonalMatchesReference) {
     y(1) = -4.0f;
     y(2) = 2.0f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = -1.25f;
@@ -692,7 +692,7 @@ TEST(DeviceBlasTest, FillVectorAndMatrixSetConstantValues) {
     Vector<float> x(5);
     Matrix<float, MatrixFormat::Dense> a(3, 2);
     auto x_view = VectorView<float>(x);
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
     run_group_kernel(ctx, local_size, [=](const auto& group) {
@@ -736,7 +736,7 @@ TEST(DeviceBlasTest, TrmvUpperNoTransSupportsInPlaceOutput) {
     x(1) = -1.0f;
     x(2) = 3.0f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     const size_t local_size = device_test_work_group_size(ctx);
 
@@ -774,7 +774,7 @@ TEST(DeviceBlasTest, SymvLowerMatchesReferenceUsingOnlyStoredTriangle) {
     y(1) = -1.0f;
     y(2) = 2.0f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = 0.75f;
@@ -822,7 +822,7 @@ TEST(DeviceBlasTest, SymvUpperMatchesReferenceUsingOnlyStoredTriangle) {
     y(1) = -3.0f;
     y(2) = 2.5f;
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_view = VectorView<float>(y);
     const float alpha = -1.25f;
@@ -883,7 +883,7 @@ TEST(DeviceBlasTest, HemvLowerMatchesReferenceUsingStoredTriangle) {
         expected[static_cast<std::size_t>(row)] = alpha * acc + beta * y(row);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
@@ -938,7 +938,7 @@ TEST(DeviceBlasTest, HemvUpperMatchesReferenceUsingStoredTriangle) {
         expected[static_cast<std::size_t>(row)] = alpha * acc + beta * y(row);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
@@ -993,7 +993,7 @@ TEST(DeviceBlasTest, HemvLowerNdItemMatchesReferenceUsingStoredTriangle) {
         expected[static_cast<std::size_t>(row)] = alpha * acc + beta * y(row);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<Complex>(x);
     auto y_view = VectorView<Complex>(y);
     const size_t local_size = device_test_work_group_size(ctx);
@@ -1046,7 +1046,7 @@ TEST(DeviceBlasTest, SymvLowerAutoMatchesGenericOnTiledCase) {
 
     const float alpha = 0.8f;
     const float beta = -0.35f;
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
@@ -1276,15 +1276,15 @@ TEST(DeviceBlasTest, GerGroupMatchesReference) {
 
     const auto x_view = VectorView<float>(x);
     const auto y_view = VectorView<float>(y);
-    const auto a0 = snapshot(a.view());
-    auto a_view = a.view().kernel_view();
+    const auto a0 = snapshot(a);
+    auto a_view = a.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
     run_group_kernel(ctx, local_size, [=](auto group) {
         batchlas::device::ger(group, x_view, y_view, a_view, 1.25f);
     });
 
-    expect_ger_close(ctx, x_view, y_view, a0, a.view(), 1.25f, false, false, 1e-4);
+    expect_ger_close(ctx, x_view, y_view, a0, a, 1.25f, false, false, 1e-4);
 }
 
 TEST(DeviceBlasTest, GercGroupMatchesReference) {
@@ -1311,15 +1311,15 @@ TEST(DeviceBlasTest, GercGroupMatchesReference) {
 
     const auto x_view = VectorView<Complex>(x);
     const auto y_view = VectorView<Complex>(y);
-    const auto a0 = snapshot(a.view());
-    auto a_view = a.view().kernel_view();
+    const auto a0 = snapshot(a);
+    auto a_view = a.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
     run_group_kernel(ctx, local_size, [=](auto group) {
         batchlas::device::gerc(group, x_view, y_view, a_view, Complex(0.75f, -0.5f));
     });
 
-    expect_ger_close(ctx, x_view, y_view, a0, a.view(), Complex(0.75f, -0.5f), false, true, 1e-4);
+    expect_ger_close(ctx, x_view, y_view, a0, a, Complex(0.75f, -0.5f), false, true, 1e-4);
 }
 
 TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
@@ -1348,9 +1348,9 @@ TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
 
     const auto x_view = VectorView<float>(x);
     const auto y_view = VectorView<float>(y);
-    const auto a0 = snapshot(a_auto.view());
-    auto a_auto_view = a_auto.view().kernel_view();
-    auto a_generic_view = a_generic.view().kernel_view();
+    const auto a0 = snapshot(a_auto);
+    auto a_auto_view = a_auto.kernel_view();
+    auto a_generic_view = a_generic.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
 
     run_nd_item_kernel(ctx, local_size, [=](sycl::nd_item<1> item) {
@@ -1360,11 +1360,11 @@ TEST(DeviceBlasTest, GerNdItemAutoMatchesGeneric) {
         batchlas::device::ger<batchlas::device::DeviceBlasPolicy::Generic>(item.get_group(), x_view, y_view, a_generic_view, 0.75f);
     });
 
-    expect_ger_close(ctx, x_view, y_view, a0, a_auto.view(), 0.75f, false, false, 1e-4);
+    expect_ger_close(ctx, x_view, y_view, a0, a_auto, 0.75f, false, false, 1e-4);
     for (int j = 0; j < a_auto.cols(); ++j) {
         for (int i = 0; i < a_auto.rows(); ++i) {
-            EXPECT_NEAR(a_auto.view().template at<MatrixFormat::Dense>(i, j),
-                        a_generic.view().template at<MatrixFormat::Dense>(i, j),
+            EXPECT_NEAR(a_auto.template at<MatrixFormat::Dense>(i, j),
+                        a_generic.template at<MatrixFormat::Dense>(i, j),
                         1e-5f)
                 << "Mismatch at (" << i << ", " << j << ")";
         }
@@ -1393,10 +1393,10 @@ TEST(DeviceBlasTest, Syr2kGroupMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::syr2k_workspace_elements<float, Uplo::Lower, Transpose::NoTrans>(
@@ -1406,7 +1406,7 @@ TEST(DeviceBlasTest, Syr2kGroupMatchesReference) {
         batchlas::device::syr2k<Uplo::Lower, Transpose::NoTrans>(group, a_view, b_view, c_view, -0.75f, 0.5f, workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f, false, 0.0001);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::NoTrans, c0, c, -0.75f, 0.5f, false, 0.0001);
 }
 
 TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
@@ -1428,9 +1428,9 @@ TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::syrk_workspace_elements<float, Uplo::Lower, Transpose::NoTrans>(launch, c_view.rows(), a_view.cols());
@@ -1439,7 +1439,7 @@ TEST(DeviceBlasTest, SyrkGroupMatchesReference) {
         batchlas::device::syrk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, -0.75f, 0.5f, workspace);
     });
 
-    expect_syrk_close(ctx, a.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), -0.75f, 0.5f, 0.0001);
+    expect_syrk_close(ctx, a, Uplo::Lower, Transpose::NoTrans, c0, c, -0.75f, 0.5f, 0.0001);
 }
 
 TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
@@ -1475,10 +1475,10 @@ TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, Uplo::Lower, Transpose::NoTrans>(
@@ -1489,7 +1489,7 @@ TEST(DeviceBlasTest, Her2kGroupMatchesReference) {
             group, a_view, b_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), true, 1e-4);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::NoTrans, c0, c, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), true, 1e-4);
 }
 
 TEST(DeviceBlasTest, HerkGroupMatchesReference) {
@@ -1516,9 +1516,9 @@ TEST(DeviceBlasTest, HerkGroupMatchesReference) {
         }
     }
 
-    const auto expected = reference_rankk(a.view(), c.view(), Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
-    auto a_view = a.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto expected = reference_rankk(a, c, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::herk_workspace_elements<Complex, Uplo::Lower, Transpose::NoTrans>(
@@ -1528,7 +1528,7 @@ TEST(DeviceBlasTest, HerkGroupMatchesReference) {
         batchlas::device::herk<Uplo::Lower, Transpose::NoTrans>(group, a_view, c_view, Complex(-0.5f, 0.25f), Complex(1.0f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected);
+    expect_matrix_matches_vector(c, expected);
 }
 
 TEST(DeviceBlasTest, Syr2kNdItemAutoMatchesGeneric) {
@@ -1557,10 +1557,10 @@ TEST(DeviceBlasTest, Syr2kNdItemAutoMatchesGeneric) {
         }
     }
 
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_auto_view = c_auto.view().kernel_view();
-    auto c_generic_view = c_generic.view().kernel_view();
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_auto_view = c_auto.kernel_view();
+    auto c_generic_view = c_generic.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto auto_workspace = batchlas::device::syr2k_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
@@ -1579,8 +1579,8 @@ TEST(DeviceBlasTest, Syr2kNdItemAutoMatchesGeneric) {
 
     for (int j = 0; j < c_auto.cols(); ++j) {
         for (int i = 0; i < c_auto.rows(); ++i) {
-            EXPECT_NEAR(c_auto.view().template at<MatrixFormat::Dense>(i, j),
-                        c_generic.view().template at<MatrixFormat::Dense>(i, j),
+            EXPECT_NEAR(c_auto.template at<MatrixFormat::Dense>(i, j),
+                        c_generic.template at<MatrixFormat::Dense>(i, j),
                         1e-4f)
                 << "Mismatch at (" << i << ", " << j << ")";
         }
@@ -1609,9 +1609,9 @@ TEST(DeviceBlasTest, SyrkNdItem3DTiledTransposeMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::syrk_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
         launch, c_view.rows(), a_view.rows());
@@ -1621,7 +1621,7 @@ TEST(DeviceBlasTest, SyrkNdItem3DTiledTransposeMatchesReference) {
             item, a_view, c_view, -0.6f, 0.8f, workspace);
     });
 
-    expect_syrk_close(ctx, a.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f, 0.0005);
+    expect_syrk_close(ctx, a, Uplo::Lower, Transpose::Trans, c0, c, -0.6f, 0.8f, 0.0005);
 }
 
 TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
@@ -1649,10 +1649,10 @@ TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::syr2k_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::Trans>(
         launch, c_view.rows(), a_view.rows());
@@ -1662,7 +1662,7 @@ TEST(DeviceBlasTest, Syr2kNdItem3DTiledTransposeMatchesReference) {
             item, a_view, b_view, c_view, -0.6f, 0.8f, workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::Trans, c0, c.view(), -0.6f, 0.8f, false, 0.0005);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::Trans, c0, c, -0.6f, 0.8f, false, 0.0005);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
@@ -1693,10 +1693,10 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
         launch, c_view.rows(), a_view.cols());
@@ -1706,7 +1706,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::NoTrans, c0, c, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
@@ -1734,9 +1734,9 @@ TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto expected = reference_rankk(a.view(), c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
-    auto a_view = a.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto expected = reference_rankk(a, c, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), Uplo::Lower, Transpose::NoTrans, true);
+    auto a_view = a.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::herk_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
         launch, c_view.rows(), a_view.cols());
@@ -1746,7 +1746,7 @@ TEST(DeviceBlasTest, HerkNdItem3DTiledMatchesReference) {
             item, a_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
-    expect_matrix_matches_vector(c.view(), expected, 1e-3);
+    expect_matrix_matches_vector(c, expected, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
@@ -1777,10 +1777,10 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
         launch, c_view.rows(), a_view.rows());
@@ -1790,7 +1790,7 @@ TEST(DeviceBlasTest, Her2kNdItem3DTiledConjTransposeMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::ConjTrans, c0, c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::ConjTrans, c0, c, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
@@ -1821,10 +1821,10 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
@@ -1835,7 +1835,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::NoTrans, c0, c, Complex(-0.4f, 0.3f), Complex(0.9f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
@@ -1866,10 +1866,10 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = static_cast<size_t>(batchlas::device::detail::subgroup::kComplexRank2kThreadsPerGroup);
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::ConjTrans>(
@@ -1880,7 +1880,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DCompactConjTransposeMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::ConjTrans, c0, c.view(), Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::ConjTrans, c0, c, Complex(-0.35f, 0.2f), Complex(0.8f, 0.0f), true, 1e-3);
 }
 
 TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
@@ -1912,10 +1912,10 @@ TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto workspace_elements = batchlas::device::her2k_workspace_elements<Complex, batchlas::device::DeviceBlasPolicy::Auto, Uplo::Lower, Transpose::NoTrans>(
@@ -1926,7 +1926,7 @@ TEST(DeviceBlasTest, Her2kNdItem1DComplexDoubleGenericMatchesReference) {
             item, a_view, b_view, c_view, Complex(-0.4, 0.3), Complex(0.9, 0.0), workspace);
     });
 
-    expect_rank2k_close(ctx, a.view(), b.view(), Uplo::Lower, Transpose::NoTrans, c0, c.view(), Complex(-0.4, 0.3), Complex(0.9, 0.0), true, 1e-10);
+    expect_rank2k_close(ctx, a, b, Uplo::Lower, Transpose::NoTrans, c0, c, Complex(-0.4, 0.3), Complex(0.9, 0.0), true, 1e-10);
 }
 
 TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
@@ -1963,9 +1963,9 @@ TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
     c_host.at<MatrixFormat::Dense>(1, 1) = -3.0f;
     c_host.at<MatrixFormat::Dense>(2, 1) = 2.0f;
 
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const float alpha = 1.5f;
     const float beta = -0.25f;
     const size_t local_size = device_test_work_group_size(ctx);
@@ -1987,7 +1987,7 @@ TEST(DeviceBlasTest, TrmmLeftLowerMatchesReference) {
         28.0f,
     };
 
-    expect_matrix_near(c.view(), expected);
+    expect_matrix_near(c, expected);
 }
 
 TEST(DeviceBlasTest, TrmmRightUpperTransposeUnitDiagonalMatchesReference) {
@@ -2024,9 +2024,9 @@ TEST(DeviceBlasTest, TrmmRightUpperTransposeUnitDiagonalMatchesReference) {
     c_host.at<MatrixFormat::Dense>(0, 2) = 4.0f;
     c_host.at<MatrixFormat::Dense>(1, 2) = 2.0f;
 
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const float alpha = -1.25f;
     const float beta = 0.5f;
     const size_t local_size = device_test_work_group_size(ctx);
@@ -2048,7 +2048,7 @@ TEST(DeviceBlasTest, TrmmRightUpperTransposeUnitDiagonalMatchesReference) {
         2.25f,
     };
 
-    expect_matrix_near(c.view(), expected);
+    expect_matrix_near(c, expected);
 }
 
 TEST(DeviceBlasTest, TrmmLeftUpperNoTransSupportsInPlaceOutput) {
@@ -2076,8 +2076,8 @@ TEST(DeviceBlasTest, TrmmLeftUpperNoTransSupportsInPlaceOutput) {
     b_host.at<MatrixFormat::Dense>(1, 1) = 1.0f;
     b_host.at<MatrixFormat::Dense>(2, 1) = -1.0f;
 
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, float>(
@@ -2089,7 +2089,7 @@ TEST(DeviceBlasTest, TrmmLeftUpperNoTransSupportsInPlaceOutput) {
     });
 
     const std::array<float, 6> expected{-4.0f, -6.5f, 3.25f, 11.5f, -0.5f, -6.5f};
-    expect_matrix_near(b.view(), expected);
+    expect_matrix_near(b, expected);
 }
 
 TEST(DeviceBlasTest, TrmmRightUpperNoTransSupportsInPlaceOutput) {
@@ -2117,8 +2117,8 @@ TEST(DeviceBlasTest, TrmmRightUpperNoTransSupportsInPlaceOutput) {
     b_host.at<MatrixFormat::Dense>(0, 2) = 0.5f;
     b_host.at<MatrixFormat::Dense>(1, 2) = -1.0f;
 
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::trmm_workspace_elements<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, float>(
@@ -2130,7 +2130,7 @@ TEST(DeviceBlasTest, TrmmRightUpperNoTransSupportsInPlaceOutput) {
     });
 
     const std::array<float, 6> expected{2.5f, 7.5f, -6.0f, 13.5f, -7.75f, -4.5f};
-    expect_matrix_near(b.view(), expected);
+    expect_matrix_near(b, expected);
 }
 
 TEST(DeviceBlasTest, GemvNdItemGenericAndAutoMatch) {
@@ -2148,7 +2148,7 @@ TEST(DeviceBlasTest, GemvNdItemGenericAndAutoMatch) {
         y_generic(i) = y_auto(i);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
@@ -2203,7 +2203,7 @@ TEST(DeviceBlasTest, GemvNdItemTiledAutoMatchesGeneric) {
         y_generic(i) = initial;
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_auto_view = VectorView<float>(y_auto);
     auto y_generic_view = VectorView<float>(y_generic);
@@ -2247,7 +2247,7 @@ TEST(DeviceBlasTest, TrmvNdItemMatchesGroupReference) {
         y_item(i) = y_group(i);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_group_view = VectorView<float>(y_group);
     auto y_item_view = VectorView<float>(y_item);
@@ -2286,7 +2286,7 @@ TEST(DeviceBlasTest, TrmvTransposeNdItemMatchesGroupReference) {
         y_item(i) = y_group(i);
     }
 
-    auto a_view = a.view().kernel_view();
+    auto a_view = a.kernel_view();
     auto x_view = VectorView<float>(x);
     auto y_group_view = VectorView<float>(y_group);
     auto y_item_view = VectorView<float>(y_item);
@@ -2339,10 +2339,10 @@ TEST(DeviceBlasTest, SymmGroupMatchesReference) {
     c_initial.at<MatrixFormat::Dense>(1, 1) = -3.0f;
     c_initial.at<MatrixFormat::Dense>(2, 1) = 2.0f;
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_group_launch_info(local_size);
     const auto workspace_elements = batchlas::device::symm_workspace_elements<float, Side::Left, Uplo::Lower>(launch, c_view.rows(), c_view.cols());
@@ -2351,7 +2351,7 @@ TEST(DeviceBlasTest, SymmGroupMatchesReference) {
         batchlas::device::symm<Side::Left, Uplo::Lower>(group, a_view, b_view, c_view, 1.5f, -0.25f, workspace);
     });
 
-    expect_symm_close(ctx, a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.5f, -0.25f, 0.0005);
+    expect_symm_close(ctx, a, Side::Left, Uplo::Lower, b, c0, c, 1.5f, -0.25f, 0.0005);
 }
 
 TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
@@ -2380,11 +2380,11 @@ TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
         }
     }
 
-    const auto c0 = snapshot(c_auto.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_auto_view = c_auto.view().kernel_view();
-    auto c_generic_view = c_generic.view().kernel_view();
+    const auto c0 = snapshot(c_auto);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_auto_view = c_auto.kernel_view();
+    auto c_generic_view = c_generic.kernel_view();
     const size_t local_size = device_test_work_group_size(ctx);
     const auto launch = device_test_nd_item_1d_launch_info(ctx, local_size);
     const auto auto_workspace = batchlas::device::symm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Side::Right, Uplo::Upper>(
@@ -2401,8 +2401,8 @@ TEST(DeviceBlasTest, SymmNdItemAutoAndGenericMatchReference) {
             item, a_view, b_view, c_generic_view, 0.8f, 0.3f, workspace);
     });
 
-    expect_symm_close(ctx, a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_auto.view(), 0.8f, 0.3f, 0.0001);
-    expect_symm_close(ctx, a.view(), Side::Right, Uplo::Upper, b.view(), c0, c_generic.view(), 0.8f, 0.3f, 0.0001);
+    expect_symm_close(ctx, a, Side::Right, Uplo::Upper, b, c0, c_auto, 0.8f, 0.3f, 0.0001);
+    expect_symm_close(ctx, a, Side::Right, Uplo::Upper, b, c0, c_generic, 0.8f, 0.3f, 0.0001);
 }
 
 TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
@@ -2443,11 +2443,11 @@ TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
                 }
             }
 
-            const auto c0 = snapshot(c_auto.view());
-            auto a_view = a.view().kernel_view();
-            auto b_view = b.view().kernel_view();
-            auto c_auto_view = c_auto.view().kernel_view();
-            auto c_generic_view = c_generic.view().kernel_view();
+            const auto c0 = snapshot(c_auto);
+            auto a_view = a.kernel_view();
+            auto b_view = b.kernel_view();
+            auto c_auto_view = c_auto.kernel_view();
+            auto c_generic_view = c_generic.kernel_view();
 
             auto run_case = [&](auto trans_a_tag, auto trans_b_tag) {
                 constexpr auto TransAValue = decltype(trans_a_tag)::value;
@@ -2491,8 +2491,8 @@ TEST(DeviceBlasTest, GemmNdItemMatchesReferenceAcrossTransforms) {
                          std::integral_constant<Transpose, Transpose::Trans>{});
             }
 
-            expect_gemm_close(ctx, a.view(), trans_a, b.view(), trans_b, c0, c_auto.view(), 1.25f, -0.35f, 0.0001);
-            expect_gemm_close(ctx, a.view(), trans_a, b.view(), trans_b, c0, c_generic.view(), 1.25f, -0.35f, 0.0001);
+            expect_gemm_close(ctx, a, trans_a, b, trans_b, c0, c_auto, 1.25f, -0.35f, 0.0001);
+            expect_gemm_close(ctx, a, trans_a, b, trans_b, c0, c_generic, 1.25f, -0.35f, 0.0001);
         }
     }
 }
@@ -2544,10 +2544,10 @@ TEST(DeviceBlasTest, TrmmNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::trmm_workspace_elements<float,
                                                                                batchlas::device::DeviceBlasPolicy::Auto,
@@ -2571,7 +2571,7 @@ TEST(DeviceBlasTest, TrmmNdItem3DTiledMatchesReference) {
                                   workspace);
     });
 
-    expect_trmm_close(ctx, a.view(), Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, b.view(), c0, c.view(), 0.9f, -0.2f, 0.0005);
+    expect_trmm_close(ctx, a, Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, b, c0, c, 0.9f, -0.2f, 0.0005);
 }
 
 TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
@@ -2599,10 +2599,10 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
         launch, c_view.rows(), c_view.cols(), a_view.cols(), false, false);
@@ -2612,7 +2612,7 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, 0.95f, -0.2f, workspace);
     });
 
-    expect_gemm_close(ctx, a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 0.95f, -0.2f, 0.0005);
+    expect_gemm_close(ctx, a, Transpose::NoTrans, b, Transpose::NoTrans, c0, c, 0.95f, -0.2f, 0.0005);
 }
 
 TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
@@ -2640,10 +2640,10 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::gemm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Transpose::NoTrans, Transpose::NoTrans>(
         launch, c_view.rows(), c_view.cols(), a_view.cols(), false, false);
@@ -2653,7 +2653,7 @@ TEST(DeviceBlasTest, GemmNdItem3DTiledAlignedLargeMatchesReference) {
             item, a_view, b_view, c_view, 1.1f, -0.25f, workspace);
     });
 
-    expect_gemm_close(ctx, a.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, c0, c.view(), 1.1f, -0.25f, 0.001);
+    expect_gemm_close(ctx, a, Transpose::NoTrans, b, Transpose::NoTrans, c0, c, 1.1f, -0.25f, 0.001);
 }
 
 TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
@@ -2685,10 +2685,10 @@ TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
         }
     }
 
-    const auto c0 = snapshot(c.view());
-    auto a_view = a.view().kernel_view();
-    auto b_view = b.view().kernel_view();
-    auto c_view = c.view().kernel_view();
+    const auto c0 = snapshot(c);
+    auto a_view = a.kernel_view();
+    auto b_view = b.kernel_view();
+    auto c_view = c.kernel_view();
     const auto launch = device_test_nd_item_3d_launch_info(ctx);
     const auto workspace_elements = batchlas::device::symm_workspace_elements<float, batchlas::device::DeviceBlasPolicy::Auto, Side::Left, Uplo::Lower>(
         launch, c_view.rows(), c_view.cols());
@@ -2698,7 +2698,7 @@ TEST(DeviceBlasTest, SymmNdItem3DTiledMatchesReference) {
             item, a_view, b_view, c_view, 1.1f, -0.15f, workspace);
     });
 
-    expect_symm_close(ctx, a.view(), Side::Left, Uplo::Lower, b.view(), c0, c.view(), 1.1f, -0.15f, 0.0005);
+    expect_symm_close(ctx, a, Side::Left, Uplo::Lower, b, c0, c, 1.1f, -0.15f, 0.0005);
 }
 
 namespace {

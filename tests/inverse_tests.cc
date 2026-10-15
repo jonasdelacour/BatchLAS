@@ -15,13 +15,13 @@ TEST(InverseTest, InverseIdentityCheck) {
     const Matrix<float, MatrixFormat::Dense> A0 = A;
 
     Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
-    UnifiedVector<std::byte> ws(inv_buffer_size(ctx, A.view()));
-    (void)inv(ctx, A.view(), Ainverse.view(), ws);
+    UnifiedVector<std::byte> ws(inv_buffer_size(ctx, A));
+    (void)inv(ctx, A, Ainverse, ws);
     ctx.wait();
 
     // ||A X - I||_F / (||A||_F ||X||_F): an empty B0 is the identity.
     using MV = MatrixView<float, MatrixFormat::Dense>;
     EXPECT_VERIFY(float, verify::Check::solve, 40,
-                  MV::solve_residual(ctx, A0.view(), Ainverse.view(), MV(nullptr, 0, 0, 1), A0.view().all_items()));
+                  MV::solve_residual(ctx, A0, Ainverse, MV(nullptr, 0, 0, 1), A0.all_items()));
 }
 #endif // BATCHLAS_HAS_GPU_BACKEND

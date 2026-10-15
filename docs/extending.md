@@ -105,11 +105,10 @@ Every step is required; each has a check that fails if skipped.
   `include/batchlas/blas/functions.hh` (which declares nothing itself). The extension surface
   (`steqr`, `stedc`, `syevx`, `lanczos`, `ritz_values`, ...) lives in
   `include/batchlas/blas/extensions.hh`.
-- The primary takes views (`MatrixView` / `VectorView` / `Span`). Do not hand-write an owning
-  `Matrix` twin: close the header with `BATCHLAS_ACCEPT_OWNING(<op>)` and
+- The primary takes views (`MatrixView` / `VectorView` / `Span`); an owning `Matrix` binds to it
+  as its base, so never write an owning twin. Close the header with
   `BATCHLAS_DISPATCH_ON_QUEUE(<op>)`, once per name including the sizing function
-  (`functions/gemv.hh`, `geqrf.hh` show the shape). The one hand-written owning twin is in
-  `ritz_values`, documented in place.
+  (`functions/gemv.hh`, `geqrf.hh` show the shape).
 - The sizing function is `<op>_buffer_size` and returns bytes. It takes the same arguments as the run
   path up to the workspace and branches identically. Size it with `BumpAllocator::measuring()` +
   `required_bytes()`, never by re-deriving sizes: the allocator checks the alignment-rounded size

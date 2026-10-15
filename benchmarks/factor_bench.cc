@@ -579,7 +579,7 @@ static int run(const Cfg& c) {
                 double orth = 0;
                 for (int b : items) {
                     const auto Q = MV::form_q(*q, Av, tauv, b, kmin);
-                    orth = verify::nanmax(orth, QV::orthogonality(*q, Q.view()));
+                    orth = verify::nanmax(orth, QV::orthogonality(*q, Q));
                 }
                 a.extra = orth;
                 within = verify::within<T>(Check::factorization, n, a.residual);

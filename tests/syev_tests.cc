@@ -164,7 +164,7 @@ TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
     const int batch = 8;
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-    fill_mixed_convergence_matrices<T>(A.view());
+    fill_mixed_convergence_matrices<T>(A);
     UnifiedVector<Real> W(static_cast<size_t>(n) * static_cast<size_t>(batch));
 
     // -1, NOT 0: a span left at zero cannot tell "the solver wrote 0" from
@@ -175,8 +175,8 @@ TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     auto ws = UnifiedVector<std::byte>(
-        syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    (void)syev<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+        syev_buffer_size<B, T>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+    (void)syev<B, T>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws.to_span(), info.to_span());
     this->ctx->wait();
 
@@ -202,21 +202,21 @@ TYPED_TEST(SyevTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     const int batch = 4;
 
     Matrix<T, MatrixFormat::Dense> A0(n, n, batch), A1(n, n, batch);
-    fill_mixed_convergence_matrices<T>(A0.view());
-    fill_mixed_convergence_matrices<T>(A1.view());
+    fill_mixed_convergence_matrices<T>(A0);
+    fill_mixed_convergence_matrices<T>(A1);
     UnifiedVector<Real> W0(static_cast<size_t>(n) * batch), W1(static_cast<size_t>(n) * batch);
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
-    const size_t bytes_a = syev_buffer_size<B, T>(*this->ctx, A0.view(), W0.to_span(),
+    const size_t bytes_a = syev_buffer_size<B, T>(*this->ctx, A0, W0.to_span(),
                                                   JobType::NoEigenVectors, Uplo::Lower);
-    const size_t bytes_b = syev_buffer_size<B, T>(*this->ctx, A1.view(), W1.to_span(),
+    const size_t bytes_b = syev_buffer_size<B, T>(*this->ctx, A1, W1.to_span(),
                                                   JobType::NoEigenVectors, Uplo::Lower);
     EXPECT_EQ(bytes_a, bytes_b);
 
     UnifiedVector<std::byte> ws0(bytes_a), ws1(bytes_a);
-    (void)syev<B, T>(*this->ctx, A0.view(), W0.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+    (void)syev<B, T>(*this->ctx, A0, W0.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws0.to_span(), info.to_span());
-    (void)syev<B, T>(*this->ctx, A1.view(), W1.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+    (void)syev<B, T>(*this->ctx, A1, W1.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws1.to_span(), Span<int32_t>{});
     this->ctx->wait();
 
@@ -253,7 +253,7 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
         const int batch = 8;
 
         Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-        fill_mixed_convergence_matrices<T>(A.view());
+        fill_mixed_convergence_matrices<T>(A);
         UnifiedVector<Real> W(static_cast<size_t>(n) * static_cast<size_t>(batch));
         UnifiedVector<int32_t> info(batch, int32_t(-1));
 
@@ -261,8 +261,8 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
         params.max_sweeps = 1;
 
         auto ws = UnifiedVector<std::byte>(
-            syev_cta_buffer_size<B, T>(*this->ctx, A.view(), JobType::NoEigenVectors, params));
-        (void)syev_cta<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+            syev_cta_buffer_size<B, T>(*this->ctx, A, JobType::NoEigenVectors, params));
+        (void)syev_cta<B, T>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                        ws.to_span(), params, /*cta_wg_size_multiplier=*/1, info.to_span());
         this->ctx->wait();
 
@@ -382,14 +382,14 @@ TYPED_TEST(SyevTest, VendorRouteHonoursLdSubViewsAndBatchStride) {
                 // ||A||_2 = max |lambda| = 1e3.
                 const VectorView<Real> w(W.data(), s.n, s.batch);
                 EXPECT_VERIFY(T, verify::Check::values, s.n,
-                              MV::values_error(w, std::vector<std::vector<double>>(s.batch, want), 1e3, A0.view().all_items()))
+                              MV::values_error(w, std::vector<std::vector<double>>(s.batch, want), 1e3, A0.all_items()))
                     << where;
                 if (jobz != JobType::EigenVectors) continue;
                 EXPECT_VERIFY(T, verify::Check::eigen_residual, s.n,
-                              MV::eigen_residual(*this->ctx, A0.view(), A, w, A0.view().all_items()))
+                              MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
                     << where;
                 EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, s.n,
-                              MV::orthogonality(*this->ctx, A, A0.view().all_items()))
+                              MV::orthogonality(*this->ctx, A, A0.all_items()))
                     << where;
             }
         }

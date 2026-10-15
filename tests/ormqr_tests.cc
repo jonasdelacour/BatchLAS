@@ -28,17 +28,17 @@ TYPED_TEST(OrmqrTest, SingleMatrix) {
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
     const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(n);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n);
-    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-    (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
+    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size(*this->ctx, A, Q, Side::Left, Transpose::NoTrans, tau.to_span()));
+    (void)ormqr(*this->ctx, A, Q, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
     EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q, Transpose::NoTrans));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q)));
 }
 
 TYPED_TEST(OrmqrTest, BatchedMatrices) {
@@ -50,17 +50,17 @@ TYPED_TEST(OrmqrTest, BatchedMatrices) {
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
     const Matrix<T, MatrixFormat::Dense> A0 = A;
     UnifiedVector<T> tau(n * batch);
-    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A, tau.to_span()));
+    (void)geqrf(*this->ctx, A, tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Q = Matrix<T, MatrixFormat::Dense>::Identity(n, batch);
-    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-    (void)ormqr(*this->ctx, A.view(), Q.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
+    UnifiedVector<std::byte> ws_ormqr(ormqr_buffer_size(*this->ctx, A, Q, Side::Left, Transpose::NoTrans, tau.to_span()));
+    (void)ormqr(*this->ctx, A, Q, Side::Left, Transpose::NoTrans, tau.to_span(), ws_ormqr.to_span());
     this->ctx->wait();
 
     EXPECT_VERIFY(T, batchlas::verify::Check::factorization, n, test_utils::ormqr_q_error(*this->ctx, A0, A, Q, Transpose::NoTrans));
-    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q.view())));
+    EXPECT_VERIFY(T, batchlas::verify::Check::orthogonality, n, (MatrixView<T, MatrixFormat::Dense>::orthogonality(*this->ctx, Q)));
 }
 
 // The two routing regressions that lived here (an unmatched forced provider whose size and

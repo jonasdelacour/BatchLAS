@@ -69,7 +69,7 @@ double qr_error(Queue& ctx, const T* F, const T* A0, const T* tau, int m, int n,
 // ||Q^H Q - I||_F / sqrt(k), for a Q held tight in double.
 template <typename D>
 double orth_of_promoted(Queue& ctx, const Matrix<D>& Q, int k) {
-    return MVof<D>::orthogonality(ctx, Q.view()) / std::sqrt(double(k));
+    return MVof<D>::orthogonality(ctx, Q) / std::sqrt(double(k));
 }
 
 // ||Q^H Q - I||_F / sqrt(n) over every item of a Q the code under test PRODUCED (m x n at ldq, qstride).

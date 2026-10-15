@@ -30,8 +30,6 @@ struct BackendMatrixHandle {
 
     BackendMatrixHandle(const MatrixView<T, MType>& matrix) { initialize(matrix); }
 
-    BackendMatrixHandle(const Matrix<T, MType>& matrix) : BackendMatrixHandle(matrix.view()) {}
-
     #if BATCHLAS_HAS_CUSPARSE
         constexpr inline operator cusparseDnMatDescr_t() const { return cusparse_descr_; }
         constexpr inline operator cusparseSpMatDescr_t() const { return cusparse_descr_sp_; }
@@ -114,9 +112,5 @@ std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const MatrixV
     return std::make_shared<BackendMatrixHandle<T, MType>>(view);
 }
 
-template <typename T, MatrixFormat MType>
-std::shared_ptr<BackendMatrixHandle<T, MType>> createBackendHandle(const Matrix<T, MType>& matrix) {
-    return createBackendHandle<T, MType>(matrix.view());
-}
 
 } // namespace batchlas

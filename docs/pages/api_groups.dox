@@ -75,7 +75,7 @@ Lower-level functions (algorithm-specific variants, workspace queries, validatio
 @brief Value-returning, NumPy-like wrappers over the entry points.
 
 @defgroup api_dispatch Backend dispatch and vendor seams
-@brief How a call reaches a backend: the Queue's backend, owning-argument forwarding, and the
+@brief How a call reaches a backend: the Queue's backend, owning arguments, and the
 `backend::*_vendor` declarations the vendor families call.
 
 Which kernel runs for a shape is decided by flat kernel selection (developer docs:

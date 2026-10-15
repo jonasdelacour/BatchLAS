@@ -63,9 +63,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     {
         const int n = 8, batch = 4;
         Matrix<float> As(n, n, batch), Bs(n, n, batch), Cs(n, n, batch);
-        (void)As.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
-        (void)Bs.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
-        (void)gemm(ctx, As.view(), Bs.view(), Cs.view(), {.alpha = 2.0f});
+        (void)As.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+        (void)Bs.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+        (void)gemm(ctx, As, Bs, Cs, {.alpha = 2.0f});
         ctx.wait();
         [[maybe_unused]] float c00 = Cs(0, 0, 0);
     }
@@ -103,9 +103,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     {
         const int n = 4, k = 3, batch = 2;
         Matrix<float> Asy(n, k, batch), Csy(n, n, batch);
-        syrk(ctx, Asy.view(), Csy.view(), {.uplo = Uplo::Lower}).wait();
-        Csy.view().symmetrize(ctx, Uplo::Lower).wait();
-        (void)Csy.view().hermitize(ctx, Uplo::Lower);
+        syrk(ctx, Asy, Csy, {.uplo = Uplo::Lower}).wait();
+        Csy.symmetrize(ctx, Uplo::Lower).wait();
+        (void)Csy.hermitize(ctx, Uplo::Lower);
     }
 
     // "Which type each parameter takes"
@@ -117,12 +117,12 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         [[maybe_unused]] Span<float> ws_span = w.to_span();
 
         Vector<float> x(n, /*batch_size=*/batch), y(m, batch);
-        (void)gemv(ctx, A, x.view(), y.view(), {.alpha = 1.0f});
+        (void)gemv(ctx, A, x, y, {.alpha = 1.0f});
 
         // The inc/stride argument orders are opposite. Vector now names both with tag
         // types, so the two spellings can no longer be transliterated into each other.
         [[maybe_unused]] Vector<float> v(n, /*batch_size=*/batch, Stride{n}, Inc{1});
-        [[maybe_unused]] VectorView<float> vv(x.view().data_ptr(), n, /*batch_size=*/batch,
+        [[maybe_unused]] VectorView<float> vv(x.data_ptr(), n, /*batch_size=*/batch,
                                               /*inc=*/1, /*stride=*/n);
         [[maybe_unused]] auto vz = Vector<float>::zeros(n, batch);
         [[maybe_unused]] auto vo = Vector<float>::ones(n, batch);
@@ -153,9 +153,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
 
         Matrix<float> Bh(n, n, batch), dst(n, n, batch);
         UnifiedVector<float> d(n);
-        (void)Bh.view().fill_diagonal(ctx, d.to_span());
-        (void)Bh.view().fill_zeros(ctx);
-        (void)MatrixView<float>::copy(ctx, dst.view(), Bh.view());
+        (void)Bh.fill_diagonal(ctx, d.to_span());
+        (void)Bh.fill_zeros(ctx);
+        (void)MatrixView<float>::copy(ctx, dst, Bh);
 
         // "`Random` is deterministic"
         [[maybe_unused]] auto R0 = Matrix<float>::Random(n, n, false, batch);
@@ -221,9 +221,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     {
         const int m = 3, k = 4, n = 5;
         Matrix<float> RA(k, m), RB(n, k), RC(n, m);
-        MatrixView<float> At(RA.view().data_ptr(), k, m, k);
-        MatrixView<float> Bt(RB.view().data_ptr(), n, k, n);
-        MatrixView<float> Ct(RC.view().data_ptr(), n, m, n);
+        MatrixView<float> At(RA.data_ptr(), k, m, k);
+        MatrixView<float> Bt(RB.data_ptr(), n, k, n);
+        MatrixView<float> Ct(RC.data_ptr(), n, m, n);
         (void)gemm(ctx, Bt, At, Ct, GemmOptions<float>{});
     }
 
@@ -409,23 +409,23 @@ TEST(LinalgLayer, ElementwiseMatchesScalarReference) {
     auto A = from_fn(rows, cols, batch, [](int i, int j, int b) { return 1.0f + i + 2.0f * j + b; });
     auto B = from_fn(rows, cols, batch, [](int i, int j, int b) { return 2.0f + j + 0.5f * i - b; });
 
-    auto S = linalg::add(q, A.view(), B.view());
-    auto D = linalg::subtract(q, A.view(), B.view());
-    auto P = linalg::multiply(q, A.view(), B.view());
-    auto Q = linalg::divide(q, A.view(), B.view());
-    auto K = linalg::scaled(q, A.view(), 3.0f);
+    auto S = linalg::add(q, A, B);
+    auto D = linalg::subtract(q, A, B);
+    auto P = linalg::multiply(q, A, B);
+    auto Q = linalg::divide(q, A, B);
+    auto K = linalg::scaled(q, A, 3.0f);
     q.wait();
 
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) {
-                const float a = at(A.view(), i, j, b);
-                const float bb = at(B.view(), i, j, b);
-                ASSERT_FLOAT_EQ(at(S.view(), i, j, b), a + bb) << "add " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(D.view(), i, j, b), a - bb) << "sub " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(P.view(), i, j, b), a * bb) << "mul " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(Q.view(), i, j, b), a / bb) << "div " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(K.view(), i, j, b), 3.0f * a) << "scaled " << i << "," << j;
+                const float a = at(A, i, j, b);
+                const float bb = at(B, i, j, b);
+                ASSERT_FLOAT_EQ(at(S, i, j, b), a + bb) << "add " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(D, i, j, b), a - bb) << "sub " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(P, i, j, b), a * bb) << "mul " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(Q, i, j, b), a / bb) << "div " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(K, i, j, b), 3.0f * a) << "scaled " << i << "," << j;
             }
 }
 
@@ -437,19 +437,19 @@ TEST(LinalgLayer, MultiplyIsHadamardNotMatmul) {
     auto A = from_fn(n, n, 1, [](int i, int j, int) { return float(i + 2 * j + 1); });
     auto B = from_fn(n, n, 1, [](int i, int j, int) { return float(j - i + 4); });
 
-    auto had = linalg::multiply(q, A.view(), B.view());
-    auto mm = linalg::matmul(q, A.view(), B.view());
+    auto had = linalg::multiply(q, A, B);
+    auto mm = linalg::matmul(q, A, B);
     q.wait();
 
     for (int j = 0; j < n; ++j)
         for (int i = 0; i < n; ++i)
-            ASSERT_FLOAT_EQ(at(had.view(), i, j, 0),
-                            at(A.view(), i, j, 0) * at(B.view(), i, j, 0));
+            ASSERT_FLOAT_EQ(at(had, i, j, 0),
+                            at(A, i, j, 0) * at(B, i, j, 0));
 
     // ...and matmul really is the matrix product.
     EXPECT_VERIFY(float, verify::Check::blas, n,
-                  Dense::gemm_backward_error(q, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, mm.view(), mm.view(),
-                                             1.0, 0.0, mm.view().all_items()));
+                  Dense::gemm_backward_error(q, A, Transpose::NoTrans, B, Transpose::NoTrans, mm, mm,
+                                             1.0, 0.0, mm.all_items()));
 }
 
 TEST(LinalgLayer, ScaleIsInPlaceAndAxpbyAccumulates) {
@@ -459,36 +459,36 @@ TEST(LinalgLayer, ScaleIsInPlaceAndAxpbyAccumulates) {
     std::vector<float> before;
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
-            for (int i = 0; i < rows; ++i) before.push_back(at(A.view(), i, j, b));
+            for (int i = 0; i < rows; ++i) before.push_back(at(A, i, j, b));
 
-    (void)linalg::scale<float>(q, A.view(), -2.0f);
+    (void)linalg::scale<float>(q, A, -2.0f);
     q.wait();
 
     size_t k = 0;
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
-                ASSERT_FLOAT_EQ(at(A.view(), i, j, b), -2.0f * before[k++]);
+                ASSERT_FLOAT_EQ(at(A, i, j, b), -2.0f * before[k++]);
 
     // C = 2A + 3B
     auto X = from_fn(rows, cols, batch, [](int i, int j, int) { return float(i + j + 1); });
     auto Y = from_fn(rows, cols, batch, [](int i, int j, int) { return float(2 * i - j); });
     Matrix<float, MatrixFormat::Dense> C(rows, cols, batch);
-    (void)linalg::axpby_into<float>(q, 2.0f, X.view(), 3.0f, Y.view(), C.view());
+    (void)linalg::axpby_into<float>(q, 2.0f, X, 3.0f, Y, C);
     q.wait();
 
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
-                ASSERT_FLOAT_EQ(at(C.view(), i, j, b),
-                                2.0f * at(X.view(), i, j, b) + 3.0f * at(Y.view(), i, j, b));
+                ASSERT_FLOAT_EQ(at(C, i, j, b),
+                                2.0f * at(X, i, j, b) + 3.0f * at(Y, i, j, b));
 }
 
 TEST(LinalgLayer, MismatchedShapesAreRejected) {
     Queue q;
     auto A = from_fn(4, 4, 1, [](int, int, int) { return 1.0f; });
     auto B = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
-    EXPECT_THROW((void)linalg::add_into<float>(q, A.view(), B.view(), A.view()), std::invalid_argument);
+    EXPECT_THROW((void)linalg::add_into<float>(q, A, B, A), std::invalid_argument);
 }
 
 // The value-returning wrappers must not modify their inputs -- that is the whole
@@ -501,22 +501,22 @@ TEST(LinalgLayer, ValueReturningWrappersLeaveInputsAlone) {
     std::vector<float> original;
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) original.push_back(at(A.view(), i, j, b));
+            for (int i = 0; i < n; ++i) original.push_back(at(A, i, j, b));
 
-    auto L = linalg::cholesky(q, A.view());
-    auto w = linalg::eigvalsh(q, A.view());
-    auto e = linalg::eigh(q, A.view());
-    auto s = linalg::svd(q, A.view());
-    auto f = linalg::lu(q, A.view());
-    auto Ai = linalg::inv(q, A.view());
-    auto up = linalg::triu(q, A.view());
+    auto L = linalg::cholesky(q, A);
+    auto w = linalg::eigvalsh(q, A);
+    auto e = linalg::eigh(q, A);
+    auto s = linalg::svd(q, A);
+    auto f = linalg::lu(q, A);
+    auto Ai = linalg::inv(q, A);
+    auto up = linalg::triu(q, A);
     q.wait();
 
     size_t k = 0;
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                ASSERT_FLOAT_EQ(at(A.view(), i, j, b), original[k++]) << "input was modified";
+                ASSERT_FLOAT_EQ(at(A, i, j, b), original[k++]) << "input was modified";
 
     // eigvalsh and eigh must agree on the eigenvalues.
     ASSERT_EQ(w.size(), e.values.size());
@@ -528,11 +528,11 @@ TEST(LinalgLayer, CholeskyFactorReproducesInput) {
     Queue q;
     const int n = 8, batch = 2;
     auto A = spd(n, batch);
-    auto L = linalg::cholesky(q, A.view(), Uplo::Lower);
+    auto L = linalg::cholesky(q, A, Uplo::Lower);
     q.wait();
 
     EXPECT_VERIFY(float, verify::Check::factorization, n,
-                  Dense::potrf_residual(q, A.view(), L.view(), Uplo::Lower, A.view().all_items()));
+                  Dense::potrf_residual(q, A, L, Uplo::Lower, A.all_items()));
 }
 
 // A X == B, checked by multiplying back.
@@ -542,10 +542,10 @@ TEST(LinalgLayer, SolveSatisfiesTheSystem) {
     auto A = spd(n, batch);
     auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - 2 * j + b); });
 
-    auto X = linalg::solve(q, A.view(), B.view());
+    auto X = linalg::solve(q, A, B);
     q.wait();
 
-    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A.view(), X.view(), B.view(), A.view().all_items()));
+    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A, X, B, A.all_items()));
 }
 
 // ---- linalg::solve after the gesv rewire -----------------------------------
@@ -626,7 +626,7 @@ void expect_solves(Queue& q, const char* what, int n, int nrhs, int batch, Trans
     auto A = solve_system<T>(n, batch);
     auto B = solve_rhs<T>(n, nrhs, batch);
 
-    auto X = linalg::solve(q, A.view(), B.view(), trans);
+    auto X = linalg::solve(q, A, B, trans);
     q.wait();
 
     ASSERT_EQ(X.rows(), n) << what;
@@ -690,10 +690,10 @@ TEST(LinalgLayer, EighProducesConsistentEigenpairs) {
     Queue q;
     const int n = 8, batch = 2;
     auto A = spd(n, batch);
-    auto e = linalg::eigh(q, A.view());
+    auto e = linalg::eigh(q, A);
     q.wait();
 
-    test_utils::expect_eigenpairs<float>(q, A.view(), e.vectors.view(), e.values, n, std::span<const int>(A.view().all_items()));
+    test_utils::expect_eigenpairs<float>(q, A, e.vectors, e.values, n, std::span<const int>(A.all_items()));
 }
 
 // The convenience layer leases from the arena; repeated calls must not grow it.
@@ -703,12 +703,12 @@ TEST(LinalgLayer, RepeatedCallsDoNotGrowTheArena) {
     auto A = spd(n, batch);
     auto B = from_fn(n, 2, batch, [](int i, int j, int) { return float(i + j + 1); });
 
-    auto warm = linalg::solve(q, A.view(), B.view());
+    auto warm = linalg::solve(q, A, B);
     q.wait();
     const size_t settled = q.workspace_capacity();
 
     for (int i = 0; i < 16; ++i) {
-        auto X = linalg::solve(q, A.view(), B.view());
+        auto X = linalg::solve(q, A, B);
         q.wait();
     }
     EXPECT_EQ(q.workspace_capacity(), settled);
@@ -722,19 +722,19 @@ TEST(LinalgLayer, MatmulAlphaScalesTheProduct) {
     auto A = from_fn(n, n, batch, [](int i, int j, int b) { return float(1 + i + 2 * j + b); });
     auto B = from_fn(n, n, batch, [](int i, int j, int) { return float(j - i + 3); });
 
-    auto plain = linalg::matmul(q, A.view(), B.view());
-    auto scaled_product = linalg::matmul(q, A.view(), B.view(), {.alpha = 2.0f});
-    auto transposed = linalg::matmul(q, A.view(), B.view(), {.transA = Transpose::Trans});
+    auto plain = linalg::matmul(q, A, B);
+    auto scaled_product = linalg::matmul(q, A, B, {.alpha = 2.0f});
+    auto transposed = linalg::matmul(q, A, B, {.transA = Transpose::Trans});
     q.wait();
 
-    const auto items = A.view().all_items();
+    const auto items = A.all_items();
     EXPECT_VERIFY(float, verify::Check::blas, n,
-                  Dense::gemm_backward_error(q, A.view(), Transpose::NoTrans, B.view(), Transpose::NoTrans, plain.view(),
-                                             scaled_product.view(), 2.0, 0.0, items))
+                  Dense::gemm_backward_error(q, A, Transpose::NoTrans, B, Transpose::NoTrans, plain,
+                                             scaled_product, 2.0, 0.0, items))
         << "alpha";
     EXPECT_VERIFY(float, verify::Check::blas, n,
-                  Dense::gemm_backward_error(q, A.view(), Transpose::Trans, B.view(), Transpose::NoTrans, plain.view(),
-                                             transposed.view(), 1.0, 0.0, items))
+                  Dense::gemm_backward_error(q, A, Transpose::Trans, B, Transpose::NoTrans, plain,
+                                             transposed, 1.0, 0.0, items))
         << "transA";
 }
 
@@ -747,30 +747,30 @@ TEST(LinalgLayer, TriuTrilMaskAnExistingMatrix) {
     auto A = from_fn(rows, cols, batch,
                      [](int i, int j, int b) { return float(1 + i + 10 * j + 100 * b); });
 
-    auto u0 = linalg::triu(q, A.view());
-    auto u2 = linalg::triu(q, A.view(), 2);
-    auto l0 = linalg::tril(q, A.view());
-    auto lm1 = linalg::tril(q, A.view(), -1);
+    auto u0 = linalg::triu(q, A);
+    auto u2 = linalg::triu(q, A, 2);
+    auto l0 = linalg::tril(q, A);
+    auto lm1 = linalg::tril(q, A, -1);
     q.wait();
 
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) {
-                const float a = at(A.view(), i, j, b);
+                const float a = at(A, i, j, b);
                 const int d = j - i;
-                ASSERT_FLOAT_EQ(at(u0.view(), i, j, b), d >= 0 ? a : 0.0f) << "triu " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(u2.view(), i, j, b), d >= 2 ? a : 0.0f) << "triu2 " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(l0.view(), i, j, b), d <= 0 ? a : 0.0f) << "tril " << i << "," << j;
-                ASSERT_FLOAT_EQ(at(lm1.view(), i, j, b), d <= -1 ? a : 0.0f) << "tril-1 " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(u0, i, j, b), d >= 0 ? a : 0.0f) << "triu " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(u2, i, j, b), d >= 2 ? a : 0.0f) << "triu2 " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(l0, i, j, b), d <= 0 ? a : 0.0f) << "tril " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(lm1, i, j, b), d <= -1 ? a : 0.0f) << "tril-1 " << i << "," << j;
             }
 
     // Aliasing: the documented in-place spelling.
-    (void)linalg::triangular_mask_into<float>(q, A.view(), A.view(), Uplo::Upper, 0);
+    (void)linalg::triangular_mask_into<float>(q, A, A, Uplo::Upper, 0);
     q.wait();
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
-                ASSERT_FLOAT_EQ(at(A.view(), i, j, b), at(u0.view(), i, j, b))
+                ASSERT_FLOAT_EQ(at(A, i, j, b), at(u0, i, j, b))
                     << "in place " << i << "," << j;
 }
 
@@ -778,7 +778,7 @@ TEST(LinalgLayer, TriangularMaskRejectsMismatchedShapes) {
     Queue q;
     auto A = from_fn(4, 4, 1, [](int, int, int) { return 1.0f; });
     auto C = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
-    EXPECT_THROW((void)linalg::triangular_mask_into<float>(q, A.view(), C.view(), Uplo::Upper, 0),
+    EXPECT_THROW((void)linalg::triangular_mask_into<float>(q, A, C, Uplo::Upper, 0),
                  std::invalid_argument);
 }
 
@@ -786,12 +786,12 @@ TEST(LinalgLayer, InvReproducesTheIdentity) {
     Queue q;
     const int n = 8, batch = 2;
     auto A = spd(n, batch);
-    auto Ai = linalg::inv(q, A.view());
+    auto Ai = linalg::inv(q, A);
     q.wait();
 
     // ||A A^-1 - I||_F / (||A||_F ||A^-1||_F): an empty B0 is the identity.
     EXPECT_VERIFY(float, verify::Check::solve, n,
-                  Dense::solve_residual(q, A.view(), Ai.view(), Dense(nullptr, 0, 0, 1), A.view().all_items()));
+                  Dense::solve_residual(q, A, Ai, Dense(nullptr, 0, 0, 1), A.all_items()));
 }
 
 TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
@@ -799,15 +799,15 @@ TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
     const int rows = 3, cols = 5, batch = 2;
     auto A = from_fn(rows, cols, batch,
                      [](int i, int j, int b) { return float(1 + i + 7 * j + 50 * b); });
-    auto At = linalg::transpose(q, A.view());
+    auto At = linalg::transpose(q, A);
     q.wait();
 
-    ASSERT_EQ(At.view().rows(), cols);
-    ASSERT_EQ(At.view().cols(), rows);
+    ASSERT_EQ(At.rows(), cols);
+    ASSERT_EQ(At.cols(), rows);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
-                ASSERT_FLOAT_EQ(at(At.view(), j, i, b), at(A.view(), i, j, b));
+                ASSERT_FLOAT_EQ(at(At, j, i, b), at(A, i, j, b));
 }
 
 // norm returns one value per batch item. Unlike the rest of the layer it has
@@ -816,14 +816,14 @@ TEST(LinalgLayer, NormMatchesTheHostFrobeniusNorm) {
     Queue q;
     const int rows = 4, cols = 3, batch = 3;
     auto A = from_fn(rows, cols, batch, [](int i, int j, int b) { return float(i - 2 * j + b); });
-    auto n = linalg::norm(q, A.view());
+    auto n = linalg::norm(q, A);
 
     ASSERT_EQ(n.size(), size_t(batch));
     for (int b = 0; b < batch; ++b) {
         double acc = 0.0;
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) {
-                const double v = at(A.view(), i, j, b);
+                const double v = at(A, i, j, b);
                 acc += v * v;
             }
         ASSERT_NEAR(n[b], float(std::sqrt(acc)), 1e-3f) << "batch " << b;
@@ -837,7 +837,7 @@ TEST(LinalgLayer, CondMatchesTheDiagonalReference) {
     const int n = 4, batch = 2;
     const float d[n] = {1.0f, 2.0f, 4.0f, 8.0f};
     auto A = from_fn(n, n, batch, [&](int i, int j, int) { return i == j ? d[i] : 0.0f; });
-    auto k = linalg::cond(q, A.view());
+    auto k = linalg::cond(q, A);
 
     double a2 = 0.0, ai2 = 0.0;
     for (int i = 0; i < n; ++i) {
@@ -858,15 +858,15 @@ TEST(LinalgLayer, LuFactorsAndPivotsSolveTheSystem) {
     auto A = spd(n, batch);
     auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + b); });
 
-    auto f = linalg::lu(q, A.view());
+    auto f = linalg::lu(q, A);
     ASSERT_EQ(f.pivots.size(), size_t(n) * size_t(batch));
 
     Matrix<float, MatrixFormat::Dense> X(n, nrhs, batch);
-    (void)MatrixView<float, MatrixFormat::Dense>::copy(q, X.view(), B.view());
-    (void)getrs(q, f.factors.view(), X.view(), f.pivots.to_span());
+    (void)MatrixView<float, MatrixFormat::Dense>::copy(q, X, B);
+    (void)getrs(q, f.factors, X, f.pivots.to_span());
     q.wait();
 
-    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A.view(), X.view(), B.view(), A.view().all_items()));
+    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A, X, B, A.all_items()));
 }
 
 // U diag(S) Vh == A, on a square well-conditioned input.
@@ -875,24 +875,24 @@ TEST(LinalgLayer, SvdReconstructsInput) {
     const int n = 6, batch = 2;
     auto A = spd(n, batch);
 
-    auto s = linalg::svd(q, A.view());
+    auto s = linalg::svd(q, A);
     q.wait();
 
-    ASSERT_EQ(s.U.view().rows(), n);
-    ASSERT_EQ(s.U.view().cols(), n);
-    ASSERT_EQ(s.Vh.view().rows(), n);
-    ASSERT_EQ(s.Vh.view().cols(), n);
+    ASSERT_EQ(s.U.rows(), n);
+    ASSERT_EQ(s.U.cols(), n);
+    ASSERT_EQ(s.Vh.rows(), n);
+    ASSERT_EQ(s.Vh.cols(), n);
     ASSERT_EQ(s.values.size(), size_t(n) * size_t(batch));
 
     EXPECT_VERIFY(float, verify::Check::factorization, n,
-                  Dense::svd_residual(q, A.view(), s.U.view(), VectorView<float>(s.values, n, batch), s.Vh.view(),
-                                      A.view().all_items()));
+                  Dense::svd_residual(q, A, s.U, VectorView<float>(s.values, n, batch), s.Vh,
+                                      A.all_items()));
 }
 
 TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
     Queue q;
     auto A = spd(4, 1);
-    EXPECT_THROW(linalg::svd(q, A.view(), SvdVectors::None), std::invalid_argument);
+    EXPECT_THROW(linalg::svd(q, A, SvdVectors::None), std::invalid_argument);
 }
 
 // posv and syev run an out-of-order caller's call on a temporary in-order queue; the caller's
@@ -905,14 +905,14 @@ TEST(LinalgWrappers, OutOfOrderWaitCoversInOrderDrivers) {
     auto E = spd(n, batch);
     auto X = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + (b % 5)); });
     UnifiedVector<float> W(static_cast<size_t>(n) * batch);
-    auto lease = q.workspace(posv_buffer_size(q, F.view(), X.view(), Uplo::Lower));
+    auto lease = q.workspace(posv_buffer_size(q, F, X, Uplo::Lower));
     const auto complete = sycl::info::event_command_status::complete;
 
-    Event solved = posv(q, F.view(), X.view(), Uplo::Lower, lease.span(), Span<int32_t>{});
+    Event solved = posv(q, F, X, Uplo::Lower, lease.span(), Span<int32_t>{});
     q.wait();
     EXPECT_EQ(sycl_event(solved).get_info<sycl::info::event::command_execution_status>(), complete) << "posv";
 
-    Event values = syev(q, E.view(), W.to_span(), {.jobz = JobType::NoEigenVectors});
+    Event values = syev(q, E, W.to_span(), {.jobz = JobType::NoEigenVectors});
     q.wait();
     EXPECT_EQ(sycl_event(values).get_info<sycl::info::event::command_execution_status>(), complete) << "syev";
 }
@@ -930,23 +930,23 @@ TEST(LinalgWrappers, ScratchOutlivesKernels) {
     std::vector<Matrix<float, MatrixFormat::Dense>> X, Y;
     std::vector<UnifiedVector<float>> W;
     for (int r = 0; r < reps; ++r) {
-        X.push_back(linalg::solve(q, A.view(), B.view()));
-        Y.push_back(linalg::solve_spd(q, A.view(), B.view()));
-        W.push_back(linalg::eigvalsh(q, A.view()));
+        X.push_back(linalg::solve(q, A, B));
+        Y.push_back(linalg::solve_spd(q, A, B));
+        W.push_back(linalg::eigvalsh(q, A));
     }
     q.wait();
 
     std::vector<std::vector<double>> ref(static_cast<size_t>(batch));
     double scale = 0.0;
     for (int b = 0; b < batch; ++b) {
-        ASSERT_TRUE(batchlas::verify::eigenvalues(A.view(), b, ref[static_cast<size_t>(b)]));
+        ASSERT_TRUE(batchlas::verify::eigenvalues(A, b, ref[static_cast<size_t>(b)]));
         scale = std::max(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
     }
     for (int r = 0; r < reps; ++r) {
         // Checked on the in-order `base`: the verify helpers chain kernels and must not race.
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), X[r].view(), B.view()))
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, X[r], B))
             << "solve, rep " << r;
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A.view(), Y[r].view(), B.view()))
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, Y[r], B))
             << "solve_spd, rep " << r;
         const VectorView<float> w(W[r].data(), n, batch);
         EXPECT_VERIFY(float, batchlas::verify::Check::values, n, Dense::values_error(w, ref, scale)) << "eigvalsh, rep " << r;

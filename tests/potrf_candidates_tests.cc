@@ -129,7 +129,7 @@ double residual(Queue& ctx, const Prob<T>& p) {
     for (int g = 0; g < 2; ++g)
         std::copy(p.ref[items[g]].begin(), p.ref[items[g]].end(), a.data().data() + static_cast<size_t>(g) * p.n * p.n);
     const auto f = MV(const_cast<T*>(p.buf.data()), p.n, p.n, p.ld, p.stride, p.batch).template astype<T>(items);
-    return MV::potrf_residual(ctx, a.view(), f.view(), p.uplo, a.view().all_items());
+    return MV::potrf_residual(ctx, a, f, p.uplo, a.all_items());
 }
 
 // info, the residual of the first and last item, and every element the factor must not

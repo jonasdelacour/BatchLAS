@@ -78,7 +78,7 @@ static void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> s(n * batch);
 
     const size_t ws_size = backend::gesvd_vendor_buffer_size<B, T>(
-        *q, A.view(), s.to_span(), U.view(), Vh.view(), jobu, jobvh);
+        *q, A, s.to_span(), U, Vh, jobu, jobvh);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,
@@ -114,7 +114,7 @@ static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
     UnifiedVector<typename base_type<T>::type> s(n * batch);
 
     const size_t ws_size = gesvd_cta_buffer_size<B, T>(
-        *q, A.view(), s.to_span(), U.view(), Vh.view(), jobu, jobvh);
+        *q, A, s.to_span(), U, Vh, jobu, jobvh);
     UnifiedVector<std::byte> workspace(ws_size);
 
     state.SetKernel(q,

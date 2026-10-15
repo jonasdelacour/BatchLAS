@@ -73,13 +73,13 @@ struct TrmmProblem {
         const auto items = av.default_items();
         auto a = av.template astype<T>(items);
         auto b = view(B, rows, cols, ldb, sb).template astype<T>(items), c = view(C, rows, cols, ldb, sb).template astype<T>(items);
-        (void)a.view().triangularize(q, Uplo::Lower, Diag::NonUnit);
+        (void)a.triangularize(q, Uplo::Lower, Diag::NonUnit);
         q.wait();
-        const auto all = a.view().all_items();
+        const auto all = a.all_items();
         const Transpose nt = Transpose::NoTrans;
         const auto al = MV::up(alpha), zero = MV::up(T(0));
-        return {side == Side::Left ? MV::gemm_backward_error(q, a.view(), nt, b.view(), nt, b.view(), c.view(), al, zero, all)
-                                   : MV::gemm_backward_error(q, b.view(), nt, a.view(), nt, b.view(), c.view(), al, zero, all),
+        return {side == Side::Left ? MV::gemm_backward_error(q, a, nt, b, nt, b, c, al, zero, all)
+                                   : MV::gemm_backward_error(q, b, nt, a, nt, b, c, al, zero, all),
                 0};
     }
 };

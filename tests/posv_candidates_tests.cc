@@ -138,7 +138,7 @@ double residual(Queue& ctx, const Sys<T>& p) {
     for (int it = 0; it < p.batch; ++it)
         std::copy(p.full[it].begin(), p.full[it].end(), af.data().data() + size_t(it) * p.n * p.n);
     const int items[] = {0, p.batch - 1};
-    return MV::solve_residual(ctx, af.view(), MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
+    return MV::solve_residual(ctx, af, MV(const_cast<T*>(p.b.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch),
                               MV(const_cast<T*>(p.b0.data()), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
 }
 
@@ -531,8 +531,8 @@ TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     Bm.fill(MatrixView<T, MatrixFormat::Dense>::make(R(1), R(0.5)));
     UnifiedVector<int> act(batch), cols(batch);
     for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
-    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hetA = A.with_active_dims(act.to_span(), act.to_span());
+    const auto hetB = Bm.with_active_dims(act.to_span(), cols.to_span());
     ASSERT_TRUE(hetA.is_heterogeneous());
     ASSERT_TRUE(hetB.is_heterogeneous());
     struct Case { const char* what; MatrixView<T, MatrixFormat::Dense> a, b; };
@@ -609,12 +609,12 @@ TYPED_TEST(PosvCandidates, UnknownPinsThrow) {
                              // removed aliases (phase 5): each must stay an error
                              "native:tiny", "native:cta", "native:blocked"}) {
         const Pin pin("posv", std::string_view(word));
-        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)),
+        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)),
                      std::invalid_argument) << word;
     }
     for (const C& c : ps::candidates<T>()) {
         const Pin pin("posv", c);
-        EXPECT_NO_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)))
+        EXPECT_NO_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)))
             << select::to_string(c);
     }
 }
@@ -633,7 +633,7 @@ TYPED_TEST(PosvCandidates, CanRunFalsePinsThrow) {
         Matrix<T, MatrixFormat::Dense> A(k.n, k.n, 1), Bm(k.n, k.nrhs, 1);
         const Pin pin("posv", k.c);
         try {
-            (void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), k.uplo);
+            (void)posv_buffer_size<B, T>(*this->ctx, A, Bm, k.uplo);
             ADD_FAILURE() << this->name(k.c, k.uplo, k.n, k.nrhs) << " was accepted";
         } catch (const std::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos)
@@ -688,7 +688,7 @@ TYPED_TEST(PosvCandidates, ScopedPinBeatsTheEnvironment) {
     const ScopedEnvVar env("BATCHLAS_POSV_ROUTE", "tiny");
     {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1), Bm(n, 1, 1);
-        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)),
+        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)),
                      std::invalid_argument)
             << "the environment pin was not read, so nothing below proves it lost";
     }
@@ -853,13 +853,13 @@ TYPED_TEST(PosvCandidates, EmptyShapesThrowBeforeChoose) {
     for (auto [n, nrhs, batch] : {std::tuple{0, 1, 1}, std::tuple{4, 0, 1}}) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
         const Pin pin("posv", C{ps::Blocked{}});
-        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)),
+        EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)),
                      batchlas::internal_error)
             << n << " " << nrhs << " " << batch;
     }
     Matrix<T, MatrixFormat::Dense> A(4, 4, 0), Bm(4, 1, 0);
     const Pin pin("posv", C{ps::Blocked{}});
-    EXPECT_EQ((posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)), 0u);
+    EXPECT_EQ((posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)), 0u);
 }
 
 // The transcribed sm_89 rows, read with Table::nearest directly so every device checks them:

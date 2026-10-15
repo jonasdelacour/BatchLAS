@@ -114,21 +114,21 @@ TYPED_TEST(SytrdSy2sbTest, RandomSymmetricLowerBandMatchesExplicitSimilarity) {
         Matrix<Real, MatrixFormat::Dense> AB(kd + 1, n, batch);
         Vector<Real> tau(n - kd, batch);
 
-        const size_t ws_bytes = sytrd_sy2sb_buffer_size<B, Real>(*this->ctx, A.view(), AB.view(), tau, Uplo::Lower, kd);
+        const size_t ws_bytes = sytrd_sy2sb_buffer_size<B, Real>(*this->ctx, A, AB, tau, Uplo::Lower, kd);
         UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
 
-        sytrd_sy2sb<B, Real>(*this->ctx, A.view(), AB.view(), tau, Uplo::Lower, kd, ws.to_span()).wait();
+        sytrd_sy2sb<B, Real>(*this->ctx, A, AB, tau, Uplo::Lower, kd, ws.to_span()).wait();
 
         // Compute B = Q^T * A0 * Q by applying stored reflectors to the trailing blocks.
         Matrix<Real, MatrixFormat::Dense> Bwork = A0;
-        apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A.view(), static_cast<VectorView<Real>>(tau).batch_item(0), Bwork.view(), n, kd);
+        apply_sy2sb_reflectors_to_trailing<Real, B>(*this->ctx, A, static_cast<VectorView<Real>>(tau).batch_item(0), Bwork, n, kd);
 
         // Validate AB matches the lower band of B.
         // Bwork = Q^T A0 Q is the explicit similarity transform; AB must be its band, so Bwork = I AB_dense I^T.
-        const auto Bband = band_to_dense(AB.view(), n, kd);
+        const auto Bband = band_to_dense(AB, n, kd);
         const auto I = Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
         const double resid =
-            MatrixView<Real, MatrixFormat::Dense>::similarity_residual(*this->ctx, Bwork.view(), I.view(), Bband.view());
+            MatrixView<Real, MatrixFormat::Dense>::similarity_residual(*this->ctx, Bwork, I, Bband);
         EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, resid);
     }
 }

@@ -3,7 +3,7 @@
 > **Status:** current · checked 2026-10-06
 
 The rules behind the shape of the entry points in `include/batchlas/blas/`: the two spellings,
-the dispatch and owning-argument overloads, argument checks, workspace and `info` arguments.
+the dispatch overload, owning arguments, argument checks, workspace and `info` arguments.
 The user-facing rules are in [the C++ API guide](../cpp-api.md).
 
 ## api conventions: the backend is bound to the Queue by with_backend
@@ -50,33 +50,21 @@ with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
 - Positional primaries in `blas/functions/*.hh` that take an explicit workspace are unchecked.
   `src/extensions/` calls them per iteration.
 
-## api conventions: owning Matrix and Vector arguments
+## api conventions: a Matrix is a MatrixView
 
-Implicit conversion (`Matrix` to `MatrixView`, `Vector` to `VectorView`) does not help
-deduction. With owning matrices, `gemm<Backend::CUDA>(ctx, A, B, C, ...)` deduces nothing and
-reports "no matching function".
+`Matrix<T, F>` publicly derives from `MatrixView<T, F>` over its own storage, and `Vector<T>` from
+`VectorView<T>`. An owning argument binds to a view parameter as its base, and template deduction
+accepts it (derived-to-base deduction), so every entry point and every `MatrixView` member takes
+it with no forwarder and no `.view()`.
 
-- `BATCHLAS_ACCEPT_OWNING(NAME)`, placed beside `BATCHLAS_DISPATCH_ON_QUEUE(NAME)`, converts owning
-  arguments to views and lets the inner call deduce. Its signature is not copied.
-- `BATCHLAS_ACCEPT_OWNING_NB` does the same for entry points not templated on `Backend`
-  (`norm`, `transpose`, the `steqr_*_buffer_size` pair).
-- `detail::view_of` names the view a parameter becomes. Non-owning arguments pass through.
-- It is a last resort. `detail::AnyOwning` keeps it out of all-view calls, and a fixed-parameter
-  overload (an option struct, or a fixed arity such as `getrf`'s four-argument form) wins by
-  partial ordering.
-
-### api conventions: the owning pack is const Args&, never Args&&
-
-A forwarding-reference pack binds prvalues better than `const MatrixView&`, so `Args&&...` would
-beat the checked option overloads. That is how an 8x4 matrix once passed a squareness check.
-With `const Args&...` the overloads tie on conversion, and partial ordering selects the checked one.
-Nothing is moved through the forwarder, so nothing is lost.
-
-### api conventions: argument lists the owning forwarder cannot reach
-
-- A braced-init-list in any position. The pack deduces nothing, so name the type: `OrthoOptions{}`.
-- Partly supplied template arguments. Write `spmm<Back>(ctx, ...)`, not `spmm<Back, T>(...)`.
-  `ritz_values` keeps a hand-written twin in `blas/extensions.hh`.
+- The owning class holds the `UnifiedVector`s and re-points the view half (`bind()`) after every
+  allocation: constructors, copy, move and `Matrix::set_active_dims()`. A copy gets its own
+  backend handle; a move leaves the source empty.
+- Members the owning class redefines on purpose: `Matrix::fill(T)` waits, `Matrix::astype<U>()`
+  keeps the layout (the view's packs it), `Vector::operator[]` is a raw storage index.
+- A generic parameter (`auto v`, `const T&`, a CTAD or braced context) takes the `Matrix` itself:
+  by value that is a deep copy, and a catch-all `f(const T&)` beats `f(const MatrixView<T>&)`.
+  Pass `.view()` there.
 
 ## api conventions: the USM pointer check
 
@@ -181,8 +169,9 @@ empty `info` span, so the failure is not reported.
 non-finite. Householder leaves some items singular. Neither reliably hits the requested
 \f$\kappa\f$.
 
-## api conventions: generators without a dispatch or owning overload
+## api conventions: generators without a dispatch overload
 
-The `random_*_with_log10_cond_metric` generators in `blas/extra.hh` are not in either macro. Their
-`T` is non-deduced, so a macro would create an overload that can never be selected. Call them as
+The `random_*_with_log10_cond_metric` generators in `blas/extra.hh` have no
+`BATCHLAS_DISPATCH_ON_QUEUE`. Their `T` is non-deduced, so the macro would create an overload that
+can never be selected. Call them as
 `f<Backend, T>(...)`; see [which spelling each entry point takes](../cpp-api.md#which-spelling-each-entry-point-takes).

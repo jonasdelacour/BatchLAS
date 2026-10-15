@@ -42,7 +42,7 @@ void run_stedc(miniacc::State& state) {
 
         Vector<Real> d(n, Real(0), cur_batch);
         Vector<Real> e(std::max(0, n - 1), Real(0), cur_batch);
-        miniacc_acc::extract_tridiagonal(*q, A.view(), d, e);
+        miniacc_acc::extract_tridiagonal(*q, A, d, e);
 
         std::vector<std::vector<double>> ref_eigs;
         std::vector<char> ref_ok;
@@ -63,7 +63,7 @@ void run_stedc(miniacc::State& state) {
             continue;
         }
 
-        auto conds = cond<B>(*q, A.view(), NormType::Spectral);
+        auto conds = cond<B>(*q, A, NormType::Spectral);
         q->wait();
         miniacc_acc::record_eigensolver_metrics<B, Real>(
             state,

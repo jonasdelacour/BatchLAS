@@ -32,13 +32,13 @@ void expect_symm_matches(Queue& ctx, const VA& A, const VB& B, const VC0& C0, co
                          int n) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Matrix<T, MatrixFormat::Dense> As(A.rows(), A.cols(), A.batch_size());
-    MV::copy(ctx, As.view(), A).wait();
-    As.view().symmetrize(ctx, uplo).wait();
+    MV::copy(ctx, As, A).wait();
+    As.symmetrize(ctx, uplo).wait();
     const auto items = C.all_items();
     const double err =
         side == Side::Left
-            ? MV::gemm_backward_error(ctx, As.view(), Transpose::NoTrans, B, Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items)
-            : MV::gemm_backward_error(ctx, B, Transpose::NoTrans, As.view(), Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items);
+            ? MV::gemm_backward_error(ctx, As, Transpose::NoTrans, B, Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items)
+            : MV::gemm_backward_error(ctx, B, Transpose::NoTrans, As, Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta), items);
     EXPECT_VERIFY(T, batchlas::verify::Check::blas, n, err)
         << "n=" << n << ", side=" << static_cast<int>(side) << ", uplo=" << static_cast<int>(uplo);
 }
@@ -65,15 +65,15 @@ TYPED_TEST(SymmTest, MatchesSymmetrizedGemmReference) {
 
             Matrix<T, MatrixFormat::Dense> C(rows, cols, batch);
 
-            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C.view(), C0.view()).wait();
+            MatrixView<T, MatrixFormat::Dense>::copy(*(this->ctx), C, C0).wait();
 
             symm(*(this->ctx),
-                     A.view(),
-                     B.view(),
-                     C.view(),
+                     A,
+                     B,
+                     C,
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
 
-            expect_symm_matches(*(this->ctx), A.view(), B.view(), C0.view(), C.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(*(this->ctx), A, B, C0, C, side, uplo, alpha, beta, n);
         }
     }
 }
@@ -98,18 +98,18 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
         for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
             Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
 
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
+            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom, C0).wait();
 
             {
                 const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                 symm(ctx,
-                                    A.view(),
-                                    B.view(),
-                                    C_custom.view(),
+                                    A,
+                                    B,
+                                    C_custom,
                                     {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
 
-            expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(ctx, A, B, C0, C_custom, side, uplo, alpha, beta, n);
         }
     }
 }
@@ -156,15 +156,15 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
                 ctx.wait();
 
                 Matrix<float, MatrixFormat::Dense> C_custom(rows, cols, batch);
-                MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
+                MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom, C0).wait();
 
                 {
                     const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
-                    symm(ctx, A.view(), B.view(), C_custom.view(),
+                    symm(ctx, A, B, C_custom,
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
 
-                expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+                expect_symm_matches(ctx, A, B, C0, C_custom, side, uplo, alpha, beta, n);
             }
         }
     }
@@ -192,16 +192,16 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
             auto C0 = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 37);
 
             Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
+            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom, C0).wait();
 
             {
                 const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
-                symm(ctx, A.view(), B.view(), C_custom.view(),
+                symm(ctx, A, B, C_custom,
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
             ctx.wait();
 
-            expect_symm_matches(ctx, A.view(), B.view(), C0.view(), C_custom.view(), side, uplo, alpha, beta, n);
+            expect_symm_matches(ctx, A, B, C0, C_custom, side, uplo, alpha, beta, n);
         }
     }
 }

@@ -119,15 +119,15 @@ inline UnifiedVector<typename base_type<Real>::type> orthogonality_residuals(
     const int batch = vectors.batch_size();
     auto gram_minus_i = Matrix<Real>::Identity(dimension, batch);
     (void)gemm<B, Real>(q,
-                  vectors.view(),
-                  vectors.view(),
-                  gram_minus_i.view(),
+                  vectors,
+                  vectors,
+                  gram_minus_i,
                   Real(1),
                   Real(-1),
                   Transpose::Trans,
                   Transpose::NoTrans);
     q.wait();
-    return norm(q, gram_minus_i.view(), NormType::Frobenius);
+    return norm(q, gram_minus_i, NormType::Frobenius);
 }
 
 } // namespace batchlas::accuracy

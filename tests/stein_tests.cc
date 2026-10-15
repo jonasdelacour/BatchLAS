@@ -80,11 +80,11 @@ protected:
             stein_buffer_size<test_utils::gpu_backend, Real>(*ctx, n, k, batch, sp));
         (void)stein(*ctx, d_view, e_view,
                                        VectorView<Real>(w.data(), k, batch, 1, k),
-                                       k, Z.view(), sws, sp);
+                                       k, Z, sws, sp);
         ctx->wait();
 
         const auto t = dense_tridiag(d_host, e_host, n);
-        for (int b = 0; b < batch; ++b) expect_stein_pairs(*this->ctx, t, Z.view(), w.data(), n, k, b, k);
+        for (int b = 0; b < batch; ++b) expect_stein_pairs(*this->ctx, t, Z, w.data(), n, k, b, k);
     }
 
     std::shared_ptr<Queue> ctx;
@@ -241,7 +241,7 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
             *this->ctx, n, k, CountsFixture<Real>::batch, sp));
     (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
-                                   Z.view(), sws, sp);
+                                   Z, sws, sp);
     this->ctx->wait();
 
     const auto t = dense_tridiag(f.d, f.e, n);
@@ -249,7 +249,7 @@ TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
         const int kb = f.counts[b];
 
         // (a) the declared prefix is a genuine orthonormal invariant-subspace basis.
-        expect_stein_pairs(*this->ctx, t, Z.view(), f.w.data(), n, k, b, kb);
+        expect_stein_pairs(*this->ctx, t, Z, f.w.data(), n, k, b, kb);
 
         // (b) everything past the prefix is exactly zero -- not the sentinel, not
         // an inverse-iteration result on a garbage shift, and above all not NaN.
@@ -292,13 +292,13 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
 
     Matrix<Real, MatrixFormat::Dense> Z_uniform(n, k, batch);
     (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
-                                   Z_uniform.view(), sws, sp);
+                                   Z_uniform, sws, sp);
     this->ctx->wait();
 
     Matrix<Real, MatrixFormat::Dense> Z_counts(n, k, batch);
     (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
-                                   Z_counts.view(), sws, sp);
+                                   Z_counts, sws, sp);
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -322,7 +322,7 @@ TYPED_TEST(SteinTest, FullCountsMatchesUniformOverload) {
     Matrix<Real, MatrixFormat::Dense> Z_short(n, k, batch);
     (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
-                                   Z_short.view(), sws, sp);
+                                   Z_short, sws, sp);
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -374,7 +374,7 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
             *this->ctx, n, k, CountsFixture<Real>::batch, sp));
     (void)stein<test_utils::gpu_backend>(*this->ctx, f.dv(), f.ev(), f.wv(), k,
                                    Span<const int32_t>(f.counts.data(), f.counts.size()),
-                                   Z.view(), sws, sp);
+                                   Z, sws, sp);
     this->ctx->wait();
 
     for (int j = 0; j < k; ++j) {
@@ -384,7 +384,7 @@ TYPED_TEST(SteinTest, ZeroCountYieldsZeroColumns) {
         }
     }
     // Item 0 is unaffected by its neighbour's empty request.
-    expect_stein_pairs(*this->ctx, dense_tridiag(f.d, f.e, n), Z.view(), f.w.data(), n, k, 0, k, /*residual_only=*/true);
+    expect_stein_pairs(*this->ctx, dense_tridiag(f.d, f.e, n), Z, f.w.data(), n, k, 0, k, /*residual_only=*/true);
 }
 
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND

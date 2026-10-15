@@ -114,8 +114,8 @@ struct TrsmProblem {
                     xs[at(t, i)] = X[o];
                     b0s[at(t, i)] = B0[o];
                 }
-            (void)V::copy(q, tri.view(), V(A.data() + std::size_t(b) * sa, order, order, lda));
-            (void)tri.view().triangularize(q, uplo, diag);
+            (void)V::copy(q, tri, V(A.data() + std::size_t(b) * sa, order, order, lda));
+            (void)tri.triangularize(q, uplo, diag);
             q.wait();
             const V a = tri.view();
             const V x = left ? V(xs.data(), order, nr, ldp) : V(xs.data(), nr, order, ldp);

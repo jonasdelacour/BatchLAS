@@ -245,7 +245,7 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     }
     // ||A||_2 = 12, so the kind's bound is 9e-4 absolute: 9x the old 1e-4.
     test_utils::expect_eigenvalues_match_lapacke<float>(
-        dense.view(), W, n, /*sorted_copy=*/true, dense.view().all_items(),
+        dense, W, n, /*sorted_copy=*/true, dense.all_items(),
         verify::Slack{0.11, "old bound 1e-4 absolute (10x test_utils::tolerance<float>), ||A||_2 = 12"});
 
     // verify eigenvectors A*v = lambda*v
@@ -312,8 +312,8 @@ UnifiedVector<float> lanczos_two_items(ToeplitzCoef item0, ToeplitzCoef item1) {
     params.ortho_algorithm = OrthoAlgorithm::SVQB2;
     params.sort_order = SortOrder::Descending;
     UnifiedVector<std::byte> workspace(
-        lanczos_buffer_size(ctx, A_view, W, JobType::EigenVectors, eigenvectors.view(), params));
-    (void)lanczos(ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors.view(), params);
+        lanczos_buffer_size(ctx, A_view, W, JobType::EigenVectors, eigenvectors, params));
+    (void)lanczos(ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors, params);
     ctx.wait();
     return W;
 }

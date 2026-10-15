@@ -322,7 +322,7 @@ TEST(NoRoute, IsUnsupported) {
     if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the vendor-free call needs the CUDA queue";
     using C = std::complex<float>;
     Matrix<C, MatrixFormat::Dense> A(4, 4, 2), B(4, 4, 2), Cm(4, 4, 2);
-    const auto call = [&] { (void)hemm(q, A.view(), B.view(), Cm.view(), HemmOptions<C>{}); };
+    const auto call = [&] { (void)hemm(q, A, B, Cm, HemmOptions<C>{}); };
     ExpectThreeWayCatch<batchlas::unsupported>(call, "no route for hemm");
     EXPECT_THROW(call(), std::runtime_error);
 #endif

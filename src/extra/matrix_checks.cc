@@ -100,7 +100,7 @@ template <class P> void mirror_lower(Queue& ctx, const MV<P>& A) {
 
 template <class P> Matrix<P> identity(Queue& ctx, int rows, int cols, int batch) {
     Matrix<P> I(rows, cols, batch);
-    if (std::size_t(rows) * cols * batch) (void)I.view().fill_identity(ctx);
+    if (std::size_t(rows) * cols * batch) (void)I.fill_identity(ctx);
     return I;
 }
 
@@ -259,14 +259,14 @@ double MatrixView<T, MType>::potrf_residual(Queue& ctx, const MatrixView& A0, co
     for (auto grp : chunks(all, std::size_t(n) * n)) {
         const int g = int(grp.size());
         auto f = F.template astype<P>(grp);
-        (void)f.view().triangularize(ctx, uplo, Diag::NonUnit);
+        (void)f.triangularize(ctx, uplo, Diag::NonUnit);
         Matrix<P> R(n, n, g);
         const bool lower = uplo == Uplo::Lower;
-        (void)MV<P>::product(ctx, f.view(), lower ? Transpose::NoTrans : Transpose::ConjTrans, f.view(),
-                             lower ? Transpose::ConjTrans : Transpose::NoTrans, R.view());
+        (void)MV<P>::product(ctx, f, lower ? Transpose::NoTrans : Transpose::ConjTrans, f,
+                             lower ? Transpose::ConjTrans : Transpose::NoTrans, R);
         auto t = A0.template astype<P>(grp);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, R.view(), t.view(), P(1), uplo, nm.data(), nm.data() + g);
+        difference(ctx, R, t, P(1), uplo, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
     }
@@ -288,10 +288,10 @@ double MatrixView<T, MType>::similarity_residual(Queue& ctx, const MatrixView& A
         const int g = int(grp.size());
         auto q = Q.template astype<P>(grp), b = B.template astype<P>(grp), t = A0.template astype<P>(grp);
         Matrix<P> qb(n, n, g), R(n, n, g);
-        (void)MV<P>::product(ctx, q.view(), Transpose::NoTrans, b.view(), Transpose::NoTrans, qb.view());
-        (void)MV<P>::product(ctx, qb.view(), Transpose::NoTrans, q.view(), Transpose::ConjTrans, R.view());
+        (void)MV<P>::product(ctx, q, Transpose::NoTrans, b, Transpose::NoTrans, qb);
+        (void)MV<P>::product(ctx, qb, Transpose::NoTrans, q, Transpose::ConjTrans, R);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, R.view(), t.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, R, t, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
     }
@@ -314,15 +314,15 @@ double MatrixView<T, MType>::getrf_residual(Queue& ctx, const MatrixView& A0, co
         std::vector<bool> nan_items;
         const auto p0 = pivots(piv, grp, mn, m, nan_items);
         auto pa = A0.template astype<P>(grp);
-        row_swaps(ctx, pa.view(), p0, mn, true);
+        row_swaps(ctx, pa, p0, mn, true);
         auto l = F.template astype<P>(grp), u = F.template astype<P>(grp);
-        const auto L = window(l.view(), m, mn), U = window(u.view(), mn, n);
+        const auto L = window(l, m, mn), U = window(u, mn, n);
         (void)L.triangularize(ctx, Uplo::Lower, Diag::Unit);
         (void)U.triangularize(ctx, Uplo::Upper, Diag::NonUnit);
         Matrix<P> R(m, n, g);
-        (void)MV<P>::product(ctx, L, Transpose::NoTrans, U, Transpose::NoTrans, R.view());
+        (void)MV<P>::product(ctx, L, Transpose::NoTrans, U, Transpose::NoTrans, R);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, R.view(), pa.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, R, pa, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, nan_items[std::size_t(it)] ? kNaN : quot(nm[it], nm[g + it]));
     }
@@ -346,10 +346,10 @@ double MatrixView<T, MType>::qr_residual(Queue& ctx, const MatrixView& A0, const
         auto f = F.template astype<P>(grp), x = F.template astype<P>(grp), t = A0.template astype<P>(grp);
         auto tv = column_of<P>(tau, k, it_list);
         // Column j of R: rows r <= j, which also satisfy r < k (j < n, and k = m when m <= n).
-        (void)x.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit);
-        apply_q(ctx, x.view(), f.view(), tv.view(), k);
+        (void)x.triangularize(ctx, Uplo::Upper, Diag::NonUnit);
+        apply_q(ctx, x, f, tv, k);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, x.view(), t.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, x, t, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
     }
@@ -377,7 +377,7 @@ Matrix<typename MatrixView<T, MType>::promoted_type, MType> MatrixView<T, MType>
     auto f = F.template astype<P>(all);
     auto tv = column_of<P>(tau, k, all);
     auto Q = identity<P>(ctx, m, cols, int(all.size()));
-    apply_q(ctx, Q.view(), f.view(), tv.view(), k);
+    apply_q(ctx, Q, f, tv, k);
     ctx.wait();
     return Q;
 }
@@ -400,12 +400,12 @@ double MatrixView<T, MType>::svd_residual(Queue& ctx, const MatrixView& A0, cons
         const std::vector<int> it_list(grp.begin(), grp.end());
         auto u = U.template astype<P>(grp), v = Vh.template astype<P>(grp), t = A0.template astype<P>(grp);
         auto sv = column_of<P>(s, k, it_list);
-        const auto Vk = window(v.view(), k, n);
+        const auto Vk = window(v, k, n);
         using D = Dev<P>;
         D* x = dev_ptr(Vk);
-        const D* d = dev_ptr(sv.view());
+        const D* d = dev_ptr(sv);
         const int ldv = Vk.ld();
-        const long long strv = Vk.stride(), strs = sv.view().stride();
+        const long long strv = Vk.stride(), strs = sv.stride();
         const std::size_t total = std::size_t(g) * k * n;
         if (total) ctx->parallel_for(sycl::range<1>(total), [=](sycl::id<1> id) {  // row l of Vh times s_l
             const long long it = static_cast<long long>(id[0] / (std::size_t(k) * n));
@@ -415,9 +415,9 @@ double MatrixView<T, MType>::svd_residual(Queue& ctx, const MatrixView& A0, cons
             e = sycl_device::dev_mul(e, d[it * strs + l]);
         });
         Matrix<P> X(m, n, g);
-        (void)MV<P>::product(ctx, window(u.view(), m, k), Transpose::NoTrans, Vk, Transpose::NoTrans, X.view());
+        (void)MV<P>::product(ctx, window(u, m, k), Transpose::NoTrans, Vk, Transpose::NoTrans, X);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, X.view(), t.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, X, t, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
     }
@@ -437,12 +437,12 @@ double MatrixView<T, MType>::qr_reconstruction(Queue& ctx, const MatrixView& A0,
     for (auto grp : chunks(all, std::size_t(std::max(m, R.rows())) * std::max(n, k))) {
         const int g = int(grp.size());
         auto q = Q.template astype<P>(grp), r = R.template astype<P>(grp), t = A0.template astype<P>(grp);
-        const auto Rk = window(r.view(), k, n);
+        const auto Rk = window(r, k, n);
         (void)Rk.triangularize(ctx, Uplo::Upper, Diag::NonUnit);
         Matrix<P> X(m, n, g);
-        (void)MV<P>::product(ctx, q.view(), Transpose::NoTrans, Rk, Transpose::NoTrans, X.view());
+        (void)MV<P>::product(ctx, q, Transpose::NoTrans, Rk, Transpose::NoTrans, X);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, X.view(), t.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, X, t, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[g + it]));
     }
@@ -465,19 +465,19 @@ double solve_core(Queue& ctx, const MV<P>& M, Transpose ta, const MV<P>& X, cons
     MV<P> xv = X, bv = B;
     if (!full) {
         Matrix<T> v(nc, nv, 1);
-        (void)v.view().fill_random(ctx, false, 4242);
+        (void)v.fill_random(ctx, false, 4242);
         ctx.wait();
         auto V = v.view().template astype<P>();
         xv = xv_store.emplace(k, nv, g).view();
         bv = bv_store.emplace(m, nv, g).view();
-        (void)MV<P>::product(ctx, X, Transpose::NoTrans, V.view(), Transpose::NoTrans, xv);
-        (void)MV<P>::product(ctx, B, Transpose::NoTrans, V.view(), Transpose::NoTrans, bv);
+        (void)MV<P>::product(ctx, X, Transpose::NoTrans, V, Transpose::NoTrans, xv);
+        (void)MV<P>::product(ctx, B, Transpose::NoTrans, V, Transpose::NoTrans, bv);
         ctx.wait();  // V is freed on leaving this block
     }
     Matrix<P> R(m, nv, g);
-    (void)MV<P>::product(ctx, M, ta, xv, Transpose::NoTrans, R.view());
+    (void)MV<P>::product(ctx, M, ta, xv, Transpose::NoTrans, R);
     UnifiedVector<double> nm(4 * std::size_t(g));
-    difference(ctx, R.view(), bv, P(1), std::nullopt, nm.data(), nm.data() + g);
+    difference(ctx, R, bv, P(1), std::nullopt, nm.data(), nm.data() + g);
     frobenius(ctx, M, nm.data() + 2 * g);
     frobenius(ctx, xv, nm.data() + 3 * g);
     ctx.wait();
@@ -503,7 +503,7 @@ double MatrixView<T, MType>::solve_residual(Queue& ctx, const MatrixView& A0, Tr
         const int g = int(grp.size());
         auto a = A0.template astype<P>(grp), x = X.template astype<P>(grp);
         auto b = identity_rhs ? identity<P>(ctx, m, X.cols(), g) : B0.template astype<P>(grp);
-        worst = nanmax(worst, solve_core<T>(ctx, a.view(), ta, x.view(), b.view(), full_limit, std::vector<bool>(grp.size(), false)));
+        worst = nanmax(worst, solve_core<T>(ctx, a, ta, x, b, full_limit, std::vector<bool>(grp.size(), false)));
     }
     return worst;
 }
@@ -533,14 +533,14 @@ double MatrixView<T, MType>::lu_solve_residual(Queue& ctx, const MatrixView& F, 
         std::vector<bool> nan_items;
         const auto p0 = pivots(piv, grp, n, n, nan_items);
         auto l = F.template astype<P>(grp), u = F.template astype<P>(grp);
-        (void)l.view().triangularize(ctx, Uplo::Lower, Diag::Unit);
-        (void)u.view().triangularize(ctx, Uplo::Upper, Diag::NonUnit);
+        (void)l.triangularize(ctx, Uplo::Lower, Diag::Unit);
+        (void)u.triangularize(ctx, Uplo::Upper, Diag::NonUnit);
         Matrix<P> M(n, n, g);
-        (void)MV<P>::product(ctx, l.view(), Transpose::NoTrans, u.view(), Transpose::NoTrans, M.view());
-        row_swaps(ctx, M.view(), p0, n, false);
+        (void)MV<P>::product(ctx, l, Transpose::NoTrans, u, Transpose::NoTrans, M);
+        row_swaps(ctx, M, p0, n, false);
         auto x = X.template astype<P>(grp);
         auto b = identity_rhs ? identity<P>(ctx, n, X.cols(), g) : B0.template astype<P>(grp);
-        worst = nanmax(worst, solve_core<T>(ctx, M.view(), ta, x.view(), b.view(), full_limit, nan_items));
+        worst = nanmax(worst, solve_core<T>(ctx, M, ta, x, b, full_limit, nan_items));
     }
     return worst;
 }
@@ -564,7 +564,7 @@ double MatrixView<T, MType>::gemm_backward_error(Queue& ctx, const MatrixView& A
         std::optional<Matrix<P>> c0;
         if (use_c0) c0.emplace(C0.template astype<P>(grp));
         const MV<P> c0v = c0 ? c0->view() : c.view(), cv = c.view();
-        worst = nanmax(worst, componentwise(ctx, a.view(), ta, b.view(), tb, use_c0 ? &c0v : nullptr, &cv, c_triangle, alpha, beta,
+        worst = nanmax(worst, componentwise(ctx, a, ta, b, tb, use_c0 ? &c0v : nullptr, &cv, c_triangle, alpha, beta,
                                             false, false));
     }
     return worst;
@@ -589,7 +589,7 @@ double MatrixView<T, MType>::gemm_max_denominator(Queue& ctx, const MatrixView& 
         std::optional<Matrix<P>> c0;
         if (use_c0) c0.emplace(C0.template astype<P>(grp));
         const MV<P> c0v = c0 ? c0->view() : a.view();
-        worst = nanmax(worst, componentwise<P>(ctx, a.view(), ta, b.view(), tb, use_c0 ? &c0v : nullptr, nullptr, std::nullopt, alpha,
+        worst = nanmax(worst, componentwise<P>(ctx, a, ta, b, tb, use_c0 ? &c0v : nullptr, nullptr, std::nullopt, alpha,
                                                beta, false, true));
     }
     return worst;
@@ -613,7 +613,7 @@ double MatrixView<T, MType>::gemv_backward_error(Queue& ctx, const MatrixView& A
     std::optional<Matrix<P>> y0v;
     if (use_c0) y0v.emplace(column_of<P>(y0, y0.size(), it));
     const MV<P> c0 = y0v ? y0v->view() : yv.view(), c = yv.view();
-    return componentwise(ctx, a.view(), ta, xv.view(), Transpose::NoTrans, use_c0 ? &c0 : nullptr, &c, std::nullopt, alpha, beta, false,
+    return componentwise(ctx, a, ta, xv, Transpose::NoTrans, use_c0 ? &c0 : nullptr, &c, std::nullopt, alpha, beta, false,
                          false);
 }
 
@@ -632,14 +632,14 @@ double MatrixView<T, MType>::trsm_residual(Queue& ctx, const MatrixView& A, Side
     for (auto grp : chunks(all, std::size_t(std::max(na, X.rows())) * std::max(na, X.cols()))) {
         const int g = int(grp.size());
         auto a = A.template astype<P>(grp), x = X.template astype<P>(grp), b = B0.template astype<P>(grp);
-        (void)a.view().triangularize(ctx, uplo, diag);
+        (void)a.triangularize(ctx, uplo, diag);
         Matrix<P> R(X.rows(), X.cols(), g);
-        if (left) (void)MV<P>::product(ctx, a.view(), ta, x.view(), Transpose::NoTrans, R.view());
-        else (void)MV<P>::product(ctx, x.view(), Transpose::NoTrans, a.view(), ta, R.view());
+        if (left) (void)MV<P>::product(ctx, a, ta, x, Transpose::NoTrans, R);
+        else (void)MV<P>::product(ctx, x, Transpose::NoTrans, a, ta, R);
         UnifiedVector<double> nm(4 * std::size_t(g));
-        difference(ctx, R.view(), b.view(), alpha, std::nullopt, nm.data(), nm.data() + g);
-        frobenius(ctx, a.view(), nm.data() + 2 * g);
-        frobenius(ctx, x.view(), nm.data() + 3 * g);
+        difference(ctx, R, b, alpha, std::nullopt, nm.data(), nm.data() + g);
+        frobenius(ctx, a, nm.data() + 2 * g);
+        frobenius(ctx, x, nm.data() + 3 * g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[2 * g + it] * nm[3 * g + it] + std::abs(alpha) * nm[g + it]));
     }
@@ -680,7 +680,7 @@ double MatrixView<T, MType>::spmm_backward_error(Queue& ctx, const MatrixView<T,
     if (use_c0) c0.emplace(C0.template astype<P>(it));
     const MV<P> c0v = c0 ? c0->view() : c.view(), cv = c.view();
     const double e = it.empty() ? 0.0
-                                : componentwise(ctx, a.view(), ta, b.view(), tb, use_c0 ? &c0v : nullptr, &cv, std::nullopt, alpha, beta,
+                                : componentwise(ctx, a, ta, b, tb, use_c0 ? &c0v : nullptr, &cv, std::nullopt, alpha, beta,
                                                 false, false);
     return bad_index ? kNaN : e;
 }
@@ -729,7 +729,7 @@ double MatrixView<T, MType>::rank2k_backward_error(Queue& ctx, const MatrixView&
         std::optional<Matrix<P>> c0;
         if (use_c0) c0.emplace(C0.template astype<P>(grp));
         const MV<P> c0v = c0 ? c0->view() : c.view(), cv = c.view();
-        worst = nanmax(worst, componentwise(ctx, Pm.view(), Transpose::NoTrans, Qm.view(), Transpose::NoTrans, use_c0 ? &c0v : nullptr, &cv,
+        worst = nanmax(worst, componentwise(ctx, Pm, Transpose::NoTrans, Qm, Transpose::NoTrans, use_c0 ? &c0v : nullptr, &cv,
                                             uplo, P(1), beta, hermitian, false));
     }
     return worst;
@@ -747,10 +747,10 @@ double MatrixView<T, MType>::orthogonality(Queue& ctx, const MatrixView& Q, std:
         const int g = int(grp.size());
         auto q = Q.template astype<P>(grp);
         Matrix<P> G(c, c, g);
-        (void)MV<P>::product(ctx, q.view(), Transpose::ConjTrans, q.view(), Transpose::NoTrans, G.view());
+        (void)MV<P>::product(ctx, q, Transpose::ConjTrans, q, Transpose::NoTrans, G);
         auto I = identity<P>(ctx, c, c, g);
         UnifiedVector<double> nm(2 * std::size_t(g));
-        difference(ctx, G.view(), I.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
+        difference(ctx, G, I, P(1), std::nullopt, nm.data(), nm.data() + g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, nm[it]);
     }
@@ -770,17 +770,17 @@ double MatrixView<T, MType>::eigen_residual(Queue& ctx, const MatrixView& A, con
     for (auto grp : chunks(all, std::size_t(n) * std::max(n, nv))) {
         const int g = int(grp.size());
         auto a = A.template astype<P>(grp), v = V.template astype<P>(grp);
-        mirror_lower(ctx, a.view());
+        mirror_lower(ctx, a);
         Matrix<P> W(nv, nv, g);
         std::fill(W.data().data(), W.data().data() + std::size_t(nv) * nv * g, P(0));
         for (int it = 0; it < g; ++it)
             for (int j = 0; j < nv; ++j) W(j, j, it) = P(double(w(j, grp[std::size_t(it)])));
         Matrix<P> R(n, nv, g), Tm(n, nv, g);
-        (void)MV<P>::product(ctx, a.view(), Transpose::NoTrans, v.view(), Transpose::NoTrans, R.view());
-        (void)MV<P>::product(ctx, v.view(), Transpose::NoTrans, W.view(), Transpose::NoTrans, Tm.view());
+        (void)MV<P>::product(ctx, a, Transpose::NoTrans, v, Transpose::NoTrans, R);
+        (void)MV<P>::product(ctx, v, Transpose::NoTrans, W, Transpose::NoTrans, Tm);
         UnifiedVector<double> nm(3 * std::size_t(g));
-        difference(ctx, R.view(), Tm.view(), P(1), std::nullopt, nm.data(), nm.data() + g);
-        frobenius(ctx, a.view(), nm.data() + 2 * g);
+        difference(ctx, R, Tm, P(1), std::nullopt, nm.data(), nm.data() + g);
+        frobenius(ctx, a, nm.data() + 2 * g);
         ctx.wait();
         for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[2 * g + it]));
     }
