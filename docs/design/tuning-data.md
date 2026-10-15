@@ -108,6 +108,18 @@ candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
   deep"`, `"at"`: HEAD); otherwise nothing is written and the unsettled cells are printed as
   `--remeasure-keys` lines, to be re-measured at deep with
   `batchlas_tune <op> --tier deep --remeasure-keys FILE --only-named`.
+- **`moved:<base commit>`** (a file move): `F`'s source list at the base commit maps onto HEAD's
+  pairwise, in list order: each HEAD path is its base path under a git rename (or unchanged), with
+  the same basename, and the two files are equal after the hash's normalization once every
+  `#include "x"` is replaced by the repo path it resolves to (its own directory, then `include/`),
+  mapped through the renames. An include that now resolves to another file, a content edit or a
+  changed list length gives no proof; so does any include form this does not model
+  (`__has_include`, `#include_next`, a macro or commented include, an include inside a raw string,
+  `<x>` naming a moved header). `scripts/sweep_to_table.py --rehash-moved BASE [--op OP]
+  [--device DEV]` (default: every ledger) writes one line per (family, stored hash) whose hash, after
+  the earlier `rehash` lines, is `F`'s hash at `BASE` and differs from today's (`"from"`: the stored
+  hash, `"at"`: HEAD, `"why"`: `"<k> files moved, equal modulo comments, whitespace and include
+  paths"`). It refuses uncommitted changes to the hashed files and writes nothing on a second run.
 
 A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
 and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one
@@ -153,6 +165,7 @@ scripts/sweep_to_table.py --op potrf --device sm_120 --out DIR
 scripts/sweep_to_table.py --check              # CI: re-derive every table byte for byte
 scripts/sweep_to_table.py --self-test
 scripts/sweep_to_table.py --rehash-sample RUN_ID --op gemm --device sm_120   # "Kernel hashes"
+scripts/sweep_to_table.py --rehash-moved BASE                                # "Kernel hashes"
 ```
 
 - **Rows:** each cell takes its best current record; a lower-tier row is emitted only where no
