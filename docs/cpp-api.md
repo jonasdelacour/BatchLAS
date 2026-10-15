@@ -615,9 +615,10 @@ for (int b = 0; b < batch; ++b) if (info[b] != 0) { /* item b's eigenvalues are 
   [stedc: convergence reporting through info](perf/stedc.md#stedc-convergence-reporting-through-info)).
   `stein` runs a fixed iteration count and reports nothing.
 
-The solve-style calls (`getrs`, `linalg::solve`) report nothing. A near-singular item produces
-plausible numbers; when inputs are not known to be well-conditioned, check the residual
-`‖A·X − B‖` or scan the factor's diagonal for zeros and NaNs per item.
+`getrs` and `linalg::solve_triangular` report nothing. The `linalg` factorisations and solves
+return their factorisation's `info`, which flags only an exactly singular (or, for Cholesky,
+non-positive-definite) item. A near-singular item still reports `0` and produces plausible
+numbers; when inputs are not known to be well-conditioned, check the residual `‖A·X − B‖`.
 
 ## Synchronisation and threading
 
@@ -861,20 +862,43 @@ and workspace from the arena.
 
 ```cpp
 auto C = linalg::matmul(ctx, A, B);   // allocates and returns C
-auto L = linalg::cholesky(ctx, A);    // A is not modified
-auto X = linalg::solve(ctx, A, B);    // A X = B
-auto e = linalg::eigh(ctx, A);        // e.values, e.vectors
+auto c = linalg::cholesky(ctx, A);    // c.factor, c.info; A is not modified
+auto s = linalg::solve(ctx, A, B);    // s.x with A s.x = B, s.info
+auto e = linalg::eigh(ctx, A);        // e.values, e.vectors, e.info
 ctx.wait();                                         // required before reading any of them
 ```
 
-These enqueue and do not wait, except `linalg::norm`, `linalg::cond` and `linalg::svd`.
-`add`, `subtract`, `multiply`, `divide` and `scaled` allocate their result; the `_into` forms write
-into storage you own (use them in inner loops); `scale` works in place.
+| Wrapper | Returns | Runs |
+|---|---|---|
+| `matmul(A, B, MatmulOptions)` | `Matrix` | `gemm` |
+| `matvec(A, x, trans)` | `Vector` | `gemv` |
+| `gram(A, trans = ConjTrans)` | `Matrix`, \f$A^HA\f$ (or \f$AA^H\f$ for `NoTrans`), both triangles | `syrk` (real), `herk` (complex) |
+| `solve_triangular(A, B, TrsmOptions)` | `Matrix` | `trsm` |
+| `cholesky(A, uplo)` | `Cholesky{factor, info}`; the other triangle is zero | `potrf` |
+| `lu(A)` | `Lu{factors, pivots, info}` | `getrf` |
+| `solve(A, B, trans)` / `solve_spd(A, B, uplo)` | `Solve{x, info}` | `gesv` or `getrf`+`getrs` / `posv` |
+| `inv(A)` | `Inv{inverse, info}` | `getrf`+`getri` |
+| `eigh(A, uplo)` / `eigvalsh(A, uplo)` | `Eigh{values, vectors, info}` / values | `syev` |
+| `eigh(A, SyevxParams)` / `eigvalsh(A, SyevxParams)` | `EighSubset{values, vectors, count, info}` | `syevx` |
+| `svd(A, SvdVectors)` / `svd(A, GesvdOptions)` | `Svd{U, values, Vh, info}` | `gesvd` |
+
+These enqueue and do not wait, except `norm`, `cond`, `svd`, `solve`, `solve_spd`, `inv` and the
+full `eigvalsh`, which free local scratch on return. A wrapper that launches more than once orders
+its own launches, so an out-of-order `Queue` is safe. `add`, `subtract`, `multiply`, `divide` and
+`scaled` allocate their result; the `_into` forms write into storage you own (use them in inner
+loops); `scale` works in place.
 
 - `matmul` takes a `MatmulOptions` with no `beta`: naming it is a compile error.
 - `multiply` is elementwise (Hadamard); use `matmul` for the matrix product.
-- `eigh` and `svd` return a per-item `info` vector (`0` = converged), always filled; check it.
-  `solve`, `solve_spd` and `cholesky` report nothing.
+- Every `info` is per item and always filled (`0` = success); check it. `cholesky` and
+  `solve_spd`: `i > 0` is the leading minor that is not positive definite. `lu`, `solve` and
+  `inv`: `i > 0` is the first exactly zero `U(i,i)`. `eigh` and `svd`: non-convergence.
+- The subset `eigh` takes `SyevxParams` with `select = Index` (`il`, `iu`, 0-based, inclusive) or
+  `Value` (\f$(v_l, v_u]\f$; `count[b]` eigenpairs per item, capacity `n`); it reads the lower
+  triangle and rejects `Extremal`.
+- `svd`'s jobs may differ (`Thin` is NumPy `full_matrices=False`); one may be `None`, not both.
+- `gram` on complex input runs `herk`, which has no native kernel: a vendor-free build throws
+  `NoRouteError`.
 - There is no `linalg::qr`; compose `geqrf` and `orgqr`. The wrapper is withheld because of an
   unexplained wrong-answer defect ([Known defects](design/known-defects.md)).
 
