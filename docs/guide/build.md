@@ -266,8 +266,11 @@ PYTHONPATH="$PWD/build/python" python3 -c "import batchlas; print(batchlas.avail
 
 The importable package lands in `build/python` and links against the in-tree
 `BatchLAS::batchlas`. It has NumPy dense-array support, SciPy sparse wrappers,
-`available_backends()`, `available_devices()`, `compiled_features()` and elementwise arithmetic
-(`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`). Its tests run with
+`available_backends()`, `available_devices()`, `compiled_features()`, elementwise arithmetic
+(`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`), the value-returning `batchlas.linalg`
+submodule, exception classes mirroring the C++ hierarchy and route pins (`set_route`, `route`).
+`cmake --install` puts the package in `<prefix>/BATCHLAS_PYTHON_INSTALL_DIR/batchlas` (default
+`lib/pythonX.Y/site-packages`, relative to the prefix). Its tests run with
 `PYTHONPATH="$PWD/build/python" python3 -m pytest python/tests` (pytest; SciPy only for the sparse
 cases). Twelve self-checking notebooks in
 `python/examples/` are committed with output:
