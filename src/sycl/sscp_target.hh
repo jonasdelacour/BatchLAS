@@ -21,6 +21,16 @@ __attribute__((always_inline)) inline bool on_ptx() {
     return r;
 }
 
+// Metal has no double, no vector types and no static local memory; see on_metal() callers.
+// 4 is compiler_backend::metal, spelled as a number: acpp 25.10 has no such enumerator.
+__attribute__((always_inline)) inline bool on_metal() {
+    namespace jit = sycl::AdaptiveCpp_jit;
+    bool r = false;
+    __acpp_if_target_sscp(
+        r = static_cast<int>(jit::reflect<jit::reflection_query::compiler_backend>()) == 4;)
+    return r;
+}
+
 // sm_XY as XY (sm_89 -> 89, sm_120 -> 120); meaningful only when on_ptx().
 __attribute__((always_inline)) inline int target_arch() {
     int r = 0;
@@ -37,6 +47,8 @@ inline constexpr bool on_ptx() {
     return false;
 #endif
 }
+
+inline constexpr bool on_metal() { return false; }
 
 inline constexpr int target_arch() {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SYCL_CUDA_ARCH__)

@@ -61,6 +61,20 @@ std::string run(const std::string& cmd) {
     return out;
 }
 
+// The pointer rule of .github/ci/check_lfs_pointers.py: under 1024 bytes, the version line first,
+// then an oid and a size line. A clone without `git lfs pull` holds these in place of results.
+bool is_lfs_pointer(const std::string& text) {
+    if (text.size() >= 1024 || text.rfind("version https://git-lfs.github.com/spec/v1\n", 0) != 0) return false;
+    bool oid = false, size = false;
+    std::istringstream in(text);
+    for (std::string l; std::getline(in, l);) {
+        if (l.size() == 75 && l.rfind("oid sha256:", 0) == 0)
+            oid = l.find_first_not_of("0123456789abcdef", 11) == std::string::npos;
+        if (l.size() > 5 && l.rfind("size ", 0) == 0) size = l.find_first_not_of("0123456789", 5) == std::string::npos;
+    }
+    return oid && size;
+}
+
 fs::path scratch(const std::string& name) {
     const fs::path d = fs::temp_directory_path() / ("tune_tests_" + std::to_string(getpid())) / name;
     fs::create_directories(d);
@@ -317,7 +331,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "8678bfc5"}, {"potrf", "6ee22c62"}, {"posv", "5a7eed28"}, {"trsm", "cf08f292"}};
+        {"gemm", "867ba81f"}, {"potrf", "f4dcbfce"}, {"posv", "5067b861"}, {"trsm", "3b31cae0"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -604,13 +618,7 @@ TEST(TuneCsv, EmptyFieldsSurviveAndErrorTextIsQuoted) {
 }
 
 TEST(TuneOldCsv, ReadsEveryRowOfAGateCsvAndRejectsWhatItCannotRead) {
-    // A previous gate's output: 87 of its 120 rows have empty fields.
     std::string err;
-    const auto real = parse_old_csv(read_file(fs::path(BATCHLAS_TUNE_SOURCE_DIR) /
-                                              "benchmarks/results/routing/sm120_potrf_phase2_gate.csv"),
-                                    {"n", "batch"}, {}, &err);
-    ASSERT_TRUE(real) << err;
-    EXPECT_EQ(real->size(), 120u);
     const std::string head = "dtype,uplo,n,batch,old,new,old_ms_p1,new_ms_p1,ratio_p1,ratio_p2,verdict\n";
     const std::string text = head + "float,L,44,512,lpanel:panel=8,lpanel:panel=8,,,,,same\n\n"
                                     "double,U,72,512,native:lpanel,blocked,1.0,1.1,1.1,1.1,FAIL\n";
@@ -627,6 +635,23 @@ TEST(TuneOldCsv, ReadsEveryRowOfAGateCsvAndRejectsWhatItCannotRead) {
     EXPECT_FALSE(parse_old_csv(head + "float,L,44,512,,tiny,,,,,same\n", {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(head, {"uplo", "n", "batch"}, {}, &err));
     EXPECT_FALSE(parse_old_csv(text, {"uplo", "n", "nrhs", "batch"}, {}, &err));
+    // Last, so a skip leaves the synthetic cases above checked. A previous gate's output: 87 of
+    // its 120 rows have empty fields.
+    const std::string gate = read_file(fs::path(BATCHLAS_TUNE_SOURCE_DIR) /
+                                       "benchmarks/results/routing/sm120_potrf_phase2_gate.csv");
+    if (is_lfs_pointer(gate)) GTEST_SKIP() << "sm120_potrf_phase2_gate.csv is a Git LFS pointer: run git lfs pull";
+    const auto real = parse_old_csv(gate, {"n", "batch"}, {}, &err);
+    ASSERT_TRUE(real) << err;
+    EXPECT_EQ(real->size(), 120u);
+}
+
+TEST(TuneOldCsv, LfsPointerRuleMatchesTheCiChecker) {
+    const std::string ptr = "version https://git-lfs.github.com/spec/v1\noid sha256:" + std::string(64, 'f') + "\nsize 6265\n";
+    EXPECT_TRUE(is_lfs_pointer(ptr));
+    EXPECT_FALSE(is_lfs_pointer(ptr + std::string(1024, '#'))) << "a real file may start with the version line";
+    EXPECT_FALSE(is_lfs_pointer("version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 9\n"));
+    EXPECT_FALSE(is_lfs_pointer("version https://git-lfs.github.com/spec/v1\noid sha256:" + std::string(64, 'f') + "\n"));
+    EXPECT_FALSE(is_lfs_pointer("dtype,uplo,n,batch\n" + ptr));
 }
 
 TEST(TuneGate, ExitCodeCannotPassAnIncompleteGate) {

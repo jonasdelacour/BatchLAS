@@ -14,6 +14,7 @@
 #include <stdexcept> // Include for std::runtime_error
 #include <string>
 #include <vector>    // Include for std::vector used in scan
+#include <batchlas/blas/queue-dispatch.hh>
 #include "queue.hh"
 #include "backends/backend_handle_impl.hh"
 #include "util/philox.hh"
@@ -202,6 +203,12 @@ inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int
     return data.data();
 }
 
+// The queue-less helpers run on the default device, or the CPU for double on an fp64-less GPU.
+template <typename T>
+Queue default_queue_for() {
+    return Queue(Device::default_device_for<T>());
+}
+
 }  // namespace
 
 //----------------------------------------------------------------------
@@ -371,7 +378,7 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
 template <typename T, MatrixFormat MType>
 template <MatrixFormat NewMType>
 Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshold) const {
-    Queue q; // Use default queue
+    Queue q = default_queue_for<T>(); // Use default queue
 
     // Handle identity conversion (same format)
     if constexpr (MType == NewMType) {
@@ -713,7 +720,7 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
     
     // Create a queue to submit work to
-    Queue q;
+    Queue q = default_queue_for<T>();
     
     // Get pointer to the matrix data
     T* data_ptr = result.values_.data();
@@ -762,6 +769,7 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
                                              T non_diagonal_value) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_triangular");
     T* data_ptr = data_.data();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
@@ -808,6 +816,7 @@ template <MatrixFormat M>
 Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo, 
                                                     Diag diag,
                                                     unsigned int seed) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_triangular_random");
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto n = rows_; // Assuming square matrix
@@ -852,6 +861,7 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
                                                     Diag diag) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::triangularize");
     // `uplo` names the triangle to KEEP: Uplo::Upper zeroes the strict lower triangle. The count is
     // rows*cols*batch, never data_.size() (wrong for a strided view).
     // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
@@ -898,6 +908,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::symmetrize(const Queue& ctx, Uplo uplo) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::symmetrize");
     T* data_ptr = data_.data();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
@@ -941,6 +952,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
+    detail::require_device_fp64<T>(ctx, "MatrixView::hermitize");
     T* data_ptr = data_.data();
     auto n = rows_; // Assuming square matrix
     auto batch_size = batch_size_;
@@ -1008,7 +1020,7 @@ Matrix<T, MType> Matrix<T, MType>::RandomSparseHermitian(int n,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) {
     Matrix<T, MType> result(n, n, NonZeros{csr_random_nnz_per_matrix(n, density)}, batch_size);
-    result.fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern).wait();
+    result.fill_random_sparse_hermitian(default_queue_for<T>(), density, seed, diagonal_boost, shared_pattern).wait();
     return result;
 }
 
@@ -1016,6 +1028,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsigned int seed) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_random");
     T* data_ptr = data_.data();
     size_t total_elements = data_.size();
     auto rows = rows_;
@@ -1121,6 +1134,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random_spd(const Queue& ctx, unsigned int seed) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_spd");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_spd: the matrix must be square");
     const std::size_t n = static_cast<std::size_t>(rows_);
     const std::size_t total = static_cast<std::size_t>(batch_size_) * n * n;
@@ -1176,6 +1190,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int seed) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_pivoted");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_random_pivoted: the matrix must be square");
     const int n = rows_;
     const int batch = batch_size_;
@@ -1220,6 +1235,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10_cond, unsigned int seed) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_graded_hermitian");
     if (rows_ != cols_) throw batchlas::invalid_argument("fill_graded_hermitian: the matrix must be square");
     if (!std::isfinite(log10_cond)) throw batchlas::invalid_argument("fill_graded_hermitian: log10_cond must be finite");
     using R = float_t<T>;
@@ -1304,6 +1320,7 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
                                                          unsigned int seed,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_random_sparse_hermitian");
     if (rows_ <= 0 || cols_ <= 0) {
         throw batchlas::invalid_argument("fill_random_sparse_hermitian: matrix dimensions must be > 0");
     }
@@ -1489,6 +1506,7 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
+    if (!(fill_val_is_zero && contiguous)) detail::require_device_fp64<T>(ctx, "MatrixView::fill");
     if (fill_val_is_zero && contiguous) {
         ctx->memset(data_ptr, char_val, total_elements * sizeof(T));
     } else if (contiguous) {
@@ -1534,6 +1552,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_identity");
     // (void) on an Event: deliberate. This Queue is in-order, so the next submission
     // is already ordered after this one and the Event carries nothing the caller needs.
     (void)fill_zeros(ctx);
@@ -1583,6 +1602,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const Span<T>& diag_values, int64_t k) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_diagonal");
     const int d = std::max<int64_t>(0, std::min<int64_t>(rows_ - (k < 0 ? -k : 0), cols_ - (k > 0 ? k : 0)));
     if (d == 0 || batch_size_ == 0) return ctx.get_event();
     const bool batch_diagonals = diag_values.size() == static_cast<std::size_t>(d) * batch_size_;
@@ -1595,6 +1615,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const VectorView<T>& diag_values, int64_t k) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_diagonal");
     int ld = ld_;
     int stride = stride_;
     auto col_offset = (k >= 0) ? k : 0;
@@ -1636,6 +1657,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_diagonal(const Queue& ctx, const T& diag_value) const {
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_diagonal");
     T* data_ptr = data_.data();
     int ld = ld_;
     int stride = stride_;
@@ -1673,6 +1695,7 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T sub_diag, T super_diag) const{
+    detail::require_device_fp64<T>(ctx, "MatrixView::fill_tridiag_toeplitz");
     T* data_ptr = data().data();
     int n = rows_; // Assuming square matrix
     int batch_size = batch_size_;
@@ -1784,6 +1807,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pitch) const {
+    detail::require_device_fp64<T>(ctx, "Matrix::to_column_major");
     // The source holds row-major data. Its row pitch is what the caller says it is
     // (default: packed, pitch cols -- allowed only where the layout leaves no room
     // for a padded pitch); its batch items are stride_ apart, which need not be
@@ -1837,7 +1861,7 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major(int row_pitch) const {
     // Builds a queue of its own, and waits on it before returning.
-    Queue q;
+    Queue q = default_queue_for<T>();
     return to_column_major(q, row_pitch);
 }
 
@@ -1846,6 +1870,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
+    detail::require_device_fp64<T>(ctx, "Matrix::to_row_major");
     // The source is read column-major with this matrix' own ld_/stride_.
     check_column_major_extent(rows_, cols_, static_cast<size_t>(ld_),
                               static_cast<size_t>(stride_), batch_size_, values_.size());
@@ -1900,7 +1925,7 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
     // Builds a queue of its own, and waits on it before returning.
-    Queue q;
+    Queue q = default_queue_for<T>();
     return to_row_major(q);
 }
 
@@ -2095,6 +2120,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
 #endif
         } else {
             //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
+            detail::require_device_fp64<T>(ctx, "MatrixView::copy");
             auto [ global_size, local_size ] = compute_nd_range_sizes(
                     static_cast<size_t>(src.rows()) * src.cols() * src.batch_size(),
                     ctx.device(), KernelType::MEMORY_BOUND);
@@ -2167,6 +2193,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
 #endif
     } else {
         //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
+        detail::require_device_fp64<T>(ctx, "VectorView::copy");
         auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range<2>(src.size(), src.batch_size()),
                             [=](sycl::id<2> idx) {
@@ -2181,6 +2208,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
 
 template <typename T>
 bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol) {
+    detail::require_device_fp64<T>(ctx, "VectorView::all_close");
     if (a.size() != b.size() || a.batch_size() != b.batch_size()) {
         throw batchlas::invalid_argument("all_close called on incompatible vectors");
     }
@@ -2239,6 +2267,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
 
 template <typename T, MatrixFormat MType>
 bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, const MatrixView<T, MType>& B, float_t<T> tol) {
+    detail::require_device_fp64<T>(ctx, "MatrixView::all_close");
     if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument("all_close called on incompatible matrices");
     }
@@ -2330,6 +2359,7 @@ void MatrixView<T, MType>::init() const {
 
 template <typename T, MatrixFormat MType>
 Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
+    detail::require_device_fp64<T>(ctx, "scale");
     auto [global_size, local_size] = compute_nd_range_sizes(
         static_cast<size_t>(matrix.rows()) * matrix.cols() * matrix.batch_size(),
         ctx.device(), KernelType::ELEMENTWISE);
@@ -2353,6 +2383,7 @@ Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
 
 template <typename T, MatrixFormat MType>
 Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vector) {
+    detail::require_device_fp64<T>(ctx, "scale");
     auto [global_size, local_size] = compute_nd_range_sizes(
         static_cast<size_t>(vector.size()) * vector.batch_size(),
         ctx.device(), KernelType::ELEMENTWISE);

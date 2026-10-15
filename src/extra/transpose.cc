@@ -10,6 +10,7 @@ namespace batchlas {
     Event transpose_impl(Queue &ctx,
                          const MatrixView<T, MF> &A,
                          const MatrixView<T, MF> &B) {
+        detail::require_device_fp64<T>(ctx, "transpose");
         constexpr int TILE = 16;
         ctx->submit([&](sycl::handler &cgh) {
             auto src = A.data_ptr();

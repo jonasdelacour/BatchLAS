@@ -162,7 +162,7 @@ TYPED_TEST(SyrkTest, LeavesTheOtherTriangleUntouched) {
     }
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 namespace {
 
 // syrk names one triangle of C, and BLAS forbids the other one from being

@@ -927,7 +927,10 @@ TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string klo = "16 4 16", khi = "3 48 48";
     ASSERT_TRUE(rows.count(klo)) << "no Left 16x4 row";
     ASSERT_TRUE(rows.count(khi)) << "no Right 3x48 row";
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s, algo] : {std::tuple{klo, lo, "cta"}, std::tuple{khi, hi, "blocked"}}) {
         const auto& f = rows[key];

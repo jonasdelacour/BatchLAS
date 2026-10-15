@@ -208,6 +208,10 @@ using SytrdSb2stTestTypes = ::testing::Types<
     SytrdSb2stConfig<double, Backend::ROCM>,
     SytrdSb2stConfig<std::complex<float>, Backend::ROCM>,
     SytrdSb2stConfig<std::complex<double>, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+using SytrdSb2stTestTypes = ::testing::Types<
+    SytrdSb2stConfig<float, Backend::SYCL>,
+    SytrdSb2stConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using SytrdSb2stTestTypes = ::testing::Types<SytrdSb2stConfig<float, Backend::NETLIB>>;
 #endif
@@ -217,7 +221,7 @@ class SytrdSb2stTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SytrdSb2stTest, SytrdSb2stTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -281,6 +285,47 @@ TYPED_TEST(SytrdSb2stTest, MatchesDenseSyevSpectrum) {
     Spectra tri;
     ASSERT_TRUE(tridiagonal_spectra(d_out, e_out, n, batch, tri)) << "LAPACKE_dsterf failed for SB2ST tridiagonal";
     EXPECT_TRUE(spectra_match<T>(tri, eig_ref, n)) << "SB2ST";
+}
+
+// The sub-group SB2ST kernel keeps its rotation scratch (C/WORK) and the band (AB) in local or
+// global memory, chosen per launch from the local-memory budget; on Metal each combination is a
+// separate copy of the chase (sytrd_sb2st_cta.cc). On a 32 KiB device (Metal) the shapes below
+// take local/local (n=24, kd=3), local C/WORK with global AB (n=256, kd=6) and global/global
+// (n=200, kd=2). Batches that are not a multiple of the problems per work-group leave a partial
+// last group.
+TYPED_TEST(SytrdSb2stTest, SubgroupKernelEveryStorageCombination) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    auto& ctx = *this->ctx;
+    if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
+    ScopedEnvVar force_subgroup("BATCHLAS_SB2ST_SUBGROUP", "1");
+
+    struct Case { int n, kd, batch; };
+    for (const Case cs : {Case{24, 3, 17}, Case{256, 6, 5}, Case{200, 2, 17}}) {
+        SCOPED_TRACE("n=" + std::to_string(cs.n) + " kd=" + std::to_string(cs.kd));
+        const int n = cs.n, kd = cs.kd, batch = cs.batch;
+        auto A0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/11 + n);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i)
+                    if (std::abs(i - j) > kd) A0(i, j, b) = T(0);
+        Matrix<T, MatrixFormat::Dense> AB(kd + 1, n, batch);
+        fill_lower_band_from_dense<T>(A0, AB, n, kd);
+        Spectra eig_ref;
+        ASSERT_TRUE(dense_spectra(A0.view(), eig_ref)) << "LAPACKE reference failed";
+
+        Vector<Real> d_out(n, batch);
+        Vector<Real> e_out(n - 1, batch);
+        Vector<T> tau_out(n - 1, batch);
+        UnifiedVector<std::byte> ws(
+            sytrd_sb2st_buffer_size(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, 16));
+        sytrd_sb2st(ctx, AB.view(), d_out.view(), e_out.view(), tau_out.view(), Uplo::Lower, kd, ws.to_span(), 16)
+            .wait();
+
+        Spectra tri;
+        ASSERT_TRUE(tridiagonal_spectra(d_out, e_out, n, batch, tri)) << "LAPACKE sterf failed";
+        EXPECT_TRUE(spectra_match<T>(tri, eig_ref, n));
+    }
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {

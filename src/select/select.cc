@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -44,12 +45,21 @@ std::vector<std::string_view> words(std::string_view s) {
     return out;
 }
 
+// Whole-string, locale-independent (strtod obeys a host app's comma-decimal LC_NUMERIC).
+// Not std::from_chars: Apple libc++ headers mark the floating-point overload unavailable.
+bool parse_double(std::string_view s, double& out) {
+    if (s.empty() || s.front() == '+' || std::isspace(static_cast<unsigned char>(s.front()))) return false;
+    std::istringstream in{std::string(s)};
+    in.imbue(std::locale::classic());
+    in >> std::noskipws >> out;
+    return !in.fail() && in.peek() == std::char_traits<char>::eof();
+}
+
 // A plain positive decimal: digits with at most one '.', no sign, no exponent.
 bool parse_weight(std::string_view s, double& out) {
     if (s.empty() || std::count(s.begin(), s.end(), '.') > 1) return false;
     if (!std::all_of(s.begin(), s.end(), [](char c) { return c == '.' || (c >= '0' && c <= '9'); })) return false;
-    const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
-    return r.ec == std::errc{} && r.ptr == s.data() + s.size() && std::isfinite(out) && out > 0;
+    return parse_double(s, out) && std::isfinite(out) && out > 0;
 }
 
 int leading_int(std::string_view s) {
@@ -184,8 +194,9 @@ int family_rank(std::string_view f) {
     if (f == "sm") return 0;
     if (f == "gfx") return 1;
     if (f == "intel") return 2;
-    if (f == "cpu") return 4;
-    return 3;
+    if (f == "apple") return 3;
+    if (f == "cpu") return 5;
+    return 4;
 }
 
 struct Decision {
@@ -225,8 +236,25 @@ Device device_from_key(std::string_view key) {
     } else if (key.rfind("intel", 0) == 0) {
         d.family = "intel";
         if (key.size() > 6) d.arch_number = leading_int(key.substr(6));
+    } else if (key.rfind("apple", 0) == 0) {
+        d.family = "apple";
+        const auto digit = key.find_first_of("0123456789");
+        if (digit != std::string_view::npos) d.arch_number = leading_int(key.substr(digit));
     }
     return d;
+}
+
+std::string apple_device_key(std::string_view device_name) {
+    std::string key;
+    for (const char c : device_name) {
+        if (std::isalnum(static_cast<unsigned char>(c)))
+            key += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        else if (!key.empty() && key.back() != '_')
+            key += '_';
+    }
+    while (!key.empty() && key.back() == '_') key.pop_back();
+    if (key.rfind("apple", 0) != 0) key = key.empty() ? "apple" : "apple_" + key;
+    return key;
 }
 
 const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) {
@@ -243,6 +271,9 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) 
         key = "sm_" + std::to_string(dev.cuda_compute_capability());
     else if (b == Backend::ROCM) key = "rocm";
     else if (dev.get_vendor() == Vendor::INTEL) key = "intel";
+    // Only acpp's Metal backend exposes an Apple GPU; tables are per chip, named after it.
+    const bool metal = is_gpu && dev.get_vendor() == Vendor::APPLE;
+    if (metal) key = apple_device_key(dev.get_name());
     Device d = device_from_key(key);
     d.is_gpu = is_gpu;
     d.has_sg32 = dev.supports_sub_group_size(32);
@@ -252,6 +283,12 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) 
         resident::device_slm_budget(static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))),
         static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())));
     d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    if (metal) {
+        // impl::local_mem_scratch_per_item and impl::kMetalMaxGlobalRange (src/sycl/), which
+        // this sycl-free TU cannot include; resident_capacity_tests holds the two to agree.
+        d.slm_per_item = 8;
+        d.max_groups_yz = 0xffffffffll;
+    }
     std::lock_guard<std::mutex> lock(state_mutex());
     return memo->emplace(k, std::move(d)).first->second;
 }
@@ -338,10 +375,10 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
             const auto w = words(segs[s]);
             if (w.size() != 2)
                 fail("ranked entry '" + std::string(trim(segs[s])) + "' is not '<choice> <ms>' or '<choice> -'");
-            double ms = 0.0;  // from_chars: strtod obeys a host app's comma-decimal LC_NUMERIC
-            const auto r = std::from_chars(w[1].data(), w[1].data() + w[1].size(), ms);
+            double ms = 0.0;
+            const bool parsed = parse_double(w[1], ms);
             if (w[1] == "-") ++untimed;
-            else if (r.ec != std::errc{} || r.ptr != w[1].data() + w[1].size() || !std::isfinite(ms) || ms < 0)
+            else if (!parsed || !std::isfinite(ms) || ms < 0)
                 fail("time '" + std::string(w[1]) + "' is not a non-negative number or '-'");
             for (const auto& e : row.ranked)
                 if (e.spelling == w[0]) fail("'" + e.spelling + "' ranked twice");

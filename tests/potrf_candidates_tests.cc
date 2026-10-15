@@ -719,6 +719,17 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const int n = this->limit(C{pc::Tiny{}}, Uplo::Lower) + 1;
+    // cta and blocked where they serve n; an SLM-poor device (Metal cfloat) caps cta below it.
+    auto serves = [&](const C& c) { const int l = this->limit(c, Uplo::Lower); return l == TestFixture::kUnbounded || l >= n; };
+    std::vector<C> runnable;
+    for (const C& c : pc::candidates<T>())
+        if (!std::holds_alternative<pc::Tiny>(c) && serves(c)) runnable.push_back(c);
+    ASSERT_GE(runnable.size(), 2u) << "two candidates other than tiny must serve n=" << n;
+    const C outer_c = serves(C{pc::Cta{}}) ? C{pc::Cta{}} : runnable.front();
+    const C inner_c = serves(C{pc::Blocked{}}) && !std::holds_alternative<pc::Blocked>(outer_c)
+                          ? C{pc::Blocked{}}
+                          : (runnable.front() == outer_c ? runnable[1] : runnable.front());
+    const std::string outer_s = select::to_string(outer_c), inner_s = select::to_string(inner_c);
     const ScopedEnvVar env("BATCHLAS_POTRF_ROUTE", "tiny");
     {
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
@@ -728,11 +739,11 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
     std::vector<int32_t> info;
     auto p = make_prob<T>(n, 2, Uplo::Lower, 31u);
     EXPECT_EQ(traced_choice([&] {
-                  const Pin pin("potrf", C{pc::Cta{}});
+                  const Pin pin("potrf", outer_c);
                   info = this->run_auto(p);
               }),
-              "cta");
-    expect_factored(*this->ctx, p, info, "cta over env tiny");
+              outer_s);
+    expect_factored(*this->ctx, p, info, outer_s + " over env tiny");
 
     auto q = make_prob<T>(n, 2, Uplo::Lower, 32u);
     std::string got = traced_choice([&] {
@@ -742,14 +753,14 @@ TYPED_TEST(PotrfCandidates, ScopedPinBeatsTheEnvironment) {
     EXPECT_NE(got, "tiny");
     expect_factored(*this->ctx, q, info, "auto over env tiny");
 
-    const Pin outer("potrf", C{pc::Cta{}});
+    const Pin outer("potrf", outer_c);
     {
-        const Pin inner("potrf", C{pc::Blocked{}});
+        const Pin inner("potrf", inner_c);
         auto r = make_prob<T>(n, 2, Uplo::Lower, 33u);
-        EXPECT_EQ(traced_choice([&] { (void)this->run_auto(r); }), "blocked");
+        EXPECT_EQ(traced_choice([&] { (void)this->run_auto(r); }), inner_s);
     }
     auto s = make_prob<T>(n, 2, Uplo::Lower, 34u);
-    EXPECT_EQ(traced_choice([&] { (void)this->run_auto(s); }), "cta") << "the inner pin did not restore the outer";
+    EXPECT_EQ(traced_choice([&] { (void)this->run_auto(s); }), outer_s) << "the inner pin did not restore the outer";
 }
 
 // §8.4, device half: every entry of every row of this device's own table was timed at that

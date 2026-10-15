@@ -460,9 +460,18 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
     using real_t = float_t<T>;
     if constexpr (std::is_same_v<T, float>) {
         if (metric == NormType::Spectral) {
-            auto mat_d = random_hermitian_tridiagonal_with_log10_cond_metric<B, double>(
-                ctx, n, static_cast<double>(log10_kappa), metric, batch_size, seed);
-            return mat_d.template astype<float>();
+            if constexpr (B != Backend::SYCL || BATCHLAS_HAS_DEVICE_FP64) {
+                auto mat_d = random_hermitian_tridiagonal_with_log10_cond_metric<B, double>(
+                    ctx, n, static_cast<double>(log10_kappa), metric, batch_size, seed);
+                return mat_d.template astype<float>();
+            } else if constexpr (BATCHLAS_HAS_HOST_BACKEND) {
+                // No double kernels on this device: widen on the host backend instead.
+                ctx.wait();
+                static Queue* host = new Queue(Device("cpu"), Backend::NETLIB);  // leaked on purpose
+                auto mat_d = random_hermitian_tridiagonal_with_log10_cond_metric<Backend::NETLIB, double>(
+                    *host, n, static_cast<double>(log10_kappa), metric, batch_size, seed);
+                return mat_d.template astype<float>();
+            }
         }
     }
     if (n <= 0 || batch_size <= 0) {

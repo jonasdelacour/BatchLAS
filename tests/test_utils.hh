@@ -1,5 +1,6 @@
 #pragma once
 #include <batchlas/backend_config.h>
+#include <cstdint>
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
@@ -23,7 +24,11 @@ namespace test_utils {
 // evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
 inline constexpr bool kSlmCappedAt48KiB = BATCHLAS_SYCL_IMPL_ACPP && !BATCHLAS_ACPP_SLM_OPTIN;
 inline constexpr const char* kSlmCappedReason =
+#if BATCHLAS_HAS_SYCL_BACKEND
+    "acpp on an Apple GPU: 32 KiB threadgroup memory per work-group, less the runtime's scratch";
+#else
     "acpp without BATCHLAS_ACPP_SLM_OPTIN: 48 KiB local memory per work-group (no CUDA opt-in)";
+#endif
 
 // True when @p msg reports a kernel with no device image (runtimes word it differently) AND
 // BATCHLAS_TEST_ALLOW_MISSING_KERNEL=1: only then may the caller skip. Otherwise it rethrows and
@@ -73,12 +78,12 @@ inline bool should_run_backend(batchlas::Backend backend) {
     std::transform(backend_filter.begin(), backend_filter.end(), backend_filter.begin(), ::toupper);
     
     // Check if filter matches a known backend
-    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" || 
-                       backend_filter == "NETLIB");
+    bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" ||
+                       backend_filter == "SYCL" || backend_filter == "NETLIB");
     
     if (!recognized) {
         std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
-                  << " is not recognized. Valid values are: CUDA, ROCM, NETLIB. "
+                  << " is not recognized. Valid values are: CUDA, ROCM, SYCL, NETLIB. "
                   << "Skipping all tests." << std::endl;
         return false;
     }
@@ -86,6 +91,7 @@ inline bool should_run_backend(batchlas::Backend backend) {
     // Match backend to filter
     if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
     if (backend == batchlas::Backend::ROCM && backend_filter == "ROCM") return true;
+    if (backend == batchlas::Backend::SYCL && backend_filter == "SYCL") return true;
     if (backend == batchlas::Backend::NETLIB && backend_filter == "NETLIB") return true;
     
     return false;  // Filter doesn't match, skip
@@ -142,6 +148,14 @@ struct backend_types {
                    Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<float, batchlas::Backend::SYCL>,
+                   Config<std::complex<float>, batchlas::Backend::SYCL>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<double, batchlas::Backend::SYCL>,
+                   Config<std::complex<double>, batchlas::Backend::SYCL>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -175,6 +189,16 @@ struct backend_types_filtered {
                               Config<std::complex<double>, batchlas::Backend::ROCM>>,
                    std::tuple<>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<float, batchlas::Backend::SYCL>>{},
+        std::conditional_t<IncludeComplex, std::tuple<Config<std::complex<float>, batchlas::Backend::SYCL>>,
+                           std::tuple<>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<double, batchlas::Backend::SYCL>>{},
+        std::conditional_t<IncludeComplex, std::tuple<Config<std::complex<double>, batchlas::Backend::SYCL>>,
+                           std::tuple<>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -197,6 +221,12 @@ struct backend_types_complex {
         std::tuple<Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+        std::tuple<Config<std::complex<float>, batchlas::Backend::SYCL>>{},
+#if BATCHLAS_HAS_DEVICE_FP64
+        std::tuple<Config<std::complex<double>, batchlas::Backend::SYCL>>{},
+#endif
+#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -207,7 +237,42 @@ struct backend_types_complex {
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+constexpr batchlas::Backend gpu_backend = batchlas::Backend::SYCL;
 #endif
+
+// The backend a native-kernel test pins (tests that call the CUDA-or-SYCL native kernels
+// directly): CUDA, else SYCL (AdaptiveCpp Metal). A build with neither keeps CUDA, whose
+// Queue constructor throws, which is how these tests behaved before SYCL existed.
+#if BATCHLAS_HAS_CUDA_BACKEND
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::SYCL;
+#else
+constexpr batchlas::Backend native_gpu_backend = batchlas::Backend::CUDA;
+#endif
+
+// True when the native GPU backend has no double kernels (Metal: no device fp64).
+inline constexpr bool native_gpu_lacks_fp64 =
+    native_gpu_backend == batchlas::Backend::SYCL && !BATCHLAS_HAS_DEVICE_FP64;
+
+// T for a native-kernel case written in double: double (or complex<double>) where the native
+// GPU backend has it, else the float type of the same kind, so the kernel still launches.
+template <typename T>
+using native_gpu_scalar_t = std::conditional_t<
+    native_gpu_lacks_fp64,
+    std::conditional_t<std::is_same_v<T, double>, float,
+                       std::conditional_t<std::is_same_v<T, std::complex<double>>, std::complex<float>, T>>,
+    T>;
+
+// The work-group ceiling of SYCL dims 0/1 of a 2-D/3-D launch (CUDA grid z/y). Grid-ceiling
+// tests launch at kCudaGridYZ and one past it; on an Apple GPU (acpp Metal) the cap is the
+// 32-bit work-item global range instead, so one past CUDA's ceiling must be served. The test's
+// own fact, checked against select::Device::max_groups_yz; pass select::Device::family.
+inline constexpr std::int64_t kCudaGridYZ = 65535;
+inline std::int64_t expected_grid_yz(std::string_view device_family) {
+    return device_family == "apple" ? std::int64_t{0xffffffff} : kCudaGridYZ;
+}
 
 // Utility traits and helper functions
 template <typename T>

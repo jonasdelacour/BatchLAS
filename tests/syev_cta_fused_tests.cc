@@ -43,6 +43,15 @@ using SyevCtaFusedTestTypes = ::testing::Types<
 	SyevCtaFusedConfig<double, Backend::ROCM>,
 	SyevCtaFusedConfig<std::complex<float>, Backend::ROCM>,
 	SyevCtaFusedConfig<std::complex<double>, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+// AdaptiveCpp Metal: the native kernels in float and complex<float>; double needs device fp64.
+using SyevCtaFusedTestTypes = ::testing::Types<
+    SyevCtaFusedConfig<float, Backend::SYCL>,
+#if BATCHLAS_HAS_DEVICE_FP64
+    SyevCtaFusedConfig<double, Backend::SYCL>,
+    SyevCtaFusedConfig<std::complex<double>, Backend::SYCL>,
+#endif
+    SyevCtaFusedConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using SyevCtaFusedTestTypes = ::testing::Types<SyevCtaFusedConfig<float, Backend::NETLIB>>;
 #endif
@@ -52,7 +61,7 @@ class SyevCtaFusedTest : public test_utils::BatchLASTest<Config> {};
 
 TYPED_TEST_SUITE(SyevCtaFusedTest, SyevCtaFusedTestTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 
 // The fused kernel must produce a valid eigendecomposition for every partition
 // width it dispatches (P = 4, 8, 16, 32) and for both triangles, including the

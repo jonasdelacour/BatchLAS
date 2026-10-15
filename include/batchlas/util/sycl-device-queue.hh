@@ -3,6 +3,7 @@
 #include <vector>
 #include <string>
 #include <algorithm>
+#include <complex>
 #include <stdexcept>
 #include <cstdint>
 #include <optional>
@@ -56,6 +57,7 @@ enum class Vendor
     ARM,     ///< Arm.
     INTEL,   ///< Intel.
     NVIDIA,  ///< NVIDIA.
+    APPLE,   ///< Apple (Apple-silicon GPUs through AdaptiveCpp Metal).
     OTHER    ///< Any other vendor.
 };
 
@@ -91,6 +93,7 @@ inline constexpr std::string_view to_string(Vendor v) {
         case Vendor::ARM: return "ARM";
         case Vendor::INTEL: return "INTEL";
         case Vendor::NVIDIA: return "NVIDIA";
+        case Vendor::APPLE: return "APPLE";
         case Vendor::OTHER: return "OTHER";
     }
     return "Vendor(?)";
@@ -127,6 +130,8 @@ inline Vendor str_to_vendor(std::string&& v) {
     std::transform(v.begin(), v.end(), v.begin(), ::tolower);
     if (v.find("amd") != std::string::npos || v.find("advanced micro devices") != std::string::npos) {
         return Vendor::AMD;
+    } else if (v.find("apple") != std::string::npos) {
+        return Vendor::APPLE;
     } else if (v.find("arm") != std::string::npos) {
         return Vendor::ARM;
     } else if (v.find("intel") != std::string::npos) {
@@ -216,6 +221,18 @@ struct BATCHLAS_API Device{
         }
     }
 
+    /// @brief default_device(), except the first CPU device for a double or complex<double> @p T
+    /// when that default is a GPU without fp64 (an Apple GPU), which cannot run @p T kernels.
+    template <typename T>
+    static Device default_device_for() {
+        Device dev = default_device();
+        if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
+            if (dev.type == DeviceType::GPU && !dev.supports_fp64() && !get_devices(DeviceType::CPU).empty())
+                dev = get_devices(DeviceType::CPU).front();
+        }
+        return dev;
+    }
+
     /// @brief The device's name as reported by SYCL.
     std::string get_name() const;
     /// @brief The device's vendor.
@@ -235,6 +252,11 @@ struct BATCHLAS_API Device{
     // Parsed from info::device::version, because ext_oneapi_architecture reports
     // "unknown" for sm_100/sm_120 on current DPC++.
     int cuda_compute_capability() const;
+
+    /// @brief True when the device runs double-precision kernels (`sycl::aspect::fp64`).
+    /// Memoized per device. False on Apple GPUs, where a Backend::SYCL build without
+    /// `BATCHLAS_HAS_DEVICE_FP64` has no double or complex<double> kernels.
+    bool supports_fp64() const;
 
 
 

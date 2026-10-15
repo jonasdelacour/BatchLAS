@@ -92,6 +92,42 @@ batchlas_rewrite_unaliased_nvidia_targets("nvidia_gpu_sm_89;native_cpu" "" _unto
 expect("nothing unaliased leaves the targets alone" "${_untouched}" "nvidia_gpu_sm_89;native_cpu")
 expect("nothing unaliased adds no option" "${_no_option}" "")
 
+# AdaptiveCpp: trimmed acpp-info (develop 9ec394ef, macOS 27) listing the OpenMP host device and
+# an Apple M5 Max, plus an OpenCL GPU whose vendor is not Intel and must not become intel_gpu.
+include("${BATCHLAS_SOURCE_DIR}/cmake/BatchLASSyclAcpp.cmake")
+batchlas_parse_acpp_info("***************** Devices for backend OpenMP *****************
+Device 0:
+ General device information:
+  Name: AdaptiveCpp OpenMP host device
+  Backend: OpenMP
+  Vendor: the AdaptiveCpp project
+  Arch: <native-cpu>
+  Is CPU: 1
+  Is GPU: 0
+***************** Devices for backend Metal *****************
+Device 0:
+ General device information:
+  Name: Apple M5 Max
+  Backend: Metal
+  Vendor: Apple
+  Arch: applegpu_g17s
+  Driver version: Version 27.0.1 (Build 26A434), gpufamilies: Apple1,Apple2
+  Is CPU: 0
+  Is GPU: 1
+  sub_group_sizes: 32
+***************** Devices for backend OpenCL *****************
+Device 0:
+  Name: Apple M5 Max
+  Backend: OpenCL
+  Vendor: Apple
+  Is GPU: 1
+" _acpp_devices)
+expect("acpp-info records carry the vendor as a sixth field" "${_acpp_devices}"
+    "OpenMP|cpu|AdaptiveCpp OpenMP host device|<native-cpu>|1|the AdaptiveCpp project;Metal|gpu|Apple M5 Max|applegpu_g17s|32|Apple;OpenCL|gpu|Apple M5 Max|unknown|1|Apple")
+batchlas_architecture_table_local_mem_bytes("apple_gpu_g17s" "gpu" _apple_bytes)
+batchlas_subgroup_workspace_budget_bytes("apple_gpu_g17s" "${_apple_bytes}" "gpu" _apple_budget)
+expect("Apple GPU workspace budget" "${_apple_budget}" "28672")
+
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -DBATCHLAS_SOURCE_DIR=${BATCHLAS_SOURCE_DIR} -DBATCHLAS_EXPECT_FATAL=1
             -P "${CMAKE_CURRENT_LIST_FILE}"

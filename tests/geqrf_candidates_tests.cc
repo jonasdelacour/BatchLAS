@@ -553,8 +553,10 @@ TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
             EXPECT_EQ(got, spelling) << what;
             expect_factored(*this->ctx, p, what);
         }
-    {   // tiny on a square order inside the ceiling.
-        auto p = make_qr<T>(Spec{9, 9, 2});
+    {   // tiny on a square order inside the ceiling (Metal's local memory caps cfloat's below 9).
+        const int n = std::min(9, this->tiny_max());
+        ASSERT_GE(n, 2) << "tiny serves no order above 1 at budget " << this->budget();
+        auto p = make_qr<T>(Spec{n, n, 2});
         EXPECT_EQ(traced_choice([&] {
                       const Pin pin("geqrf", std::string_view("tiny"));
                       this->run(p);
@@ -734,7 +736,10 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         }
     }
     std::filesystem::remove_all(dir);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     ASSERT_TRUE(rows.count("40 24 24")) << "no 40x24 row";
     const auto& f = rows["40 24 24"];
     EXPECT_EQ(f[3], backend);

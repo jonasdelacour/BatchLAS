@@ -70,7 +70,7 @@ struct Sys {
     int n = 0, nrhs = 0, batch = 0;
     int lda = 0, stra = 0, ldb = 0, strb = 0;
     UnifiedVector<T> a, b;
-    std::vector<T> a0, b0;
+    UnifiedVector<T> a0, b0;  // read by device kernels in solve_residual: never host-only memory
     UnifiedVector<T*> aptr, bptr;
     UnifiedVector<int32_t> info;
 };
@@ -133,8 +133,8 @@ Sys<T> make_spd(int n, int nrhs, int batch, Uplo uplo, unsigned seed,
             for (int i = 0; i < n; ++i)
                 p.b[size_t(bi) * p.strb + size_t(k) * p.ldb + i] = rnd(i, n + k, bi);
     }
-    p.a0.assign(p.a.begin(), p.a.end());
-    p.b0.assign(p.b.begin(), p.b.end());
+    p.a0 = p.a;
+    p.b0 = p.b;
     return p;
 }
 

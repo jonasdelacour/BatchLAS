@@ -1,0 +1,66 @@
+From e8e4916d6ee9af26ad414ffd91291b5710cd658b Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Mon, 12 Oct 2026 23:06:53 +0200
+Subject: [PATCH 6/7] [Metal] Optimize without the loop and SLP vectorizers
+
+A PassBuilder built without a TargetMachine runs LoopVectorize at O3. Its
+output (vector phis, insertelement, shufflevector, <N x i1> bitcasts and
+llvm.experimental.cttz.elts for early-exit loops) has no MetalEmitter
+lowering, so an ordinary search loop such as
+  while (i * (i + 1) / 2 > t) --i;
+made the JIT fail with 'Unknown LLVM instruction: insertelement'. Run the
+same O3 pipeline with LoopVectorization and SLPVectorization off.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../llvm-to-backend/metal/LLVMToMetal.hpp     |  2 ++
+ .../llvm-to-backend/metal/LLVMToMetal.cpp     | 20 +++++++++++++++++++
+ 2 files changed, 22 insertions(+)
+
+diff --git a/include/hipSYCL/compiler/llvm-to-backend/metal/LLVMToMetal.hpp b/include/hipSYCL/compiler/llvm-to-backend/metal/LLVMToMetal.hpp
+index bc2da99d..70cc7c93 100644
+--- a/include/hipSYCL/compiler/llvm-to-backend/metal/LLVMToMetal.hpp
++++ b/include/hipSYCL/compiler/llvm-to-backend/metal/LLVMToMetal.hpp
+@@ -35,6 +35,8 @@ protected:
+   // Transform LLVM IR as much as required to backend-specific flavor
+   virtual bool toBackendFlavor(llvm::Module &M, PassHandler& PH) override;
+   virtual bool translateToBackendFormat(llvm::Module& FlavoredModule, std::string& out) override;
++  // The default O3 pipeline without the loop and SLP vectorizers: MetalEmitter has no vector types.
++  virtual bool optimizeFlavoredIR(llvm::Module& M, PassHandler& PH) override;
+ 
+   // Transfers kernel properties (e.g. kernel call conventions, additional metadata) from one kernel
+   // "From" to another "To". This is useful e.g. for dead argument elimination, where a new
+diff --git a/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp b/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
+index 8c6b3f38..6cfa2138 100644
+--- a/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
++++ b/src/compiler/llvm-to-backend/metal/LLVMToMetal.cpp
+@@ -630,6 +630,26 @@ bool LLVMToMetalTranslator::toBackendFlavor(llvm::Module &M, PassHandler& PH) {
+   return true;
+ }
+ 
++bool LLVMToMetalTranslator::optimizeFlavoredIR(llvm::Module& M, PassHandler& PH) {
++  // LoopVectorize runs by default in a TargetMachine-less PassBuilder, and its output (vector
++  // phis, insertelement, shufflevector, <N x i1> bitcasts) is not expressible by MetalEmitter.
++  llvm::PipelineTuningOptions PTO;
++  PTO.LoopVectorization = false;
++  PTO.SLPVectorization = false;
++  llvm::LoopAnalysisManager LAM;
++  llvm::FunctionAnalysisManager FAM;
++  llvm::CGSCCAnalysisManager CGAM;
++  llvm::ModuleAnalysisManager MAM;
++  llvm::PassBuilder PB{nullptr, PTO};
++  PB.registerModuleAnalyses(MAM);
++  PB.registerCGSCCAnalyses(CGAM);
++  PB.registerFunctionAnalyses(FAM);
++  PB.registerLoopAnalyses(LAM);
++  PB.crossRegisterProxies(LAM, FAM, CGAM, MAM);
++  PassHandler ScalarPH{&PB, &MAM};
++  return LLVMToBackendTranslator::optimizeFlavoredIR(M, ScalarPH);
++}
++
+ bool LLVMToMetalTranslator::translateToBackendFormat(llvm::Module& FlavoredModule, std::string& out) {
+   AddressSpaceMap ASMap = getAddressSpaceMap();
+ 
+-- 
+2.54.0 (Apple Git-157)
+

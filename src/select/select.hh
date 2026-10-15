@@ -10,6 +10,7 @@
 #include "coverage.hh"
 #include "vendor.hh"
 #include <batchlas/blas/enums.hh>
+#include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
@@ -41,18 +42,29 @@ namespace batchlas::select {
 
 /// The device facts a `can_run` predicate and the table lookup read (§5.1).
 struct Device {
-    std::string key;     ///< table key: "sm_120", "gfx90a", "intel", "cpu"
-    std::string family;  ///< "sm", "gfx", "intel", "cpu": borrowing stays in a family first
-    int arch_number = 0; ///< 120, 89, 90 (gfx90a), 0 for cpu
+    std::string key;     ///< table key: "sm_120", "gfx90a", "intel", "apple_m5_max", "cpu"
+    std::string family;  ///< "sm", "gfx", "intel", "apple", "cpu": borrowing stays in a family first
+    int arch_number = 0; ///< 120, 89, 90 (gfx90a), 5 (apple_m5_max), 0 for cpu
     bool is_gpu = false;
     bool has_sg32 = false;
     bool has_vendor = false;  ///< the asking op's library group (OpSpec::vendor) is compiled in
-    std::int64_t slm_budget = 0;  ///< LOCAL_MEM_SIZE less a 4 KiB reserve, bytes
+    std::int64_t slm_budget = 0;  ///< LOCAL_MEM_SIZE less a 4 KiB reserve, bytes: any work-group size
     int max_wg = 0;  ///< MAX_WORK_GROUP_SIZE
+    std::int64_t slm_per_item = 0;  ///< local memory the runtime adds per work-item (Metal: 8)
+    /// Work-groups in SYCL dim 0/1 of a 2-D/3-D launch (CUDA grid z/y); Metal: 2^32 - 1.
+    std::int64_t max_groups_yz = 65535;
+
+    /// slm_budget for a launch of @p wg work-items (>= slm_budget when wg <= max_wg).
+    constexpr std::int64_t slm_budget_for(int wg) const {
+        return wg >= max_wg ? slm_budget : slm_budget + slm_per_item * (max_wg - wg);
+    }
 };
 
 /// Key, family and arch only; the capability fields stay default. Tables and tests use it.
 BATCHLAS_API Device device_from_key(std::string_view key);
+
+/// The table key of an Apple GPU from its device name: "Apple M5 Max" -> "apple_m5_max".
+BATCHLAS_API std::string apple_device_key(std::string_view device_name);
 
 /// The facts of @p dev for backend @p b; memoized per (device, backend, has_vendor).
 BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor);
@@ -547,6 +559,7 @@ Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<
 template <Backend B, class T, class Choice, std::size_t N, class CanRun>
 Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
+    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
     return pick<B, T>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
 }
 
@@ -556,6 +569,7 @@ Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<C
 template <Backend B, class T, class Choice, std::size_t N, class CanRun, class Launch>
 decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
                    CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
+    ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
     const Device& d = device_of<B>(q, op.vendor);
     const Choice c = pick<B, T>(op, d, key, candidates, can_run);
     shape.scalar = scalar_kind_of<T>;

@@ -98,7 +98,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
     const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
-    const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
+    // every 3-D launch but small's: kMaxGridBatch on CUDA, the device's grid elsewhere
+    const bool grid = native && A.batch_size() <= d.max_groups_yz;
     return std::visit(overloaded{
         [&](Direct) { return grid && d.max_wg >= kDirectWg; },
         [&](Tiled) { return grid && d.max_wg >= kTiledWg; },
@@ -112,7 +113,7 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
             return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
-                   d.slm_budget >= cfg->slm_bytes();
+                   d.slm_budget_for(cfg->threads()) >= cfg->slm_bytes();
         },
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),

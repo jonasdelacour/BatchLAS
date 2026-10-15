@@ -374,7 +374,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
               spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        const bool prefer_vendor_projected_syev = (B != Backend::NETLIB) && projected_vendor_opted_in();
+        // The opt-in names the vendor solver; Backend::SYCL has none, so there it is ignored, not a throw.
+        const bool prefer_vendor_projected_syev =
+            (B != Backend::NETLIB) && (B != Backend::SYCL) && projected_vendor_opted_in();
 
         // syev picks its provider from the matrix shape, so workspace demand is NOT
         // monotone in the problem size: the 2*block_vectors restart problem can demand
@@ -1297,7 +1299,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const size_t ws_stas = projected_syev_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
-                if constexpr (B != Backend::NETLIB) if (projected_vendor_opted_in()) {
+                // The opt-in names the vendor solver; Backend::SYCL has none, so it is ignored there.
+                if constexpr (B != Backend::NETLIB && B != Backend::SYCL) if (projected_vendor_opted_in()) {
                     const size_t ws_xtax_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_restart_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);

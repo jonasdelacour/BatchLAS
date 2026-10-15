@@ -767,7 +767,10 @@ TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), TestFixture::kVendor ? 2u : 1u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     std::vector<std::pair<std::string, std::string>> want{{"16 16 16", "blocked"}};
     if (TestFixture::kVendor) want.emplace_back("48 48 48", "vendor");
     for (const auto& [key, algo] : want) {

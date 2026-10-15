@@ -66,11 +66,17 @@
 
 using namespace batchlas;
 // The vendor arm is whichever vendor library this build links: cuSOLVER/cuBLAS on
-// CUDA, rocSOLVER/rocBLAS on ROCm.
+// CUDA, rocSOLVER/rocBLAS on ROCm. Backend::SYCL (AdaptiveCpp Metal) has no vendor arm,
+// and no double kernels without device fp64.
 #if BATCHLAS_HAS_CUDA_BACKEND
 static constexpr Backend BE = Backend::CUDA;
+#define FACTOR_BENCH_FP64 1
 #elif BATCHLAS_HAS_ROCM_BACKEND
 static constexpr Backend BE = Backend::ROCM;
+#define FACTOR_BENCH_FP64 1
+#elif BATCHLAS_HAS_SYCL_BACKEND
+static constexpr Backend BE = Backend::SYCL;
+#define FACTOR_BENCH_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
 static double warm_s() { const char* e = std::getenv("WARM_S"); return e ? std::atof(e) : 1.5; }
@@ -693,9 +699,16 @@ int main(int argc, char** argv) {
     }
 
     if (c.type == "float")   return run<float>(c);
-    if (c.type == "double")  return run<double>(c);
     if (c.type == "cfloat")  return run<std::complex<float>>(c);
+#if FACTOR_BENCH_FP64
+    if (c.type == "double")  return run<double>(c);
     if (c.type == "cdouble") return run<std::complex<double>>(c);
+#else
+    if (c.type == "double" || c.type == "cdouble") {
+        std::fprintf(stderr, "factor_bench: %s needs device fp64, which this build lacks\n", c.type.c_str());
+        return 2;
+    }
+#endif
     std::fprintf(stderr, "factor_bench: unknown type %s\n", c.type.c_str());
     return 2;
 }

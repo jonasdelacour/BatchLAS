@@ -520,6 +520,57 @@ TEST_F(Select, BorrowedChoiceWarnsOncePerOp) {
               "batchlas: synth2 has no float table for sm_86; borrowing sm_89 (run tools/tune to tune this device)\n");
 }
 
+// An Apple GPU is keyed by its chip, from the device name; its family borrows its own chips
+// first (nearest at or below), then the sm tables, never ahead of them a CPU table.
+TEST(SelectDevice, AppleKeyIsTheChipName) {
+    EXPECT_EQ(sel::apple_device_key("Apple M5 Max"), "apple_m5_max");
+    EXPECT_EQ(sel::apple_device_key("Apple M2 Ultra"), "apple_m2_ultra");
+    EXPECT_EQ(sel::apple_device_key("  Apple   M4 "), "apple_m4");
+    EXPECT_EQ(sel::apple_device_key("M3 Pro"), "apple_m3_pro");
+    const sel::Device d = sel::device_from_key("apple_m5_max");
+    EXPECT_EQ(d.family, "apple");
+    EXPECT_EQ(d.arch_number, 5);
+    EXPECT_EQ(sel::device_from_key("apple_m12_ultra").arch_number, 12);
+    // A table name must survive split_file_name: one dot-free device token.
+    EXPECT_EQ(sel::apple_device_key("Apple M5.1 Max").find('.'), std::string::npos);
+}
+
+TEST_F(Select, AppleBorrowOrder) {
+    const std::string row = "uplo=L n=64 batch=1024 | vendor 1\n";
+    sel::testing::set_builtin_tables({file("sm_120", row), file("sm_89", row), file("gfx90a", row),
+                                      file("cpu", row), file("intel", row), file("apple_m4", row),
+                                      file("apple_m6", row)});
+    using V = std::vector<std::string>;
+    EXPECT_EQ(order_for("apple_m5_max"), (V{"apple_m4", "apple_m6", "sm_120", "sm_89", "gfx90a", "intel", "cpu"}));
+    EXPECT_EQ(order_for("apple_m4"), (V{"apple_m4", "apple_m6", "sm_120", "sm_89", "gfx90a", "intel", "cpu"}));
+    EXPECT_EQ(order_for("sm_89"), (V{"sm_89", "sm_120", "gfx90a", "intel", "apple_m6", "apple_m4", "cpu"}));
+    sel::testing::set_builtin_tables({file("sm_120", row), file("sm_89", row), file("cpu", row)});
+    EXPECT_EQ(order_for("apple_m5_max"), (V{"sm_120", "sm_89", "cpu"}));
+}
+
+TEST_F(Select, UntunedAppleGpuBorrowsAndWarnsOncePerOp) {
+    sel::testing::set_builtin_tables({file("sm_120", "uplo=L n=64 batch=1024 | tiny 1 | vendor 2\n"),
+                                      file("sm_89", "uplo=L n=64 batch=1024 | cta 1 | vendor 2\n")});
+    ::testing::internal::CaptureStderr();
+    EXPECT_EQ(S(choose("apple_m5_max", key("L", 64, 1024))), "tiny");
+    EXPECT_EQ(S(choose("apple_m5_max", key("L", 80, 4096))), "tiny");
+    EXPECT_EQ(::testing::internal::GetCapturedStderr(),
+              "batchlas: synth has no float table for apple_m5_max; borrowing sm_120 (run tools/tune to tune this "
+              "device)\n");
+}
+
+// describe() on a real Apple GPU: the chip key, not the generic "gpu" it had before.
+TEST(SelectDevice, DescribeKeysAnAppleGpuByItsName) {
+    const auto gpus = batchlas::Device::get_devices(batchlas::DeviceType::GPU);
+    if (gpus.empty() || gpus.front().get_vendor() != batchlas::Vendor::APPLE) GTEST_SKIP() << "no Apple GPU";
+    const sel::Device& d = sel::describe(gpus.front(), batchlas::Backend::SYCL, false);
+    EXPECT_EQ(d.key, sel::apple_device_key(gpus.front().get_name()));
+    EXPECT_EQ(d.key.rfind("apple_m", 0), 0u) << d.key;
+    EXPECT_EQ(d.family, "apple");
+    EXPECT_GT(d.arch_number, 0);
+    EXPECT_EQ(d.slm_per_item, 8);
+}
+
 TEST_F(Select, CpuWithoutItsOwnTableTakesTheLastResortSilently) {
     sel::testing::set_builtin_tables({file("sm_120", "uplo=L n=64 batch=1024 | cta 1 | vendor 2\n")});
     ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
@@ -901,7 +952,11 @@ TEST_F(Select, TranscribedRowsWalkInRankOrderAndTraceAsTranscribed) {
 // library group: each group's own compile-time predicate, none for an op without a vendor.
 TEST(SelectDevice, VendorFlagIsTheOpsLibraryGroupAndPartOfTheMemoKey) {
     const batchlas::Device dev = batchlas::Device::default_device();
+#if BATCHLAS_HAS_SYCL_BACKEND && !BATCHLAS_HAS_CUDA_BACKEND
+    constexpr auto B = batchlas::Backend::SYCL;  // the Metal build's only GPU backend
+#else
     constexpr auto B = batchlas::Backend::CUDA;
+#endif
     const sel::Device& without = sel::describe(dev, B, false);
     const sel::Device& with = sel::describe(dev, B, true);
     EXPECT_FALSE(without.has_vendor);

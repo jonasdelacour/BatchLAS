@@ -300,6 +300,12 @@ TEST(OptionsApi, CoexistsWithPositionalAndExplicitBackendSpellings) {
                             Transpose::NoTrans, Transpose::NoTrans);
     }
 #endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+    if (q.backend() == Backend::SYCL) {
+        (void)gemm<Backend::SYCL>(q, A.view(), B.view(), C.view(), 1.0f, 0.0f,
+                            Transpose::NoTrans, Transpose::NoTrans);
+    }
+#endif
     q.wait();
     SUCCEED();
 }

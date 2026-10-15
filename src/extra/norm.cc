@@ -8,6 +8,7 @@
 #include "../queue.hh"
 #include "../math-helpers.hh"
 #include "../ops/syev/vendor.hh"
+#include "../sycl/sscp_target.hh"
 
 namespace batchlas
 {   
@@ -38,18 +39,26 @@ namespace batchlas
         UnifiedVector<Real> eigenvalues(static_cast<size_t>(batch_size) * n);
         auto eigen_span = eigenvalues.to_span();
 
-        const size_t ws_bytes = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                        A_copy,
-                                                                        eigen_span,
-                                                                        JobType::NoEigenVectors,
-                                                                        Uplo::Lower);
-        auto workspace = ctx.workspace(ws_bytes);
-        Event e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx,
-                                             A_copy,
-                                             eigen_span,
-                                             JobType::NoEigenVectors,
-                                             Uplo::Lower,
-                                             workspace.span());
+        Event e;
+        if constexpr (B == Backend::SYCL) {
+            // No vendor solver: the public syev's native kernels on the queue's device.
+            auto workspace = ctx.workspace(
+                syev_buffer_size<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower));
+            e = syev<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower, workspace.span());
+        } else {
+            const size_t ws_bytes = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
+                                                                            A_copy,
+                                                                            eigen_span,
+                                                                            JobType::NoEigenVectors,
+                                                                            Uplo::Lower);
+            auto workspace = ctx.workspace(ws_bytes);
+            e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx,
+                                                 A_copy,
+                                                 eigen_span,
+                                                 JobType::NoEigenVectors,
+                                                 Uplo::Lower,
+                                                 workspace.span());
+        }
         ctx.enqueue(e);
 
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
@@ -84,6 +93,16 @@ namespace batchlas
         #if BATCHLAS_HAS_ROCM_BACKEND
         if (is_gpu && vendor == Vendor::AMD) {
             return norm_spectral_vendor_impl<Backend::ROCM>(ctx, A, norms);
+        }
+        #endif
+
+        #if BATCHLAS_HAS_SYCL_BACKEND
+        if (is_gpu && ctx.backend() == Backend::SYCL) {
+            if constexpr (detail::is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
+                detail::throw_no_device_fp64(ctx, "norm");
+            } else {
+                return norm_spectral_vendor_impl<Backend::SYCL>(ctx, A, norms);
+            }
         }
         #endif
 
@@ -126,40 +145,57 @@ namespace batchlas
                     }
                     result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
-                    // Initialize local memory with zeros for column sums
-                    for (int j = local_idx; j < cols; j += local_size) {
-                        local_mem[j] = 0;
-                    }
-                    sycl::group_barrier(cta);
+                    // Metal has no floating atomics on threadgroup memory: one item owns each sum.
+                    if (sycl_impl::on_metal()) {
+                        for (int k = local_idx; k < cols; k += local_size) {
+                            float_t<T> s = 0;
+                            for (int i = 0; i < rows; ++i) s += internal::abs(data_span[k * ld + i]);
+                            local_mem[k] = s;
+                        }
+                    } else {
+                        // Initialize local memory with zeros for column sums
+                        for (int j = local_idx; j < cols; j += local_size) {
+                            local_mem[j] = 0;
+                        }
+                        sycl::group_barrier(cta);
 
-                    // Sum absolute values for each column across all rows
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                        sycl::memory_scope::work_group>
-                            atomic_local_mem(local_mem[col]);
-                        atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        // Sum absolute values for each column across all rows
+                        for (int j = local_idx; j < rows * cols; j += local_size) {
+                            auto col = j / rows;
+                            auto row = j % rows;
+                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
+                                            sycl::memory_scope::work_group>
+                                atomic_local_mem(local_mem[col]);
+                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        }
                     }
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
                     result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
-                    // Initialize local memory with zeros for row sums
-                    for (int j = local_idx; j < rows; j += local_size) {
-                        local_mem[j] = 0;
-                    }
-                    sycl::group_barrier(cta);
+                    if (sycl_impl::on_metal()) {
+                        for (int k = local_idx; k < rows; k += local_size) {
+                            float_t<T> s = 0;
+                            for (int i = 0; i < cols; ++i) s += internal::abs(data_span[i * ld + k]);
+                            local_mem[k] = s;
+                        }
+                    } else {
+                        // Initialize local memory with zeros for row sums
+                        for (int j = local_idx; j < rows; j += local_size) {
+                            local_mem[j] = 0;
+                        }
+                        sycl::group_barrier(cta);
 
-                    // Sum absolute values for each row across all columns
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                        sycl::memory_scope::work_group>
-                            atomic_local_mem(local_mem[row]);
-                        atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        // Sum absolute values for each row across all columns
+                        for (int j = local_idx; j < rows * cols; j += local_size) {
+                            auto col = j / rows;
+                            auto row = j % rows;
+                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
+                                            sycl::memory_scope::work_group>
+                                atomic_local_mem(local_mem[row]);
+                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                        }
                     }
                     sycl::group_barrier(cta);
 
@@ -188,6 +224,7 @@ namespace batchlas
               const NormType norm_type,
               const Span<float_t<T>> norms)
     {
+        detail::require_device_fp64<T>(ctx, "norm");
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
                 throw batchlas::unsupported("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
@@ -203,6 +240,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
+        detail::require_device_fp64<T>(ctx, "norm");
         // Allocate memory for the results
         UnifiedVector<float_t<T>> norms(A.batch_size());
         if (norm_type == NormType::Spectral) {

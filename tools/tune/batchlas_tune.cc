@@ -40,6 +40,11 @@
 #include <sys/file.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <climits>
+#include <cstdint>
+#include <mach-o/dyld.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -61,6 +66,16 @@
 
 #ifndef BATCHLAS_TUNE_SOURCE_DIR
 #define BATCHLAS_TUNE_SOURCE_DIR "."
+#endif
+
+// POSIX: <unistd.h> need not declare it, and macOS does not.
+extern char** environ;
+
+// The guard reads nvidia-smi; an Apple GPU has no equivalent, so macOS measures unguarded.
+#ifdef __APPLE__
+constexpr bool kHasGpuGuard = false;
+#else
+constexpr bool kHasGpuGuard = true;
 #endif
 
 namespace fs = std::filesystem;
@@ -88,7 +103,7 @@ struct Opts {
     int reps = 16, passes = 2, ld_pad = 0;
     double warm = 1.5, remeasure = 0.10, refine_ratio = 1.1, cap_gib = 4.0, cell_timeout = 1800, guard_wait = 300;
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
-    bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
+    bool jit = true, refine = true, guard = kHasGpuGuard, devices_given = false, dtype_given = false;
     bool allow_idle_foreign = false, allow_dirty = false, only_named = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
     double audit_fraction = -1;  // tiered: < 0 is the tier's
@@ -134,8 +149,16 @@ std::string capture(const std::string& cmd) {
 
 std::string self_exe() {
     std::error_code ec;
+#ifdef __APPLE__
+    char buf[PATH_MAX];
+    std::uint32_t size = sizeof(buf);
+    if (::_NSGetExecutablePath(buf, &size) != 0) die("cannot resolve the executable path");
+    const auto p = fs::canonical(buf, ec);
+    if (ec) die(std::string("cannot resolve ") + buf);
+#else
     const auto p = fs::read_symlink("/proc/self/exe", ec);
     if (ec) die("cannot resolve /proc/self/exe");
+#endif
     return p.string();
 }
 
@@ -524,6 +547,9 @@ std::vector<std::string> Driver::guard(int gpu) {
 // One device key for the run (tables are per device), and the §10 / §13 warnings.
 std::string Driver::preflight() {
     std::string name;
+    if (!kHasGpuGuard)
+        std::fprintf(stderr, "batchlas_tune: warning: no GPU guard on this platform; nothing stops another process "
+                             "measuring beside this run (docs/developer/agent-guide.md §10)\n");
     for (int gpu : o_.devices) {
         std::string n;
         const std::string k = device_key(gpu, &n);
@@ -1050,8 +1076,16 @@ private:
 };
 
 // --plan names the device from nvidia-smi's compute capability (no CUDA context), as select.cc does.
+// macOS has no CUDA context to avoid: an --info child names the Metal device.
 std::string plan_device_key(const Opts& o) {
     if (!o.device_key.empty()) return o.device_key;
+#ifdef __APPLE__
+    const std::string info = capture("'" + self_exe() + "' --info --result /dev/stdout 2>/dev/null");
+    const auto at = info.find("\"device\": \"");
+    if (at == std::string::npos) die("--plan: cannot name the GPU (" + info + "); pass --device-key");
+    const auto from = at + 11;
+    return info.substr(from, info.find('"', from) - from);
+#endif
     const std::string gpu = std::to_string(o.devices.empty() ? 0 : o.devices[0]);
     const std::string cc = capture("nvidia-smi --id=" + gpu + " --query-gpu=compute_cap --format=csv,noheader 2>/dev/null");
     const auto dot = cc.find('.');

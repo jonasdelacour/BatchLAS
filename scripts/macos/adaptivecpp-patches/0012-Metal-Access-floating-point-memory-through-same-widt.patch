@@ -1,0 +1,84 @@
+From 4d926ac45ee6451db64921d9f6e46a8fd685be43 Mon Sep 17 00:00:00 2001
+From: jonaslacour <jonaslacour1@gmail.com>
+Date: Tue, 13 Oct 2026 04:23:31 +0200
+Subject: [PATCH] [Metal] Access floating-point memory through same-width
+ unsigned types
+
+LLVM IR memory is untyped. After InstCombine, a float that went through an
+integer shuffle (simd_shuffle on the i32 bit pattern) is often stored as i32
+into a float object and read back later as float. The emitter spelled that
+as `*((thread uint*)p) = x` followed by `y = *((thread float*)q)`. MSL is
+compiled with strict aliasing, so the Metal compiler assumed the two do not
+alias and forwarded the stale float to the load.
+
+Observed in BatchLAS's register-resident geqrf kernel: the diagonal R(j,j)
+kept its pre-reflector value, while tau and the reflector tail were right.
+
+Emit every float (half) load and store through uint (ushort) plus as_type,
+so all 32-bit (16-bit) scalar accesses share one alias class.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01EPytkCH8xVwQyJeGegbGzF
+---
+ .../llvm-to-backend/metal/Emitter.cpp         | 31 +++++++++++++++++--
+ 1 file changed, 29 insertions(+), 2 deletions(-)
+
+diff --git a/src/compiler/llvm-to-backend/metal/Emitter.cpp b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+index b1c0c4df..6adff6c4 100644
+--- a/src/compiler/llvm-to-backend/metal/Emitter.cpp
++++ b/src/compiler/llvm-to-backend/metal/Emitter.cpp
+@@ -755,6 +755,22 @@ bool MetalEmitter::emitBasicBlock(const BasicBlock* BB, int level) {
+   return success;
+ }
+ 
++// LLVM IR memory is untyped: after InstCombine a value that went through an integer
++// shuffle is often stored as i32 into a float object and read back as float. MSL is
++// compiled with strict aliasing, so a `uint` store and a `float` load of the same address
++// are assumed not to alias and the load is forwarded a stale value. Accessing every
++// floating-point scalar through its same-width unsigned type keeps all such accesses in
++// one alias class.
++static std::string integerAccessType(const std::string& elemType) {
++  if (elemType == "float") {
++    return "uint";
++  }
++  if (elemType == "half") {
++    return "ushort";
++  }
++  return elemType;
++}
++
+ bool MetalEmitter::emitInstruction(const Instruction& I, int level) {
+   std::string name = valueName(&I);
+ 
+@@ -784,7 +800,14 @@ bool MetalEmitter::emitInstruction(const Instruction& I, int level) {
+       auto structName = "__struct_ptr_to_" + elemAddrSpace;
+       os << indent(level) << name << " = ((" << addrSpace << " " << structName << "*)" << ptr << ")->value; " << "// " << instToString(I) << "\n";
+     } else {
+-      os << indent(level) << name << " = *((" << addrSpace << " " << elemType << "*)" << ptr << "); " << "// " << instToString(I) << "\n";
++      // Access floating-point memory through the same-width unsigned type (see
++      // integerAccessType): the Metal compiler applies type-based alias analysis.
++      std::string accessType = integerAccessType(elemType);
++      std::string access = "*((" + addrSpace + " " + accessType + "*)" + ptr + ")";
++      if (accessType != elemType) {
++        access = "as_type<" + elemType + ">(" + access + ")";
++      }
++      os << indent(level) << name << " = " << access << "; " << "// " << instToString(I) << "\n";
+     }
+     return true;
+   }
+@@ -803,7 +826,11 @@ bool MetalEmitter::emitInstruction(const Instruction& I, int level) {
+       auto structName = "__struct_ptr_to_" + elemAddrSpace;
+       os << indent(level) << "((" << addrSpace << " " << structName << "*)" << ptr << ")->value = " << val << "; " << "// " << instToString(I) << "\n";
+     } else {
+-      os << indent(level) << "*((" << addrSpace << " " << elemType << "*)" << ptr << ") = " << val << "; " << "// " << instToString(I) << "\n";
++      std::string accessType = integerAccessType(elemType);
++      if (accessType != elemType) {
++        val = "as_type<" + accessType + ">(" + val + ")";
++      }
++      os << indent(level) << "*((" << addrSpace << " " << accessType << "*)" << ptr << ") = " << val << "; " << "// " << instToString(I) << "\n";
+     }
+     return true;
+   }
+-- 
+2.54.0 (Apple Git-157)
+

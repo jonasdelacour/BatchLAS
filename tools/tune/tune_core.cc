@@ -2,12 +2,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <stdexcept>
 
@@ -325,8 +327,14 @@ double Record::number(const std::string& k) const {
     double v = std::numeric_limits<double>::quiet_NaN();
     if (it == s.end() || it->second == "null") return v;
     const auto& t = it->second;
-    if (std::from_chars(t.data(), t.data() + t.size(), v).ptr != t.data() + t.size())
+    // Not floating from_chars: Apple libc++ (brew llvm@21) marks it unavailable. Classic
+    // locale, and the same rejections from_chars made (leading '+' or whitespace, trailing junk).
+    if (t.empty() || t.front() == '+' || std::isspace(static_cast<unsigned char>(t.front())))
         return std::numeric_limits<double>::quiet_NaN();
+    std::istringstream in(t);
+    in.imbue(std::locale::classic());
+    in >> std::noskipws >> v;
+    if (in.fail() || in.peek() != std::char_traits<char>::eof()) return std::numeric_limits<double>::quiet_NaN();
     return v;
 }
 

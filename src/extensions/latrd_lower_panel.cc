@@ -998,6 +998,10 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     // multiplexed onto a thread pool), so the barrier is unsound there and the
     // legacy single-work-group kernel must be used instead.
     if (q.device().type != DeviceType::GPU) return out;
+    // Nor on Metal, not even when forced: Metal promises no co-residency of work-groups, and
+    // MSL atomics are memory_order_relaxed only, so the acq_rel handshake is not what runs.
+    // A hang there also stalls the display, which shares the GPU.
+    if (impl::is_metal(impl::backend_of(*q))) return out;
 
     const int cus = static_cast<int>(q.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     const int resident_cap = std::max(1, cus);

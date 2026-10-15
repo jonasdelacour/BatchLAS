@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <string_view>
@@ -37,9 +38,11 @@ std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
 // Three hard ceilings, not tuned: the batch in grid z (expand_mirrored, accumulate_hermitian), the
 // int-linearised SYCL range (2^31 elements of the PADDED expanded_ld x n x batch scratch) and a quarter
 // of global memory (BATCHLAS_EXPAND_MAX_BYTES lowers it). Past any, the caller takes its no-scratch route.
+// max_grid_z is the device's grid z (select::Device::max_groups_yz; CUDA's 65535 by default, unbounded on Metal).
 template <typename T>
-inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    if (batch > ::batchlas::ops::symm::kMaxGridBatch) {
+inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes,
+                           std::int64_t max_grid_z = ::batchlas::ops::symm::kMaxGridBatch) {
+    if (batch > max_grid_z) {
         return false;
     }
     const std::size_t elements = static_cast<std::size_t>(expanded_ld<T>(n)) *

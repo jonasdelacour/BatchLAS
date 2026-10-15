@@ -114,7 +114,8 @@ namespace batchlas {
         ROCM,    ///< AMD GPU: rocBLAS / rocSOLVER / rocSPARSE and the native SYCL kernels.
         MKL,     ///< Reserved; no dispatch target, never available.
         MAGMA,   ///< Reserved; no dispatch target, never available.
-        SYCL,    ///< Reserved; no dispatch target, never available.
+        SYCL,    ///< Native SYCL kernels on a GPU with no vendor library (AdaptiveCpp Metal); float and
+                 ///< complex<float> only unless the build has device fp64 (`BATCHLAS_HAS_DEVICE_FP64`).
         NETLIB   ///< Host CBLAS / LAPACKE; the fallback for any device.
         // Add more as needed
     };

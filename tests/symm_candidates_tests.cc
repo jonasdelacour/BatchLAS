@@ -481,12 +481,15 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// expand_mirrored and its gemm put the batch in grid z: 65535 items launch, 65536 do not, so
-// the pin refuses 65536 and Auto takes the vendor (vendor-free: no route).
+// expand_mirrored and its gemm put the batch in grid z: 65535 items launch, 65536 do not on
+// CUDA, so the pin refuses 65536 and Auto takes the vendor (vendor-free: no route). Metal has
+// no such cap: both launch.
 TYPED_TEST(SymmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const int ceiling = int(sy::kMaxGridBatch);
+    const select::Device& dev = select::device_of<B>(*this->ctx);
+    ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
+    const int ceiling = int(test_utils::kCudaGridYZ);
     for (int batch : {ceiling, ceiling + 1}) {
         Matrix<T, MatrixFormat::Dense> A(1, 1, batch), Bm(1, 2, batch), Cm(1, 2, batch);
         A.fill(T(2)), Bm.fill(T(3)), Cm.fill(T(1));
@@ -498,10 +501,10 @@ TYPED_TEST(SymmCandidates, GridBatchCeiling) {
         Matrix<T, MatrixFormat::Dense> Cd(1, 2, batch);
         Cd.fill(T(1));
         const bool launches = this->direct(C{sy::Expand{}}, A, Bm, Cd, T(1), T(1), Side::Left, Uplo::Lower, &why);
-        EXPECT_EQ(launches, batch <= ceiling) << "direct expand at batch " << batch << ": " << why;
+        EXPECT_EQ(launches, batch <= dev.max_groups_yz) << "direct expand at batch " << batch << ": " << why;
         {
             const Pin pin("symm", C{sy::Expand{}});
-            if (batch <= ceiling) {
+            if (batch <= dev.max_groups_yz) {
                 call();
                 for (int it : {0, batch / 2, batch - 1}) EXPECT_EQ(double(Cm(0, 1, it)), 7.0) << "item " << it;
                 continue;
@@ -861,7 +864,10 @@ TYPED_TEST(SymmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string klo = "16 5 16", khi = "7 40 40";
     ASSERT_TRUE(rows.count(klo)) << "no Left 16x5 row";
     ASSERT_TRUE(rows.count(khi)) << "no Right 7x40 row";
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     const std::string scalar = std::is_same_v<T, float> ? "float" : "double";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     const std::string hi_algo = TestFixture::kVendor ? "vendor" : "expand";

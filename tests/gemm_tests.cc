@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <cstdio>
 #include <cstring>
 
 #include <batchlas/backend_config.h>
@@ -76,8 +77,9 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
         ADD_FAILURE() << word << " is not a reg_configs row";
         return false;
     }
-    const auto budget = static_cast<std::int64_t>(
-        resident::device_slm_budget(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    // At the tile's own width: Metal's runtime scratch grows with it (select::Device::slm_budget_for).
+    const std::int64_t budget =
+        select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
     if (cfg->slm_bytes() <= budget || !NativePinsRun(ctx)) return true;
     EXPECT_TRUE(test_utils::kSlmCappedAt48KiB)
         << word << " needs " << cfg->slm_bytes() << " B of local memory; this device budgets " << budget;
@@ -153,6 +155,9 @@ void RunForcedSyclGemmKernelCheck(Queue& ctx,
                                   ScalarType beta = ScalarType(1),
                                   double tol_scale = 75) {
     SKIP_UNLESS_NATIVE(ctx);
+    if (int rm, rn, rk, ru; std::sscanf(kernel_name, "reg:m=%d:n=%d:k=%d:u=%d", &rm, &rn, &rk, &ru) == 4 &&
+                            !RegTileFitsOrIsRefused(ctx, kernel_name, rm, rn, rk, ru))
+        GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead";
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;

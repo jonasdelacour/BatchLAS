@@ -124,7 +124,7 @@ TYPED_TEST(Syr2kTest, LeavesTheOtherTriangleUntouched) {
     }
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 namespace {
 
 struct Syr2kShape {
@@ -376,7 +376,7 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
 // reads every non-NoTrans as Trans, so the launch's fold is defensive and this cannot see it removed.
 TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
     Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is CUDA GPU only";
+    if (ctx.device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is native GPU only";
     const int n = 200, k = 53, batch = 5, lda = k + 3, sa = lda * n + 7, ldc = n + 2, sc = ldc * n + 5;
     auto fill = [](UnifiedVector<float>& v, unsigned seed) {
         for (std::size_t e = 0; e < v.size(); ++e) v[e] = float(int((e * 2654435761u + seed) % 2001) - 1000) / 1000.f;
@@ -391,8 +391,8 @@ TEST(Syr2kTriangular, RealConjTransEqualsTrans) {
     const float alpha = 0.9f, beta = -0.35f;
     {
         ScopedEnvVar route("BATCHLAS_SYR2K_ROUTE", "triangular");
-        syr2k<Backend::CUDA, float>(ctx, A, B, Ct, alpha, beta, Uplo::Lower, Transpose::Trans);
-        syr2k<Backend::CUDA, float>(ctx, A, B, Cc, alpha, beta, Uplo::Lower, Transpose::ConjTrans);
+        syr2k(ctx, A, B, Ct, {.alpha = alpha, .beta = beta, .uplo = Uplo::Lower, .trans = Transpose::Trans});
+        syr2k(ctx, A, B, Cc, {.alpha = alpha, .beta = beta, .uplo = Uplo::Lower, .trans = Transpose::ConjTrans});
         ctx.wait();
     }
     std::size_t differ = 0;

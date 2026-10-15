@@ -263,14 +263,16 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the tile kernel is a GPU kernel";
+        grid_yz = test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family);
     }
+    static inline std::int64_t grid_yz = test_utils::kCudaGridYZ;  // the tile kernel's grid ceiling
 
     // The limit oracle, from the kernel's launch geometry rather than syr2k.cc's can_run.
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<s2::Vendor>(c)) return kVendor;
         const long t = (s.n + 127) / 128;
-        return kFloat && B == Backend::CUDA && s.n >= 1 && s.k >= 1 &&
-               s.batch >= 1 && s.batch <= 65535 && t * (t + 1) / 2 <= 65535;
+        return kFloat && (B == Backend::CUDA || B == Backend::SYCL) && s.n >= 1 && s.k >= 1 &&
+               s.batch >= 1 && s.batch <= grid_yz && t * (t + 1) / 2 <= grid_yz;
     }
     // `vendor` is a class word: with no vendor it falls back to Auto (with a warning), §5.3.
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<s2::Vendor>(c) && !kVendor; }
@@ -418,17 +420,19 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
 // refused at 65536 (without the term that launch throws from the driver; the break is in
 // docs/design/flat-kernel-selection.md §12). Auto past it takes the vendor (no route vendor-free).
 // The tile list is grid y: a launch at n = 46208 (361 tiles a side, 65341 tiles), a refusal at
-// 46209 (65703 tiles).
+// 46209 (65703 tiles). Metal has neither cap: the launches one past CUDA's ceilings run too.
 TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
     using T = typename TestFixture::T;
     if constexpr (!TestFixture::kFloat) GTEST_SKIP() << "no native family for this dtype";
     else {
         Queue& q = *this->ctx;
-        const int ceiling = int(s2::kMaxGridBatch);
+        const select::Device& dev = select::device_of<TestFixture::B>(q);
+        ASSERT_EQ(dev.max_groups_yz, TestFixture::grid_yz) << dev.key;
+        const int ceiling = int(test_utils::kCudaGridYZ);
         for (int batch : {ceiling, ceiling + 1}) {
             UnifiedVector<T> a(std::size_t(batch) * 2, T(0.5)), c(std::size_t(batch) * 4, T(1));
             const MVof<T> A(a.data(), 2, 1, 2, 2, batch), Cm(c.data(), 2, 2, 2, 4, batch);
-            const bool fits = batch <= ceiling;
+            const bool fits = batch <= TestFixture::grid_yz;
             {
                 const Pin pin("syr2k", C{s2::Triangular{}});
                 if (fits) {
@@ -477,8 +481,19 @@ TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
         {
             const MVof<T> A(abuf, n_past, 1, n_past, n_past, 1), Cm(cbuf, n_past, n_past, n_past, n_past * n_past, 1);
             const Pin pin("syr2k", C{s2::Triangular{}});
-            EXPECT_THROW(((void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans)),
-                         std::invalid_argument);
+            auto call = [&] {
+                (void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
+                q.wait();
+            };
+            const long t = (n_past + 127) / 128;
+            if (t * (t + 1) / 2 > TestFixture::grid_yz) {
+                EXPECT_THROW(call(), std::invalid_argument);
+            } else {
+                call();
+                T probe = T(0);
+                sq.memcpy(&probe, cbuf + std::size_t(n_past) * n_past - 1, sizeof(T)).wait();
+                EXPECT_EQ(probe, T(2)) << "last diagonal element past CUDA's tile ceiling";
+            }
         }
         sycl::free(cbuf, sq);
         sycl::free(abuf, sq);
@@ -834,7 +849,10 @@ TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     const bool f = TestFixture::kFloat;
     const std::string algo_lo = f ? "triangular" : "vendor";

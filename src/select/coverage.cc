@@ -82,6 +82,7 @@ const char* backend_name(Backend b) {
     switch (b) {
         case Backend::CUDA:   return "CUDA";
         case Backend::ROCM:   return "ROCM";
+        case Backend::SYCL:   return "SYCL";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
         case Backend::AUTO:   return "AUTO";
@@ -230,6 +231,9 @@ std::string static_table() {
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
     append_static_rows<Backend::ROCM>(out);
+#endif
+#if BATCHLAS_HAS_SYCL_BACKEND
+    append_static_rows<Backend::SYCL>(out);
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
     append_static_rows<Backend::NETLIB>(out);

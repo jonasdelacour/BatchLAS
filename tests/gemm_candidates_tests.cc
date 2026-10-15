@@ -72,8 +72,10 @@ const char* tw(Transpose t) { return t == kN ? "N" : (t == kT ? "T" : "C"); }
 
 // ---- the oracle: the compiled kernels as the pre-P3.4 KernelVariant enum named them ----
 
-// slm: the launch's local memory in bytes as the CUDA driver saw it (cuLaunchKernel interposer log),
-// set where it exceeds 45,056 B (48 KiB less the reserve), the smallest budget a device here reports.
+// slm: the launch's local memory in bytes, set where it exceeds 16 KiB (an Apple GPU's budget is
+// ~28 KiB, CUDA's smallest 45,056 B). The 49,920 B rows are what the CUDA driver saw
+// (cuLaunchKernel interposer log); the others are the kernels' staged tiles, 4 B x stages x
+// ((m+1)k + (k+1)n), 128x128 its own layout.
 struct RegRow {
     int m, n, k, u;
     std::vector<std::string> forms;
@@ -81,7 +83,11 @@ struct RegRow {
     std::int64_t slm = 0;
 };
 // The device's resident::device_slm_budget, set by the fixture: a reg tile above it is refused.
+// An Apple GPU's runtime takes 8 B per work-item from it, so a group narrower than the device
+// maximum stages that much more per missing item.
 std::int64_t g_slm_budget = std::numeric_limits<std::int64_t>::max();
+std::int64_t g_slm_per_item = 0;
+int g_max_wg = 0;
 const std::vector<RegRow>& reg_rows() {
     static const std::vector<RegRow> rows{
         {32, 32, 8, 1, {"NN"}, {{"NN", "gemm_sycl_register_32x32"}}},
@@ -91,12 +97,14 @@ const std::vector<RegRow>& reg_rows() {
           {"TN", "gemm_sycl_register_64x64_k16_tn"}, {"TT", "gemm_sycl_register_64x64_k16_tt"}}},
         {128, 32, 16, 1, {"NN", "NT", "TN", "TT"},
          {{"NN", "gemm_sycl_register_128x32_k16"}, {"NT", "gemm_sycl_register_128x32_k16_nt"},
-          {"TN", "gemm_sycl_register_128x32_k16_tn"}, {"TT", "gemm_sycl_register_128x32_k16_tt"}}},
+          {"TN", "gemm_sycl_register_128x32_k16_tn"}, {"TT", "gemm_sycl_register_128x32_k16_tt"}},
+         20864},
         {128, 32, 32, 1, {"NN", "NT", "TN", "TT"},
          {{"NN", "gemm_sycl_register_128x32_k32_s2_u1_generic"},
           {"NN+aligned", "gemm_sycl_register_128x32_k32_s2_u1_aligned"},
           {"NT", "gemm_sycl_register_128x32_k32_nt"}, {"TN", "gemm_sycl_register_128x32_k32_tn"},
-          {"TT", "gemm_sycl_register_128x32_k32_tt"}}},
+          {"TT", "gemm_sycl_register_128x32_k32_tt"}},
+         41472},
         {128, 64, 16, 1, {"NT", "TN", "TT"},
          {{"NT", "gemm_sycl_register_128x64_k16_nt"}, {"TN", "gemm_sycl_register_128x64_k16_tn"},
           {"TT", "gemm_sycl_register_128x64_k16_tt"}}},
@@ -111,7 +119,8 @@ const std::vector<RegRow>& reg_rows() {
           {"NN+aligned", "gemm_sycl_register_128x64_k32_large_u2_aligned"}},
          49920},
         {128, 128, 8, 1, {"NN"},
-         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"}}},
+         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"}},
+         25088},
     };
     return rows;
 }
@@ -148,6 +157,13 @@ const RegRow* reg_row(const og::Reg& r) {
         if (row.m == r.m && row.n == r.n && row.k == r.k && row.u == r.u) return &row;
     return nullptr;
 }
+// Whether the row's staged tiles fit the budget of its own launch width.
+bool reg_fits(const RegRow& row) {
+    int wg = g_max_wg;
+    for (const og::RegCfg& c : og::reg_configs)
+        if (c.m == row.m && c.n == row.n && c.k == row.k && c.u == row.u) wg = c.threads();
+    return row.slm <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
+}
 const WideRow* wide_row(const og::Wide& w) {
     for (const auto& row : wide_rows())
         if (row.m == w.m && row.n == w.n && row.k == w.k) return &row;
@@ -165,7 +181,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
         [&](const og::Reg& r) {
             const RegRow* row = reg_row(r);
             const std::string f = reg_form(ta, tb);
-            return std::is_same_v<T, float> && row && row->slm <= g_slm_budget &&
+            return std::is_same_v<T, float> && row && reg_fits(*row) &&
                    std::find(row->forms.begin(), row->forms.end(), f) != row->forms.end();
         },
         [&](const og::Wide& w) {
@@ -436,6 +452,8 @@ protected:
         g_slm_budget = static_cast<std::int64_t>(
             resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
         if (g_slm_budget < 49920) EXPECT_TRUE(test_utils::kSlmCappedAt48KiB) << "budget " << g_slm_budget;
+        g_slm_per_item = select::device_of<B>(*this->ctx).family == "apple" ? 8 : 0;
+        g_max_wg = int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     }
 
     static bool expect_runs(const C& c, const Spec& s) {
@@ -526,8 +544,8 @@ const int kShapes[][3] = {{128, 128, 64}, {100, 70, 37}, {48, 48, 48}, {33, 17, 
 
 // §8.1: each candidate on every (ta, tb), both layouts, every shape. Accepted shapes run and
 // are right; refused ones throw from the pin. The oracle is the old KernelVariant list.
-// can_run's local memory term against the oracle's driver-observed bytes: every row above the
-// smallest budget (45,056 B) agrees with RegCfg::slm_bytes, and no other row comes near it.
+// can_run's local memory term against the oracle's bytes: every row above 16 KiB agrees with
+// RegCfg::slm_bytes, and no other row comes near any device's budget.
 TEST(GemmRegSlm, SlmBytesMatchWhatTheDriverWasAskedFor) {
     for (const og::RegCfg& c : og::reg_configs) {
         const auto row = std::find_if(reg_rows().begin(), reg_rows().end(), [&](const RegRow& r) {
@@ -535,7 +553,7 @@ TEST(GemmRegSlm, SlmBytesMatchWhatTheDriverWasAskedFor) {
         });
         ASSERT_NE(row, reg_rows().end()) << c.m << "x" << c.n << "x" << c.k;
         if (row->slm > 0) EXPECT_EQ(c.slm_bytes(), row->slm) << c.m << "x" << c.n << "x" << c.k << " u" << c.u;
-        else EXPECT_LE(c.slm_bytes(), 45056) << c.m << "x" << c.n << "x" << c.k << " u" << c.u;
+        else EXPECT_LE(c.slm_bytes(), 16384) << c.m << "x" << c.n << "x" << c.k << " u" << c.u;
     }
 }
 
@@ -798,12 +816,16 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
 }
 
-// can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535), so a
-// pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto serve the
-// larger batch (real: the transcribed rows' trailing small; complex: the vendor, if any).
+// can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535 on
+// CUDA), so a pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto
+// serve the larger batch (real: the transcribed rows' trailing small; complex: the vendor, if
+// any). Metal has no group-count cap there: one past CUDA's ceiling is a launch too.
 TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     using T = typename TestFixture::T;
-    const int ceiling = int(og::kMaxGridBatch);
+    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
+    ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
+    const int ceiling = int(test_utils::kCudaGridYZ);
+    const bool capped = dev.max_groups_yz <= ceiling;
     const Spec at{kN, kN, 2, 2, 2, ceiling, Layout::Packed};
     const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
     for (const C& c : og::candidates<T>()) {
@@ -813,7 +835,11 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
         expect_gemm(*this->ctx, p, name(c, at));
         auto q = make_problem<T>(past);
-        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
+        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
+        if (!capped) {
+            expect_gemm(*this->ctx, q, name(c, past));
+            continue;
+        }
         for (std::size_t e = 0; e < q.mem.size(); ++e)
             ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
     }
@@ -822,6 +848,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
         ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
         expect_gemm(*this->ctx, p, "small past the grid ceiling");
     }
+    if (!capped) return;  // Auto past it is then whatever the table ranks first
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
     if constexpr (kCx<T> && !TestFixture::kVendor) {
@@ -947,7 +974,7 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
             const auto c = select::parse<og::GemmChoice>(w.spelling);
             ASSERT_TRUE(c && std::holds_alternative<og::Reg>(*c)) << w.spelling;
             const RegRow* row = reg_row(std::get<og::Reg>(*c));
-            if (row && row->slm > g_slm_budget) {
+            if (row && !reg_fits(*row)) {
                 // Spelled correctly, refused by the budget: the pin parses and then throws can_run's refusal.
                 auto p = make_problem<T>(w.s);
                 const Pin pin("gemm", std::string_view(w.word));
@@ -1177,7 +1204,10 @@ TYPED_TEST(GemmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [s, algo] : {std::pair{lo, "tiled"}, std::pair{hi, "direct"}}) {
         const std::string key = std::to_string(s.m) + " " + std::to_string(s.n) + " " + std::to_string(s.k);

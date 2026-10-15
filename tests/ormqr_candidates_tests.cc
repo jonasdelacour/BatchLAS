@@ -749,7 +749,10 @@ TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
-    const std::string backend = B == Backend::CUDA ? "CUDA" : (B == Backend::ROCM ? "ROCM" : "?");
+    const std::string backend = B == Backend::CUDA   ? "CUDA"
+                                : B == Backend::ROCM ? "ROCM"
+                                : B == Backend::SYCL ? "SYCL"
+                                                     : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     for (const auto& [key, s] : {std::pair{std::string("16 6 6"), lo}, std::pair{std::string("30 9 9"), hi}}) {
         ASSERT_TRUE(rows.count(key)) << key;

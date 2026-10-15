@@ -957,7 +957,7 @@ namespace batchlas {
         /// @name In-place fills and transforms
         /// Dense-only unless stated. The `const Queue&` overloads enqueue and return the
         /// kernel's Event without waiting; the queue-less overloads run on a new Queue()
-        /// on Device::default_device(). The square transforms read rows() as n.
+        /// on Device::default_device_for<T>(). The square transforms read rows() as n.
         /// @{
 
         /// @brief Copies the @p uplo triangle onto the other: a_ji := a_ij for (i, j) in @p uplo.
@@ -970,7 +970,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event symmetrize(Uplo uplo) const {
-            return symmetrize(Queue(), uplo);
+            return symmetrize(Queue(Device::default_device_for<T>()), uplo);
         }
 
         /// @brief Mirrors the @p uplo triangle conjugated (a_ji := conj(a_ij)) and makes the diagonal real.
@@ -983,7 +983,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event hermitize(Uplo uplo) const {
-            return hermitize(Queue(), uplo);
+            return hermitize(Queue(Device::default_device_for<T>()), uplo);
         }
 
         /// @brief In-place (conjugate) transpose.
@@ -996,7 +996,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event transpose(bool conjugate = false) const {
-            return transpose(Queue(), conjugate);
+            return transpose(Queue(Device::default_device_for<T>()), conjugate);
         }
 
         /// @brief Zeros the strict triangle opposite @p uplo, keeping the @p uplo triangle;
@@ -1011,7 +1011,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event triangularize(Uplo uplo, Diag diag) const {
-            return triangularize(Queue(), uplo, diag);
+            return triangularize(Queue(Device::default_device_for<T>()), uplo, diag);
         }
 
         /// @brief Fills with values uniform in [-1, 1], deterministic in @p seed; see Matrix::Random().
@@ -1025,7 +1025,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_random(bool hermitian = false, unsigned int seed = 42) const {
-            return fill_random(Queue(), hermitian, seed);
+            return fill_random(Queue(Device::default_device_for<T>()), hermitian, seed);
         }
 
         /// @brief CSR: fills this storage with a random diagonally dominant Hermitian pattern and values.
@@ -1049,7 +1049,7 @@ namespace batchlas {
                                            unsigned int seed = 42,
                                            typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
                                            bool shared_pattern = true) const {
-            return fill_random_sparse_hermitian(Queue(), density, seed, diagonal_boost, shared_pattern);
+            return fill_random_sparse_hermitian(Queue(Device::default_device_for<T>()), density, seed, diagonal_boost, shared_pattern);
         }
 
         /// @brief Sets every element of every item (dense: within rows() x cols(); CSR: every stored value).
@@ -1057,7 +1057,7 @@ namespace batchlas {
 
         /// @brief fill() on a new default queue.
         Event fill(T value) const {
-            return fill(Queue(), value);
+            return fill(Queue(Device::default_device_for<T>()), value);
         }
 
         /// @brief fill() with zero. Deliberately has no queue-less form, which would run on the default device.
@@ -1090,7 +1090,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const Span<T>& diag_values, int64_t k = 0) const {
-            return fill_diagonal(Queue(), diag_values, k);
+            return fill_diagonal(Queue(Device::default_device_for<T>()), diag_values, k);
         }
 
         /// @brief Sets the main diagonal of every item to @p value.
@@ -1102,7 +1102,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_diagonal(const T& value) const {
-            return fill_diagonal(Queue(), value);
+            return fill_diagonal(Queue(Device::default_device_for<T>()), value);
         }
 
         /// @brief Writes a full triangular matrix: @p diagonal_value on the diagonal,
@@ -1117,7 +1117,7 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_triangular(Uplo uplo, T diagonal_value = T(1),
                               T non_diagonal_value = T(0.5)) const {
-            return fill_triangular(Queue(), uplo, diagonal_value, non_diagonal_value);
+            return fill_triangular(Queue(Device::default_device_for<T>()), uplo, diagonal_value, non_diagonal_value);
         }
 
         /// @brief Writes the three diagonals from per-item vectors; other entries are untouched.
@@ -1144,7 +1144,7 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_tridiag_toeplitz(T diag = T(1),
                                     T sub_diag = T(-0.5), T super_diag = T(0.5)) const {
-            return fill_tridiag_toeplitz(Queue(), diag, sub_diag, super_diag);
+            return fill_tridiag_toeplitz(Queue(Device::default_device_for<T>()), diag, sub_diag, super_diag);
         }
 
         /// @brief Writes a full random triangular matrix: uniform [-1, 1] in the @p uplo
@@ -1163,7 +1163,7 @@ namespace batchlas {
         Event fill_triangular_random(Uplo uplo,
                                      Diag diag = Diag::Unit,
                                      unsigned int seed = 42) const {
-            return fill_triangular_random(Queue(), uplo, diag, seed);
+            return fill_triangular_random(Queue(Device::default_device_for<T>()), uplo, diag, seed);
         }
 
         /// @brief Random Hermitian (real T: symmetric) positive definite matrix, a different one per item.
@@ -1181,7 +1181,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_random_spd(unsigned int seed = 42) const {
-            return fill_random_spd(Queue(), seed);
+            return fill_random_spd(Queue(Device::default_device_for<T>()), seed);
         }
 
         /// @brief Row-permuted diagonally dominant random matrix, so LU partial pivoting is not the identity.
@@ -1199,7 +1199,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_random_pivoted(unsigned int seed = 42) const {
-            return fill_random_pivoted(Queue(), seed);
+            return fill_random_pivoted(Queue(Device::default_device_for<T>()), seed);
         }
 
         /// @brief Hermitian Q diag(lambda) Q^H with condition number 10^@p log10_cond, a different Q per item.
@@ -1218,7 +1218,7 @@ namespace batchlas {
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         Event fill_graded_hermitian(double log10_cond, unsigned int seed = 42) const {
-            return fill_graded_hermitian(Queue(), log10_cond, seed);
+            return fill_graded_hermitian(Queue(Device::default_device_for<T>()), log10_cond, seed);
         }
 
         /// @brief Clustered-spectrum Hermitian matrix: diagonal floor(i / 4) + (i % 4) 1e-4 plus

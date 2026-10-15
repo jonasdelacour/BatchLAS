@@ -71,13 +71,22 @@ using TwoStageTypes = ::testing::Types<
 using TwoStageTypes = ::testing::Types<
     TwoStageConfig<float, Backend::ROCM>,
     TwoStageConfig<double, Backend::ROCM>>;
+#elif BATCHLAS_HAS_SYCL_BACKEND
+// AdaptiveCpp Metal: the native kernels in float and complex<float>; double needs device fp64.
+using TwoStageTypes = ::testing::Types<
+    TwoStageConfig<float, Backend::SYCL>,
+#if BATCHLAS_HAS_DEVICE_FP64
+    TwoStageConfig<double, Backend::SYCL>,
+    TwoStageConfig<std::complex<double>, Backend::SYCL>,
+#endif
+    TwoStageConfig<std::complex<float>, Backend::SYCL>>;
 #else
 using TwoStageTypes = ::testing::Types<TwoStageConfig<float, Backend::NETLIB>>;
 #endif
 
 TYPED_TEST_SUITE(SyevTwoStageTest, TwoStageTypes);
 
-#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 TYPED_TEST(SyevTwoStageTest, EigenvectorResidualAndOrthogonality) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;

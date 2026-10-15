@@ -2,7 +2,7 @@
 
 > **Status:** implemented through P5 and P6 · 2026-10-09 · threadripper02 (4x RTX PRO 6000,
 > sm_120, CUDA 13.2, AdaptiveCpp 25.10.0 at `/opt/adaptivecpp-25.10.0-cuda13.2`, LLVM 20 plugin).
-> Measurements: @ref perf_sycl_implementations.
+> Measurements: @ref perf_sycl_implementations. AdaptiveCpp Metal (Apple GPU): [AdaptiveCpp Metal](#sycl-impl-metal), 2026-10-13.
 
 Goal: the same source tree configures and builds with either intel/llvm DPC++ (`/opt/dpcpp-cuda`)
 or AdaptiveCpp (`acpp`). Two trees on one box then A/B the same tests and benchmarks for
@@ -291,7 +291,8 @@ Two BatchLAS bugs found on the way, fixed for both builds:
 ## Correctness A/B {#sycl-impl-correctness-ab}
 
 - Each implementation has its own self-contained failure ledger: `tests/known-failures.txt`
-  (DPC++) and `tests/known-failures-acpp.txt`; defects shared by both are listed in both.
+  (DPC++) and `tests/known-failures-acpp.txt`; defects shared by both are listed in both. A Metal
+  tree has a third, `tests/known-failures-acpp-metal.txt` ([Metal ledger](#sycl-impl-metal-failure-ledger)).
   `.github/ci/compare_failures.py` picks the ledger with `--sycl-impl` or `--build-dir <tree>`
   (the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). Compare failing **names**, as for DPC++.
 - **Gate for "acpp supported":** the acpp tree's failing set is a subset of the DPC++ failing set
@@ -421,3 +422,211 @@ The recommended option was taken in each case.
    vendor-free acpp tree is not measured yet.
 4. **Per-implementation tuning tables: not added.** The P5 data shows no inversion worth a table
    ([the performance protocol](#sycl-impl-performance-ab), Tables). Revisit if acpp's code generation changes (a newer LLVM) or on another device.
+
+## AdaptiveCpp Metal {#sycl-impl-metal}
+
+> **Status:** implemented · 2026-10-13 · Apple M5 Max (`applegpu_g17s`), macOS 27.0.1,
+> AdaptiveCpp `develop` `9ec394ef` plus local patches 0001-0013 at `~/opt/adaptivecpp`, Homebrew
+> `llvm@21` 21.1.8, OpenBLAS 0.3.34. Build recipe:
+> [macOS](../guide/build.md#macos-apple-gpu-through-adaptivecpp-metal).
+
+A third configuration of the acpp build: the Apple GPU through AdaptiveCpp's Metal backend. It is
+vendor-free, has no device fp64, and every table it reads was measured on NVIDIA. Nothing in this
+section changes the DPC++ or Linux acpp builds: each switch below is either a configure result that
+is false there (`BATCHLAS_HAS_SYCL_BACKEND`, `BATCHLAS_DEVICE_NO_VECTOR_TYPES`) or a runtime test
+that is false off Metal (`impl::is_metal`, `sycl_impl::on_metal()`).
+
+### Metal: the SSCP-to-MSL pipeline and its cache {#sycl-impl-metal-pipeline}
+
+- **Compile.** `--acpp-targets=generic`, as on Linux: one SSCP IR image per TU, no device link.
+- **First launch.** AdaptiveCpp's `llvm-to-metal` translator lowers the kernel's IR to Metal
+  Shading Language, and `newLibraryWithSource` compiles that MSL. Both happen in-process at the
+  first launch of each kernel; a translation or MSL compile error is reported at that launch.
+- **Cache.** Translated binaries go to `~/.acpp/apps` (`ACPP_APPDB_DIR` overrides). The cache is
+  keyed by the kernel, not by the translator, so **clear it after reinstalling AdaptiveCpp**, or
+  kernels keep the code the old translator emitted.
+- **Configure.** `BatchLASSyclAcpp.cmake` parses `acpp-info` (now with a `Vendor:` field). A `Metal`
+  GPU sets `BATCHLAS_DETECTED_APPLE_GPU`, arch `apple_gpu_<arch>` (`apple_gpu_g17s` here), and,
+  unless `BATCHLAS_ENABLE_METAL=OFF`, `BATCHLAS_HAS_SYCL_BACKEND` and
+  `BATCHLAS_DEVICE_NO_VECTOR_TYPES`. `OFF` while the GPU is visible is a `FATAL_ERROR` (the guards
+  would be compiled out under queues that still reach it): hide it with `ACPP_VISIBILITY_MASK=omp`. `Level Zero`/`OpenCL` GPUs count as Intel only when the vendor
+  says so. Without `acpp-info`, a `librt-backend-metal.dylib` in the install stands for the GPU.
+- **The OpenMP device is mandatory.** Double and the verification layer run there, so a Metal
+  configure without `BATCHLAS_HAS_CPU_TARGET` is a `FATAL_ERROR`. `ACPP_VISIBILITY_MASK=omp;metal`
+  in the presets keeps both devices visible.
+
+### Metal: Backend::SYCL and the no-fp64 policy {#sycl-impl-metal-fp64-policy}
+
+MSL has no `double`. AdaptiveCpp's Metal emitter rejects any double type, so a double kernel cannot
+be JIT-compiled for the GPU at all.
+
+- **`Backend::SYCL`** (`include/batchlas/blas/enums.hh`): native SYCL kernels on a GPU with no
+  vendor library. `Queue::backend()` resolves an Apple GPU to it. `select::native_gpu_backend<B>`
+  (`src/select/vendor.hh`) is CUDA or SYCL, so every native GPU family that was gated on CUDA runs
+  here too; ROCm and the host keep their vendor routes.
+- **Instantiation.** `BATCHLAS_INSTANTIATE_*_ALL_BACKENDS` (`src/util/template-instantiations.hh`)
+  give `Backend::SYCL` float and complex<float> only, plus the double pair under
+  `BATCHLAS_HAS_DEVICE_FP64` (`BATCHLAS_DEVICE_FP64`, `OFF` on Metal). No `<SYCL, double>` symbol
+  exists, so a stray reference is a link error, not a JIT error.
+- **The refusal.** The deducing entry points (`BATCHLAS_DISPATCH_ON_QUEUE` and the `with_backend`
+  lambdas in `options.hh`/`extensions.hh`) go through `detail::with_backend_gated<NeedsFp64>`
+  (`include/batchlas/blas/queue-dispatch.hh`). `detail::needs_fp64_v<Args...>` is true when any
+  container argument (`Matrix`, `MatrixView`, `Vector`, `VectorView`, `Span`, `UnifiedVector`, or a
+  one-parameter template over the scalar such as `StedcParams<double>`) holds double or
+  complex<double>. Scalars do not count: a float op may take a double knob. Then the SYCL branch is
+  discarded at compile time and replaced by `batchlas::unsupported` naming the op, the device and
+  the fix (a CPU `Queue`). `with_backend_for<T>(ctx, op, f)` is the same gate for a caller that
+  knows its element type; plain `with_backend` has no gate.
+- **No silent reroute.** A double call on the GPU throws. Double work runs on a CPU `Queue`, whose
+  backend is NETLIB (OpenBLAS plus the OpenMP device). `Queue::set_backend(NETLIB)` on the Apple GPU
+  throws, because NETLIB still launches its native kernels, double ones included, on the queue's
+  device.
+- **Internal double.** Where library code widened float to double on the device, it now does not on
+  Metal: `lartg` for complex<float> rounds in float on the Metal device only (chosen at JIT time,
+  `src/math-helpers.hh`); `random_hermitian_tridiagonal_with_log10_cond_metric<SYCL, float>`
+  builds the spectral case on a leaked host NETLIB queue; the queue-less `Matrix` helpers use
+  `Device::default_device_for<T>()`, the CPU for double; `batchlas::verify` checks on a CPU queue
+  ([verification](verification.md#verification-no-fp64-device)).
+- **Tests.** `backend_dispatch_tests` `NoDeviceFp64.*` call gemm, potrf and syev with double through
+  the ordinary spelling and expect the throw.
+
+### Metal: the ACPP_ADAPTIVITY_LEVEL=0 guard {#sycl-impl-metal-adaptivity-guard}
+
+At adaptivity level 0 AdaptiveCpp JITs every kernel of a TU together at the first launch. Every
+library TU instantiates double kernels for the host backend, so on Metal one double kernel fails the
+whole batch and every float launch in that TU fails with it. The `Queue` constructors therefore
+throw `batchlas::unsupported` on an Apple GPU when the resolved level is 0
+(`require_metal_adaptivity`, `src/util/queue-impl.cc`; the level is read from AdaptiveCpp's
+settings, environment or config file). Level 1 (the default) and above JIT per kernel.
+`backend_dispatch_tests_adaptivity0` runs `MetalAdaptivityGuard.*` with
+`ACPP_ADAPTIVITY_LEVEL=0`; it is added only in a Metal tree.
+
+### Metal: the local AdaptiveCpp patches {#sycl-impl-metal-acpp-patches}
+
+Twelve patches on AdaptiveCpp `develop` `9ec394ef`, applied by
+`scripts/macos/build_adaptivecpp_metal.sh`. They are local and not sent upstream. The evidence for
+each, with its reproducer, is in `scripts/macos/adaptivecpp-patches/README.md`.
+
+| Patch | Upstream defect | What it broke in BatchLAS |
+| --- | --- | --- |
+| 0001 barrier fences | `group_barrier` fenced threadgroup memory only; a work-group barrier with sub-group fence scope emitted a `simdgroup_barrier` | Every kernel that exchanges global data across a barrier was racy by the MSL spec (about 384 barrier sites). Not observed on this GPU |
+| 0002 safe math | `MTLCompileOptions` default to fast math | `7.0f/3.0f` and `exp` off by up to 3 ulp; NaN/Inf guards (Annex G complex, secular-equation safeguards) foldable. `ACPP_METAL_FAST_MATH=1` restores fast math |
+| 0003 launch limits | a launch over the pipeline's thread or threadgroup-memory limit ran with undefined results | Silent wrong answers; now an asynchronous error naming the kernel and byte counts |
+| 0004 narrow i8/i16 | signed i8/i16 `sdiv`/`srem`/`ashr` emitted a size-mismatched `as_type` | float `small` gemm kernels did not compile |
+| 0005 memmove | a `device`-to-`threadgroup` memmove compared distinct pointer types | `reg:` gemm with a 16-byte struct did not compile (BatchLAS's `Vec4` copies element-wise anyway) |
+| 0006 no vectorizers | LoopVectorize/SLP produced vector IR the emitter cannot print | syrk/syr2k triangular-tile kernels failed the JIT (`insertelement`) |
+| 0007 `get_num_subgroups` | undefined in the Metal libkernel | 8 float `geqrf_cta` kernels did not compile |
+| 0008 trunc to i1 | `trunc iN to i1` emitted as `(bool)x`, not bit 0 | `reg:m=128:n=32:k=16:u=1` gemm wrong once k spans three tiles |
+| 0009 convergent SIMD-group intrinsics | shuffles/broadcasts not `convergent`, so LLVM sank them under per-lane branches | float tiny `getrf` n = 5..8 wrong |
+| 0010 linear translation time | StructurizeCFG's per-PHI `SSAUpdater`, name renumbering and long names made translation super-linear | `posv_tiny` NC = 28 took about 90 s to translate (1.25 s after) |
+| 0011 no re-advise in `alloc_at` | every shared/host allocation re-`madvise`d most of a 10x-RAM region (about 70 us per call) | `steqr_tests` timed out at 1800 s; passes in 335 s after |
+| 0012 float memory through `uint` | stores of an `i32` into a float object and float loads of it did not alias under MSL strict aliasing | float tiny `geqrf` left R(j,j) stale; geqrf, ormqr, orgqr and the two-stage syev failed downstream |
+| 0013 instruction in emitter errors | 0010's IR-comment switch also emptied the instruction text of three JIT error messages | diagnostics only; the MSL is unchanged |
+
+With 0001-0012 the AdaptiveCpp `sycl_tests` pass on Metal (792 of 793 cases, 1 failed warning).
+
+### Metal: launch limits {#sycl-impl-metal-launch-limits}
+
+Measured on the M5 Max with patch 0003.
+
+| Limit | Value | Where BatchLAS models it |
+| --- | --- | --- |
+| Threadgroup memory reported (`local_mem_size`) | 32,768 B | `cmake/BatchLASDetectSYCL.cmake` table row `apple_gpu_*` (a hypothesis, not a measured budget) |
+| Hidden per-lane scratch | AdaptiveCpp adds `8 * wg` bytes of group-algorithm scratch to every launch (`metal_queue.cpp`) | `impl::local_mem_scratch_per_item` = 8; `impl::local_mem_bytes(d, wg)` = reported - 8 wg; `local_mem_bytes(d)` takes the device's largest wg (24,576 B at wg = 1024), so every older caller is safe at any width |
+| Selector budget | `slm_budget` (at max wg, less the 4 KiB reserve) = 20,480 B | `select::Device::slm_per_item` and `slm_budget_for(wg)`; gemm `reg` reads the per-width figure |
+| Threads per threadgroup | 1024 for every pipeline measured, including 512 live floats per thread: the compiler spills rather than lowering the cap | the getrs_fused sm_89 register cap is skipped on Metal |
+| Grid | **no 65,535 cap** on the work-group count, in any dimension; thread positions are 32-bit, so a dimension of 2^32 work-items or more runs with wrong ids and no error (2^32 - 1024 is exact) | `impl::check_global_range` (every `parallel_for`, and `check_group_count` on Metal) throws `errc::nd_range` above 2^32 - 1; `select::Device::max_groups_yz` = 2^32 - 1, read by the gemm, syrk, syr2k, trmm and symm `can_run` instead of 65,535 |
+| Co-residency | not promised; MSL atomics are relaxed only | the latrd grid-barrier path is off on Metal, even when forced ([sytrd](../perf/sytrd.md#sytrd-the-latrd-grid-kernel-and-its-co-residency-cap)) |
+| Sub-groups per work-group (safe) | 1 | `cmake/BatchLASDetectSYCL.cmake`: the unrecognised-GPU default, a hypothesis |
+
+Guards: `resident_capacity_tests` launches at the advertised budget and at the raw per-width figure,
+refuses one 16-byte granule past it, checks `slm_budget` against the launch budget, runs 65,537
+groups per dimension and 2^32 - 1024 work-items, and serves batch 65,537 with five gemm pins.
+`select::describe` hard-codes 8 and 2^32 - 1 (`select.cc` cannot include `src/sycl/`); these tests
+hold the two copies equal.
+
+### Metal: coarse-grained events and error delivery {#sycl-impl-metal-coarse-events}
+
+- **Coarse events by default.** AdaptiveCpp commits one Metal command buffer per operation unless
+  the queue has `AdaptiveCpp_coarse_grained_events`. `QueueImpl::make_queue_properties` adds it on
+  Metal queues unless profiling is on or `BATCHLAS_METAL_FLUSH_EACH_OP` is set
+  ([environment](environment.md)). Such an event completes with the whole queue: over-synchronised,
+  never early, and without timestamps.
+- **Measured** (6-7 reps per mode, alternating, first pass dropped): back-to-back calls with no host
+  wait, flush-each-op over coarse time: gemm 1.64 (n = 8, batch 1024); potrf 1.33 (n = 8/1024), 1.39
+  (n = 16/4096), 1.72 (n = 32/128); neutral at n = 64/512. With a host wait after every call, coarse
+  is neutral, and 4-8% slower at n = 64/batch 512. Results are bit-identical between modes.
+- **`~QueueImpl` always drains on acpp.** acpp's `~queue` does not wait, and with coarse events the
+  command buffer stays open, so a derived queue's work could outlive the caller's wait. DPC++ still
+  drains only when the arena holds blocks.
+- **Errors are asynchronous.** A command-buffer failure (GPU timeout, a patch-0003 launch refusal) is
+  registered from a completion handler, so it surfaces only at `Queue::wait()` or the next
+  `impl::throw_launch_errors` ([asynchronous errors](#sycl-impl-asynchronous-errors)). Under coarse events one error
+  can cover many operations: set `BATCHLAS_METAL_FLUSH_EACH_OP=1` to attribute it. The macOS GPU
+  watchdog also applies to the GPU that drives the display.
+
+### Metal: device-code rules {#sycl-impl-metal-device-code-rules}
+
+| Metal fact | Consequence | Where |
+| --- | --- | --- |
+| No generic address space: a pointer chosen between local and global memory at run time is rejected ("Conflicting address space information in PHI node") | the body is instantiated once per storage combination under `on_metal()`; elsewhere the pointers are selected once, as before | sb2st chase (`src/extensions/sytrd_sb2st_cta.cc`), tridiagonal solve (`src/extensions/tridiag_solver.cc`) |
+| No floating-point atomics on threadgroup memory | One and Inf norms give each column or row sum to one work-item on Metal | `src/extra/norm.cc` |
+| No static (program-scope) local memory | `wg_reduce_floating` uses AdaptiveCpp's own reduce on Metal; its typed scratch has no rounding defect ([group algorithms](#sycl-impl-group-algorithms)) | `include/batchlas/util/group-collectives.hh` |
+| No vector types in the emitter | under `BATCHLAS_DEVICE_NO_VECTOR_TYPES`: `Vec4` and `tiny_r4` are 16-byte structs, `Raw16` is an `unsigned __int128` (emitted as `uint4`). CUDA codegen keeps the vectors | `src/sycl/gemm/vec4.hh`, `src/extensions/tiny_device.hh`, `src/sycl/gemm/register_64x64_k16_wide.hh` |
+| No double | see [the no-fp64 policy](#sycl-impl-metal-fp64-policy) | |
+| Float subnormals flush to zero, in safe math too; `info::device` still reports denorm support | a test that needs a subnormal must probe the device | `TrsmNativeSgLeft.NonFiniteReciprocalFallsBackToDivision` probes and skips |
+| `logb(0)` and `logb(inf)` are finite (`(float)ilogb(fabs(x))` in the Metal libkernel) | Annex G complex division of zero, inf or NaN may give wrong special values; normal-range results are unaffected. Not tested | `src/sycl/annexg_complex.hh` (`annexg::div`) |
+| An arm64 host rejects the `"l"` asm constraint | the PTX L2-prefetch asm is compiled only on x86 hosts | `src/sycl/gemm/register_128x128.hh` |
+
+`sycl_impl::on_metal()` (`src/sycl/sscp_target.hh`) is JIT-time reflection on the compiler backend
+(spelled as the number 4, since acpp 25.10 has no `metal` enumerator); a private copy sits in
+`group-collectives.hh` because an installed header cannot include `src/`. It folds to a constant in
+each backend's IR, so the other branch is dropped before emission; on DPC++ it is `constexpr false`.
+
+### Metal: the apple_m5_max table key {#sycl-impl-metal-select-key}
+
+`select::describe` keys an Apple GPU by its device name (`select::apple_device_key`: "Apple M5 Max"
+becomes `apple_m5_max`), family `apple`, arch number 5. The family ranks after `sm`, `gfx` and
+`intel`, before unknown families and `cpu`. No `tuned/*.apple_*.txt` exists, so each op borrows the nearest table and
+warns once (on this tree: "gemm has no float table for apple_m5_max; borrowing sm_120"). Every
+route on the Apple GPU is therefore an NVIDIA measurement applied to a different GPU; tune before
+quoting a ratio. `select_tests` cover the key, the borrow order and the once-per-op warning.
+
+### Metal: build shape on macOS {#sycl-impl-metal-build-shape}
+
+- **One dylib.** ld64 rejects undefined symbols in a dylib, and the component libraries reference
+  each other in cycles, so macOS requires `BATCHLAS_MONOLITHIC_LIBRARY=ON`. The test trees set
+  `BATCHLAS_HIDDEN_VISIBILITY=OFF`: the tests reach about 1,000 unexported internal symbols.
+- **OpenBLAS as LAPACKE and CBLAS.** Homebrew's keg-only OpenBLAS has no `liblapacke`; LAPACKE and
+  CBLAS are inside `libopenblas.dylib`. `BATCHLAS_OPENBLAS_ROOT` points the search there, frameworks
+  are off for the search so the SDK's vecLib `cblas.h`/`lapack.h` never pair with it, and the
+  prefix's include directory goes on the library's include path.
+- **`<float.h>` shim.** The macOS 27 SDK's `<math.h>` requests only `INFINITY`/`NAN` from
+  `<float.h>` under modules, which libc++'s include guard then blocks, so `FLT_MAX` is undefined
+  after `<cmath>`. A configure check enables `cmake/compat/float-h` only when that happens.
+- **No `/opt/include`** on the include path on Darwin. `BATCHLAS_ACPP_SLM_OPTIN` (a CUDA interposer)
+  is a configure error on macOS.
+
+### Metal: tests and the failure ledger {#sycl-impl-metal-failure-ledger}
+
+- Native candidate and pin suites have `Backend::SYCL` arms (float, complex<float>); the double
+  configurations run as NETLIB on the host. Grid-ceiling oracles read the device's own ceiling.
+- `tests/known-failures-acpp-metal.txt` is a third self-contained ledger, picked by
+  `compare_failures.py` for an ACPP tree whose cache has `BATCHLAS_GPU_FAMILY_RESOLVED=METAL` (or
+  `--gpu-family METAL`). Its `type_param` strings are macOS libc++ spellings
+  (`std::__1::complex<float>`). Entries:
+  - hemm, herk, her2k complex<float>: vendor-only rules, `NoRouteError` in a vendor-free build
+    ([flat selection §11](flat-kernel-selection.md)).
+  - `posv` pinned blocked, Upper, n = 33, complex<float>: no vendor-free potrf route
+    ([known defects](known-defects.md#defect-19-upper-potrf-beyond-the-cta-ceiling-has-no-vendor-free-route)).
+  - lanczos: [defect 3](known-defects.md#defect-3-lanczos-issues-a-two-column-multiply-and-consumes-one-column),
+    shared with the other trees.
+- `device_calls_tests` exits 77 (skip): there is no NVPTX image.
+
+### Metal: open items {#sycl-impl-metal-open-items}
+
+- No Apple tuning tables; the CMake local-memory row and the safe sub-group count are hypotheses.
+- The patches are not upstream; each AdaptiveCpp bump must re-apply them and re-run the
+  `sycl_tests` and the BatchLAS suite.
+- Annex G special values under the Metal `logb` ([device-code rules](#sycl-impl-metal-device-code-rules)) are untested.
+- No performance A/B against another implementation on this device.

@@ -6,6 +6,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../select/vendor.hh"
 #include "../util/template-instantiations.hh"
 #include "larft_wy.hh"
 
@@ -35,7 +36,7 @@ class PackPPanelKernel;
 template <Backend B, typename T>
 bool ormbr_q_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
                      const MatrixView<T, MatrixFormat::Dense>& c) {
-    if constexpr (B != Backend::CUDA) {
+    if constexpr (!select::native_gpu_backend<B>) {
         static_cast<void>(a);
         static_cast<void>(c);
         return false;
@@ -48,7 +49,7 @@ template <Backend B, typename T>
 bool ormbr_p_use_cta(const MatrixView<T, MatrixFormat::Dense>& a,
                      const MatrixView<T, MatrixFormat::Dense>& c,
                      Side side) {
-    if constexpr (B != Backend::CUDA) {
+    if constexpr (!select::native_gpu_backend<B>) {
         static_cast<void>(a);
         static_cast<void>(c);
         static_cast<void>(side);
