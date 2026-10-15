@@ -2,11 +2,11 @@
 // scatter (transposed). CSR indexing and beta == 0 / alpha == 0 semantics:
 // evidence: docs/perf/spmm.md#spmm-the-kernel-contract
 
-#include "../spmm_native.hh"
+#include <src/ops/spmm/spmm_native.hh>
 
-#include "../../../queue.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

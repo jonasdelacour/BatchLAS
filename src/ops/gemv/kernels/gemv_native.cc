@@ -2,11 +2,11 @@
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies
 
-#include "../gemv_native.hh"
+#include <src/ops/gemv/gemv_native.hh>
 
-#include "../../../queue.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

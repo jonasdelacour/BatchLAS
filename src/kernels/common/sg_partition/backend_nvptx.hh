@@ -20,7 +20,7 @@
 #include <cstring>
 #include <type_traits>
 
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/kernel_attrs.hh>
 
 namespace batchlas::sgp {
 

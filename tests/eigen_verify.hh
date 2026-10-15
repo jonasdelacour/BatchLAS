@@ -3,7 +3,7 @@
 // (orthogonality_rotations, eigen_residual), and eigenvalues against LAPACKE (values).
 #pragma once
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-vector.hh>

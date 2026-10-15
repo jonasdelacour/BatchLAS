@@ -2,7 +2,7 @@
 
 #include <batchlas/blas/extensions.hh>
 
-#include "../../../math-helpers.hh"
+#include <src/math-helpers.hh>
 
 #include <array>
 

@@ -13,17 +13,17 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
-#include "../src/select/coverage.hh"
-#include "../src/select/vendor.hh"
+#include <src/select/coverage.hh>
+#include <src/select/vendor.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
-#include "shipped_table_pick.hh"
+#include <tests/shipped_table_pick.hh>
 
-#include "../src/kernels/common/triangular_expand.hh"
-#include "../src/ops/trmm/kernels/trmm_triangular_tiles.hh"
-#include "../src/expansion_budget.hh"
-#include "../src/ops/trmm/choice.hh"
+#include <src/kernels/common/triangular_expand.hh>
+#include <src/ops/trmm/kernels/trmm_triangular_tiles.hh>
+#include <src/expansion_budget.hh>
+#include <src/ops/trmm/choice.hh>
 
 #include <algorithm>
 #include <cmath>

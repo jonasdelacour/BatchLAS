@@ -9,7 +9,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <algorithm>
 #include <complex>
 #include <string>
@@ -27,7 +27,7 @@ struct SyevConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 

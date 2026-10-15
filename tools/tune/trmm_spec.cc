@@ -13,8 +13,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/trmm/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/trmm/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <memory>
 #include <string>

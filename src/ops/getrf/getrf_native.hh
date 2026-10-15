@@ -5,8 +5,8 @@
 // int64_t span packs 1-based int32 in its first half (as_span<int>()) -- an interchange list,
 // not a permutation; complex pivots on cabs1, not cuBLAS's modulus. evidence: docs/perf/lu.md
 
-#include "../../util/internal-api.hh"
-#include "../../util/resident_capacity.hh"
+#include <src/util/internal-api.hh>
+#include <src/util/resident_capacity.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

@@ -3,8 +3,8 @@
 // Native batched POTRF, declarations only (no <sycl/sycl.hpp>). EVERY *_dispatch re-checks its
 // limits, and can_run() in src/ops/potrf/potrf.cc must agree exactly. evidence: docs/perf/potrf.md
 
-#include "../../util/internal-api.hh"
-#include "../../util/resident_capacity.hh"
+#include <src/util/internal-api.hh>
+#include <src/util/resident_capacity.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

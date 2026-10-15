@@ -8,9 +8,9 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
-#include "../../../math-helpers.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/math-helpers.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <array>
 #include <cstdint>

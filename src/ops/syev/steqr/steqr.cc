@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <batchlas/blas/extensions.hh>
-#include "steqr_internal.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/ops/syev/steqr/steqr_internal.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

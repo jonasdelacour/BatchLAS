@@ -10,12 +10,12 @@
 #include <cstring>
 #include <random>
 #include <type_traits>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
-#include "../src/select/vendor.hh"
-#include "../src/ops/trsm/trsm_native.hh"
+#include <src/select/vendor.hh>
+#include <src/ops/trsm/trsm_native.hh>
 
 using namespace batchlas;
 

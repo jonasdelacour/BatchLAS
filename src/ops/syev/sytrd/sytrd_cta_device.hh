@@ -5,8 +5,8 @@
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
-#include "../../../math-helpers.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/math-helpers.hh>
 
 #include <cstdint>
 #include <batchlas/blas/device/detail/group_blas_common.hh>

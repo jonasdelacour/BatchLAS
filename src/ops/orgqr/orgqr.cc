@@ -7,10 +7,10 @@
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "orgqr_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/orgqr/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/orgqr/orgqr_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

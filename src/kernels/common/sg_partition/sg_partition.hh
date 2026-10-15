@@ -25,20 +25,20 @@
 
 #include <batchlas/backend_config.h>
 
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/kernel_attrs.hh>
 
-#include "backend_generic.hh"
+#include <src/kernels/common/sg_partition/backend_generic.hh>
 
 // acpp SSCP picks the target at JIT time (SscpBackend); FORCE_GENERIC is the break (divergence
 // tests hang). evidence: docs/design/sycl-implementations.md#sycl-impl-device-target-dispatch
 #if BATCHLAS_SYCL_IMPL_ACPP && !defined(BATCHLAS_SGP_FORCE_GENERIC)
-#include "backend_sscp.hh"
+#include <src/kernels/common/sg_partition/backend_sscp.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#include "backend_nvptx.hh"
+#include <src/kernels/common/sg_partition/backend_nvptx.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && defined(__AMDGCN__)
-#include "backend_amdgcn.hh"
+#include <src/kernels/common/sg_partition/backend_amdgcn.hh>
 #elif defined(__SYCL_DEVICE_ONLY__) && (defined(__SPIR__) || defined(__SPIRV__))
-#include "backend_spirv.hh"
+#include <src/kernels/common/sg_partition/backend_spirv.hh>
 #endif
 
 namespace batchlas {

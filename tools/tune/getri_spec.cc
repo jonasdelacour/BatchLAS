@@ -12,8 +12,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/getri/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/getri/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <memory>

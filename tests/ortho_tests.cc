@@ -2,8 +2,8 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
-#include "test_utils.hh"
-#include "../src/ops/potrf/choice.hh"
+#include <tests/test_utils.hh>
+#include <src/ops/potrf/choice.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
 #include <vector>

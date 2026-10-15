@@ -4,7 +4,7 @@
 // tuned/orgqr.*.txt picks it to n = 512 on both extents, so it is the DEFAULT inside
 // that window, not a vendor-free fallback. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

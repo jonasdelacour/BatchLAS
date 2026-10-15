@@ -1,6 +1,6 @@
 #include <batchlas/blas/device.hh>
 #include <batchlas/util/group-collectives.hh>
-#include "../../../select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -10,10 +10,10 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include "../../../expansion_budget.hh"
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/expansion_budget.hh>
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <atomic>

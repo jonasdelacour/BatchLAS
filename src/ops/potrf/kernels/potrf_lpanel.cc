@@ -4,14 +4,14 @@
 // leaf and this kernel are meant to become interchangeable and the tests compare the two.
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
-#include "../potrf_native.hh"
-#include "potrf_lpanel_device.hh"
-#include "../potrf_slm_hole.hh"
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/potrf/kernels/potrf_lpanel_device.hh>
+#include <src/ops/potrf/potrf_slm_hole.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 

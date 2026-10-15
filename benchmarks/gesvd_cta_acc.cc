@@ -1,8 +1,8 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/miniacc.hh>
 
-#include "acc_utils.hh"
-#include "miniacc_accuracy_common.hh"
+#include <benchmarks/acc_utils.hh>
+#include <benchmarks/miniacc_accuracy_common.hh>
 #include <batchlas/verify/reference.hh>
 
 #include <algorithm>

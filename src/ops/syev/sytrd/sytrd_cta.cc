@@ -5,17 +5,17 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/local_mem.hh"
-#include "../../../sort.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/local_mem.hh>
+#include <src/sort.hh>
 #include <complex>
 #include <numeric>
 #include <array>
-#include "sytrd_cta_device.hh"
+#include <src/ops/syev/sytrd/sytrd_cta_device.hh>
 
 
 namespace batchlas {

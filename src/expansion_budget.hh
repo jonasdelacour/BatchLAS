@@ -1,8 +1,8 @@
 #pragma once
 
-#include "math-helpers.hh"
-#include "queue.hh"
-#include "ops/symm/choice.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/ops/symm/choice.hh>
 
 #include <batchlas/settings.hh>
 #include <batchlas/util/mempool.hh>

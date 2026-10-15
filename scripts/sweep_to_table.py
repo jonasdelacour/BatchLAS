@@ -847,35 +847,33 @@ def git_renames(repo, base, head):
     return out
 
 
-INCLUDE = re.compile(rb'^([ \t]*#[ \t]*include[ \t]*)"([^"\n]*)"', re.M)
-ANGLE = re.compile(rb'^[ \t]*#[ \t]*include[ \t]*<([^>\n]*)>', re.M)
+INCLUDE = re.compile(rb'^([ \t]*#[ \t]*include[ \t]*)(?:"([^"\n]*)"|<([^>\n]*)>)', re.M)
 ANY_INCLUDE = re.compile(rb'^[ \t]*(?:#|%:)[ \t]*include', re.M)
-# A file a move can retarget without the "x" text changing: refused, never modelled.
+# A file a move can retarget without the include text changing: refused, never modelled.
 UNMODELLED = re.compile(rb'__has_include|include_next|R"[^(\s"]{0,16}\([^)]*?#[ \t]*include')
 
 
-def unmodelled_include(data, path, rename):
+def unmodelled_include(data, path):
     """Why `data`'s includes are outside the moved proof's model, or None."""
     if UNMODELLED.search(data):
         return f"{path}: __has_include, #include_next or an include inside a raw string"
-    if len(ANY_INCLUDE.findall(data)) != len(INCLUDE.findall(data)) + len(ANGLE.findall(data)):
+    if len(ANY_INCLUDE.findall(data)) != len(INCLUDE.findall(data)):
         return f"{path}: an #include that is neither \"x\" nor <x> (macro, comment or digraph)"
-    for m in ANGLE.findall(data):
-        if os.path.join("include", m.decode()) in rename:
-            return f"{path}: <{m.decode()}> names a moved header"
     return None
 
 
 def canonical_includes(data, path, tree, rename=None):
-    """Every #include "x" -> the repo path it resolves to (its own directory, then include/), mapped
-    through rename; an unresolved one is kept verbatim, marked."""
+    """Every include -> the repo path it resolves to, mapped through rename: "x" against its own
+    directory, then the repo root, then include/; <x> against the repo root, then include/ (the
+    build's -I order). An unresolved one (a system header) is kept verbatim, marked."""
     def sub(m):
-        target = m.group(2).decode()
-        for cand in (os.path.join(os.path.dirname(path), target), os.path.join("include", target)):
-            cand = os.path.normpath(cand)
+        quoted = m.group(2) is not None
+        target = (m.group(2) if quoted else m.group(3)).decode()
+        roots = ([os.path.dirname(path)] if quoted else []) + ["", "include"]
+        for cand in (os.path.normpath(os.path.join(r, target)) for r in roots):
             if cand in tree.paths:
                 return m.group(1) + b'"@' + (rename or {}).get(cand, cand).encode() + b'"'
-        return m.group(1) + b'"?' + m.group(2) + b'"'
+        return m.group(0) + b' ?'
     return INCLUDE.sub(sub, data)
 
 
@@ -889,7 +887,7 @@ def moved_difference(base_paths, head_paths, base, head, rename):
         old, new = base.read(b), head.read(h)
         if old is None or new is None:
             return f"{b if old is None else h} is missing"
-        why = unmodelled_include(old, b, rename) or unmodelled_include(new, h, rename)
+        why = unmodelled_include(old, b) or unmodelled_include(new, h)
         if why:
             return why
         if normalize_source(canonical_includes(old, b, base, rename)) != \
@@ -993,7 +991,7 @@ def moved_self_test(d, run_line, cell, cands):
         if variant != "other":
             os.makedirs(os.path.join(repo, "src", "common"))
             git(repo, "mv", "src/a/util.hh", "src/common/util.hh")
-            inc = b'#include "../../common/util.hh"\n'
+            inc = b'#include <src/common/util.hh>\n' if variant == "root" else b'#include "../../common/util.hh"\n'
         else:
             put(repo, "src/ops/k/util.hh", filler + b"int u;\n")
             inc = b'#include "util.hh"\n'
@@ -1034,6 +1032,8 @@ def moved_self_test(d, run_line, cell, cands):
         expect(False, "an uncommitted change to a hashed file was accepted")
     except SystemExit as e:
         expect("uncommitted" in str(e), f"uncommitted change message {e}")
+    repo, path, _ = case("root", "root")
+    expect(len(rehash_moved(path, "posv", "HEAD~1", repo=repo)[1]) == 4, "a move to root-based <src/...> includes")
     for name, want in (("other", "differs"), ("edit", "differs"), ("length", "source list length"),
                        ("macro", "neither"), ("has", "__has_include")):
         repo, path, _ = case(name, name)

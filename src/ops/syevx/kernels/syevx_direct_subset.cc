@@ -11,11 +11,11 @@
 //
 // evidence: docs/perf/syevx.md#syevx-tier-2-directsubset
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/queue.hh>
+#include <src/kernels/common/info_span.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -27,11 +27,11 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
-#include "../../../util/template-instantiations.hh"
-#include "../../../kernels/common/two_stage_common.hh"
-#include "../../syev/sytrd/sytrd_sb2st_hh.hh"
+#include <src/util/template-instantiations.hh>
+#include <src/kernels/common/two_stage_common.hh>
+#include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <vector>
-#include "../../ormqr/vendor.hh"
+#include <src/ops/ormqr/vendor.hh>
 
 namespace batchlas {
 

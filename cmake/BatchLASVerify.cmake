@@ -4,6 +4,7 @@
 add_library(batchlas_verify STATIC "${PROJECT_SOURCE_DIR}/src/verify/reference.cc")
 add_library(batchlas::verify ALIAS batchlas_verify)
 target_include_directories(batchlas_verify PUBLIC "${PROJECT_SOURCE_DIR}/include" "${PROJECT_BINARY_DIR}/include")
+target_include_directories(batchlas_verify PRIVATE "${PROJECT_SOURCE_DIR}")
 target_compile_features(batchlas_verify PUBLIC cxx_std_20)
 target_link_libraries(batchlas_verify PUBLIC batchlas)
 

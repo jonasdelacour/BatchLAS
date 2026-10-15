@@ -1,5 +1,5 @@
-#include "init.hh"
-#include "support.hh"
+#include <python/batchlas/bindings/init.hh>
+#include <python/batchlas/bindings/support.hh>
 
 #include <batchlas/blas/linalg.hh>
 

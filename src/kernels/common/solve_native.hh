@@ -8,7 +8,7 @@
 // overwritten by its factors and `pivots` filled exactly as getrf would, B by X -- so a
 // caller can swap `getrf; getrs` for `gesv` and keep every reader of the factor working.
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

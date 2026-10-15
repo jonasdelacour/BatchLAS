@@ -4,20 +4,20 @@
 // kernel path. The baseline implementation and the public sytrd_sb2st entrypoints
 // live in sytrd_sb2st.cc.
 
-#include "sytrd_sb2st_cta.hh"
-#include "sytrd_sb2st_cta_instantiations.hh"
+#include <src/ops/syev/sytrd/sytrd_sb2st_cta.hh>
+#include <src/ops/syev/sytrd/sytrd_sb2st_cta_instantiations.hh>
 
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <batchlas/backend_config.h>
 
-#include "../../../math-helpers.hh"
-#include "../../../sycl/kernel_attrs.hh"
-#include "../../../sycl/local_mem.hh"
-#include "../../../sycl/sscp_target.hh"
+#include <src/math-helpers.hh>
+#include <src/sycl/kernel_attrs.hh>
+#include <src/sycl/local_mem.hh>
+#include <src/sycl/sscp_target.hh>
 
 #include <array>
 #include <cstdint>

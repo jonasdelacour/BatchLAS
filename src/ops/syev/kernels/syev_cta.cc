@@ -5,8 +5,8 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>
@@ -16,7 +16,7 @@
 #include <type_traits>
 #include <iostream>
 
-#include "../../../math-helpers.hh"
+#include <src/math-helpers.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 

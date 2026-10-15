@@ -7,10 +7,10 @@
 // AFTER the relabel, by the item whose `act` is therefore false; and selecting a complex
 // scalar by if/else and never `?:`. evidence: docs/perf/lu.md#the-register-panel-leaf
 
-#include "../getrf_cta_device.hh"
+#include <src/ops/getrf/getrf_cta_device.hh>
 
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

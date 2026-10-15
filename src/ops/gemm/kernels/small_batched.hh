@@ -14,8 +14,8 @@
 #include <complex>
 #include <cstddef>
 #include <type_traits>
-#include "../../../sycl/kernel_attrs.hh"
-#include "vec4.hh"
+#include <src/sycl/kernel_attrs.hh>
+#include <src/ops/gemm/kernels/vec4.hh>
 
 namespace batchlas::sycl_gemm_small {
 

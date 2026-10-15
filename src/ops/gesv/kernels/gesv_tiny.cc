@@ -12,16 +12,16 @@
 // The solution vector is NOT permuted -- x_i is the i-th unknown -- so the store writes
 // rX at row `rowid`, exactly as the factor store does.
 
-#include "../../../kernels/common/solve_native.hh"
+#include <src/kernels/common/solve_native.hh>
 
-#include "../../getrf/getrf_native.hh"
-#include "../../getrf/getrf_cta_device.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/getrf_cta_device.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>

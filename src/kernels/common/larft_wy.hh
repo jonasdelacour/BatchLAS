@@ -17,8 +17,8 @@
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
 
-#include "../../math-helpers.hh"
-#include "../../queue.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
 
 #include <sycl/sycl.hpp>
 

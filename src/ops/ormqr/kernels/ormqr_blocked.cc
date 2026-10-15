@@ -1,15 +1,15 @@
 #include <batchlas/blas/device.hh>
-#include "../../../select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../math-helpers.hh"
-#include "../../../kernels/common/larft_wy.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/kernels/common/larft_wy.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

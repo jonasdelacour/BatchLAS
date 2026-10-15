@@ -17,14 +17,14 @@
 //     kernel fits at 127, one register more is one group per SM, 3/CU spills.
 // evidence: docs/perf/gemm.md#the-128x128-float-kernel
 
-#include "accessors.hh"
-#include "epilogue_linear.hh"
-#include "vec4.hh"
+#include <src/ops/gemm/kernels/accessors.hh>
+#include <src/ops/gemm/kernels/epilogue_linear.hh>
+#include <src/ops/gemm/kernels/vec4.hh>
 
-#include "../gemm_kernels.hh"
+#include <src/ops/gemm/gemm_kernels.hh>
 
-#include "../../../linalg-impl.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/linalg-impl.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

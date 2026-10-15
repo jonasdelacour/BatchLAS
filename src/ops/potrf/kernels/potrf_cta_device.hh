@@ -15,8 +15,8 @@
 //   never a dynamic index (which silently relocates them to local memory).
 //   evidence: docs/perf/potrf.md#register-gate
 
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

@@ -8,14 +8,14 @@
 // The pivot metric is LAPACK's cabs1, not cuBLAS's modulus, so a pivot test needs a HOST
 // oracle; ipiv is 1-based and GLOBAL, int32 in the public int64 span.
 
-#include "../getrf_native.hh"
-#include "../getrf_cta_device.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/getrf_cta_device.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>

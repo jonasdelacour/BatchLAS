@@ -6,7 +6,7 @@
 
 #include <batchlas/blas/functions/syev.hh>
 
-#include "../../select/vendor.hh"
+#include <src/select/vendor.hh>
 
 #include <cstddef>
 #include <utility>

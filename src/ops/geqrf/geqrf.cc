@@ -9,12 +9,12 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/geqrf.hh>
 
-#include "can_run.hh"
-#include "choice.hh"
-#include "geqrf.hh"
-#include "../../select/select.hh"
-#include "geqrf_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/geqrf/can_run.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/geqrf/geqrf.hh>
+#include <src/select/select.hh>
+#include <src/ops/geqrf/geqrf_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

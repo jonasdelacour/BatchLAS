@@ -4,7 +4,7 @@
 /// @brief Link facts for `if constexpr` gates: is an op's vendor library compiled in for a
 /// backend, and is the native level-3 tile kernel linked. @ingroup api_selection
 
-#include "coverage.hh"
+#include <src/select/coverage.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/enums.hh>

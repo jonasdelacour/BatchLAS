@@ -5,7 +5,7 @@
 // metric, info's exact-zero/1-based/first-failure rule, and the top-of-loop barriers.
 // evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
 
-#include "../../sycl/device_scalar.hh"
+#include <src/sycl/device_scalar.hh>
 
 #include <sycl/sycl.hpp>
 

@@ -9,7 +9,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 
-#include "../../../queue.hh"
+#include <src/queue.hh>
 
 #include <sycl/sycl.hpp>
 

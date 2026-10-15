@@ -9,19 +9,19 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/sycl_interop.hh>
 #include <batchlas/util/env.hh>
 
-#include "../src/util/resident_capacity.hh"
-#include "../src/queue.hh"
-#include "../src/select/select.hh"
-#include "../src/sycl/local_mem.hh"
-#include "../src/ops/potrf/potrf_native.hh"
-#include "../src/ops/getrf/getrf_native.hh"
-#include "../src/ops/geqrf/geqrf_native.hh"
+#include <src/util/resident_capacity.hh>
+#include <src/queue.hh>
+#include <src/select/select.hh>
+#include <src/sycl/local_mem.hh>
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/geqrf/geqrf_native.hh>
 
 #include <algorithm>
 #include <complex>

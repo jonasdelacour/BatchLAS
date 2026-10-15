@@ -9,11 +9,11 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "../getrs/getrs_native.hh"
-#include "../../kernels/common/solve_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/posv/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/getrs/getrs_native.hh>
+#include <src/kernels/common/solve_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstddef>

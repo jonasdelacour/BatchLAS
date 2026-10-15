@@ -1,12 +1,12 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/local_mem.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/local_mem.hh>
 
 #include <array>
 #include <numeric>

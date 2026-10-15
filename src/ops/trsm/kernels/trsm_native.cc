@@ -5,13 +5,13 @@
 // is a compile-time bucket >= n and the loops are fully unrolled (indexing x by a
 // runtime variable moves it to local memory). Rows n..N-1 pad with Lc(s,s)=1.
 
-#include "../trsm_native.hh"
-#include "../trsm_canonical.hh"
+#include <src/ops/trsm/trsm_native.hh>
+#include <src/ops/trsm/trsm_canonical.hh>
 
-#include "../../../linalg-impl.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/linalg-impl.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

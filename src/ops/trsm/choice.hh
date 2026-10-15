@@ -3,7 +3,7 @@
 /// @file
 /// @brief trsm: cta, sg_left, blocked, vendor. evidence: docs/perf/trsm.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

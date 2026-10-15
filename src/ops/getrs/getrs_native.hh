@@ -3,7 +3,7 @@
 // Native batched GETRS declarations: the composed tier (row permutation + two routed
 // trsm) and the fused narrow-RHS tier; selected in src/ops/getrs/getrs.cc. evidence: docs/perf/lu.md
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

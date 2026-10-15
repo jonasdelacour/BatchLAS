@@ -3,7 +3,7 @@
 /// @file
 /// @brief spmm: direct, vendor. evidence: docs/perf/spmm.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

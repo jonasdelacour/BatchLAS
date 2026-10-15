@@ -5,7 +5,7 @@
 #include <batchlas/backend_config.h>
 #include <sycl/sycl.hpp>
 
-#include "../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 
 #include <algorithm>
 #include <atomic>

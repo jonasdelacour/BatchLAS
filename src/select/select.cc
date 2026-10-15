@@ -1,6 +1,6 @@
-#include "select.hh"
+#include <src/select/select.hh>
 
-#include "../util/resident_capacity.hh"
+#include <src/util/resident_capacity.hh>
 
 #include <batchlas/settings.hh>
 

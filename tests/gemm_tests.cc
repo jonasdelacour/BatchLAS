@@ -13,16 +13,16 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
-#include "../src/select/vendor.hh"
-#include "../src/ops/gemm/choice.hh"
-#include "../src/ops/gemm/gemm_kernels.hh"
-#include "../src/util/resident_capacity.hh"
+#include <src/select/vendor.hh>
+#include <src/ops/gemm/choice.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
+#include <src/util/resident_capacity.hh>
 #include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <utility>
 #include <optional>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 using namespace batchlas;
 

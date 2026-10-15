@@ -1,6 +1,6 @@
 #pragma once
 
-#include "register_tiled_common.hh"
+#include <src/ops/gemm/kernels/register_tiled_common.hh>
 
 #include <stdexcept>
 

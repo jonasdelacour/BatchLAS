@@ -1,6 +1,6 @@
 #pragma once
 #include <batchlas/blas/linalg.hh>
-#include "queue.hh"
+#include <src/queue.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/util/mempool.hh>
 #include <execution>

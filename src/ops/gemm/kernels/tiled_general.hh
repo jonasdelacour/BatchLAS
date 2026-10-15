@@ -1,8 +1,8 @@
 #pragma once
 #include <cstddef>
 
-#include "accessors.hh"
-#include "epilogue_linear.hh"
+#include <src/ops/gemm/kernels/accessors.hh>
+#include <src/ops/gemm/kernels/epilogue_linear.hh>
 
 #include <sycl/sycl.hpp>
 

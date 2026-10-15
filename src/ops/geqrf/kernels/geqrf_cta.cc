@@ -4,14 +4,14 @@
 // the tuned/geqrf.* table's call; a pin (BATCHLAS_GEQRF_ROUTE=cta) reaches it on any build.
 // evidence: docs/perf/qr.md#qr-route-arms
 
-#include "../geqrf_native.hh"
-#include "../geqrf_cta_device.hh"
-#include "../geqrf_panel_reg_device.hh"
+#include <src/ops/geqrf/geqrf_native.hh>
+#include <src/ops/geqrf/geqrf_cta_device.hh>
+#include <src/ops/geqrf/geqrf_panel_reg_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 

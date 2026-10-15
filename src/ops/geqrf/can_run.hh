@@ -6,9 +6,9 @@
 
 #include <batchlas/blas/matrix.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "geqrf_native.hh"
+#include <src/ops/geqrf/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/geqrf/geqrf_native.hh>
 
 #include <cstddef>
 #include <cstdint>

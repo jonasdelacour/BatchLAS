@@ -3,10 +3,10 @@
 // evidence: docs/design/syevx.md#syevx-small-n-why-direct-is-the-answer
 // evidence: docs/perf/syevx.md#syevx-routing-thresholds-as-they-stand
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -16,7 +16,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/functions/syev.hh>
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

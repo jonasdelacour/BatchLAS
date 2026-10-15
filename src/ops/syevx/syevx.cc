@@ -3,10 +3,10 @@
 // n * batch; sparse: LOBPCG, or Filtered on request) is measured, not flop-derived.
 // evidence: docs/perf/syevx.md#syevx-routing-thresholds-as-they-stand
 
-#include "../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../queue.hh"
-#include "syevx.hh"
+#include <src/queue.hh>
+#include <src/ops/syevx/syevx.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>
@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include "../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas {

@@ -4,11 +4,11 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
-#include "../../../sort.hh"
+#include <src/sort.hh>
 #include <batchlas/backend_config.h>
-#include "../../../math-helpers.hh"
-#include "stedc_secular.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/math-helpers.hh>
+#include <src/ops/syev/stedc/stedc_secular.hh>
+#include <src/kernels/common/info_span.hh>
 
 namespace batchlas {
 

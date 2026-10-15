@@ -5,12 +5,12 @@
 // second LAPACK real-beta convention is a second thing to get wrong. evidence:
 // docs/perf/qr.md#the-two-partition-butterflies, #a-residual-test-cannot-guard-a-convention
 
-#include "../geqrf_cta_device.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/geqrf/geqrf_cta_device.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../sycl/device_scalar.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <cstddef>
 #include <cstdint>

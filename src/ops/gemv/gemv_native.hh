@@ -4,7 +4,7 @@
 // this TU out of NO_CPU_TARGETS. evidence: docs/perf/gemv.md#the-five-kernel-bodies
 // m == 0, n == 0 or (alpha == 0 && beta == 1) leaves Y untouched; A unread at alpha == 0.
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

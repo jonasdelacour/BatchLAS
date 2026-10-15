@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/ormqr.hh>
-#include "../src/select/coverage.hh"
+#include <src/select/coverage.hh>
 #include <batchlas/no_route.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/tuning_params.hh>
 #include <batchlas/util/env.hh>
@@ -16,11 +16,11 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/ops/ormqr/choice.hh"
-#include "shipped_table_pick.hh"
+#include <src/ops/ormqr/choice.hh>
+#include <tests/shipped_table_pick.hh>
 
 #include <algorithm>
 #include <cmath>

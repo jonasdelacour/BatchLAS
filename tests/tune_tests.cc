@@ -2,15 +2,15 @@
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, kernel hash v2, the
 // ledger, and the round trip through scripts/sweep_to_table.py. No GPU.
 
-#include "../tools/tune/grid.hh"
-#include "../tools/tune/ledger.hh"
-#include "../tools/tune/race.hh"
-#include "../tools/tune/replay_core.hh"
-#include "../tools/tune/schedule.hh"
-#include "../tools/tune/tiered_driver.hh"
-#include "../tools/tune/tier.hh"
-#include "../tools/tune/tune_core.hh"
-#include "../tools/tune/worker.hh"
+#include <tools/tune/grid.hh>
+#include <tools/tune/ledger.hh>
+#include <tools/tune/race.hh>
+#include <tools/tune/replay_core.hh>
+#include <tools/tune/schedule.hh>
+#include <tools/tune/tiered_driver.hh>
+#include <tools/tune/tier.hh>
+#include <tools/tune/tune_core.hh>
+#include <tools/tune/worker.hh>
 
 #include <gtest/gtest.h>
 #include <fcntl.h>
@@ -331,7 +331,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "36bbfe37"}, {"potrf", "4c2c6cbc"}, {"posv", "ef955dca"}, {"trsm", "38ff0a0c"}};
+        {"gemm", "d13d3605"}, {"potrf", "e25b90cb"}, {"posv", "e589ffae"}, {"trsm", "707034a6"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;

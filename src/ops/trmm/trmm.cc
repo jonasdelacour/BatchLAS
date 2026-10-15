@@ -9,13 +9,13 @@
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/util/mempool.hh>
 
-#include "choice.hh"
-#include "../../backends/level3_shape.hh"
-#include "../../kernels/common/triangular_expand.hh"
-#include "kernels/trmm_triangular_tiles.hh"
-#include "../../expansion_budget.hh"
-#include "../../select/select.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/trmm/choice.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/kernels/common/triangular_expand.hh>
+#include <src/ops/trmm/kernels/trmm_triangular_tiles.hh>
+#include <src/expansion_budget.hh>
+#include <src/select/select.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstddef>

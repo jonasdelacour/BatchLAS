@@ -50,6 +50,10 @@ which validates arguments, chooses a kernel and launches it
 | Verification checks (`batchlas::verify`) | `src/verify/` |
 | Library-wide internals (`queue.hh`, `linalg-impl.hh`, `sort.hh`, `matrix.cc`) | `src/` |
 
+Includes are root-based from the repository root: `#include <src/ops/potrf/potrf_native.hh>`,
+`<src/kernels/common/info_span.hh>`, public headers `<batchlas/...>`. A quoted or relative include
+fails CI.
+
 A new kernel TU also goes into one of the OBJECT-library lists in `src/ops/CMakeLists.txt`, chosen by
 which sources' device symbols it calls, not by folder
 ([build-time structure](design/runtime-internals.md#runtime-internals-build-time-structure)).

@@ -8,11 +8,11 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/settings.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "../../backends/gemm_heterogeneous.hh"
-#include "gemm_kernels.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/gemm/choice.hh>
+#include <src/select/select.hh>
+#include <src/backends/gemm_heterogeneous.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

@@ -4,12 +4,12 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
-#include "../../../math-helpers.hh"
-#include "stedc_secular.hh"
-#include "stedc_merge_kernels.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/math-helpers.hh>
+#include <src/ops/syev/stedc/stedc_secular.hh>
+#include <src/ops/syev/stedc/stedc_merge_kernels.hh>
+#include <src/kernels/common/info_span.hh>
 
 namespace batchlas {
 

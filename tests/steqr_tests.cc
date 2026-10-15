@@ -6,8 +6,8 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 
 #include <algorithm>
 #include <array>
@@ -100,7 +100,7 @@ struct SteqrConfig {
     static constexpr Backend BackendVal = B;
 };
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 // STEQR tests are not meaningful for complex types.
 using SteqrTestTypes = typename test_utils::backend_types_filtered<SteqrConfig, false>::type;
 

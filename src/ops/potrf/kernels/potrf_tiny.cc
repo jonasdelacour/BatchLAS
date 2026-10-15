@@ -9,13 +9,13 @@
 // decisive argument is portability: sg_partition.hh's group_barrier(part) is only a memory fence
 // on masked SPIR-V, so a publish/read pair ordered only by it is not ordered everywhere.
 
-#include "../potrf_native.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 

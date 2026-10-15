@@ -1,10 +1,10 @@
-#include "../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 
-#include "../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

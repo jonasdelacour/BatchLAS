@@ -19,9 +19,9 @@
 
 // Quoted on purpose: src/util/ is private and on no -I line. Never convert to <> or add -I src.
 // evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
-#include "util/internal-api.hh"
-#include "util/kernel-trace.hh"
-#include "sycl/impl.hh"
+#include <src/util/internal-api.hh>
+#include <src/util/kernel-trace.hh>
+#include <src/sycl/impl.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 

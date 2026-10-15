@@ -15,13 +15,13 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
-#include "sytrd_sb2st_hh.hh"
-#include "../../../sycl/kernel_attrs.hh"
-#include "../../../sycl/local_mem.hh"
+#include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
+#include <src/sycl/kernel_attrs.hh>
+#include <src/sycl/local_mem.hh>
 
 #include <algorithm>
 #include <cctype>

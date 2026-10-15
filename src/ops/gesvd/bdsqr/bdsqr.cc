@@ -3,10 +3,10 @@
 
 #include <batchlas/util/mempool.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/kernels/common/info_span.hh>
 
 #include <algorithm>
 #include <cmath>

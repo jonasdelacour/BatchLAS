@@ -1,5 +1,5 @@
 #include <batchlas/blas/linalg.hh>
-#include "../../math-helpers.hh"
+#include <src/math-helpers.hh>
 
 namespace batchlas {
 

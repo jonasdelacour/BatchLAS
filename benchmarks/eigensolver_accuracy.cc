@@ -1,10 +1,10 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/linalg.hh>
-#include "accuracy_utils.hh"
+#include <benchmarks/accuracy_utils.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <cmath>

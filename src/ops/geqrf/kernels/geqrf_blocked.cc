@@ -3,12 +3,12 @@
 // The update applies (I - V T^H V^H), not (I - V T V^H); identical for real scalars, so
 // the wrong one only breaks complex. Design and evidence: docs/perf/qr.md
 
-#include "../geqrf_native.hh"
-#include "../geqrf_panel_reg_device.hh"
-#include "../../../kernels/common/larft_wy.hh"
+#include <src/ops/geqrf/geqrf_native.hh>
+#include <src/ops/geqrf/geqrf_panel_reg_device.hh>
+#include <src/kernels/common/larft_wy.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 #include <batchlas/settings.hh>

@@ -8,10 +8,10 @@
 // partition must reach every partition collective, so no kernel here returns early.
 // evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
-#include "sg_partition/sg_partition.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
 
-#include "../../sycl/device_scalar.hh"
-#include "../../sycl/kernel_attrs.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/backend_config.h>
 

@@ -1,13 +1,13 @@
 #pragma once
 #include <cstddef>
 
-#include "accessors.hh"
-#include "epilogue_linear.hh"
-#include "load_policies.hh"
+#include <src/ops/gemm/kernels/accessors.hh>
+#include <src/ops/gemm/kernels/epilogue_linear.hh>
+#include <src/ops/gemm/kernels/load_policies.hh>
 
-#include "../gemm_kernels.hh"
+#include <src/ops/gemm/gemm_kernels.hh>
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 
 #include <sycl/sycl.hpp>
 #include <utility>

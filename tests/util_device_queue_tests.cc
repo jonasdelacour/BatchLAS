@@ -4,7 +4,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/sycl_interop.hh>
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <cmath>

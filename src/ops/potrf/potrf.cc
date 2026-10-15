@@ -8,10 +8,10 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "potrf_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/potrf/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstddef>

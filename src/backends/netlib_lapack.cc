@@ -1,9 +1,9 @@
 #include <batchlas/blas/linalg.hh>
-#include "../linalg-impl.hh"
-#include "level3_shape.hh"
+#include <src/linalg-impl.hh>
+#include <src/backends/level3_shape.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/backend_config.h>
 #include <complex>
@@ -22,9 +22,9 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
 
-#include "gemm_heterogeneous.hh"
-#include "host_blas_health.hh"
-#include "../util/template-instantiations.hh"
+#include <src/backends/gemm_heterogeneous.hh>
+#include <src/backends/host_blas_health.hh>
+#include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas{

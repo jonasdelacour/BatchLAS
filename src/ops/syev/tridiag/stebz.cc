@@ -8,11 +8,11 @@
 // eigenvalue. Eigenvalues are mutually independent, so no communication is needed
 // beyond the initial reduction for the Gershgorin bounds.
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -20,7 +20,7 @@
 #include <stdexcept>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

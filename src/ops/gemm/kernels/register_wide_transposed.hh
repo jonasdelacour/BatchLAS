@@ -8,11 +8,11 @@
 // to a panel width (16 or 32), not square.
 // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
 
-#include "../../../linalg-impl.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../gemm_kernels.hh"
-#include "register_64x64_k16_wide.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/linalg-impl.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
+#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

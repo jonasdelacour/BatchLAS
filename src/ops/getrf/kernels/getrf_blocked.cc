@@ -3,11 +3,11 @@
 // (P) calls a device symbol from getrf_cta.cc and the two share one device-code cluster.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
-#include "../getrf_native.hh"
-#include "../../../kernels/common/lu_laswp.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/kernels/common/lu_laswp.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 

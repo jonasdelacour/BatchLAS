@@ -1,4 +1,4 @@
-#include "bindings/init.hh"
+#include <python/batchlas/bindings/init.hh>
 
 #include <pybind11/pybind11.h>
 

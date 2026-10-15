@@ -3,7 +3,7 @@
 // Native batched GETRI declarations: the arm writes P straight into C, then two
 // routed trsm calls; zero workspace. evidence: docs/perf/lu.md#getri-window-evidence
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

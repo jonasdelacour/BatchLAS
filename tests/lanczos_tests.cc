@@ -4,8 +4,8 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 #include <iostream>
 #include <vector>
 #include <algorithm>

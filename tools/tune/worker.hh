@@ -4,9 +4,9 @@
 // outcome_text() records (as a --cell child writes them) and a {"kind":"done"} line.
 // evidence: docs/design/tiered-tuning.md#engine-persistent-workers-and-the-carve-out-audit
 
-#include "spec.hh"
-#include "tiered_driver.hh"
-#include "tune_core.hh"
+#include <tools/tune/spec.hh>
+#include <tools/tune/tiered_driver.hh>
+#include <tools/tune/tune_core.hh>
 
 #include <sys/types.h>
 

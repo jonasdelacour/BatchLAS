@@ -4,11 +4,11 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/mempool.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../select/vendor.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../kernels/common/larft_wy.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/select/vendor.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/kernels/common/larft_wy.hh>
 
 #include <algorithm>
 #include <cctype>

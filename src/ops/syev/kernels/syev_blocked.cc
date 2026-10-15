@@ -1,6 +1,6 @@
 #include <batchlas/blas/extensions.hh>
-#include "../uplo_mirror.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/ops/syev/uplo_mirror.hh>
+#include <src/kernels/common/info_span.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/linalg.hh>
@@ -8,9 +8,9 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

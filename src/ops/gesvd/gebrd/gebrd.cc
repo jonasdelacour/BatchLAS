@@ -1,9 +1,9 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <stdexcept>
 

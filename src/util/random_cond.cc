@@ -3,7 +3,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <cmath>
 #include <complex>
 #include <random>

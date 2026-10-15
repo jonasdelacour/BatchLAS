@@ -1,15 +1,15 @@
-#include "../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/functions.hh>
-#include "../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <complex>
 
-#include "batch_launch.hh"
-#include "level3_shape.hh"
-#include "gemm_heterogeneous.hh"
+#include <src/backends/batch_launch.hh>
+#include <src/backends/level3_shape.hh>
+#include <src/backends/gemm_heterogeneous.hh>
 
 namespace batchlas {
 

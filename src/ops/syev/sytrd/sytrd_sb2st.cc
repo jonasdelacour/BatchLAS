@@ -6,12 +6,12 @@
 
 #include <batchlas/backend_config.h>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
 
-#include "sytrd_sb2st_cta.hh"
+#include <src/ops/syev/sytrd/sytrd_sb2st_cta.hh>
 
 #include <algorithm>
 #include <cctype>

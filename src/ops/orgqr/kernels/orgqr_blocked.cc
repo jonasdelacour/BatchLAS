@@ -5,10 +5,10 @@
 // instantiated per scalar type with no Backend parameter, so only the facade
 // can name the routed ormqr. An empty seam throws.
 
-#include "../orgqr_native.hh"
+#include <src/ops/orgqr/orgqr_native.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 

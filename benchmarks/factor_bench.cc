@@ -35,16 +35,16 @@
 
 #include <batchlas/settings.hh>
 
-#include "../src/ops/getrf/getrf_native.hh"
-#include "../src/ops/potrf/potrf_native.hh"
-#include "../src/ops/trsm/trsm_native.hh"
-#include "../src/ops/geqrf/choice.hh"
-#include "../src/ops/orgqr/choice.hh"
-#include "../src/ops/getrf/choice.hh"
-#include "../src/ops/getrs/choice.hh"
-#include "../src/ops/gesv/choice.hh"
-#include "../src/ops/posv/choice.hh"
-#include "../src/ops/potrf/choice.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/trsm/trsm_native.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/orgqr/choice.hh>
+#include <src/ops/getrf/choice.hh>
+#include <src/ops/getrs/choice.hh>
+#include <src/ops/gesv/choice.hh>
+#include <src/ops/posv/choice.hh>
+#include <src/ops/potrf/choice.hh>
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>

@@ -6,11 +6,11 @@
 // evidence: docs/perf/syevx.md#syevx-tier-1-stebz-and-stein
 // evidence: docs/design/syevx.md#syevx-for-batches-of-medium-matrices
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

@@ -83,7 +83,7 @@ check() {
     fi
 
     "$CXX" -fsyntax-only -std=c++20 -fsycl -ferror-limit=0 \
-        -Iinclude -I"$BUILD_INCLUDE" -Isrc -I"$ROCM/include" \
+        -I. -Iinclude -I"$BUILD_INCLUDE" -Isrc -I"$ROCM/include" \
         -include "$WORK/force_rocm.h" \
         -Wno-unused-command-line-argument \
         "$tu" > "$log" 2>&1

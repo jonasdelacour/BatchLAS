@@ -4,7 +4,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 
 #include <cstddef>
 

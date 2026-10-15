@@ -7,11 +7,11 @@
 // at launch for complex<double>.
 // evidence: docs/perf/gemm.md#the-wide-scalar-kernel
 
-#include "../../../sycl/device_scalar.hh"
-#include "../gemm_kernels.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
 
-#include "../../../linalg-impl.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/linalg-impl.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/backend_config.h>
 

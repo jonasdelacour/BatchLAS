@@ -2,20 +2,20 @@
 // decided only in src/ops/gemm/gemm.cc; nothing here selects, and nothing falls back to another
 // kernel: a launcher handed a form or config it does not instantiate throws.
 
-#include "../gemm_kernels.hh"
+#include <src/ops/gemm/gemm_kernels.hh>
 
-#include "accessors.hh"
-#include "register_128x128.hh"
-#include "register_64x64_k16_wide.hh"
-#include "register_launchers.hh"
-#include "register_wide_transposed.hh"
-#include "small_batched.hh"
-#include "tiled_general.hh"
-#include "../../../sycl/local_mem.hh"
+#include <src/ops/gemm/kernels/accessors.hh>
+#include <src/ops/gemm/kernels/register_128x128.hh>
+#include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
+#include <src/ops/gemm/kernels/register_launchers.hh>
+#include <src/ops/gemm/kernels/register_wide_transposed.hh>
+#include <src/ops/gemm/kernels/small_batched.hh>
+#include <src/ops/gemm/kernels/tiled_general.hh>
+#include <src/sycl/local_mem.hh>
 
-#include "../../../linalg-impl.hh"
-#include "../choice.hh"
-#include "../../../queue.hh"
+#include <src/linalg-impl.hh>
+#include <src/ops/gemm/choice.hh>
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <optional>

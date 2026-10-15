@@ -1,5 +1,5 @@
 #include <batchlas/blas/extra.hh>
-#include "../queue.hh"
+#include <src/queue.hh>
 
 namespace batchlas {
 

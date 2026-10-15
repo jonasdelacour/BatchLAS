@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "backend_amdgcn_core.hh"
+#include <src/kernels/common/sg_partition/backend_amdgcn_core.hh>
 
 namespace batchlas::sgp {
 

@@ -7,12 +7,12 @@
 #include <tuple>
 #include <utility>
 #include <batchlas/backend_config.h>
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sort.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "steqr_internal.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sort.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/ops/syev/steqr/steqr_internal.hh>
 
 namespace batchlas {
 

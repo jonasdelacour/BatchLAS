@@ -28,12 +28,12 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <sycl/sycl.hpp>
 
-#include "../../src/select/select.hh"
-#include "cell_runner.hh"
-#include "spec.hh"
-#include "tiered_driver.hh"
-#include "tune_core.hh"
-#include "worker.hh"
+#include <src/select/select.hh>
+#include <tools/tune/cell_runner.hh>
+#include <tools/tune/spec.hh>
+#include <tools/tune/tiered_driver.hh>
+#include <tools/tune/tune_core.hh>
+#include <tools/tune/worker.hh>
 
 #include <fcntl.h>
 #include <signal.h>

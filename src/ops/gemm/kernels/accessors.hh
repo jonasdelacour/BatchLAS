@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../gemm_kernels.hh"
+#include <src/ops/gemm/gemm_kernels.hh>
 
 #include <complex>
 

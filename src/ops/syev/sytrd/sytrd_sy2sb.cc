@@ -8,10 +8,10 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../geqrf/geqrf.hh"  // geqrf_buffer_size_bound: sized once, run on sub-views
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/ops/geqrf/geqrf.hh>  // geqrf_buffer_size_bound: sized once, run on sub-views
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <complex>

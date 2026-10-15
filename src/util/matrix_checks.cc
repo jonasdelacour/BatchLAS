@@ -21,9 +21,9 @@
 #include <string>
 #include <vector>
 
-#include "../queue.hh"
-#include "../select/select.hh"
-#include "../sycl/device_scalar.hh"
+#include <src/queue.hh>
+#include <src/select/select.hh>
+#include <src/sycl/device_scalar.hh>
 
 namespace batchlas {
 namespace {

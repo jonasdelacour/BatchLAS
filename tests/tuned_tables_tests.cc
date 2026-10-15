@@ -5,26 +5,26 @@
 
 #include <batchlas/util/env.hh>
 
-#include "../src/ops/gemm/choice.hh"
-#include "../src/ops/geqrf/choice.hh"
-#include "../src/ops/orgqr/choice.hh"
-#include "../src/ops/getrf/choice.hh"
-#include "../src/ops/getrs/choice.hh"
-#include "../src/ops/posv/choice.hh"
-#include "../src/ops/potrf/choice.hh"
-#include "../src/ops/trsm/choice.hh"
-#include "../src/ops/gemv/choice.hh"
-#include "../src/ops/ormqr/choice.hh"
-#include "../src/ops/getri/choice.hh"
-#include "../src/ops/gesv/choice.hh"
-#include "../src/ops/gesvd/choice.hh"
-#include "../src/ops/spmm/choice.hh"
-#include "../src/ops/syev/choice.hh"
-#include "../src/ops/symm/choice.hh"
-#include "../src/ops/syrk/choice.hh"
-#include "../src/ops/syr2k/choice.hh"
-#include "../src/ops/trmm/choice.hh"
-#include "../src/select/select.hh"
+#include <src/ops/gemm/choice.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/orgqr/choice.hh>
+#include <src/ops/getrf/choice.hh>
+#include <src/ops/getrs/choice.hh>
+#include <src/ops/posv/choice.hh>
+#include <src/ops/potrf/choice.hh>
+#include <src/ops/trsm/choice.hh>
+#include <src/ops/gemv/choice.hh>
+#include <src/ops/ormqr/choice.hh>
+#include <src/ops/getri/choice.hh>
+#include <src/ops/gesv/choice.hh>
+#include <src/ops/gesvd/choice.hh>
+#include <src/ops/spmm/choice.hh>
+#include <src/ops/syev/choice.hh>
+#include <src/ops/symm/choice.hh>
+#include <src/ops/syrk/choice.hh>
+#include <src/ops/syr2k/choice.hh>
+#include <src/ops/trmm/choice.hh>
+#include <src/select/select.hh>
 
 #include <algorithm>
 #include <complex>

@@ -1,13 +1,13 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
-#include "template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <batchlas/util/mempool.hh>
 #include <complex>
 #include <limits>
 #include <type_traits>
-#include "../queue.hh"
-#include "../ops/syev/vendor.hh"
+#include <src/queue.hh>
+#include <src/ops/syev/vendor.hh>
 namespace batchlas
 {
     template <Backend B, typename T>

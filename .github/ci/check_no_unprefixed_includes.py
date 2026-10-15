@@ -26,10 +26,14 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-SEARCH_DIRS = ("include", "src", "tests", "benchmarks", "python", "examples")
+SEARCH_DIRS = ("include", "src", "tests", "benchmarks", "python", "examples", "tools")
 SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inc", ".ipp", ".c", ".cc", ".cpp", ".cxx", ".cu")
 
 BAD_INCLUDE = re.compile(r'^\s*#\s*include\s*<(blas|util|internal)/')
+# In-tree sources include each other root-based (<src/...>, <tests/...>, <tools/...>), never by a
+# quoted path: a relative "../../x.hh" breaks silently when either file moves.
+QUOTED_INCLUDE = re.compile(r'^\s*#\s*include\s*"')
+QUOTED_DIRS = ("include", "src", "tests", "benchmarks", "python", "tools")
 
 # examples/consumer/decoy_include/ deliberately contains headers named
 # blas/enums.hh, util/workspace.hh and internal/ormqr_blocked.hh. They exist to
@@ -61,11 +65,14 @@ def main(argv):
                 with open(path, "r", encoding="utf-8", errors="replace") as fh:
                     for lineno, line in enumerate(fh, 1):
                         if BAD_INCLUDE.match(line):
-                            findings.append((os.path.relpath(path, root), lineno, line.strip()))
+                            findings.append((os.path.relpath(path, root), lineno, line.strip(),
+                                             "unprefixed include `%s` -- spell it <batchlas/...>"))
+                        elif top in QUOTED_DIRS and QUOTED_INCLUDE.match(line):
+                            findings.append((os.path.relpath(path, root), lineno, line.strip(),
+                                             "quoted include `%s` -- spell it root-based, <src/...>"))
 
-    for rel, lineno, text in findings:
-        print("%s:%d: error: unprefixed include `%s` -- spell it <batchlas/...>"
-              % (rel, lineno, text))
+    for rel, lineno, text, what in findings:
+        print("%s:%d: error: %s" % (rel, lineno, what % text))
     print("check_no_unprefixed_includes: %d file(s) checked, %d problem(s)"
           % (checked, len(findings)))
     return 1 if findings else 0

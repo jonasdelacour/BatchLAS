@@ -7,11 +7,11 @@
 
 #include <batchlas/backend_config.h>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../geqrf/geqrf.hh"  // geqrf_buffer_size_bound: sized once, run on sub-views
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/ops/geqrf/geqrf.hh>  // geqrf_buffer_size_bound: sized once, run on sub-views
 
 #include <algorithm>
 #include <cstdint>

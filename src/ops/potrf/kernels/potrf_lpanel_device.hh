@@ -12,8 +12,8 @@
 // (4) rp[], rS[] and rA[] must stay in registers -- never a parameter, never a dynamic index.
 // evidence: docs/perf/potrf.md#the-lpanel-tier
 
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

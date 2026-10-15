@@ -22,8 +22,8 @@
 #include <type_traits>
 #include <vector>
 
-#include "eigen_verify.hh"
-#include "test_utils.hh"
+#include <tests/eigen_verify.hh>
+#include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
 

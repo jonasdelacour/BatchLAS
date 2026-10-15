@@ -4,18 +4,18 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/group-invoke.hh>
-#include "../../../kernels/common/sg_partition/sg_partition.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 
-#include "../../../math-helpers.hh"
-#include "stedc_secular.hh"
-#include "stedc_merge_kernels.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/math-helpers.hh>
+#include <src/ops/syev/stedc/stedc_secular.hh>
+#include <src/ops/syev/stedc/stedc_merge_kernels.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <cassert>
 #include <algorithm>

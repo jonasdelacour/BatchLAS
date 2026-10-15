@@ -3,8 +3,8 @@
 // DPC++ reports the CUDA opt-in maximum (99 KiB on sm_89/sm_120) and opts launches in itself.
 // acpp reports 48 KiB; BATCHLAS_ACPP_SLM_OPTIN's interposer opts in to the driver maximum.
 // evidence: docs/design/sycl-implementations.md#sycl-impl-slm-budget
-#include "impl.hh"
-#include "../util/resident_capacity.hh"
+#include <src/sycl/impl.hh>
+#include <src/util/resident_capacity.hh>
 
 #include <batchlas/error.hh>
 

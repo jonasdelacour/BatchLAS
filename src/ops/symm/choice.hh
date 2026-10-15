@@ -3,7 +3,7 @@
 /// @file
 /// @brief symm: expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <algorithm>
 #include <array>

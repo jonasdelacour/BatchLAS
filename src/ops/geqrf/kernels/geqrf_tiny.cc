@@ -2,14 +2,14 @@
 // SubGroupPartition<N>, the whole matrix in registers between the load and the store.
 // evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers
 
-#include "../geqrf_native.hh"
-#include "geqrf_tiny_device.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/geqrf/geqrf_native.hh>
+#include <src/ops/geqrf/kernels/geqrf_tiny_device.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <algorithm>
 #include <complex>

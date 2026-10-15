@@ -8,15 +8,15 @@
 // transpose: at step i, lane i broadcasts rA[0..i-1] and lane r keeps element c == r;
 // N(N-1)/2 shuffles, independent of nrhs. evidence: docs/perf/potrf.md#posv-the-backward-solve-costs-a-transpose
 
-#include "../../../kernels/common/solve_native.hh"
+#include <src/kernels/common/solve_native.hh>
 
-#include "../../potrf/potrf_native.hh"
-#include "../../../kernels/common/tiny_device.hh"
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/kernels/common/tiny_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>

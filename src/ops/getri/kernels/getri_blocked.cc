@@ -4,11 +4,11 @@
 // perm[] array and no workspace. Auto takes it only where tuned/getri.* ranks it first.
 // evidence: docs/perf/lu.md#getri-window-evidence
 
-#include "../getri_native.hh"
+#include <src/ops/getri/getri_native.hh>
 
-#include "../../../sycl/device_scalar.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/sycl/device_scalar.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 

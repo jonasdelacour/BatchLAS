@@ -15,9 +15,9 @@
 #include <string>
 #include <vector>    // Include for std::vector used in scan
 #include <batchlas/blas/queue-dispatch.hh>
-#include "queue.hh"
-#include "backends/backend_handle_impl.hh"
-#include "util/philox.hh"
+#include <src/queue.hh>
+#include <src/backends/backend_handle_impl.hh>
+#include <src/util/philox.hh>
 
 namespace batchlas {
 

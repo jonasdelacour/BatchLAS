@@ -15,12 +15,12 @@
 // Known cost: one host read of the convergence flag per outer iteration.
 // evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
-#include "../../../kernels/common/info_span.hh"
+#include <src/queue.hh>
+#include <src/kernels/common/info_span.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -35,7 +35,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas {

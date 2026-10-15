@@ -15,8 +15,8 @@
 #include <cstring>
 #include <type_traits>
 
-#include "../../../sycl/kernel_attrs.hh"
-#include "../../../sycl/sscp_target.hh"
+#include <src/sycl/kernel_attrs.hh>
+#include <src/sycl/sscp_target.hh>
 
 // Asm labels bind these to the LLVM intrinsics, so LLVM attaches the intrinsic's own attributes
 // (convergent, inaccessiblemem). A plain __nvvm_* declaration is left unresolved at ptxas.
@@ -75,8 +75,8 @@ BATCHLAS_SSCP_NVVM void __nvvm_bar_warp_sync(unsigned m) {
 }
 #undef BATCHLAS_SSCP_NVVM
 
-#include "backend_generic.hh"
-#include "backend_nvptx.hh"
+#include <src/kernels/common/sg_partition/backend_generic.hh>
+#include <src/kernels/common/sg_partition/backend_nvptx.hh>
 
 namespace batchlas::sgp {
 

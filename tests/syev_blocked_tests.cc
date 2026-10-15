@@ -9,8 +9,8 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 
 #include <algorithm>
 #include <cmath>

@@ -3,11 +3,11 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
-#include "../src/queue.hh"
+#include <src/queue.hh>
 
 #include <batchlas/util/miniacc.hh>
-#include "acc_utils.hh"
-#include "miniacc_accuracy_common.hh"
+#include <benchmarks/acc_utils.hh>
+#include <benchmarks/miniacc_accuracy_common.hh>
 
 #include <algorithm>
 #include <cmath>

@@ -7,11 +7,11 @@
 #include <batchlas/tuning_params.hh>
 #include <batchlas/util/mempool.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../gesvd_native.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "../../syev/stedc/stedc_internal.hh"
+#include <src/math-helpers.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/ops/gesvd/gesvd_native.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/ops/syev/stedc/stedc_internal.hh>
 
 #include <algorithm>
 #include <chrono>

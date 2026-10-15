@@ -10,9 +10,9 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <cmath>

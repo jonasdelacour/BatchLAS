@@ -16,7 +16,7 @@ declarations (@ref design_symbol_visibility). Private headers follow the additio
 
 - **`BATCHLAS_INTERNAL_API`** (`src/util/internal-api.hh`, never installed). 199 of the 1,083 symbols
   that the 63 test binaries resolve from `libbatchlas*.so` belong to 55 entities declared in no
-  public header. The tests reach them by including private headers by relative path. The macro
+  public header. The tests reach them by including private headers (`<src/...>`). The macro
   gives them default visibility on ELF, so the links work, without promising them to consumers: a
   consumer cannot name a symbol it cannot reach. When the tests stop including private headers,
   delete the macro, or link the tests against the object libraries instead.
@@ -33,10 +33,13 @@ declarations (@ref design_symbol_visibility). Private headers follow the additio
   `std::byte` no visibility attribute, so this specialisation would be hidden. Do not remove the
   attribute: `resize`, both constructors and the destructor silently stop being exported, and the
   only symptom is a consumer link error.
-- **Include spelling.** `src/util/` is private, never installed and on no `-I` line. Its headers are
-  included only by quoted relative paths. Public util headers live in `include/batchlas/util/` and
-  are spelled `<batchlas/util/...>`. Do not add `-I${PROJECT_SOURCE_DIR}/src` and do not convert
-  quoted includes to `<>`.
+- **Include spelling.** `src/` is private and never installed. In-tree code includes it root-based,
+  `<src/util/...>`, through the repository root, which `batchlas_add_source_root`
+  (`cmake/BatchLASTargetHelpers.cmake`) puts on in-tree targets' PRIVATE `-I` line only. Public
+  util headers live in `include/batchlas/util/` and are spelled `<batchlas/util/...>`. Never add
+  `-I${PROJECT_SOURCE_DIR}/src`: `<util/...>` would then name a private header with the spelling
+  `check_no_unprefixed_includes.py` reserves. A public header that spells `<src/...>` fails
+  `check_public_headers.py`.
 
 ## Namespace placement of out-of-line definitions {#runtime-internals-namespace-placement-of-out-of-line-definitions}
 

@@ -1,5 +1,5 @@
 #include <batchlas/blas/extensions.hh>
-#include "../uplo_mirror.hh"
+#include <src/ops/syev/uplo_mirror.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/matrix.hh>
@@ -9,11 +9,11 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include "../../../queue.hh"
-#include "../../../kernels/common/info_span.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../sytrd/sytrd_sb2st_hh.hh"
-#include "../../../kernels/common/two_stage_common.hh"
+#include <src/queue.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
+#include <src/kernels/common/two_stage_common.hh>
 
 #include <algorithm>
 #include <complex>
@@ -22,7 +22,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
-#include "../../ormqr/vendor.hh"
+#include <src/ops/ormqr/vendor.hh>
 
 namespace batchlas {
 

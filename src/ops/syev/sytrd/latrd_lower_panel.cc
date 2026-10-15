@@ -5,10 +5,10 @@
 
 #include <batchlas/backend_config.h>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
 
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>

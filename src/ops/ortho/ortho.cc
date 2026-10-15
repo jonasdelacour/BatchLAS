@@ -1,11 +1,11 @@
-#include "../../linalg-impl.hh"
-#include "../../math-helpers.hh"
-#include "../../select/vendor.hh"
+#include <src/linalg-impl.hh>
+#include <src/math-helpers.hh>
+#include <src/select/vendor.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/util/group-collectives.hh>
-#include "../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
@@ -16,7 +16,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 
-#include "../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 #include <batchlas/settings.hh>
 
 

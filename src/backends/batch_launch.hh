@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 
 namespace batchlas::backend {
 

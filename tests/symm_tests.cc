@@ -4,8 +4,8 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <cstdlib>
 #include <string>
-#include "test_utils.hh"
-#include "../src/ops/symm/choice.hh"
+#include <tests/test_utils.hh>
+#include <src/ops/symm/choice.hh>
 
 // The forced-route tests pin through select::ScopedPin (docs/design/flat-kernel-selection.md §12).
 using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;

@@ -4,11 +4,11 @@
 // getrf pair -- hence EXTENSIONS_FACTORIZATION_SOURCES and lu_laswp.hh's tag.
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 
-#include "../getrs_native.hh"
-#include "../../../kernels/common/lu_laswp.hh"
+#include <src/ops/getrs/getrs_native.hh>
+#include <src/kernels/common/lu_laswp.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 

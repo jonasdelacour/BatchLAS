@@ -7,10 +7,10 @@
 
 #include <batchlas/blas/functions/gemv.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "gemv_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/gemv/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/gemv/gemv_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <type_traits>

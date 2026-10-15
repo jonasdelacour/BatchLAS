@@ -2,8 +2,8 @@
 
 // Tier lattices and multi-axis bisection (docs/design/tiered-tuning.md, "Engine: tiers"). Host-only.
 
-#include "tier.hh"
-#include "tune_core.hh"
+#include <tools/tune/tier.hh>
+#include <tools/tune/tune_core.hh>
 
 #include <cstdint>
 #include <map>

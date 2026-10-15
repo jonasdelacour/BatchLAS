@@ -7,12 +7,12 @@
 // Belongs in EXTENSIONS_FACTORIZATION_SOURCES: calling a getrf CTA device function
 // from here fails the device link with `ptxas fatal`.
 
-#include "../getrs_native.hh"
+#include <src/ops/getrs/getrs_native.hh>
 
-#include "../../../queue.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/group-collectives.hh>
 

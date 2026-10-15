@@ -19,8 +19,8 @@
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include "../../src/ops/syev/choice.hh"
-#include "cell_runner.hh"
+#include <src/ops/syev/choice.hh>
+#include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
 #include <cmath>

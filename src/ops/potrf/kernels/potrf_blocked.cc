@@ -2,13 +2,13 @@
 // the leaf potrf on the ib x ib diagonal block, an info-merge/quench fixup, the panel solve
 // L21 = A21 L11^{-H}, and A22 -= L21 L21^H. See docs/perf/potrf.md#the-blocked-driver
 
-#include "../potrf_native.hh"
-#include "symmetric_product_fold.hh"
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/potrf/kernels/symmetric_product_fold.hh>
 
-#include "../../trsm/trsm_native.hh"
+#include <src/ops/trsm/trsm_native.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
 

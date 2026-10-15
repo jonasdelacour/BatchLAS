@@ -5,12 +5,12 @@
 // as getrf_cta.cc (EXTENSIONS_CTA_SOURCES), which is where lu_cabs1 and lu_zero live.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
-#include "../getrf_native.hh"
-#include "getrf_panel_reg_device.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/kernels/getrf_panel_reg_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/error.hh>
 

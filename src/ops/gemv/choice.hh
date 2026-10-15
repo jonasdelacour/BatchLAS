@@ -3,7 +3,7 @@
 /// @file
 /// @brief gemv: cta, direct, vendor. evidence: docs/perf/gemv.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

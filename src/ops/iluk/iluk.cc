@@ -1,6 +1,6 @@
-#include "../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 
-#include "../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/util/mempool.hh>

@@ -5,13 +5,13 @@
 // THIS arm is the tuned/getrf.* table's call; BATCHLAS_GETRF_ROUTE=cta pins it.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
-#include "../getrf_native.hh"
-#include "../getrf_cta_device.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrf/getrf_cta_device.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/resident_capacity.hh"
-#include "../../../util/template-instantiations.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/resident_capacity.hh>
+#include <src/util/template-instantiations.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
 

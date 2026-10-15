@@ -2,9 +2,9 @@
 
 #include <batchlas/blas/matrix.hh>
 
-#include "../../../math-helpers.hh"
-#include "../../../queue.hh"
-#include "sytrd_sb2st_cta_instantiations.hh"
+#include <src/math-helpers.hh>
+#include <src/queue.hh>
+#include <src/ops/syev/sytrd/sytrd_sb2st_cta_instantiations.hh>
 
 #include <sycl/sycl.hpp>
 

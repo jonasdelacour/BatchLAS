@@ -1,12 +1,12 @@
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/verify/tolerance.hh>
-#include "eigen_verify.hh"
-#include "../src/queue.hh"
-#include "../src/ops/syev/stedc/stedc_levels_plan.hh"
+#include <tests/eigen_verify.hh>
+#include <src/queue.hh>
+#include <src/ops/syev/stedc/stedc_levels_plan.hh>
 #include <batchlas/util/group-collectives.hh>
 
 // Named rather than inherited transitively: the `info` cases below use M_PI,

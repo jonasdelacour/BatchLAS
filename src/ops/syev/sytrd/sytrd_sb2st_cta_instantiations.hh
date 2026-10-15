@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 #define BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(INVOKE) \
     INVOKE((float), (float)) \

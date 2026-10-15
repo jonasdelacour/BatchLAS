@@ -10,10 +10,10 @@
 
 #include <batchlas/blas/functions/spmm.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "spmm_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/spmm/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/spmm/spmm_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstddef>

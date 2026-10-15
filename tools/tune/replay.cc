@@ -2,7 +2,7 @@
 //   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 
-#include "replay_core.hh"
+#include <tools/tune/replay_core.hh>
 
 #include <cstdio>
 #include <cstdlib>

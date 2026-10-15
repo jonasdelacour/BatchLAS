@@ -6,7 +6,7 @@
 // the test; AutoReadsEveryKeyField (synthetic tables) proves key_of's wiring independently.
 // evidence: docs/design/flat-kernel-selection.md#flat-selection-tables-and-provenance
 
-#include "../src/select/select.hh"
+#include <src/select/select.hh>
 
 #include <algorithm>
 #include <stdexcept>

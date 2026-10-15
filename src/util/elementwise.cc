@@ -7,8 +7,8 @@
 #include <complex>
 #include <stdexcept>
 
-#include "../queue.hh"
-#include "template-instantiations.hh"
+#include <src/queue.hh>
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas::linalg {
 

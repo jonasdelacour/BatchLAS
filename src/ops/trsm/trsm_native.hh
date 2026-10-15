@@ -3,7 +3,7 @@
 // Native batched TRSM declarations: V1 (CTA solver, one work-group per matrix)
 // and V2 (blocked driver that calls V1 on each diagonal block). See docs/perf/trsm.md.
 
-#include "../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 

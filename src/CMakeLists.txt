@@ -150,8 +150,8 @@ add_custom_command(
     VERBATIM
 )
 target_sources(batchlas_selection_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
-# src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
-# src/select. ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
+# src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are root-based
+# (<src/...>). ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
 target_sources(batchlas_selection_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/geqrf/geqrf.cc)

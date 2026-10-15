@@ -12,7 +12,7 @@
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -20,18 +20,18 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/settings.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
 // The only non-BatchLAS oracle here (verify::getrf_pivots): both tiers share lu_cabs1, so only
 // TinyPivotsMatchLapackeOnUnstructuredData sees a defect in the pivot METRIC itself.
 #include <batchlas/verify/reference.hh>
 
-#include "../src/ops/getrf/getrf_native.hh"
-#include "../src/ops/getrs/getrs_native.hh"
-#include "../src/ops/getri/getri_native.hh"
-#include "../src/ops/getrs/choice.hh"
-#include "../src/ops/getri/choice.hh"
+#include <src/ops/getrf/getrf_native.hh>
+#include <src/ops/getrs/getrs_native.hh>
+#include <src/ops/getri/getri_native.hh>
+#include <src/ops/getrs/choice.hh>
+#include <src/ops/getri/choice.hh>
 
 #include <algorithm>
 #include <cmath>

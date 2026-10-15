@@ -3,9 +3,9 @@
 // Breadth-first tiered rounds (docs/design/tiered-tuning.md, "Engine: driver interface"). SYCL-free:
 // the GPU side stays in batchlas_tune.cc behind CellMeasurer.
 
-#include "schedule.hh"
-#include "spec.hh"
-#include "tier.hh"
+#include <tools/tune/schedule.hh>
+#include <tools/tune/spec.hh>
+#include <tools/tune/tier.hh>
 
 #include <map>
 #include <set>

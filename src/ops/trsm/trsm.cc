@@ -8,10 +8,10 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
 
-#include "choice.hh"
-#include "../../select/select.hh"
-#include "trsm_native.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/ops/trsm/choice.hh>
+#include <src/select/select.hh>
+#include <src/ops/trsm/trsm_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <complex>
 #include <cstdint>

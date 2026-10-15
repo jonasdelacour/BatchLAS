@@ -4,11 +4,11 @@
 #include <cstddef>
 #include <stdexcept>
 #include <type_traits>
-#include "../linalg-impl.hh"
-#include "../queue.hh"
-#include "../math-helpers.hh"
-#include "../ops/syev/vendor.hh"
-#include "../sycl/sscp_target.hh"
+#include <src/linalg-impl.hh>
+#include <src/queue.hh>
+#include <src/math-helpers.hh>
+#include <src/ops/syev/vendor.hh>
+#include <src/sycl/sscp_target.hh>
 
 namespace batchlas
 {   

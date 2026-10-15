@@ -3,7 +3,7 @@
 /// @file
 /// @brief gesv: tiny, blocked. `evidence: docs/perf/lu.md#the-fused-gesv-tier` @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

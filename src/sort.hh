@@ -3,7 +3,7 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
-#include "queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 
 namespace batchlas {

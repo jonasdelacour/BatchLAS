@@ -28,9 +28,9 @@
 
 #include <batchlas/util/group-invoke.hh>
 
-#include "../src/kernels/common/sg_partition/sg_partition.hh"
-#include "../src/sycl/impl.hh"
-#include "../src/sycl/kernel_attrs.hh"
+#include <src/kernels/common/sg_partition/sg_partition.hh>
+#include <src/sycl/impl.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <algorithm>
 #include <complex>

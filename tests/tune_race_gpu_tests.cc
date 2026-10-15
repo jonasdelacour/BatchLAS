@@ -2,10 +2,10 @@
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).
 
-#include "../tools/tune/schedule.hh"
-#include "../tools/tune/spec.hh"
-#include "../tools/tune/tune_core.hh"
-#include "../tools/tune/worker.hh"
+#include <tools/tune/schedule.hh>
+#include <tools/tune/spec.hh>
+#include <tools/tune/tune_core.hh>
+#include <tools/tune/worker.hh>
 
 #include <gtest/gtest.h>
 #include <unistd.h>

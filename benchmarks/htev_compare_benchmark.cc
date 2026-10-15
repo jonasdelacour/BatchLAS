@@ -5,7 +5,7 @@
 
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
-#include "bench_utils.hh"
+#include <benchmarks/bench_utils.hh>
 #include <batchlas/backend_config.h>
 
 using namespace batchlas;

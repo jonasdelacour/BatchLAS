@@ -5,19 +5,19 @@
 #include <batchlas/verify/tolerance.hh>
 
 #include <batchlas/blas/functions/spmm.hh>
-#include "../src/select/coverage.hh"
+#include <src/select/coverage.hh>
 #include <batchlas/no_route.hh>
-#include "../src/select/vendor.hh"
+#include <src/select/vendor.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
-#include "shipped_table_pick.hh"
+#include <tests/test_utils.hh>
+#include <tests/shipped_table_pick.hh>
 
-#include "../src/ops/spmm/choice.hh"
-#include "../src/ops/spmm/spmm_native.hh"
+#include <src/ops/spmm/choice.hh>
+#include <src/ops/spmm/spmm_native.hh>
 
 #include <algorithm>
 #include <cmath>

@@ -15,12 +15,12 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include "test_utils.hh"
+#include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
-#include "../src/ops/potrf/potrf_native.hh"
-#include "../src/ops/potrf/choice.hh"
+#include <src/ops/potrf/potrf_native.hh>
+#include <src/ops/potrf/choice.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -1387,10 +1387,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
 // The TINY tier's cases, in their own file only for length; they are inside this
 // anonymous namespace so make_spd, make_planted_ldl and potrf_error
 // above are the same oracles the CTA cases use.
-#include "potrf_tiny_cases.inc"
+#include <tests/potrf_tiny_cases.inc>
 
 // The LPANEL tier's cases, here for the same reason: one set of oracles.
-#include "potrf_lpanel_cases.inc"
+#include <tests/potrf_lpanel_cases.inc>
 
 }  // namespace
 

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../../expansion_budget.hh"
-#include "../../queue.hh"
-#include "../../math-helpers.hh"
+#include <src/expansion_budget.hh>
+#include <src/queue.hh>
+#include <src/math-helpers.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

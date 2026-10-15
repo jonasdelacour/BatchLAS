@@ -6,9 +6,9 @@
 // sit in different device-link clusters, so a shared kernel would fail at ptxas.
 // evidence: docs/perf/lu.md#the-laswp-gather
 
-#include "../../sycl/device_scalar.hh"
+#include <src/sycl/device_scalar.hh>
 // ../queue.hh: the public header only forward-declares QueueImpl; ctx->submit needs it defined.
-#include "../../queue.hh"
+#include <src/queue.hh>
 
 #include <batchlas/util/sycl-device-queue.hh>
 

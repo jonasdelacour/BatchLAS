@@ -3,7 +3,7 @@
 /// @file
 /// @brief syev: cta, cta_fused, jacobi, blocked, two_stage, vendor. evidence: docs/perf/syev.md @ingroup api_selection_ops
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <string_view>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "internal-api.hh"
+#include <src/util/internal-api.hh>
 
 #include <sycl/sycl.hpp>
 

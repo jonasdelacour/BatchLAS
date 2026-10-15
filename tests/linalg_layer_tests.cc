@@ -6,8 +6,8 @@
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
 #include <batchlas/verify/reference.hh>
 
-#include "eigen_verify.hh"
-#include "test_utils.hh"
+#include <tests/eigen_verify.hh>
+#include <tests/test_utils.hh>
 
 #include <algorithm>
 #include <cmath>

@@ -6,11 +6,11 @@
 // src/ops/gemm/kernels/register_128x128.hh; both operands are A at two row offsets.
 // evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
-#include "../../../kernels/common/triangular_tiles.hh"
+#include <src/kernels/common/triangular_tiles.hh>
 
-#include "../../../queue.hh"
-#include "../../../util/kernel-trace.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/util/kernel-trace.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

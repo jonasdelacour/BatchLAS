@@ -8,11 +8,11 @@
 #include <type_traits>
 #include <limits>
 #include <algorithm>
-#include "test_utils.hh"
-#include "../src/ops/gemv/gemv_native.hh"
-#include "../src/select/select.hh"
-#include "../src/select/vendor.hh"
-#include "../src/ops/gemv/choice.hh"
+#include <tests/test_utils.hh>
+#include <src/ops/gemv/gemv_native.hh>
+#include <src/select/select.hh>
+#include <src/select/vendor.hh>
+#include <src/ops/gemv/choice.hh>
 #include <complex>
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment

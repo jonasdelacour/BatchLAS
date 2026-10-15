@@ -5,7 +5,7 @@
 
 #include <batchlas/util/sycl-span.hh>
 
-#include "../../queue.hh"
+#include <src/queue.hh>
 
 // Per-item status span: caller-owned USM, 0 = converged, >0 LAPACK-like, empty = not requested.
 // An ACCUMULATOR: cleared once by the entry point, then only raised. evidence: docs/design/runtime-internals.md#runtime-internals-the-per-item-info-span-contract

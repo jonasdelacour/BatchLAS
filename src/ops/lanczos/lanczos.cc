@@ -1,18 +1,18 @@
 //Implementation file for Lanczos algorithm
-#include "../../linalg-impl.hh"
-#include "../../math-helpers.hh"
-#include "../../util/template-instantiations.hh"
+#include <src/linalg-impl.hh>
+#include <src/math-helpers.hh>
+#include <src/util/template-instantiations.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/group-collectives.hh>
-#include "../../queue.hh"
+#include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include "../../util/philox.hh"
+#include <src/util/philox.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
-#include "../../sort.hh"
+#include <src/sort.hh>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MF>

@@ -11,7 +11,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 
-#include "../../queue.hh"
+#include <src/queue.hh>
 
 #include <algorithm>
 #include <cstdint>

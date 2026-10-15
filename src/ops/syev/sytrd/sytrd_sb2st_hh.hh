@@ -5,7 +5,7 @@
 // Q = H_1 ... H_m in generation order, so the back-transform applies them in REVERSE.
 // evidence: docs/perf/sytrd.md#sytrd-the-householder-chase-against-the-givens-chase
 
-#include "../../../util/internal-api.hh"
+#include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>

@@ -1,11 +1,11 @@
-#include "../../../linalg-impl.hh"
+#include <src/linalg-impl.hh>
 #include <batchlas/util/group-collectives.hh>
-#include "../../../math-helpers.hh"
+#include <src/math-helpers.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
-#include "../../../queue.hh"
-#include "../../../sycl/local_mem.hh"
-#include "../../../sycl/sscp_target.hh"
+#include <src/queue.hh>
+#include <src/sycl/local_mem.hh>
+#include <src/sycl/sscp_target.hh>
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <array>
@@ -15,7 +15,7 @@
 #include <batchlas/error.hh>
 #include <batchlas/blas/linalg.hh>
 
-#include "../../../util/template-instantiations.hh"
+#include <src/util/template-instantiations.hh>
 
 namespace batchlas {
 

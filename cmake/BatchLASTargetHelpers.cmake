@@ -1,7 +1,15 @@
+# In-tree sources include each other root-based (<src/ops/potrf/potrf_native.hh>,
+# <tests/test_utils.hh>), never by a relative path. PRIVATE and build-tree only: the installed
+# include root stays <batchlas/...> alone.
+function(batchlas_add_source_root target)
+    target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}")
+endfunction()
+
 function(batchlas_apply_object_options target)
     set(options NO_CPU_TARGETS)
     cmake_parse_arguments(BATCHLAS_OBJ "${options}" "" "" ${ARGN})
 
+    batchlas_add_source_root(${target})
     target_link_libraries(${target} PRIVATE
         batchlas_build_options
         batchlas_dep_options
@@ -18,6 +26,8 @@ function(batchlas_configure_binary_target target)
     set(options NO_FACADE)
     set(multiValueArgs LIBRARIES)
     cmake_parse_arguments(BATCHLAS_BIN "${options}" "" "${multiValueArgs}" ${ARGN})
+
+    batchlas_add_source_root(${target})
 
     set(_batchlas_binary_links ${BATCHLAS_BIN_LIBRARIES})
     if(NOT BATCHLAS_BIN_NO_FACADE)

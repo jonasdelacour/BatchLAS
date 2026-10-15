@@ -4,7 +4,7 @@
 /// @brief gemm: direct, tiled, small, reg, wide, vendor. evidence: docs/perf/gemm.md @ingroup api_selection_ops
 // Sycl-free on purpose: tests and the tuner include it to name the choices the library runs.
 
-#include "../../select/select.hh"
+#include <src/select/select.hh>
 
 #include <array>
 #include <complex>

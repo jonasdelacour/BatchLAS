@@ -6,7 +6,7 @@
 // and the vendors return a REAL beta, and tau is a contract ormqr/orgqr/ormbr/sy2sb read.
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 
-#include "../../sycl/device_scalar.hh"
+#include <src/sycl/device_scalar.hh>
 
 #include <batchlas/util/group-collectives.hh>
 

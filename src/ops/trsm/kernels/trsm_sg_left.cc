@@ -3,13 +3,13 @@
 // broadcast loop is not unrolled and x[] / nL[] go to a stack frame (520 B at
 // cfloat N=32), which V1's kernels in trsm_native.cc do not need.
 
-#include "../trsm_native.hh"
-#include "../trsm_canonical.hh"
+#include <src/ops/trsm/trsm_native.hh>
+#include <src/ops/trsm/trsm_canonical.hh>
 #include <batchlas/error.hh>
 
-#include "../../../queue.hh"
-#include "../../../sycl/device_scalar.hh"
-#include "../../../sycl/kernel_attrs.hh"
+#include <src/queue.hh>
+#include <src/sycl/device_scalar.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 

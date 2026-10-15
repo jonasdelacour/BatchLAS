@@ -18,8 +18,8 @@
 #include <string>
 #include <vector>
 
-#include "test_utils.hh"
-#include "eigen_verify.hh"
+#include <tests/test_utils.hh>
+#include <tests/eigen_verify.hh>
 
 using namespace batchlas;
 
