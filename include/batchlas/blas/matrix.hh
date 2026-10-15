@@ -973,7 +973,8 @@ namespace batchlas {
             return symmetrize(Queue(Device::default_device_for<T>()), uplo);
         }
 
-        /// @brief Mirrors the @p uplo triangle conjugated (a_ji := conj(a_ij)) and makes the diagonal real.
+        /// @brief Mirrors the @p uplo triangle conjugated (a_ji := conj(a_ij)) and makes the diagonal real;
+        ///        symmetrize() for real T.
         /// @pre rows() == cols()
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>

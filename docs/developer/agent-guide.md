@@ -502,7 +502,8 @@ boxes.
   never test `ws.data() != nullptr` to mean "the caller passed a workspace"; use separate overloads.
 - The workspace arena belongs to the `Queue`, so a per-call `Queue` defeats pooling. Leak long-lived
   SYCL objects held in statics: static destruction after the runtime is gone hangs.
-- `linalg::` value-returning wrappers free their scratch while kernels are still enqueued.
+- `linalg::` wrappers that own a local copy of `A` wait before returning (`~Matrix` frees USM without
+  waiting); multi-launch wrappers order themselves on an out-of-order Queue.
   `linalg::qr` is deliberately absent because of an unexplained cross-Queue wrong-answer defect
   (`docs/design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process`).
 - Pivots are packed 1-based int32 everywhere. `cusolverDnXgetrs` wants int64.

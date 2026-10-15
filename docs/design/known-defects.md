@@ -91,7 +91,7 @@ closed and kept only for numbering.
 - **Symptom (inferred):** on real scalars, `ConjTrans` is passed as the conjugating enum, which
   should give wrong results as it did in cuSPARSE.
 - **Cause:** `src/backends/rocsparse.cc:37-38` and `:70-71` pass `enum_convert` results straight
-  through. That conversion (`src/linalg-impl.hh:275-281`) maps `ConjTrans` to
+  through. That conversion (`src/linalg-impl.hh:267-273`) maps `ConjTrans` to
   `rocsparse_operation_conjugate_transpose` for every scalar type.
 - **Reference fix:** `cusparse_op<T>` in `src/backends/cusparse.cc:29-40`.
 - **Status:** inferred, not observed. There is no AMD device here.
@@ -282,7 +282,8 @@ With large finite poison in the triangle the caller did not name:
 Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. syev sends cfloat
 n = 9..32 and cdouble n <= 32 to `syev_cta`. syev `two_stage` with Lower is the Auto choice for
 jobz=N above n = 320, and for float V with n = 449..1024. A caller that stores only the upper
-triangle gets a wrong answer today.
+triangle gets a wrong answer today. `linalg::eigh`, `eigvalsh` and the Hermitian `linalg::svd`
+mirror the named triangle on their copy first (`MatrixView::hermitize`), so they are unaffected.
 
 - **Tests:** `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
   (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
@@ -425,9 +426,9 @@ because `syev_cta` with Upper reads the lower triangle.
 
 `linalg::qr` is absent from `include/batchlas/blas/linalg-ops.hh`. Composing `geqrf`,
 `triangular_mask_into` and `orgqr` returns \f$QR \ne A\f$ after an earlier `linalg::qr` call in the
-same process. Run alone, it passes. The repro is `tests/linalg_layer_tests.cc`, 4x.
+same process. Run alone, it passes. No repro is checked in: the wrapper left the tree with its
+test. Rebuild one by composing the three calls twice in one process.
 
-The `linalg::` value-returning wrappers free their scratch while kernels may still be enqueued.
 The workspace arena belongs to the `Queue` (see @ref design_runtime_internals). Look at state that
 outlives one call first: arena reuse, a static, or a stale event.
 

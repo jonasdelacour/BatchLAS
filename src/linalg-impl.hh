@@ -42,8 +42,6 @@
     #include <rocsolver/rocsolver.h>
 #endif
 
-#include <batchlas/blas/linalg.hh>
-
 
 namespace batchlas{
     template <typename T, BackendLibrary B>

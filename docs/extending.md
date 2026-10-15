@@ -209,8 +209,8 @@ Event gemm(Queue&, const MA& A, ..., const GemmOptions<T>& opts);
 
 Keep that shape. Fixing `T` from the first matrix before the option parameter is considered is what
 makes `{.alpha = 2.0f}` compile (a braced initialiser deduces nothing), and what lets `Matrix` and
-`MatrixView` be passed and mixed. Positional entry points have a `Matrix` wrapper beside the
-`MatrixView` primary; everything converts to `MatrixView` before the positional call.
+`MatrixView` be passed and mixed. Positional entry points take `MatrixView` only: a `Matrix` is a
+`MatrixView` and binds to it directly, so no owning wrapper is written.
 
 ## Keep the documentation examples compiling
 
