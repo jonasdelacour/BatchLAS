@@ -11,6 +11,7 @@ add_executable(batchlas_tune_impl
     schedule.cc
     tiered_driver.cc
     worker.cc
+    nvml_guard.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc
@@ -35,6 +36,8 @@ add_executable(batchlas_tune_impl
 batchlas_configure_binary_target(batchlas_tune_impl LIBRARIES batchlas::verify)
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# The guard dlopens libnvidia-ml (nvml_guard.cc); no link-time NVML dependency.
+target_link_libraries(batchlas_tune_impl PRIVATE ${CMAKE_DL_LIBS})
 
 # The command users run. It must stay SYCL-free (no batchlas_configure_binary_target): linking
 # libbatchlas or libsycl would put a CUDA context on every visible GPU (see launcher.cc).

@@ -43,6 +43,7 @@ std::string run_line(const RunMeta& m) {
         .str("device_name", m.device_name).str("batchlas", m.batchlas).str("argv", m.argv).str("date", m.date)
         .str("tier", to_string(m.tier)).str("keys", m.keys).str("candidates", m.candidates);
     if (!m.protocol.empty()) j.str("protocol", m.protocol);
+    if (!m.guard.empty()) j.str("guard", m.guard);
     for (const auto& [k, v] : m.worker_mode) j.str("wm." + k, v);
     return j.line();
 }
@@ -90,6 +91,7 @@ RunMeta parse_run(const Record& r) {
     m.candidates = r.get("candidates");
     m.tier = need_tier(r);
     m.protocol = r.get("protocol");
+    m.guard = r.get("guard");
     for (const auto& [k, v] : r.s)
         if (k.rfind("wm.", 0) == 0) m.worker_mode[k.substr(3)] = v;
     return m;

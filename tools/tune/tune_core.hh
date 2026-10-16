@@ -194,8 +194,26 @@ struct GuardCheck {
     std::string refuse;
     std::vector<std::string> tolerated;
 };
-GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign);
+GuardCheck guard_before(const AppScan& scan, bool allow_idle_foreign);
 std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+
+struct ProcUtil {
+    std::string pid;  // "" = the whole GPU (nvidia-smi's only figure); our own pids are dropped first
+    double sm = 0;    // SM utilization, percent
+};
+// A tolerated pid or the whole GPU above `ceiling`, any other pid at any SM load ("610696 at 37%").
+std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, const std::vector<std::string>& tolerated,
+                                        double ceiling);
+
+struct GuardChoice {
+    std::string backend, warning, error;
+};
+GuardChoice choose_guard_backend(const std::string& requested, const std::string& nvml_error);  // nvml_error "" = loaded
+
+// `attempt` returns why the after-check discarded it ("" = kept); re-run at once, then after each
+// `refuse` (seconds waited) until `wait_s`: the last reason. evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+std::string rerun_discarded(const std::function<std::string()>& attempt, const std::function<double()>& refuse,
+                            double wait_s);
 
 // A guard query that fails (nvidia-smi errors while a GPU is reset) is retried after `first_s`,
 // doubling to `max_s`, until `wait_s` of sleeping has passed; then nullopt (the caller stops).

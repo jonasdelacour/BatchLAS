@@ -764,9 +764,8 @@ TEST(TuneGuard, EveryOtherLineIsForeignIncludingUnparseableOnes) {
 AppScan foreign(std::vector<std::string> f) { return AppScan{std::move(f), false}; }
 
 TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), 0, 5, false).refuse, "compute processes [610696]");
-    EXPECT_EQ(guard_before(foreign({}), 6, 5, false).refuse, "utilization 6%");
-    const GuardCheck ok = guard_before(foreign({}), 5, 5, false);
+    EXPECT_EQ(guard_before(foreign({"610696"}), false).refuse, "compute processes [610696]");
+    const GuardCheck ok = guard_before(foreign({}), false);
     EXPECT_EQ(ok.refuse, "");
     EXPECT_TRUE(ok.tolerated.empty());
     EXPECT_EQ(guard_new_foreign(foreign({"610696"}), ok.tolerated), (std::vector<std::string>{"610696"}));
@@ -774,7 +773,7 @@ TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
 }
 
 TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
-    const GuardCheck g = guard_before(foreign({"610696", "671125"}), 3, 5, true);
+    const GuardCheck g = guard_before(foreign({"610696", "671125"}), true);
     EXPECT_EQ(g.refuse, "");
     EXPECT_EQ(g.tolerated, (std::vector<std::string>{"610696", "671125"}));
     EXPECT_TRUE(guard_new_foreign(foreign({"671125", "610696"}), g.tolerated).empty());
@@ -782,21 +781,24 @@ TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
 }
 
 TEST(TuneGuard, NewForeignPidDuringTheChildDiscards) {
-    const GuardCheck g = guard_before(foreign({"610696"}), 0, 5, true);
+    const GuardCheck g = guard_before(foreign({"610696"}), true);
     ASSERT_EQ(g.refuse, "");
     EXPECT_EQ(guard_new_foreign(foreign({"610696", "700001"}), g.tolerated), (std::vector<std::string>{"700001"}));
     EXPECT_EQ(guard_new_foreign(foreign({"[N/A]"}), g.tolerated), (std::vector<std::string>{"[N/A]"}));
 }
 
+// The whole-GPU figure (nvidia-smi) refuses above the ceiling whatever pids are tolerated.
 TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), 57, 5, true).refuse,
-              "utilization 57% with compute processes [610696]");
-    EXPECT_EQ(guard_before(foreign({}), 6, 5, true).refuse, "utilization 6%");
-    EXPECT_TRUE(guard_before(foreign({"610696"}), 57, 5, true).tolerated.empty());
+    const GuardCheck g = guard_before(foreign({"610696"}), true);
+    ASSERT_EQ(g.refuse, "");
+    EXPECT_EQ(foreign_active({{"", 57}}, g.tolerated, 5), (std::vector<std::string>{"GPU at 57%"}));
+    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_TRUE(foreign_active({{"", 5}}, g.tolerated, 5).empty());
+    EXPECT_TRUE(foreign_active({{"", 3}}, g.tolerated, 5).empty()) << "idle tolerated contexts at 3%";
 }
 
 TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), 0, 5, true).refuse, "compute processes [610696,[N/A]]");
+    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), true).refuse, "compute processes [610696,[N/A]]");
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
@@ -826,6 +828,70 @@ TEST(TuneGuard, AFailedQueryRetriesWithDoublingBackoffUntilTheWaitExpires) {
     EXPECT_EQ(query_with_backoff(fails_until(1000), 0, sleep), std::nullopt);
     EXPECT_TRUE(slept.empty()) << "--guard-wait 0: one try";
     EXPECT_EQ(calls, 1);
+}
+
+// evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+TEST(TuneGuard, ToleratedPidsAndTheWholeGpuAreActiveOnlyAboveTheCeiling) {
+    const std::vector<std::string> tol{"610696", "671125"};
+    EXPECT_TRUE(foreign_active({}, tol, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
+    EXPECT_TRUE(foreign_active({{"610696", 0}, {"671125", 5}}, tol, 5).empty()) << "idle tolerated pids, 5 is not above 5";
+    EXPECT_EQ(foreign_active({{"610696", 0}, {"671125", 6}}, tol, 5), (std::vector<std::string>{"671125 at 6%"}));
+    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, tol, 5),
+              (std::vector<std::string>{"671125 at 37%"}))
+        << "one entry per pid, at its peak sample";
+    EXPECT_TRUE(foreign_active({{"", 5}}, {}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
+    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_EQ(foreign_active({{"", 57}}, tol, 5), (std::vector<std::string>{"GPU at 57%"}));
+    EXPECT_EQ(foreign_active({{"671125", 6}}, tol, 10), std::vector<std::string>{}) << "the ceiling is the caller's";
+}
+
+TEST(TuneGuard, AnUntoleratedPidIsActiveAtAnySmLoad) {
+    EXPECT_EQ(foreign_active({{"700001", 1}}, {"610696"}, 5), (std::vector<std::string>{"700001 at 1%"}));
+    EXPECT_EQ(foreign_active({{"700001", 1}}, {}, 5), (std::vector<std::string>{"700001 at 1%"})) << "strict mode";
+    EXPECT_TRUE(foreign_active({{"700001", 0}}, {}, 5).empty()) << "a sample with no SM load (memory or video only)";
+}
+
+TEST(TuneGuard, BackendAutoPrefersNvmlAndFallsBackToNvidiaSmiWithAWarning) {
+    const GuardChoice nvml = choose_guard_backend("auto", "");
+    EXPECT_EQ(nvml.backend, "nvml");
+    EXPECT_TRUE(nvml.warning.empty() && nvml.error.empty());
+    const GuardChoice fb = choose_guard_backend("auto", "dlopen libnvidia-ml.so.1: not found");
+    EXPECT_EQ(fb.backend, "nvidia-smi");
+    EXPECT_NE(fb.warning.find("dlopen libnvidia-ml.so.1: not found"), std::string::npos) << fb.warning;
+    EXPECT_TRUE(fb.error.empty());
+    EXPECT_EQ(choose_guard_backend("nvml", "").backend, "nvml");
+    EXPECT_NE(choose_guard_backend("nvml", "nvmlInit_v2 returned 9").error, "") << "an explicit nvml never degrades";
+    EXPECT_EQ(choose_guard_backend("nvidia-smi", "").backend, "nvidia-smi") << "forced fallback even with NVML loaded";
+    EXPECT_EQ(choose_guard_backend("off", "").backend, "off");
+    EXPECT_NE(choose_guard_backend("smi", "").error, "");
+}
+
+// D12: discard, re-run at once, then refuse (wait) before every further run, until --guard-wait.
+TEST(TuneGuard, ADiscardedRunRerunsOnceThenWaitsBeforeEachRerunUntilTheWaitExpires) {
+    auto run = [](int discards, double wait_s, double per_refuse, int& attempts, int& refusals) {
+        attempts = refusals = 0;
+        return rerun_discarded([&] { return ++attempts <= discards ? "guard: foreign [671125 at 37%]" : std::string(); },
+                               [&] { ++refusals; return per_refuse; }, wait_s);
+    };
+    int at = 0, rf = 0;
+    EXPECT_EQ(run(0, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 1);
+    EXPECT_EQ(rf, 0);
+    EXPECT_EQ(run(1, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 2) << "the first discard re-runs at once";
+    EXPECT_EQ(rf, 0);
+    EXPECT_EQ(run(2, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 3);
+    EXPECT_EQ(rf, 1) << "the second discard refuses and waits first";
+    EXPECT_EQ(run(1000, 3, 1, at, rf), "guard: foreign [671125 at 37%]") << "a burst that never stops";
+    EXPECT_EQ(rf, 3);
+    EXPECT_EQ(at, 5);
+    EXPECT_EQ(run(1000, 3, 0, at, rf), "guard: foreign [671125 at 37%]") << "a refusal that took no time counts 1 s";
+    EXPECT_EQ(rf, 3);
+    EXPECT_EQ(run(1000, 3.5, 2, at, rf), "guard: foreign [671125 at 37%]");
+    EXPECT_EQ(rf, 2) << "2 s, 4 s: past 3.5";
+    EXPECT_EQ(run(4, 3, 1, at, rf), "") << "quiet on the last allowed run";
+    EXPECT_EQ(at, 5);
 }
 
 namespace {
@@ -2435,6 +2501,7 @@ TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
     m.dtype = "float";
     m.run_id = "r1";
     m.protocol = kProtocol;
+    m.guard = "nvml";
     CellRecord c = two_family_cell();
     c.phases.setup = 0.5, c.phases.timed = 1.25, c.phases.ipc = 0.01, c.phases.start = 3.5, c.phases.mode = "worker";
     c.phases.arms = 2;
@@ -2449,6 +2516,7 @@ TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
         RunMeta old = m;
         old.run_id = "r0";
         old.protocol.clear();
+        old.guard.clear();
         LedgerWriter o(d.led(), old);
         RunMeta dirty = m;
         dirty.run_id = "rd";
@@ -2463,10 +2531,13 @@ TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
     EXPECT_EQ(lines[2].find("ph_"), std::string::npos) << "a record without phases has no ph_ field";
     EXPECT_EQ(lines[4].find("audit_s"), std::string::npos) << lines[4];
     EXPECT_EQ(lines[5].find("protocol"), std::string::npos) << "unset: absent, as in an old ledger";
+    EXPECT_EQ(lines[5].find("\"guard\""), std::string::npos) << "unset: absent, as in an old ledger";
     const Ledger l = read_ledger(d.led(), "float");
     ASSERT_EQ(l.runs.size(), 2u);
     EXPECT_EQ(l.runs[0].protocol, kProtocol);
     EXPECT_EQ(l.runs[1].protocol, "");
+    EXPECT_EQ(l.runs[0].guard, "nvml");
+    EXPECT_EQ(l.runs[1].guard, "");
     ASSERT_EQ(l.cells.size(), 2u);
     const Phases& p = l.cells[0].phases;
     EXPECT_DOUBLE_EQ(p.setup, 0.5);

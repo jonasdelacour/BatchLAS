@@ -42,6 +42,7 @@ struct RunMeta {
     Tier tier = Tier::deep;
     std::map<std::string, std::string> worker_mode;
     std::string protocol;  // the per-cell protocol (kProtocol); "" = a ledger from before the field
+    std::string guard;     // guard backend: nvml, nvidia-smi or off; "" = a ledger from before the field
 };
 
 std::string make_run_id();  // <UTC yyyymmddThhmmss>-<host>-<pid>

@@ -103,6 +103,7 @@ families changed are re-raced (`partial:<family>`).
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
 | `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts (see "Guard") |
+| `--guard-backend` | auto | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
 | `--lock-dir` | `/tmp` | per-GPU flock files `batchlas_tune_gpu<N>.lock` |
 | `--cell-timeout` | 1800 s | a child running longer is killed and counts as a failed child |
 | `--gate`, `--old-csv`, `--parent-bin`, `--gate-csv`, `--gate-limit` | `--gate-limit` 1.05 | gate mode |
@@ -245,16 +246,24 @@ device key, because one run writes one device's tables.
 
 ## Guard
 
-Before each child: no compute process on the GPU and utilization at most `--util-ceiling`. Otherwise
-the tuner waits up to `--guard-wait` and then stops. After each child: a compute process on the GPU
-discards that child's numbers and the child is retried. Any process with a context counts, and an
-entry nvidia-smi shows as `[N/A]` counts as foreign. The tuner warns at start when a listed GPU drives
-a display, or when another GPU has compute processes. Without nvidia-smi the tuner stops; `--no-guard`
-skips the guard.
+The guard reads NVML in the driver process (`--guard-backend auto`, the default), or nvidia-smi when
+NVML does not load (with a warning) or with `--guard-backend nvidia-smi`. Details, costs and the
+retry rules: [tiered tuning](../../docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query).
+`batchlas_tune --guard-probe` prints both backends' view of every GPU (read-only).
 
-`--allow-idle-foreign` tolerates other users' idle contexts while utilization is at most
-`--util-ceiling`. Each child remembers their pids, and only a new pid discards its numbers. A busy GPU,
-or an `[N/A]` entry, still refuses. The raw files record `allow_idle_foreign` and `tolerated_foreign`
+Before each cell or child: no compute process on the GPU and no foreign activity (NVML: per-process SM
+load in the last second; nvidia-smi: whole-GPU utilization at most `--util-ceiling`, checked only at a
+full guard, every 60 s on a worker and before each fresh child). Otherwise the tuner waits up to
+`--guard-wait` and then stops. After each: a new compute process, or (NVML) foreign activity since it
+started, discards its numbers. A discarded run is re-run at once; after a second discard the tuner
+waits for a quiet GPU before each re-run and stops after `--guard-wait`. A discard is never an arm error. Any process with a context counts,
+and an entry nvidia-smi shows as `[N/A]` counts as foreign. The tuner warns at start when a listed GPU
+drives a display, or when another GPU has compute processes. Without NVML or nvidia-smi the tuner
+stops; `--no-guard` skips the guard.
+
+`--allow-idle-foreign` tolerates other users' idle contexts. Each child remembers their pids; a new
+pid, or (NVML) a tolerated pid above `--util-ceiling`, discards its numbers. A busy GPU, or an `[N/A]` entry,
+still refuses. The raw files record `allow_idle_foreign` and `tolerated_foreign`
 (`gpu:pid(user),..;..`) in `meta`. Each `pass` and `rep` record carries the pids the child ran beside.
 
 ## Raw JSONL (schema 1)
@@ -264,7 +273,7 @@ Times are milliseconds per call for the whole batch.
 
 | kind | fields |
 |---|---|
-| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign`, `argv` |
+| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign`, `guard_backend`, `argv` |
 | `rep` | `op`, `dtype`, `device`, key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `tolerated_foreign`, `cand`, `rep`, `slot` (position in the rotated order), `ms` |
 | `pass` | as `rep` without `rep`, `slot`, `ms`; plus `status` (`ok`, `skipped`, `bad`, `error`), `reason`, `median_ms`, `residual`, `info_nonzero`, `reps` |
 | `retry` | `op`, `dtype`, key fields, `mode`, `error` (a failed child that was run again) |

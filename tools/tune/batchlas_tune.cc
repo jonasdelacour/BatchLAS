@@ -30,6 +30,7 @@
 
 #include <src/select/select.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/nvml_guard.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tiered_driver.hh>
 #include <tools/tune/tune_core.hh>
@@ -71,7 +72,7 @@
 // POSIX: <unistd.h> need not declare it, and macOS does not.
 extern char** environ;
 
-// The guard reads nvidia-smi; an Apple GPU has no equivalent, so macOS measures unguarded.
+// The guard reads NVML or nvidia-smi; an Apple GPU has no equivalent, so macOS measures unguarded.
 #ifdef __APPLE__
 constexpr bool kHasGpuGuard = false;
 #else
@@ -103,6 +104,7 @@ struct Opts {
     int reps = 16, passes = 2, ld_pad = 0;
     double warm = 1.5, remeasure = 0.10, refine_ratio = 1.1, cap_gib = 4.0, cell_timeout = 1800, guard_wait = 300;
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
+    std::string guard_backend = "auto";
     bool jit = true, refine = true, guard = kHasGpuGuard, devices_given = false, dtype_given = false;
     bool allow_idle_foreign = false, allow_dirty = false, only_named = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
@@ -314,8 +316,17 @@ int info_main(const std::string& result) {
 std::mutex g_worker_mu;
 std::map<int, long> g_worker_pid;
 
+// Exited children and workers, until NVML's sample lag has passed (pids get reused): pid -> expiry.
+std::map<std::string, unsigned long long> g_own_exited;
+constexpr unsigned long long kOwnPidLagUs = 10000000;
+
+void own_exited(long pid) {
+    if (pid > 0) g_own_exited[std::to_string(pid)] = nvml::now_us() + kOwnPidLagUs;
+}
+
 void set_worker_pid(int gpu, long pid) {
     std::lock_guard<std::mutex> lock(g_worker_mu);
+    if (const auto it = g_worker_pid.find(gpu); it != g_worker_pid.end()) own_exited(it->second);
     if (pid > 0) g_worker_pid[gpu] = pid;
     else g_worker_pid.erase(gpu);
 }
@@ -324,6 +335,35 @@ long worker_pid(int gpu) {
     std::lock_guard<std::mutex> lock(g_worker_mu);
     const auto it = g_worker_pid.find(gpu);
     return it == g_worker_pid.end() ? -1 : it->second;
+}
+
+void child_exited(long pid) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    own_exited(pid);
+}
+
+// A live worker or a recently exited child or worker: its NVML samples are never foreign activity.
+bool is_own_pid(const std::string& pid) {
+    std::lock_guard<std::mutex> lock(g_worker_mu);
+    for (const auto& [gpu, w] : g_worker_pid)
+        if (std::to_string(w) == pid) return true;
+    std::erase_if(g_own_exited, [now = nvml::now_us()](const auto& e) { return e.second < now; });
+    return g_own_exited.count(pid) != 0;
+}
+
+// The guard backend for the run (--guard-backend): NVML until a query fails, then nvidia-smi for good.
+std::string g_guard_backend = "off";
+std::atomic<bool> g_nvml{false};
+
+// What guards the run now, for the ledger: "nvml->nvidia-smi" once a query failed.
+std::string guard_backend_now() {
+    return g_guard_backend == "nvml" && !g_nvml ? "nvml->nvidia-smi" : g_guard_backend;
+}
+
+void nvml_lost(int gpu, const char* what) {
+    if (g_nvml.exchange(false))
+        std::fprintf(stderr, "batchlas_tune: warning: NVML %s failed on GPU %d; the guard uses nvidia-smi from now on\n",
+                     what, gpu);
 }
 
 
@@ -336,7 +376,7 @@ struct Cell {
 
 struct ChildOut {
     bool ok = false;
-    bool guard = false;  // a foreign process was on the GPU when the child finished
+    bool guard = false;  // child_once only: the after-check discarded it (child() re-runs it)
     std::string error;
     std::vector<std::string> tolerated;  // idle foreign pids accepted before the child
     std::vector<Record> records;
@@ -361,10 +401,28 @@ public:
     }
 
     // reps/warm < 0: the --reps/--warm options; `extra` arguments go to the child as they are.
+    // A guard discard is re-run (rerun_discarded), never returned.
     ChildOut child(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                    const std::vector<std::string>& arms, const std::string& mode, bool reverse,
                    const std::string& coverage = "", int reps = -1, double warm = -1,
                    const std::vector<std::string>& extra = {}) {
+        ChildOut c;
+        Phases spent;
+        const std::string why = rerun_discarded(
+            [&] {
+                c = child_once(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
+                spent += c.phases;
+                return c.guard ? c.error : std::string();
+            },
+            [&] { return refuse_wait(gpu); }, o_.guard_wait);
+        if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+        c.phases = spent;
+        return c;
+    }
+
+    ChildOut child_once(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
+                        const std::vector<std::string>& arms, const std::string& mode, bool reverse,
+                        const std::string& coverage, int reps, double warm, const std::vector<std::string>& extra) {
         ChildOut c;
         auto t = std::chrono::steady_clock::now();
         const std::vector<std::string> tolerated = guard(gpu);
@@ -382,7 +440,9 @@ public:
                                                              {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}};
         if (!coverage.empty()) env.push_back({"BATCHLAS_COVERAGE_OUT", coverage});
         t = std::chrono::steady_clock::now();
+        const unsigned long long since = nvml::now_us();
         const Spawned s = spawn_wait(argv, env, log, o_.cell_timeout);
+        child_exited(long(s.pid));
         c.phases.spawn = seconds_since(t);
         c.phases.mode = "fresh";
         c.pid = s.pid;
@@ -391,14 +451,13 @@ public:
             c.error = (s.timed_out ? "timeout" : "exit " + std::to_string(s.status)) + ": " + tail(log);
             return c;
         }
-        // gpu_guard.sh's after-check: a process that landed on the GPU mid-child voids its numbers.
-        // Strict mode tolerated nothing, so any foreign entry is new.
+        // gpu_guard.sh's after-check. Strict mode tolerated nothing, so any foreign entry is new.
         t = std::chrono::steady_clock::now();
-        const auto fresh = o_.guard ? guard_new_foreign(apps(gpu), tolerated) : std::vector<std::string>{};
+        const auto fresh = after(gpu, tolerated, since);
         c.phases.add(&Phases::guard, seconds_since(t));
         if (!fresh.empty()) {
             c.guard = true;
-            c.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(gpu) + " after the child; numbers discarded";
+            c.error = "guard: foreign [" + join(fresh, ",") + "] on GPU " + std::to_string(gpu) + " during the child; numbers discarded";
             return c;
         }
         try {
@@ -470,6 +529,8 @@ public:
     ArmBatch race_fresh(const CellJob& j);
     void start_worker(WorkerProcess& w, int gpu);
     WorkerTry race_worker(WorkerProcess& w, const CellJob& j, bool full_guard);
+    WorkerTry race_worker_once(WorkerProcess& w, const CellJob& j, bool full_guard);
+    double refuse_wait(int gpu);
 
 private:
     const Opts& o_;
@@ -484,6 +545,9 @@ private:
     CellRequest race_request(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
+    std::vector<ProcUtil> activity(int gpu, unsigned long long since_us, bool device);
+    GuardCheck check(int gpu, bool device);
+    std::vector<std::string> after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us);
     std::vector<std::string> guard(int gpu);
     std::string preflight();
     void write(const std::string& line) {
@@ -508,8 +572,13 @@ std::optional<std::string> retried(int gpu, const std::string& what, double wait
 }
 
 AppScan Driver::apps(int gpu) {
+    std::optional<std::string> got;
+    if (g_nvml) {
+        if (const auto pids = nvml::compute_pids(gpu)) got = join(*pids, "\n");
+        else nvml_lost(gpu, "compute-process query");
+    }
     const std::string id = "nvidia-smi --id=" + std::to_string(gpu);
-    const auto got = retried(gpu, "--query-compute-apps", o_.guard_wait, [&]() -> std::optional<std::string> {
+    if (!got) got = retried(gpu, "--query-compute-apps", o_.guard_wait, [&]() -> std::optional<std::string> {
         std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
         const auto rc = out.rfind("rc=");
         if (rc == std::string::npos || out.substr(rc) != "rc=0") return std::nullopt;
@@ -540,12 +609,50 @@ double Driver::utilization(int gpu) {
     return std::stod(*got);
 }
 
+// SM samples since since_us, ours dropped. NVML attributes them per process, so a cell of ours never
+// counts; nvidia-smi has only the whole GPU (`device`), which is ours while a cell runs.
+std::vector<ProcUtil> Driver::activity(int gpu, unsigned long long since_us, bool device) {
+    if (g_nvml) {
+        if (auto got = nvml::process_util(gpu, since_us)) {
+            std::erase_if(*got, [](const ProcUtil& p) { return is_own_pid(p.pid); });
+            return *got;
+        }
+        nvml_lost(gpu, "process-utilization query");
+    }
+    if (!device) return {};
+    return {{"", utilization(gpu)}};
+}
+
+// Before a run: no untolerated compute process, no foreign activity in the last second (README "Guard").
+GuardCheck Driver::check(int gpu, bool device) {
+    const GuardCheck g = guard_before(apps(gpu), o_.allow_idle_foreign);
+    if (!g.refuse.empty()) return g;
+    const auto active = foreign_active(activity(gpu, nvml::now_us() - 1000000, device), g.tolerated, o_.util_ceiling);
+    if (!active.empty()) return {"activity [" + join(active, ",") + "]", {}};
+    return g;
+}
+
+// After a run: a new compute process, or foreign activity since it started, voids its numbers.
+std::vector<std::string> Driver::after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us) {
+    if (!o_.guard) return {};
+    std::vector<std::string> bad = guard_new_foreign(apps(gpu), tolerated);
+    for (std::string& a : foreign_active(activity(gpu, since_us, false), tolerated, o_.util_ceiling)) bad.push_back(std::move(a));
+    return bad;
+}
+
+// After a second discard: idle 1 s, then wait for a quiet GPU (guard() dies past --guard-wait).
+double Driver::refuse_wait(int gpu) {
+    const auto t = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    guard(gpu);
+    return seconds_since(t);
+}
+
 // The foreign pids this child runs beside (always empty in strict mode).
 std::vector<std::string> Driver::guard(int gpu) {
     if (!o_.guard) return {};
     for (double waited = 0;; waited += 1) {
-        const AppScan scan = apps(gpu);
-        const GuardCheck g = guard_before(scan, utilization(gpu), o_.util_ceiling, o_.allow_idle_foreign);
+        const GuardCheck g = check(gpu, true);
         if (g.refuse.empty()) return g.tolerated;
         if (waited >= o_.guard_wait)
             die("GPU " + std::to_string(gpu) + " is busy (" + g.refuse + "); refusing to measure");
@@ -566,6 +673,13 @@ std::string Driver::preflight() {
         else if (k != device_)
             die("--devices mixes " + device_ + " and " + k + " (GPU " + std::to_string(gpu) + "): one device per run");
         const std::string q = "nvidia-smi --id=" + std::to_string(gpu);
+        if (g_nvml) {
+            const std::string smi = capture(q + " --query-gpu=uuid --format=csv,noheader 2>/dev/null");
+            const auto mine = nvml::uuid(gpu);
+            if (mine && smi.rfind("GPU-", 0) == 0 && *mine != smi)
+                die("NVML index " + std::to_string(gpu) + " is " + *mine + " but nvidia-smi --id=" + std::to_string(gpu) +
+                    " is " + smi + ": --guard-backend nvidia-smi");
+        }
         if (capture(q + " --query-gpu=display_active --format=csv,noheader 2>/dev/null") == "Enabled")
             std::fprintf(stderr, "batchlas_tune: warning: GPU %d drives a display, which slows L2-resident cells "
                                  "(docs/developer/agent-guide.md §13); prefer a headless GPU\n", gpu);
@@ -598,7 +712,7 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
     ChildOut ch = child_retry(c.gpu, self_, dtype_, c.key, cands_, "time", reverse);
     // Still failing: find the arms that crash a child on their own and time the rest without them.
     std::map<std::string, std::string> alone;
-    if (!ch.ok && !ch.guard) {
+    if (!ch.ok) {
         std::printf("[gpu%d] %s %s pass %d: running each arm alone to find the one that fails\n", c.gpu,
                     spec_.op().c_str(), key_text(c.key).c_str(), pass + 1);
         std::vector<std::string> keep;
@@ -676,7 +790,7 @@ ArmBatch Driver::race_fresh(const CellJob& j) {
     ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, -1, extra);
     Phases spent = ch.phases;
     std::map<std::string, std::string> alone;
-    if (!ch.ok && !ch.guard) {
+    if (!ch.ok) {
         std::vector<std::string> keep;
         for (const auto& a : j.arms) {
             const ChildOut one = child(j.gpu, self_, j.dtype, j.key, {a}, "jit", false);
@@ -712,20 +826,37 @@ void Driver::start_worker(WorkerProcess& w, int gpu) {
     set_worker_pid(gpu, long(w.pid()));
 }
 
-// One cell on the running worker. Between cells the guard checks for foreign compute processes;
-// `full_guard` first idles 1 s so the worker's own last cell leaves the utilization sample.
+// One cell on the running worker; a guard discard is re-run on it (rerun_discarded), never returned.
 WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guard) {
+    WorkerTry r;
+    Phases spent;
+    const std::string why = rerun_discarded(
+        [&] {
+            r = race_worker_once(w, j, full_guard);
+            spent += r.phases;
+            return r.guard ? r.error : std::string();
+        },
+        [&] { return refuse_wait(j.gpu); }, o_.guard_wait);
+    if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+    r.phases = spent;
+    return r;
+}
+
+// Before it: compute processes and (NVML) foreign activity, every cell. nvidia-smi sees only the
+// whole GPU, so its `full_guard` first idles 1 s for the worker's last cell to leave the
+// utilization sample. After it: after(); a hit sets WorkerTry::guard.
+WorkerTry Driver::race_worker_once(WorkerProcess& w, const CellJob& j, bool full_guard) {
     WorkerTry r;
     r.phases.mode = "worker";
     auto t = std::chrono::steady_clock::now();
     std::vector<std::string> tolerated;
-    if (full_guard && o_.guard) {
+    const bool device = full_guard && !g_nvml;
+    if (device && o_.guard) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         t = std::chrono::steady_clock::now();  // the periodic idle second is no cell's guard cost
-        tolerated = guard(j.gpu);
     }
-    for (double waited = 0; o_.guard && !full_guard; waited += 1) {
-        const GuardCheck g = guard_before(apps(j.gpu), 0, o_.util_ceiling, o_.allow_idle_foreign);
+    for (double waited = 0; o_.guard; waited += 1) {
+        const GuardCheck g = check(j.gpu, device);
         if (g.refuse.empty()) {
             tolerated = g.tolerated;
             break;
@@ -737,6 +868,7 @@ WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guar
     std::vector<Record> recs;
     WorkerProcess::Got got = WorkerProcess::Got::eof;
     t = std::chrono::steady_clock::now();
+    const unsigned long long since = nvml::now_us();
     if (w.send(request_line(spec_.op(), race_request(j)))) got = w.receive(o_.cell_timeout, &recs);
     r.phases += phases_from_records(recs);
     r.phases.ipc = seconds_since(t) - r.phases.worker_s();
@@ -746,11 +878,11 @@ WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guar
         return r;
     }
     t = std::chrono::steady_clock::now();
-    const auto fresh = o_.guard ? guard_new_foreign(apps(j.gpu), tolerated) : std::vector<std::string>{};
+    const auto fresh = after(j.gpu, tolerated, since);
     r.phases.add(&Phases::guard, seconds_since(t));
     if (!fresh.empty()) {
         r.guard = true;
-        r.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(j.gpu) +
+        r.error = "guard: foreign [" + join(fresh, ",") + "] on GPU " + std::to_string(j.gpu) +
                   " during the cell; numbers discarded";
         return r;
     }
@@ -809,7 +941,7 @@ std::string Driver::meta_line(const std::string& name) const {
         .num("remeasure", o_.remeasure).num("refine_ratio", o_.refine ? o_.refine_ratio : 0.0)
         .num("cap_gib", o_.cap_gib).integer("ld_pad", o_.ld_pad).str("devices", join(devs, ","))
         .boolean("allow_idle_foreign", o_.allow_idle_foreign).str("tolerated_foreign", tolerated_at_start_)
-        .str("argv", join(o_.argv, " ")).line();
+        .str("guard_backend", guard_backend_now()).str("argv", join(o_.argv, " ")).line();
 }
 
 // Tables come from ledgers only: the op's table is regenerated from the ledger this run appended to.
@@ -929,7 +1061,7 @@ int Driver::gate() {
         fs::create_directories(o_.raw);
         raw_.open(o_.raw + "/gate." + spec_.op() + "." + device_ + ".jsonl", std::ios::trunc);
         if (raw_.is_open())
-            write(Json().str("kind", "guard").boolean("guard", o_.guard)
+            write(Json().str("kind", "guard").boolean("guard", o_.guard).str("guard_backend", guard_backend_now())
                       .boolean("allow_idle_foreign", o_.allow_idle_foreign)
                       .str("tolerated_foreign", tolerated_at_start_).line());
     }
@@ -1117,7 +1249,7 @@ void usage() {
     std::puts(
         "usage: batchlas_tune <op>[,<op>..|all] --tier preview|coarse|deep --devices N[,M..] [options]   ledger + tables\n"
         "       batchlas_tune <op>[,..] --tier T --plan [--devices N | --device-key sm_NN]   plan and estimate, no GPU\n"
-        "       batchlas_tune --status | --import-raw RAW.jsonl | --list\n"
+        "       batchlas_tune --status | --import-raw RAW.jsonl | --list | --guard-probe\n"
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
         "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
         "        --remeasure-keys FILE (lines '<op> <dtype> <name=v,...>': measure those cells again in round 0)\n"
@@ -1125,7 +1257,7 @@ void usage() {
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
-        "         --util-ceiling 5 --allow-idle-foreign --allow-dirty\n"
+        "         --util-ceiling 5 --allow-idle-foreign --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
@@ -1150,6 +1282,37 @@ int list_main(const std::string& repo) {
 
 std::vector<std::string> csv_list(const std::string& v) { return split(v, ','); }
 
+// Read-only: what each guard backend sees on every GPU (no kernel, no context). Exit 1 on a disagreement.
+int guard_probe_main() {
+    const std::string& err = nvml::load_error();
+    std::printf("NVML: %s\n", err.empty() ? "loaded" : err.c_str());
+    int rc = err.empty() ? 0 : 1;
+    for (const std::string& idx : split(capture("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null"), '\n')) {
+        if (idx.empty() || idx.find_first_not_of("0123456789") != std::string::npos) continue;
+        const int gpu = std::stoi(idx);
+        const std::string q = "nvidia-smi --id=" + idx;
+        std::vector<std::string> smi_pids =
+            scan_compute_apps(capture(q + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null"), -1).foreign;
+        const std::string smi_uuid = capture(q + " --query-gpu=uuid --format=csv,noheader 2>/dev/null");
+        const std::string smi_util = capture(q + " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
+        auto pids = nvml::compute_pids(gpu).value_or(std::vector<std::string>{"<failed>"});
+        const auto act = nvml::process_util(gpu, nvml::now_us() - 1000000);
+        std::vector<std::string> samples;
+        for (const ProcUtil& p : act.value_or(std::vector<ProcUtil>{})) samples.push_back(p.pid + ":" + fmt(p.sm, "%g"));
+        const auto util = nvml::utilization(gpu);
+        std::sort(pids.begin(), pids.end());
+        std::sort(smi_pids.begin(), smi_pids.end());
+        const bool same = pids == smi_pids && nvml::uuid(gpu).value_or("") == smi_uuid;
+        std::printf("GPU %d %s\n  nvml:       uuid %s pids [%s] util %s%% sm-samples(1s) %s[%s]\n"
+                    "  nvidia-smi: uuid %s pids [%s] util %s%%\n",
+                    gpu, same ? "match" : "MISMATCH", nvml::uuid(gpu).value_or("?").c_str(), join(pids, ",").c_str(),
+                    util ? fmt(*util, "%g").c_str() : "?", act ? "" : "<failed>", join(samples, ",").c_str(),
+                    smi_uuid.c_str(), join(smi_pids, ",").c_str(), smi_util.c_str());
+        if (!same) rc = 1;
+    }
+    return rc;
+}
+
 TieredOpts tiered_opts(const Opts& o) {
     TieredOpts t;
     t.ops = o.ops;
@@ -1171,6 +1334,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.argv = join(o.argv, " ");
     t.grid = o.grid;
     t.only_named = o.only_named;
+    t.guard = guard_backend_now;
     if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
 }
@@ -1186,6 +1350,7 @@ int main(int argc, char** argv) {
     if (a[0] == "--cell") return child_main(a);
     if (a[0] == "--worker") return worker_main(a);
     if (a[0] == "--info") return info_main(a.size() > 2 ? a[2] : "/dev/stdout");
+    if (a[0] == "--guard-probe") return guard_probe_main();
     Opts o;
     o.argv.assign(argv, argv + argc);
     bool list = false;
@@ -1239,6 +1404,7 @@ int main(int argc, char** argv) {
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
         else if (f == "--util-ceiling") o.util_ceiling = std::stod(val());
         else if (f == "--allow-idle-foreign") o.allow_idle_foreign = true;
+        else if (f == "--guard-backend") o.guard_backend = val();
         else if (f == "--allow-dirty") o.allow_dirty = true;
         else if (f == "--lock-dir") o.lock_dir = val();
         else if (f == "--n-list") o.grid["n"] = csv_list(val());
@@ -1309,6 +1475,7 @@ int main(int argc, char** argv) {
     if (!std::getenv("BATCHLAS_TUNE_LAUNCHED"))
         die("start the tuner as batchlas_tune (launcher.cc), not batchlas_tune_impl: the launcher keeps the driver "
             "off every GPU");
+    if (const GuardChoice spelled = choose_guard_backend(o.guard_backend, ""); !spelled.error.empty()) die(spelled.error);
     if (o.plan) {
         try {
             return run_tiered(tiered_opts(o), {plan_device_key(o), ""}, nullptr);
@@ -1326,6 +1493,13 @@ int main(int argc, char** argv) {
         for (char** e = environ; *e; ++e)
             if (std::strncmp(*e, "BATCHLAS_", 9) == 0 && std::strstr(*e, (std::string("_") + var + "=").c_str()))
                 std::fprintf(stderr, "batchlas_tune: warning: %s is set and reaches the op's children\n", *e);
+    const GuardChoice gc = choose_guard_backend(
+        o.guard ? o.guard_backend : "off",
+        o.guard && (o.guard_backend == "auto" || o.guard_backend == "nvml") ? nvml::load_error() : "");
+    if (!gc.error.empty()) die(gc.error);
+    if (!gc.warning.empty()) std::fprintf(stderr, "batchlas_tune: warning: %s\n", gc.warning.c_str());
+    g_guard_backend = gc.backend;
+    g_nvml = gc.backend == "nvml";
     const auto locks = lock_devices(o);
     if (tiered) {
         TieredMeasurer m(o, o.ops);

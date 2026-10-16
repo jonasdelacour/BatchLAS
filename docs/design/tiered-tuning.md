@@ -451,13 +451,39 @@ the stored winner and runner-up at the stored tier and writes a merged record (`
 `ledger.cc`, and `stale_families` in `sweep_to_table.py`; shared fixture
 `tests/data/ledger_dominated`).
 
-## Engine: guard retries a failed nvidia-smi query
+## Engine: the guard reads NVML, falls back to nvidia-smi {#engine-guard-retries-a-failed-nvidia-smi-query}
 
-The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer reset
-GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed guard query
-(`--query-compute-apps` or the utilization sample) is now retried after 5 s, doubling to 60 s,
-until `--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry;
-only then does the run stop (`query_with_backoff`, `tune_core.hh`).
+**Backend.** `--guard-backend auto` (default) loads `libnvidia-ml.so.1` with `dlopen` in the driver
+(`nvml_guard.cc`; structs declared locally, no `nvml.h`). NVML creates no CUDA context and ignores
+`CUDA_VISIBLE_DEVICES`. Its index is nvidia-smi's `--id`; preflight dies if the UUIDs differ. If NVML
+does not load, `auto` warns and uses nvidia-smi; `nvml` refuses to start; `nvidia-smi` forces the
+old path. A query that fails mid-run warns once and switches the run to nvidia-smi. The run line
+records `guard` (`nvml`, `nvidia-smi`, `off`; `nvml->nvidia-smi` once a run fell back, rewritten at the
+next cell).
+The custom-run `meta` and the gate's `guard` record hold the backend at start. `batchlas_tune --guard-probe` prints what both
+backends see on every GPU, read-only, and exits 1 on a disagreement.
+
+**Activity.** NVML samples SM load per process (`nvmlDeviceGetProcessUtilization`). The driver drops
+every live worker, and each exited child or worker for 10 s (NVML's sample lag; pids get reused). `foreign_active` (`tune_core.hh`) flags a tolerated pid or the
+whole GPU above `--util-ceiling`, and any other pid at any SM load.
+
+| check | NVML | nvidia-smi |
+| --- | --- | --- |
+| before a cell or child | compute pids, foreign activity in the last 1 s | compute pids; whole-GPU utilization at a full guard (after a 1 s idle on a worker, every 60 s) |
+| after it | new pids, foreign activity since its start | new pids |
+| `ph_guard` per worker cell (one potrf coarse smoke, GPU 2; an observation) | 0.002-0.003 s | 0.09-0.10 s, plus the 1 s idle per minute |
+
+A tolerated pid that becomes active during a cell discards it (`rerun_discarded`, `tune_core.hh`).
+The run, worker cell or fresh child, is re-run at once; after a second discard each re-run first
+idles 1 s and waits for a quiet GPU, and after `--guard-wait` of that the run stops. A discard never
+becomes an arm outcome, an arm error or a candidate drop. NVML reports a process's last sample
+period only, so a burst that ended before the after-check can escape.
+
+**Retries.** The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer
+reset GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed nvidia-smi query
+(`--query-compute-apps` or the utilization sample) is retried after 5 s, doubling to 60 s, until
+`--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry; only then
+does the run stop (`query_with_backoff`, `tune_core.hh`).
 
 ## Engine: repeat crashers are dropped
 
@@ -627,7 +653,7 @@ microseconds of their neighbours.
 - *Idle tails:* GPUs waited at every (op, dtype) round boundary. Fixed by the pipelined queues
   ("Engine: pipelined cell queues across op and dtype jobs").
 - *A transient `nvidia-smi` failure* killed the second start. The guard now retries
-  ("Engine: guard retries a failed nvidia-smi query").
+  ("Engine: the guard reads NVML, falls back to nvidia-smi").
 - *Repeat crashers:* the complex<double> cuBLAS gemv segfaults on every shape. The tuner now drops
   such an arm ("Engine: repeat crashers are dropped"), and the library refuses it in `can_run`
   (known defects, defect 13).

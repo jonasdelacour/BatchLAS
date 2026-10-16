@@ -22,7 +22,8 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 - `run`: one per (run id, dtype): host, device, device name, `batchlas` (commit), argv, date,
   tier, `keys` (the `# keys:` text from `choice.hh`), `candidates` (`|`-joined spellings in
   candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
-  before it; absent in ledgers written before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
+  before it; absent in ledgers written before the field), `guard` (the guard backend: `nvml`,
+  `nvidia-smi` or `off`; absent before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
   `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
   lean race's tie set, already verified in its size decade; absent = verified, as in every older

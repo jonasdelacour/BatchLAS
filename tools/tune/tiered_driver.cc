@@ -320,12 +320,16 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.date = date_;
         m.tier = o_.tier;
         m.protocol = kProtocol;
+        m.guard = o_.guard ? o_.guard() : "";
         // Always the full lists: table generation derives the current families from the newest run.
         m.keys = join(j.spec->key_names(), " ");
         m.candidates = join(j.cands, "|");
         m.worker_mode[j.spec->op() + "." + j.dtype] = m_ && m_->persistent() ? "worker" : "fresh";
         j.meta = m;
         j.writer = std::make_unique<LedgerWriter>(j.file, m);
+    } else if (o_.guard && j.meta.guard != o_.guard()) {
+        j.meta.guard = o_.guard();
+        j.writer->update_run(j.meta);
     }
     CellRecord c = r;
     c.date = date_;
