@@ -93,6 +93,7 @@ public:
         const double n = double(key_int(k, "n"));
         return 5.0 * n * n * double(key_int(k, "batch")) * dtype_bytes(dtype);  // A0, LU, A, C0, C
     }
+    FrontierPlan frontier() const override { return {1}; }  // p99.9 fails at every k. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

@@ -125,6 +125,7 @@ public:
         return (nnz * (s + 4.0) + (m + 1.0) * 4.0 + 3.0 * m * q * s) * double(key_int(key, "batch"));
     }
     std::string refine_key() const override { return "m"; }
+    FrontierPlan frontier() const override { return {1}; }  // p99.9 fails at every k. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

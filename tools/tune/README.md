@@ -127,10 +127,10 @@ and planning is in `schedule.cc`.
 - **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
   (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
   Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
-  8; same exact keys; ledger cells of the same or a higher tier count) hold a winner more than 5%
+  and trmm 8; same exact keys; ledger cells of the same or a higher tier count) hold a winner more than 5%
   slower at another of them, or not runnable there, plus bisection midpoints off the grid between
-  adjacent grid values. No cap, no margin: only `--budget` stops it. gemm keeps today's path
-  (`frontier()` stride 1). See "Engine: round planning by flip frontier".
+  adjacent grid values. No cap, no margin: only `--budget` stops it. gemm, geqrf, getri, orgqr
+  and spmm keep today's path (`frontier()` stride 1). See "Engine: round planning by flip frontier".
 - **Pipelined queues.** Rounds are per (op, dtype) job. Each round is one queue sorted by (per-item
   footprint, bytes); every GPU pops the next cell of the earliest job (op order) that has queued
   cells, and a job's next round is planned only once all of its current round's cells are recorded.
