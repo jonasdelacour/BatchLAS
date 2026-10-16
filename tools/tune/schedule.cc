@@ -148,8 +148,8 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     }
     // The lean cell: one untimed and two cut runs, kWarmMinRounds warm rounds (capped), the reps.
     const int reps = ms.empty() ? 0 : lean_max_reps(*std::max_element(ms.begin(), ms.end()), p);
-    double s = overhead_s;
-    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m, kVerifyS);
+    double s = overhead_s + (ms.empty() ? 0 : kVerifyS);
+    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m);
     return s;
 }
 
@@ -375,6 +375,7 @@ CellRecord record_from_arms(const CellKey& key, int round, const std::vector<Arm
         c.hash = hash_of(a.arm);
         c.status = kStatuses.count(a.status) ? a.status : "error";
         c.reason = a.reason;
+        c.verified = a.verified;
         if ((c.status == "ok" || c.status == "eliminated") && !a.ms.empty()) {
             c.median_ms = median(a.ms);
             c.lo = *std::min_element(a.ms.begin(), a.ms.end());
@@ -497,10 +498,14 @@ bool audit_pick(const std::string& run_id, const CellKey& key, double fraction) 
 namespace {
 
 bool feasible(const std::string& status) { return status == "ok" || status == "eliminated"; }
+bool ran(const std::string& status) { return feasible(status) || status == "bad"; }
 
-// A per-candidate disagreement: usable in one process (ok or eliminated; run_race verifies both),
-// refused or failing in the other.
-bool differ(const std::string& w, const std::string& f) { return feasible(w) != feasible(f); }
+// A per-candidate disagreement: usable in one process, refused or failing in the other. An arm one side
+// left unverified (run_race's tie set) can only disagree on whether it ran: ok there and bad here is no defect.
+bool differ(const ArmOutcome& w, const ArmOutcome& f) {
+    if (!w.verified || !f.verified) return ran(w.status) != ran(f.status);
+    return feasible(w.status) != feasible(f.status);
+}
 
 // rank()'s winner among the survivors, else the fastest eliminated arm; "" when nothing was timed.
 std::string winner_of(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& order, double tie) {
@@ -539,7 +544,7 @@ AuditResult audit_compare(const std::vector<ArmOutcome>& warm, const std::vector
     std::vector<std::string> bad;
     for (const ArmOutcome& w : warm)
         for (const ArmOutcome& f : fresh)
-            if (w.arm == f.arm && differ(w.status, f.status)) bad.push_back(w.arm + " " + w.status + "/" + f.status);
+            if (w.arm == f.arm && differ(w, f)) bad.push_back(w.arm + " " + w.status + "/" + f.status);
     if (!bad.empty()) {
         r.verdict = "mismatch:feasibility " + join(bad, ",");
         return r;
@@ -585,12 +590,51 @@ std::size_t LdAuditBook::skipped() const {
     return std::size_t(std::count_if(refused.begin(), refused.end(), [&](const std::string& a) { return !done.count(a); }));
 }
 
-bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason) {
+std::string verify_bucket(const CellKey& key, const std::vector<AxisSpec>& axes, double item_bytes) {
+    std::string b;
+    for (const KV& kv : key)
+        if (std::none_of(axes.begin(), axes.end(), [&](const AxisSpec& a) { return a.log && a.name == kv.name; }))
+            b += kv.name + "=" + kv.value + ",";
+    const double decade = item_bytes > 0 ? std::floor(std::log10(item_bytes)) : 0;
+    return b + "e" + std::to_string(static_cast<int>(decade));
+}
+
+std::vector<std::string> VerifyBook::want(const std::string& bucket, const std::vector<std::string>& arms) const {
+    const auto d = done.find(bucket);
+    std::vector<std::string> out;
+    for (const std::string& a : arms)
+        if (d == done.end() || !d->second.count(a)) out.push_back(a);
+    return out;
+}
+
+std::vector<std::string> VerifyBook::note(const std::string& bucket, const CellKey& key, const std::vector<ArmOutcome>& out) {
+    static const std::set<std::string> kVerifyFails{"residual", "residual_nonfinite", "info"};  // ArmBench::verify
+    std::vector<std::string> fails;
+    for (const ArmOutcome& o : out) {
+        const bool failed = o.status == "bad" && kVerifyFails.count(o.reason);
+        if (!o.verified || !(feasible(o.status) || failed)) continue;
+        done[bucket].insert(o.arm);
+        if (failed && bad[bucket].emplace(o.arm, "verify failed @ " + key_text(key)).second) fails.push_back(o.arm);
+    }
+    return fails;
+}
+
+bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason, bool unverified_only) {
     bool hit = false;
     for (CandResult& c : r.cands)
-        if (c.cand == arm && (c.status == "ok" || c.status == "eliminated")) c.status = "bad", c.reason = reason, hit = true;
+        if (c.cand == arm && feasible(c.status) && !(unverified_only && c.verified)) c.status = "bad", c.reason = reason, hit = true;
     if (hit) std::erase(r.ranked, arm);
     return hit;
+}
+
+bool verified_front(CellRecord& r) {
+    const auto first = std::find_if(r.ranked.begin(), r.ranked.end(), [&](const std::string& s) {
+        return std::any_of(r.cands.begin(), r.cands.end(), [&](const CandResult& c) { return c.cand == s && c.verified; });
+    });
+    if (first == r.ranked.begin()) return false;
+    if (first == r.ranked.end()) r.ranked.clear();
+    else std::rotate(r.ranked.begin(), first, first + 1);
+    return true;
 }
 
 }  // namespace batchlas::tune

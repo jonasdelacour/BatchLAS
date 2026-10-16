@@ -46,7 +46,7 @@ struct ReplayReport {
     std::size_t unrunnable = 0;                                      // cells where no entry of the nearest row can run
     double floor_race = 0, floor_table = 0, excess_race = 0, excess_table = 0;  // see apply_floor
     double measure_s = 0;  // rep time the replay consumed, alone
-    double est_gpu_h = 0;  // (measure_s + lean_arm_fixed_s per candidate + cell_overhead_s per cell) / 3600
+    double est_gpu_h = 0;  // (measure_s + lean_arm_fixed_s per candidate + verify_s + cell_overhead_s per cell) / 3600
     std::size_t refine_unavailable = 0;  // distinct bisection midpoints that are not in the raw file
     std::size_t cells_lattice = 0;       // round-0 cells measured; cells_measured - this = refinement cells
     std::size_t refine_capped = 0;       // midpoints the refinement cap dropped (0 = the cap was not hit)
@@ -56,7 +56,7 @@ struct ReplayReport {
 // holdout: race on pass-1 reps only (no reversed round), score against the pass-2 median; off: shared samples.
 struct ReplayOpts {
     bool holdout = false;
-    double verify_s = 0.05;        // residual check of one candidate in a cell
+    double verify_s = 0.05;        // per cell: the tie set's residual check
     double cell_overhead_s = 0;    // per cell; 0 = persistent worker
     bool all_cells = false;        // race every cell of the file: no lattice, no bisection (the oracle)
     std::vector<std::string> order;  // tie order (meta.candidates); empty = first appearance in the cells

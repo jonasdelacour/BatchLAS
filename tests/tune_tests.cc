@@ -1394,8 +1394,8 @@ TEST(TuneReplay, HoldoutRacesOnPassOneAndScoresAgainstPassTwo) {
     EXPECT_NEAR(h.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "16 pass-1 rounds of both candidates, nothing from pass 2";
     EXPECT_EQ(h.race_misrank, 1.0);
     EXPECT_NEAR(h.max_loss, 0.5, 1e-9) << "reference a = 1.5 (pass 2), best b = 1.0";
-    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + (5 * 1.0 + 5 * 1.5) / 1000 + 2 * 0.05) / 3600, 1e-12)
-        << "per arm: 3 runs + 2 warm rounds (below the 0.2 s cap) + verify";
+    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + (5 * 1.0 + 5 * 1.5) / 1000 + 0.05) / 3600, 1e-12)
+        << "per arm: 3 runs + 2 warm rounds (below the 0.2 s cap); one verify for the cell's tie set";
     p.min_reps = p.max_reps = 32;
     const ReplayReport all = replay(rc, meta.axes, Tier::coarse, p);
     EXPECT_NEAR(all.measure_s, 32 * (1.0 + 1.5) / 1000, 1e-12) << "without holdout every round of both passes is raced";
@@ -2418,15 +2418,15 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
     CellKey lower = nkey(100);
     lower.insert(lower.begin(), {"uplo", "L"});
     EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
-    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s, verify.
+    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s; one verify a cell.
     // 2 ms: 50 ms / 2 ms = 25 reps, capped at 16. 200 ms: 1 rep, raised to coarse's floor 4.
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, Tier::coarse, 0.49),
                      0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS);
     l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 200.0)}, {"vendor"}, 4096));
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + kVerifyS);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor", "cta"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + (7 * 0.2 + 0.2 + kVerifyS) + (7 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS))
-        << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16";
+                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3))
+        << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16; one verification (the tie set)";
 }
 
 TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
@@ -3005,7 +3005,7 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
               "mismatch:winner b/a");
     const std::vector<ArmOutcome> warm_elim{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "ok", {3.0})};
     EXPECT_EQ(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "bad", {2.0}), arm("c", "ok", {3.0})}, order).verdict,
-              "mismatch:feasibility b eliminated/bad") << "run_race verifies eliminated arms too";
+              "mismatch:feasibility b eliminated/bad") << "both sides verified b (TuneVerify: the unverified case)";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "ok", {2.0}), arm("c", "bad", {3.0})}, order)
                     .mismatch()) << "ok in the worker, bad in a fresh process";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "skipped"), arm("c", "ok", {3.0})}, order)
@@ -4236,4 +4236,383 @@ TEST(TuneLdAudit, AnLdAuditFailureIsNotACarveOutMismatch) {
     EXPECT_NE(out.find(" audit: ok"), std::string::npos) << out;
     EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos)
         << "the fresh child re-verifies at the natural ld, where the arm passes: no worker defect\n" << out;
+}
+
+TEST(TuneVerify, VerifyNextIsTheUnverifiedTieSetPlusTheExtras) {
+    auto unv = [](ArmOutcome a) { return a.verified = false, a; };
+    std::vector<ArmOutcome> arms{unv(arm("a", "ok", {1.0})), unv(arm("b", "ok", {1.029})), unv(arm("c", "ok", {1.031})),
+                                 unv(arm("d", "eliminated", {0.5})), unv(arm("e", "skipped")), unv(arm("f", "bad", {0.9}))};
+    EXPECT_EQ(verify_next(arms, {}), (std::vector<std::string>{"a", "b"})) << "1.029 ties, 1.031 does not; an eliminated arm never ranks above a survivor";
+    EXPECT_EQ(verify_next(arms, {"d", "e", "zz"}), (std::vector<std::string>{"a", "b", "d"})) << "extras that raced";
+    arms[0].verified = true;
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"b"}) << "a verdict is never asked twice";
+    arms[0].status = arms[1].status = "bad";
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"c"}) << "the tie set failed: the next survivor can rank first";
+    arms[2].status = "error";
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"d"}) << "no survivor: the fastest eliminated ranks first";
+    arms[3].verified = true;
+    EXPECT_TRUE(verify_next(arms, {}).empty());
+}
+
+TEST(TuneVerify, TheBucketIsTheExactKeysAndThePerItemDecade) {
+    const std::vector<AxisSpec> axes{{"uplo", false, {"L", "U"}}, {"n", true, {"8", "16"}}, {"batch", true, {"128"}}};
+    const CellKey k{{"uplo", "L"}, {"n", "8"}, {"batch", "128"}};
+    EXPECT_EQ(verify_bucket(k, axes, 1000), "uplo=L,e3");
+    EXPECT_EQ(verify_bucket(k, axes, 999.9), "uplo=L,e2");
+    EXPECT_EQ(verify_bucket(k, axes, 9999), "uplo=L,e3");
+    EXPECT_EQ(verify_bucket({{"uplo", "U"}, {"n", "16"}, {"batch", "128"}}, axes, 5000), "uplo=U,e3");
+    EXPECT_EQ(verify_bucket({{"n", "8"}, {"side", "R"}}, axes, 0), "side=R,e0") << "an axis-less key is exact";
+}
+
+TEST(TuneVerify, TheBookVerifiesEachArmOncePerBucketAndBooksVerificationFails) {
+    VerifyBook book;
+    EXPECT_EQ(book.want("e3", {"a", "b", "c"}), (std::vector<std::string>{"a", "b", "c"}));
+    std::vector<ArmOutcome> cell{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "eliminated", {9.0}),
+                                 arm("d", "skipped"), arm("e", "bad", {1.0}), arm("f", "bad", {1.0})};
+    cell[2].verified = false;
+    cell[4].reason = "residual";
+    cell[5].reason = "ld audit: ld_pad +3: bad", cell[5].ld_audit = "fail";
+    EXPECT_EQ(book.note("e3", nkey(8), cell), std::vector<std::string>{"e"});
+    EXPECT_EQ(book.want("e3", {"a", "b", "c", "d", "e", "f"}), (std::vector<std::string>{"c", "d", "f"}))
+        << "unverified, refused and ld-audit fails stay wanted";
+    EXPECT_EQ(book.bad.at("e3").at("e"), "verify failed @ n=8 batch=1024");
+    EXPECT_EQ(book.bad.at("e3").size(), 1u);
+    EXPECT_EQ(book.want("e4", {"a", "e"}), (std::vector<std::string>{"a", "e"})) << "another bucket starts over";
+    EXPECT_TRUE(book.note("e3", nkey(9), cell).empty()) << "a second fail is no new verdict";
+    std::vector<ArmOutcome> info{arm("c", "bad", {1.0})};
+    info[0].reason = "info";
+    EXPECT_EQ(book.note("e3", nkey(9), info), std::vector<std::string>{"c"});
+    EXPECT_EQ(book.want("e3", {"a", "b", "c"}), std::vector<std::string>{});
+}
+
+TEST(TuneVerify, AuditIgnoresAVerdictTheOtherSideNeverAsked) {
+    const std::vector<std::string> order{"a", "b"};
+    ArmOutcome unverified = arm("b", "eliminated", {3.0});
+    unverified.verified = false;
+    const std::vector<ArmOutcome> warm{arm("a", "ok", {1.0}), unverified};
+    EXPECT_EQ(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, order).verdict, "ok")
+        << "the worker left b unverified; the fresh child's tie set held it";
+    EXPECT_EQ(audit_compare({arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, warm, order).verdict, "ok") << "either side";
+    EXPECT_EQ(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "skipped")}, order).verdict,
+              "mismatch:feasibility b eliminated/skipped") << "whether it launched is still compared";
+    EXPECT_TRUE(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "error")}, order).mismatch());
+    EXPECT_TRUE(audit_compare({arm("a", "ok", {1.0}), arm("b", "eliminated", {3.0})},
+                              {arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, order).mismatch())
+        << "verified on both sides: compared as before";
+}
+
+TEST(TuneVerify, RequestsOutcomesRecordsAndTheLedgerCarryTheVerifyFlags) {
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b"};
+    r.mode = "race";
+    r.verify = {"b"};
+    EXPECT_EQ(parse_request(request_line("fakeop", r))->second.verify, r.verify);
+    r.verify.clear();
+    EXPECT_TRUE(parse_request(request_line("fakeop", r))->second.verify.empty());
+
+    std::vector<ArmOutcome> arms{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0})};
+    arms[1].verified = false;
+    const std::string text = outcome_text(arms);
+    EXPECT_EQ(count_of(text, "\"verified\""), 1u) << "only the unverified arm says so: " << text;
+    std::vector<Record> recs;
+    for (const std::string& line : split(text, '\n')) recs.push_back(*parse_record(line));
+    const auto back = outcomes_from_records(recs);
+    EXPECT_TRUE(outcome(back, "a").verified);
+    EXPECT_FALSE(outcome(back, "b").verified);
+    EXPECT_EQ(ld_audit_arms(back, {"a", "b"}), std::vector<std::string>{"a"}) << "the ld audit asks a verified cell";
+
+    CellRecord rec = record_from_arms(nkey(8), 0, back, {"a", "b"}, {});
+    ASSERT_EQ(rec.cands.size(), 2u);
+    EXPECT_TRUE(rec.cands[0].verified);
+    EXPECT_FALSE(rec.cands[1].verified);
+    EXPECT_EQ(rec.ranked, (std::vector<std::string>{"a", "b"})) << "an unverified arm stays in the row";
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float";
+    m.run_id = "r1";
+    {
+        LedgerWriter w(d.led(), m);
+        w.cell(rec);
+    }
+    const std::string line = read_file(d.led());
+    EXPECT_EQ(count_of(line, "\"v1\": 0"), 1u) << line;
+    EXPECT_EQ(line.find("\"v0\""), std::string::npos) << "absent = verified, as in every older ledger: " << line;
+    const Ledger l = read_ledger(d.led(), "float");
+    ASSERT_EQ(l.cells.size(), 1u);
+    EXPECT_TRUE(l.cells[0].cands[0].verified);
+    EXPECT_FALSE(l.cells[0].cands[1].verified);
+    CellRecord x = l.cells[0];
+    EXPECT_FALSE(ld_retract(x, "a", "verify failed", true)) << "a verified arm is not retracted by a bucket verdict";
+    EXPECT_TRUE(ld_retract(x, "b", "verify failed", true));
+    EXPECT_EQ(x.ranked, std::vector<std::string>{"a"});
+}
+
+TEST(TuneVerify, AFreshChildsArgvCarriesEveryRaceField) {
+    CellRequest r;
+    r.tier = "coarse";
+    r.min_reps = 4;
+    r.max_reps = 12;
+    r.confidence = 0.95;
+    r.alternate_reverse = true;
+    r.seed_order = {"b", "a"};
+    r.ld_audit = {"a"};
+    r.verify = {"b", "c"};
+    const std::vector<std::string> argv = race_argv(r);
+    CellRequest back;
+    for (std::size_t i = 0; i < argv.size(); ++i) ASSERT_TRUE(parse_race_arg(argv, i, back)) << argv[i];
+    EXPECT_EQ(back.verify, r.verify) << "the bucket's first-sight arms reach a fresh child";
+    EXPECT_EQ(back.ld_audit, r.ld_audit);
+    EXPECT_EQ(back.seed_order, r.seed_order);
+    EXPECT_EQ(back.tier, r.tier);
+    EXPECT_EQ(back.min_reps, r.min_reps);
+    EXPECT_EQ(back.max_reps, r.max_reps);
+    EXPECT_EQ(back.confidence, r.confidence);
+    EXPECT_TRUE(back.alternate_reverse);
+    r.verify.clear();
+    const std::vector<std::string> none = race_argv(r);
+    EXPECT_EQ(std::count(none.begin(), none.end(), "--verify"), 0);
+    const std::vector<std::string> other{"--result", "x"};
+    std::size_t i = 0;
+    EXPECT_FALSE(parse_race_arg(other, i, back));
+    EXPECT_EQ(i, 0u);
+}
+
+TEST(TuneVerify, TheFrontOfARankingIsAlwaysAVerifiedArm) {
+    auto unv = [](CandResult c) { return c.verified = false, c; };
+    CellRecord r;
+    r.cands = {unv(cres("a", "h", "ok", 1.0)), unv(cres("b", "h", "eliminated")), cres("c", "h", "eliminated"),
+               unv(cres("d", "h", "eliminated"))};
+    r.ranked = {"c", "a"};
+    EXPECT_FALSE(verified_front(r));
+    r.ranked = {"a", "b", "c", "d"};
+    EXPECT_TRUE(verified_front(r)) << "a retraction or a partial re-race promoted a and b, never verified here";
+    EXPECT_EQ(r.ranked, (std::vector<std::string>{"c", "a", "b", "d"})) << "they stay in the row, below c";
+    r.ranked = {"a", "b", "d"};
+    EXPECT_TRUE(verified_front(r));
+    EXPECT_TRUE(r.ranked.empty()) << "no verified arm: no row";
+    EXPECT_FALSE(verified_front(r));
+}
+
+namespace {
+
+class FakeVerifySpec : public FakeSpec {
+public:
+    std::string op() const override { return "fakeverify"; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b", "c"}; }
+};
+const FakeVerifySpec kFakeVerify;
+
+// Races as run_race does, verify_next included: a 1 ms, b 2 ms (eliminated), c 5 ms (eliminated) or,
+// at `fast`, 0.5 ms. c gives a wrong answer at `wrong`. The fresh child (`fresh_tie`) times c tied with a.
+// FakeVerifySpec bytes: n * 1e3, so n <= 8 is bucket e3, n >= 16 bucket e4.
+class VerifyMeasurer : public CellMeasurer {
+public:
+    std::set<int> wrong, fast;
+    bool worker = false, fresh_tie = false;
+    int ld_refuse_a = -1;  // >= 0: a's ld audit is refused that many times, then fails
+    std::map<int, int> calls;
+    std::map<int, std::vector<std::string>> asked, fresh_asked, verified, timed;
+    bool persistent() const override { return worker; }
+    ArmBatch race(const CellJob& j, bool fresh) {
+        const int n = static_cast<int>(key_int(j.key, "n"));
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const bool c_fast = fast.count(n) != 0;
+            const double t = a == "a" ? 1.0 : a == "b" ? 2.0 : c_fast ? 0.5 : fresh && fresh_tie ? 1.0 : 5.0;
+            const bool alive = a == "c" ? t <= 1.0 : a == "a" ? !c_fast : false;
+            ArmOutcome o = arm(a, alive ? "ok" : "eliminated", {t, t, t});
+            o.verified = false;
+            if (a == "a" && ld_refuse_a >= 0 && std::count(j.ld_audit.begin(), j.ld_audit.end(), a)) {
+                o.ld_audit = ld_refuse_a-- > 0 ? "skipped" : "fail";
+                if (o.ld_audit == "fail") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
+            }
+            b.arms.push_back(o);
+        }
+        for (auto want = verify_next(b.arms, j.verify); !want.empty(); want = verify_next(b.arms, j.verify))
+            for (ArmOutcome& o : b.arms) {
+                if (std::find(want.begin(), want.end(), o.arm) == want.end()) continue;
+                o.verified = true;
+                if (!fresh) verified[n].push_back(o.arm);
+                if (o.arm == "c" && wrong.count(n)) o.status = "bad", o.reason = "residual";
+            }
+        return b;
+    }
+    ArmBatch measure(const CellJob& j) override {
+        const int n = static_cast<int>(key_int(j.key, "n"));
+        asked[n] = sorted(j.verify);
+        timed[n] = sorted(j.arms);
+        ++calls[n];
+        return race(j, false);
+    }
+    ArmBatch measure_fresh(const CellJob& j) override {
+        if (!worker) return measure(j);
+        fresh_asked[static_cast<int>(key_int(j.key, "n"))] = sorted(j.verify);
+        return race(j, true);
+    }
+};
+
+TieredOpts verify_opts(const TempDir& repo, const TempDir& ledger) {
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakeverify")) register_spec(&kFakeVerify);
+    o.ops = {"fakeverify"};
+    return o;
+}
+
+// The newest line per key (equal tier, date and run: a retract copy wins).
+std::map<int, CellRecord> newest_cells(const TempDir& ledger) {
+    std::map<int, CellRecord> out;
+    for (const CellRecord& c : read_ledger(ledger_file(ledger.str(), "fakeverify", "sm_fake"), "float").cells)
+        out[static_cast<int>(key_int(c.key, "n"))] = c;
+    return out;
+}
+
+const CandResult& cand(const CellRecord& r, const std::string& name) {
+    return *std::find_if(r.cands.begin(), r.cands.end(), [&](const CandResult& c) { return c.cand == name; });
+}
+
+}  // namespace
+
+TEST(TuneVerify, AWrongArmOutsideTheTieSetIsCaughtAtItsBucketsFirstCell) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.wrong = {16, 32, 64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    const std::vector<std::string> all{"a", "b", "c"};
+    EXPECT_EQ(m.asked[1], all) << "bucket e3's first cell";
+    EXPECT_EQ(m.asked[16], all) << "bucket e4's first cell";
+    for (int n : {2, 4, 8}) EXPECT_TRUE(m.asked[n].empty()) << n;
+    for (int n : {2, 4, 8}) EXPECT_EQ(m.verified[n], std::vector<std::string>{"a"}) << "the tie set only: " << n;
+    EXPECT_EQ(m.verified[16], all);
+    for (int n : {32, 64}) EXPECT_EQ(m.timed[n], (std::vector<std::string>{"a", "b"})) << "bad in e4: not raced " << n;
+    const auto cells = newest_cells(ledger);
+    ASSERT_EQ(cells.size(), 7u);
+    EXPECT_EQ(cand(cells.at(16), "c").status, "bad");
+    EXPECT_EQ(cand(cells.at(16), "c").reason, "residual");
+    for (int n : {32, 64}) {
+        EXPECT_EQ(cand(cells.at(n), "c").status, "bad") << n;
+        EXPECT_EQ(cand(cells.at(n), "c").reason, "verify failed @ n=16") << n;
+    }
+    EXPECT_TRUE(cand(cells.at(1), "c").verified);
+    for (int n : {2, 4, 8}) {
+        EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << n;
+        EXPECT_FALSE(cand(cells.at(n), "c").verified) << n;
+        EXPECT_EQ(cells.at(n).ranked, all) << "an unverified arm keeps its place in the row: " << n;
+    }
+}
+
+TEST(TuneVerify, ALaterFailInTheBucketRetractsItsUnverifiedEarlierCellsOnly) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.wrong = m.fast = {64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(m.verified[64], (std::vector<std::string>{"c", "a"})) << "c ranked first and failed; then a could";
+    EXPECT_NE(out.find("verify: c marked bad in 1 recorded cells of bucket e4"), std::string::npos) << out;
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(64), "c").reason, "residual");
+    EXPECT_EQ(cells.at(64).ranked.front(), "a");
+    EXPECT_EQ(cand(cells.at(32), "c").status, "bad") << "unverified at 32";
+    EXPECT_EQ(cand(cells.at(32), "c").reason, "verify failed @ n=64");
+    EXPECT_EQ(cells.at(32).ranked, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(cand(cells.at(16), "c").status, "eliminated") << "verified (and passed) at 16: kept";
+    for (int n : {1, 2, 4, 8}) EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << "bucket e3: " << n;
+}
+
+TEST(TuneVerify, ALeanWorkerAndAFreshAuditGiveNoSpuriousFeasibilityMismatch) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    o.audit_fraction = 1.0;
+    VerifyMeasurer m;
+    m.worker = m.fresh_tie = true;
+    m.wrong = {2};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(out.find("mismatch"), std::string::npos) << out;
+    EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos) << out;
+    EXPECT_EQ(m.fresh_asked, m.asked) << "the fresh child gets the worker's verify list";
+    EXPECT_FALSE(m.fresh_asked.at(1).empty());
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(2), "c").status, "bad") << "the fresh child's verdict is booked and retracts the worker's cell";
+    EXPECT_EQ(cand(cells.at(2), "c").reason, "verify failed @ n=2");
+    for (int n : {4, 8}) EXPECT_EQ(m.timed[n], (std::vector<std::string>{"a", "b"})) << n;
+    EXPECT_EQ(cand(cells.at(16), "c").status, "eliminated") << "bucket e4 is unaffected";
+}
+
+TEST(TuneVerify, ARetractedWinnerWithAnUnverifiedRunnerUpIsRacedAgain) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.ld_refuse_a = 2;  // a's ld audit fails at n=4, after a won n=1 and n=2
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find("ld audit: a marked bad in 2 recorded cells"), std::string::npos) << out;
+    EXPECT_EQ(m.calls[2], 2) << "n=2 verified only a; b came first after the retraction: raced again\n" << out;
+    EXPECT_EQ(m.timed[2], (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(m.calls[1], 1) << "the bucket's first cell verified b";
+    EXPECT_EQ(m.calls[4], 1) << "a failed in the cell, so the cell verified b";
+    for (const auto& [n, c] : newest_cells(ledger)) {
+        ASSERT_FALSE(c.ranked.empty()) << n;
+        EXPECT_EQ(c.ranked.front(), "b") << n;
+        EXPECT_TRUE(cand(c, "b").verified) << "a record's winner is an arm it verified: " << n;
+    }
+}
+
+namespace {
+
+class FakeBucketSpec : public FakeVerifySpec {
+public:
+    std::string op() const override { return "fakebucket"; }
+    std::vector<std::string> key_names() const override { return {"uplo", "n:log:3", "batch:log:1"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"uplo", {"L", "U"}}, {"n", {"1", "16"}}, {"batch", {"128", "1024"}}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override {
+        return double(key_int(k, "n")) * double(key_int(k, "batch")) * 1e3;
+    }
+};
+const FakeBucketSpec kFakeBucket;
+
+class BucketMeasurer : public CellMeasurer {
+public:
+    std::map<std::string, std::vector<std::string>> asked;
+    ArmBatch measure(const CellJob& j) override {
+        asked[key_arg(j.key)] = j.verify;
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            b.arms.push_back(arm(a, a == "a" ? "ok" : "eliminated", {a == "a" ? 1.0 : 3.0}));
+            b.arms.back().verified = a == "a" || std::count(j.verify.begin(), j.verify.end(), a);
+        }
+        return b;
+    }
+};
+
+}  // namespace
+
+TEST(TuneVerify, TheDriversBucketIsTheExactKeysAndThePerItemDecade) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    if (!find_spec("fakebucket")) register_spec(&kFakeBucket);
+    o.ops = {"fakebucket"};
+    BucketMeasurer m;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_EQ(m.asked.size(), 8u) << out;
+    // Per item n * 1e3 bytes: e3 at n=1, e4 at n=16, whatever the batch (batch 128 runs first).
+    for (const auto& [k, want] : m.asked)
+        EXPECT_EQ(want.size(), k.find("batch=128") != std::string::npos ? 3u : 0u) << k << ": one bucket per (uplo, decade)";
 }

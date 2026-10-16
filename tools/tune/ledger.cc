@@ -47,7 +47,8 @@ std::string run_line(const RunMeta& m) {
     return j.line();
 }
 
-// Candidate i of a cell is spread over fields h<i> s<i> r<i> m<i> lo<i> hi<i> n<i>, so a cell is one line.
+// Candidate i of a cell is spread over fields h<i> s<i> r<i> m<i> lo<i> hi<i> n<i> (and v<i> = 0 when
+// unverified), so a cell is one line.
 std::string cell_line(const CellRecord& r, const std::string& dtype) {
     Json j;
     j.str("kind", "cell").str("dtype", dtype).str("run_id", r.run_id).str("tier", to_string(r.tier)).str("key", key_arg(r.key))
@@ -60,6 +61,7 @@ std::string cell_line(const CellRecord& r, const std::string& dtype) {
         const std::string n = std::to_string(i);
         j.str("h" + n, c.hash).str("s" + n, c.status).str("r" + n, c.reason).num("m" + n, c.median_ms)
             .num("lo" + n, c.lo).num("hi" + n, c.hi).integer("n" + n, c.reps);
+        if (!c.verified) j.integer("v" + n, 0);
     }
     for (const auto& [name, f] : Phases::fields())
         if (!std::isnan(r.phases.*f)) j.num("ph_" + name, r.phases.*f);
@@ -116,6 +118,7 @@ CellRecord parse_cell(const Record& r) {
         cr.lo = r.number("lo" + n);
         cr.hi = r.number("hi" + n);
         cr.reps = static_cast<int>(r.number("n" + n));
+        cr.verified = r.number("v" + n) != 0;  // absent (NaN): verified, as every pre-v<i> ledger is
         c.cands.push_back(std::move(cr));
     }
     for (const auto& [name, f] : Phases::fields()) c.phases.*f = r.number("ph_" + name);

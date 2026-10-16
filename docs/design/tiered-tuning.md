@@ -76,8 +76,8 @@ Each cell goes through three steps:
    candidate is eliminated when it is confidently slower than the leader by more than the tie
    margin. The race stops when one candidate remains, when the survivors are confidently within the
    margin, or at the rep cap. The race starts from the winner of the nearest finished neighbour.
-   Before its times count, each candidate is verified on the default items (`batchlas::verify`,
-   @ref design_verification).
+   Each candidate that can rank first is verified on the default items (`batchlas::verify`,
+   @ref design_verification), every candidate once per size decade ("Engine: tie-set verification").
 
 Across cells:
 
@@ -148,13 +148,45 @@ absent field is older still. `--plan` history reads only `lean` cells.
    floor is the first round count at which the paired-ratio rule can decide (3 / 4 / 6), so the
    confidence rule stays satisfiable; a tier's `min_reps` equals it. Rounds are shared, so the
    slowest arm sets the count.
-5. **Verification** of every raced arm, the cut and eliminated included, as before.
+5. **Verification** of the tie set and `CellRequest::verify` only ("Engine: tie-set verification").
 
 The cell runs on the worker's one `Queue` (`OpSpec::run_cell(req, q)`; the ld audit's re-run reuses
 it). The bench's workspace is a lease from that Queue's arena, which keeps its blocks across cells,
 and `~ArmBench` drains the Queue so an async error cannot surface in the next cell. Each spec's
 `clear_info` poisons outputs that `reset` does not restore (syev `w`, gesvd `s`/U/Vh, getrf
 pivots, geqrf `tau`), so an arm that writes nothing cannot pass on an earlier arm's output.
+
+## Engine: tie-set verification
+
+A cell verifies only the arms that can rank first, plus the arms its bucket has not verified yet.
+Rules (`verify_next` in `race.hh`, `VerifyBook` and `verify_bucket` in `schedule.hh`):
+
+- **Tie set.** After the race, the unverified arms within the 3% tie of the fastest survivor's median
+  (with no survivor: of the fastest eliminated arm), the order `record_from_arms` ranks by. A failure
+  leaves the set, and the next arms that can rank first are verified, until the set holds no
+  unverified arm. Gross-cut and eliminated arms outside it are not verified.
+- **Once per bucket.** Bucket = (op, dtype, exact keys, floor(log10 per-item bytes)). The driver
+  sends each cell the arms that have no verdict in its bucket yet (`CellJob::verify`, worker request
+  `verify`, child `--verify`). A pin refusal or an unverified arm stays wanted.
+- **Unverified arms stay in the row** with ledger flag `v<i> = 0` (@ref design_tuning_data): a pin
+  that falls through needs them.
+- **A failure** (residual or info) is a verdict on the kernel in its bucket. Later cells of the bucket
+  record the arm `bad` (`verify failed @ <key>`) without timing it. Each current record of the bucket
+  that ranks it unverified, this run's or the ledger's, is appended again with it `bad`, through the
+  ld audit's retract path. Records that verified it keep it. The driver prints `verify: <arm> marked
+  bad in N recorded cells of bucket <b>` and emits `verify_retract`.
+- **A verified winner.** A record's front arm is one it verified (`verified_front`). When a retraction
+  (ld audit or bucket fail) or a partial re-race whose arms all failed would put an unverified arm
+  first, unverified arms move below the first verified one (none: the ranking empties), and the cell
+  is queued again once in the run (`remeasure`, all live arms), which verifies the new tie set.
+- **Fresh audit.** The fresh child gets the cell's `verify` list. `audit_compare` treats an arm one
+  side left unverified as feasible if it ran there (ok, eliminated or bad), so `bad` against
+  unverified is no mismatch. Refused or `error` against ran still is. The fresh child's own verdicts go
+  into the book like a cell's.
+
+Evidence: `TuneVerify.*` in `tests/tune_tests.cc`. Deliberate breaks, each with its own red set:
+`want()` asking nothing, retracting verified records, `audit_compare` ignoring the flag, a strict tie
+(no 3%), no `v<i>` field, no retract, the audit's verdicts not booked, verifying every arm.
 
 ## Engine: persistent workers and the carve-out audit
 
@@ -179,7 +211,8 @@ fails in a fresh process. Two defences:
 2. **Fresh-process audit.** A sample of cells is re-measured in one-cell fresh processes. The sample
    is chosen by `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, and each op and dtype gets one
    audit before its first unaudited worker cell. A mismatch is a candidate usable in one process and
-   refused or failing in the other, or a winner more than 10% slower in the fresh run. A mismatch
+   refused or failing in the other, or a winner more than 10% slower in the fresh run. An arm left
+   unverified on either side only has to have run on both ("Engine: tie-set verification"). A mismatch
    marks that op and dtype fresh-process only. Each audited cell gets an `audit` record.
 
 **Result.** No carve-out mismatch was found (threadripper02, GPU 1, 2026-10-07, `tune_race_gpu_tests`).
@@ -286,9 +319,9 @@ cell and picks from all pass-1 reps scores that same floor, so the verdict is th
 
 The estimated cost for trsm float on sm_120 was 0.57 GPU-h for preview, 0.86 for coarse and 0.86 for
 deep under the `full` protocol's model (0.2 s warm-up per candidate). The estimate is now `est_gpu_h = [measure_s + Σ_candidates
-(3 × median + min(0.2 s, 2 × median) + verify_s) + cell_overhead_s per cell] / 3600` (`lean_arm_fixed_s`,
-the same per-arm term as `--plan`'s model), with `verify_s` 0.05 and `cell_overhead_s` 0 for a
-persistent worker. The summed rep time is 0.07 GPU-h.
+(3 × median + min(0.2 s, 2 × median)) + (verify_s + cell_overhead_s) per cell] / 3600` (`lean_arm_fixed_s`,
+the same per-arm term as `--plan`'s model; `verify_s` once a cell, for the tie set), with `verify_s` 0.05
+and `cell_overhead_s` 0 for a persistent worker. The summed rep time is 0.07 GPU-h.
 
 **Alternatives** (same-sample replay, table misrank over all raw cells, float / double):
 
@@ -494,7 +527,7 @@ could have caught such a defect if it had been real.
 
 **The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified
 cell* (status `ok`, or `eliminated` after passing verification) for one extra verification at
-`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`). The check runs in the same worker or child,
+`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`); an arm the lean race left unverified waits. The check runs in the same worker or child,
 straight after the timed cell, as a `verify`-mode cell, which is a fresh problem built by the spec
 at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict (pass or
 fail). A candidate that the cell did not verify, or whose pin refused the padded shape there

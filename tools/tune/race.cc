@@ -39,8 +39,8 @@ int lean_max_reps(double slowest_ms, const TierParams& p) {
     return static_cast<int>(std::clamp(want, double(lo), double(std::max(lo, kRepCap))));
 }
 
-double lean_arm_fixed_s(double ms, double verify_s) {
-    return 3 * ms * 1e-3 + std::min(kWarmCapPerArmS, kWarmMinRounds * ms * 1e-3) + verify_s;
+double lean_arm_fixed_s(double ms) {
+    return 3 * ms * 1e-3 + std::min(kWarmCapPerArmS, kWarmMinRounds * ms * 1e-3);
 }
 
 namespace {
@@ -115,6 +115,28 @@ std::vector<std::string> race_ranking(const RaceState& s, const std::vector<std:
         return std::pair(a.first, pos(s.cands[a.second])) < std::pair(b.first, pos(s.cands[b.second]));
     });
     for (const auto& d : dead) out.push_back(s.cands[d.second]);
+    return out;
+}
+
+std::vector<std::string> verify_next(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& extra,
+                                     double tie) {
+    auto best_of = [&](const std::string& status) {
+        double b = std::numeric_limits<double>::infinity();
+        for (const ArmOutcome& a : arms)
+            if (const double m = median(a.ms); a.status == status && std::isfinite(m)) b = std::min(b, m);
+        return b;
+    };
+    std::string top = "ok";
+    double best = best_of(top);
+    if (!std::isfinite(best)) top = "eliminated", best = best_of(top);
+    std::vector<std::string> out;
+    for (const ArmOutcome& a : arms) {
+        if (a.verified || (a.status != "ok" && a.status != "eliminated")) continue;
+        const double m = median(a.ms);
+        if ((a.status == top && std::isfinite(m) && m <= best * (1.0 + tie)) ||
+            std::find(extra.begin(), extra.end(), a.arm) != extra.end())
+            out.push_back(a.arm);
+    }
     return out;
 }
 

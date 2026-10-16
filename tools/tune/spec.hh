@@ -35,6 +35,7 @@ struct CellRequest {
     bool alternate_reverse = false;
     std::vector<std::string> seed_order;  // arms to put first (the nearest finished cell's winner)
     std::vector<std::string> ld_audit;    // arms to re-verify at ld_pad + kLdAuditPad if this cell verifies them
+    std::vector<std::string> verify;      // race: verified besides the tie set (the bucket's first sight of them)
 };
 
 inline constexpr int kLdAuditPad = 3;  // ld audit; evidence: docs/design/tiered-tuning.md#engine-the-ld-audit
@@ -48,6 +49,7 @@ struct ArmOutcome {
     double residual = 0;
     int info_nonzero = 0;
     std::string ld_audit;  // "" not audited | pass | fail | skipped (the pin refused the padded shape)
+    bool verified = true;  // false: raced (ok or eliminated) but never verified in this cell
 };
 
 class OpSpec {

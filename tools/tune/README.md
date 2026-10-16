@@ -145,10 +145,14 @@ and planning is in `schedule.cc`.
   2 rounds, at most 0.2 s per arm); then interleaved rounds of one timed run per candidate until a
   winner, a tie or the rep cap: ceil(50 ms / the slowest survivor's warm median), within
   [3, 16] preview, [4, 16] coarse, [6, 16] deep. From the second round on, whatever `min_reps` says,
-  the gross rule still applies; one stalled round never kills an arm. Eliminated candidates are
-  still verified; a passing one keeps its median with status `eliminated` (ranked after the
-  survivors). A failing one is `bad` and left out. Rationale:
+  the gross rule still applies; one stalled round never kills an arm. Eliminated candidates keep
+  their median with status `eliminated` (ranked after the survivors). Rationale:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-lean-cell).
+- **Verification.** Only the candidates that can rank first (the 3% tie set) are verified, plus each
+  candidate's first cell per (op, dtype, exact keys, size decade). A failing one is `bad` and left
+  out; the others are kept unverified (ledger `v<i>: 0`). A failure is also `bad` in that bucket's
+  later cells, untimed, and in its earlier records that did not verify it (appended again). Rationale:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-tie-set-verification).
 - **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`) pin
   that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of timing Auto
   under the vendor's name.
@@ -164,7 +168,8 @@ and planning is in `schedule.cc`.
 - **Audit.** A worker cell is re-raced in a fresh child when `fnv1a64(run_id + key) % 1000` falls
   below `audit_fraction * 1000` (2% preview and coarse, 1% deep; `--audit-fraction`). The first worker cell of each op and dtype is always audited. A
   mismatch (usable in one run and refused or failing in the other, or a different winner more than
-  10% slower in the fresh run) is logged as an `audit` record. The rest of that op and dtype then runs
+  10% slower in the fresh run; an arm unverified on either side only has to have run on both) is
+  logged as an `audit` record. The rest of that op and dtype then runs
   in fresh children.
 - **ld audit.** Each candidate's first verified cell per op and dtype is verified once more, in the
   same worker or child, at `ld_pad + 3`; a pin that refuses the padded shape is asked again at the

@@ -23,6 +23,9 @@ namespace batchlas::tune {
 std::string request_line(const std::string& op, const CellRequest& r);
 // (op, request); nullopt with *err on a malformed line.
 std::optional<std::pair<std::string, CellRequest>> parse_request(const std::string& line, std::string* err = nullptr);
+// A fresh `--cell --mode race` child's race fields, as argv; parse_race_arg reads one back at a[i].
+std::vector<std::string> race_argv(const CellRequest& r);
+bool parse_race_arg(const std::vector<std::string>& a, std::size_t& i, CellRequest& r);  // false: not one of them
 
 std::string outcome_text(const std::vector<ArmOutcome>& arms, const Phases* ph = nullptr);  // ph: a "phase" line last
 std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs);

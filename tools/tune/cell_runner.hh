@@ -265,8 +265,9 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
 // The race (docs/design/tiered-tuning.md#engine-the-lean-cell): one untimed run per arm, two
 // timed rounds and the gross cut, the survivors' samples dropped and warm_until_stable over them,
 // then rounds of one timed run per live arm, race_step after each, until race_over under the
-// lean_max_reps cap. Every raced arm is then verified, the eliminated too: one that fails is "bad"
-// and leaves the row; one that passes keeps its median (a gross loser: of its two cut rounds).
+// lean_max_reps cap. Then only the arms that can rank first (verify_next) and req.verify are
+// verified: one that fails is "bad" and leaves the row, the rest keep their medians (a gross loser:
+// of its two cut rounds), unverified arms flagged so.
 template <class Choice, class Problem>
 std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     std::vector<std::string> names;
@@ -340,11 +341,20 @@ std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRe
     for (std::size_t c = 0; c < idx.size(); ++c) {
         if (failed[c]) continue;
         ArmOutcome& a = arms[idx[c]];
-        b.verify(a, tol);
-        if (s.alive[c] || a.status != "ok") continue;
+        a.verified = false;
+        if (s.alive[c]) continue;
         a.status = "eliminated";
         a.reason = "round " + std::to_string(a.ms.size());
     }
+    for (auto want = verify_next(arms, req.verify); !want.empty(); want = verify_next(arms, req.verify))
+        for (ArmOutcome& a : arms) {
+            if (std::find(want.begin(), want.end(), a.arm) == want.end()) continue;
+            const std::string kept = a.status;
+            a.status = "ok";  // guarded() runs "ok" arms only
+            b.verify(a, tol);
+            if (a.status == "ok") a.status = kept;
+            a.verified = true;
+        }
     std::vector<ArmOutcome> out;  // request order, like run_arms
     for (const std::string& w : req.arms)
         for (const ArmOutcome& a : arms)

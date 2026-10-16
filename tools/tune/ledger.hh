@@ -18,6 +18,7 @@ struct CandResult {
     std::string cand, hash, status, reason;
     double median_ms = NAN, lo = NAN, hi = NAN;
     int reps = 0;
+    bool verified = true;  // false: timed but never verified in this cell (field v<i> = 0)
 };
 
 struct CellRecord {

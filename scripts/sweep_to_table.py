@@ -198,7 +198,7 @@ def read_cell(rec):
     names = [n for n in rec["cands"].split("|") if n]
     cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""),
               "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}"), "lo": rec.get(f"lo{i}"),
-              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}")}
+              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}"), "verified": rec.get(f"v{i}", 1) != 0}
              for i, n in enumerate(names)]
     return {"run_id": rec["run_id"], "dtype": rec["dtype"], "tier": rec["tier"], "key": key,
             "date": rec.get("date", ""), "round": int(rec.get("round", 0)),
@@ -1102,6 +1102,12 @@ def self_test():
                  "verdict": "ok", "fresh_ms": 1.0, "warm_ms": 1.0, "audit_s": 2.5}
         expect(ledger_text("posv", "sm_0", build(timed + [audit], d, "ph.jsonl"), fh, "k").text == plain,
                "ph_* fields changed the table")
+        # v<i> = 0 (timed, never verified: the lean race's non-tie arms) stays in the row; absent = verified
+        unver = [dict(x, v1=0) if x["kind"] == "cell" else x for x in base]
+        vpath = build(unver, d, "ph.jsonl")
+        expect(ledger_text("posv", "sm_0", vpath, fh, "k").text == plain, "v<i> = 0 changed the table")
+        vc = read_ledger(vpath, "float").cells[0]["cands"]
+        expect([c["verified"] for c in vc] == [True, False, True], f"v<i> read back -> {[c['verified'] for c in vc]}")
         # an empty ranking emits no row; a stale winner is skipped so the lower tier stands
         led2 = build([run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 8), cell(r3, "preview", 256),
                       run_line(r4, "2026-10-04"), cell(r4, "deep", 8, ranked=()),

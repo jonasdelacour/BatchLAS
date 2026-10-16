@@ -244,7 +244,7 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
         s.ms.assign(c.cands.size(), {});
         s.alive.assign(c.cands.size(), true);
         const std::size_t step = o.holdout ? std::size_t(c.passes) : 1, rounds = c.rounds.front().size() / step;
-        fixed_s += o.cell_overhead_s;
+        fixed_s += o.cell_overhead_s + o.verify_s;
         for (std::size_t r = 0; r < rounds; ++r) {
             for (std::size_t k = 0; k < c.cands.size(); ++k) {
                 const double v = c.rounds[k][r * step];
@@ -263,7 +263,7 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
             for (double x : s.ms[k])
                 if (!std::isnan(x)) v.push_back(x);
             if (!v.empty()) rc.ms[c.cands[k]] = median(v);
-            fixed_s += lean_arm_fixed_s(v.empty() ? 0.0 : median(v), o.verify_s);
+            fixed_s += lean_arm_fixed_s(v.empty() ? 0.0 : median(v));
         }
         for (const std::string& cand : order)  // the raw file's failed candidates are not runnable here
             if (!rc.ms.count(cand)) rc.out.insert(cand);

@@ -237,14 +237,8 @@ int child_main(const std::vector<std::string>& a) {
         else if (a[i] == "--warm") req.warm_s = std::stod(val());
         else if (a[i] == "--reverse") req.reverse = true;
         else if (a[i] == "--ld-pad") req.ld_pad = std::stoi(val());
-        else if (a[i] == "--tier") req.tier = val();
-        else if (a[i] == "--min-reps") req.min_reps = std::stoi(val());
-        else if (a[i] == "--max-reps") req.max_reps = std::stoi(val());
-        else if (a[i] == "--confidence") req.confidence = std::stod(val());
-        else if (a[i] == "--alternate-reverse") req.alternate_reverse = true;
-        else if (a[i] == "--seed-order") req.seed_order = split(val(), ',');
-        else if (a[i] == "--ld-audit") req.ld_audit = split(val(), ',');
         else if (a[i] == "--result") result = val();
+        else if (parse_race_arg(a, i, req)) continue;
         else die("--cell: unknown argument " + a[i]);
     }
     const OpSpec* spec = find_spec(op);
@@ -488,7 +482,6 @@ private:
 
     std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
     CellRequest race_request(const CellJob& j) const;
-    std::vector<std::string> race_args(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
     std::vector<std::string> guard(int gpu);
@@ -672,22 +665,14 @@ CellRequest Driver::race_request(const CellJob& j) const {
     r.alternate_reverse = j.p.alternate_reverse;
     r.seed_order = j.arms;
     r.ld_audit = j.ld_audit;
+    r.verify = j.verify;
     return r;
-}
-
-std::vector<std::string> Driver::race_args(const CellJob& j) const {
-    std::vector<std::string> a{"--tier", to_string(j.tier), "--min-reps", std::to_string(j.p.min_reps), "--max-reps",
-                               std::to_string(j.p.max_reps), "--confidence", fmt(j.p.confidence, "%.17g"),
-                               "--seed-order", join(j.arms, ",")};
-    if (j.p.alternate_reverse) a.push_back("--alternate-reverse");
-    if (!j.ld_audit.empty()) a.insert(a.end(), {"--ld-audit", join(j.ld_audit, ",")});
-    return a;
 }
 
 // One fresh `--cell --mode race` child (the audit, --no-worker, the worker's fallback). Arms that
 // crash a child even alone are `error`; the rest race without them.
 ArmBatch Driver::race_fresh(const CellJob& j) {
-    const auto extra = race_args(j);
+    const auto extra = race_argv(race_request(j));  // the worker's request, as argv
     ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, -1, extra);
     Phases spent = ch.phases;
     std::map<std::string, std::string> alone;

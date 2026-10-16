@@ -24,7 +24,9 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
   candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
   before it; absent in ledgers written before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
-  `h/s/r/m/lo/hi/n`), plus the cell's wall seconds by phase, each written only when measured:
+  `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
+  lean race's tie set, already verified in its size decade; absent = verified, as in every older
+  ledger; table generation keeps it in the row), plus the cell's wall seconds by phase, each written only when measured:
   `ph_setup` (Problem, fill, workspace probe), `ph_warm` (untimed and warm rounds), `ph_timed` (wall, resets included),
   `ph_verify`, `ph_ld` (the ld audit's second run), `ph_guard`, `ph_ipc` (worker round trip less the
   worker's phases), `ph_spawn` (fresh child start and exit less its phases), `ph_start` (a worker

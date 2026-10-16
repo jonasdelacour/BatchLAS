@@ -141,6 +141,10 @@ struct Job {
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
     bool audited = false;  // until set, the next eligible worker cell is audited whatever the hash says
     LdAuditBook ld;        // under TieredRun::mu_
+    VerifyBook verify;     // under TieredRun::mu_
+    std::set<CellKey> requeued;          // under mu_: raced again once after verified_front changed its front
+    std::vector<PlannedCell> requeue;    // under mu_: those cells, until gpu_loop queues them
+    std::deque<PlannedCell> again;       // under sq_: their storage (queue points into it)
     bool capped = false;
     double est_refine_cells = 0;
     std::vector<std::size_t> per_round;  // cells measured per round
@@ -152,6 +156,7 @@ struct Job {
     int round = 0;
     bool planning = false, done = false;
     double wall = 0;
+    std::string bucket(const CellKey& k) const { return verify_bucket(k, axes, item_footprint(spec->bytes(dtype, k), k)); }
     PlanSpec plan_spec() const {
         return {cands, [s = spec, d = dtype](const CellKey& k) { return s->bytes(d, k); },
                 [s = spec, d = dtype](const CellKey& k) {
@@ -199,7 +204,8 @@ private:
     void note_pop(std::size_t g, const Job& j, const PlannedCell& c);
     void measure_one(Job& j, const PlannedCell& c, int gpu, int round);
     void record(Job& j, const CellRecord& r, Tier tier);
-    void retract(Job& j, const std::vector<std::string>& arms);
+    void retract(Job& j, const std::vector<std::string>& arms, const std::string& bucket = "");
+    void verdicts(Job& j, const CellKey& key, const std::vector<ArmOutcome>& out);
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
     bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
@@ -326,14 +332,30 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     c.tier = tier;
     // Under the lock that note() takes: a cell finishing on another GPU never ranks a failed arm.
     for (const auto& [arm, why] : j.ld.bad) (void)ld_retract(c, arm, why);
+    if (const auto vb = j.verify.bad.find(j.bucket(c.key)); vb != j.verify.bad.end())
+        for (const auto& [arm, why] : vb->second) (void)ld_retract(c, arm, why, true);
+    // A retraction (or a partial re-race whose arms all failed) promoted an arm this cell never
+    // verified: it goes out below the first verified arm, and the cell is raced again over its live
+    // arms, verifying the new tie set. evidence: docs/design/tiered-tuning.md#engine-tie-set-verification
+    if (verified_front(c) && j.region->contains(c.key) && j.requeued.insert(c.key).second) {
+        PlannedCell p;
+        p.key = c.key;
+        p.tier = c.tier;
+        p.round = c.round;
+        p.reason = "remeasure";
+        const auto live = j.runnable.find(c.key);
+        p.arms = live != j.runnable.end() && !live->second.empty() ? live->second : j.cands;
+        j.requeue.push_back(std::move(p));
+    }
     j.writer->cell(c, tier);
     j.mine[c.key] = c;
 }
 
 // An ld-audit fail condemns the kernel, not the cell: every current record of this (op, dtype) that
 // ranks the arm, from this run or the ledger, is appended again with the arm bad. The newer line
-// wins in best_records and sweep_to_table.py; record() applies j.ld.bad to the copy.
-void TieredRun::retract(Job& j, const std::vector<std::string>& arms) {
+// wins in best_records and sweep_to_table.py; record() applies j.ld.bad to the copy. With a
+// `bucket`, a VerifyBook fail: only that bucket's records that did not verify the arm.
+void TieredRun::retract(Job& j, const std::vector<std::string>& arms, const std::string& bucket) {
     if (arms.empty()) return;
     std::vector<CellRecord> hit;
     {
@@ -341,18 +363,34 @@ void TieredRun::retract(Job& j, const std::vector<std::string>& arms) {
         std::map<CellKey, const CellRecord*> cur = best_records(j.ledger, j.fh);
         for (const auto& [k, r] : j.mine) cur[k] = &r;
         for (const auto& [k, r] : cur) {
+            if (!bucket.empty() && j.bucket(k) != bucket) continue;
             CellRecord c = *r;
             bool ranked = false;
-            for (const std::string& a : arms) ranked = ld_retract(c, a, j.ld.bad.at(a)) || ranked;
+            for (const std::string& a : arms)
+                ranked = (bucket.empty() ? ld_retract(c, a, j.ld.bad.at(a))
+                                         : ld_retract(c, a, j.verify.bad.at(bucket).at(a), true)) || ranked;
             if (ranked) hit.push_back(*r), hit.back().phases = {};  // the time was spent once
         }
     }
     for (const CellRecord& r : hit) record(j, r, r.tier);
-    std::printf("== %s %s ld audit: %s marked bad in %zu recorded cells\n", j.spec->op().c_str(), j.dtype.c_str(),
-                join(arms, ",").c_str(), hit.size());
+    const char* what = bucket.empty() ? "ld audit" : "verify";
+    std::printf("== %s %s %s: %s marked bad in %zu recorded cells%s\n", j.spec->op().c_str(), j.dtype.c_str(), what,
+                join(arms, ",").c_str(), hit.size(), bucket.empty() ? "" : (" of bucket " + bucket).c_str());
     std::fflush(stdout);
-    emit(Json().str("ev", "ld_retract").str("op", j.spec->op()).str("dtype", j.dtype).str("cands", join(arms, ","))
-             .integer("cells", std::int64_t(hit.size())));
+    emit(Json().str("ev", bucket.empty() ? "ld_retract" : "verify_retract").str("op", j.spec->op()).str("dtype", j.dtype)
+             .str("cands", join(arms, ",")).integer("cells", std::int64_t(hit.size())));
+}
+
+// A cell's (or its fresh audit's) verifications into the VerifyBook; a fail unranks the arm in the
+// bucket's earlier cells that did not verify it. evidence: docs/design/tiered-tuning.md#engine-tie-set-verification
+void TieredRun::verdicts(Job& j, const CellKey& key, const std::vector<ArmOutcome>& out) {
+    const std::string bucket = j.bucket(key);
+    std::vector<std::string> fails;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        fails = j.verify.note(bucket, key, out);
+    }
+    retract(j, fails, bucket);
 }
 
 // A fresh child re-measures the cell; a mismatch sends the rest of this op and dtype to fresh children.
@@ -374,6 +412,7 @@ void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
         if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end() && !ld_failed(x.arm))
             on_worker.push_back(x);
     const AuditResult a = audit_compare(on_worker, f.arms, j.cands);
+    verdicts(j, job.key, f.arms);
     const std::string od = j.spec->op() + "." + j.dtype;
     bool flipped = false;
     {
@@ -398,18 +437,23 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     const double bytes = j.spec->bytes(j.dtype, c.key);
     CellJob job{gpu, j.spec, j.dtype, c.key, {}, c.tier, params(c.tier), item_footprint(bytes, c.key)};
     bool worker = false;
-    std::vector<ArmOutcome> ld_bad;  // failed the ld audit at an earlier cell: not timed again
+    const std::string bucket = j.bucket(c.key);
+    std::vector<ArmOutcome> ld_bad;  // failed the ld audit, or verification in this bucket, earlier: not timed again
     {
         std::lock_guard<std::mutex> lock(mu_);
+        const auto vb = j.verify.bad.find(bucket);
         std::vector<std::string> arms;
         for (const std::string& a : c.arms)
             if (const auto it = j.ld.bad.find(a); it != j.ld.bad.end()) ld_bad.push_back({a, "bad", it->second, {}, {}, 0, 0});
+            else if (vb != j.verify.bad.end() && vb->second.count(a)) ld_bad.push_back({a, "bad", vb->second.at(a), {}, {}, 0, 0});
             else arms.push_back(a);
         job.arms = seed_order(j.mine, c.key, arms);
         job.ld_audit = j.ld.want(job.arms);
+        job.verify = j.verify.want(bucket, job.arms);
         worker = m_->persistent() && !j.fresh && !job.arms.empty();
     }
     ArmBatch b = job.arms.empty() ? ArmBatch{} : worker ? m_->measure(job) : m_->measure_fresh(job);
+    verdicts(j, c.key, b.arms);
     b.arms.insert(b.arms.end(), ld_bad.begin(), ld_bad.end());
     std::vector<std::string> ld_failed;
     {
@@ -553,7 +597,14 @@ void TieredRun::gpu_loop(std::size_t g) {
             const int round = j->round;
             lk.unlock();
             measure_one(*j, *c, o_.devices[g], round);
+            std::vector<PlannedCell> again;
+            {
+                std::lock_guard<std::mutex> lock(mu_);
+                again.swap(j->requeue);
+            }
             lk.lock();
+            for (PlannedCell& p : again) j->again.push_back(std::move(p)), j->queue.push_back(&j->again.back());
+            if (!again.empty()) cv_.notify_all();
             --j->running;
         } else {
             ++budget_left_;  // a refinement cell the budget stopped

@@ -19,7 +19,7 @@ namespace batchlas::tune {
 
 // Task 0's measured child start-up (threadripper02): docs/design/tiered-tuning.md#engine-measured-per-child-overhead
 inline constexpr double kChildOverheadS = 0.49;
-inline constexpr double kVerifyS = 0.05;        // per candidate, the untimed verification run
+inline constexpr double kVerifyS = 0.05;        // per cell: the tie set's untimed verification run
 inline constexpr double kModelBytesPerS = 500e9;
 
 struct PlanSpec {  // plain data, so tests need no OpSpec
@@ -114,8 +114,23 @@ struct LdAuditBook {
     std::size_t skipped() const;  // refused at every cell that asked, never audited
 };
 
+// evidence: docs/design/tiered-tuning.md#engine-tie-set-verification
+std::string verify_bucket(const CellKey& key, const std::vector<AxisSpec>& axes, double item_bytes);  // exact keys, decade
+
+struct VerifyBook {  // one (op, dtype)'s, per verify_bucket
+    std::map<std::string, std::set<std::string>> done;              // bucket -> arms with a verdict
+    std::map<std::string, std::map<std::string, std::string>> bad;  // bucket -> failed arm -> reason
+    std::vector<std::string> want(const std::string& bucket, const std::vector<std::string>& arms) const;
+    std::vector<std::string> note(const std::string& bucket, const CellKey& key,
+                                  const std::vector<ArmOutcome>& out);  // returns the bucket's new fails
+};
+
 // `arm` ok or eliminated in r -> bad with `reason`, out of r.ranked; false when r did not rank it.
-bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason);
+bool ld_retract(CellRecord& r, const std::string& arm, const std::string& reason,
+                bool unverified_only = false);  // true: only where r did not verify it (a VerifyBook fail)
+
+// r.ranked's front becomes an arm r verified: unverified arms above it move below it; none verified: emptied.
+bool verified_front(CellRecord& r);  // true: the front changed (the driver races the cell again)
 
 // The refinement view of a record (grid.hh RefineCell); `lattice` marks a round-0 cell of this run.
 RefineCell refine_cell(const CellRecord& r, bool lattice);

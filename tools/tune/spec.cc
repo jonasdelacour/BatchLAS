@@ -26,7 +26,7 @@ std::vector<const OpSpec*> all_specs() { return registry(); }
 std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out, const std::vector<std::string>& wanted) {
     std::vector<std::string> arms;
     for (const ArmOutcome& o : out)
-        if ((o.status == "ok" || o.status == "eliminated") &&
+        if (o.verified && (o.status == "ok" || o.status == "eliminated") &&
             std::find(wanted.begin(), wanted.end(), o.arm) != wanted.end())
             arms.push_back(o.arm);
     return arms;
