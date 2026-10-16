@@ -1,7 +1,7 @@
 #pragma once
 
-// Offline replay of the tiered tuner against an exhaustive raw sweep (docs/design/tiered-tuning.md,
-// "Engine: replay results on the trsm data"). Host-only: no SYCL, no GPU.
+// Offline replay of the tiered tuner against an exhaustive raw sweep, and the slowdown replay of planning
+// schemes (docs/design/tiered-tuning.md, "Engine: replay results on trsm" and the next section). Host-only.
 
 #include <tools/tune/grid.hh>
 #include <tools/tune/tier.hh>
@@ -70,11 +70,57 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
 // the axis lacks or a bad stride.
 void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std::string& spec, bool keep);
 
-// Port of nearest() in scripts/sweep_to_table.py (exact-key prefix, weighted log2 distance, ties as there).
-std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes);
-
 // Holdout noise floor: the no-elimination oracle (run with ReplayOpts::all_cells) on the same pass-2 reference.
 TierParams oracle_params();
 void apply_floor(ReplayReport& r, const ReplayReport& oracle);
+
+// Slowdown replay: a measured universe scored t(pick) / t(fastest) per cell under a planning scheme.
+// evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
+struct OracleSet {
+    std::string label;
+    std::vector<AxisSpec> axes;           // log axes: the round-0 lattice values when known, else every distinct value
+    std::map<CellKey, RefineCell> cells;  // ms = each timed arm's median; out = the set's other arms; dtype is a key
+    std::string lattice = "inferred";     // ledger (round-0 records), raw (sweep meta), inferred (distinct values)
+};
+
+OracleSet load_table_oracle(const std::string& tuned_txt);  // timed rows only; transcribed (`-`) rows are dropped
+std::map<std::string, std::string> table_family_hashes(const std::string& tuned_txt);  // header family_kernels=
+// Current best records; the lattice is the round-0 records' values (rare strays dropped).
+OracleSet load_ledger_oracle(const std::string& ledger_jsonl, const std::map<std::string, std::string>& family_hash);
+OracleSet raw_oracle(const std::string& label, const std::vector<ReplayCell>& cells, const ReplayMeta& meta);
+void adopt_lattice(OracleSet& o, const std::vector<AxisSpec>& lattice);  // log axes take lattice's values, by name
+
+struct Scheme {
+    std::string name;
+    int stride = 1;         // round 0: the universe cells on tier_lattice(axes, stride); 0 = every universe cell
+    bool frontier = false;  // then flip_frontier rounds until none is left
+    double prune = 0;       // > 0: a frontier cell races only arms within prune x the best at one of its neighbours
+};
+std::vector<Scheme> replay_schemes();  // full, lattice, stride2, stride4, stride2+frontier, stride4+frontier, stride2+frontier+prune
+
+struct SlowdownReport {
+    std::size_t cells = 0, measured = 0, rounds = 0;
+    double arm_runs = 0, arm_total = 0;          // timed arms raced / timed arms in the universe
+    std::vector<double> ratio, ratio_measured;   // t(pick) / t(fastest): every scored cell; measured cells alone
+    double worst = 1;
+    std::string worst_key;
+    std::vector<std::string> failures;  // no entry of the nearest measured row runs, or no row of the dtype (not scored)
+    std::string lattice;
+};
+// Round 0: the stride lattice; an exact-key group with no cell on it takes the stride of its own values.
+// Picks: a measured cell's fastest raced arm; any other cell reads the nearest measured row (NearestIndex::find,
+// as select::choose) and takes its first entry, fastest first, that runs there.
+SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t k = 6, double slower = 0.05);
+
+struct SlowdownStats {
+    double geomean = 0;  // geomean(ratio) - 1
+    double p99 = 1, p999 = 1, worst = 1;  // nearest rank: sorted[ceil(f n) - 1]
+    double slow10 = 0, misrank = 0;  // share of cells > 1.10, > 1.03
+};
+SlowdownStats slowdown_stats(std::vector<double> ratio);
+
+constexpr double kGateGeomean = 0.0005, kGateP999 = 1.10;  // evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
+// Every cell scored (no failures, something measured), geomean <= kGateGeomean and p99.9 <= kGateP999.
+bool slowdown_gate(const SlowdownReport& r);
 
 }  // namespace batchlas::tune

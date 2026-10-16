@@ -291,7 +291,8 @@ Tests follow the agent guide's "guards that cannot fail" rules (@ref dev_agent_g
   against the exhaustive trsm sweeps (4452 float and 4098 double cells, every rep of every candidate),
   without a GPU. The score is the table misrank: the fraction of cells where the nearest row's first
   runnable entry is more than 3% slower than the exhaustive best. Acceptance: deep at most 0.2%,
-  coarse at most 1%, preview at most 5%, each measured as the excess over the noise floor.
+  coarse at most 1%, preview at most 5%, each measured as the excess over the noise floor. Its
+  `--slowdown` mode scores planning schemes on shipped tables, ledgers and raw sweeps (next sections).
 - **Unit tests without a GPU.** Precedence (a coarse record never displaces a current deep one; a
   stale deep one is displaced), gap fill, partly-stale selection, lattice nesting and `--check`
   reproducibility. Each has a deliberate break that turns only its own test red.
@@ -342,6 +343,123 @@ and `cell_overhead_s` 0 for a persistent worker. The summed rep time is 0.07 GPU
 
 Batch is the costliest axis to shrink, because the winner flips along it. No shrunken grid meets the
 1% coarse bound. The full lattice does.
+
+## Engine: flip frontier and the slowdown replay
+
+**Rule** (`flip_frontier`, `tools/tune/grid.cc`). After a stride-2 start, an unmeasured cell is
+measured when its k = 6 nearest measured cells hold a decisive flip: one neighbour's winner (fastest
+median) is more than 5% slower than the best at another neighbour, or is not runnable there.
+Neighbours come only from the cell's own exact-key group. Distance is `select::choose`'s: sum of
+weight × |log2 a − log2 b| over the log keys (`NearestIndex`, the one host port). Rounds repeat
+until none is left. The driver does not use it yet.
+
+**Slowdown replay** (`tune_replay --slowdown`, `slowdown_replay` in `tools/tune/replay_core.cc`).
+- **Universe.** Every timed row of a shipped table (`--table`, deep and custom rows), every current
+  best record of a ledger (`--ledger`, family hashes from the table header), or every ok cell of a raw
+  sweep (`--raw`).
+- **Start lattice** (the `lattice` field of each output line).
+  - `ledger`: the ledger's round-0 values per log axis. Values under 1% of the axis's commonest are
+    re-measure strays and are dropped. A table adopts the lattice of the ledger it was built from. Deep
+    runs race at stride 1, so round 0 is the spec lattice: this models the driver.
+  - `raw`: the sweep's round-0 values.
+  - `inferred` (a table with no ledger): each exact-key group's own distinct row values. Refinement
+    midpoints land on the lattice, so this start is denser at the old crossovers than the driver's.
+  - An exact-key group with no cell on the start lattice takes the stride of its own values, as
+    the driver's round 0 covers every group.
+- **Score.** t(pick) / t(fastest arm) per universe cell. A measured cell picks its fastest raced arm.
+  Any other cell picks from the nearest measured row (`NearestIndex::find`, as `select::choose`, never
+  crossing `dtype`): its first entry, fastest first, that runs there. A cell where no entry runs, or with
+  no row of its dtype, is a failure: listed in full, not scored. Truth is the shipped medians, so race
+  noise and the 3% tie order are not modelled. Quantiles are nearest rank, sorted[⌈f·n⌉ − 1]: below
+  1000 cells p99.9 is the worst cell, and below 100 cells p99 is too.
+- **Gate** (per line): every cell scored (no failures, something measured), geomean ≤ 0.05% and
+  p99.9 ≤ 1.10.
+- **Schemes.** `full` (every cell), `lattice` (round 0 at stride 1, no refinement), `stride2`,
+  `stride4`, `stride2+frontier`, `stride4+frontier`, and `stride2+frontier+prune`. Prune races a
+  frontier cell only on arms within 1.5x of the best at one of its neighbours.
+- **Measured cells** are scored separately (`measured_*` fields). They score exactly 1.0 by
+  construction except under prune, where a frontier cell may not race its fastest arm.
+
+**Gate run** (2026-10-16, threadripper02, one core, 44 s). Shipped `tuned/*.sm_120.txt` with their
+ledgers, plus the two raw trsm sweeps:
+
+```
+tune_replay $(for t in tuned/*.sm_120.txt; do echo --table $t; done) \
+    $(for l in benchmarks/results/tuning/ledger/*.sm_120.jsonl; do echo --ledger $l; done) \
+    --raw benchmarks/results/tuning/trsm.float.sm_120.jsonl --raw benchmarks/results/tuning/trsm.double.sm_120.jsonl
+```
+
+All 19 tables, 115,595 cells, `ledger` lattice:
+
+| Scheme | Cells kept | Arm runs | Geomean slowdown | p99 | p99.9 | Cells >10% slow | >3% (misrank) | Worst | Failures |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| full | 100% | 100% | 0.000% | 1.000 | 1.000 | 0.00% | 0.00% | 1.00x | 0 |
+| lattice | 59% | 47% | 3.079% | 1.747 | 4.241 | 8.74% | 13.86% | 16.92x | 0 |
+| stride2 | 12% | 10% | 5.129% | 2.055 | 5.237 | 14.03% | 21.20% | 42.69x | 6 |
+| stride4 | 3% | 2% | 8.905% | 3.516 | 40.767 | 17.40% | 24.52% | 578.78x | 32 |
+| stride2+frontier | 76% | 82% | 0.044% | 1.000 | 1.072 | 0.08% | 0.15% | 5.28x | 0 |
+| stride4+frontier | 82% | 88% | 0.073% | 1.000 | 1.234 | 0.17% | 0.24% | 5.28x | 0 |
+| stride2+frontier+prune | 76% | 63% | 0.074% | 1.000 | 1.255 | 0.16% | 0.29% | 5.28x | 0 |
+
+Prune's measured cells alone: geomean 0.037%, p99.9 1.104, 0.10% over 10% slow, worst 2.01x.
+
+The ledgers as the universe give the same `stride2+frontier` row (0.044%, p99.9 1.072). Raw trsm
+(8550 cells): `stride2+frontier` keeps 78% for 0.006% geomean, p99.9 1.014, misrank 0.00% / 0.02%
+(float / double), against 3.6% / 4.3% for the preview scheme (stride 2, index bisection, margin) in
+the race replay above. `lattice` misranks 4.99% / 5.59% here and 6.4% / 6.1% there.
+
+**Against the plan's replay.** The tuner-overhaul plan (2026-10) scored the same tables with an
+`inferred` lattice on deep rows only (115,547 cells). That replay reproduces it: geomean / p99.9 /
+worst, here then there.
+
+| Scheme | `inferred`, deep rows | Plan | `inferred`, deep + custom | `ledger` |
+| --- | --- | --- | --- | --- |
+| stride2 | 4.324% / 5.952 / 204.28x | 4.32% / 5.928 / 204.28x | 4.345% / 6.108 / 204.28x | 5.129% / 5.237 / 42.69x |
+| stride4 | 9.124% / 35.041 / 578.78x | 9.12% / 35.023 / 578.78x | 9.064% / 33.822 / 578.78x | 8.905% / 40.767 / 578.78x |
+| stride2+frontier | 0.018% / 1.054 / 1.78x | 0.02% / 1.052 / 1.78x | 0.018% / 1.052 / 1.78x | 0.044% / 1.072 / 5.28x |
+| stride4+frontier | 0.013% / 1.027 / 1.77x | 0.01% / 1.016 / 1.77x | 0.013% / 1.021 / 1.77x | 0.073% / 1.234 / 5.28x |
+| stride2+frontier+prune | 0.044% / 1.166 / 2.27x | 0.04% / 1.171 / 2.27x | 0.045% / 1.174 / 2.27x | 0.074% / 1.255 / 5.28x |
+
+The p99.9 residue is the quantile rule. The custom rows move gemv (29 rows: p99.9 1.167 to 1.052) and
+trmm (17 rows: 1.060 to 1.187). The `ledger` lattice is the whole gap to the plan: its start holds only
+spec values, so the per-op failures below are cells the plan's start measured as midpoints.
+
+`stride2+frontier` per op (`ledger` lattice; raw trsm last). The two right columns are p99.9 / worst
+with the `inferred` lattice here and in the plan:
+
+| Op | Cells | Kept | Arm runs | Geomean | p99.9 | Worst | Gate | Inferred p99.9 / worst | Plan p99.9 / worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gemm | 32225 | 81% | 84% | 0.110% | 1.339 | 5.28x | FAIL | 1.100 / 1.31x | 1.100 / 1.31x |
+| gemv | 8587 | 89% | 91% | 0.017% | 1.063 | 1.29x | PASS | 1.052 / 1.78x | 1.163 / 1.78x |
+| geqrf | 2186 | 58% | 60% | 0.037% | 1.140 | 1.32x | FAIL | 1.121 / 1.32x | 1.104 / 1.32x |
+| gesvd | 2034 | 66% | 77% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| gesv | 877 | 59% | 65% | 0.007% | 1.061 | 1.06x | PASS | 1.061 / 1.06x | 1.008 / 1.06x |
+| getrf | 1141 | 70% | 68% | 0.001% | 1.000 | 1.01x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| getri | 363 | 80% | 80% | 0.057% | 1.113 | 1.11x | FAIL | 1.113 / 1.11x | 1.111 / 1.11x |
+| getrs | 10653 | 77% | 78% | 0.002% | 1.000 | 1.06x | PASS | 1.000 / 1.21x | 1.000 / 1.21x |
+| orgqr | 497 | 40% | 40% | 0.062% | 1.262 | 1.26x | FAIL | 1.000 / 1.00x | 1.000 / 1.00x |
+| ormqr | 1370 | 26% | 26% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| posv | 8616 | 81% | 86% | 0.018% | 1.058 | 1.54x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| potrf | 1374 | 80% | 85% | 0.001% | 1.000 | 1.01x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| spmm | 2894 | 75% | 76% | 0.047% | 1.183 | 1.24x | FAIL | 1.224 / 1.39x | 1.187 / 1.39x |
+| syev | 1226 | 93% | 95% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| symm | 3604 | 65% | 66% | 0.112% | 1.851 | 1.87x | FAIL | 1.000 / 1.00x | 1.000 / 1.00x |
+| syr2k | 941 | 60% | 69% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| syrk | 12805 | 56% | 64% | 0.003% | 1.002 | 1.25x | PASS | 1.000 / 1.25x | 1.000 / 1.03x |
+| trmm | 2566 | 94% | 95% | 0.071% | 1.299 | 1.40x | FAIL | 1.187 / 1.73x | 1.037 / 1.43x |
+| trsm | 21636 | 80% | 83% | 0.014% | 1.022 | 1.24x | PASS | 1.013 / 1.23x | 1.012 / 1.23x |
+| trsm float (raw) | 4452 | 79% | 77% | 0.004% | 1.011 | 1.02x | PASS | - | - |
+| trsm double (raw) | 4098 | 76% | 77% | 0.008% | 1.015 | 1.04x | PASS | - | - |
+
+**Verdict.** The gate (overall geomean ≤ 0.05%, p99.9 ≤ 1.10, no failures) passes for
+`stride2+frontier` with both lattices: 0.044% and 1.072 with the `ledger` lattice (the driver's start;
+the binding number), 0.018% and 1.052 with the `inferred` one. Per op, with the `ledger` lattice, gemm
+fails both bounds (0.110%, 1.339; worst 5.28x at cdouble T/N 8×8×8, batch 32768), and symm fails both
+(0.112%, 1.851). geqrf, getri, orgqr, spmm and trmm meet the geomean bound but fail p99.9: getri (363
+cells) and orgqr (497) on their worst cell, the others on their third-worst. With the
+`inferred` lattice, gemm passes the geomean (0.036%) and sits on the p99.9 bound (1.100), and symm and
+orgqr pass. `stride4+frontier` measures more and, with the `ledger` lattice, scores worse. Pruning cuts
+arm runs from 82% to 63% but raises the geomean to 0.074% and p99.9 to 1.255, so it stays opt-in.
 
 ## Coverage: interface for sub-project 2
 

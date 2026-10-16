@@ -30,7 +30,8 @@ std::vector<AxisSpec> axis_specs(const std::vector<std::string>& key_names,
 
 std::vector<std::string> subsample_axis(const std::vector<std::string>& values, int stride);
 
-std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t);
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, int stride);  // log axes: every stride-th value + last
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t);       // at params(t).stride
 
 // For grids that are not lattices: keep a cell when fnv1a64(key_arg(cell)) % stride == 0.
 std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t);
@@ -53,6 +54,39 @@ struct RefineOpts {
 
 // The refinement cells an (op, dtype) may still measure: floor(cap_factor x lattice_cells) - refined.
 std::size_t refine_allowance(std::size_t lattice_cells, std::size_t refined, double cap_factor);
+
+// The one host port of select::choose's row distance (Table::nearest_scan, sweep_to_table.py nearest()).
+class NearestIndex {
+public:
+    NearestIndex(const std::vector<CellKey>& rows, const std::vector<AxisSpec>& axes);  // keys in `axes` order
+    static constexpr std::size_t npos = std::size_t(-1);
+    // Exact-key prefix dropped from the right, never past a leading `dtype` (select keeps one table per dtype):
+    // npos when no row shares it. Ties: smaller log keys.
+    std::size_t find(const CellKey& key) const;
+    std::vector<std::size_t> k_nearest(const CellKey& key, std::size_t k) const;  // own exact-key group only
+
+private:
+    struct Row {
+        std::vector<std::string> exact;
+        std::vector<std::int64_t> logs;
+        std::vector<double> lg;
+    };
+    Row prepare(const CellKey& k, bool query) const;
+    double distance(const Row& r, const Row& q) const;
+    std::vector<AxisSpec> axes_;
+    std::vector<double> weights_;
+    std::size_t min_prefix_ = 0;
+    std::vector<Row> rows_;
+    std::vector<std::size_t> order_;                                      // (exact strings, log integers) order
+    std::map<std::vector<std::string>, std::vector<std::size_t>> group_;  // exact keys -> rows, in order_
+};
+
+std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes);
+
+// The unmeasured `universe` cells (in order) whose k nearest measured cells hold a decisive flip at > `slower`.
+// evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
+std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
+                                   const std::vector<AxisSpec>& axes, std::size_t k = 6, double slower = 0.05);
 
 // RefineRound::next = flip midpoints, then margin midpoints; stalled = a midpoint without a winner.
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,

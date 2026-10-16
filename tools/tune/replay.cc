@@ -1,17 +1,135 @@
-// tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, no GPU.
+// tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, or scores planning schemes, no GPU.
 //   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
+//   tune_replay --slowdown [--table <tuned/op.dev.txt>]... [--ledger <op.dev.jsonl>]... [--raw <jsonl>]... [--scheme a,b] [--k n] [--slower f]
+// Slowdown replay: one JSON line per (scheme, source), then per (scheme, overall/<kind>). --table or --ledger
+// implies --slowdown; a ledger takes its family hashes from the --table of the same <op>.<device>.
 
 #include <tools/tune/replay_core.hh>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <map>
 #include <string>
 
 using namespace batchlas::tune;
 
+namespace {
+
+void print_slowdown(const std::string& scheme, const std::string& source, const SlowdownReport& r) {
+    const SlowdownStats all = slowdown_stats(r.ratio), mine = slowdown_stats(r.ratio_measured);
+    std::string fails;
+    for (const std::string& f : r.failures) fails += (fails.empty() ? "" : "; ") + f;
+    Json j;
+    j.str("scheme", scheme).str("source", source).str("lattice", r.lattice).integer("cells", std::int64_t(r.cells)).integer("measured", std::int64_t(r.measured));
+    j.num("kept", r.cells ? double(r.measured) / double(r.cells) : 0).num("arm_runs", r.arm_total > 0 ? r.arm_runs / r.arm_total : 0);
+    j.integer("rounds", std::int64_t(r.rounds)).num("geomean", all.geomean).num("p99", all.p99).num("p999", all.p999);
+    j.num("slow10", all.slow10).num("misrank", all.misrank).num("worst", r.worst).str("worst_key", r.worst_key);
+    j.num("measured_geomean", mine.geomean).num("measured_p99", mine.p99).num("measured_p999", mine.p999);
+    j.num("measured_slow10", mine.slow10).num("measured_worst", mine.worst);
+    j.integer("failures", std::int64_t(r.failures.size())).str("failure_list", fails);
+    j.str("gate", slowdown_gate(r) ? "PASS" : "FAIL");
+    std::fputs(j.line().c_str(), stdout);
+}
+
+void pool(SlowdownReport& into, const SlowdownReport& r) {
+    into.lattice = into.lattice.empty() || into.lattice == r.lattice ? r.lattice : "mixed";
+    into.cells += r.cells, into.measured += r.measured, into.rounds = std::max(into.rounds, r.rounds);
+    into.arm_runs += r.arm_runs, into.arm_total += r.arm_total;
+    into.ratio.insert(into.ratio.end(), r.ratio.begin(), r.ratio.end());
+    into.ratio_measured.insert(into.ratio_measured.end(), r.ratio_measured.begin(), r.ratio_measured.end());
+    into.failures.insert(into.failures.end(), r.failures.begin(), r.failures.end());
+    if (r.worst > into.worst) into.worst = r.worst, into.worst_key = r.worst_key;
+}
+
+int slowdown_main(int argc, char** argv) {
+    std::vector<std::string> tables, ledgers, raws, want;
+    std::size_t k = 6;
+    double slower = 0.05;
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--slowdown") continue;
+        if (i + 1 >= argc) {
+            std::fprintf(stderr, "tune_replay: %s needs a value\n", a.c_str());
+            return 2;
+        }
+        const std::string v = argv[++i];
+        if (a == "--table") tables.push_back(v);
+        else if (a == "--ledger") ledgers.push_back(v);
+        else if (a == "--raw") raws.push_back(v);
+        else if (a == "--scheme") want = split(v, ',');
+        else if (a == "--k") k = std::size_t(std::stoul(v));
+        else if (a == "--slower") slower = std::stod(v);
+        else {
+            std::fprintf(stderr, "tune_replay: unknown argument %s in --slowdown mode\n", a.c_str());
+            return 2;
+        }
+    }
+    std::vector<Scheme> schemes;
+    for (const Scheme& s : replay_schemes())
+        if (want.empty() || std::find(want.begin(), want.end(), s.name) != want.end()) schemes.push_back(s);
+    if (schemes.size() != (want.empty() ? replay_schemes().size() : want.size())) {
+        std::fprintf(stderr, "tune_replay: --scheme takes a comma list of full, lattice, stride2, stride4, stride2+frontier, "
+                             "stride4+frontier, stride2+frontier+prune\n");
+        return 2;
+    }
+    std::vector<std::pair<std::string, OracleSet>> sources;  // kind, set
+    std::map<std::string, std::string> table_of;              // <op>.<device> -> table path
+    for (const std::string& t : tables) {
+        sources.emplace_back("table", load_table_oracle(t));
+        table_of[std::filesystem::path(t).stem().string()] = t;
+    }
+    const std::size_t n_tables = sources.size();
+    for (const std::string& l : ledgers) {
+        const std::string stem = std::filesystem::path(l).stem().string();
+        if (!table_of.count(stem)) {
+            std::fprintf(stderr, "tune_replay: --ledger %s needs --table .../%s.txt for its family hashes\n", l.c_str(), stem.c_str());
+            return 2;
+        }
+        sources.emplace_back("ledger", load_ledger_oracle(l, table_family_hashes(table_of[stem])));
+        sources.back().second.label = stem.substr(0, stem.find('.')) + "/ledger";
+        for (std::size_t i = 0; i < n_tables; ++i)  // a table starts from its ledger's round-0 lattice
+            if (std::filesystem::path(tables[i]).stem().string() == stem) {
+                adopt_lattice(sources[i].second, sources.back().second.axes);
+                sources[i].second.lattice = "ledger";
+            }
+    }
+    for (const std::string& r : raws) {
+        ReplayMeta meta;
+        const auto cells = load_replay(r, &meta);
+        sources.emplace_back("raw", raw_oracle(std::filesystem::path(r).stem().string() + "/raw", cells, meta));
+    }
+    for (const Scheme& s : schemes) {
+        std::map<std::string, SlowdownReport> overall;
+        for (const auto& [kind, o] : sources) {
+            SlowdownReport r = slowdown_replay(o, s, k, slower);
+            r.lattice = o.lattice;
+            print_slowdown(s.name, o.label, r);
+            pool(overall[kind], r);
+        }
+        for (const auto& [kind, r] : overall) print_slowdown(s.name, "overall/" + kind, r);
+        std::fflush(stdout);
+    }
+    return 0;
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--slowdown" || a == "--table" || a == "--ledger") {
+            try {
+                return slowdown_main(argc, argv);
+            } catch (const std::exception& e) {
+                std::fprintf(stderr, "tune_replay: %s\n", e.what());
+                return 1;
+            }
+        }
+    }
     std::string raw, tier_name;
     TierParams p = params(Tier::coarse);
     std::optional<double> confidence;

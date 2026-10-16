@@ -284,6 +284,24 @@ Key fields use the op's key names. Integer values are JSON integers. With `--led
 `pass` records of each cell's highest attempt that timed anything. A candidate enters the table when it
 is `ok` in every pass of that attempt, and the run becomes a `custom` run of the ledger.
 
+## Offline replay (`tune_replay`)
+
+Host-only, no GPU (`build/tools/tune/tune_replay`).
+
+- `--raw <jsonl> --tier <t>`: re-races a raw exhaustive sweep at a tier and scores table misrank
+  (one JSON line).
+- `--slowdown` (implied by `--table`/`--ledger`): `--table tuned/<op>.<dev>.txt`, `--ledger
+  <op>.<dev>.jsonl` (needs the matching `--table` for its family hashes, and lends it its round-0
+  lattice) and `--raw <jsonl>`, each repeatable. `--scheme a,b` picks from `full`, `lattice`,
+  `stride2`, `stride4`, `stride2+frontier`, `stride4+frontier`, `stride2+frontier+prune` (default:
+  all); `--k` (6) and `--slower` (0.05) set the frontier rule. Output is one JSON line per (scheme,
+  source), then per (scheme, `overall/<table|ledger|raw>`): `lattice` (`ledger`, `raw` or
+  `inferred`), `kept`, `arm_runs`, `geomean` (geomean slowdown − 1), `p99`, `p999` (nearest rank),
+  `slow10`, `misrank`, `worst`, `worst_key`, `measured_geomean`, `measured_p99`, `measured_p999`,
+  `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
+  failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay).
+
 ## Gate mode (§10.3)
 
 Gate mode compares the old choice with Auto for each cell. Cells come from `--old-csv` (columns

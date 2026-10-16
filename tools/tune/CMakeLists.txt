@@ -48,6 +48,6 @@ target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE
 
 # Offline replay of the tiers against a raw sweep (docs/design/tiered-tuning.md). Host-only, like the tests:
 # no batchlas_configure_binary_target, no SYCL.
-add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc tune_core.cc)
+add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc ledger.cc tune_core.cc)
 target_compile_features(tune_replay PRIVATE cxx_std_20)
 target_include_directories(tune_replay PRIVATE "${PROJECT_SOURCE_DIR}")

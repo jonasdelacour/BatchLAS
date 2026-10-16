@@ -4687,3 +4687,255 @@ TEST(TuneVerify, TheDriversBucketIsTheExactKeysAndThePerItemDecade) {
     for (const auto& [k, want] : m.asked)
         EXPECT_EQ(want.size(), k.find("batch=128") != std::string::npos ? 3u : 0u) << k << ": one bucket per (uplo, decade)";
 }
+
+// ---- Flip frontier and the slowdown replay (grid.cc flip_frontier, replay_core.cc slowdown_replay) ----
+
+namespace {
+
+const std::vector<std::string> kPow2{"1", "2", "4", "8", "16", "32", "64"};
+
+CellKey fcell(const std::string& g, int n, int b = 0) {
+    CellKey k{{"x", g}, {"n", std::to_string(n)}};
+    if (b) k.push_back({"b", std::to_string(b)});
+    return k;
+}
+
+RefineCell rcell(std::map<std::string, double> ms, std::set<std::string> out = {}) {
+    RefineCell c;
+    c.ms = std::move(ms);
+    c.out = std::move(out);
+    return c;
+}
+
+std::vector<CellKey> frontier_1d(const std::map<CellKey, RefineCell>& m, std::size_t k = 2) {
+    const std::vector<AxisSpec> axes{{"x", false, {"g"}}, {"n", true, {"1", "2", "4"}}};
+    return flip_frontier(m, {fcell("g", 1), fcell("g", 2), fcell("g", 4)}, axes, k);
+}
+
+}  // namespace
+
+TEST(TuneFrontier, TwoDimensionalFlipRegionIsTheUnmeasuredCellsBesideTheEdge) {
+    // a wins n <= 8, b from n = 16 (each 1.5x slower where it loses); stride-2 start n, b in {1, 4, 16, 64}.
+    const std::vector<AxisSpec> axes{{"x", false, {"g"}}, {"n", true, kPow2}, {"b", true, kPow2}};
+    std::map<CellKey, RefineCell> m;
+    std::vector<CellKey> universe;
+    for (int n = 1; n <= 64; n *= 2)
+        for (int b = 1; b <= 64; b *= 2) {
+            universe.push_back(fcell("g", n, b));
+            if ((n == 1 || n == 4 || n == 16 || n == 64) && (b == 1 || b == 4 || b == 16 || b == 64))
+                m[fcell("g", n, b)] = rcell({{"a", n <= 8 ? 1.0 : 1.5}, {"b", n <= 8 ? 1.5 : 1.0}});
+        }
+    std::set<std::string> got, want;
+    for (const CellKey& k : flip_frontier(m, universe, axes, 4)) got.insert(key_arg(k));
+    for (int b = 1; b <= 64; b *= 2) want.insert(key_arg(fcell("g", 8, b)));
+    for (int b : {2, 8, 32}) want.insert(key_arg(fcell("g", 16, b)));
+    // n=32 on a lattice b: two neighbours at distance 1, then a tie at 3 that goes to the smaller log keys (n=4).
+    for (int b : {1, 4, 16, 64}) want.insert(key_arg(fcell("g", 32, b)));
+    EXPECT_EQ(got, want);
+}
+
+TEST(TuneFrontier, ANearTieNeverTriggersAndJustAboveTheFivePercentDoesAtEitherEnd) {
+    auto at = [](double a1, double b1, double a4, double b4) {
+        return frontier_1d({{fcell("g", 1), rcell({{"a", a1}, {"b", b1}})}, {fcell("g", 4), rcell({{"a", a4}, {"b", b4}})}});
+    };
+    EXPECT_TRUE(at(1.0, 1.04, 1.04, 1.0).empty());
+    EXPECT_EQ(at(1.0, 1.06, 1.04, 1.0), std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_EQ(at(1.0, 1.04, 1.06, 1.0), std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_TRUE(at(1.0, 1.5, 0.9, 1.0).empty());  // same winner at both ends
+}
+
+TEST(TuneFrontier, ANeighboursWinnerThatCannotRunAtAnotherTriggers) {
+    const RefineCell a_wins = rcell({{"a", 1.0}, {"b", 1.01}});
+    EXPECT_EQ(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}}, {"a"})}}),
+              std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_TRUE(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}})}}).empty());  // untimed, not out
+}
+
+TEST(TuneFrontier, NeighboursAreSelectsWeightedLog2Distance) {
+    // n weighs 3. From (4, 4): (4, 1) and (4, 16) cost 2, (8, 4) costs 3, so the two nearest agree on a.
+    // Unweighted, (8, 4) costs 1 and its b flips against (4, 1).
+    const auto axes = axis_specs({"x:exact", "n:log:3", "b:log"}, {{"x", {"g"}}, {"n", {"4", "8"}}, {"b", {"1", "4", "16"}}});
+    const std::map<CellKey, RefineCell> m{{fcell("g", 4, 1), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 4, 16), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 8, 4), rcell({{"a", 2.0}, {"b", 1.0}})}};
+    EXPECT_TRUE(flip_frontier(m, {fcell("g", 4, 4)}, axes, 2).empty());
+    const NearestIndex index({fcell("g", 4, 1), fcell("g", 4, 16), fcell("g", 8, 4)}, axes);
+    EXPECT_EQ(index.k_nearest(fcell("g", 4, 4), 3), (std::vector<std::size_t>{0, 1, 2}));
+}
+
+TEST(TuneFrontier, ExactKeyGroupsNeverMix) {
+    // Group h sits at the query's own log coordinate with the other winner; group g alone has no flip.
+    const std::map<CellKey, RefineCell> m{{fcell("g", 1), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 4), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("h", 2), rcell({{"a", 2.0}, {"b", 1.0}})}};
+    const std::vector<AxisSpec> axes{{"x", false, {"g", "h"}}, {"n", true, {"1", "2", "4"}}};
+    EXPECT_TRUE(flip_frontier(m, {fcell("g", 2)}, axes, 3).empty());
+    const NearestIndex index({fcell("g", 1), fcell("g", 4), fcell("h", 2)}, axes);
+    EXPECT_EQ(index.k_nearest(fcell("g", 2), 3), (std::vector<std::size_t>{0, 1}));
+    EXPECT_TRUE(index.k_nearest(fcell("z", 2), 3).empty());
+    EXPECT_EQ(index.find(fcell("z", 2)), 2u);  // find still falls back past the exact keys: n=2 is exact in h
+}
+
+TEST(TuneFrontier, FindDropsExactKeysButNeverALeadingDtype) {
+    const std::vector<AxisSpec> axes{{"dtype", false, {"float", "double"}}, {"x", false, {"g", "h"}}, {"n", true, {"1", "8"}}};
+    auto key = [](const char* d, const char* x, int n) { return CellKey{{"dtype", d}, {"x", x}, {"n", std::to_string(n)}}; };
+    const NearestIndex index({key("float", "g", 1), key("double", "h", 8)}, axes);
+    EXPECT_EQ(index.find(key("float", "h", 8)), 0u);  // x dropped, dtype kept: float's row, not double's nearer one
+    EXPECT_EQ(index.find(key("cfloat", "h", 8)), NearestIndex::npos);
+}
+
+namespace {
+
+// 1D universe n = 1..128: a wins n <= 4, b from n = 8 (the loser 1.5x); at n = 32 only arm c runs.
+OracleSet flip_oracle() {
+    OracleSet o;
+    o.label = "syn";
+    std::vector<std::string> ns;
+    for (int n = 1; n <= 128; n *= 2) {
+        ns.push_back(std::to_string(n));
+        o.cells[fcell("g", n)].ms = n == 32 ? std::map<std::string, double>{{"c", 1.0}}
+                                            : std::map<std::string, double>{{"a", n <= 4 ? 1.0 : 1.5}, {"b", n <= 4 ? 1.5 : 1.0}};
+    }
+    o.axes = {{"x", false, {"g"}}, {"n", true, ns}};
+    for (auto& [k, c] : o.cells)
+        for (const char* arm : {"a", "b", "c"})
+            if (!c.ms.count(arm)) c.out.insert(arm);
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneReplay, SlowdownScoresEveryCellAgainstItsFastestArmAndListsUnrunnablePicks) {
+    const OracleSet o = flip_oracle();
+    // Stride 2 measures n = 1, 4, 16, 64, 128. n = 8 ties between 4 and 16 and reads 4 (a, 1.5x); n = 32 reads 16,
+    // whose a and b cannot run there: a failure, not scored.
+    const SlowdownReport s2 = slowdown_replay(o, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(s2.cells, 8u);
+    EXPECT_EQ(s2.measured, 5u);
+    EXPECT_DOUBLE_EQ(s2.arm_runs, 10.0);
+    EXPECT_DOUBLE_EQ(s2.arm_total, 15.0);
+    ASSERT_EQ(s2.failures.size(), 1u);
+    EXPECT_NE(s2.failures[0].find("n=32"), std::string::npos) << s2.failures[0];
+    ASSERT_EQ(s2.ratio.size(), 7u);
+    EXPECT_EQ(s2.ratio_measured, std::vector<double>(5, 1.0));
+    EXPECT_DOUBLE_EQ(s2.worst, 1.5);
+    EXPECT_NE(s2.worst_key.find("n=8 picked a"), std::string::npos) << s2.worst_key;
+    const SlowdownStats st = slowdown_stats(s2.ratio);
+    EXPECT_NEAR(st.geomean, std::pow(1.5, 1.0 / 7) - 1, 1e-12);
+    EXPECT_DOUBLE_EQ(st.p99, 1.5);
+    EXPECT_DOUBLE_EQ(st.p999, 1.5);
+    EXPECT_DOUBLE_EQ(st.slow10, 1.0 / 7);
+    EXPECT_DOUBLE_EQ(st.misrank, 1.0 / 7);
+    // The frontier measures n = 8 (4 and 16 disagree). n = 32 stays a failure: 16 and 64 agree, and c runs at neither.
+    const SlowdownReport f = slowdown_replay(o, {"stride2+frontier", 2, true, 0}, 2);
+    EXPECT_EQ(f.measured, 6u);
+    EXPECT_EQ(f.rounds, 1u);
+    EXPECT_EQ(f.failures.size(), 1u);
+    EXPECT_EQ(slowdown_stats(f.ratio).worst, 1.0);
+    OracleSet only_b = o;  // n = 8 cannot run row 4's front (a): the pick falls through to b, no failure
+    only_b.cells.at(fcell("g", 8)) = rcell({{"b", 1.0}}, {"a", "c"});
+    const SlowdownReport fb = slowdown_replay(only_b, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(fb.failures.size(), 1u);
+    EXPECT_EQ(slowdown_stats(fb.ratio).worst, 1.0);
+    EXPECT_EQ(slowdown_replay(o, {"full", 0, false, 0}).measured, 8u);
+    EXPECT_EQ(slowdown_replay(o, {"lattice", 1, false, 0}).measured, 8u);
+    EXPECT_FALSE(slowdown_gate(f));  // one unscored cell fails the gate: the scored ones are all 1.0
+    EXPECT_TRUE(slowdown_gate(slowdown_replay(o, {"full", 0, false, 0})));
+    EXPECT_FALSE(slowdown_gate(slowdown_replay(OracleSet{}, {"stride2", 2, false, 0})));  // nothing measured
+}
+
+TEST(TuneReplay, SlowdownQuantilesAreNearestRank) {
+    std::vector<double> r;
+    for (int i = 1000; i >= 1; --i) r.push_back(1.0 + i / 1000.0);  // 1.001 .. 2.000, reversed
+    const SlowdownStats st = slowdown_stats(r);
+    EXPECT_DOUBLE_EQ(st.p99, 1.990);  // sorted[ceil(0.99 x 1000) - 1] = sorted[989]
+    EXPECT_DOUBLE_EQ(st.p999, 1.999);
+    EXPECT_DOUBLE_EQ(st.worst, 2.0);
+    r.pop_back();  // 999 cells: sorted[ceil(989.01) - 1] = sorted[989] = 1.991
+    EXPECT_DOUBLE_EQ(slowdown_stats(r).p99, 1.991);
+}
+
+TEST(TuneReplay, AGroupOffTheStartLatticeTakesItsOwnStrideAndNeverBorrowsAnotherGroup) {
+    OracleSet o = flip_oracle();
+    o.lattice = "ledger";
+    o.axes[0].values.push_back("h");
+    o.axes[1].values = {"1", "4", "16", "64", "128"};  // ledger round-0 values: h's 2, 8 and 32 are off it
+    for (int n : {2, 8, 32}) o.cells[fcell("h", n)] = rcell({{"b", n == 8 ? 3.0 : 2.0}, {"c", 1.0}}, {"a"});
+    const SlowdownReport r = slowdown_replay(o, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(r.measured, 3u + 2u);  // g at 1, 16, 128 (the ledger values' stride); h at 2 and 32 (its own)
+    ASSERT_EQ(r.failures.size(), 1u);  // g's n = 32 reads g's 16, as before
+    EXPECT_NE(r.failures[0].find("x=g"), std::string::npos) << r.failures[0];
+    EXPECT_EQ(r.ratio.size(), 10u);
+    EXPECT_DOUBLE_EQ(r.worst, 1.0);  // h's n = 8 reads h's 2 (c); borrowing g's 16 would pick b, 3x
+    o.lattice = "inferred";  // every group starts from its own values: g at 1, 4, 16, 64, 128
+    EXPECT_EQ(slowdown_replay(o, {"stride2", 2, false, 0}, 2).measured, 5u + 2u);
+}
+
+TEST(TuneReplay, ArmPruningRacesOnlyArmsWithinTheRatioAtANeighbour) {
+    OracleSet o = flip_oracle();
+    // Neighbours 4 (best a 1.0) and 16 (best b 1.0): d is exactly 1.5x at 4 and 1.6x at 16, c 1.6x at both.
+    // At n = 8, c is fastest (0.5), then d (0.6): prune races a, b and d, never c.
+    const std::map<int, std::pair<double, double>> cd{{4, {1.6, 1.5}}, {8, {0.5, 0.6}}, {16, {1.6, 1.6}}};
+    for (const auto& [n, t] : cd) {
+        RefineCell& c = o.cells.at(fcell("g", n));
+        c.ms["c"] = t.first, c.ms["d"] = t.second;
+        c.out.erase("c");
+    }
+    for (auto& [k, c] : o.cells)
+        if (!c.ms.count("d")) c.out.insert("d");
+    const SlowdownReport p = slowdown_replay(o, {"prune", 2, true, 1.5}, 2);
+    const SlowdownReport full = slowdown_replay(o, {"frontier", 2, true, 0}, 2);
+    EXPECT_DOUBLE_EQ(p.arm_runs, full.arm_runs - 1);
+    EXPECT_DOUBLE_EQ(slowdown_stats(p.ratio_measured).worst, 1.2);  // d 0.6 against c 0.5
+    EXPECT_DOUBLE_EQ(slowdown_stats(full.ratio).worst, 1.0);
+    EXPECT_EQ(replay_schemes().size(), 7u);
+}
+
+TEST(TuneReplay, TableOracleReadsTimedRowsTheirMediansAndTheHeader) {
+    const std::string path = (scratch("oracle") / "op.sm_0.txt").string();
+    std::ofstream(path) << "# op=potrf device=sm_0 family_kernels=tiny:aa11,vendor:bb22 date=2026-10-11\n"
+                        << "# keys: dtype:exact uplo:exact n:log:3 batch:log\n"
+                        << "dtype=float uplo=L n=4 batch=128 | tiny 0.5 | vendor 1.25 # deep\n"
+                        << "dtype=float uplo=L n=8 batch=128 | vendor - # transcribed\n"
+                        << "dtype=double uplo=L n=16 batch=128 | reg:m=8:n=8 0.25 # deep\n";
+    const OracleSet o = load_table_oracle(path);
+    EXPECT_EQ(o.label, "potrf");
+    ASSERT_EQ(o.cells.size(), 2u);
+    const CellKey k{{"dtype", "float"}, {"uplo", "L"}, {"n", "4"}, {"batch", "128"}};
+    ASSERT_TRUE(o.cells.count(k));
+    EXPECT_EQ(o.cells.at(k).ms, (std::map<std::string, double>{{"tiny", 0.5}, {"vendor", 1.25}}));
+    EXPECT_EQ(o.cells.at(k).out, std::set<std::string>{"reg:m=8:n=8"});
+    ASSERT_EQ(o.axes.size(), 4u);
+    EXPECT_FALSE(o.axes[0].log);
+    EXPECT_EQ(o.axes[2].weight, 3.0);
+    EXPECT_EQ(o.axes[2].values, (std::vector<std::string>{"4", "16"}));  // the transcribed n=8 is no cell
+    EXPECT_EQ(table_family_hashes(path), (std::map<std::string, std::string>{{"tiny", "aa11"}, {"vendor", "bb22"}}));
+}
+
+TEST(TuneReplay, LedgerOracleTakesBestRecordsAndTheRoundZeroLattice) {
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float", m.run_id = "r1", m.tier = Tier::deep, m.date = "2026-10-08", m.keys = "n:log:3 batch:log";
+    {
+        LedgerWriter w(d.led(), m);
+        auto put = [&](int n, int round, double lp) {
+            CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", lp), cres("vendor", "v1", "ok", 2.0)}, {"lpanel:panel=8", "vendor"}, n);
+            c.round = round, c.date = m.date;
+            w.cell(c);
+        };
+        for (int i = 0; i < 101; ++i) put(64, 0, 1.0), put(128, 0, i < 2 ? 3.0 : 2.5);
+        put(96, 1, 1.0);
+        put(40, 0, 1.0);  // one round-0 record against 101: a re-measure stray, not lattice
+        put(48, 0, 1.0), put(48, 0, 1.0);  // two against 101 (2%): kept
+    }
+    const OracleSet o = load_ledger_oracle(d.led(), kHashes);
+    EXPECT_EQ(o.lattice, "ledger");
+    ASSERT_EQ(o.cells.size(), 5u);
+    const CellKey k{{"dtype", "float"}, {"n", "128"}, {"batch", "1024"}};
+    ASSERT_TRUE(o.cells.count(k));
+    EXPECT_EQ(o.cells.at(k).ms, (std::map<std::string, double>{{"lpanel:panel=8", 2.5}, {"vendor", 2.0}}));
+    ASSERT_EQ(o.axes.size(), 3u);
+    EXPECT_EQ(o.axes[1].weight, 3.0);
+    EXPECT_EQ(o.axes[1].values, (std::vector<std::string>{"48", "64", "128"}));
+    EXPECT_TRUE(load_ledger_oracle(d.led(), {}).cells.empty());  // every record stale without the hashes
+}

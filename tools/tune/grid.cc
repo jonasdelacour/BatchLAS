@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <tuple>
 
 namespace batchlas::tune {
 
@@ -39,8 +40,9 @@ std::vector<std::string> subsample_axis(const std::vector<std::string>& values, 
     return out;
 }
 
-std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t) {
-    const int stride = params(t).stride;
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t) { return tier_lattice(axes, params(t).stride); }
+
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, int stride) {
     std::vector<CellKey> cells{{}};
     for (const AxisSpec& a : axes) {
         const auto vals = a.log ? subsample_axis(a.values, stride) : a.values;
@@ -64,6 +66,77 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
     return out;
 }
 
+NearestIndex::NearestIndex(const std::vector<CellKey>& rows, const std::vector<AxisSpec>& axes)
+    : axes_(axes), min_prefix_(!axes.empty() && !axes[0].log && axes[0].name == "dtype") {
+    for (const AxisSpec& a : axes)
+        if (a.log) weights_.push_back(a.weight);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        order_.push_back(i);
+        rows_.push_back(prepare(rows[i], false));
+    }
+    std::sort(order_.begin(), order_.end(), [&](std::size_t a, std::size_t b) {
+        return std::tie(rows_[a].exact, rows_[a].logs) < std::tie(rows_[b].exact, rows_[b].logs);
+    });
+    for (std::size_t i : order_) group_[rows_[i].exact].push_back(i);
+}
+
+NearestIndex::Row NearestIndex::prepare(const CellKey& k, bool query) const {
+    Row r;
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+        if (!axes_[i].log) {
+            r.exact.push_back(k[i].value);
+            continue;
+        }
+        r.logs.push_back(std::stoll(k[i].value));
+        r.lg.push_back(std::log2(double(query ? std::max<std::int64_t>(1, r.logs.back()) : r.logs.back())));
+    }
+    return r;
+}
+
+double NearestIndex::distance(const Row& r, const Row& q) const {
+    double d = 0;
+    for (std::size_t j = 0; j < weights_.size(); ++j) d += weights_[j] * std::abs(r.lg[j] - q.lg[j]);
+    return d;
+}
+
+std::size_t NearestIndex::find(const CellKey& key) const {
+    const Row q = prepare(key, true);
+    for (std::size_t p = q.exact.size() + 1; p-- > min_prefix_;) {
+        const auto g = group_.find(q.exact);
+        if (p == q.exact.size() && g == group_.end()) continue;
+        bool have = false;
+        std::size_t best = 0;
+        double best_d = 0;
+        for (std::size_t i : p == q.exact.size() ? g->second : order_) {
+            if (!std::equal(q.exact.begin(), q.exact.begin() + std::ptrdiff_t(p), rows_[i].exact.begin())) continue;
+            const double d = distance(rows_[i], q);
+            const bool tie = have && std::abs(d - best_d) <= 1e-9;
+            if (!have || (!tie && d < best_d) || (tie && rows_[i].logs < rows_[best].logs)) best = i, best_d = d, have = true;
+        }
+        if (have) return best;
+    }
+    return npos;
+}
+
+std::vector<std::size_t> NearestIndex::k_nearest(const CellKey& key, std::size_t k) const {
+    const Row q = prepare(key, true);
+    const auto g = group_.find(q.exact);
+    if (g == group_.end()) return {};
+    std::vector<std::pair<double, std::size_t>> by;
+    for (std::size_t i : g->second) by.emplace_back(distance(rows_[i], q), i);
+    const auto n = std::ptrdiff_t(std::min(k, by.size()));
+    std::partial_sort(by.begin(), by.begin() + n, by.end(), [&](const auto& a, const auto& b) {
+        if (std::abs(a.first - b.first) > 1e-9) return a.first < b.first;
+        return rows_[a.second].logs < rows_[b.second].logs;
+    });
+    std::vector<std::size_t> out;
+    for (std::ptrdiff_t i = 0; i < n; ++i) out.push_back(by[std::size_t(i)].second);
+    return out;
+}
+
+std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes) {
+    return NearestIndex(rows, axes).find(key);
+}
 
 std::size_t refine_allowance(std::size_t lattice_cells, std::size_t refined, double cap_factor) {
     const auto cap = std::size_t(std::floor(std::max(cap_factor, 0.0) * double(lattice_cells) + 1e-9));
@@ -160,6 +233,34 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
     for (auto& kind : by_kind)
         for (CellKey& k : kind)
             if (seen.insert(k).second) out.next.push_back(std::move(k));
+    return out;
+}
+
+std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
+                                   const std::vector<AxisSpec>& axes, std::size_t k, double slower) {
+    std::vector<CellKey> rows;
+    std::vector<const RefineCell*> info;
+    std::vector<std::string> winner;
+    for (const auto& [key, c] : measured) {
+        if (c.ms.empty()) continue;
+        rows.push_back(key);
+        info.push_back(&c);
+        winner.push_back(std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) {
+                             return x.second < y.second;
+                         })->first);
+    }
+    std::vector<CellKey> out;
+    if (rows.empty()) return out;
+    const NearestIndex index(rows, axes);
+    for (const CellKey& u : universe) {
+        if (measured.count(u)) continue;
+        const auto nb = index.k_nearest(u, k);
+        bool flip = false;
+        for (std::size_t a = 0; a < nb.size() && !flip; ++a)
+            for (std::size_t b = 0; b < nb.size() && !flip; ++b)
+                flip = a != b && winner[nb[a]] != winner[nb[b]] && decisive(*info[nb[b]], winner[nb[b]], winner[nb[a]], slower);
+        if (flip) out.push_back(u);
+    }
     return out;
 }
 
