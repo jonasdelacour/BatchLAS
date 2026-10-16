@@ -24,7 +24,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -67,8 +66,9 @@ struct SyevProblem {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
-    void clear_info() {
+    void clear_info() {  // an earlier arm's w must not pass for this one's
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
+        for (R& x : w) x = R(kPoison);
     }
     void run(Span<std::byte> ws) {
         (void)syev<kBackend, T>(q, Av, w.to_span(), jobz, Uplo::Lower, ws, info.to_span());
@@ -185,12 +185,11 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/syev_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const JobType jobz = *key_get(req.key, "jobz") == "V" ? JobType::EigenVectors : JobType::NoEigenVectors;
             const int n = int(key_int(req.key, "n"));
-            SyevProblem<T> p(*q, jobz, n, int(key_int(req.key, "batch")), req.ld_pad);
+            SyevProblem<T> p(q, jobz, n, int(key_int(req.key, "batch")), req.ld_pad);
             if (req.mode == "race") return run_race<S::SyevChoice>("syev", p, req, 1.0);
             return run_arms<S::SyevChoice>("syev", p, req, 1.0);
         });

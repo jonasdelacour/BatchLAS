@@ -23,6 +23,26 @@ std::size_t lower_order_stat(int n, double confidence) {
     return k;
 }
 
+bool warm_converged(double prev, double total, int rounds) {
+    return rounds >= kWarmMinRounds && prev > 0 && std::fabs(total - prev) <= kWarmTol * prev;
+}
+
+int min_reps_for(double confidence) {
+    int n = 1;
+    while (n < 64 && lower_order_stat(n, confidence) < 1) ++n;
+    return n;
+}
+
+int lean_max_reps(double slowest_ms, const TierParams& p) {
+    const int lo = min_reps_for(p.confidence);
+    const double want = std::ceil(kRepBudgetS * 1e3 / (slowest_ms > 1e-6 ? slowest_ms : 1e-6));  // NaN: the cap
+    return static_cast<int>(std::clamp(want, double(lo), double(std::max(lo, kRepCap))));
+}
+
+double lean_arm_fixed_s(double ms, double verify_s) {
+    return 3 * ms * 1e-3 + std::min(kWarmCapPerArmS, kWarmMinRounds * ms * 1e-3) + verify_s;
+}
+
 namespace {
 
 double run_median(const std::vector<double>& v) {

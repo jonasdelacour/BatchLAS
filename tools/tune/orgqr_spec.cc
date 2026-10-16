@@ -5,7 +5,6 @@
 // each as a fraction of its bound at n = m (docs/design/verification.md), so the cell's residual is
 // the worse of the two and its tolerance 1. No orgqr path forms M's reflectors, so the check is not
 // self-referential (agent guide §8 rule 7).
-//
 // The key has no batch: a cell runs at qr_batch (spec.hh). The grid is the m x n lattice with
 // n <= m (Q's columns live in C^m). blocked's time includes the public ormqr it applies to an
 // identity, and that ormqr's own gemm and trmm, each choosing for itself.
@@ -21,7 +20,6 @@
 #include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -120,12 +118,11 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             if (n > m) throw std::invalid_argument("orgqr: n > m has no native family to tune");
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
-            OrgqrProblem<T> p(*q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);
+            OrgqrProblem<T> p(q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
             return run_arms<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
         });

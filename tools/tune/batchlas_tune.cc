@@ -249,8 +249,9 @@ int child_main(const std::vector<std::string>& a) {
     }
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);
     std::ofstream out(result);
-    out << outcome_text(run_cell_audited(*spec, req), &cell_phases());
+    out << outcome_text(run_cell_audited(*spec, req, q), &cell_phases());
     return out ? 0 : 1;
 }
 
@@ -286,6 +287,7 @@ int worker_main(const std::vector<std::string>& a) {
     const int out = ::dup(1);
     if (out < 0 || ::dup2(2, 1) < 0) die("--worker: cannot redirect stdout");
     worker_warm(warm_s);
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);  // every cell's: the arena and its blocks persist
     std::string line;
     while (std::getline(std::cin, line)) {
         if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
@@ -295,7 +297,7 @@ int worker_main(const std::vector<std::string>& a) {
         const OpSpec* spec = find_spec(req->first);
         if (!spec) die("--worker: unknown op " + req->first);
         const std::string text =
-            outcome_text(run_cell_audited(*spec, req->second), &cell_phases()) + Json().str("kind", "done").line();
+            outcome_text(run_cell_audited(*spec, req->second, q), &cell_phases()) + Json().str("kind", "done").line();
         for (std::size_t done = 0; done < text.size();) {
             const ssize_t n = ::write(out, text.data() + done, text.size() - done);
             if (n <= 0) return 1;
@@ -377,9 +379,9 @@ public:
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
         std::vector<std::string> argv{bin, "--cell", spec_.op(), "--dtype", dtype, "--key", key_arg(key),
                                       "--arms", join(arms, ","), "--mode", mode,
-                                      "--reps", std::to_string(reps < 0 ? o_.reps : reps),
-                                      "--warm", fmt(warm < 0 ? o_.warm : warm, "%g"), "--ld-pad", std::to_string(o_.ld_pad),
-                                      "--result", res};
+                                      "--reps", std::to_string(reps < 0 ? o_.reps : reps), "--ld-pad",
+                                      std::to_string(o_.ld_pad), "--result", res};
+        if (mode == "time") argv.insert(argv.end(), {"--warm", fmt(warm < 0 ? o_.warm : warm, "%g")});
         if (reverse) argv.push_back("--reverse");
         argv.insert(argv.end(), extra.begin(), extra.end());
         std::vector<std::pair<std::string, std::string>> env{{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"},
@@ -662,7 +664,6 @@ CellRequest Driver::race_request(const CellJob& j) const {
     r.key = j.key;
     r.arms = j.arms;
     r.mode = "race";
-    r.warm_s = j.p.warm_topup_s;
     r.ld_pad = o_.ld_pad;
     r.tier = to_string(j.tier);
     r.min_reps = j.p.min_reps;
@@ -687,8 +688,7 @@ std::vector<std::string> Driver::race_args(const CellJob& j) const {
 // crash a child even alone are `error`; the rest race without them.
 ArmBatch Driver::race_fresh(const CellJob& j) {
     const auto extra = race_args(j);
-    const double warm = j.p.warm_topup_s;
-    ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, warm, extra);
+    ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, -1, extra);
     Phases spent = ch.phases;
     std::map<std::string, std::string> alone;
     if (!ch.ok && !ch.guard) {
@@ -700,7 +700,7 @@ ArmBatch Driver::race_fresh(const CellJob& j) {
             else alone[a] = one.error;
         }
         if (!alone.empty() && !keep.empty()) {
-            ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, warm, extra);
+            ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, 0, extra);
             spent += ch.phases;
         }
     }

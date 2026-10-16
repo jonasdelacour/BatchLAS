@@ -21,11 +21,11 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 
 - `run`: one per (run id, dtype): host, device, device name, `batchlas` (commit), argv, date,
   tier, `keys` (the `# keys:` text from `choice.hh`), `candidates` (`|`-joined spellings in
-  candidate order), `protocol` (the per-cell protocol, `full`; absent in ledgers written before
-  the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
+  candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
+  before it; absent in ledgers written before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
   `h/s/r/m/lo/hi/n`), plus the cell's wall seconds by phase, each written only when measured:
-  `ph_setup` (Queue, Problem, fill, workspace probe), `ph_warm`, `ph_timed` (wall, resets included),
+  `ph_setup` (Problem, fill, workspace probe), `ph_warm` (untimed and warm rounds), `ph_timed` (wall, resets included),
   `ph_verify`, `ph_ld` (the ld audit's second run), `ph_guard`, `ph_ipc` (worker round trip less the
   worker's phases), `ph_spawn` (fresh child start and exit less its phases), `ph_start` (a worker
   start: guard, spawn, CUDA init, clock warm-up), `ph_mode` (`worker`, `fresh`, `fallback`) and

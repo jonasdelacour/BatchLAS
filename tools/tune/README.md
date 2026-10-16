@@ -138,12 +138,17 @@ and planning is in `schedule.cc`.
   of every family.
   A stale record, or one where every candidate is `error`, counts as missing. A cell whose probe found
   at most one runnable candidate is `skip:single` and is written as an untimed row.
-- **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`): a warm-up per live candidate,
-  then interleaved rounds of one timed run per candidate until a winner, a tie or `max_reps` rounds.
-  Eliminated candidates are still verified; a passing one keeps its median with status `eliminated`
-  (ranked after the survivors). A failing one is `bad` and left out. From the second round on,
-  whatever `min_reps` says, an arm whose lower median paired ratio to the leader exceeds 4.0 is
-  eliminated (a gross loser); one stalled round never kills an arm.
+- **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`, the lean protocol; ledger
+  `protocol=lean`): one untimed run per candidate; two timed rounds that cut gross losers (lower
+  median paired ratio to the leader above 4.0, so both runs; they keep that median and get no
+  warm-up); untimed warm rounds over the survivors until two round totals agree within 2% (at least
+  2 rounds, at most 0.2 s per arm); then interleaved rounds of one timed run per candidate until a
+  winner, a tie or the rep cap: ceil(50 ms / the slowest survivor's warm median), within
+  [3, 16] preview, [4, 16] coarse, [6, 16] deep. From the second round on, whatever `min_reps` says,
+  the gross rule still applies; one stalled round never kills an arm. Eliminated candidates are
+  still verified; a passing one keeps its median with status `eliminated` (ranked after the
+  survivors). A failing one is `bad` and left out. Rationale:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-lean-cell).
 - **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`) pin
   that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of timing Auto
   under the vendor's name.
@@ -157,7 +162,7 @@ and planning is in `schedule.cc`.
   consecutive such cells it is dropped for the rest of that op and dtype (`error`, reason
   `dropped after 5 consecutive errors`, not run).
 - **Audit.** A worker cell is re-raced in a fresh child when `fnv1a64(run_id + key) % 1000` falls
-  below `audit_fraction * 1000`. The first worker cell of each op and dtype is always audited. A
+  below `audit_fraction * 1000` (2% preview and coarse, 1% deep; `--audit-fraction`). The first worker cell of each op and dtype is always audited. A
   mismatch (usable in one run and refused or failing in the other, or a different winner more than
   10% slower in the fresh run) is logged as an `audit` record. The rest of that op and dtype then runs
   in fresh children.
@@ -174,9 +179,10 @@ and planning is in `schedule.cc`.
   `--repo` tree is refused without `--allow-dirty`.
 - **Estimate.** Per cell: the recorded phases (`ph_*`) of the nearest ledger cell of the same
   protocol, tier and mode, per-arm phases scaled by the arm count, plus per history cell the recorded
-  worker-start and audit share, and once a run the ld audits. Without that history: `--cell-overhead-s` plus, per candidate, `max_reps` times
-  the nearest ledger median (else bytes / 500 GB/s), the warm-up top-up and 0.05 s of verification
-  (this model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
+  worker-start and audit share, and once a run the ld audits. Without that history: `--cell-overhead-s`
+  plus, per candidate, (the rep cap of the slowest candidate + 3) times the nearest ledger median
+  (else bytes / 500 GB/s), two warm rounds capped at 0.2 s, and 0.05 s of verification (the `full`
+  protocol's model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
   history, and the lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so
   divide by `--devices`.
 

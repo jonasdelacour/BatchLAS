@@ -37,6 +37,7 @@
 #include <vector>
 
 using namespace batchlas::tune;
+using batchlas::Queue;
 namespace fs = std::filesystem;
 
 namespace {
@@ -1000,6 +1001,48 @@ TEST(TuneRace, LowerOrderStatMatchesTheBinomial) {
     EXPECT_EQ(lower_order_stat(2, 0.98), 0u);
 }
 
+// The first n with 0.5^n <= 1 - confidence; every tier's min_reps is that n (decision D4).
+TEST(TuneRace, MinRepsForIsTheFirstRoundCountTheConfidenceRuleCanUse) {
+    EXPECT_EQ(min_reps_for(0.80), 3);
+    EXPECT_EQ(min_reps_for(0.90), 4);
+    EXPECT_EQ(min_reps_for(0.98), 6);
+    for (double c : {0.80, 0.90, 0.98}) {
+        EXPECT_EQ(lower_order_stat(min_reps_for(c) - 1, c), 0u) << c;
+        EXPECT_GE(lower_order_stat(min_reps_for(c), c), 1u) << c;
+    }
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep})
+        EXPECT_EQ(params(t).min_reps, min_reps_for(params(t).confidence)) << to_string(t);
+}
+
+// 50 ms of timed work for the slowest surviving arm, within [min_reps_for, kRepCap = 16] in every tier.
+TEST(TuneRace, LeanMaxRepsSpendsTheBudgetOnTheSlowestArm) {
+    const TierParams& deep = params(Tier::deep);
+    EXPECT_EQ(lean_max_reps(0.001, deep), 16);
+    EXPECT_EQ(lean_max_reps(3.0, deep), 16) << "17 wanted, capped";
+    EXPECT_EQ(lean_max_reps(50.0 / 15, deep), 15);
+    EXPECT_EQ(lean_max_reps(5.0, deep), 10);
+    EXPECT_EQ(lean_max_reps(8.0, deep), 7);
+    EXPECT_EQ(lean_max_reps(9.0, deep), 6) << "5.6 wanted, floored";
+    EXPECT_EQ(lean_max_reps(1000.0, deep), 6);
+    EXPECT_EQ(lean_max_reps(std::nan(""), deep), 16) << "no timing: the cap";
+    EXPECT_EQ(lean_max_reps(0.001, params(Tier::coarse)), 16) << "not the tier's max_reps (12)";
+    EXPECT_EQ(lean_max_reps(5.0, params(Tier::coarse)), 10);
+    EXPECT_EQ(lean_max_reps(1000.0, params(Tier::coarse)), 4);
+    EXPECT_EQ(lean_max_reps(0.001, params(Tier::preview)), 16) << "not the tier's max_reps (6)";
+    EXPECT_EQ(lean_max_reps(1000.0, params(Tier::preview)), 3);
+}
+
+TEST(TuneRace, WarmConvergesOnTwoConsecutiveRoundsWithinTwoPercent) {
+    EXPECT_FALSE(warm_converged(0, 1.0, 1)) << "no earlier round";
+    EXPECT_FALSE(warm_converged(1.0, 1.0, 1)) << "below kWarmMinRounds";
+    EXPECT_TRUE(warm_converged(1.0, 1.0, 2));
+    EXPECT_TRUE(warm_converged(1.0, 1.019, 2));
+    EXPECT_FALSE(warm_converged(1.0, 1.021, 2));
+    EXPECT_TRUE(warm_converged(1.0, 0.981, 3));
+    EXPECT_FALSE(warm_converged(1.0, 0.979, 3)) << "a clock still ramping down a round is not stable either";
+    EXPECT_FALSE(warm_converged(4.0, 2.0, 5)) << "the clocks came up between the rounds";
+}
+
 TEST(TuneRace, RankingPutsSurvivorsBeforeTheEliminated) {
     RaceState s;
     s.cands = {"a", "b", "c"};
@@ -1351,7 +1394,8 @@ TEST(TuneReplay, HoldoutRacesOnPassOneAndScoresAgainstPassTwo) {
     EXPECT_NEAR(h.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "16 pass-1 rounds of both candidates, nothing from pass 2";
     EXPECT_EQ(h.race_misrank, 1.0);
     EXPECT_NEAR(h.max_loss, 0.5, 1e-9) << "reference a = 1.5 (pass 2), best b = 1.0";
-    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + 2 * (p.warm_topup_s + 0.05)) / 3600, 1e-12);
+    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + (5 * 1.0 + 5 * 1.5) / 1000 + 2 * 0.05) / 3600, 1e-12)
+        << "per arm: 3 runs + 2 warm rounds (below the 0.2 s cap) + verify";
     p.min_reps = p.max_reps = 32;
     const ReplayReport all = replay(rc, meta.axes, Tier::coarse, p);
     EXPECT_NEAR(all.measure_s, 32 * (1.0 + 1.5) / 1000, 1e-12) << "without holdout every round of both passes is raced";
@@ -2374,9 +2418,15 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
     CellKey lower = nkey(100);
     lower.insert(lower.begin(), {"uplo", "L"});
     EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
-    const TierParams& p = params(Tier::coarse);
+    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s, verify.
+    // 2 ms: 50 ms / 2 ms = 25 reps, capped at 16. 200 ms: 1 rep, raised to coarse's floor 4.
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + p.max_reps * 2.0e-3 + p.warm_topup_s + kVerifyS);
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS);
+    l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 200.0)}, {"vendor"}, 4096));
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + kVerifyS);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor", "cta"}, 1e9, Tier::coarse, 0.49),
+                     0.49 + (7 * 0.2 + 0.2 + kVerifyS) + (7 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS))
+        << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16";
 }
 
 TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
@@ -2449,8 +2499,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
         r.phases.guard = 0.05, r.phases.ipc = 0.01, r.phases.start = 4.0, r.phases.mode = mode;
         return r;
     };
-    const TierParams& p = params(Tier::coarse);
-    const double model = 0.49 + p.max_reps * 2.0e-3 + p.warm_topup_s + kVerifyS;
+    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS;  // coarse: 16 reps of 2 ms
     bool hist = true;
     const Tier co = Tier::coarse;
     l.cells = {phased(64, 0.5, "old")};
@@ -2468,9 +2517,8 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
     upper.insert(upper.begin(), {"uplo", "U"});
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, upper, {"a"}, 1e9, co, 0.49, &hist), model) << "exact fields must match";
     EXPECT_FALSE(hist);
-    const TierParams& deep = params(Tier::deep);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, Tier::deep, 0.49, &hist),
-                     0.49 + deep.max_reps * 2.0e-3 + deep.warm_topup_s + kVerifyS) << "coarse history prices no deep cell";
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS) << "coarse history prices no deep cell (16 reps)";
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist, "fresh"), model) << "worker history, fresh run";
     EXPECT_FALSE(hist);
@@ -2497,7 +2545,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
     EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, Tier::preview, "worker", 0.1, &hist, &ld), 0.0);
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(ld, 0.0);
-    l.runs[0].protocol = "lean";
+    l.runs[0].protocol = "full";  // the fixed warm-up engine: its history prices no lean cell
     EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, co, "worker", 0.1, &hist), 0.0);
     EXPECT_FALSE(hist);
 }
@@ -2551,7 +2599,7 @@ public:
     double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
     std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
     std::string spec_file() const override { return "fake_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest&) const override { return {}; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
 };
 
 const FakeSpec kFake;
@@ -2967,11 +3015,15 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
     EXPECT_EQ(audit_compare(warm, {arm("a", "error"), arm("b", "error"), arm("c", "error")}, order).verdict, "inconclusive");
 }
 
+// The lean protocol audits 1% of deep cells (was 10%); preview and coarse keep 2%.
 TEST(TuneSchedule, AuditPickIsAStableHashFraction) {
+    EXPECT_EQ(params(Tier::deep).audit_fraction, 0.01);
+    EXPECT_EQ(params(Tier::coarse).audit_fraction, 0.02);
+    EXPECT_EQ(params(Tier::preview).audit_fraction, 0.02);
     int picked = 0;
-    for (int n = 1; n <= 2000; ++n) picked += audit_pick("run1", nkey(n), 0.10);
-    EXPECT_GT(picked, 140);
-    EXPECT_LT(picked, 260);
+    for (int n = 1; n <= 4000; ++n) picked += audit_pick("run1", nkey(n), params(Tier::deep).audit_fraction);
+    EXPECT_GT(picked, 20);
+    EXPECT_LT(picked, 65);
     EXPECT_EQ(audit_pick("run1", nkey(7), 0.10), audit_pick("run1", nkey(7), 0.10));
     EXPECT_FALSE(audit_pick("run1", nkey(7), 0.0));
     EXPECT_TRUE(audit_pick("run1", nkey(7), 1.0));
@@ -3003,7 +3055,7 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     r.key = nkey(32);
     r.arms = {"cta", "lpanel:panel=8"};
     r.mode = "race";
-    r.warm_s = 0.2;
+    r.warm_s = 0.2;  // not sent: a race warms until stable
     r.ld_pad = 3;
     r.tier = "deep";
     r.min_reps = 6;
@@ -3019,7 +3071,8 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     EXPECT_EQ(g.key, r.key);
     EXPECT_EQ(g.arms, r.arms);
     EXPECT_EQ(g.mode, "race");
-    EXPECT_DOUBLE_EQ(g.warm_s, 0.2);
+    EXPECT_DOUBLE_EQ(g.warm_s, CellRequest{}.warm_s);
+    EXPECT_EQ(request_line("potrf", r).find("\"warm\""), std::string::npos);
     EXPECT_EQ(g.ld_pad, 3);
     EXPECT_EQ(g.tier, "deep");
     EXPECT_EQ(g.min_reps, 6);
@@ -3027,6 +3080,12 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     EXPECT_DOUBLE_EQ(g.confidence, 0.98);
     EXPECT_TRUE(g.alternate_reverse);
     EXPECT_EQ(g.seed_order, r.seed_order);
+    r.mode = "time";
+    EXPECT_DOUBLE_EQ(parse_request(request_line("potrf", r))->second.warm_s, 0.2);
+    std::string no_warm = request_line("potrf", r);
+    const std::size_t at = no_warm.find("\"warm\"");
+    no_warm.erase(at, no_warm.find(',', at) + 1 - at);
+    EXPECT_FALSE(parse_request(no_warm)) << "mode time needs warm: " << no_warm;
     EXPECT_FALSE(parse_request("{\"op\": \"potrf\"}"));
     EXPECT_FALSE(parse_request("not json"));
 
@@ -3620,7 +3679,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     std::string out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from full phase history, 7 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
     o.plan = false;
     o.tier = Tier::preview;
@@ -3638,7 +3697,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from full phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
+    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
 
     // A changed family-b source: every preview lattice cell is raced again at preview, from history.
@@ -3653,7 +3712,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     out = testing::internal::GetCapturedStdout();
     ::close(fd);
     EXPECT_NE(out.find("(2 measure, 2 partial)"), std::string::npos) << out;
-    EXPECT_NE(out.find("(4 cells from full phase history, 0 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(4 cells from lean phase history, 0 from the model)"), std::string::npos) << out;
     EXPECT_NE(out.find("est=1.25s (history)"), std::string::npos) << out;
     const double per_cell = 4.0 / double(l.cells.size());  // 1 worker start over every preview record
     char line[96];
@@ -3883,10 +3942,12 @@ namespace {
 class LdAuditSpec : public FakeSpec {
 public:
     mutable std::vector<CellRequest> calls;
+    mutable std::vector<const Queue*> queues;
     bool throw_on_verify = false;
     std::string op() const override { return "ldauditop"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         calls.push_back(req);
+        queues.push_back(&q);
         if (req.mode == "verify" && throw_on_verify) throw std::runtime_error("device lost");
         std::vector<ArmOutcome> out;
         for (const std::string& a : req.arms) {
@@ -3904,6 +3965,12 @@ const ArmOutcome& outcome(const std::vector<ArmOutcome>& v, const std::string& a
     return *std::find_if(v.begin(), v.end(), [&](const ArmOutcome& o) { return o.arm == a; });
 }
 
+// The worker's Queue as the fake specs see it: an address only (tune_tests links no library).
+Queue& worker_queue() {
+    alignas(std::max_align_t) static std::byte storage[64];
+    return *reinterpret_cast<Queue*>(storage);
+}
+
 }  // namespace
 
 TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
@@ -3915,8 +3982,9 @@ TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
     r.mode = "race";
     r.ld_pad = 1;
     r.ld_audit = {"a", "b", "c", "d"};
-    const auto out = run_cell_audited(s, r);
+    const auto out = run_cell_audited(s, r, worker_queue());
     ASSERT_EQ(s.calls.size(), 2u);
+    EXPECT_EQ(s.queues, (std::vector<const Queue*>{&worker_queue(), &worker_queue()})) << "the audit reuses the Queue";
     EXPECT_EQ(s.calls[1].mode, "verify");
     EXPECT_EQ(s.calls[1].ld_pad, 1 + kLdAuditPad);
     EXPECT_EQ(s.calls[1].arms, (std::vector<std::string>{"a", "b", "c"})) << "d failed at the natural ld; e was not asked";
@@ -3934,17 +4002,17 @@ TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
 
     s.calls.clear();
     r.mode = "jit";
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(s.calls.size(), 1u) << "only a timed cell is audited";
     s.calls.clear();
     r.mode = "race";
     r.ld_audit.clear();
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(s.calls.size(), 1u) << "nothing asked, nothing audited";
 
     s.throw_on_verify = true;
     r.ld_audit = {"b"};
-    const auto thrown = run_cell_audited(s, r);
+    const auto thrown = run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(outcome(thrown, "b").status, "bad");
     EXPECT_EQ(outcome(thrown, "b").ld_audit, "fail");
     EXPECT_NE(outcome(thrown, "b").reason.find("device lost"), std::string::npos);
@@ -3955,11 +4023,11 @@ namespace {
 // Adds to cell_phases() as ArmBench does; the ld audit's run (verify mode) adds a large verify.
 class PhaseSpec : public LdAuditSpec {
 public:
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         std::this_thread::sleep_for(std::chrono::milliseconds(req.mode == "verify" ? 30 : 20));
         cell_phases().add(&Phases::warm, req.mode == "verify" ? 0 : 0.004);
         cell_phases().add(&Phases::verify, req.mode == "verify" ? 1.0 : 0.002);
-        return LdAuditSpec::run_cell(req);
+        return LdAuditSpec::run_cell(req, q);
     }
 };
 
@@ -3973,7 +4041,7 @@ TEST(TuneLdAudit, PhasesSplitSetupFromTheBenchAndTheLdAuditFromVerify) {
     r.arms = {"a", "b"};
     r.mode = "race";
     r.ld_audit = {"b"};
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     const Phases p = cell_phases();
     EXPECT_DOUBLE_EQ(p.warm, 0.004);
     EXPECT_DOUBLE_EQ(p.verify, 0.002) << "the audit's verify runs are ld, not verify";
@@ -3983,7 +4051,7 @@ TEST(TuneLdAudit, PhasesSplitSetupFromTheBenchAndTheLdAuditFromVerify) {
     EXPECT_LT(p.setup, 0.5);
     EXPECT_TRUE(std::isnan(p.timed));
     r.ld_audit.clear();
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     EXPECT_DOUBLE_EQ(cell_phases().warm, 0.004) << "each cell starts from zero";
     EXPECT_TRUE(std::isnan(cell_phases().ld)) << "no audit, no ld phase";
 }
@@ -4043,7 +4111,6 @@ TEST(TuneLdAudit, RequestsAndOutcomesCarryTheAudit) {
     r.key = nkey(8);
     r.arms = {"a", "b"};
     r.mode = "race";
-    r.warm_s = 0.1;
     r.ld_audit = {"b", "a"};
     const auto got = parse_request(request_line("fakeop", r));
     ASSERT_TRUE(got);

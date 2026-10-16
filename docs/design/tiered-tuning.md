@@ -57,9 +57,9 @@ deep results.
 | Starting lattice | every 2nd point of each `choice.hh` axis, ends kept | full lattice | full lattice |
 | Bisection | index space until adjacent, then geometric to hi/lo < 1.1; also between cells when a runner-up is within 10% | geometric to hi/lo < 1.1 | geometric to hi/lo < 1.1 |
 | Refinement cap (x round-0 cells, per op and dtype) | 3.0 | 1.0 | 2.0 |
-| Race reps, min / max per candidate | 3 / 6 | 4 / 12 | 6 / 16 |
+| Race reps, floor per candidate; cap 50 ms of the slowest arm, at most 16 ("Engine: the lean cell") | 3 | 4 | 6 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
-| Fresh-process audit sample | 2% of cells | 2% | 10% |
+| Fresh-process audit sample | 2% of cells | 2% | 1% |
 
 The tie margin is 3% in every tier. The lattices nest (preview ⊂ coarse ⊂ deep). An op whose grid
 is not a lattice is subsampled by a stable hash of the cell key, so subsets still nest.
@@ -71,12 +71,13 @@ Each cell goes through three steps:
    recorded and nothing is timed.
 2. **Skip.** A current ledger result at the same or higher tier skips the cell. A partly stale
    result re-races only the changed candidates, against the stored winner and runner-up.
-3. **Race.** Survivors are timed in interleaved rounds, with the order rotated per round and inputs
-   restored untimed. A candidate is eliminated when it is confidently slower than the leader by more
-   than the tie margin. The race stops when one candidate remains, when the survivors are confidently
-   within the margin, or at the max reps. The race starts from the winner of the nearest finished
-   neighbour. Before its times count, each candidate is verified on the default items
-   (`batchlas::verify`, @ref design_verification).
+3. **Race.** Gross losers are cut and the survivors warmed ("Engine: the lean cell"). Survivors are
+   then timed in interleaved rounds, with the order rotated per round and inputs restored untimed. A
+   candidate is eliminated when it is confidently slower than the leader by more than the tie
+   margin. The race stops when one candidate remains, when the survivors are confidently within the
+   margin, or at the rep cap. The race starts from the winner of the nearest finished neighbour.
+   Before its times count, each candidate is verified on the default items (`batchlas::verify`,
+   @ref design_verification).
 
 Across cells:
 
@@ -88,8 +89,9 @@ Across cells:
 - **Estimate and budget.** The driver predicts cost from earlier ledger timings for the same op,
   dtype and device, or from a byte model. A cell takes the recorded phases of the nearest cell of
   the same protocol, tier and mode (worker or fresh; exact keys equal, log distance), its per-arm
-  phases (warm, timed, verify) scaled by the arm count over `ph_arms`; without such a cell,
-  `--cell-overhead-s` plus `max_reps` × the nearest median per arm. Each history cell also carries
+  phases (warm, timed, verify) scaled by the arm count over `ph_arms`; without such a cell, the lean
+  model: `--cell-overhead-s` plus, per arm, (`lean_max_reps` of the slowest arm + 3) × its nearest
+  median + min(0.2 s, 2 × median) + 0.05 s verify. Each history cell also carries
   the recorded worker-start rate × median start and the audit fraction × median audit; the run once
   carries the ld audits (`ph_ld` summed per run, median over runs). `--plan` says how many cells came from
   history. `--budget <h>` stops refinement; the starting lattice always completes.
@@ -127,13 +129,40 @@ coupling is explicit: posv's families list the potrf and trsm families they call
 **Import.** `batchlas_tune --import-raw` turns a schema-1 raw sweep into a deep run. Its hashes are
 `legacy:<kernels>` unless the raw file's op hash equals today's, so an old sweep imports stale.
 
+## Engine: the lean cell
+
+The race of one cell (`run_race`, `tools/tune/cell_runner.hh`; constants in `race.hh`). Ledgers
+record it as `protocol=lean`; `full` is the engine before it (a fixed 0.2 s warm-up per arm), and an
+absent field is older still. `--plan` history reads only `lean` cells.
+
+1. **One untimed run per arm**, so JIT and module loads stay out of the cut.
+2. **Gross cut.** Two timed interleaved rounds, then `race_step`. Two pairs are below every tier's
+   floor, so only the gross rule can fire: an arm above 4x the leader on both runs leaves, with the
+   median of those two runs ("Engine: readiness for a deep run over all 19 ops"). It gets no
+   warm-up share and no reps.
+3. **Warm until stable.** The survivors' samples are dropped, then interleaved untimed rounds run
+   until two consecutive round totals (run spans only) agree within 2%, after at least 2 rounds and
+   at most 0.2 s per arm (`kWarmTol`, `kWarmMinRounds`, `kWarmCapPerArmS`; `warm_converged`).
+4. **Rep cap from a time budget.** `lean_max_reps` = ceil(50 ms / the slowest survivor's median over
+   the last two warm rounds), clamped to [`min_reps_for(confidence)`, 16] (`kRepCap`). The
+   floor is the first round count at which the paired-ratio rule can decide (3 / 4 / 6), so the
+   confidence rule stays satisfiable; a tier's `min_reps` equals it. Rounds are shared, so the
+   slowest arm sets the count.
+5. **Verification** of every raced arm, the cut and eliminated included, as before.
+
+The cell runs on the worker's one `Queue` (`OpSpec::run_cell(req, q)`; the ld audit's re-run reuses
+it). The bench's workspace is a lease from that Queue's arena, which keeps its blocks across cells,
+and `~ArmBench` drains the Queue so an async error cannot surface in the next cell. Each spec's
+`clear_info` poisons outputs that `reset` does not restore (syev `w`, gesvd `s`/U/Vh, getrf
+pivots, geqrf `tau`), so an arm that writes nothing cannot pass on an earlier arm's output.
+
 ## Engine: persistent workers and the carve-out audit
 
 **Worker.** Each GPU gets one long-lived `batchlas_tune_impl --worker`, started by the driver under
 the existing `CUDA_VISIBLE_DEVICES` fence and per-GPU flock. Cells arrive on a pipe and come back as
 `cell` records.
 
-- The worker warms the clocks for 3 s at start, then tops up each cell by about 0.2 s per candidate.
+- The worker warms the clocks for 3 s at start; each cell then warms its survivors until stable.
 - Each kernel is JIT-compiled once per worker. The on-disk JIT cache stays shared.
 - The idle guard runs between cells. If the worker dies, it restarts and the cell is retried. A
   candidate that crashes alone is recorded as `error`.
@@ -255,10 +284,11 @@ cell and picks from all pass-1 reps scores that same floor, so the verdict is th
 | deep | float | 0.2% | 4427 (3480 + 947) | 0.01% / 0.09% | PASS |
 | deep | double | 0.2% | 4068 (3219 + 849) | -0.02% / 0.07% | PASS |
 
-The estimated cost for trsm float on sm_120 is 0.57 GPU-h for preview, 0.86 for coarse and 0.86 for
-deep. The estimate is `est_gpu_h = [measure_s + live_candidates × (warm_topup_s + verify_s) +
-cell_overhead_s per cell] / 3600`, with `warm_topup_s` 0.2, `verify_s` 0.05 and `cell_overhead_s` 0
-for a persistent worker. Per-candidate warm-up dominates; the summed rep time is 0.07 GPU-h.
+The estimated cost for trsm float on sm_120 was 0.57 GPU-h for preview, 0.86 for coarse and 0.86 for
+deep under the `full` protocol's model (0.2 s warm-up per candidate). The estimate is now `est_gpu_h = [measure_s + Σ_candidates
+(3 × median + min(0.2 s, 2 × median) + verify_s) + cell_overhead_s per cell] / 3600` (`lean_arm_fixed_s`,
+the same per-arm term as `--plan`'s model), with `verify_s` 0.05 and `cell_overhead_s` 0 for a
+persistent worker. The summed rep time is 0.07 GPU-h.
 
 **Alternatives** (same-sample replay, table misrank over all raw cells, float / double):
 
@@ -355,7 +385,8 @@ call faults the device (known defect 15), which no pin rule can see.
 **Gross losers.** After every round from the second on, whatever `min_reps` says, the race
 eliminates an arm whose lower median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
 `race.hh`; the lower of the two middle ratios, so at two rounds both must exceed it). One stalled
-round never kills an arm. It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
+round never kills an arm. It is recorded `eliminated` with the median of the rounds it ran. The lean
+cell applies it first, after two rounds and before the warm-up ("Engine: the lean cell"). geqrf's vendor
 (`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
 cells, and before this rule each of its timed rounds cost minutes.
 
@@ -577,7 +608,7 @@ microseconds of their neighbours.
 ## Open risks
 
 - Racing assumes timing noise is stationary within a cell. Clock ramps after idle gaps break that.
-  The worker's warm start and top-up are the defence. The replay cannot test this, because the raw
+  The worker's warm start and each cell's warm-until-stable are the defence. The replay cannot test this, because the raw
   files come from warm, back-to-back runs.
 - If the audit fails often, the speedup depends mostly on racing and the adaptive grid.
 - Deferred, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and guard settings

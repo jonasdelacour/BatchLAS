@@ -1,6 +1,7 @@
 #include <tools/tune/schedule.hh>
 
 #include <tools/tune/grid.hh>
+#include <tools/tune/race.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -140,12 +141,15 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     if (from_history) *from_history = h != nullptr;
     if (h) return history_s(*h, arms.size());
     const auto near = idx.nearest(key, arms);
-    double s = overhead_s;
+    std::vector<double> ms;
     for (const std::string& a : arms) {
         const auto it = near.find(a);
-        const double ms = it != near.end() ? it->second : bytes / kModelBytesPerS * 1e3;
-        s += p.max_reps * ms * 1e-3 + p.warm_topup_s + kVerifyS;
+        ms.push_back(it != near.end() ? it->second : bytes / kModelBytesPerS * 1e3);
     }
+    // The lean cell: one untimed and two cut runs, kWarmMinRounds warm rounds (capped), the reps.
+    const int reps = ms.empty() ? 0 : lean_max_reps(*std::max_element(ms.begin(), ms.end()), p);
+    double s = overhead_s;
+    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m, kVerifyS);
     return s;
 }
 

@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <complex>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -143,11 +142,10 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/spmm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             constexpr bool kComplex = !std::is_same_v<T, typename base_type<T>::type>;
-            SpmmProblem<T> p(*q, trans_of(*key_get(req.key, "transA"), kComplex),
+            SpmmProblem<T> p(q, trans_of(*key_get(req.key, "transA"), kComplex),
                              trans_of(*key_get(req.key, "transB"), kComplex), int(key_int(req.key, "m")),
                              int(key_int(req.key, "nrhs")), int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.m);

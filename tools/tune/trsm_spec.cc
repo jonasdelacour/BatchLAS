@@ -19,7 +19,6 @@
 #include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -170,9 +169,8 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/trsm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             auto get = [&](std::string_view name, const char* dflt) {
                 const std::string* v = key_get(req.key, name);
                 return v ? *v : std::string(dflt);
@@ -184,7 +182,7 @@ public:
                                                               : Transpose::Trans;
             const Uplo uplo = get("uplo", "L") == "U" ? Uplo::Upper : Uplo::Lower;
             const Diag diag = get("diag", "N") == "U" ? Diag::Unit : Diag::NonUnit;
-            TrsmProblem<T> p(*q, side, uplo, trans, diag, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
+            TrsmProblem<T> p(q, side, uplo, trans, diag, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::blas, p.order);
             if (req.mode == "race") return run_race<S::TrsmChoice>("trsm", p, req, tol);

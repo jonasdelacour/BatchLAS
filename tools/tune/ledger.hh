@@ -32,7 +32,7 @@ struct CellRecord {
 };
 
 // RunMeta::protocol of this engine's runs; --plan estimates from history of the same protocol only.
-inline constexpr const char* kProtocol = "full";
+inline constexpr const char* kProtocol = "lean";  // "full": the fixed warm-up engine before it
 
 struct RunMeta {
     std::string run_id, dtype, host, device, device_name, batchlas, argv, date;

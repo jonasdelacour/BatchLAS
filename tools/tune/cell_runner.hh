@@ -3,7 +3,9 @@
 // The child side of one cell (docs/design/flat-kernel-selection.md §6.1, §6.3): probe every
 // arm through the public sizing call under its ScopedPin (a refused pin is "skipped", never
 // timed), then warm up and time the arms interleaved, rotating the order every rep, then verify
-// each arm from one more untimed run. The SLM carve-out is sticky per CUfunction
+// each arm from one more untimed run. The workspace is leased from the worker's Queue, whose arena
+// outlives the cell; ~ArmBench drains it with wait_and_throw, so no async error reaches the next
+// cell, and trims the arena's slack. The SLM carve-out is sticky per CUfunction
 // (benchmarks/factor_bench.cc header), so a process that has run a larger launch can accept one a
 // fresh process refuses: the custom protocol forks a child per cell, and the tiered worker takes
 // its cells in ascending bytes and is audited against fresh children
@@ -18,6 +20,7 @@
 #include <tools/tune/spec.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
 #include <src/select/select.hh>
@@ -27,8 +30,8 @@
 #include <chrono>
 #include <cmath>
 #include <complex>
+#include <cstdio>
 #include <exception>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -112,9 +115,19 @@ public:
 
     ArmBench(const std::string& op, Problem& p, const std::vector<std::string>& names) : op_(op), p_(p) {
         for (const std::string& w : names) arms.push_back({w, "ok", "", {}, {}, 0.0, 0});
-        std::size_t wneed = 1;
-        for (ArmOutcome& a : arms) guarded(a, [&] { wneed = std::max(wneed, p_.workspace()); });
-        ws_ = std::make_unique<UnifiedVector<std::byte>>(wneed);
+        for (ArmOutcome& a : arms) guarded(a, [&] { wneed_ = std::max(wneed_, p_.workspace()); });
+        ws_ = p_.q.workspace(wneed_);
+    }
+    ArmBench(const ArmBench&) = delete;
+    ArmBench& operator=(const ArmBench&) = delete;
+    ~ArmBench() {
+        ws_.release();
+        try {  // DPC++'s plain wait() leaves an async error pending on the Queue for a later cell
+            p_.q.wait_and_throw();
+            if (p_.q.workspace_capacity() > 2 * wneed_) (void)p_.q.trim_workspace();  // blocks are never freed
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "batchlas_tune: %s: an async error at the cell's end: %s\n", op_.c_str(), e.what());
+        }
     }
 
     std::size_t live() const {
@@ -124,7 +137,7 @@ public:
     bool once(ArmOutcome& a) {
         return guarded(a, [&] {
             p_.reset();
-            p_.run(ws_->to_span());
+            p_.run(ws_.span());
         });
     }
 
@@ -138,15 +151,34 @@ public:
         spent(&Phases::warm, w0);
     }
 
+    // The lean warm-up: interleaved rounds until two consecutive round totals (run spans only)
+    // agree, at most kWarmCapPerArmS per arm. Returns each arm's run ms over the last two rounds.
+    std::vector<std::vector<double>> warm_until_stable(const std::vector<std::size_t>& order) {
+        const auto w0 = clock::now();
+        std::vector<std::vector<double>> last(order.size());
+        double prev = 0;
+        for (int r = 1;; ++r) {
+            double total = 0;
+            bool ran = false;
+            for (std::size_t i = 0; i < order.size(); ++i) {
+                double ms = 0;
+                if (guarded(arms[order[i]], [&] { ms = reset_and_run(); })) total += ms, ran = true;
+                if (last[i].size() == 2) last[i].erase(last[i].begin());
+                last[i].push_back(ms);
+            }
+            if (!ran || warm_converged(prev, total, r) ||
+                seconds_since(w0) >= kWarmCapPerArmS * double(order.size()))
+                break;
+            prev = total;
+        }
+        spent(&Phases::warm, w0);
+        return last;
+    }
+
     bool timed(ArmOutcome& a, int slot) {
         double ms = 0;
         const auto c0 = clock::now();
-        const bool ran = guarded(a, [&] {
-            p_.reset();
-            const auto t0 = clock::now();
-            p_.run(ws_->to_span());
-            ms = std::chrono::duration<double, std::milli>(clock::now() - t0).count();
-        });
+        const bool ran = guarded(a, [&] { ms = reset_and_run(); });
         if (ran) {
             a.ms.push_back(ms);
             a.slot.push_back(slot);
@@ -173,7 +205,15 @@ public:
 private:
     const std::string& op_;
     Problem& p_;
-    std::unique_ptr<UnifiedVector<std::byte>> ws_;
+    std::size_t wneed_ = 1;
+    WorkspaceLease ws_;
+
+    double reset_and_run() {  // ms of the run alone
+        p_.reset();
+        const auto t0 = clock::now();
+        p_.run(ws_.span());
+        return std::chrono::duration<double, std::milli>(clock::now() - t0).count();
+    }
 
     static void spent(double Phases::*f, clock::time_point t0) { cell_phases().add(f, seconds_since(t0)); }
     static void fail(ArmOutcome& a, const char* status, const std::string& why) {
@@ -222,9 +262,11 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
     return arms;
 }
 
-// The race (docs/design/tiered-tuning.md, the per-cell algorithm): rounds of one timed run per
-// live arm, race_step after each, until race_over. Every raced arm is then verified, the
-// eliminated too: one that fails is "bad" and leaves the row; one that passes keeps its median.
+// The race (docs/design/tiered-tuning.md#engine-the-lean-cell): one untimed run per arm, two
+// timed rounds and the gross cut, the survivors' samples dropped and warm_until_stable over them,
+// then rounds of one timed run per live arm, race_step after each, until race_over under the
+// lean_max_reps cap. Every raced arm is then verified, the eliminated too: one that fails is "bad"
+// and leaves the row; one that passes keeps its median (a gross loser: of its two cut rounds).
 template <class Choice, class Problem>
 std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     std::vector<std::string> names;
@@ -239,7 +281,9 @@ std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRe
     std::vector<std::size_t> idx;  // the arms that entered the race
     for (std::size_t i = 0; i < arms.size(); ++i)
         if (arms[i].status == "ok") idx.push_back(i);
-    b.warm(idx, req.warm_s * double(idx.size()));
+    const auto w0 = std::chrono::steady_clock::now();
+    for (std::size_t i : idx) b.once(arms[i]);  // JIT and module load stay out of the gross cut
+    cell_phases().add(&Phases::warm, seconds_since(w0));
 
     TierParams tp{};
     tp.min_reps = req.min_reps;
@@ -250,22 +294,49 @@ std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRe
     s.ms.assign(idx.size(), {});
     s.alive.assign(idx.size(), true);
     std::vector<bool> failed(idx.size(), false);
-    for (int r = 0; !idx.empty(); ++r) {
+    auto fail = [&](std::size_t c) { failed[c] = true, s.alive[c] = false; };
+    for (std::size_t c = 0; c < idx.size(); ++c)
+        if (arms[idx[c]].status != "ok") fail(c);
+    auto round = [&](int r) {  // false once no arm is alive
         std::vector<std::size_t> alive;
         for (std::size_t c = 0; c < idx.size(); ++c)
             if (s.alive[c]) alive.push_back(c);
-        std::vector<double> round(idx.size(), std::nan(""));
+        std::vector<double> got(idx.size(), std::nan(""));
         const auto order = rep_order(alive.size(), r, req.alternate_reverse && r % 2);
         for (std::size_t pos = 0; pos < order.size(); ++pos) {
             const std::size_t c = alive[order[pos]];
             ArmOutcome& a = arms[idx[c]];
-            if (b.timed(a, static_cast<int>(pos))) round[c] = a.ms.back();
-            else failed[c] = true, s.alive[c] = false;
+            if (b.timed(a, static_cast<int>(pos))) got[c] = a.ms.back();
+            else fail(c);
         }
-        for (std::size_t c = 0; c < idx.size(); ++c) s.ms[c].push_back(round[c]);
-        if (std::find(s.alive.begin(), s.alive.end(), true) == s.alive.end()) break;
-        if (race_over(race_step(s, tp, 0.03), r + 1, tp)) break;
+        for (std::size_t c = 0; c < idx.size(); ++c) s.ms[c].push_back(got[c]);
+        return std::find(s.alive.begin(), s.alive.end(), true) != s.alive.end();
+    };
+    // Two pairs are below every tier's min_reps, so only the gross rule fires here.
+    const bool live = round(0) && round(1);
+    if (live) race_step(s, tp, 0.03);
+    std::vector<std::size_t> warm;
+    for (std::size_t c = 0; c < idx.size(); ++c) {
+        s.ms[c].clear();
+        if (!s.alive[c]) continue;
+        arms[idx[c]].ms.clear();
+        arms[idx[c]].slot.clear();
+        warm.push_back(idx[c]);
     }
+    if (live) {
+        const auto last = b.warm_until_stable(warm);
+        double slowest = 0;
+        for (std::size_t c = 0, w = 0; c < idx.size(); ++c) {
+            if (!s.alive[c]) continue;
+            if (arms[idx[c]].status != "ok") fail(c);
+            else slowest = std::max(slowest, median(last[w]));
+            ++w;
+        }
+        tp.max_reps = lean_max_reps(slowest, tp);
+        tp.min_reps = std::min(tp.min_reps, tp.max_reps);
+    }
+    for (int r = 0; live && round(r); ++r)
+        if (race_over(race_step(s, tp, 0.03), r + 1, tp)) break;
     for (std::size_t c = 0; c < idx.size(); ++c) {
         if (failed[c]) continue;
         ArmOutcome& a = arms[idx[c]];

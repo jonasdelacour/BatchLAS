@@ -28,8 +28,11 @@ std::string join(const std::vector<std::string>& v, const char* sep) {
 }  // namespace
 
 std::string request_line(const std::string& op, const CellRequest& r) {
-    return Json().str("op", op).str("dtype", r.dtype).str("key", key_arg(r.key)).str("arms", join(r.arms, ","))
-        .str("mode", r.mode).integer("reps", r.reps).num("warm", r.warm_s).boolean("reverse", r.reverse)
+    Json j;
+    j.str("op", op).str("dtype", r.dtype).str("key", key_arg(r.key)).str("arms", join(r.arms, ","))
+        .str("mode", r.mode).integer("reps", r.reps);
+    if (r.mode == "time") j.num("warm", r.warm_s);  // a race warms until stable
+    return j.boolean("reverse", r.reverse)
         .integer("ld_pad", r.ld_pad).str("tier", r.tier).integer("min_reps", r.min_reps)
         .integer("max_reps", r.max_reps).num("confidence", r.confidence)
         .boolean("alternate_reverse", r.alternate_reverse).str("seed_order", join(r.seed_order, ","))
@@ -46,7 +49,7 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
         r.arms = split(rec->get("arms"), ',');
         r.mode = rec->get("mode");
         r.reps = static_cast<int>(rec->number("reps"));
-        r.warm_s = rec->number("warm");
+        if (r.mode == "time") r.warm_s = rec->number("warm");
         r.reverse = rec->get("reverse") == "true";
         r.ld_pad = static_cast<int>(rec->number("ld_pad"));
         r.tier = rec->get("tier");
@@ -62,7 +65,7 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
     }
     const std::string op = rec->get("op");
     if (op.empty() || r.key.empty() || r.arms.empty() || std::isnan(r.warm_s)) {
-        if (err) *err = "a request needs op, key, arms and warm";
+        if (err) *err = "a request needs op, key, arms, and warm in mode time";
         return std::nullopt;
     }
     return std::pair(op, std::move(r));

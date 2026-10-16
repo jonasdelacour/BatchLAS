@@ -13,6 +13,10 @@
 #include <string_view>
 #include <vector>
 
+namespace batchlas {
+struct Queue;  // the worker's, one per process: run_cell takes it, so the spec stays SYCL-free
+}
+
 namespace batchlas::tune {
 
 // One cell for a child or the worker; `arms` are ScopedPin words (spellings; "auto" in --gate).
@@ -22,7 +26,7 @@ struct CellRequest {
     std::vector<std::string> arms;
     std::string mode;  // "time" | "race" | "jit" | "probe" | "verify" (the ld audit: verify only)
     int reps = 16;
-    double warm_s = 1.5;   // race: the per-arm warm top-up
+    double warm_s = 1.5;   // time (custom): the per-arm warm-up; a race warms until stable (race.hh)
     bool reverse = false;  // pass 2: the base arm order reversed (§6.3 step 4)
     int ld_pad = 0;        // non-natural ld = n + ld_pad
     std::string tier;  // race: the tier's protocol (docs/design/tiered-tuning.md)
@@ -69,8 +73,8 @@ public:
     KernelBlock kernel_block(const std::string& repo) const;
     // Family -> repo-relative files (own section plus deps; common is kernel_block().common).
     virtual std::map<std::string, std::vector<std::string>> family_sources(const std::string& repo) const;
-    // The child side: run one cell.
-    virtual std::vector<ArmOutcome> run_cell(const CellRequest& req) const = 0;
+    // The child side: run one cell on the process's Queue (its workspace arena outlives the cell).
+    virtual std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const = 0;
 
     // The coarse grid: the full lattice of axes(), unless overridden (gemm's demand-driven shapes).
     virtual std::vector<CellKey> grid(const std::string& dtype,
@@ -94,7 +98,7 @@ inline int qr_batch(double item_bytes) {
 std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out,  // of `wanted`, those out verified
                                        const std::vector<std::string>& wanted);
 void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit);  // bad/error there: bad here
-std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req);  // run_cell + its ld audit
+std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req, Queue& q);  // + its ld audit
 Phases& cell_phases();  // this thread's cell: run_cell_audited resets it, sets setup and ld; ArmBench adds the rest
 
 void register_spec(const OpSpec* spec);

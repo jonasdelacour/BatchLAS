@@ -55,13 +55,13 @@ Phases& cell_phases() {
     return p;
 }
 
-std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req) {
+std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req, Queue& q) {
     using clock = std::chrono::steady_clock;
     Phases& ph = cell_phases();
     ph = Phases{};
     const auto t0 = clock::now();
-    std::vector<ArmOutcome> out = spec.run_cell(req);
-    ph.setup = seconds_since(t0) - ph.worker_s();  // Queue, Problem, fill and the per-arm workspace probe
+    std::vector<ArmOutcome> out = spec.run_cell(req, q);
+    ph.setup = seconds_since(t0) - ph.worker_s();  // Problem, fill and the per-arm workspace probe
     if (req.ld_audit.empty() || (req.mode != "race" && req.mode != "time")) return out;
     CellRequest a = req;
     a.mode = "verify";
@@ -74,7 +74,7 @@ std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& 
     const Phases cell = ph;  // the audit's own verify runs count as ld, not as verify
     const auto t1 = clock::now();
     try {
-        got = spec.run_cell(a);
+        got = spec.run_cell(a, q);
     } catch (const std::exception& e) {
         for (const std::string& arm : a.arms) got.push_back({arm, "error", e.what(), {}, {}, 0, 0, ""});
     }

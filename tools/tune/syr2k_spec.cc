@@ -15,7 +15,6 @@
 #include <src/ops/syr2k/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -114,10 +113,9 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/syr2k_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_real_dtype("syr2k", req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
-            Syr2kProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "k")), int(key_int(req.key, "batch")),
+            Syr2kProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "k")), int(key_int(req.key, "batch")),
                               req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, 2 * p.k);
             if (req.mode == "race") return run_race<R2::Syr2kChoice>("syr2k", p, req, tol);
