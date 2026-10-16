@@ -2,6 +2,7 @@
 
 #include <tools/tune/grid.hh>
 #include <tools/tune/ledger.hh>
+#include <tools/tune/replay_core.hh>
 
 #include <unistd.h>
 
@@ -140,6 +141,9 @@ struct Job {
     bool frontier = false;           // fp.stride > 1: round 0 sparse, then flip_frontier rounds
     std::vector<CellKey> universe;   // frontier: the grid, the cells flip_frontier may add (on_grid: as a set)
     std::set<CellKey> on_grid;
+    std::unique_ptr<Prior> prior;    // calibrate: the borrowed table; round 0 is `probes`
+    std::set<CellKey> probes;
+    std::size_t prior_rows = 0, contradicted = 0;
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
@@ -215,6 +219,13 @@ private:
     bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
     std::string mode(const Job& j) const { return (m_ ? m_->persistent() : o_.worker) && !j.fresh ? "worker" : "fresh"; }
     void refine(Job& j);
+    std::map<CellKey, RefineCell> refine_cells(const Job& j, std::map<CellKey, std::vector<std::string>>* ranked) const;
+    bool calibrate() const { return o_.tier == Tier::calibrate; }
+    std::string prior_pick(const Job& j, const CellKey& k) const {
+        const auto r = j.prior->row(j.dtype, k, j.cands);
+        return r.empty() ? std::string() : r.front();
+    }
+    void copy_prior(Job& j);
 };
 
 void TieredRun::emit(Json j) {
@@ -252,11 +263,23 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     // Every tier plans by flip frontier unless the spec keeps the full lattice; a partly stale record joins
     // round 0, as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     j->fp = s.frontier();
-    j->frontier = !named_only() && j->fp.stride > 1;
+    j->frontier = !named_only() && !calibrate() && j->fp.stride > 1;
+    if (calibrate()) {
+        const std::string path = prior_table(o_.repo + "/tuned", op, id_.device, o_.prior);
+        if (path.empty())
+            throw std::runtime_error("--tier calibrate: no prior table for " + op + " in " + o_.repo + "/tuned" +
+                                     (o_.prior.empty() ? " (pass --prior <device>)" : " for --prior " + o_.prior));
+        j->prior = std::make_unique<Prior>(path);
+        j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
+        j->next = frontier_start(grid, j->axes, o_.probe_stride > 0 ? o_.probe_stride : params(Tier::calibrate).stride);
+        j->probes.insert(j->next.begin(), j->next.end());
+        std::printf("== calibrate %s %s: prior %s (%s, %s, %zu rows, %zu timed)\n", op.c_str(), dtype.c_str(), path.c_str(),
+                    j->prior->device.c_str(), j->prior->date.c_str(), j->prior->rows, j->prior->timed);
+    }
     // A custom or --only-named run is a sample: the named cells only, every candidate, no refinement.
     if (named_only()) j->next.clear();
     else if (j->frontier) j->next = frontier_start(grid, j->axes, j->fp.stride);
-    else j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    else if (!calibrate()) j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
     if (j->frontier) {
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
         const std::set<CellKey> r0(j->next.begin(), j->next.end());
@@ -289,8 +312,21 @@ std::vector<PlannedCell> TieredRun::plan(Job& j) {
     j.planned.insert(j.next.begin(), j.next.end());
     PlanSpec spec = j.plan_spec();
     spec.mode = mode(j);
-    return plan_round(spec, o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable, o_.max_dim,
-                      j.round == 0 ? &j.remeasure : nullptr);
+    auto out = plan_round(spec, o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable, o_.max_dim,
+                          j.round == 0 ? &j.remeasure : nullptr);
+    if (!calibrate() || std::all_of(out.begin(), out.end(), [&](const PlannedCell& c) { return j.probes.count(c.key) != 0; }))
+        return out;
+    const auto cells = refine_cells(j, nullptr);
+    const CalibrateRound cr(cells, j.axes, [&](const CellKey& k) { return prior_pick(j, k); }, j.fp.k, j.fp.slower);
+    for (PlannedCell& c : out) {
+        if (!c.reason.empty() || j.probes.count(c.key) || (j.round == 0 && j.remeasure.count(c.key))) continue;
+        const auto keep = j.prior->arms(j.dtype, c.key, j.cands, cr.winners(c.key));
+        std::vector<std::string> arms;
+        for (const std::string& a : c.arms)
+            if (std::find(keep.begin(), keep.end(), a) != keep.end()) arms.push_back(a);
+        if (!arms.empty()) c.arms = std::move(arms);
+    }
+    return out;
 }
 
 std::string TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
@@ -338,6 +374,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.tier = o_.tier;
         m.protocol = kProtocol;
         m.guard = o_.guard ? o_.guard() : "";
+        if (j.prior) m.prior = j.prior->device + "@" + j.prior->date;
         // Always the full lists: table generation derives the current families from the newest run.
         m.keys = join(j.spec->key_names(), " ");
         m.candidates = join(j.cands, "|");
@@ -513,6 +550,12 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     }
     if (c.round >= 0) round = c.round;  // a re-measured refinement midpoint stays a refinement record
     CellRecord r = record_from_arms(c.key, round, b.arms, j.cands, j.fh, c.stored);
+    // Arms calibrate left out on purpose: seen, so the record is not partly stale (refine_cell ignores them).
+    if (c.tier == Tier::calibrate)
+        for (const std::string& a : j.cands)
+            if (std::none_of(r.cands.begin(), r.cands.end(), [&](const CandResult& x) { return x.cand == a; }))
+                r.cands.push_back({a, j.fh.count(family_of(a)) ? j.fh.at(family_of(a)) : "", "skipped", kUnraced, NAN, NAN,
+                                   NAN, 0, true});
     r.phases = b.phases;
     r.phases.arms = static_cast<int>(job.arms.size());
     {
@@ -579,6 +622,7 @@ void TieredRun::advance(Job& j) {
         ++j.round;
         if (stage(j) > 0) return;
     }
+    if (calibrate()) copy_prior(j);
     j.wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count();
     std::lock_guard<std::mutex> lock(sq_);
     j.done = true;
@@ -658,7 +702,7 @@ std::pair<std::size_t, std::size_t> TieredRun::cap_base(const Job& j) const {
 // Refinement records per (op, dtype) <= cap_factor x round-0 records: past it, the first cells in
 // refine_all_axes's order (flips, then margin hedges) run and refinement stops, reported.
 void TieredRun::cap(Job& j, std::vector<PlannedCell>& plan) {
-    if (j.frontier) return;  // only the budget stops a frontier
+    if (j.frontier || calibrate()) return;  // only the budget stops a frontier
     const auto [lattice, done] = cap_base(j);
     const std::size_t want = std::size_t(std::count_if(plan.begin(), plan.end(), measurable));
     const std::size_t allow = refine_allowance(lattice, done, cap_factor());
@@ -682,15 +726,26 @@ void TieredRun::cap(Job& j, std::vector<PlannedCell>& plan) {
              .integer("cap", std::int64_t(limit)).integer("dropped", std::int64_t(want - allow)));
 }
 
-void TieredRun::refine(Job& j) {
-    std::map<CellKey, std::vector<std::string>> ranked;
+std::map<CellKey, RefineCell> TieredRun::refine_cells(const Job& j, std::map<CellKey, std::vector<std::string>>* ranked) const {
     std::map<CellKey, RefineCell> cells;
     for (const auto& [k, r] : best_records(j.ledger, j.fh))
         // A lower-tier record is no bracket end: a midpoint on it is measured again. The margin
         // hedges lattice cells of this tier, stored or measured now (a resumed run hedges too).
-        if (j.region->contains(k) && tier_rank(r->tier) >= tier_rank(o_.tier))
-            ranked[k] = r->ranked, cells[k] = refine_cell(*r, r->round == 0 && r->tier == o_.tier);
-    for (const auto& [k, r] : j.mine) ranked[k] = r.ranked, cells[k] = refine_cell(r, r.round == 0);
+        if (j.region->contains(k) && tier_rank(r->tier) >= tier_rank(o_.tier)) {
+            cells[k] = refine_cell(*r, r->round == 0 && r->tier == o_.tier);
+            if (ranked) (*ranked)[k] = r->ranked;
+        }
+    for (const auto& [k, r] : j.mine) {
+        if (unhashed(r.tier)) continue;
+        cells[k] = refine_cell(r, r.round == 0);
+        if (ranked) (*ranked)[k] = r.ranked;
+    }
+    return cells;
+}
+
+void TieredRun::refine(Job& j) {
+    std::map<CellKey, std::vector<std::string>> ranked;
+    const std::map<CellKey, RefineCell> cells = refine_cells(j, &ranked);
     const TierParams& p = params(o_.tier);
     RefineOpts ro;
     ro.mode = p.refine_mode;
@@ -706,11 +761,54 @@ void TieredRun::refine(Job& j) {
         front = flip_frontier(cells, open, j.axes, j.fp.k, j.fp.slower);
         ro.mode = RefineMode::index, ro.margin = 0;
     }
+    // Calibrate: grid cells whose prior pick a disagreeing neighbour beats, then bisection midpoints off the grid
+    // beside a disagreeing cell. evidence: docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table
+    std::optional<CalibrateRound> cr;
+    if (calibrate()) {
+        cr.emplace(cells, j.axes, [&](const CellKey& k) { return prior_pick(j, k); }, j.fp.k, j.fp.slower);
+        std::vector<CellKey> open;
+        for (const CellKey& k : j.universe)
+            if (!j.planned.count(k)) open.push_back(k);
+        front = cr->frontier(open);
+    }
     const RefineRound rr = refine_all_axes(ranked, j.axes, p.refine_ratio, ro);
     for (const std::string& s : rr.stalled) std::printf("== %s %s refinement stalled: %s\n", j.spec->op().c_str(), j.dtype.c_str(), s.c_str());
     j.next = front;
     for (const CellKey& k : rr.next)
-        if (!j.planned.count(k) && !j.on_grid.count(k)) j.next.push_back(k);
+        if (!j.planned.count(k) && !j.on_grid.count(k) && (!cr || cr->disagrees_near(k, 2))) j.next.push_back(k);
+}
+
+// Calibrate's last step: every grid cell with no measured record and no disagreeing neighbour that beats the
+// prior's pick there gets the prior's nearest row, untimed, as a `prior` record (unhashed, ranked below every
+// measured tier). evidence: docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table
+void TieredRun::copy_prior(Job& j) {
+    const std::map<CellKey, RefineCell> cells = refine_cells(j, nullptr);
+    std::set<CellKey> measured;
+    const auto best = best_records(j.ledger, j.fh);
+    for (const auto& [k, r] : best)
+        if (!unhashed(r->tier)) measured.insert(k);
+    for (const auto& [k, r] : j.mine)
+        if (!unhashed(r.tier)) measured.insert(k);
+    std::vector<CellKey> rest;
+    for (const CellKey& k : j.universe)
+        if (!measured.count(k)) rest.push_back(k);
+    const CalibrateRound cr(cells, j.axes, [&](const CellKey& k) { return prior_pick(j, k); }, j.fp.k, j.fp.slower);
+    const std::vector<CellKey> against = cr.frontier(rest);
+    const std::set<CellKey> contradicted(against.begin(), against.end());
+    for (const CellKey& k : rest) {
+        if (contradicted.count(k)) continue;
+        const std::vector<std::string> row = j.prior->row(j.dtype, k, j.cands);
+        if (row.empty()) continue;
+        if (const auto b = best.find(k); b != best.end() && b->second->tier == Tier::prior && b->second->ranked == row) continue;
+        CellRecord r;
+        r.key = k;
+        r.round = j.round;
+        r.ranked = row;
+        for (const std::string& c : row) r.cands.push_back({c, "", "ok", "", NAN, NAN, NAN, 0, true});
+        record(j, r, Tier::prior);
+        ++j.prior_rows;
+    }
+    j.contradicted = contradicted.size();
 }
 
 int TieredRun::go() {
@@ -771,13 +869,18 @@ int TieredRun::go() {
                                                    &j->runnable, o_.max_dim))
                 if (measurable(c)) ++open, open_s += c.est_s;
         }
-        const double ratio = named_only() || j->frontier ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
+        const double ratio = named_only() || j->frontier || calibrate() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
         j->est_refine_cells = j->frontier ? kFrontierShare * double(open) : ratio * double(n_measure);
         const double s = j->frontier ? kFrontierShare * open_s
                                      : n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;
         const auto [stored, refined] = cap_base(*j);
-        if (j->frontier)
+        if (calibrate())
+            std::printf("   calibrate: %zu probe cells race every arm (est above); refinement only around disagreements with "
+                        "the prior, data-dependent (%zu grid cells off the probe lattice), cells off the probes race the "
+                        "prior's top 2 + families it lacks + the neighbours' winners; the rest get prior rows\n",
+                        j->probes.size(), j->universe.size() - j->probes.size());
+        else if (j->frontier)
             std::printf("   frontier (stride %d, k %zu, %.0f%%): ~%.0f cells, data-dependent (%.2f x the %zu grid cells "
                         "round 0 leaves, the replay's share), est %s; no cap, only --budget\n", j->fp.stride, j->fp.k,
                         100 * j->fp.slower, j->est_refine_cells, kFrontierShare, open, hours(s).c_str());
@@ -820,11 +923,20 @@ int TieredRun::go() {
         std::string rounds;
         for (std::size_t n : j->per_round) rounds += (rounds.empty() ? "" : ",") + std::to_string(n);
         const std::size_t refined = std::accumulate(j->per_round.begin() + 1, j->per_round.end(), std::size_t(0));
-        const std::string r0 = j->frontier ? "round-0 (stride " + std::to_string(j->fp.stride) + ")" : "lattice";
+        const std::string r0 = calibrate() ? "probe" : j->frontier ? "round-0 (stride " + std::to_string(j->fp.stride) + ")" : "lattice";
         std::printf("== summary %s %s: measured %zu %s + %zu %s cells, per round %s; planned ~%.0f%s; wall %.1f s\n",
                     j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], r0.c_str(), refined,
                     j->frontier ? "frontier and bisection" : "refinement", rounds.c_str(), j->est_refine_cells,
                     j->capped ? "; refinement cap hit" : "", j->wall);
+        if (calibrate()) {
+            const auto cells = this->refine_cells(*j, nullptr);
+            const CalibrateRound cr(cells, j->axes, [&](const CellKey& k) { return prior_pick(*j, k); }, j->fp.k, j->fp.slower);
+            std::size_t dis = 0;
+            for (const CellKey& k : j->probes) dis += cr.disagrees(k);
+            std::printf("== summary %s %s calibrate vs %s: %zu of %zu probes disagree; %zu prior rows copied, %zu cells left to "
+                        "their measured neighbours\n", j->spec->op().c_str(), j->dtype.c_str(), j->prior->device.c_str(), dis,
+                        j->probes.size(), j->prior_rows, j->contradicted);
+        }
     }
     for (auto& j : jobs_) {
         std::printf("== summary %s %s ld audit (ld +%d): %zu passed, %zu skipped, %zu failed\n", j->spec->op().c_str(),
@@ -871,7 +983,8 @@ struct StatusRow {
 
 std::string tier_mix(const std::map<Tier, int>& t) {
     std::string s;
-    for (Tier x : {Tier::deep, Tier::coarse, Tier::preview, Tier::custom, Tier::converted, Tier::transcribed})
+    for (Tier x : {Tier::deep, Tier::coarse, Tier::calibrate, Tier::preview, Tier::custom, Tier::converted, Tier::prior,
+                   Tier::transcribed})
         if (t.count(x)) s += (s.empty() ? "" : ",") + to_string(x) + ":" + std::to_string(t.at(x));
     return s.empty() ? "-" : s;
 }

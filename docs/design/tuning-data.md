@@ -23,7 +23,8 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
   tier, `keys` (the `# keys:` text from `choice.hh`), `candidates` (`|`-joined spellings in
   candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
   before it; absent in ledgers written before the field), `guard` (the guard backend: `nvml`,
-  `nvidia-smi` or `off`; absent before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
+  `nvidia-smi` or `off`; absent before the field), `prior` (calibrate runs only: the borrowed table as
+  `<device>@<header date>`; table generation ignores it). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
   `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
   lean race's tie set, already verified in its size decade; absent = verified, as in every older
@@ -43,15 +44,22 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 Readers take the lines in file order. Ties in the best-record rule ("later line") are therefore
 judged by file order.
 
-Tiers, best first: `deep`, `coarse`, `preview`, `custom`, `converted`, `transcribed`.
+Tiers, best first: `deep`, `coarse`, `calibrate`, `preview`, `custom`, `converted`, `prior`,
+`transcribed`.
 
+- `calibrate`: a measured tier, probes and refinement of `--tier calibrate`; bracketed like preview
+  (2 lattice steps).
 - `converted`: medians from the old forced-route sweeps (sm_89 potrf). Timed, but measured on
   old kernels.
+- `prior`: a calibrate run's copy of the borrowed table's nearest row at a grid cell it did not
+  measure, untimed (`-`), under the calibrate run's id.
 - `transcribed`: the old router's order, untimed (`-`).
-- Both carry no kernel hash and are exempt from the freshness rule. They compete only among
-  themselves for a cell, so one still stands where the measured record's ranking is empty. A
-  measured row within 2 lattice steps on every log key (equal exact keys) removes them from the
-  table, kept or not.
+- `converted`, `prior` and `transcribed` carry no kernel hash and are exempt from the freshness rule.
+  They compete only among themselves for a cell, so one still stands where the measured record's
+  ranking is empty. A measured row within 2 lattice steps on every log key (equal exact keys)
+  removes a converted or transcribed row from the table, kept or not; a prior row does too. A prior
+  row gives way only to a measured record with its own key (stride 0), so the copies fill a sparse
+  calibrate run's gaps (@ref design_tiered_tuning, "Engine: calibrate tier from a borrowed table").
 
 Writers append under `flock(LOCK_EX)`, one `write()` per line, and repair a torn last line under
 the same lock. Several dtype jobs and processes share one file. A reader ignores a truncated last
@@ -92,7 +100,7 @@ files (common, its own, `kernel-deps`), hash v2:
   and `check_tuned_tables.py --self-test`.
 - Table staleness is one function, `sweep_to_table.stale_kernel_warnings`: the header's
   `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
-  deep, coarse, preview or custom row (all converted/transcribed) carries no hash and is never stale;
+  deep, coarse, calibrate, preview or custom row (all converted/prior/transcribed) carries no hash and is never stale;
   a missing or unparsable `tiers=` is checked.
 - Shared device headers (`src/sycl/kernel_attrs.hh`, `src/sycl/sscp_target.hh`,
   `src/kernels/common/sg_partition/` and `group-collectives.hh`) sit in a spec's common section, once,
@@ -183,6 +191,7 @@ scripts/sweep_to_table.py --rehash-moved BASE                                # "
 - **Rows:** each cell takes its best current record; a lower-tier row is emitted only where no
   higher-tier row lies within the lower tier's lattice spacing under `select::choose`'s distance,
   and every row ends in its tier comment (`# deep`). Output is byte-reproducible.
+- **Header:** `tiers=` counts every tier in the order above, zeros included.
 - **Keys and candidates** come from each dtype's newest run line, never from Python. A cell key
   field that is not a table key (trsm's `uplo`, `diag`) is a hidden grid axis: it is projected
   away, and a dtype whose cells vary it is refused (an A/B run is raw data, not a table).
@@ -193,7 +202,7 @@ scripts/sweep_to_table.py --rehash-moved BASE                                # "
   stale table stays in use; there is no configure-time check. `sweep_to_table.py --check` and
   `.github/ci/check_tuned_tables.py` print the same warnings from one function,
   `sweep_to_table.stale_kernel_warnings`, which compares the op-level `kernels=` and every
-  `family_kernels=` hash (kernel-deps included). A table with only converted/transcribed rows
+  `family_kernels=` hash (kernel-deps included). A table with only converted/prior/transcribed rows
   (every sm_89 table) carries no hash and is never reported stale.
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.

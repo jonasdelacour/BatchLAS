@@ -1,5 +1,5 @@
 # op=gesv device=sm_120 batchlas=a549338b kernels=8ffc2bd2 family_kernels=tiny:92925990,blocked:69f0f88c date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/gesv.sm_120.jsonl tiers=deep:877,coarse:0,preview:0,custom:0,converted:0,transcribed:0
+# source=ledger:benchmarks/results/tuning/ledger/gesv.sm_120.jsonl tiers=deep:877,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:0
 # keys: dtype:exact n:log:3 nrhs:log
 dtype=float n=1 nrhs=1 | tiny 0.008833 | blocked 0.01954 # deep
 dtype=float n=1 nrhs=2 | tiny 0.008993 | blocked 0.01836 # deep

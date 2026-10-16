@@ -10,6 +10,7 @@ add_executable(batchlas_tune_impl
     ledger.cc
     schedule.cc
     tiered_driver.cc
+    replay_core.cc
     worker.cc
     nvml_guard.cc
     spec.cc

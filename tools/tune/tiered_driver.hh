@@ -35,6 +35,8 @@ struct TieredOpts {
     std::map<std::string, std::set<CellKey>> remeasure;
     bool only_named = false;  // round 0 is exactly the remeasure cells: no lattice, no refinement (tier custom always)
     std::function<std::string()> guard;  // the guard backend now ("nvml->nvidia-smi" after a fallback); run meta
+    std::string prior;     // calibrate: --prior <device>; "" = prior_table's default rule
+    int probe_stride = 0;  // calibrate: --probe-stride; 0 = params(Tier::calibrate).stride
 };
 
 struct RunIdentity {

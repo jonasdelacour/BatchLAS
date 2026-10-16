@@ -35,6 +35,8 @@ struct CellRecord {
 // RunMeta::protocol of this engine's runs; --plan estimates from history of the same protocol only.
 inline constexpr const char* kProtocol = "lean";  // "full": the fixed warm-up engine before it
 
+inline constexpr const char* kUnraced = "unraced:calibrate";  // off-probe arm: skipped, not stale, not unrunnable
+
 struct RunMeta {
     std::string run_id, dtype, host, device, device_name, batchlas, argv, date;
     std::string keys;        // the op's '# keys:' spec text, e.g. "uplo:exact n:log:3 batch:log"
@@ -43,6 +45,7 @@ struct RunMeta {
     std::map<std::string, std::string> worker_mode;
     std::string protocol;  // the per-cell protocol (kProtocol); "" = a ledger from before the field
     std::string guard;     // guard backend: nvml, nvidia-smi or off; "" = a ledger from before the field
+    std::string prior;     // calibrate: the borrowed table, <device>@<header date>; "" otherwise
 };
 
 std::string make_run_id();  // <UTC yyyymmddThhmmss>-<host>-<pid>

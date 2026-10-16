@@ -1,5 +1,5 @@
 # op=getri device=sm_120 batchlas=2606d367 kernels=9144411b family_kernels=blocked:0ab5dee8,vendor:718af871 date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/getri.sm_120.jsonl tiers=deep:363,coarse:0,preview:0,custom:0,converted:0,transcribed:94
+# source=ledger:benchmarks/results/tuning/ledger/getri.sm_120.jsonl tiers=deep:363,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:94
 # keys: dtype:exact n:log:3 batch:log
 dtype=float n=1 batch=128 | blocked 0.01581 | vendor 0.01770 # deep
 dtype=float n=1 batch=512 | blocked 0.01578 | vendor 0.01790 # deep

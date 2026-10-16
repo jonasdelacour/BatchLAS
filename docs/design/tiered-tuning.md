@@ -35,6 +35,7 @@ The sm_120 tables come from the engine ("Engine: the sm_120 deep run").
 | Raw per-rep timings | Kept for deep runs only (deferred, see [open risks](#open-risks)). |
 | UI | A Tuning tab in `benchviz serve`, driving `batchlas_tune`. |
 | Worker | One persistent worker per GPU, with a fresh-process audit. See [persistent workers](#engine-persistent-workers-and-the-carve-out-audit). |
+| New machine | `--tier calibrate` probes the nearest shipped table and measures where the device disagrees; the rest is copied as `prior` rows ("Engine: calibrate tier from a borrowed table"). |
 
 ## Sub-projects
 
@@ -61,7 +62,9 @@ deep results.
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
 | Fresh-process audit sample | 2% of cells | 2% | 1% |
 
-The tie margin is 3% in every tier. The lattices nest (preview ⊂ coarse ⊂ deep). An op whose grid
+`calibrate` races at coarse quality on a stride-4 probe lattice against a prior table ("Engine:
+calibrate tier from a borrowed table"). The tie margin is 3% in every tier. The lattices nest
+(preview ⊂ coarse ⊂ deep). An op whose grid
 is not a lattice is subsampled by a stable hash of the cell key, so subsets still nest.
 
 Each cell goes through three steps:
@@ -244,7 +247,8 @@ ran three children per cell, about 1.5 s of start-up per cell, so per-cell proce
 
 ## Engine: driver interface
 
-- `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep --dtype ... --devices ...`. The old
+- `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep|calibrate --dtype ... --devices ...`
+  (calibrate: `--prior <device>`, `--probe-stride 4`). The old
   protocol flags (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`) remain as expert
   overrides. A run that uses them is tier `custom`, ranked below preview, and writes to the shared
   ledger only with an explicit `--ledger DIR`.
@@ -536,6 +540,80 @@ largest for spmm (+1.32%), trsm (+0.25%), symm (+0.24% at k 6, +0.08% at k 8), g
 plan measures about 92,000 of the 115,595 table cells (79.6%); the frontier plan (gemm full, symm k 8)
 about 70,000, 24% fewer. The 2026-10-08/09 deep run wrote 124,724 records, re-runs included, with
 refinement unfinished for nine ops ("Engine: the sm_120 deep run").
+
+## Engine: calibrate tier from a borrowed table
+
+`--tier calibrate` (2026-10-16) fills a new device's tables from the nearest shipped table instead of
+from nothing: it probes that table (the prior) on the device and measures only where the device
+disagrees. Code: `CalibrateRound` (`tools/tune/grid.cc`), `Prior`, `prior_table` and
+`calibrate_replay` (`tools/tune/replay_core.cc`), `TieredRun::build`, `plan`, `refine` and
+`copy_prior` (`tools/tune/tiered_driver.cc`). Tests: `TuneCalibrate.*`, `TuneTier.*`,
+`sweep_to_table.py --self-test` ("prior rows").
+
+- **Prior.** `--prior <device>` reads `tuned/<op>.<device>.txt`. Default (`prior_table`): among
+  `tuned/<op>.<d>.txt` with `d` neither the device's own key nor `cpu`, the newest header `date=` among
+  the fully timed (>= 90% timed rows); if none is, the larger timed-row share, then the newest date, then
+  the device name, so a table with no timed row only when no other is left. Today that is sm_120 for
+  every op (sm_89 is transcribed, potrf `converted` but older). The whole table is read host-side (`load_table_oracle`, untimed rows included in
+  `OracleSet::rows`); a cell looks up the prior's nearest row with `NearestIndex::find` (select's rule:
+  exact-key prefix, then weighted log distance), fields beyond the table keys ignored. The prior's
+  pick is that row's first entry that is a current candidate.
+- **Probe** (round 0). `frontier_start(grid, axes, 4)`: every 4th value of each log axis, ends kept
+  (`--probe-stride 8` for a cheaper probe). Probe cells race every arm at coarse quality (calibrate's
+  `TierParams`: reps floor 4, confidence 0.90). A probe *disagrees* when the device's winner is more
+  than 5% faster than the prior's pick there, or the pick cannot run (`decisive`, as the frontier).
+- **Refinement.** Each round measures the open grid cells u whose prior pick is decisively beaten at one
+  of u's 6 nearest measured cells (`OpSpec::frontier().k`, same exact keys) that disagrees with the
+  prior: the step-2 flip predicate with one side the prior's expectation at u. A cell with no prior row
+  takes `flip_frontier`'s rule. Bisection (3% tie) adds off-grid midpoints only next to a disagreeing
+  cell (one of its 2 nearest). Rounds repeat until neither adds a cell; `--budget` stops them.
+- **Arms off the probes.** The prior's top 2 at the nearest prior row (row order: for a transcribed
+  prior, order only), every candidate of a family the prior's rows for the dtype never name (trsm.sm_89
+  has no `sg_left`), and the winners of the 6 nearest measured cells (so a winner the probes found
+  beyond the prior's top 2 is raced). Probes and `--remeasure-keys` cells race every arm. The arms left
+  out are recorded `skipped` with reason `unraced:calibrate`: seen, so never stale, and never "not
+  runnable" to the frontier. `--only-named` is refused with calibrate (a sample cannot judge the whole grid).
+- **Prior rows.** When the job ends, every grid cell with no measured record and no contradiction (the
+  refinement predicate) gets the prior's nearest row as a `prior` record: untimed (`-`), unhashed, never
+  stale, ranked below every measured tier (@ref design_tuning_data). Without them the
+  device's own sparse table would shadow the borrowed one everywhere: `select::walk` reads the own table
+  first and `nearest` always finds a row in it. A contradicted cell left unmeasured (budget) gets no row:
+  its measured neighbours answer. A rerun appends no row whose ranking is unchanged.
+- **Ranking.** `calibrate` sits between preview and coarse; a coarse or deep run re-measures its cells,
+  a preview run does not. `prior` sits between `transcribed` and `converted`: a later run of any tier
+  measures over it, and `sweep_to_table.py` drops a prior row only where a measured record has its own
+  key (stride 0), so the copies fill the gaps of a sparse run. A transcribed row near a prior row is
+  dropped as near a measured one.
+- **`--plan`** prices the probe; refinement is data-dependent and printed as such (cells off the probe
+  lattice). The summary prints probes, disagreeing probes, prior rows copied and contradicted cells.
+
+**Replay** (`tune_replay --table tuned/*.sm_120.txt --ledger ...sm_120.jsonl --prior tuned/*.sm_89.txt`,
+2026-10-16, CPU only). The universe is the shipped sm_120 tables; sm_120's own table is hidden and the
+sm_89 tables are the prior, because they are the only real cross-device data in the tree (a perturbed
+sm_120 copy would grade the mechanism against its own answer). They are a weak prior: every sm_89 table
+but potrf is the old routers' untimed order. `calibrate_replay` emulates the driver without bisection
+(the universe has no off-grid midpoints) and scores select's pick on the generated table: measured rows
+plus copied prior rows, nearest row elsewhere. `arm runs` = timed arms raced / timed arms in the
+universe.
+
+| Scheme | Probes (disagree) | Measured | Arm runs | Prior rows | Geomean | p99 | p99.9 | > 10% slow |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `prior` (borrow blindly, nothing measured) | - | 0% | 0% | 115,595 | 19.8% | 12.3 | 451 | 29.6% |
+| `calibrate-probe` (probe, no refinement) | 3,403 (1,322) | 2.9% | 2.1% | 27,245 | 8.46% | 3.20 | 37.6 | 16.8% |
+| `calibrate8` | 1,406 (511) | 70.1% | 51.1% | 34,573 | 1.47% | 1.259 | 10.1 | 2.83% |
+| `calibrate` (stride 4) | 3,403 (1,322) | 80.7% | 61.3% | 22,255 | 0.291% | 1.074 | 1.770 | 0.79% |
+| `stride2+frontier` (from scratch, reference) | - | 76.1% | 81.8% | - | 0.044% | 1.000 | 1.072 | 0.08% |
+| `calibrate`, prior = sm_120 itself (sanity) | 3,403 (0) | 2.9% | 2.1% | 112,192 | 0.132% | 1.027 | 1.030 | 0% |
+
+With the sm_89 prior, 39% of probes disagree, refinement spreads over most of the grid, and calibrate
+measures more cells than a from-scratch frontier, with fewer arms per cell (61% against 82% of arm
+runs) and a worse table (geomean 0.29% against 0.044%). The loss sits where the prior is trusted between
+two agreeing probes: syr2k (2 of 32 probes disagree) 5.6% geomean, gesvd 2.0%, spmm 0.79%, geqrf 0.68%,
+gemm 0.48%. Requiring a device flip next to a contradicted cell as well (measured 76.2%, geomean 0.39%,
+p99.9 2.23) was worse and is not shipped. The sanity row is the floor of a perfect prior: select's tie
+rule (a row lists arms within 3% in tie order) costs 0.13%. Calibrate pays off only with a prior close
+to the device; whether a shipped table is that close for a real second device is the open gate: a lean
+deep run on the 2x4090 box, then this replay with the sm_120 prior against it.
 
 ## Coverage: interface for sub-project 2
 

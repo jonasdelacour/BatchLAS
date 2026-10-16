@@ -155,6 +155,11 @@ const RefineCell* info_of(const RefineOpts& o, const CellKey& k) {
     return it == o.cells->end() ? nullptr : &it->second;
 }
 
+std::string winner_of(const RefineCell& c) {
+    if (c.ms.empty()) return c.single;
+    return std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) { return x.second < y.second; })->first;
+}
+
 // At a cell won by `w`: `other` is more than the tie slower, or cannot win there (not runnable, eliminated untimed).
 bool decisive(const RefineCell& c, const std::string& w, const std::string& other, double tie) {
     const auto o = c.ms.find(other);
@@ -238,29 +243,76 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
 
 std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
                                    const std::vector<AxisSpec>& axes, std::size_t k, double slower) {
-    std::vector<CellKey> rows;
-    std::vector<const RefineCell*> info;
-    std::vector<std::string> winner;
+    return CalibrateRound(measured, axes, {}, k, slower).flips(universe);
+}
+
+CalibrateRound::CalibrateRound(const std::map<CellKey, RefineCell>& measured, const std::vector<AxisSpec>& axes, Pick pick,
+                               std::size_t k, double slower)
+    : measured_(measured), axes_(axes), pick_(std::move(pick)), k_(k), slower_(slower) {
     for (const auto& [key, c] : measured) {
         if (c.ms.empty() && c.single.empty()) continue;
-        rows.push_back(key);
-        info.push_back(&c);
-        winner.push_back(c.ms.empty() ? c.single : std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) {
-                             return x.second < y.second;
-                         })->first);
+        rows_.push_back(key);
+        info_.push_back(&c);
+        winner_.push_back(winner_of(c));
+        const std::string p = pick_ ? pick_(key) : std::string();
+        dis_.push_back(pick_ && (p.empty() || (p != winner_.back() && decisive(c, winner_.back(), p, slower_))));
     }
+    if (!rows_.empty()) index_.emplace(rows_, axes_);
+}
+
+bool CalibrateRound::disagrees(const CellKey& m) const {
+    const auto it = std::find(rows_.begin(), rows_.end(), m);
+    return it != rows_.end() && dis_[std::size_t(it - rows_.begin())];
+}
+
+bool CalibrateRound::disagrees_near(const CellKey& u, std::size_t n) const {
+    if (!index_) return false;
+    const auto nb = index_->k_nearest(u, n);
+    return std::any_of(nb.begin(), nb.end(), [&](std::size_t r) { return bool(dis_[r]); });
+}
+
+// A cell with no prior pick has nothing to copy: flip_frontier's rule over the device's cells decides it.
+std::vector<CellKey> CalibrateRound::frontier(const std::vector<CellKey>& open) const {
+    std::vector<CellKey> out, unpicked;
+    if (!index_) return out;
+    for (const CellKey& u : open) {
+        if (measured_.count(u)) continue;
+        const std::string p = pick_(u);
+        if (p.empty()) {
+            unpicked.push_back(u);
+            continue;
+        }
+        for (std::size_t r : index_->k_nearest(u, k_))
+            if (dis_[r] && winner_[r] != p && decisive(*info_[r], winner_[r], p, slower_)) {
+                out.push_back(u);
+                break;
+            }
+    }
+    for (CellKey& u : flips(unpicked)) out.push_back(std::move(u));
+    return out;
+}
+
+// Two of u's k nearest measured cells have different winners and one decisively beats the other there.
+std::vector<CellKey> CalibrateRound::flips(const std::vector<CellKey>& open) const {
     std::vector<CellKey> out;
-    if (rows.empty()) return out;
-    const NearestIndex index(rows, axes);
-    for (const CellKey& u : universe) {
-        if (measured.count(u)) continue;
-        const auto nb = index.k_nearest(u, k);
+    if (!index_) return out;
+    for (const CellKey& u : open) {
+        if (measured_.count(u)) continue;
+        const auto nb = index_->k_nearest(u, k_);
         bool flip = false;
         for (std::size_t a = 0; a < nb.size() && !flip; ++a)
             for (std::size_t b = 0; b < nb.size() && !flip; ++b)
-                flip = a != b && winner[nb[a]] != winner[nb[b]] && decisive(*info[nb[b]], winner[nb[b]], winner[nb[a]], slower);
+                flip = a != b && winner_[nb[a]] != winner_[nb[b]] &&
+                       decisive(*info_[nb[b]], winner_[nb[b]], winner_[nb[a]], slower_);
         if (flip) out.push_back(u);
     }
+    return out;
+}
+
+std::set<std::string> CalibrateRound::winners(const CellKey& u) const {
+    std::set<std::string> out;
+    if (index_)
+        for (std::size_t r : index_->k_nearest(u, k_)) out.insert(winner_[r]);
     return out;
 }
 

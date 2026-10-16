@@ -5,10 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <tuple>
 
 namespace batchlas::tune {
 
@@ -364,14 +366,17 @@ OracleSet load_table_oracle(const std::string& tuned_txt) {
         }
         RefineCell c;
         bool timed = true;
-        for (std::size_t i = 1; i < parts.size() && timed; ++i) {
+        std::vector<std::string>& entries = o.rows[key];
+        for (std::size_t i = 1; i < parts.size(); ++i) {
             const auto w = split(parts[i], ' ');
+            if (!w.empty()) entries.push_back(w[0]);
             if (w.size() != 2 || w[1] == "-") timed = false;
-            else c.ms[w[0]] = std::stod(w[1]);
+            else if (timed) c.ms[w[0]] = std::stod(w[1]);
         }
         if (timed && !c.ms.empty()) o.cells[key] = std::move(c);
     }
     finish(o, key_names);
+    o.key_names = key_names;
     return o;
 }
 
@@ -447,7 +452,25 @@ std::vector<Scheme> replay_schemes() {
             {"stride2+frontier+bisect", 2, true, 0, true}};
 }
 
+std::vector<Scheme> calibrate_schemes() {
+    Scheme c{"calibrate", 4, true, 0, false, true}, c8{"calibrate8", 8, true, 0, false, true};
+    return {c, c8, {"calibrate-probe", 4, false, 0, false, true}, {"prior", 0, false, 0, false, true}};
+}
+
 namespace {
+
+// The universe cell `key` raced over `arms` (nullptr, or none of them runs there: every arm) into m.
+void race_into(const OracleSet& o, std::map<CellKey, RefineCell>& m, SlowdownReport& rep, const CellKey& key,
+               const std::set<std::string>* arms) {
+    const RefineCell& t = o.cells.at(key);
+    if (arms && std::none_of(t.ms.begin(), t.ms.end(), [&](const auto& a) { return arms->count(a.first) != 0; }))
+        arms = nullptr;
+    RefineCell& c = m[key];
+    for (const auto& [arm, ms] : t.ms)
+        if (!arms || arms->count(arm)) c.ms[arm] = ms, rep.arm_runs += 1;
+    for (const std::string& arm : t.out)
+        if (!arms || arms->count(arm)) c.out.insert(arm);
+}
 
 std::vector<std::string> fastest_first(const std::map<std::string, double>& ms) {
     std::vector<std::string> v;
@@ -465,16 +488,7 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
     rep.cells = universe.size();
     std::map<CellKey, RefineCell> m;
     std::set<CellKey> missed;  // bisection midpoints the universe lacks
-    auto measure = [&](const CellKey& key, const std::set<std::string>* arms) {
-        const RefineCell& t = o.cells.at(key);
-        if (arms && std::none_of(t.ms.begin(), t.ms.end(), [&](const auto& a) { return arms->count(a.first) != 0; }))
-            arms = nullptr;  // no kept arm runs here: race them all
-        RefineCell& c = m[key];
-        for (const auto& [arm, ms] : t.ms)
-            if (!arms || arms->count(arm)) c.ms[arm] = ms, rep.arm_runs += 1;
-        for (const std::string& arm : t.out)
-            if (!arms || arms->count(arm)) c.out.insert(arm);
-    };
+    auto measure = [&](const CellKey& key, const std::set<std::string>* arms) { race_into(o, m, rep, key, arms); };
     std::vector<std::set<std::string>> start_all;  // tier_lattice(o.axes, 1) per axis, without the product
     for (const AxisSpec& a : o.axes) start_all.emplace_back(a.values.begin(), a.values.end());
     // The driver's round 0 (frontier_start): the start lattice, own strides for exact-key groups it misses.
@@ -552,6 +566,181 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
         rep.ratio.push_back(ratio);
         if (measured) rep.ratio_measured.push_back(ratio);
         if (ratio > rep.worst) rep.worst = ratio, rep.worst_key = key_text(u) + " picked " + *pick;
+    }
+    return rep;
+}
+
+namespace {
+
+std::string family(const std::string& spelling) { return spelling.substr(0, spelling.find(':')); }
+
+std::string dtype_of(const CellKey& k) {
+    const std::string* d = key_get(k, "dtype");
+    return d ? *d : std::string();
+}
+
+}  // namespace
+
+Prior::Prior(const std::string& tuned_txt) : path(tuned_txt), t_(load_table_oracle(tuned_txt)) {
+    const std::string stem = std::filesystem::path(tuned_txt).stem().string();
+    device = stem.substr(stem.find('.') + 1);
+    const auto d = header_field(tuned_txt, "date=");
+    date = d.empty() ? "" : d.front();
+    rows = t_.rows.size(), timed = t_.cells.size();
+    std::vector<std::pair<std::string, std::vector<std::string>>> values;
+    std::vector<std::set<std::string>> seen;
+    for (const auto& [key, entries] : t_.rows) {
+        keys_.push_back(key);
+        if (values.empty())
+            for (const KV& kv : key) values.push_back({kv.name, {}});
+        seen.resize(key.size());
+        for (std::size_t i = 0; i < key.size(); ++i) seen[i].insert(key[i].value);
+        for (const std::string& e : entries) families_[dtype_of(key)].insert(family(e));
+    }
+    for (std::size_t i = 0; i < values.size(); ++i) values[i].second.assign(seen[i].begin(), seen[i].end());
+    axes_ = axis_specs(t_.key_names, values);
+    if (!keys_.empty()) index_.emplace(keys_, axes_);
+}
+
+std::vector<std::string> Prior::row(const std::string& dtype, const CellKey& key, const std::vector<std::string>& cands) const {
+    if (!index_) return {};
+    CellKey q;
+    for (const AxisSpec& a : axes_) {
+        const std::string* v = a.name == "dtype" ? &dtype : key_get(key, a.name);
+        if (!v) return {};
+        q.push_back({a.name, *v});
+    }
+    const std::size_t i = index_->find(q);
+    std::vector<std::string> out;
+    if (i != NearestIndex::npos)
+        for (const std::string& e : t_.rows.at(keys_[i]))
+            if (std::find(cands.begin(), cands.end(), e) != cands.end()) out.push_back(e);
+    return out;
+}
+
+std::vector<std::string> Prior::arms(const std::string& dtype, const CellKey& key, const std::vector<std::string>& cands,
+                                     const std::set<std::string>& also) const {
+    const auto r = row(dtype, key, cands);
+    std::set<std::string> want = also;
+    want.insert(r.begin(), r.begin() + std::ptrdiff_t(std::min<std::size_t>(2, r.size())));
+    const auto named = families_.find(dtype);
+    std::vector<std::string> out;
+    for (const std::string& c : cands)
+        if (want.count(c) || named == families_.end() || !named->second.count(family(c))) out.push_back(c);
+    return out;
+}
+
+// The newest table with timed rows wins (header date, then timed share, then device name); untimed-only tables
+// only when no other exists. Never the device's own table, never cpu's.
+std::string prior_table(const std::string& tuned_dir, const std::string& op, const std::string& device,
+                        const std::string& want) {
+    namespace fs = std::filesystem;
+    if (!want.empty()) {
+        const fs::path p = fs::path(tuned_dir) / (op + "." + want + ".txt");
+        return fs::exists(p) ? p.string() : "";
+    }
+    std::string best;
+    std::tuple<bool, std::string, double, std::string, std::string> best_rank;
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(tuned_dir, ec)) {
+        const std::string name = e.path().filename().string();
+        if (name.rfind(op + ".", 0) != 0 || e.path().extension() != ".txt") continue;
+        const std::string dev = e.path().stem().string().substr(op.size() + 1);
+        if (dev.empty() || dev == device || dev == "cpu" || dev.find('.') != std::string::npos) continue;
+        const Prior p(e.path().string());
+        const double share = p.rows ? double(p.timed) / double(p.rows) : 0.0;
+        const bool full = share >= 0.9;  // fully timed: the newest wins; otherwise the larger share
+        const auto rank = std::tuple(full, full ? p.date : std::string(), share, p.date, dev);
+        if (best.empty() || rank > best_rank) best = e.path().string(), best_rank = rank;
+    }
+    return best;
+}
+
+SlowdownReport calibrate_replay(const OracleSet& o, const Prior& prior, const Scheme& s, std::size_t k, double slower) {
+    SlowdownReport rep;
+    std::vector<CellKey> universe;
+    std::map<std::string, std::vector<std::string>> cands;  // dtype -> every arm its cells name
+    for (const auto& [key, c] : o.cells) {
+        universe.push_back(key), rep.arm_total += double(c.ms.size());
+        auto& v = cands[dtype_of(key)];
+        for (const auto& [arm, ms] : c.ms)
+            if (std::find(v.begin(), v.end(), arm) == v.end()) v.push_back(arm);
+        for (const std::string& arm : c.out)
+            if (std::find(v.begin(), v.end(), arm) == v.end()) v.push_back(arm);
+    }
+    rep.cells = universe.size();
+    const std::vector<std::string> none;
+    auto cands_of = [&](const CellKey& key) -> const std::vector<std::string>& {
+        const auto it = cands.find(dtype_of(key));
+        return it == cands.end() ? none : it->second;
+    };
+    auto row = [&](const CellKey& key) { return prior.row(dtype_of(key), key, cands_of(key)); };
+    auto pick = [&](const CellKey& key) {
+        const auto r = row(key);
+        return r.empty() ? std::string() : r.front();
+    };
+    std::map<CellKey, RefineCell> m;
+    if (s.stride > 0)
+        for (const CellKey& c : frontier_start(universe, o.axes, s.stride, o.lattice != "inferred")) race_into(o, m, rep, c, nullptr);
+    rep.probes = m.size();
+    {
+        const CalibrateRound cr(m, o.axes, pick, k, slower);
+        for (const auto& [key, c] : m) rep.disagreed += cr.disagrees(key);
+    }
+    while (s.frontier && !m.empty()) {
+        const CalibrateRound cr(m, o.axes, pick, k, slower);
+        std::vector<CellKey> open;
+        for (const CellKey& u : universe)
+            if (!m.count(u)) open.push_back(u);
+        const auto next = cr.frontier(open);
+        if (next.empty()) break;
+        ++rep.rounds;
+        std::vector<std::set<std::string>> arms;
+        for (const CellKey& u : next) {
+            const auto a = prior.arms(dtype_of(u), u, cands_of(u), cr.winners(u));
+            arms.emplace_back(a.begin(), a.end());
+        }
+        for (std::size_t i = 0; i < next.size(); ++i) race_into(o, m, rep, next[i], &arms[i]);
+    }
+    rep.measured = m.size();
+    std::map<CellKey, std::vector<std::string>> table;  // the generated table: measured rows, then copied prior rows
+    for (const auto& [key, c] : m)
+        if (!c.ms.empty()) table[key] = fastest_first(c.ms);
+    std::vector<CellKey> rest;
+    for (const CellKey& u : universe)
+        if (!m.count(u)) rest.push_back(u);
+    std::set<CellKey> contradicted;
+    if (!m.empty())
+        for (const CellKey& u : CalibrateRound(m, o.axes, pick, k, slower).frontier(rest)) contradicted.insert(u);
+    for (const CellKey& u : rest)
+        if (!contradicted.count(u))
+            if (auto r = row(u); !r.empty()) table[u] = std::move(r), ++rep.prior_rows;
+    std::vector<CellKey> keys;
+    for (const auto& [key, r] : table) keys.push_back(key);
+    if (keys.empty()) {
+        for (const CellKey& u : universe) rep.failures.push_back(key_text(u) + " (no row)");
+        return rep;
+    }
+    const NearestIndex index(keys, o.axes);
+    for (const CellKey& u : universe) {
+        const auto& truth = o.cells.at(u).ms;
+        const bool own = table.count(u) != 0;
+        const std::size_t near = own ? 0 : index.find(u);
+        if (near == NearestIndex::npos) {
+            rep.failures.push_back(key_text(u) + " (no row of its dtype)");
+            continue;
+        }
+        const CellKey& from = own ? u : keys[near];
+        const auto& ranked = table.at(from);
+        const auto p = std::find_if(ranked.begin(), ranked.end(), [&](const std::string& a) { return truth.count(a) != 0; });
+        if (p == ranked.end()) {
+            rep.failures.push_back(key_text(u) + " (row " + key_text(from) + ")");
+            continue;
+        }
+        const double ratio = truth.at(*p) / truth.at(fastest_first(truth).front());
+        rep.ratio.push_back(ratio);
+        if (m.count(u) && !m.at(u).ms.empty()) rep.ratio_measured.push_back(ratio);
+        if (ratio > rep.worst) rep.worst = ratio, rep.worst_key = key_text(u) + " picked " + *p;
     }
     return rep;
 }

@@ -33,6 +33,8 @@ DTYPES = list(stt.DTYPES)
 TIMED = set(stt.LEDGER_STATUS_TIMED)
 TIER_NOTES = {
     "preview": "every 2nd lattice point, short races: a first look, not a table",
+    "calibrate": "every 4th lattice point raced against the nearest shipped table (prior), measured only where "
+                 "the device disagrees; the prior fills the rest: a new GPU's first table",
     "coarse": "the full lattice, refined to 1.1x; the default fill",
     "deep": "the full lattice, long races at 0.98 confidence; the shipped tables",
     "custom": "exactly the cells listed below, every candidate, no lattice: a rehash sample",
@@ -405,7 +407,7 @@ class Ledgers:
             ranked = [r for r in c["ranked"] if r in med]
             margin = med[ranked[1]] / med[ranked[0]] - 1 if len(ranked) > 1 else None
             win = c["ranked"][0] if c["ranked"] else None
-            refused = {r["cand"] for r in c["cands"] if r["status"] == "skipped"}
+            refused = {r["cand"] for r in c["cands"] if r["status"] == "skipped" and r.get("reason") != "unraced:calibrate"}
             old = next((s for s, _ in orow if s not in refused), None) if orow else None
             new = next((s for s, _ in nrow if s not in refused), None) if nrow else None
             sp = med[old] / med[new] if old in med and new in med else None

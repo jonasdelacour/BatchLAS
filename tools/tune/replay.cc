@@ -2,8 +2,10 @@
 //   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 //   tune_replay --slowdown [--table <tuned/op.dev.txt>]... [--ledger <op.dev.jsonl>]... [--raw <jsonl>]... [--scheme a,b] [--k n] [--slower f]
+//               [--prior <tuned/op.dev.txt>]...
 // Slowdown replay: one JSON line per (scheme, source), then per (scheme, overall/<kind>). --table or --ledger
-// implies --slowdown; a ledger takes its family hashes from the --table of the same <op>.<device>.
+// implies --slowdown; a ledger takes its family hashes from the --table of the same <op>.<device>. A --prior adds
+// the calibrate schemes for the sources of its op (calibrate_replay).
 
 #include <tools/tune/replay_core.hh>
 
@@ -13,6 +15,7 @@
 #include <exception>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 
 using namespace batchlas::tune;
@@ -31,6 +34,8 @@ void print_slowdown(const std::string& scheme, const std::string& source, const 
     j.num("slow10", all.slow10).num("misrank", all.misrank).num("worst", r.worst).str("worst_key", r.worst_key);
     j.num("measured_geomean", mine.geomean).num("measured_p99", mine.p99).num("measured_p999", mine.p999);
     j.num("measured_slow10", mine.slow10).num("measured_worst", mine.worst);
+    j.integer("probes", std::int64_t(r.probes)).integer("disagreed", std::int64_t(r.disagreed));
+    j.integer("prior_rows", std::int64_t(r.prior_rows));
     j.integer("failures", std::int64_t(r.failures.size())).str("failure_list", fails);
     j.str("gate", slowdown_gate(r) ? "PASS" : "FAIL");
     std::fputs(j.line().c_str(), stdout);
@@ -40,6 +45,7 @@ void pool(SlowdownReport& into, const SlowdownReport& r) {
     into.lattice = into.lattice.empty() || into.lattice == r.lattice ? r.lattice : "mixed";
     into.cells += r.cells, into.measured += r.measured, into.rounds = std::max(into.rounds, r.rounds);
     into.bisect_missing += r.bisect_missing;
+    into.probes += r.probes, into.disagreed += r.disagreed, into.prior_rows += r.prior_rows;
     into.arm_runs += r.arm_runs, into.arm_total += r.arm_total;
     into.ratio.insert(into.ratio.end(), r.ratio.begin(), r.ratio.end());
     into.ratio_measured.insert(into.ratio_measured.end(), r.ratio_measured.begin(), r.ratio_measured.end());
@@ -48,7 +54,7 @@ void pool(SlowdownReport& into, const SlowdownReport& r) {
 }
 
 int slowdown_main(int argc, char** argv) {
-    std::vector<std::string> tables, ledgers, raws, want;
+    std::vector<std::string> tables, ledgers, raws, want, priors;
     std::size_t k = 6;
     double slower = 0.05;
     for (int i = 1; i < argc; ++i) {
@@ -62,6 +68,7 @@ int slowdown_main(int argc, char** argv) {
         if (a == "--table") tables.push_back(v);
         else if (a == "--ledger") ledgers.push_back(v);
         else if (a == "--raw") raws.push_back(v);
+        else if (a == "--prior") priors.push_back(v);
         else if (a == "--scheme") want = split(v, ',');
         else if (a == "--k") k = std::size_t(std::stoul(v));
         else if (a == "--slower") slower = std::stod(v);
@@ -70,13 +77,21 @@ int slowdown_main(int argc, char** argv) {
             return 2;
         }
     }
-    std::vector<Scheme> schemes;
-    for (const Scheme& s : replay_schemes())
+    std::vector<Scheme> known = replay_schemes(), schemes;
+    for (const Scheme& s : calibrate_schemes())
+        if (!priors.empty()) known.push_back(s);
+    for (const Scheme& s : known)
         if (want.empty() || std::find(want.begin(), want.end(), s.name) != want.end()) schemes.push_back(s);
-    if (schemes.size() != (want.empty() ? replay_schemes().size() : want.size())) {
+    if (schemes.size() != (want.empty() ? known.size() : want.size())) {
         std::fprintf(stderr, "tune_replay: --scheme takes a comma list of full, lattice, stride2, stride4, stride2+frontier, "
-                             "stride4+frontier, stride2+frontier+prune, lattice+bisect, stride2+frontier+bisect\n");
+                             "stride4+frontier, stride2+frontier+prune, lattice+bisect, stride2+frontier+bisect; with "
+                             "--prior also calibrate, calibrate8, calibrate-probe, prior\n");
         return 2;
+    }
+    std::map<std::string, std::unique_ptr<Prior>> prior_of;  // op -> its --prior
+    for (const std::string& p : priors) {
+        const std::string stem = std::filesystem::path(p).stem().string();
+        prior_of[stem.substr(0, stem.find('.'))] = std::make_unique<Prior>(p);
     }
     std::vector<std::pair<std::string, OracleSet>> sources;  // kind, set
     std::map<std::string, std::string> table_of;              // <op>.<device> -> table path
@@ -107,7 +122,9 @@ int slowdown_main(int argc, char** argv) {
     for (const Scheme& s : schemes) {
         std::map<std::string, SlowdownReport> overall;
         for (const auto& [kind, o] : sources) {
-            SlowdownReport r = slowdown_replay(o, s, k, slower);
+            const auto prior = prior_of.find(o.label.substr(0, o.label.find('/')));
+            if (s.calibrate && prior == prior_of.end()) continue;
+            SlowdownReport r = s.calibrate ? calibrate_replay(o, *prior->second, s, k, slower) : slowdown_replay(o, s, k, slower);
             r.lattice = o.lattice;
             print_slowdown(s.name, o.label, r);
             pool(overall[kind], r);

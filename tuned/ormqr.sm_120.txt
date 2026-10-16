@@ -1,5 +1,5 @@
 # op=ormqr device=sm_120 batchlas=2606d367 kernels=e62dc05a family_kernels=blocked:3ee8b27b,vendor:4eb2f5cf date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/ormqr.sm_120.jsonl tiers=deep:1370,coarse:0,preview:0,custom:0,converted:0,transcribed:372
+# source=ledger:benchmarks/results/tuning/ledger/ormqr.sm_120.jsonl tiers=deep:1370,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:372
 # keys: dtype:exact side:exact trans:exact m:log k:log q:log batch:log
 dtype=float side=L trans=C m=1 k=1 q=1 batch=128 | blocked 0.02559 | vendor 0.5344 # deep
 dtype=float side=L trans=C m=1 k=1 q=1 batch=2048 | blocked 0.03591 | vendor 8.255 # deep

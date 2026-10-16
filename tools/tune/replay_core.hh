@@ -9,6 +9,8 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -81,6 +83,8 @@ struct OracleSet {
     std::vector<AxisSpec> axes;           // log axes: the round-0 lattice values when known, else every distinct value
     std::map<CellKey, RefineCell> cells;  // ms = each timed arm's median; out = the set's other arms; dtype is a key
     std::string lattice = "inferred";     // ledger (round-0 records), raw (sweep meta), inferred (distinct values)
+    std::vector<std::string> key_names;   // a table's '# keys:' entries
+    std::map<CellKey, std::vector<std::string>> rows;  // a table's every row, untimed ones too, entries in table order
 };
 
 OracleSet load_table_oracle(const std::string& tuned_txt);  // timed rows only; transcribed (`-`) rows are dropped
@@ -96,10 +100,12 @@ struct Scheme {
     bool frontier = false;  // then flip_frontier rounds until none is left
     double prune = 0;       // > 0: a frontier cell races only arms within prune x the best at one of its neighbours
     bool bisect = false;    // the driver: the frontier picks lattice cells only, bisection (3% tie) adds midpoints off it
+    bool calibrate = false;  // calibrate_replay: stride = probe stride (0: none), frontier = CalibrateRound rounds
 };
 // full, lattice, stride2, stride4, stride2+frontier, stride4+frontier, stride2+frontier+prune, lattice+bisect,
 // stride2+frontier+bisect
 std::vector<Scheme> replay_schemes();
+std::vector<Scheme> calibrate_schemes();  // calibrate (stride 4), calibrate8, calibrate-probe (no rounds), prior (no probe)
 
 struct SlowdownReport {
     std::size_t cells = 0, measured = 0, rounds = 0;
@@ -110,6 +116,7 @@ struct SlowdownReport {
     std::string worst_key;
     std::vector<std::string> failures;  // no entry of the nearest measured row runs, or no row of the dtype (not scored)
     std::string lattice;
+    std::size_t probes = 0, disagreed = 0, prior_rows = 0;  // calibrate_replay
 };
 // Round 0: the stride lattice; an exact-key group with no cell on it takes the stride of its own values.
 // Picks: a measured cell's fastest raced arm; any other cell reads the nearest measured row (NearestIndex::find,
@@ -121,6 +128,35 @@ struct SlowdownStats {
     double p99 = 1, p999 = 1, worst = 1;  // nearest rank: sorted[ceil(f n) - 1]
     double slow10 = 0, misrank = 0;  // share of cells > 1.10, > 1.03
 };
+// A borrowed table as the calibrate tier's prior. evidence: docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table
+class Prior {
+public:
+    explicit Prior(const std::string& tuned_txt);
+    // The nearest row of `dtype` (NearestIndex::find; fields beyond the table keys ignored): its entries in `cands`.
+    std::vector<std::string> row(const std::string& dtype, const CellKey& key, const std::vector<std::string>& cands) const;
+    // A cell off the probe lattice races these `cands`: the row's first two, every family the dtype's rows never name, `also`.
+    std::vector<std::string> arms(const std::string& dtype, const CellKey& key, const std::vector<std::string>& cands,
+                                  const std::set<std::string>& also) const;
+    std::string path, device, date;
+    std::size_t rows = 0, timed = 0;
+
+private:
+    OracleSet t_;
+    std::vector<CellKey> keys_;
+    std::vector<AxisSpec> axes_;
+    std::map<std::string, std::set<std::string>> families_;  // dtype -> the families its rows name
+    std::optional<NearestIndex> index_;
+};
+
+// `want` names a device (tuned/<op>.<want>.txt); "" = the default rule (the evidence page above). "" = no prior.
+std::string prior_table(const std::string& tuned_dir, const std::string& op, const std::string& device,
+                        const std::string& want = "");
+
+// Calibrate on the universe against `prior`: probes race every arm, CalibrateRound cells Prior::arms; picks read the
+// nearest row of the measured rows and the prior rows copied to every other cell no disagreeing neighbour contradicts.
+SlowdownReport calibrate_replay(const OracleSet& o, const Prior& prior, const Scheme& s, std::size_t k = 6,
+                                double slower = 0.05);
+
 SlowdownStats slowdown_stats(std::vector<double> ratio);
 
 constexpr double kGateGeomean = 0.0005, kGateP999 = 1.10;  // evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay

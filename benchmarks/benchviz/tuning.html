@@ -9,8 +9,10 @@
 /* Tuning tab only; everything shared lives in benchviz.css. */
 html { overflow-x: clip; }  /* the off-canvas drawer must never widen the page */
 :root { --t-deep: var(--accent); --t-coarse: color-mix(in srgb, var(--accent) 55%, var(--surface));
+  --t-calibrate: color-mix(in srgb, var(--accent) 40%, var(--surface));
   --t-preview: color-mix(in srgb, var(--accent) 25%, var(--surface)); --t-custom: var(--warn);
-  --t-converted: color-mix(in srgb, var(--warn) 45%, var(--surface)); --t-transcribed: var(--hair-2); }
+  --t-converted: color-mix(in srgb, var(--warn) 45%, var(--surface));
+  --t-prior: color-mix(in srgb, var(--hair-2) 55%, var(--surface)); --t-transcribed: var(--hair-2); }
 .fam { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
 .fam.stale { color: var(--warn); }
 textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resize: vertical; }
@@ -118,7 +120,8 @@ textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resi
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
-const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", preview: "--t-preview", custom: "--t-custom", converted: "--t-converted", transcribed: "--t-transcribed" };
+const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", calibrate: "--t-calibrate", preview: "--t-preview", custom: "--t-custom",
+  converted: "--t-converted", prior: "--t-prior", transcribed: "--t-transcribed" };
 const PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#e377c2", "#bcbd22", "#17becf", "#8c564b", "#393b79"];
 const VENDOR = "#7f7f7f";
 let meta = null, ST = null, RUN = null, route = { page: "status" }, device = null, es = null, built = null;

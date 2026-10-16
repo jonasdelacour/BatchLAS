@@ -434,6 +434,7 @@ RefineCell refine_cell(const CellRecord& r, bool lattice) {
     RefineCell c;
     c.lattice = lattice;
     for (const CandResult& x : r.cands) {
+        if (x.reason == kUnraced) continue;
         const bool timed = (x.status == "ok" || x.status == "eliminated") && std::isfinite(x.median_ms) && x.median_ms > 0;
         if (timed) c.ms[x.cand] = x.median_ms;
         else if (x.status != "ok") c.out.insert(x.cand);

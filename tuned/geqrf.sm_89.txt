@@ -1,5 +1,5 @@
 # op=geqrf device=sm_89 batchlas=424a45bc kernels=e2ab9f00 family_kernels=tiny:b39d5968,cta:fac77784,blocked:127bf8cd,vendor:e3360dd7 date=2026-10-05
-# source=ledger:benchmarks/results/tuning/ledger/geqrf.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:2544
+# source=ledger:benchmarks/results/tuning/ledger/geqrf.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2544
 # keys: dtype:exact form:exact n:log:3 aspect:log
 dtype=float form=sq n=1 aspect=1 | vendor - | tiny - | cta - | blocked - # transcribed
 dtype=float form=sq n=2 aspect=1 | vendor - | tiny - | cta - | blocked - # transcribed

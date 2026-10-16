@@ -6,7 +6,9 @@
 #include <tools/tune/tune_core.hh>
 
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -88,6 +90,33 @@ std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, co
 // evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
 std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
                                    const std::vector<AxisSpec>& axes, std::size_t k = 6, double slower = 0.05);
+
+// The calibrate tier's rounds: measured cells against the prior's pick at any cell ("" = no prior row; no Pick:
+// flip_frontier).
+// evidence: docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table
+class CalibrateRound {
+public:
+    using Pick = std::function<std::string(const CellKey&)>;
+    CalibrateRound(const std::map<CellKey, RefineCell>& measured, const std::vector<AxisSpec>& axes, Pick pick,
+                   std::size_t k = 6, double slower = 0.05);
+    bool disagrees(const CellKey& m) const;  // the device's winner beats m's pick by > slower, or the pick cannot run
+    bool disagrees_near(const CellKey& u, std::size_t n) const;  // one of u's n nearest measured cells disagrees
+    std::vector<CellKey> frontier(const std::vector<CellKey>& open) const;  // u's pick beaten at a disagreeing neighbour
+    std::set<std::string> winners(const CellKey& u) const;                  // of u's k nearest measured cells
+    std::vector<CellKey> flips(const std::vector<CellKey>& open) const;     // flip_frontier's rule; ignores the pick
+
+private:
+    const std::map<CellKey, RefineCell>& measured_;
+    std::vector<AxisSpec> axes_;
+    Pick pick_;
+    std::size_t k_;
+    double slower_;
+    std::vector<CellKey> rows_;
+    std::vector<const RefineCell*> info_;
+    std::vector<std::string> winner_;
+    std::vector<bool> dis_;
+    std::optional<NearestIndex> index_;
+};
 
 // Round 0: cells on tier_lattice(axes, stride) if global; a group without one: its own values' stride, else whole.
 std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std::vector<AxisSpec>& axes, int stride,

@@ -58,8 +58,8 @@ Tiered runs are the normal workflow: plan, measure, inspect, write tables.
 
 Modes:
 
-- **Tiered** (`--tier preview|coarse|deep`): records per-cell results in the ledger and skips cells
-  it already holds. A run with no `--out` updates the ledger only.
+- **Tiered** (`--tier preview|coarse|deep|calibrate`): records per-cell results in the ledger and skips
+  cells it already holds. A run with no `--out` updates the ledger only.
 - **Custom** (any of `--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`, `--no-refine`,
   `--no-jit`, `--ld-pad`, `--raw`): the two-pass protocol below. Recorded in the ledger as tier
   `custom` (ranked below preview) only when `--ledger DIR` is given explicitly.
@@ -75,7 +75,9 @@ families changed are re-raced (`partial:<family>`).
 | flag | default | meaning |
 |---|---|---|
 | `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all` (every registered spec). Tiered runs take the ops in dependency order ("Op order" below) and skip, with one note, a dtype a spec refuses. Gate and custom runs take one op |
-| `--tier` | none | `preview`, `coarse` or `deep`; `custom` with `--remeasure-keys`: exactly the named cells, every candidate, no lattice and no refinement (a rehash sample, [kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)) |
+| `--prior DEVICE` | newest fully timed table | `--tier calibrate`: the prior is `tuned/<op>.DEVICE.txt`; default: of `tuned/<op>.*.txt` (not the device's own, not cpu), the newest `date=` among the fully timed (>= 90% timed rows), else the largest timed-row share |
+| `--probe-stride N` | 4 | `--tier calibrate`: probe every N-th value of each log axis (8: a cheaper probe) |
+| `--tier` | none | `preview`, `coarse`, `deep` or `calibrate` (probe the prior table at stride 4, race all arms there; measure only where the device disagrees, racing the prior's top 2 + families it lacks + the neighbours' winners; copy the prior's rows to the rest as tier `prior`: [tiered tuning](../../docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table)); `custom` with `--remeasure-keys`: exactly the named cells, every candidate, no lattice and no refinement (a rehash sample, [kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)) |
 | `--plan` | off | print cells, skips with reasons and the estimate, then exit. No GPU |
 | `--budget H` | none | stop refinement after H hours; the starting lattice always completes. `--plan` warns if its estimate exceeds H |
 | `--only-named` | off | with `--remeasure-keys` and a tiered `--tier`: round 0 is exactly the named cells at the run's tier, no lattice and no refinement (how the cells a rehash sample disagrees on are re-measured at deep) |
@@ -313,6 +315,10 @@ Host-only, no GPU (`build/tools/tune/tune_replay`).
   `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
   failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay).
+- `--prior tuned/<op>.<dev>.txt` (repeatable, matched to sources by op) adds the calibrate schemes
+  `calibrate` (probe stride 4), `calibrate8`, `calibrate-probe` (no refinement) and `prior` (borrow
+  blindly), scored by `calibrate_replay`, with `probes`, `disagreed` and `prior_rows` in the output.
+  Results: [tiered tuning](../../docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table).
 
 ## Gate mode (§10.3)
 

@@ -593,7 +593,7 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
     for (const auto& name : cands) fam += (fam.empty() ? "" : ",") + name + ":" + fh.at(name);
     EXPECT_NE(table.find("# op=posv device=sm_999 batchlas=abc12345 kernels="), std::string::npos) << table;
     EXPECT_NE(table.find(" family_kernels=" + fam + " date=2026-10-03\n"), std::string::npos) << table;
-    EXPECT_NE(table.find(" tiers=deep:3,coarse:0,preview:3,custom:0,converted:0,transcribed:0\n"), std::string::npos) << table;
+    EXPECT_NE(table.find(" tiers=deep:3,coarse:0,calibrate:0,preview:3,custom:0,converted:0,prior:0,transcribed:0\n"), std::string::npos) << table;
     EXPECT_NE(table.find("# keys: dtype:exact " + keys + "\n"), std::string::npos) << table;
     EXPECT_NE(table.find("dtype=float uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
     EXPECT_NE(table.find("dtype=float uplo=L n=8 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
@@ -1123,8 +1123,19 @@ TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     EXPECT_LT(tier_rank(Tier::preview), tier_rank(Tier::coarse));
     EXPECT_LT(tier_rank(Tier::custom), tier_rank(Tier::preview));
     EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::custom));
-    for (Tier t : {Tier::transcribed, Tier::custom, Tier::preview, Tier::coarse, Tier::deep})
+    // calibrate: a coarse race on a sparse probe lattice, between preview and coarse; prior: below every measured tier.
+    EXPECT_LT(tier_rank(Tier::preview), tier_rank(Tier::calibrate));
+    EXPECT_LT(tier_rank(Tier::calibrate), tier_rank(Tier::coarse));
+    EXPECT_LT(tier_rank(Tier::prior), tier_rank(Tier::converted));
+    EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::prior));
+    EXPECT_TRUE(unhashed(Tier::prior));
+    EXPECT_FALSE(unhashed(Tier::calibrate));
+    for (Tier t : {Tier::transcribed, Tier::prior, Tier::converted, Tier::custom, Tier::preview, Tier::calibrate,
+                   Tier::coarse, Tier::deep})
         EXPECT_EQ(parse_tier(to_string(t)), t);
+    EXPECT_EQ(params(Tier::calibrate).stride, 4);
+    EXPECT_EQ(params(Tier::calibrate).min_reps, params(Tier::coarse).min_reps);
+    EXPECT_EQ(params(Tier::calibrate).confidence, params(Tier::coarse).confidence);
     EXPECT_FALSE(parse_tier("fast").has_value());
     EXPECT_EQ(params(Tier::preview).stride, 2);
     EXPECT_EQ(params(Tier::coarse).stride, 1);
@@ -2249,7 +2260,7 @@ TEST(TuneLedger, UnhashedTiersAreNeverStale) {
     for (CandResult& c : r.cands) c.hash.clear();
     r.tier = Tier::coarse;
     EXPECT_EQ(freshness(r, kHashes), Freshness::stale);
-    for (Tier t : {Tier::transcribed, Tier::converted}) {
+    for (Tier t : {Tier::transcribed, Tier::prior, Tier::converted}) {
         r.tier = t;
         EXPECT_EQ(freshness(r, kHashes), Freshness::current) << to_string(t);
         EXPECT_TRUE(stale_candidates(r, kHashes).empty());
@@ -5222,4 +5233,391 @@ TEST(TuneReplay, LedgerOracleTakesBestRecordsAndTheRoundZeroLattice) {
     EXPECT_EQ(o.axes[1].weight, 3.0);
     EXPECT_EQ(o.axes[1].values, (std::vector<std::string>{"48", "64", "128"}));
     EXPECT_TRUE(load_ledger_oracle(d.led(), {}).cells.empty());  // every record stale without the hashes
+}
+
+// --tier calibrate (docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table)
+
+namespace {
+
+const std::vector<std::string> kCalN{"1", "2", "4", "8", "16", "32", "64", "128", "256", "512", "1024"};
+const std::vector<std::string> kCalBatch{"1", "2", "4", "8", "16", "32", "64"};
+
+// Two log axes, three families: b wins up to the crossover, a above; c only where a test says so.
+class FakeCalSpec : public OpSpec {
+public:
+    std::string op() const override { return "fakecal"; }
+    std::vector<std::string> key_names() const override { return {"n:log:3", "batch:log"}; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b", "c"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"n", kCalN}, {"batch", kCalBatch}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
+    std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
+    std::string spec_file() const override { return "fake_spec.cc"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
+};
+
+const FakeCalSpec kFakeCal;
+
+struct CalDevice {
+    std::int64_t cross = 40;
+    std::set<std::int64_t> c_wins;  // n values where c beats both
+    double near = 0.5;              // b's time up to the crossover (a takes 1.0)
+    std::set<std::int64_t> a_off;   // n values where a's pin is refused
+    double ms(const std::string& a, std::int64_t n) const {
+        if (a == "c") return c_wins.count(n) ? 0.25 : 3.0;
+        return a == "a" ? 1.0 : n <= cross ? near : 2.0;
+    }
+    std::string winner(std::int64_t n) const { return c_wins.count(n) ? "c" : n <= cross ? "b" : "a"; }
+};
+
+class CalMeasurer : public CellMeasurer {
+public:
+    explicit CalMeasurer(CalDevice d) : dev(std::move(d)) {}
+    CalDevice dev;
+    std::map<std::string, std::vector<std::string>> arms;  // key_arg -> the arms raced there
+    ArmBatch measure(const CellJob& j) override {
+        arms[key_arg(j.key)] = j.arms;
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const double t = dev.ms(a, key_int(j.key, "n"));
+            const bool off = a == "a" && dev.a_off.count(key_int(j.key, "n"));
+            b.arms.push_back(off ? arm(a, "skipped", {}) : arm(a, "ok", {t, t, t}));
+        }
+        return b;
+    }
+};
+
+// tuned/fakecal.<device>.txt over the full grid: b first up to `cross`, a above, c at entry c_pos (< 0: never
+// named); untimed when transcribed, except its first `timed_rows` rows.
+void write_prior(const TempDir& repo, const std::string& device, std::int64_t cross, bool transcribed = false,
+                 const std::string& date = "2026-10-01", int c_pos = 2, const std::string& dtype = "float",
+                 int timed_rows = 0) {
+    fs::create_directories(repo.path / "tuned");
+    std::ofstream f(repo.path / "tuned" / ("fakecal." + device + ".txt"));
+    f << "# op=fakecal device=" << device << " kernels=x family_kernels=a:x,b:x date=" << date << "\n"
+      << "# source=" << (transcribed ? "transcribed:2b46acab" : "ledger:x tiers=deep:77") << "\n"
+      << "# keys: dtype:exact n:log:3 batch:log\n";
+    int row = 0;
+    for (const std::string& n : kCalN)
+        for (const std::string& batch : kCalBatch) {
+            const bool small = std::stoll(n) <= cross, untimed = transcribed && row++ >= timed_rows;
+            std::vector<std::pair<std::string, double>> e{{small ? "b" : "a", 1.0}, {small ? "a" : "b", 2.0}};
+            if (c_pos >= 0) e.insert(e.begin() + c_pos, {"c", 3.0});
+            f << "dtype=" << dtype << " n=" << n << " batch=" << batch;
+            for (const auto& [a, t] : e) f << " | " << a << " " << (untimed ? std::string("-") : std::to_string(t));
+            f << " # " << (untimed ? "transcribed" : "deep") << "\n";
+        }
+}
+
+struct CalResult {
+    std::map<CellKey, const CellRecord*> best;
+    Ledger ledger;
+    std::set<std::string> probes, refined, prior;  // key_args by record kind
+};
+
+CalResult run_calibrate(const TempDir& repo, const TempDir& ledger, CalMeasurer& m, const std::string& prior = "",
+                        double budget_h = 0, int probe_stride = 0) {
+    TieredOpts o = fake_opts(repo, ledger, Tier::calibrate);
+    o.probe_stride = probe_stride;
+    if (!find_spec("fakecal")) register_spec(&kFakeCal);
+    o.ops = {"fakecal"};
+    o.prior = prior;
+    o.budget_h = budget_h;
+    EXPECT_EQ(run_tiered(o, {"sm_dev", "Dev"}, &m), 0);
+    CalResult r;
+    r.ledger = read_ledger(ledger_file(ledger.str(), "fakecal", "sm_dev"), "float");
+    return r;
+}
+
+void classify(CalResult& r, const std::map<std::string, std::string>& fh) {
+    r.best = best_records(r.ledger, fh);
+    for (const auto& [k, c] : r.best)
+        (c->tier == Tier::prior ? r.prior : c->round == 0 ? r.probes : r.refined).insert(key_arg(k));
+}
+
+std::map<std::string, std::string> cal_hashes(const TempDir& repo) {
+    return family_hashes(repo.str(), kFakeCal.kernel_block(repo.str()), {"a", "b", "c"});
+}
+
+// Every grid cell has a record, and its first entry is the device's winner: the table select reads is right.
+void expect_device_winners(const CalResult& r, const CalDevice& dev) {
+    for (const std::string& n : kCalN)
+        for (const std::string& batch : kCalBatch) {
+            const CellKey k{{"n", n}, {"batch", batch}};
+            const auto it = r.best.find(k);
+            ASSERT_NE(it, r.best.end()) << key_arg(k);
+            ASSERT_FALSE(it->second->ranked.empty()) << key_arg(k);
+            EXPECT_EQ(it->second->ranked.front(), dev.winner(std::stoll(n))) << key_arg(k) << " " << to_string(it->second->tier);
+        }
+}
+
+std::set<std::int64_t> n_values(const std::set<std::string>& args) {
+    std::set<std::int64_t> out;
+    for (const std::string& a : args) out.insert(std::stoll(a.substr(2, a.find(',') - 2)));
+    return out;
+}
+
+// Bisection closed in on the device's crossover: measured n_lo <= cross < n_hi, adjacent or n_hi / n_lo < 1.1.
+bool brackets(const CalResult& r, std::int64_t cross) {
+    std::set<std::int64_t> n = n_values(r.refined), p = n_values(r.probes);
+    n.insert(p.begin(), p.end());
+    const auto hi = n.upper_bound(cross);
+    if (hi == n.end() || hi == n.begin()) return false;
+    return *hi - *std::prev(hi) == 1 || double(*hi) / double(*std::prev(hi)) < params(Tier::calibrate).refine_ratio;
+}
+
+}  // namespace
+
+TEST(TuneCalibrate, PriorCrossoverTenDeviceFortyRefinesBetweenAndCopiesThePriorElsewhere) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_EQ(r.probes.size(), 4u * 3u) << "n 1,16,256,1024 x batch 1,16,64";
+    ASSERT_FALSE(r.refined.empty());
+    const auto nr = n_values(r.refined);
+    EXPECT_TRUE(nr.count(32) && nr.count(64)) << "the device's crossover lies between 32 and 64";
+    EXPECT_TRUE(brackets(r, 40));
+    EXPECT_GE(*nr.begin(), 2) << "never below the probes that agree";
+    EXPECT_LE(*nr.rbegin(), 128) << "never past 256, where the device agrees with the prior";
+    const auto np = n_values(r.prior);
+    EXPECT_TRUE(np.count(512) && np.count(2)) << "agreeing regions take the prior's rows";
+    std::size_t grid_refined = 0;
+    for (const std::string& k : r.refined) grid_refined += std::count(kCalN.begin(), kCalN.end(), k.substr(2, k.find(',') - 2));
+    EXPECT_EQ(r.probes.size() + grid_refined + r.prior.size(), kCalN.size() * kCalBatch.size());
+    for (const auto& [k, c] : r.best)
+        if (c->tier == Tier::prior) {
+            EXPECT_TRUE(std::all_of(c->cands.begin(), c->cands.end(), [](const CandResult& x) {
+                return std::isnan(x.median_ms) && x.hash.empty();
+            })) << "prior rows are untimed and unhashed: " << key_arg(k);
+        }
+    for (const std::string& k : r.refined) EXPECT_LT(m.arms.at(k).size(), 3u) << k << ": off the probes, not every arm";
+    for (const auto& [k, c] : r.best)
+        if (c->tier == Tier::calibrate)
+            EXPECT_EQ(freshness(*c, cal_hashes(repo)), Freshness::current) << key_arg(k) << ": an unraced arm is not stale";
+    for (const std::string& k : r.probes) EXPECT_EQ(m.arms.at(k).size(), 3u) << k << ": probes race every arm";
+}
+
+TEST(TuneCalibrate, PriorCrossoverFortyDeviceTenRefinesTheOtherWay) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 40);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    const auto nr = n_values(r.refined);
+    ASSERT_FALSE(nr.empty());
+    EXPECT_TRUE(nr.count(8) && nr.count(32)) << "between the device's crossover and the prior's";
+    EXPECT_TRUE(brackets(r, 10));
+    EXPECT_LE(*nr.rbegin(), 128);
+    EXPECT_TRUE(n_values(r.prior).count(512));
+}
+
+// The 5% disagreement threshold, straddled: b 4% faster than the prior's a at probe n=16 agrees, 6% disagrees.
+TEST(TuneCalibrate, TheFivePercentDisagreementThresholdIsStraddled) {
+    for (const double near : {0.96, 0.94}) {
+        TempDir repo, ledger;
+        write_prior(repo, "sm_prior", 10);
+        CalMeasurer m({40, {}, near});
+        CalResult r = run_calibrate(repo, ledger, m);
+        classify(r, cal_hashes(repo));
+        if (near > 0.95) {
+            EXPECT_TRUE(r.refined.empty()) << "within 5%: the probe agrees";
+            const auto it = r.best.find(CellKey{{"n", "32"}, {"batch", "16"}});
+            ASSERT_NE(it, r.best.end());
+            EXPECT_EQ(it->second->tier, Tier::prior);
+            EXPECT_EQ(it->second->ranked.front(), "a");
+        } else {
+            const auto nr = n_values(r.refined);
+            EXPECT_TRUE(nr.count(32) && nr.count(64)) << "past 5%: refined around the device's crossover";
+            EXPECT_FALSE(n_values(r.prior).count(32));
+        }
+    }
+}
+
+TEST(TuneCalibrate, APriorPickThatCannotRunDisagrees) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}, 0.5, {256}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    const auto nr = n_values(r.refined), np = n_values(r.prior);
+    ASSERT_FALSE(nr.empty());
+    EXPECT_TRUE(nr.count(128) && nr.count(512)) << "the prior's a is refused at the n=256 probes";
+    EXPECT_FALSE(np.count(128) || np.count(512)) << "no prior row beside a contradicted probe";
+    EXPECT_TRUE(np.count(2)) << "the agreeing region keeps the prior's rows";
+    EXPECT_GE(*nr.begin(), 16) << "nothing refined below the n=16 probes";
+}
+
+TEST(TuneCalibrate, ADtypeThePriorLacksIsPlannedByTheFlipFrontier) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10, false, "2026-10-01", 2, "double");
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    EXPECT_TRUE(r.prior.empty()) << "no prior row to copy";
+    ASSERT_FALSE(r.refined.empty());
+    EXPECT_TRUE(brackets(r, 40));
+    const auto nr = n_values(r.refined);
+    EXPECT_GE(*nr.begin(), 16) << "flips only between the probes at 16 and 256";
+    EXPECT_LE(*nr.rbegin(), 128);
+    for (const std::string& k : r.refined) EXPECT_EQ(m.arms.at(k).size(), 3u) << k << ": no prior row restricts the arms";
+}
+
+TEST(TuneCalibrate, ProbeStrideEightHalvesTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "", 0, 8);
+    classify(r, cal_hashes(repo));
+    EXPECT_EQ(r.probes, (std::set<std::string>{"n=1,batch=1", "n=1,batch=64", "n=256,batch=1", "n=256,batch=64",
+                                               "n=1024,batch=1", "n=1024,batch=64"}));
+}
+
+TEST(TuneCalibrate, AnAgreeingDeviceIsProbedOnlyAndTheRerunMeasuresNothing) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_TRUE(r.refined.empty()) << "the prior places the crossover; nothing disagrees";
+    EXPECT_EQ(r.probes.size(), 12u);
+    EXPECT_EQ(m.arms.size(), 12u);
+    CalMeasurer again({10, {}});
+    CalResult r2 = run_calibrate(repo, ledger, again);
+    EXPECT_TRUE(again.arms.empty()) << "probes current at calibrate";
+    EXPECT_EQ(r2.ledger.cells.size(), r.ledger.cells.size()) << "the same prior rows are not appended again";
+}
+
+TEST(TuneCalibrate, ABudgetStopLeavesContradictedCellsToTheirMeasuredNeighbours) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "", 1e-12);
+    classify(r, cal_hashes(repo));
+    EXPECT_TRUE(r.refined.empty()) << "the budget stops every round after the probes";
+    const auto np = n_values(r.prior);
+    EXPECT_TRUE(np.count(2) && np.count(512)) << "agreeing regions still take the prior's rows";
+    EXPECT_FALSE(np.count(32)) << "the prior's a at 32 is beaten at the disagreeing probe n=16: no prior row";
+    EXPECT_LT(r.probes.size() + r.prior.size(), kCalN.size() * kCalBatch.size());
+}
+
+TEST(TuneCalibrate, AFamilyThePriorNeverNamesIsRacedOffTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10, false, "2026-10-01", -1);
+    CalMeasurer m({40, {32}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    for (const std::string& k : r.refined) {
+        const auto& a = m.arms.at(k);
+        EXPECT_NE(std::find(a.begin(), a.end(), "c"), a.end()) << k;
+    }
+}
+
+TEST(TuneCalibrate, PriorTableFollowsTheDefaultRuleAndTheOverride) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_old", 10, false, "2026-09-01");
+    write_prior(repo, "sm_new", 40, false, "2026-10-01");
+    write_prior(repo, "sm_tr", 10, true, "2026-11-01");
+    write_prior(repo, "sm_dev", 10, false, "2026-12-01");
+    write_prior(repo, "cpu", 10, false, "2026-12-01");
+    const std::string tuned = (repo.path / "tuned").string();
+    auto stem = [](const std::string& p) { return fs::path(p).stem().string(); };
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_new") << "newest timed; never its own, never cpu";
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "apple_m4")), "fakecal.sm_dev") << "an unseen device key: the newest timed";
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_new")), "fakecal.sm_dev");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev", "sm_tr")), "fakecal.sm_tr") << "--prior";
+    EXPECT_EQ(prior_table(tuned, "fakecal", "sm_dev", "sm_none"), "");
+    EXPECT_EQ(prior_table(tuned, "nosuchop", "sm_dev"), "");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_old.txt");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_new.txt");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_dev.txt");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_tr") << "untimed only when nothing timed is left";
+    CalMeasurer m({40, {}});
+    write_prior(repo, "sm_new", 40, false, "2026-10-01");
+    CalResult r = run_calibrate(repo, ledger, m, "sm_tr");
+    classify(r, cal_hashes(repo));
+    EXPECT_FALSE(r.refined.empty()) << "--prior sm_tr (crossover 10) was used, not the default sm_new (40)";
+}
+
+TEST(TuneCalibrate, PriorTableFullyTimedBeatsANewerPartlyTimedOne) {
+    TempDir repo;
+    write_prior(repo, "sm_full", 10, false, "2026-09-01");
+    write_prior(repo, "sm_few", 10, true, "2026-11-01", 2, "float", 3);
+    write_prior(repo, "sm_half", 10, true, "2026-08-01", 2, "float", 40);
+    const std::string tuned = (repo.path / "tuned").string();
+    auto stem = [](const std::string& p) { return fs::path(p).stem().string(); };
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_full") << "fully timed, though older";
+    fs::remove(repo.path / "tuned" / "fakecal.sm_full.txt");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_half") << "none fully timed: the larger share";
+}
+
+TEST(TuneCalibrate, ATranscribedPriorGivesOrderOnlyTopTwo) {
+    TempDir repo;
+    write_prior(repo, "sm_tr", 10, true, "2026-10-01", 1);
+    const Prior p((repo.path / "tuned" / "fakecal.sm_tr.txt").string());
+    EXPECT_EQ(p.timed, 0u);
+    EXPECT_EQ(p.rows, kCalN.size() * kCalBatch.size());
+    EXPECT_EQ(p.device, "sm_tr");
+    const std::vector<std::string> cands{"a", "b", "c"};
+    const CellKey small{{"n", "6"}, {"batch", "3"}}, large{{"n", "300"}, {"batch", "64"}};
+    EXPECT_EQ(p.row("float", small, cands), (std::vector<std::string>{"b", "c", "a"}));
+    EXPECT_EQ(p.arms("float", small, cands, {}), (std::vector<std::string>{"b", "c"})) << "row order, cands order";
+    EXPECT_EQ(p.arms("float", large, cands, {}), (std::vector<std::string>{"a", "c"}));
+    EXPECT_EQ(p.arms("float", large, cands, {"b"}), cands) << "a neighbour's winner joins";
+    EXPECT_EQ(p.arms("float", large, {"a", "c", "d:x=1"}, {}), (std::vector<std::string>{"a", "c", "d:x=1"}))
+        << "a family the prior never names";
+    EXPECT_TRUE(p.row("double", small, cands).empty()) << "no row of the dtype";
+    EXPECT_TRUE(p.row("float", {{"batch", "3"}}, cands).empty()) << "a key the table needs is missing";
+    TempDir ledger;
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "sm_tr");
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_FALSE(r.refined.empty());
+}
+
+TEST(TuneCalibrate, ReplayRefinesOnlyWhereTheDeviceDisagrees) {
+    TempDir repo;
+    write_prior(repo, "sm_prior", 10);
+    const Prior prior((repo.path / "tuned" / "fakecal.sm_prior.txt").string());
+    auto universe = [](const CalDevice& dev) {
+        OracleSet o;
+        o.lattice = "raw";
+        std::vector<std::string> names{"dtype:exact", "n:log:3", "batch:log"};
+        for (const std::string& n : kCalN)
+            for (const std::string& b : kCalBatch)
+                for (const char* a : {"a", "b", "c"})
+                    o.cells[{{"dtype", "float"}, {"n", n}, {"batch", b}}].ms[a] = dev.ms(a, std::stoll(n));
+        o.axes = axis_specs(names, {{"dtype", {"float"}}, {"n", kCalN}, {"batch", kCalBatch}});
+        return o;
+    };
+    const auto schemes = calibrate_schemes();
+    auto scheme = [&](const std::string& name) {
+        return *std::find_if(schemes.begin(), schemes.end(), [&](const Scheme& s) { return s.name == name; });
+    };
+    const SlowdownReport agree = calibrate_replay(universe({10, {}}), prior, scheme("calibrate"));
+    EXPECT_EQ(agree.measured, agree.probes);
+    EXPECT_EQ(agree.disagreed, 0u);
+    EXPECT_EQ(agree.prior_rows, agree.cells - agree.probes);
+    EXPECT_EQ(slowdown_stats(agree.ratio).worst, 1.0);
+    const SlowdownReport cal = calibrate_replay(universe({40, {}}), prior, scheme("calibrate"));
+    EXPECT_GT(cal.disagreed, 0u);
+    EXPECT_GT(cal.measured, cal.probes);
+    EXPECT_LT(cal.measured, cal.cells);
+    EXPECT_TRUE(cal.failures.empty());
+    EXPECT_EQ(slowdown_stats(cal.ratio).worst, 1.0) << cal.worst_key;
+    const SlowdownReport blind = calibrate_replay(universe({40, {}}), prior, scheme("prior"));
+    EXPECT_EQ(blind.measured, 0u);
+    EXPECT_EQ(slowdown_stats(blind.ratio).worst, 2.0) << "the prior's a at n 16, 32, where b runs in half its time";
+    const SlowdownReport probe = calibrate_replay(universe({40, {}}), prior, scheme("calibrate-probe"));
+    EXPECT_EQ(probe.measured, probe.probes);
+    EXPECT_LT(calibrate_replay(universe({40, {}}), prior, scheme("calibrate8")).probes, cal.probes);
+    EXPECT_EQ(calibrate_replay(universe({40, {}, 0.96}), prior, scheme("calibrate")).disagreed, 0u) << "4%: agrees";
+    EXPECT_GT(calibrate_replay(universe({40, {}, 0.94}), prior, scheme("calibrate")).disagreed, 0u) << "6%: disagrees";
 }

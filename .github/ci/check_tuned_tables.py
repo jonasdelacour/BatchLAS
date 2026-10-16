@@ -6,8 +6,8 @@
 
 One staleness rule, scripts/sweep_to_table.py stale_kernel_warnings: a table's header hashes
 (kernels=, family_kernels=) against hash v2 of tools/tune/<op>_spec.cc's kernel-sources and
-kernel-deps now. A table whose tiers= counts only converted/transcribed rows carries no hash and
-is never stale. A stale table stays in use: staleness is never an error. Reads only tuned/ and the
+kernel-deps now. A table whose tiers= counts only converted/prior/transcribed rows carries no hash
+and is never stale. A stale table stays in use: staleness is never an error. Reads only tuned/ and the
 kernel sources (no ledger, so no LFS). sweep_to_table.py --check prints the same warnings.
 """
 
