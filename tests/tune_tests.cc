@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -2631,6 +2632,7 @@ TEST(TuneSchedule, RefineCellReadsTheRecord) {
     const RefineCell c = refine_cell(r, true);
     EXPECT_EQ(c.ms, (std::map<std::string, double>{{"a", 1.0}, {"d", 1.5}, {"f", 3.0}}));
     EXPECT_EQ(c.out, (std::set<std::string>{"b", "c", "e"})) << "an untimed ok (skip:single) is runnable";
+    EXPECT_EQ(c.single, "g");
     EXPECT_TRUE(c.lattice);
     EXPECT_FALSE(refine_cell(r, false).lattice);
 }
@@ -2658,10 +2660,12 @@ TEST(TuneSchedule, RefineRatioEstimateReadsTheTiersHistory) {
 
 namespace {
 
-// A host-only op for the tiered driver: winner b up to n=10, a above.
+// A host-only op for the tiered driver: winner b up to n=10, a above. Full lattice in coarse and deep too:
+// the tests built on it assert per-cell mechanisms (audits, verification, re-measures) on every lattice cell.
 class FakeSpec : public OpSpec {
 public:
     std::string op() const override { return "fakeop"; }
+    FrontierPlan frontier() const override { return {1}; }
     std::vector<std::string> key_names() const override { return {"n:log:3"}; }
     std::vector<std::string> candidates(const std::string&) const override { return {"a", "b"}; }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -4749,6 +4753,12 @@ TEST(TuneFrontier, ANeighboursWinnerThatCannotRunAtAnotherTriggers) {
     EXPECT_EQ(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}}, {"a"})}}),
               std::vector<CellKey>{fcell("g", 2)});
     EXPECT_TRUE(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}})}}).empty());  // untimed, not out
+    // A skip:single record (no timings) is a neighbour too: its one arm wins, the rest cannot run.
+    RefineCell single = rcell({}, {"a"});
+    single.single = "b";
+    EXPECT_EQ(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), single}}), std::vector<CellKey>{fcell("g", 2)});
+    single.out.clear();
+    EXPECT_TRUE(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), single}}).empty());
 }
 
 TEST(TuneFrontier, NeighboursAreSelectsWeightedLog2Distance) {
@@ -4888,7 +4898,281 @@ TEST(TuneReplay, ArmPruningRacesOnlyArmsWithinTheRatioAtANeighbour) {
     EXPECT_DOUBLE_EQ(p.arm_runs, full.arm_runs - 1);
     EXPECT_DOUBLE_EQ(slowdown_stats(p.ratio_measured).worst, 1.2);  // d 0.6 against c 0.5
     EXPECT_DOUBLE_EQ(slowdown_stats(full.ratio).worst, 1.0);
-    EXPECT_EQ(replay_schemes().size(), 7u);
+    EXPECT_EQ(replay_schemes().size(), 9u);  // step 2b added lattice+bisect and stride2+frontier+bisect
+}
+
+TEST(TuneReplay, BisectSchemesReachMidpointsOffTheLatticeOnlyByBisection) {
+    OracleSet o = flip_oracle();
+    o.lattice = "ledger";  // axes hold the powers of two; n = 6 is a refinement midpoint, a wins there
+    o.cells[fcell("g", 6)] = rcell({{"a", 1.0}, {"b", 1.5}}, {"c"});
+    const SlowdownReport lat = slowdown_replay(o, {"lattice", 1, false, 0}, 2);
+    EXPECT_EQ(lat.measured, 8u);  // the 8 lattice cells
+    EXPECT_DOUBLE_EQ(lat.worst, 1.5);  // n = 6 reads n = 8 (b)
+    const SlowdownReport today = slowdown_replay(o, {"lattice+bisect", 1, false, 0, true}, 2);
+    EXPECT_EQ(today.measured, 9u);  // + 6 between 4 (a) and 8 (b)
+    EXPECT_EQ(today.bisect_missing, 3u);  // 7 (6..8), 23 (16..32, c) and 45 (32..64) are not in the universe
+    EXPECT_DOUBLE_EQ(today.worst, 1.0);
+    // Round 0 1, 4, 16, 64, 128; the frontier picks lattice 8 (4 and 16 flip), never 6; bisection 4..8 reaches 6.
+    const SlowdownReport fb = slowdown_replay(o, {"stride2+frontier+bisect", 2, true, 0, true}, 2);
+    EXPECT_EQ(fb.measured, 7u);
+    EXPECT_EQ(fb.rounds, 2u);
+    EXPECT_EQ(fb.bisect_missing, 1u);  // 7
+    ASSERT_EQ(fb.failures.size(), 1u);  // n = 32 (c only) still reads 16
+    EXPECT_DOUBLE_EQ(fb.worst, 1.0);
+}
+
+TEST(TuneFrontier, StartTakesEveryStrideOfEachGroupsOwnValuesAndAWholeGroupWithoutAHit) {
+    const std::vector<AxisSpec> axes{{"x", false, {"g", "h"}}, {"n", true, kPow2}, {"b", true, kPow2}};
+    EXPECT_EQ(frontier_start(tier_lattice(axes, 1), axes, 2), tier_lattice(axes, 2));
+    const std::vector<CellKey> own{fcell("h", 2, 1), fcell("h", 8, 1), fcell("h", 32, 1), fcell("g", 4, 4)};
+    EXPECT_EQ(frontier_start(own, axes, 2), (std::vector<CellKey>{fcell("h", 2, 1), fcell("h", 32, 1), fcell("g", 4, 4)}));
+    const std::vector<CellKey> none{fcell("g", 1, 2), fcell("g", 2, 1), fcell("g", 2, 4), fcell("g", 4, 2)};
+    EXPECT_EQ(frontier_start(none, axes, 2), none);  // own values {1, 2, 4} keep 1 and 4: no cell has both
+    // The start lattice first (n = 4, 16 of kPow2's stride 2); own values {2..32} only for an inferred lattice.
+    const std::vector<CellKey> h{fcell("h", 2, 1), fcell("h", 4, 1), fcell("h", 8, 1), fcell("h", 16, 1), fcell("h", 32, 1)};
+    EXPECT_EQ(frontier_start(h, axes, 2), (std::vector<CellKey>{fcell("h", 4, 1), fcell("h", 16, 1)}));
+    EXPECT_EQ(frontier_start(h, axes, 2, false), (std::vector<CellKey>{fcell("h", 2, 1), fcell("h", 8, 1), fcell("h", 32, 1)}));
+}
+
+namespace {
+
+// The default round plan (stride-2 start, k = 6, 5%) unless `plan` says otherwise; n = 2^0..2^20 (max_dim off),
+// or n x m = 2^0..2^8 squared.
+class FrontierSpec : public FakeSpec {
+public:
+    explicit FrontierSpec(bool two) : two_d(two) {}
+    std::string op() const override { return two_d ? "frontier2d" : "frontier1d"; }
+    FrontierPlan frontier() const override { return plan; }
+    std::vector<std::string> key_names() const override {
+        return two_d ? std::vector<std::string>{"n:log", "m:log"} : std::vector<std::string>{"n:log"};
+    }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        std::vector<std::string> v;
+        for (int e = 0; e <= (two_d ? 8 : 20); ++e) v.push_back(std::to_string(1 << e));
+        if (two_d) return {{"n", v}, {"m", v}};
+        return {{"n", v}};
+    }
+    FrontierPlan plan;
+    bool two_d;
+};
+
+FrontierSpec g_frontier1d(false), g_frontier2d(true);
+
+// Arms a and b with medians from `times` (a, b).
+class MapMeasurer : public CellMeasurer {
+public:
+    explicit MapMeasurer(std::function<std::pair<double, double>(const CellKey&)> t) : times(std::move(t)) {}
+    std::function<std::pair<double, double>(const CellKey&)> times;
+    std::vector<std::string> keys;
+    ArmBatch measure(const CellJob& j) override {
+        keys.push_back(key_arg(j.key));
+        const auto [ta, tb] = times(j.key);
+        ArmBatch b;
+        for (const std::string& a : j.arms) b.arms.push_back(arm(a, "ok", std::vector<double>(3, a == "a" ? ta : tb)));
+        return b;
+    }
+};
+
+TieredOpts frontier_opts(const TempDir& repo, const TempDir& ledger, const FrontierSpec& s) {
+    TieredOpts o = fake_opts(repo, ledger, Tier::deep);
+    if (!find_spec(s.op())) register_spec(&s);
+    o.ops = {s.op()};
+    o.max_dim = 0;
+    return o;
+}
+
+// b wins n <= 10 by 2x, a above by 2x: one crossover, between the stride-2 cells 4 and 16.
+std::pair<double, double> crossover_at_10(const CellKey& k) { return {1.0, key_int(k, "n") <= 10 ? 0.5 : 2.0}; }
+
+std::set<std::string> ns(std::initializer_list<int> v) {
+    std::set<std::string> out;
+    for (int n : v) out.insert("n=" + std::to_string(n));
+    return out;
+}
+
+}  // namespace
+
+// evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+TEST(TuneTieredDriver, FrontierMeasuresTheCrossoverRegionAndSkipsTheFlatParts) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    o.refine_cap_factor = 0.01;  // no cap in frontier mode: only the budget stops it
+    o.plan = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string plan = testing::internal::GetCapturedStdout();
+    EXPECT_NE(plan.find("tier=deep: 11 cells (11 measure)"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("frontier (stride 2, k 6, 5%): ~9 cells, data-dependent (0.86 x the 10 grid cells round 0 "
+                        "leaves"), std::string::npos) << plan;
+    o.plan = false;
+    MapMeasurer m(crossover_at_10);
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    ASSERT_EQ(m.keys.size(), 18u) << out;
+    std::set<std::string> round0(m.keys.begin(), m.keys.begin() + 11);
+    std::set<std::string> lattice2;
+    for (int e = 0; e <= 20; e += 2) lattice2.insert("n=" + std::to_string(1 << e));
+    EXPECT_EQ(round0, lattice2);
+    // The frontier: 2, 8, 32 and 128 have n = 1 or 4 (b) among their 6 nearest; n = 512 and up do not.
+    // Bisection then places the edge off the grid: 11, 9, 10.
+    const std::set<std::string> later(m.keys.begin() + 11, m.keys.end());
+    EXPECT_EQ(later, ns({2, 8, 32, 128, 11, 9, 10}));
+    EXPECT_NE(out.find("measured 11 round-0 (stride 2) + 7 frontier and bisection cells, per round 11,4,1,1,1"),
+              std::string::npos) << out;
+
+    // The full lattice (gemm's plan) measures every grid cell, then the same bisection.
+    TempDir full;
+    g_frontier1d.plan = {1};
+    o = frontier_opts(repo, full, g_frontier1d);
+    MapMeasurer every(crossover_at_10);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &every), 0);
+    EXPECT_EQ(every.keys.size(), 21u + 3u);
+    // Its stride-1 records count as measured: the frontier plan on that ledger measures nothing.
+    g_frontier1d.plan = {};
+    MapMeasurer again(crossover_at_10);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_TRUE(again.keys.empty()) << again.keys.size();
+}
+
+TEST(TuneTieredDriver, FrontierNeighboursIncludeTheLedgersOlderCells) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    for (int e = 0; e <= 10; ++e) o.grid["n"].push_back(std::to_string(1 << e));
+    auto at_3000 = [](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 3000 ? 0.5 : 2.0}; };
+    MapMeasurer old(at_3000);  // a full-lattice run up to n = 1024, where b wins everywhere
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &old), 0);
+    ASSERT_EQ(old.keys.size(), 11u);
+    g_frontier1d.plan = {};
+    o.grid.clear();
+    MapMeasurer m(at_3000);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::set<std::string> got(m.keys.begin(), m.keys.end());
+    for (int e = 12; e <= 20; e += 2) EXPECT_TRUE(got.count("n=" + std::to_string(1 << e))) << e;
+    // 2048 is beside the old n = 1024 (b) and the new 4096 (a); bisection then places the edge between them.
+    EXPECT_TRUE(got.count("n=2048")) << m.keys.size();
+    EXPECT_TRUE(got.count("n=2896")) << m.keys.size();
+    EXPECT_FALSE(got.count("n=1024")) << "current in the ledger";
+}
+
+TEST(TuneTieredDriver, FrontierNeighboursNeverIncludeALowerTiersCells) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    o.tier = Tier::preview;
+    for (int e = 0; e <= 11; ++e) o.grid["n"].push_back(std::to_string(1 << e));
+    auto at_3000 = [](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 3000 ? 0.5 : 2.0}; };
+    MapMeasurer old(at_3000);  // preview's lattice up to n = 2048, where b wins everywhere
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &old), 0);
+    ASSERT_TRUE(std::count(old.keys.begin(), old.keys.end(), "n=2048")) << old.keys.size();
+    g_frontier1d.plan = {};
+    o.grid.clear();
+    o.tier = Tier::deep;
+    MapMeasurer m(at_3000);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    // The preview 2048 (b) is no bracket end: the frontier between 1024 and 4096 measures it at deep.
+    EXPECT_TRUE(std::count(m.keys.begin(), m.keys.end(), "n=2048")) << m.keys.size();
+    EXPECT_TRUE(std::count(m.keys.begin(), m.keys.end(), "n=1024")) << "a preview record is re-measured";
+}
+
+TEST(TuneTieredDriver, FrontierNearTiesAndFlipsUnderFivePercentMeasureNothingBeyondRoundZero) {
+    g_frontier1d.plan = {};
+    for (const double margin : {0.01, 0.04}) {
+        TempDir repo, ledger;
+        const TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+        // 1%: winners alternate cell by cell, no flip is decisive. 4%: one crossover at n = 10, decisive for the
+        // bisection (3%) but under the frontier's 5%, and its midpoint 8 is a grid cell: the frontier's to pick.
+        MapMeasurer m([margin](const CellKey& k) {
+            const std::int64_t n = key_int(k, "n");
+            const bool b = margin < 0.03 ? (std::countr_zero(std::uint64_t(n)) / 2) % 2 == 0 : n <= 10;
+            return std::pair{1.0, b ? 1 - margin : 1 + margin};
+        });
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        EXPECT_EQ(m.keys.size(), 11u) << margin;
+    }
+}
+
+TEST(TuneTieredDriver, FrontierReadsTheSpecsKAndThreshold) {
+    // The cells measured after round 0 for a crossover at n = 10 that is `margin` decisive.
+    auto later = [](FrontierPlan p, double margin) {
+        g_frontier1d.plan = p;
+        TempDir repo, ledger;
+        MapMeasurer m([margin](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 10 ? 1 - margin : 1 + margin}; });
+        EXPECT_EQ(run_tiered(frontier_opts(repo, ledger, g_frontier1d), {"sm_fake", "Fake"}, &m), 0);
+        return std::set<std::string>(m.keys.begin() + std::min<std::size_t>(11, m.keys.size()), m.keys.end());
+    };
+    EXPECT_TRUE(later({}, 0.04).empty());
+    EXPECT_TRUE(later({}, 0.06).count("n=8"));               // 6% > 5%
+    EXPECT_TRUE(later({2, 6, 0.03}, 0.04).count("n=8"));     // 4% > the spec's 3%
+    EXPECT_EQ(later({}, 1.0 / 3), ns({2, 8, 32, 128, 11, 9, 10}));
+    EXPECT_EQ(later({2, 2, 0.05}, 1.0 / 3), ns({8, 11, 9, 10}));  // k = 2: only 8 has both winners among its two nearest
+    g_frontier1d.plan = {};
+}
+
+TEST(TuneTieredDriver, FrontierReRacesEveryPartlyStaleCellInRoundZero) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    auto a_wins = [](const CellKey&) { return std::pair{1.0, 2.0}; };
+    MapMeasurer full(a_wins);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &full), 0);
+    ASSERT_EQ(full.keys.size(), 21u);
+    std::ofstream(repo.path / "b.cc") << "b changed";  // b's hash moves, a still wins: every record partly stale
+    g_frontier1d.plan = {};
+    MapMeasurer m(a_wins);
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(m.keys.size(), 21u) << out;
+    EXPECT_NE(out.find("(21 partial)"), std::string::npos) << out;
+}
+
+TEST(TuneTieredDriver, PreviewPlansByFrontierUnlessTheSpecKeepsTheLattice) {
+    for (const int stride : {2, 1}) {
+        TempDir repo, ledger;
+        g_frontier1d.plan = {stride};
+        TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+        o.tier = Tier::preview;
+        o.refine_cap_factor = 0.1;
+        MapMeasurer m(crossover_at_10);
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        const std::string out = testing::internal::GetCapturedStdout();
+        if (stride == 2) {
+            EXPECT_EQ(m.keys.size(), 18u) << out;
+            EXPECT_NE(out.find("measured 11 round-0 (stride 2) + 7 frontier"), std::string::npos) << out;
+            EXPECT_EQ(out.find("refinement cap hit"), std::string::npos) << out;
+        } else {  // preview's own lattice (stride 2), index refill, margin hedge and cap
+            EXPECT_NE(out.find("measured 11 lattice + 1 refinement"), std::string::npos) << out;
+            EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
+        }
+    }
+    g_frontier1d.plan = {};
+}
+
+TEST(TuneTieredDriver, FrontierOnAGridPicksEveryCellRightAndSkipsTheFarCorners) {
+    TempDir repo, ledger;
+    g_frontier2d.plan = {};
+    const TieredOpts o = frontier_opts(repo, ledger, g_frontier2d);
+    auto b_wins = [](const CellKey& k) { return key_int(k, "n") * key_int(k, "m") <= 64; };
+    MapMeasurer m([&](const CellKey& k) { return std::pair{1.0, b_wins(k) ? 0.5 : 2.0}; });
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    std::set<std::string> round0(m.keys.begin(), m.keys.begin() + std::min<std::size_t>(25, m.keys.size()));
+    std::set<std::string> want0;
+    for (const CellKey& k : tier_lattice(axis_specs(g_frontier2d.key_names(), g_frontier2d.axes()), 2)) want0.insert(key_arg(k));
+    EXPECT_EQ(round0, want0);
+    const auto axes = axis_specs(g_frontier2d.key_names(), g_frontier2d.axes());
+    const std::vector<CellKey> grid = tier_lattice(axes, 1);
+    std::vector<CellKey> measured;
+    for (const CellKey& k : grid)
+        if (std::find(m.keys.begin(), m.keys.end(), key_arg(k)) != m.keys.end()) measured.push_back(k);
+    EXPECT_LT(measured.size(), grid.size());
+    EXPECT_EQ(std::count(m.keys.begin(), m.keys.end(), "n=256,m=128"), 0) << "far from the edge";
+    const NearestIndex index(measured, axes);
+    for (const CellKey& k : grid)  // select::choose over the measured grid cells picks the true winner everywhere
+        EXPECT_EQ(b_wins(measured[index.find(k)]), b_wins(k)) << key_arg(k);
 }
 
 TEST(TuneReplay, TableOracleReadsTimedRowsTheirMediansAndTheHeader) {

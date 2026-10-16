@@ -197,6 +197,8 @@ public:
         return (m * k + k * n + 2.0 * m * n) * double(key_int(key, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "k"; }
+    // No stricter frontier passes the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    FrontierPlan frontier() const override { return {1}; }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

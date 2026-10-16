@@ -136,6 +136,10 @@ struct Job {
     std::map<CellKey, std::vector<std::string>> runnable;
     std::set<CellKey> remeasure;  // --remeasure-keys for this op and dtype
     std::set<CellKey> planned;  // never planned twice in a run: a skip:cap or skip:dim midpoint would come back forever
+    FrontierPlan fp;
+    bool frontier = false;           // fp.stride > 1: round 0 sparse, then flip_frontier rounds
+    std::vector<CellKey> universe;   // frontier: the grid, the cells flip_frontier may add (on_grid: as a set)
+    std::set<CellKey> on_grid;
     std::unique_ptr<LedgerWriter> writer;
     RunMeta meta;
     bool fresh = false;  // a failed audit: the rest of this run uses fresh children
@@ -245,9 +249,22 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
+    // Every tier plans by flip frontier unless the spec keeps the full lattice; a partly stale record joins
+    // round 0, as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    j->fp = s.frontier();
+    j->frontier = !named_only() && j->fp.stride > 1;
     // A custom or --only-named run is a sample: the named cells only, every candidate, no refinement.
     if (named_only()) j->next.clear();
+    else if (j->frontier) j->next = frontier_start(grid, j->axes, j->fp.stride);
     else j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    if (j->frontier) {
+        j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
+        const std::set<CellKey> r0(j->next.begin(), j->next.end());
+        for (const auto& [k, r] : best_records(j->ledger, j->fh))
+            if (j->on_grid.count(k) && !r0.count(k) && tier_rank(r->tier) >= tier_rank(o_.tier) &&
+                freshness(*r, j->fh) == Freshness::partly_stale)
+                j->next.push_back(k);
+    }
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
         j->remeasure = r->second;
@@ -641,6 +658,7 @@ std::pair<std::size_t, std::size_t> TieredRun::cap_base(const Job& j) const {
 // Refinement records per (op, dtype) <= cap_factor x round-0 records: past it, the first cells in
 // refine_all_axes's order (flips, then margin hedges) run and refinement stops, reported.
 void TieredRun::cap(Job& j, std::vector<PlannedCell>& plan) {
+    if (j.frontier) return;  // only the budget stops a frontier
     const auto [lattice, done] = cap_base(j);
     const std::size_t want = std::size_t(std::count_if(plan.begin(), plan.end(), measurable));
     const std::size_t allow = refine_allowance(lattice, done, cap_factor());
@@ -678,11 +696,21 @@ void TieredRun::refine(Job& j) {
     ro.mode = p.refine_mode;
     ro.margin = p.refine_margin;
     ro.cells = &cells;
+    // Frontier: grid cells near a decisive flip among their k nearest measured cells (old ledger cells
+    // included), then bisection midpoints off the grid; a grid midpoint is the frontier's to pick.
+    std::vector<CellKey> front;
+    if (j.frontier) {
+        std::vector<CellKey> open;
+        for (const CellKey& k : j.universe)
+            if (!j.planned.count(k)) open.push_back(k);
+        front = flip_frontier(cells, open, j.axes, j.fp.k, j.fp.slower);
+        ro.mode = RefineMode::index, ro.margin = 0;
+    }
     const RefineRound rr = refine_all_axes(ranked, j.axes, p.refine_ratio, ro);
     for (const std::string& s : rr.stalled) std::printf("== %s %s refinement stalled: %s\n", j.spec->op().c_str(), j.dtype.c_str(), s.c_str());
-    j.next.clear();
+    j.next = front;
     for (const CellKey& k : rr.next)
-        if (!j.planned.count(k)) j.next.push_back(k);
+        if (!j.planned.count(k) && !j.on_grid.count(k)) j.next.push_back(k);
 }
 
 int TieredRun::go() {
@@ -727,17 +755,37 @@ int TieredRun::go() {
                         "est %s\n", fmt(per_cell, "%.2f s").c_str(), n_history, fmt(ld_once, "%.2f s").c_str(),
                         kProtocol, hours(run_s).c_str());
         }
-        // Refinement cells follow the lattice cells measured now, at their mean estimate.
+        // Refinement cells follow the lattice cells measured now, at their mean estimate. A frontier's
+        // count is data-dependent: the replay's share of the grid cells round 0 leaves unmeasured.
         bool history = false;
-        const double ratio = named_only() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
-        j->est_refine_cells = ratio * double(n_measure);
-        const double s = n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
+        std::size_t open = 0;
+        double open_s = 0;
+        if (j->frontier) {  // the grid cells after round 0 that plan_round would measure
+            const std::set<CellKey> r0(j->next.begin(), j->next.end());
+            std::vector<CellKey> rest;
+            for (const CellKey& k : j->universe)
+                if (!r0.count(k)) rest.push_back(k);
+            PlanSpec spec = j->plan_spec();
+            spec.mode = mode(*j);
+            for (const PlannedCell& c : plan_round(spec, o_.tier, rest, j->ledger, j->fh, o_.cap_gib, o_.overhead_s,
+                                                   &j->runnable, o_.max_dim))
+                if (measurable(c)) ++open, open_s += c.est_s;
+        }
+        const double ratio = named_only() || j->frontier ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
+        j->est_refine_cells = j->frontier ? kFrontierShare * double(open) : ratio * double(n_measure);
+        const double s = j->frontier ? kFrontierShare * open_s
+                                     : n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
         refine_cells += j->est_refine_cells, est_refine += s;
         const auto [stored, refined] = cap_base(*j);
-        std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x round-0 records "
-                    "(%zu stored, %zu refined stored, %zu to measure)\n", j->est_refine_cells, ratio,
-                    history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(), cap_factor(), stored,
-                    refined, n_measure);
+        if (j->frontier)
+            std::printf("   frontier (stride %d, k %zu, %.0f%%): ~%.0f cells, data-dependent (%.2f x the %zu grid cells "
+                        "round 0 leaves, the replay's share), est %s; no cap, only --budget\n", j->fp.stride, j->fp.k,
+                        100 * j->fp.slower, j->est_refine_cells, kFrontierShare, open, hours(s).c_str());
+        else
+            std::printf("   refinement: ~%.0f cells (%.2f per lattice cell, %s), est %s; cap %.2f x round-0 records "
+                        "(%zu stored, %zu refined stored, %zu to measure)\n", j->est_refine_cells, ratio,
+                        history ? "ledger history" : "no history: cap x 0.5", hours(s).c_str(), cap_factor(), stored,
+                        refined, n_measure);
         emit(Json().str("ev", "plan_job").str("op", j->spec->op()).str("dtype", j->dtype).str("device", id_.device)
                  .integer("cells", std::int64_t(j->plan.size())).integer("measure", std::int64_t(n_measure))
                  .str("mix", mix).num("est_s", est_job).integer("refine_cells", std::llround(j->est_refine_cells))
@@ -772,9 +820,11 @@ int TieredRun::go() {
         std::string rounds;
         for (std::size_t n : j->per_round) rounds += (rounds.empty() ? "" : ",") + std::to_string(n);
         const std::size_t refined = std::accumulate(j->per_round.begin() + 1, j->per_round.end(), std::size_t(0));
-        std::printf("== summary %s %s: measured %zu lattice + %zu refinement cells, per round %s; planned ~%.0f "
-                    "refinement%s; wall %.1f s\n", j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], refined,
-                    rounds.c_str(), j->est_refine_cells, j->capped ? "; refinement cap hit" : "", j->wall);
+        const std::string r0 = j->frontier ? "round-0 (stride " + std::to_string(j->fp.stride) + ")" : "lattice";
+        std::printf("== summary %s %s: measured %zu %s + %zu %s cells, per round %s; planned ~%.0f%s; wall %.1f s\n",
+                    j->spec->op().c_str(), j->dtype.c_str(), j->per_round[0], r0.c_str(), refined,
+                    j->frontier ? "frontier and bisection" : "refinement", rounds.c_str(), j->est_refine_cells,
+                    j->capped ? "; refinement cap hit" : "", j->wall);
     }
     for (auto& j : jobs_) {
         std::printf("== summary %s %s ld audit (ld +%d): %zu passed, %zu skipped, %zu failed\n", j->spec->op().c_str(),

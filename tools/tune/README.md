@@ -118,9 +118,17 @@ and planning is in `schedule.cc`.
   breaking ties. `all` starts from the canonical order gemm, trsm, syr2k, gemv, spmm, trmm, symm,
   syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd ("Engine: op order
   over all 19 ops" in the design page).
-- **Rounds.** Round 0 is the tier's starting lattice for every op and dtype, in op order. Refinement
-  rounds follow over each cell ranked inside the requested grid, until no midpoint is left, `--budget`
-  is spent or the refinement cap is hit.
+- **Rounds.** Round 0 is the tier's starting set for every op and dtype, in op order (frontier: stride
+  2; gemm: preview's stride-2 lattice, coarse and deep's full lattice). Later rounds follow over each
+  cell ranked inside the requested grid, until nothing is left, `--budget` is spent or, for gemm, the
+  refinement cap is hit.
+- **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
+  (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
+  Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
+  8; same exact keys; ledger cells of the same or a higher tier count) hold a winner more than 5%
+  slower at another of them, or not runnable there, plus bisection midpoints off the grid between
+  adjacent grid values. No cap, no margin: only `--budget` stops it. gemm keeps today's path
+  (`frontier()` stride 1). See "Engine: round planning by flip frontier".
 - **Pipelined queues.** Rounds are per (op, dtype) job. Each round is one queue sorted by (per-item
   footprint, bytes); every GPU pops the next cell of the earliest job (op order) that has queued
   cells, and a job's next round is planned only once all of its current round's cells are recorded.
@@ -130,8 +138,8 @@ and planning is in `schedule.cc`.
 - **Refinement.** A bracket is a flip when its two winners differ and the other end's winner is more
   than the 3% tie slower there (or cannot win there). Near-tie alternation refines nothing. The preview
   margin (runner-up within 10%) applies only between round-0 cells at the running tier. Refinement per
-  op and dtype is capped at `refine_cap_factor` x round-0 records (preview 3.0, coarse 1.0, deep 2.0).
-  Past the cap the run prints `refinement cap hit` and emits `refine_cap`.
+  op and dtype is capped at `refine_cap_factor` x round-0 records (preview 3.0, coarse 1.0, deep 2.0)
+  for full-lattice runs. Past the cap the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell.** A dimension over `--max-dim` (`OpSpec::dims`, checked first): `skip:dim`. Over `--cap-gib`: `skip:cap`. A current record at the same or higher tier: `skip:current`.
   A partly stale record re-races only the changed or added families, plus its stored winner and
   runner-up (`partial:<families>`). A candidate stored `skipped` is not compared, but one skipped
@@ -189,8 +197,10 @@ and planning is in `schedule.cc`.
   plus, per candidate, (the rep cap of the slowest candidate + 3) times the nearest ledger median
   (else bytes / 500 GB/s), two warm rounds capped at 0.2 s, and 0.05 s of verification (the `full`
   protocol's model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
-  history, and the lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so
-  divide by `--devices`.
+  history, and the lattice-only and with-refinement estimates. A frontier's cell count depends on the
+  winners it finds: `--plan` prices 0.86 of the grid cells round 0 leaves (`kFrontierShare`, the
+  driver-model replay's share) and says so (`frontier (stride 2, k 6, 5%): ~N cells,
+  data-dependent`). The estimate is the sum over GPUs, so divide by `--devices`.
 
 Progress events (`--progress-fd`), one JSON object per line; every event also carries `t`, Unix time in seconds:
 
@@ -293,10 +303,12 @@ Host-only, no GPU (`build/tools/tune/tune_replay`).
 - `--slowdown` (implied by `--table`/`--ledger`): `--table tuned/<op>.<dev>.txt`, `--ledger
   <op>.<dev>.jsonl` (needs the matching `--table` for its family hashes, and lends it its round-0
   lattice) and `--raw <jsonl>`, each repeatable. `--scheme a,b` picks from `full`, `lattice`,
-  `stride2`, `stride4`, `stride2+frontier`, `stride4+frontier`, `stride2+frontier+prune` (default:
-  all); `--k` (6) and `--slower` (0.05) set the frontier rule. Output is one JSON line per (scheme,
-  source), then per (scheme, `overall/<table|ledger|raw>`): `lattice` (`ledger`, `raw` or
-  `inferred`), `kept`, `arm_runs`, `geomean` (geomean slowdown − 1), `p99`, `p999` (nearest rank),
+  `stride2`, `stride4`, `stride2+frontier`, `stride4+frontier`, `stride2+frontier+prune`,
+  `lattice+bisect`, `stride2+frontier+bisect` (default: all); `--k` (6) and `--slower` (0.05) set the
+  frontier rule. The `+bisect` schemes model the driver: the frontier picks lattice cells only, and
+  bisection (3% tie) reaches the cells off it (`bisect_missing`: midpoints the universe lacks).
+  Output is one JSON line per (scheme, source), then per (scheme, `overall/<table|ledger|raw>`):
+  `lattice` (`ledger`, `raw` or `inferred`), `kept`, `arm_runs`, `geomean` (geomean slowdown − 1), `p99`, `p999` (nearest rank),
   `slow10`, `misrank`, `worst`, `worst_key`, `measured_geomean`, `measured_p99`, `measured_p999`,
   `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
   failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:

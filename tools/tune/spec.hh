@@ -19,8 +19,7 @@ struct Queue;  // the worker's, one per process: run_cell takes it, so the spec 
 
 namespace batchlas::tune {
 
-// One cell for a child or the worker; `arms` are ScopedPin words (spellings; "auto" in --gate).
-struct CellRequest {
+struct CellRequest {  // one cell for a child or the worker; `arms` are ScopedPin words ("auto" in --gate)
     std::string dtype;
     CellKey key;
     std::vector<std::string> arms;
@@ -52,6 +51,12 @@ struct ArmOutcome {
     bool verified = true;  // false: raced (ok or eliminated) but never verified in this cell
 };
 
+struct FrontierPlan {  // per op, from the replay. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    int stride = 2;        // round 0: every stride-th value of each log axis; 1 = the full lattice, no frontier
+    std::size_t k = 6;     // then flip_frontier(k, slower) rounds and bisection until neither adds a cell
+    double slower = 0.05;
+};
+
 class OpSpec {
 public:
     virtual ~OpSpec() = default;
@@ -65,6 +70,7 @@ public:
     // Bytes of the op's inputs at a cell (the 4 GiB cap) and the key §6.2 bisects.
     virtual double bytes(const std::string& dtype, const CellKey& key) const = 0;
     virtual std::string refine_key() const { return "n"; }
+    virtual FrontierPlan frontier() const { return {}; }
     // The matrix extents a cell allocates (rows/cols of every operand); --max-dim caps their max. Default:
     // every integer-valued key but `batch`. Override where an extent is derived rather than keyed.
     virtual std::vector<std::int64_t> dims(const std::string& dtype, const CellKey& key) const;

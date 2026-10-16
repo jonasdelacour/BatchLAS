@@ -242,10 +242,10 @@ std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured
     std::vector<const RefineCell*> info;
     std::vector<std::string> winner;
     for (const auto& [key, c] : measured) {
-        if (c.ms.empty()) continue;
+        if (c.ms.empty() && c.single.empty()) continue;
         rows.push_back(key);
         info.push_back(&c);
-        winner.push_back(std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) {
+        winner.push_back(c.ms.empty() ? c.single : std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) {
                              return x.second < y.second;
                          })->first);
     }
@@ -261,6 +261,48 @@ std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured
                 flip = a != b && winner[nb[a]] != winner[nb[b]] && decisive(*info[nb[b]], winner[nb[b]], winner[nb[a]], slower);
         if (flip) out.push_back(u);
     }
+    return out;
+}
+
+std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std::vector<AxisSpec>& axes, int stride,
+                                    bool global) {
+    std::vector<std::set<std::string>> start(axes.size());
+    for (std::size_t i = 0; i < axes.size(); ++i)
+        if (axes[i].log)
+            for (const std::string& v : subsample_axis(axes[i].values, stride)) start[i].insert(v);
+    std::set<const CellKey*> keep;
+    std::map<std::vector<std::string>, std::vector<const CellKey*>> groups;
+    for (const CellKey& c : cells) {
+        bool on = global;
+        for (std::size_t i = 0; i < c.size() && on; ++i) on = !axes[i].log || start[i].count(c[i].value);
+        if (on) keep.insert(&c);
+        std::vector<std::string> g;
+        for (std::size_t i = 0; i < c.size(); ++i)
+            if (!axes[i].log) g.push_back(c[i].value);
+        groups[g].push_back(&c);
+    }
+    for (const auto& [g, group] : groups) {
+        if (std::any_of(group.begin(), group.end(), [&](const CellKey* c) { return keep.count(c) != 0; })) continue;
+        std::vector<std::set<std::string>> sub(axes.size());
+        for (std::size_t i = 0; i < axes.size(); ++i) {
+            if (!axes[i].log) continue;
+            std::set<std::int64_t> own;
+            for (const CellKey* c : group) own.insert(std::stoll((*c)[i].value));
+            std::vector<std::string> v;
+            for (std::int64_t x : own) v.push_back(std::to_string(x));
+            for (const std::string& x : subsample_axis(v, stride)) sub[i].insert(x);
+        }
+        std::size_t hit = 0;
+        for (const CellKey* c : group) {
+            bool on = true;
+            for (std::size_t i = 0; i < axes.size() && on; ++i) on = !axes[i].log || sub[i].count((*c)[i].value);
+            if (on) keep.insert(c), ++hit;
+        }
+        if (hit == 0) keep.insert(group.begin(), group.end());
+    }
+    std::vector<CellKey> out;
+    for (const CellKey& c : cells)
+        if (keep.count(&c)) out.push_back(c);
     return out;
 }
 

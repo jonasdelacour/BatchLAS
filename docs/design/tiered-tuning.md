@@ -28,7 +28,7 @@ The sm_120 tables come from the engine ("Engine: the sm_120 deep run").
 | --- | --- |
 | Main purpose | Initial fill of every table for a machine. Incremental retune and exploration come second. |
 | Speed versus rigor | The user picks a tier per run. Budgets come from a cost model printed by `--plan`. More GPUs shard the work. |
-| Grid reduction | Only preview is sparse. Coarse and deep use the full lattice, because sparse grids misrank 4-13% of cells. |
+| Grid reduction | Every tier starts at stride 2 and adds flip-frontier rounds; gemm keeps preview's sparse start and the full coarse and deep lattice ("Engine: round planning by flip frontier", 2026-10-16). Until then coarse and deep used the full lattice, because sparse starts with bisection alone misrank 4-13% of cells ("Engine: replay results on trsm"). |
 | Precedence | Higher fidelity wins per cell. A lower tier fills gaps and replaces stale results, never current ones. |
 | Op scope | All 19 routed ops, plus the `tuning_params.hh` constants, under the same tiers, ledger and UI. The header is generated. |
 | Result store | `benchmarks/results/tuning/` under Git LFS, so precedence holds across machines and clones. |
@@ -54,9 +54,9 @@ deep results.
 
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | every 2nd point of each `choice.hh` axis, ends kept | full lattice | full lattice |
-| Bisection | index space until adjacent, then geometric to hi/lo < 1.1; also between cells when a runner-up is within 10% | geometric to hi/lo < 1.1 | geometric to hi/lo < 1.1 |
-| Refinement cap (x round-0 cells, per op and dtype) | 3.0 | 1.0 | 2.0 |
+| Starting lattice | every 2nd point of each `choice.hh` axis, ends kept, then flip-frontier rounds | as preview; gemm: full lattice | as coarse |
+| Bisection | geometric to hi/lo < 1.1 between adjacent grid values (grid midpoints are the frontier's); gemm: index space until adjacent, then geometric, plus a 10% runner-up margin | as preview; gemm: geometric to hi/lo < 1.1 | as coarse |
+| Refinement cap (x round-0 cells, per op and dtype; gemm only, a frontier has none) | 3.0 | 1.0 | 2.0 |
 | Race reps, floor per candidate; cap 50 ms of the slowest arm, at most 16 ("Engine: the lean cell") | 3 | 4 | 6 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
 | Fresh-process audit sample | 2% of cells | 2% | 1% |
@@ -269,11 +269,14 @@ cell's raced medians arrive as a `RefineCell`.
    starting-lattice cells at the running tier. A refinement midpoint never re-triggers it.
 3. **Batch.** `batch` is never bisected below its lattice spacing. It refills its own axis values.
 4. **Cap.** Refinement cells per op and dtype are at most `refine_cap_factor` × round-0 cells
-   (preview 3.0, coarse 1.0, deep 2.0). Both counts include the ledger's current records, so a run
-   stopped by Ctrl-C or `--budget` resumes within the same total. Flips are refined before margin
-   hedges. Past the cap, refinement stops and the run reports it.
+   (preview 3.0, coarse 1.0, deep 2.0) without a frontier; a frontier run has no cap. Both counts
+   include the ledger's current records, so a run stopped by Ctrl-C or `--budget` resumes within the
+   same total. Flips are refined before margin hedges. Past the cap, refinement stops and the run
+   reports it.
 5. **Estimate.** The refinement estimate is ratio × lattice cells measured now, where ratio is the
    ledger's refined / round-0 count at the tier (at most the cap factor), else half the cap factor.
+   A frontier run instead prices `kFrontierShare` = 0.86 × the grid cells round 0 leaves ("Engine:
+   round planning by flip frontier").
 
 The rule must be two-sided: requiring rule 1 at *both* ends dropped the trsm flips, whose crossover
 sits near one end of the bracket, and failed every tier in replay.
@@ -351,7 +354,7 @@ measured when its k = 6 nearest measured cells hold a decisive flip: one neighbo
 median) is more than 5% slower than the best at another neighbour, or is not runnable there.
 Neighbours come only from the cell's own exact-key group. Distance is `select::choose`'s: sum of
 weight × |log2 a − log2 b| over the log keys (`NearestIndex`, the one host port). Rounds repeat
-until none is left. The driver does not use it yet.
+until none is left. Tiered runs plan by it ("Engine: round planning by flip frontier").
 
 **Slowdown replay** (`tune_replay --slowdown`, `slowdown_replay` in `tools/tune/replay_core.cc`).
 - **Universe.** Every timed row of a shipped table (`--table`, deep and custom rows), every current
@@ -376,7 +379,8 @@ until none is left. The driver does not use it yet.
   p99.9 ≤ 1.10.
 - **Schemes.** `full` (every cell), `lattice` (round 0 at stride 1, no refinement), `stride2`,
   `stride4`, `stride2+frontier`, `stride4+frontier`, and `stride2+frontier+prune`. Prune races a
-  frontier cell only on arms within 1.5x of the best at one of its neighbours.
+  frontier cell only on arms within 1.5x of the best at one of its neighbours. `lattice+bisect` and
+  `stride2+frontier+bisect` model the driver (next section).
 - **Measured cells** are scored separately (`measured_*` fields). They score exactly 1.0 by
   construction except under prune, where a frontier cell may not race its fastest arm.
 
@@ -460,6 +464,78 @@ cells) and orgqr (497) on their worst cell, the others on their third-worst. Wit
 `inferred` lattice, gemm passes the geomean (0.036%) and sits on the p99.9 bound (1.100), and symm and
 orgqr pass. `stride4+frontier` measures more and, with the `ledger` lattice, scores worse. Pruning cuts
 arm runs from 82% to 63% but raises the geomean to 0.074% and p99.9 to 1.255, so it stays opt-in.
+
+## Engine: round planning by flip frontier
+
+Preview, coarse and deep runs plan their rounds by the flip frontier since 2026-10-16
+(`TieredRun::build` and `refine`, `tools/tune/tiered_driver.cc`); in frontier mode preview's index
+refill, margin and cap are off. Tests: `TuneTieredDriver.Frontier*`, `TuneTieredDriver.Preview*`,
+`TuneFrontier.Start*`, `TuneReplay.BisectSchemes*`.
+
+- **Round 0** (`frontier_start`, shared with the replay). The grid cells on `tier_lattice(axes, 2)`;
+  an exact-key group with none of them (a form or aspect filtered by `grid()`, a `--grid` override)
+  takes every second value of its own log values, ends kept, and with none of those starts whole.
+  Every grid cell whose best current record at the running tier or higher is partly stale joins
+  round 0, so its `partial:` re-race runs as on the full lattice.
+- **Frontier rounds.** The grid cells not yet planned whose k nearest measured cells hold a decisive
+  flip (`flip_frontier`, previous section). Measured: this run's records and the ledger's current ones
+  of the same or a higher tier, refinement midpoints and older stride-1 runs included. A `skip:single`
+  record (no timings) counts: its one arm wins, the others cannot run.
+- **Bisection** (3% tie, `refine_all_axes` in index mode) runs in the same rounds. A midpoint on the
+  grid is dropped: it is the frontier's to pick. What is left are geometric midpoints between adjacent
+  grid values, which place a crossover inside a frontier bracket.
+- **Stop.** Rounds repeat until neither adds a cell. There is no refinement cap; `--budget` still stops
+  rounds after round 0.
+- **`--plan`** counts round 0 as usual. The rest is data-dependent: it prices `kFrontierShare` = 0.86 of
+  the grid cells after round 0 that `plan_round` would measure (the driver-model share below) and
+  prints `frontier (stride 2, k 6, 5%): ~N cells, data-dependent`.
+
+**Per op** (`OpSpec::frontier()`: stride, k, slower). The rule: the cheapest variant that passes the
+per-op gate (geomean ≤ 0.05%, p99.9 ≤ 1.10) in the previous section's replay (`ledger` lattice), else
+the full lattice. Only gemm and symm were searched (k 6, 8, 10; slower 5%, 3%, 2%; stride 2 and 4):
+
+| Op | Variant | Kept | Geomean | p99.9 | Gate |
+| --- | --- | --- | --- | --- | --- |
+| gemm | stride 2, k 6, 5% | 81.0% | 0.110% | 1.339 | FAIL |
+| gemm | stride 2, k 6, 3% | 82.2% | 0.106% | 1.339 | FAIL |
+| gemm | stride 2, k 8, 5% | 82.8% | 0.104% | 1.320 | FAIL |
+| gemm | stride 2, k 10, 5% (3%, 2% alike) | 85.1% | 0.089% | 1.090 | FAIL |
+| gemm | stride 4, k 8 or 10 | 91.8-95.9% | 0.093% | 1.095 | FAIL |
+| symm | stride 2, k 6 (3%, 2% alike) | 65.4% | 0.112% | 1.851 | FAIL |
+| symm | stride 4, k 6 | 81.7% | 0.039% | 1.106 | FAIL |
+| symm | stride 2, k 8, 5% | 70.6% | 0.000% | 1.000 | PASS |
+| symm | stride 2, k 10, 5% | 74.0% | 0.000% | 1.000 | PASS |
+
+gemm keeps the full lattice and its demand-driven grid (stride 1, the bisection and cap as before).
+symm runs k = 8. Every other op runs the default (stride 2, k 6, 5%). Not searched, for the record:
+geqrf, getri, orgqr and spmm fail p99.9 at k 6, 8 and 10 alike (on the same worst cells); trmm passes
+at k 8 (97.0% kept).
+
+**Driver-model replay.** The previous section's frontier picks any universe cell, old refinement
+midpoints included; the driver can pick only grid cells and reaches the rest by bisection. The schemes
+`lattice+bisect` (today's coarse and deep: full lattice, geometric bisection) and
+`stride2+frontier+bisect` (this driver) model that; a midpoint the universe lacks is not measured
+(`bisect_missing`). Run 2026-10-16, k 6, same inputs as the gate run:
+
+| Universe | Scheme | Measured | Geomean | p99.9 | Midpoints missing |
+| --- | --- | --- | --- | --- | --- |
+| raw trsm (8550 cells) | `lattice+bisect` | 95.4% | 0.009% | 1.030 | 687 |
+| raw trsm | `stride2+frontier+bisect` | 71.7% | 0.023% | 1.036 | 675 |
+| tables but gemm (83,370) | `lattice+bisect` | 73,217 | 0.412% | - | - |
+| tables but gemm | `stride2+frontier+bisect` | 51,048 | 0.582% | - | - |
+| gemm table (32,225) | `lattice+bisect` | 58.4% | 1.049% | 1.730 | 1488 |
+
+On the tables both schemes fail the gate, today's included: a table is the union of several runs and
+re-measures, so bisection from its medians stalls on midpoints those runs never measured. Read the
+table rows as a comparison. The frontier measures 30% fewer cells for +0.17% pooled geomean; per op the
+excess is under 0.05% for geqrf, gesv, gesvd, getrf, ormqr, posv, potrf, syev, syrk and trmm, and
+largest for spmm (+1.32%), trsm (+0.25%), symm (+0.24% at k 6, +0.08% at k 8), gemv (+0.23%) and getrs
+(+0.09%). The raw trsm sweeps, one clean run each, give +0.005% (float) and +0.022% (double).
+
+**Cells a deep run measures.** In the driver model over the shipped universe, today's coarse and deep
+plan measures about 92,000 of the 115,595 table cells (79.6%); the frontier plan (gemm full, symm k 8)
+about 70,000, 24% fewer. The 2026-10-08/09 deep run wrote 124,724 records, re-runs included, with
+refinement unfinished for nine ops ("Engine: the sm_120 deep run").
 
 ## Coverage: interface for sub-project 2
 

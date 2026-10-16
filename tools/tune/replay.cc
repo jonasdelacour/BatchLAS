@@ -26,7 +26,8 @@ void print_slowdown(const std::string& scheme, const std::string& source, const 
     Json j;
     j.str("scheme", scheme).str("source", source).str("lattice", r.lattice).integer("cells", std::int64_t(r.cells)).integer("measured", std::int64_t(r.measured));
     j.num("kept", r.cells ? double(r.measured) / double(r.cells) : 0).num("arm_runs", r.arm_total > 0 ? r.arm_runs / r.arm_total : 0);
-    j.integer("rounds", std::int64_t(r.rounds)).num("geomean", all.geomean).num("p99", all.p99).num("p999", all.p999);
+    j.integer("rounds", std::int64_t(r.rounds)).integer("bisect_missing", std::int64_t(r.bisect_missing));
+    j.num("geomean", all.geomean).num("p99", all.p99).num("p999", all.p999);
     j.num("slow10", all.slow10).num("misrank", all.misrank).num("worst", r.worst).str("worst_key", r.worst_key);
     j.num("measured_geomean", mine.geomean).num("measured_p99", mine.p99).num("measured_p999", mine.p999);
     j.num("measured_slow10", mine.slow10).num("measured_worst", mine.worst);
@@ -38,6 +39,7 @@ void print_slowdown(const std::string& scheme, const std::string& source, const 
 void pool(SlowdownReport& into, const SlowdownReport& r) {
     into.lattice = into.lattice.empty() || into.lattice == r.lattice ? r.lattice : "mixed";
     into.cells += r.cells, into.measured += r.measured, into.rounds = std::max(into.rounds, r.rounds);
+    into.bisect_missing += r.bisect_missing;
     into.arm_runs += r.arm_runs, into.arm_total += r.arm_total;
     into.ratio.insert(into.ratio.end(), r.ratio.begin(), r.ratio.end());
     into.ratio_measured.insert(into.ratio_measured.end(), r.ratio_measured.begin(), r.ratio_measured.end());
@@ -73,7 +75,7 @@ int slowdown_main(int argc, char** argv) {
         if (want.empty() || std::find(want.begin(), want.end(), s.name) != want.end()) schemes.push_back(s);
     if (schemes.size() != (want.empty() ? replay_schemes().size() : want.size())) {
         std::fprintf(stderr, "tune_replay: --scheme takes a comma list of full, lattice, stride2, stride4, stride2+frontier, "
-                             "stride4+frontier, stride2+frontier+prune\n");
+                             "stride4+frontier, stride2+frontier+prune, lattice+bisect, stride2+frontier+bisect\n");
         return 2;
     }
     std::vector<std::pair<std::string, OracleSet>> sources;  // kind, set

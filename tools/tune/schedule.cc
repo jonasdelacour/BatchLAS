@@ -436,7 +436,8 @@ RefineCell refine_cell(const CellRecord& r, bool lattice) {
     for (const CandResult& x : r.cands) {
         const bool timed = (x.status == "ok" || x.status == "eliminated") && std::isfinite(x.median_ms) && x.median_ms > 0;
         if (timed) c.ms[x.cand] = x.median_ms;
-        else if (x.status != "ok") c.out.insert(x.cand);  // an untimed "ok" (skip:single) is runnable
+        else if (x.status != "ok") c.out.insert(x.cand);
+        else c.single = x.cand;  // an untimed "ok" (skip:single) is runnable
     }
     return c;
 }

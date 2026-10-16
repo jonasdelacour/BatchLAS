@@ -95,11 +95,15 @@ struct Scheme {
     int stride = 1;         // round 0: the universe cells on tier_lattice(axes, stride); 0 = every universe cell
     bool frontier = false;  // then flip_frontier rounds until none is left
     double prune = 0;       // > 0: a frontier cell races only arms within prune x the best at one of its neighbours
+    bool bisect = false;    // the driver: the frontier picks lattice cells only, bisection (3% tie) adds midpoints off it
 };
-std::vector<Scheme> replay_schemes();  // full, lattice, stride2, stride4, stride2+frontier, stride4+frontier, stride2+frontier+prune
+// full, lattice, stride2, stride4, stride2+frontier, stride4+frontier, stride2+frontier+prune, lattice+bisect,
+// stride2+frontier+bisect
+std::vector<Scheme> replay_schemes();
 
 struct SlowdownReport {
     std::size_t cells = 0, measured = 0, rounds = 0;
+    std::size_t bisect_missing = 0;              // bisection midpoints the universe lacks (not measured)
     double arm_runs = 0, arm_total = 0;          // timed arms raced / timed arms in the universe
     std::vector<double> ratio, ratio_measured;   // t(pick) / t(fastest): every scored cell; measured cells alone
     double worst = 1;

@@ -442,7 +442,9 @@ std::vector<Scheme> replay_schemes() {
             {"stride4", 4, false, 0},
             {"stride2+frontier", 2, true, 0},
             {"stride4+frontier", 4, true, 0},
-            {"stride2+frontier+prune", 2, true, 1.5}};
+            {"stride2+frontier+prune", 2, true, 1.5},
+            {"lattice+bisect", 1, false, 0, true},
+            {"stride2+frontier+bisect", 2, true, 0, true}};
 }
 
 namespace {
@@ -462,6 +464,7 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
     for (const auto& [key, c] : o.cells) universe.push_back(key), rep.arm_total += double(c.ms.size());
     rep.cells = universe.size();
     std::map<CellKey, RefineCell> m;
+    std::set<CellKey> missed;  // bisection midpoints the universe lacks
     auto measure = [&](const CellKey& key, const std::set<std::string>* arms) {
         const RefineCell& t = o.cells.at(key);
         if (arms && std::none_of(t.ms.begin(), t.ms.end(), [&](const auto& a) { return arms->count(a.first) != 0; }))
@@ -472,46 +475,36 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
         for (const std::string& arm : t.out)
             if (!arms || arms->count(arm)) c.out.insert(arm);
     };
-    std::vector<std::set<std::string>> start;  // tier_lattice(o.axes, s.stride) per axis, without the product
-    for (const AxisSpec& a : o.axes) {
-        const auto v = a.log ? subsample_axis(a.values, s.stride) : a.values;
-        start.emplace_back(v.begin(), v.end());
-    }
-    std::map<std::vector<std::string>, std::vector<CellKey>> groups;  // exact values -> universe cells
+    std::vector<std::set<std::string>> start_all;  // tier_lattice(o.axes, 1) per axis, without the product
+    for (const AxisSpec& a : o.axes) start_all.emplace_back(a.values.begin(), a.values.end());
+    // The driver's round 0 (frontier_start): the start lattice, own strides for exact-key groups it misses.
+    for (const CellKey& c : s.stride > 0 ? frontier_start(universe, o.axes, s.stride, o.lattice != "inferred") : universe)
+        measure(c, nullptr);
+    // bisect: the driver's model. The frontier picks lattice cells only; midpoints off it come from bisection.
+    std::vector<CellKey> lattice_cells;
+    std::set<CellKey> on_lattice;
     for (const CellKey& key : universe) {
         bool on = true;
-        for (std::size_t i = 0; i < key.size() && on && s.stride > 0; ++i) on = start[i].count(key[i].value) != 0;
-        if (on && (s.stride == 0 || o.lattice != "inferred")) measure(key, nullptr);
-        std::vector<std::string> g;
-        for (std::size_t i = 0; i < key.size(); ++i)
-            if (!o.axes[i].log) g.push_back(key[i].value);
-        groups[g].push_back(key);
+        for (std::size_t i = 0; i < key.size() && on; ++i) on = !o.axes[i].log || start_all[i].count(key[i].value);
+        if (on) lattice_cells.push_back(key), on_lattice.insert(key);
     }
-    // The driver's round 0 covers every exact-key group; a sparse group missing the start takes its own stride.
-    for (const auto& [g, cells] : groups) {
-        if (std::any_of(cells.begin(), cells.end(), [&](const CellKey& c) { return m.count(c) != 0; })) continue;
-        std::vector<std::set<std::string>> own(o.axes.size()), sub(o.axes.size());
-        for (const CellKey& c : cells)
-            for (std::size_t i = 0; i < c.size(); ++i) own[i].insert(c[i].value);
-        for (std::size_t i = 0; i < own.size(); ++i) {
-            std::vector<std::string> v(own[i].begin(), own[i].end());
-            std::sort(v.begin(), v.end(), [&](const std::string& x, const std::string& y) {
-                return o.axes[i].log ? std::stoll(x) < std::stoll(y) : x < y;
-            });
-            if (o.axes[i].log) v = subsample_axis(v, s.stride);
-            sub[i].insert(v.begin(), v.end());
+    while (s.frontier || s.bisect) {
+        auto next = s.frontier ? flip_frontier(m, s.bisect ? lattice_cells : universe, o.axes, k, slower)
+                               : std::vector<CellKey>{};
+        if (s.bisect) {
+            std::map<CellKey, std::vector<std::string>> ranked;
+            for (const auto& [key, c] : m)
+                if (!c.ms.empty()) ranked[key] = fastest_first(c.ms);
+            RefineOpts ro;
+            ro.mode = s.stride > 1 ? RefineMode::index : RefineMode::geometric;
+            ro.cells = &m;
+            const std::set<CellKey> picked(next.begin(), next.end());
+            for (const CellKey& mid : refine_all_axes(ranked, o.axes, params(Tier::deep).refine_ratio, ro).next) {
+                if (on_lattice.count(mid) || picked.count(mid) || m.count(mid)) continue;
+                if (o.cells.count(mid)) next.push_back(mid);
+                else rep.bisect_missing += missed.insert(mid).second;
+            }
         }
-        std::size_t hit = 0;
-        for (const CellKey& c : cells) {
-            bool on = true;
-            for (std::size_t i = 0; i < c.size() && on; ++i) on = sub[i].count(c[i].value) != 0;
-            if (on) measure(c, nullptr), ++hit;
-        }
-        if (hit == 0)
-            for (const CellKey& c : cells) measure(c, nullptr);
-    }
-    while (s.frontier) {
-        const auto next = flip_frontier(m, universe, o.axes, k, slower);
         if (next.empty()) break;
         ++rep.rounds;
         std::vector<std::set<std::string>> arms(next.size());

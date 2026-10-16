@@ -41,6 +41,7 @@ struct RefineCell {
     std::map<std::string, double> ms;  // timed candidates (ok or eliminated): median ms
     std::set<std::string> out;         // not runnable here, or eliminated without a median
     bool lattice = false;              // a starting-lattice (round 0) cell of this run
+    std::string single;                // an untimed runnable arm (skip:single): the winner when ms is empty
 };
 
 // Flips (decisive by > tie at either end) and margin hedges (two lattice ends) refine; index mode refills
@@ -87,6 +88,10 @@ std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, co
 // evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
 std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
                                    const std::vector<AxisSpec>& axes, std::size_t k = 6, double slower = 0.05);
+
+// Round 0: cells on tier_lattice(axes, stride) if global; a group without one: its own values' stride, else whole.
+std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std::vector<AxisSpec>& axes, int stride,
+                                    bool global = true);
 
 // RefineRound::next = flip midpoints, then margin midpoints; stalled = a midpoint without a winner.
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
