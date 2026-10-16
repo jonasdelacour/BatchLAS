@@ -18,7 +18,7 @@ with `BATCHLAS_BUILD_PYTHON=ON`:
 
 ```bash
 cmake -B build -S . -DBATCHLAS_BUILD_PYTHON=ON
-cmake --build build -j
+cmake --build build --target _batchlas -j8
 
 cd python/examples
 PYTHONPATH=../../build/python jupyter lab
@@ -59,8 +59,9 @@ picks, but some routines are GPU-only (see Device requirements below).
 | 11 | `11_generators_and_utilities.ipynb` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
 | 12 | `12_choosing_a_variant.ipynb` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
 
-Together they exercise 77 of the 78 names exported by `batchlas`. The 78th is `ILUKPreconditioner`,
-the handle type returned by `iluk_factorize`.
+Together they exercise most of `batchlas.__all__`; `ILUKPreconditioner` appears only as the handle
+type `iluk_factorize` returns. Routines a notebook does not cover are checked against NumPy in
+`python/tests/`.
 
 `_common.py` holds shared helpers (device selection, reporting, reference constructions). It is not
 part of the library API.
@@ -86,21 +87,81 @@ Timings and device names in notebook 12 come from an RTX 4090 and will differ on
 - **Band storage.** `(kd + 1, n)`, lower LAPACK convention: `AB[i, j]` holds `A[j + i, j]`.
   `_common.band_to_dense` expands it.
 
+## Not in the notebooks
+
+Checked against NumPy/SciPy in `python/tests/` instead.
+
+- **Solvers and Hermitian level 3.** `gesv` (LU solve) and `posv` (Cholesky solve), both with
+  `return_factors=`; `hemm`, `herk`, `her2k`.
+- **Per-item status.** `return_info=True` on `potrf`, `gesv`, `posv`, `getri`, `gesvd`, `syev` and
+  `syevx` appends an int32 `info` array, one entry per item: `0` is success, `i > 0` as LAPACK.
+- **Thin SVD.** `gesvd(a, compute_vectors="thin")`: `u` is `m x k`, `vh` is `k x n`, `k = min(m, n)`.
+- **Exceptions.** `BatchLASException` is the base. `InvalidArgumentError` is also a `ValueError`,
+  `OutOfRangeError` an `IndexError`, `BatchLASError` a `RuntimeError`. Under `BatchLASError`:
+  `UnsupportedError` (with `NoRouteError`: nothing in this build serves the call, attributes `op`,
+  `backend`, `dtype`), `DeviceError`, `WorkspaceError`, `ConvergenceError`, `InternalError`,
+  `ApiMisuseError`.
+- **Routes.** `set_route(op, spelling)` pins `BATCHLAS_<OP>_ROUTE` for this process (`None`
+  unpins), `route(op, spelling)` is the context-manager form, `route_pin(op)` reads the pin, and
+  `reload_settings()` re-reads every `BATCHLAS_*` variable changed after the first call.
+
+## `batchlas.linalg`
+
+A NumPy/SciPy-flavoured front end of the C++ `batchlas::linalg` layer (`import batchlas.linalg`
+or `bl.linalg`). Unlike the top-level functions:
+
+- Any leading axes are the batch, and every output keeps them. Per-item scalars (`info`, `count`,
+  `norm`, `cond`) have the batch shape, so a 2-D input gives a NumPy scalar.
+- Integer input is promoted to float64; two operands are promoted to their common dtype.
+- Factorisations and solves always return a named tuple ending in `info` (the C++ layer always
+  fills it). A failed item is reported there, never raised: check `np.all(r.info == 0)`.
+- `lower=True` (default) names the triangle that is read.
+
+| Function | Returns |
+|---|---|
+| `matmul(a, b, alpha=, trans_a=, trans_b=, compute_precision=)` | array |
+| `matvec(a, x, trans=)` | array |
+| `gram(a, trans="c")` | \f$A^HA\f$; `trans="n"` gives \f$AA^H\f$ |
+| `solve_triangular(a, b, lower=, trans=, unit_diagonal=, side=, alpha=)` | array; `trans` also SciPy's 0/1/2 |
+| `cholesky(a, lower=)` | `CholeskyResult(factor, info)` |
+| `solve(a, b, trans=)`, `solve_spd(a, b, lower=)` | `SolveResult(x, info)`; a vector `b` (`b.ndim == a.ndim - 1`) is a column |
+| `inv(a)` | `InvResult(inverse, info)` |
+| `lu(a)` | `LUResult(lu, pivots, info)`; 1-based LAPACK pivots, as `getrf` |
+| `eigh(a, lower=)` | `EighResult(eigenvalues, eigenvectors, info)` |
+| `eigvalsh(a, lower=)` | array |
+| `eigh`/`eigvalsh` with `subset_by_index=(il, iu)` or `subset_by_value=(vl, vu)` | `EighSubsetResult(eigenvalues, eigenvectors, count, info)` / `EigvalshSubsetResult(eigenvalues, count, info)` |
+| `svd(a, full_matrices=, compute_uv=, hermitian_uplo=, jobu=, jobvh=)` | `SVDResult(U, S, Vh, info)` |
+| `triu(a, k)`, `tril(a, k)`, `transpose(a)` | array |
+| `norm(a, ord="fro")`, `cond(a, ord="fro")` | per-item values |
+
+- A subset is syevx: `il`, `iu` 0-based inclusive; `(vl, vu]` half-open. Each item has `k` value
+  slots (`iu - il + 1`, or `n` for a value range). Slots past `count` are NaN and their vector
+  columns zero. It reads the lower triangle only.
+- `svd`: `jobu`/`jobvh` (`"all"`, `"thin"`, `"none"`) override `full_matrices` per side;
+  `compute_uv=False` returns `U` and `Vh` as `None`.
+- `transpose` and `cond` are real-only (`NotImplementedError` for complex). `cond(a, 2)` is the
+  eigenvalue-magnitude ratio of a symmetric `a`, not the general 2-norm condition number.
+- Complex `gram` runs `herk`, which needs the vendor BLAS (`NoRouteError` vendor-free).
+- The elementwise `add`, `subtract`, `multiply`, `divide`, `axpby` and `scale` are re-exported.
+
 ## Known issues
 
-These are library defects. The notebooks call them out where they come up.
+These are library defects; the authoritative list, with causes, is
+@ref design_known_defects. The notebooks call them out where they come up.
 
-- **`ortho(algorithm="householder")` on CUDA.** After any earlier `geqrf` workspace use in the same
-  process, returns a non-orthonormal result. `ortho_buffer_size` sizes its sub-workspaces from a
-  placeholder view (`src/ops/ortho/ortho.cc`), so blocks can overlap. Other algorithms are
-  unaffected; notebook 04 uses those.
-- **`stedc` with `JobType::NoEigenVectors`.** Returns wrong eigenvalues. The bindings always request
-  vectors internally and discard them.
-- **`tridiagonal_solver` accuracy.** The QR iteration does not converge reliably. Prefer `steqr` or
-  `stedc`.
-- **`uplo="upper"` with a half-filled matrix on CUDA.** `syev` and `syev_cta` are wrong for this
-  case. `syev_jacobi_cta` and the CPU path are correct.
+- **The Hermitian drivers read the unreferenced triangle** (known defect 14). With only one
+  triangle filled, `syev_cta` with `uplo="upper"`, `syev_blocked`/`syev_two_stage` with `"lower"` at
+  some sizes, and `gesvd` with a Hermitian `uplo` can return wrong values. Pass the full symmetric
+  matrix, or use `syev_jacobi_cta`.
+- **`lanczos` returns a spectrum about three times too wide** (open, cause not located). Use
+  `syevx` or the dense solvers for the values.
+- **`stedc` without eigenvectors.** The recursive driver may merge from unset leaf vectors under
+  `NoEigenVectors` (unverified candidate). The bindings always request vectors internally and
+  discard them.
 - **Unpreconditioned `syevx` on hard problems.** Can stagnate. Notebook 09 shows the fix.
+
+No longer issues: `ortho`'s Householder workspace overlap and transposed arm (defect 1), and
+`tridiagonal_solver` convergence; earlier versions of this list flagged them.
 
 ## Device requirements
 

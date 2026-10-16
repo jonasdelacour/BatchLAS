@@ -227,7 +227,7 @@ ctest --test-dir build/presets/dev-tests --output-on-failure
 a specific algorithm. To iterate on one algorithm, build the library plus that one test:
 
 ```bash
-cmake --build build/presets/dev-tests --target stedc_tests -j"$(nproc)"
+cmake --build build/presets/dev-tests --target stedc_tests -j8
 ctest --test-dir build/presets/dev-tests -R '^stedc_tests$' --output-on-failure
 ```
 
@@ -247,8 +247,8 @@ With `BATCHLAS_BUILD_BENCHMARKS=ON` the benchmark translation units join the def
 so leave the option `OFF` in trees you iterate on. To build only them, or one:
 
 ```bash
-cmake --build build --target batchlas_benchmarks -j"$(nproc)"   # all of them
-cmake --build build --target gemm_benchmark -j"$(nproc)"        # just one
+cmake --build build --target batchlas_benchmarks -j8   # all of them
+cmake --build build --target gemm_benchmark -j8        # just one
 ```
 
 Measurement rules (saturation, warm-up, one process per box): @ref dev_agent_guide.
@@ -260,14 +260,19 @@ cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DBATCHLAS_BUILD_PYTHON=ON \
   -DBATCHLAS_BUILD_TESTS=ON
-cmake --build build -j"$(nproc)"
+cmake --build build -j8
 PYTHONPATH="$PWD/build/python" python3 -c "import batchlas; print(batchlas.available_backends())"
 ```
 
 The importable package lands in `build/python` and links against the in-tree
 `BatchLAS::batchlas`. It has NumPy dense-array support, SciPy sparse wrappers,
-`available_backends()`, `available_devices()`, `compiled_features()` and elementwise arithmetic
-(`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`). Twelve self-checking notebooks in
+`available_backends()`, `available_devices()`, `compiled_features()`, elementwise arithmetic
+(`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`), the value-returning `batchlas.linalg`
+submodule, exception classes mirroring the C++ hierarchy and route pins (`set_route`, `route`).
+`cmake --install` puts the package in `<prefix>/BATCHLAS_PYTHON_INSTALL_DIR/batchlas` (default
+`lib/pythonX.Y/site-packages`, relative to the prefix). Its tests run with
+`PYTHONPATH="$PWD/build/python" python3 -m pytest python/tests` (pytest; SciPy only for the sparse
+cases). Twelve self-checking notebooks in
 `python/examples/` are committed with output:
 
 ```bash

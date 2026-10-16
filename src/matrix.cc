@@ -964,6 +964,11 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
 
+    // std::conj of a real returns a complex; a real hermitize is symmetrize.
+    auto conj_if_complex = [](T v) -> T {
+        if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) return std::conj(v);
+        else return v;
+    };
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
         for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
             // Calculate 3D coordinates from flat index
@@ -977,14 +982,14 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
                 if (i < j) {
                     size_t idx1 = b * stride + j * ld + i;
                     size_t idx2 = b * stride + i * ld + j;
-                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                    data_ptr[idx2] = conj_if_complex(data_ptr[idx1]);
                 }
             } else {
                 // Lower triangular part
                 if (i > j) {
                     size_t idx1 = b * stride + j * ld + i;
                     size_t idx2 = b * stride + i * ld + j;
-                    data_ptr[idx2] = std::conj(data_ptr[idx1]);
+                    data_ptr[idx2] = conj_if_complex(data_ptr[idx1]);
                 }
             }
             if (i == j) {
@@ -2645,6 +2650,8 @@ template Event MatrixView<double, MatrixFormat::Dense>::triangularize(const Queu
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::triangularize(const Queue&, Uplo, Diag) const;
 
+template Event MatrixView<float, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
+template Event MatrixView<double, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
 template Event MatrixView<std::complex<float>, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
 template Event MatrixView<std::complex<double>, MatrixFormat::Dense>::hermitize(const Queue&, Uplo) const;
 

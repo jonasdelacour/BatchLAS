@@ -127,8 +127,9 @@ caller's USM, written in place.
 - An empty span means "no status wanted". A non-empty span shorter than the batch is rejected
   (`detail::require_info_span`). Otherwise the backend writes to its own scratch and the caller
   reads stale data, usually zeros, which look like "all factorised".
-- `linalg::eigh` and `linalg::svd` always request `info` and return it in the result. At batch
-  16384 a single non-converged item is otherwise invisible.
+- Every `linalg` factorisation and solve (`cholesky`, `lu`, `solve`, `solve_spd`, `inv`, `eigh`,
+  `svd`) always requests `info` and returns it in the result. At batch 16384 a single failed item
+  is otherwise invisible.
 
 ## api conventions: the linalg layer
 
@@ -137,13 +138,23 @@ caller's USM, written in place.
 - Qualify every forwarding alias as `\::batchlas::`. An unqualified `inv` inside `linalg::inv`
   recurses forever. Inside `batchlas::linalg`, `detail::` means `linalg::detail`, so write
   `\::batchlas::detail::require_square`.
-- Pivots and workspace come from the arena or move into the result. A local `UnifiedVector` is
-  freed before the kernels that read it run. `linalg::svd` waits before returning, because
-  `~Matrix` frees USM without waiting.
+- Pivots and workspace come from the arena or move into the result. `~Matrix` and
+  `~UnifiedVector` free USM without waiting, so a wrapper that owns a local copy of `A` (`svd`,
+  `solve`, `solve_spd`, `inv`, the full `eigvalsh`) waits before returning.
 - `MatmulOptions` is not `GemmOptions`. `matmul` allocates `C`, so a caller `beta` would read
   uninitialised memory, and the field is left out.
-- `eigh` and `svd` take positional arguments. `SyevOptions` and `GesvdOptions` have no `info`
-  field. `eigh` keeps the squareness check that the positional spelling would otherwise lose.
+- `eigh`, `svd`, `solve` and `solve_spd` call the positional spellings: `SyevOptions` and
+  `GesvdOptions` have no `info` field, `gesv` and `posv` have no option overload. `eigh` keeps the
+  squareness check that the positional spelling would otherwise lose.
+- Option structs are reused, not mirrored: `solve_triangular` takes `TrsmOptions`, `svd` takes
+  `GesvdOptions`, the subset `eigh` takes `SyevxParams`.
+
+### api conventions: linalg wrappers order their own launches
+
+A wrapper that launches more than once (copy, then factor) runs its body through
+`detail::on_in_order_queue` (`batchlas/util/sycl-device-queue.hh`), the mechanism the multi-launch
+drivers use. On an out-of-order `Queue` the factorisation would otherwise read the copy before it is
+written. Guard: `LinalgWrappers.OutOfOrder*` in `tests/linalg_layer_tests.cc`.
 
 ### api conventions: linalg::solve keeps its Transpose branch
 
@@ -159,8 +170,7 @@ Do not flatten the branch.
 
 `solve_spd` is spelled on `posv`. `solve` (LU with partial pivoting) is backward stable for any
 nonsingular `A`. `solve_spd` costs about half the arithmetic but makes the SPD claim the caller's.
-A non-positive-definite `A` gives an undefined `X`, as LAPACK `?POSV` does. `solve_spd` passes an
-empty `info` span, so the failure is not reported.
+A non-positive-definite item gives an undefined `x`, as LAPACK `?POSV` does, and a non-zero `info`.
 
 ## api conventions: cond generators default to CGS2
 

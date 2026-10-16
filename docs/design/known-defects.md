@@ -1,6 +1,6 @@
 # Known defects, located and not fixed {#design_known_defects}
 
-> **Status:** current · checked 2026-10-11
+> **Status:** current · checked 2026-10-15
 
 Each entry is a defect located to a line and left in the tree. Entries give the symptom, the
 cause with its location, any workaround, and the status. Performance debt is listed per op under
@@ -91,7 +91,7 @@ closed and kept only for numbering.
 - **Symptom (inferred):** on real scalars, `ConjTrans` is passed as the conjugating enum, which
   should give wrong results as it did in cuSPARSE.
 - **Cause:** `src/backends/rocsparse.cc:37-38` and `:70-71` pass `enum_convert` results straight
-  through. That conversion (`src/linalg-impl.hh:275-281`) maps `ConjTrans` to
+  through. That conversion (`src/linalg-impl.hh:267-273`) maps `ConjTrans` to
   `rocsparse_operation_conjugate_transpose` for every scalar type.
 - **Reference fix:** `cusparse_op<T>` in `src/backends/cusparse.cc:29-40`.
 - **Status:** inferred, not observed. There is no AMD device here.
@@ -282,7 +282,8 @@ With large finite poison in the triangle the caller did not name:
 Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. syev sends cfloat
 n = 9..32 and cdouble n <= 32 to `syev_cta`. syev `two_stage` with Lower is the Auto choice for
 jobz=N above n = 320, and for float V with n = 449..1024. A caller that stores only the upper
-triangle gets a wrong answer today.
+triangle gets a wrong answer today. `linalg::eigh`, `eigvalsh` and the Hermitian `linalg::svd`
+mirror the named triangle on their copy first (`MatrixView::hermitize`), so they are unaffected.
 
 - **Tests:** `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
   (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
@@ -425,9 +426,9 @@ because `syev_cta` with Upper reads the lower triangle.
 
 `linalg::qr` is absent from `include/batchlas/blas/linalg-ops.hh`. Composing `geqrf`,
 `triangular_mask_into` and `orgqr` returns \f$QR \ne A\f$ after an earlier `linalg::qr` call in the
-same process. Run alone, it passes. The repro is `tests/linalg_layer_tests.cc`, 4x.
+same process. Run alone, it passes. No repro is checked in: the wrapper left the tree with its
+test. Rebuild one by composing the three calls twice in one process.
 
-The `linalg::` value-returning wrappers free their scratch while kernels may still be enqueued.
 The workspace arena belongs to the `Queue` (see @ref design_runtime_internals). Look at state that
 outlives one call first: arena reuse, a static, or a stale event.
 
@@ -484,9 +485,6 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **`tridiagonal_solver` assumes `Q.ld() == n`.** `src/ops/syev/tridiag/tridiag_solver.cc:30` addresses
-  `Q` with stride `n`, but the identity fill uses `Q.ld()`. A padded `Q` gives a wrong answer. It
-  also caps QR steps at six per eigenvalue with no convergence report. Nothing in `src/` calls it.
 - **Kernel selection throws outside the error hierarchy.** `src/select/` throws `std::invalid_argument`
   and `std::runtime_error`, which `catch (const batchlas::exception&)` misses (`batchlas::NoRouteError`
   is a `batchlas::unsupported`). `gesv` and `posv` throw
@@ -512,6 +510,12 @@ TU but calls cuSOLVER. Re-checked, the claim does not hold. `getrs_vendor` calls
 `cublas?getrsBatched` (`src/backends/cublas.cc:1090`), and the gate matches the definition. The
 stated mismatch did not reproduce.
 
+An earlier candidate said `tridiagonal_solver` assumed `Q.ld() == n` and capped QR steps at six
+with no report. It no longer holds: `src/ops/syev/tridiag/tridiag_solver.cc` addresses `Q` through
+`Q.ld()` everywhere, allows `kTridiagMaxIterations = 30` steps per eigenvalue and throws
+`convergence_error` past that. `SteqrTest.TridiagSolverGradedAndSaturatingBatch` runs it with
+`ld = n + 3`.
+
 ## Guards that cannot fail
 
 Several test suites looked thorough but could not fail for the property they named. Each was
@@ -525,6 +529,8 @@ shown to be blind by applying a deliberate break, rebuilding, and running.
 | `gemv` tail sub-group | out-of-range writes went unseen | a guard band, poisoned before the call and checked after |
 | `geqrf` tau/beta convention | the only check skipped in a vendor-free build | an independent host `xGEQR2` reference (`ConventionMatchesReferenceLapackWithoutAVendor`) |
 | `potrf` no-fold residual | computed over the lower triangle only | poison the upper triangle and assert it is unchanged |
+| Python suite, any device fault | `_skip_if_unavailable` turned every `RuntimeError` into a skip (31 sites) | skip only on `NotImplementedError`, `NoRouteError` and the sub-group-32 message (`python/tests/test_batchlas.py`) |
+| Python 1-D results (values, pivots, `m`, `info`, CSR arrays) | under pybind11 < 2.12 and NumPy 2 every one had stride 0; the count checks compared against a constant array, which a stride-0 array matches | build arrays from a shape container; `test_coverage.py` checks per-item values and strides |
 
 Checklist before trusting a guard:
 

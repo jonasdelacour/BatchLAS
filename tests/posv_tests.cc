@@ -430,8 +430,10 @@ TYPED_TEST(PosvTest, LinalgSolveSpdLeavesItsInputsAlone) {
     auto p = make_spd<T>(n, 2, 4, Uplo::Lower, 1919u);
     auto A = a_view(p); auto Bv = b_view(p);
 
-    auto X = linalg::solve_spd<T>(*this->ctx, A, Bv, Uplo::Lower);
+    auto s = linalg::solve_spd<T>(*this->ctx, A, Bv, Uplo::Lower);
     this->ctx->wait();
+    const auto& X = s.x;
+    for (int bi = 0; bi < p.batch; ++bi) ASSERT_EQ(s.info[bi], 0) << "item " << bi;
 
     for (size_t i = 0; i < p.a.size(); ++i)
         ASSERT_EQ(0, std::memcmp(&p.a[i], &p.a0[i], sizeof(T))) << "A changed at " << i;

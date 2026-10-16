@@ -574,7 +574,10 @@ inline SvdVectors parse_svd_vectors(std::string value) {
     if (value == "all" || value == "a") {
         return SvdVectors::All;
     }
-    throw py::value_error("invalid svd vector policy");
+    if (value == "thin" || value == "s") {
+        return SvdVectors::Thin;
+    }
+    throw py::value_error("invalid svd vector policy: expected 'all', 'thin' or 'none'");
 }
 
 inline SteqrShiftStrategy parse_steqr_shift_strategy(std::string value) {
@@ -625,6 +628,62 @@ inline StedcMergeVariant parse_stedc_merge_variant(std::string value) {
         return StedcMergeVariant::FusedCta;
     }
     throw py::value_error("invalid stedc merge_variant");
+}
+
+inline StedcAlgorithm parse_stedc_algorithm(std::string value) {
+    value = lower_copy(std::move(value));
+    if (value == "auto") {
+        return StedcAlgorithm::Auto;
+    }
+    if (value == "levels") {
+        return StedcAlgorithm::Levels;
+    }
+    if (value == "recursive") {
+        return StedcAlgorithm::Recursive;
+    }
+    throw py::value_error("invalid stedc algorithm: expected 'auto', 'levels' or 'recursive'");
+}
+
+inline SyevxAlgorithm parse_syevx_method(std::string value) {
+    value = lower_copy(std::move(value));
+    if (value == "auto") {
+        return SyevxAlgorithm::Auto;
+    }
+    if (value == "direct") {
+        return SyevxAlgorithm::Direct;
+    }
+    if (value == "direct_subset" || value == "directsubset") {
+        return SyevxAlgorithm::DirectSubset;
+    }
+    if (value == "filtered") {
+        return SyevxAlgorithm::Filtered;
+    }
+    if (value == "lobpcg") {
+        return SyevxAlgorithm::LOBPCG;
+    }
+    throw py::value_error(
+        "invalid syevx method: expected 'auto', 'direct', 'direct_subset', 'filtered' or 'lobpcg'");
+}
+
+inline SyevxPreconditioner parse_syevx_preconditioner(std::string value) {
+    value = lower_copy(std::move(value));
+    if (value == "auto") {
+        return SyevxPreconditioner::Auto;
+    }
+    if (value == "none") {
+        return SyevxPreconditioner::None;
+    }
+    if (value == "jacobi") {
+        return SyevxPreconditioner::Jacobi;
+    }
+    if (value == "jacobi_shifted" || value == "jacobishifted") {
+        return SyevxPreconditioner::JacobiShifted;
+    }
+    if (value == "iluk") {
+        return SyevxPreconditioner::ILUK;
+    }
+    throw py::value_error(
+        "invalid syevx preconditioner_type: expected 'auto', 'none', 'jacobi', 'jacobi_shifted' or 'iluk'");
 }
 
 inline Device resolve_device(const std::optional<std::string>& device_name) {
@@ -994,11 +1053,14 @@ inline py::object dense_matrix_to_python(const DenseMatrix& matrix) {
     });
 }
 
+// TRAP: every array is built from a shape container, never `array_t<T>(n)` or `out({n})`. The
+// count constructor takes its strides from dtype.itemsize(), which pybind11 < 2.12 misreads under
+// NumPy 2 (0), so every 1-D result had stride 0 and showed its last element n times.
 template <typename T>
 py::array_t<T> dense_vector_to_numpy_t(const Vector<T>& vector) {
     const auto data = vector.data();
     if (vector.batch_size() == 1) {
-        py::array_t<T> out({vector.size()});
+        py::array_t<T> out(std::vector<py::ssize_t>{vector.size()});
         auto view = out.template mutable_unchecked<1>();
         for (int index = 0; index < vector.size(); ++index) {
             view(index) = data[static_cast<std::size_t>(index * vector.inc())];
@@ -1023,6 +1085,14 @@ inline py::object dense_vector_to_python(const DenseVector& vector) {
     });
 }
 
+// Explicit strides on purpose: pybind11 < 2.12 reads a NumPy 2 descriptor's item
+// size from the wrong offset, and for int32 it reads 0, so a default-strided
+// array has stride 0 and every entry aliases the last one written.
+inline py::array_t<std::int32_t> int32_array(int size) {
+    return py::array_t<std::int32_t>(std::vector<py::ssize_t>{size},
+                                     std::vector<py::ssize_t>{static_cast<py::ssize_t>(sizeof(std::int32_t))});
+}
+
 template <typename T>
 py::object sparse_matrix_to_python_t(const SparseMatrixT<T>& matrix) {
     py::module_ scipy_sparse = py::module_::import("scipy.sparse");
@@ -1031,9 +1101,9 @@ py::object sparse_matrix_to_python_t(const SparseMatrixT<T>& matrix) {
         // and this batch is heterogeneous by construction. nnz(batch) is the same row
         // offset read this line used to spell by hand.
         const int nnz = matrix.nnz(batch);
-        py::array_t<T> data({nnz});
-        py::array_t<int> indices({nnz});
-        py::array_t<int> indptr({matrix.rows() + 1});
+        py::array_t<T> data(std::vector<py::ssize_t>{nnz});
+        py::array_t<int> indices = int32_array(nnz);
+        py::array_t<int> indptr = int32_array(matrix.rows() + 1);
         auto data_view = data.template mutable_unchecked<1>();
         auto index_view = indices.template mutable_unchecked<1>();
         auto indptr_view = indptr.template mutable_unchecked<1>();
@@ -1107,19 +1177,31 @@ inline py::list available_devices() {
     return devices;
 }
 
+// Every spelling parse_backend accepts, in the order the Queue prefers them; a
+// name is listed exactly when acquire_queue would accept it.
 inline py::list available_backends() {
+    static constexpr std::pair<const char*, Backend> candidates[] = {
+        {"cuda", Backend::CUDA}, {"rocm", Backend::ROCM}, {"mkl", Backend::MKL},
+        {"sycl", Backend::SYCL}, {"magma", Backend::MAGMA}, {"netlib", Backend::NETLIB}};
     py::list backends;
     backends.append("auto");
-#if BATCHLAS_HAS_CUDA_BACKEND
-    backends.append("cuda");
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    backends.append("rocm");
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-    backends.append("netlib");
-#endif
+    for (const auto& [name, backend] : candidates) {
+        if (Queue::backend_available(backend)) backends.append(name);
+    }
     return backends;
+}
+
+inline py::list vendor_libraries() {
+    static constexpr std::pair<const char*, bool> libraries[] = {
+        {"cublas", BATCHLAS_HAS_CUBLAS},       {"cusolver", BATCHLAS_HAS_CUSOLVER},
+        {"cusparse", BATCHLAS_HAS_CUSPARSE},   {"rocblas", BATCHLAS_HAS_ROCBLAS},
+        {"rocsolver", BATCHLAS_HAS_ROCSOLVER}, {"rocsparse", BATCHLAS_HAS_ROCSPARSE},
+        {"lapacke", BATCHLAS_HAS_LAPACKE},     {"cblas", BATCHLAS_HAS_CBLAS}};
+    py::list present;
+    for (const auto& [name, available] : libraries) {
+        if (available) present.append(name);
+    }
+    return present;
 }
 
 inline py::dict compiled_features() {
@@ -1127,9 +1209,14 @@ inline py::dict compiled_features() {
     features["has_host_backend"] = static_cast<bool>(BATCHLAS_HAS_HOST_BACKEND);
     features["has_cuda_backend"] = static_cast<bool>(BATCHLAS_HAS_CUDA_BACKEND);
     features["has_rocm_backend"] = static_cast<bool>(BATCHLAS_HAS_ROCM_BACKEND);
+    features["has_sycl_backend"] = static_cast<bool>(BATCHLAS_HAS_SYCL_BACKEND);
     features["has_cpu_target"] = static_cast<bool>(BATCHLAS_HAS_CPU_TARGET);
     features["has_gpu_backend"] = static_cast<bool>(BATCHLAS_HAS_GPU_BACKEND);
     features["backends"] = available_backends();
+    const py::list libraries = vendor_libraries();
+    features["vendor_libraries"] = libraries;
+    features["vendor_free"] = py::len(libraries) == 0;
+    features["sycl_implementation"] = BATCHLAS_SYCL_IMPL_ACPP ? "acpp" : "dpcpp";
     return features;
 }
 
@@ -1209,10 +1296,40 @@ inline DenseVector make_vector(int size, int batch_size) {
 // from mistaking "nothing asked" for "nothing failed".
 inline py::object info_to_python(const UnifiedVector<std::int32_t>& info, int batch_size) {
     if (info.size() == 0 || batch_size <= 0) return py::none();
-    py::array_t<std::int32_t> out({static_cast<py::ssize_t>(batch_size)});
+    py::array_t<std::int32_t> out = int32_array(batch_size);
     auto view = out.mutable_unchecked<1>();
     for (int b = 0; b < batch_size; ++b) {
         view(static_cast<py::ssize_t>(b)) = info[static_cast<std::size_t>(b)];
+    }
+    return out;
+}
+
+// getrf's pivot span is int64-typed, but every queue except NETLIB packs 1-based int32 into it
+// (include/batchlas/blas/functions/getrf.hh). Python sees plain 1-based int64 per item, and the
+// packing is redone on the way back into getrs/getri on the same backend.
+inline bool pivots_packed_int32(const Queue& queue) {
+    return queue.backend() != Backend::NETLIB;
+}
+
+inline py::array_t<int64_t> pivots_to_numpy(const UnifiedVector<int64_t>& pivots, bool packed, int pivots_per_batch,
+                                     int batch_size) {
+    const auto* packed_data = reinterpret_cast<const int32_t*>(pivots.data());
+    auto read = [&](std::size_t index) -> int64_t { return packed ? packed_data[index] : pivots[index]; };
+    if (batch_size == 1) {
+        py::array_t<int64_t> out(std::vector<py::ssize_t>{pivots_per_batch});
+        auto view = out.mutable_unchecked<1>();
+        for (int index = 0; index < pivots_per_batch; ++index) {
+            view(index) = read(static_cast<std::size_t>(index));
+        }
+        return out;
+    }
+
+    py::array_t<int64_t> out({batch_size, pivots_per_batch});
+    auto view = out.mutable_unchecked<2>();
+    for (int batch = 0; batch < batch_size; ++batch) {
+        for (int index = 0; index < pivots_per_batch; ++index) {
+            view(batch, index) = read(static_cast<std::size_t>(batch * pivots_per_batch + index));
+        }
     }
     return out;
 }
@@ -1231,6 +1348,16 @@ SyevxParams<T> parse_syevx_params(const py::dict& options,
                                   const ILUKPreconditioner<T>* preconditioner = nullptr,
                                   SyevxInstrumentation<T>* instrumentation = nullptr) {
     SyevxParams<T> params;
+    if (options.contains("method")) {
+        params.method = parse_syevx_method(py::cast<std::string>(options["method"]));
+    }
+    if (options.contains("preconditioner_type")) {
+        params.preconditioner_type =
+            parse_syevx_preconditioner(py::cast<std::string>(options["preconditioner_type"]));
+    }
+    params.filter_degree = py_scalar_or_default<std::size_t>(options, "filter_degree", params.filter_degree);
+    params.init_power_iterations =
+        py_scalar_or_default<int>(options, "init_power_iterations", params.init_power_iterations);
     if (options.contains("algorithm")) {
         params.algorithm = parse_ortho_algorithm(py::cast<std::string>(options["algorithm"]));
     }
@@ -1323,6 +1450,9 @@ StedcParams<T> parse_stedc_params(const py::dict& options) {
         py_scalar_or_default<int>(options, "secular_threads_per_root", params.secular_threads_per_root);
     params.secular_cta_wg_size_multiplier =
         py_scalar_or_default<int>(options, "secular_cta_wg_size_multiplier", params.secular_cta_wg_size_multiplier);
+    if (options.contains("algorithm")) {
+        params.algorithm = parse_stedc_algorithm(py::cast<std::string>(options["algorithm"]));
+    }
     if (options.contains("secular_solver")) {
         params.secular_solver = parse_stedc_secular_solver(py::cast<std::string>(options["secular_solver"]));
     }

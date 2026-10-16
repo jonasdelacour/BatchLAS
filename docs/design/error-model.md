@@ -9,9 +9,9 @@ requirements: @ref design_symbol_visibility.
 
 ## error model: why a hierarchy exists
 
-- Each leaf keeps its `std::` base, so existing handlers match and pybind11 maps types as before
-  (`invalid_argument` to `ValueError`, `out_of_range` to `IndexError`, `runtime_error` to
-  `RuntimeError`).
+- Each leaf keeps its `std::` base, so existing handlers match. The Python classes keep the
+  builtin base each arm mapped to before (`ValueError`, `IndexError`, `RuntimeError`); see
+  [Python exception classes](#error-model-python-exception-classes).
 - The runtime arm must derive from `std::runtime_error`. In-tree code catches that type around calls
   that now throw into this arm.
 
@@ -83,6 +83,24 @@ Rule four (every class carries `BATCHLAS_API`) is in
   empty problem or a heterogeneous batch before selection runs, so a pin cannot change it. By
   meaning these are `invalid_argument` or `unsupported`.
 - `api_misuse` is for a valid argument used at the wrong time or from the wrong thread.
+
+## error model: Python exception classes {#error-model-python-exception-classes}
+
+`python/batchlas/bindings/runtime.cc` registers one class per C++ class and a translator; all are
+exported from `batchlas`.
+
+| C++ | Python | Builtin base |
+| --- | --- | --- |
+| `exception` | `BatchLASException` | `Exception` |
+| `invalid_argument`, and any other `std::invalid_argument` | `InvalidArgumentError` | `ValueError` |
+| `out_of_range`, and any other `std::out_of_range` | `OutOfRangeError` | `IndexError` |
+| `error` | `BatchLASError` | `RuntimeError` |
+| `unsupported`, `device_error`, `workspace_error`, `convergence_error`, `internal_error`, `api_misuse` | `UnsupportedError`, `DeviceError`, `WorkspaceError`, `ConvergenceError`, `InternalError`, `ApiMisuseError` (each a `BatchLASError`) | `RuntimeError` |
+| `NoRouteError` | `NoRouteError` (an `UnsupportedError`), with `op`, `backend` and `dtype` attributes | `RuntimeError` |
+
+- The `std::` arms are wide because a bad `BATCHLAS_<OP>_ROUTE` pin throws a plain
+  `std::invalid_argument`.
+- The other `std::runtime_error`s outside the hierarchy stay a plain `RuntimeError`.
 
 ## error model: batch-wide convergence errors
 

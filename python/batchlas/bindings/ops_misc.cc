@@ -354,7 +354,17 @@ void init_misc_ops(py::module_& module) {
     module.def("_diagonal_dense", [](const DenseVector& diagonal, int batch_size) {
         return visit_vector(diagonal, [&](auto tag, const auto& typed_diagonal) {
             using scalar_type = typename decltype(tag)::type;
-            return wrap_dense(DenseMatrixT<scalar_type>::Diagonal(typed_diagonal.data(), batch_size));
+            // Not Matrix::Diagonal(span): that reads the whole span as ONE diagonal, so a (batch, n)
+            // input became batch copies of an (n * batch)-order matrix.
+            const int n = typed_diagonal.size();
+            const bool shared = typed_diagonal.batch_size() == 1;
+            auto out = DenseMatrixT<scalar_type>::Zeros(n, n, batch_size);
+            for (int b = 0; b < batch_size; ++b) {
+                for (int i = 0; i < n; ++i) {
+                    out(i, i, b) = typed_diagonal(i, shared ? 0 : b);
+                }
+            }
+            return wrap_dense(std::move(out));
         });
     });
 

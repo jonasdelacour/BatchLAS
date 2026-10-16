@@ -12,5 +12,6 @@ void init_factorization_ops(py::module_& module);
 void init_spectral_ops(py::module_& module);
 void init_misc_ops(py::module_& module);
 void init_linalg_ops(py::module_& module);
+void init_runtime(py::module_& module);
 
 }  // namespace batchlas::python

@@ -2,6 +2,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/no_route.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>   // for the "Device-resident operands" block below
 #include <batchlas/verify/reference.hh>
@@ -358,6 +359,23 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     [[maybe_unused]] auto upper = linalg::triu(ctx, A);
     [[maybe_unused]] auto strict_lower = linalg::tril(ctx, A, -1);
     linalg::matmul(ctx, A, B, {.alpha = 2.0f});
+
+    // "The linalg convenience layer" -- the table
+    {
+        Vector<float> xv(4, 2);
+        [[maybe_unused]] auto y = linalg::matvec(ctx, A, xv);
+        [[maybe_unused]] auto g = linalg::gram(ctx, A);
+        [[maybe_unused]] auto outer = linalg::gram(ctx, A, Transpose::NoTrans);
+        [[maybe_unused]] auto t = linalg::solve_triangular(ctx, A, B, {.uplo = Uplo::Upper});
+        [[maybe_unused]] auto spd_solution = linalg::solve_spd(ctx, A, B);
+        [[maybe_unused]] auto by_index =
+            linalg::eigh(ctx, A, SyevxParams<float>{.select = SyevxSelect::Index, .il = 0, .iu = 1});
+        [[maybe_unused]] auto by_value =
+            linalg::eigvalsh(ctx, A, SyevxParams<float>{.select = SyevxSelect::Value, .vl = 0.0f, .vu = 1.0f});
+        [[maybe_unused]] auto mixed =
+            linalg::svd(ctx, A, GesvdOptions{.jobu = SvdVectors::Thin, .jobvh = SvdVectors::All});
+        [[maybe_unused]] auto hermitian = linalg::svd(ctx, A, GesvdOptions{.hermitian_uplo = Uplo::Lower});
+    }
 }
 
 // What the layer must NOT accept. Each of these is spelled as a concept rather
@@ -491,32 +509,134 @@ TEST(LinalgLayer, MismatchedShapesAreRejected) {
     EXPECT_THROW((void)linalg::add_into<float>(q, A, B, A), std::invalid_argument);
 }
 
+namespace {
+
+template <typename T>
+using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename T>
+using Real = typename base_type<T>::type;
+
+template <typename T>
+inline constexpr bool kIsComplex = !std::is_same_v<T, Real<T>>;
+
+template <typename T>
+T scalar_of(double re, double im) {
+    if constexpr (kIsComplex<T>) {
+        return T(Real<T>(re), Real<T>(im));
+    } else {
+        (void)im;
+        return T(Real<T>(re));
+    }
+}
+
+template <typename T>
+T& elem(const MV<T>& v, int i, int j, int b) {
+    return v.data_ptr()[static_cast<int64_t>(b) * v.stride() + static_cast<int64_t>(j) * v.ld() + i];
+}
+
+// In range and finite, so a kernel that reads padding or the unread triangle accepts it.
+template <typename T>
+const T kPoison = scalar_of<T>(777.0, -333.0);
+
+enum class Fill { general, hermitian, spd, pivoted };
+
+template <typename T>
+Matrix<T> make(Queue& q, int m, int n, int batch, Fill fill, unsigned seed) {
+    Matrix<T> A(m, n, batch);
+    switch (fill) {
+        case Fill::general: (void)A.fill_random(q, false, seed); break;
+        case Fill::hermitian: (void)A.fill_random(q, true, seed); break;
+        case Fill::spd: (void)A.fill_random_spd(q, seed); break;
+        case Fill::pivoted: (void)A.fill_random_pivoted(q, seed); break;
+    }
+    q.wait();
+    return A;
+}
+
+// A's values in storage with ld = rows + 3 and a padded batch stride, the padding poisoned.
+template <typename T>
+Matrix<T> padded(Queue& q, const MV<T>& A) {
+    const int ld = A.rows() + 3;
+    const int stride = ld * A.cols() + 5;
+    const int total = stride * A.batch_size();
+    Matrix<T> P(A.rows(), A.cols(), A.batch_size(), ld, stride);
+    (void)MV<T>(P.data_ptr(), total, 1, total, total, 1).fill(q, kPoison<T>);
+    (void)MV<T>::copy(q, P, A);
+    q.wait();
+    return P;
+}
+
+// A with the triangle opposite `keep` replaced by poison: proves the wrapper reads only `keep`.
+template <typename T>
+Matrix<T> poison_other_triangle(Queue& q, const MV<T>& A, Uplo keep) {
+    Matrix<T> junk(A.rows(), A.cols(), A.batch_size());
+    (void)junk.fill(q, kPoison<T>);
+    auto kept = keep == Uplo::Upper ? linalg::triu(q, A) : linalg::tril(q, A);
+    auto other = keep == Uplo::Upper ? linalg::tril(q, junk, -1) : linalg::triu(q, junk, 1);
+    auto P = linalg::add(q, kept, other);
+    q.wait();
+    return P;
+}
+
+void expect_info(const UnifiedVector<int32_t>& info, int batch, int bad, const char* what) {
+    ASSERT_EQ(info.size(), size_t(batch)) << what;
+    for (int b = 0; b < batch; ++b) {
+        if (b == bad) {
+            EXPECT_NE(info[b], 0) << what << ": item " << b << " should report failure";
+        } else {
+            EXPECT_EQ(info[b], 0) << what << ": item " << b;
+        }
+    }
+}
+
+template <typename T>
+void expect_vectors_agree(const VectorView<Real<T>>& w, const VectorView<Real<T>>& ref, int n) {
+    std::vector<std::vector<double>> r(static_cast<size_t>(w.batch_size()));
+    double scale = 0;
+    for (int b = 0; b < w.batch_size(); ++b)
+        for (int i = 0; i < w.size(); ++i) {
+            r[static_cast<size_t>(b)].push_back(double(ref(i, b)));
+            scale = std::max(scale, std::fabs(double(ref(i, b))));
+        }
+    EXPECT_VERIFY(T, verify::Check::values, n, MV<T>::values_error(w, r, scale));
+}
+
+}  // namespace
+
 // The value-returning wrappers must not modify their inputs -- that is the whole
 // difference between them and the out-parameter forms.
 TEST(LinalgLayer, ValueReturningWrappersLeaveInputsAlone) {
     Queue q;
-    const int n = 12, batch = 2;
+    const int n = 12, nrhs = 3, batch = 2;
     auto A = spd(n, batch);
-
-    std::vector<float> original;
+    auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - 2 * j + b); });
+    Vector<float> x(n, batch);
     for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) original.push_back(at(A, i, j, b));
+        for (int i = 0; i < n; ++i) x(i, b) = float(i - b);
+
+    std::vector<float> original_A(A.data_ptr(), A.data_ptr() + A.stride() * batch);
+    std::vector<float> original_B(B.data_ptr(), B.data_ptr() + B.stride() * batch);
+    std::vector<float> original_x(x.data_ptr(), x.data_ptr() + size_t(n) * batch);
 
     auto L = linalg::cholesky(q, A);
     auto w = linalg::eigvalsh(q, A);
     auto e = linalg::eigh(q, A);
+    auto ws = linalg::eigvalsh(q, A, SyevxParams<float>{.select = SyevxSelect::Index, .il = 1, .iu = 4});
     auto s = linalg::svd(q, A);
     auto f = linalg::lu(q, A);
     auto Ai = linalg::inv(q, A);
     auto up = linalg::triu(q, A);
+    auto X = linalg::solve(q, A, B);
+    auto Xt = linalg::solve(q, A, B, Transpose::Trans);
+    auto Y = linalg::solve_spd(q, A, B);
+    auto Z = linalg::solve_triangular(q, A, B);
+    auto G = linalg::gram(q, A);
+    auto y = linalg::matvec(q, A, x);
     q.wait();
 
-    size_t k = 0;
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                ASSERT_FLOAT_EQ(at(A, i, j, b), original[k++]) << "input was modified";
+    ASSERT_TRUE(std::equal(original_A.begin(), original_A.end(), A.data_ptr())) << "A was modified";
+    ASSERT_TRUE(std::equal(original_B.begin(), original_B.end(), B.data_ptr())) << "B was modified";
+    ASSERT_TRUE(std::equal(original_x.begin(), original_x.end(), x.data_ptr())) << "x was modified";
 
     // eigvalsh and eigh must agree on the eigenvalues.
     ASSERT_EQ(w.size(), e.values.size());
@@ -528,11 +648,12 @@ TEST(LinalgLayer, CholeskyFactorReproducesInput) {
     Queue q;
     const int n = 8, batch = 2;
     auto A = spd(n, batch);
-    auto L = linalg::cholesky(q, A, Uplo::Lower);
+    auto c = linalg::cholesky(q, A, Uplo::Lower);
     q.wait();
 
     EXPECT_VERIFY(float, verify::Check::factorization, n,
-                  Dense::potrf_residual(q, A, L, Uplo::Lower, A.all_items()));
+                  Dense::potrf_residual(q, A, c.factor, Uplo::Lower, A.all_items()));
+    expect_info(c.info, batch, -1, "cholesky");
 }
 
 // A X == B, checked by multiplying back.
@@ -542,119 +663,62 @@ TEST(LinalgLayer, SolveSatisfiesTheSystem) {
     auto A = spd(n, batch);
     auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - 2 * j + b); });
 
-    auto X = linalg::solve(q, A, B);
+    auto s = linalg::solve(q, A, B);
     q.wait();
 
-    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A, X, B, A.all_items()));
+    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A, s.x, B, A.all_items()));
+    expect_info(s.info, batch, -1, "solve");
 }
 
 // ---- linalg::solve after the gesv rewire -----------------------------------
 //
-// `solve` now sends Transpose::NoTrans to the fused `gesv` and keeps the
-// hand-composed getrf + getrs for Trans/ConjTrans, because gesv has no Transpose
-// parameter. Both arms therefore need their own residual. The NoTrans shapes below
-// straddle the sm_89 gesv table's fused window (float n <= 32, complex<float> n <= 16, and
-// nrhs <= 4 for both); on a CPU queue, or a device without sub-group 32, the fused
-// tier is gated off and every shape takes the composed arm -- so these are
-// correctness rows that hold on any device, not routing rows.
+// `solve` sends Transpose::NoTrans to the fused `gesv` and keeps the hand-composed
+// getrf + getrs for Trans/ConjTrans, because gesv has no Transpose parameter. Both arms
+// therefore need their own residual. The NoTrans shapes below straddle the sm_89 gesv
+// table's fused window (float n <= 32, complex<float> n <= 16, and nrhs <= 4 for both);
+// on a CPU queue, or a device without sub-group 32, the fused tier is gated off and every
+// shape takes the composed arm -- so these are correctness rows that hold on any device,
+// not routing rows.
 
 namespace {
-
-template <typename T>
-inline constexpr bool kIsComplex = !std::is_same_v<T, typename base_type<T>::type>;
-
-template <typename T>
-T scalar_of(double re, double im) {
-    using Real = typename base_type<T>::type;
-    if constexpr (kIsComplex<T>) {
-        return T(Real(re), Real(im));
-    } else {
-        (void)im;
-        return T(Real(re));
-    }
-}
-
-// std::conj on a real argument returns std::complex, so it cannot be spelled bare.
-template <typename T>
-T conj_of(const T& z) {
-    if constexpr (kIsComplex<T>) {
-        return std::conj(z);
-    } else {
-        return z;
-    }
-}
-
-template <typename T>
-T& elem(const MatrixView<T, MatrixFormat::Dense>& v, int i, int j, int b) {
-    return v.data_ptr()[static_cast<int64_t>(b) * v.stride() +
-                        static_cast<int64_t>(j) * v.ld() + i];
-}
 
 // Diagonally dominant for every batch item, so LU is well-posed without pivot luck.
 // The imaginary part is off-diagonal and odd in (i - j), which is what makes
 // ConjTrans a different system from Trans.
 template <typename T>
-Matrix<T, MatrixFormat::Dense> solve_system(int n, int batch) {
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-    const auto v = A.view();
+Matrix<T> solve_system(int n, int batch) {
+    Matrix<T> A(n, n, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i)
-                elem(v, i, j, b) =
+                elem<T>(A, i, j, b) =
                     i == j ? scalar_of<T>(double(n + b + 3), 0.0)
-                           : scalar_of<T>(1.0 / (1.0 + std::abs(i - j)),
-                                          0.25 * double(i - j) / double(n));
+                           : scalar_of<T>(1.0 / (1.0 + std::abs(i - j)), 0.25 * double(i - j) / double(n));
     return A;
 }
 
 template <typename T>
-Matrix<T, MatrixFormat::Dense> solve_rhs(int n, int nrhs, int batch) {
-    Matrix<T, MatrixFormat::Dense> B(n, nrhs, batch);
-    const auto v = B.view();
+Matrix<T> solve_rhs(int n, int nrhs, int batch) {
+    Matrix<T> B(n, nrhs, batch);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i)
-                elem(v, i, j, b) = scalar_of<T>(1.0 + i - 2.0 * j + b, 0.5 - 0.1 * j);
+            for (int i = 0; i < n; ++i) elem<T>(B, i, j, b) = scalar_of<T>(1.0 + i - 2.0 * j + b, 0.5 - 0.1 * j);
     return B;
 }
 
-// Checked on batch item 0 AND item batch - 1: a host residual on item 0 alone cannot
-// see a per-item indexing bug, which is the house rule for this kind of check.
 template <typename T>
 void expect_solves(Queue& q, const char* what, int n, int nrhs, int batch, Transpose trans) {
-    using Real = typename base_type<T>::type;
     auto A = solve_system<T>(n, batch);
     auto B = solve_rhs<T>(n, nrhs, batch);
 
-    auto X = linalg::solve(q, A, B, trans);
+    auto s = linalg::solve(q, A, B, trans);
     q.wait();
 
-    ASSERT_EQ(X.rows(), n) << what;
-    ASSERT_EQ(X.cols(), nrhs) << what;
-    ASSERT_EQ(X.batch_size(), batch) << what;
-
-    const auto Av = A.view();
-    const auto Bv = B.view();
-    const auto Xv = X.view();
-
-    for (int b : {0, batch - 1}) {
-        Real scale = Real(1);
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) scale = std::max(scale, std::abs(elem(Bv, i, j, b)));
-
-        for (int j = 0; j < nrhs; ++j)
-            for (int i = 0; i < n; ++i) {
-                T acc{};
-                for (int k = 0; k < n; ++k) {
-                    const T a = trans == Transpose::NoTrans ? elem(Av, i, k, b)
-                                : trans == Transpose::Trans ? elem(Av, k, i, b)
-                                                            : conj_of(elem(Av, k, i, b));
-                    acc += a * elem(Xv, k, j, b);
-                }
-                ASSERT_LE(std::abs(acc - elem(Bv, i, j, b)), Real(2e-3) * scale)
-                    << what << ": op(A) X != B at (" << i << "," << j << ") batch " << b;
-            }
-    }
+    ASSERT_EQ(s.x.rows(), n) << what;
+    ASSERT_EQ(s.x.cols(), nrhs) << what;
+    ASSERT_EQ(s.x.batch_size(), batch) << what;
+    EXPECT_VERIFY(T, verify::Check::solve, n, MV<T>::solve_residual(q, A, trans, s.x, B, A.all_items())) << what;
+    expect_info(s.info, batch, -1, what);
 }
 
 }  // namespace
@@ -694,6 +758,7 @@ TEST(LinalgLayer, EighProducesConsistentEigenpairs) {
     q.wait();
 
     test_utils::expect_eigenpairs<float>(q, A, e.vectors, e.values, n, std::span<const int>(A.all_items()));
+    expect_info(e.info, batch, -1, "eigh");
 }
 
 // The convenience layer leases from the arena; repeated calls must not grow it.
@@ -714,8 +779,7 @@ TEST(LinalgLayer, RepeatedCallsDoNotGrowTheArena) {
     EXPECT_EQ(q.workspace_capacity(), settled);
 }
 
-// alpha is matmul's only scalar knob now that beta is gone, and nothing else
-// exercises it.
+// alpha is matmul's only scalar knob now that beta is gone.
 TEST(LinalgLayer, MatmulAlphaScalesTheProduct) {
     Queue q;
     const int n = 4, batch = 2;
@@ -724,18 +788,11 @@ TEST(LinalgLayer, MatmulAlphaScalesTheProduct) {
 
     auto plain = linalg::matmul(q, A, B);
     auto scaled_product = linalg::matmul(q, A, B, {.alpha = 2.0f});
-    auto transposed = linalg::matmul(q, A, B, {.transA = Transpose::Trans});
     q.wait();
 
-    const auto items = A.all_items();
     EXPECT_VERIFY(float, verify::Check::blas, n,
                   Dense::gemm_backward_error(q, A, Transpose::NoTrans, B, Transpose::NoTrans, plain,
-                                             scaled_product, 2.0, 0.0, items))
-        << "alpha";
-    EXPECT_VERIFY(float, verify::Check::blas, n,
-                  Dense::gemm_backward_error(q, A, Transpose::Trans, B, Transpose::NoTrans, plain,
-                                             transposed, 1.0, 0.0, items))
-        << "transA";
+                                             scaled_product, 2.0, 0.0, A.all_items()));
 }
 
 // triu/tril mask an existing matrix; fill_triangular generates one. The k
@@ -770,8 +827,7 @@ TEST(LinalgLayer, TriuTrilMaskAnExistingMatrix) {
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i)
-                ASSERT_FLOAT_EQ(at(A, i, j, b), at(u0, i, j, b))
-                    << "in place " << i << "," << j;
+                ASSERT_FLOAT_EQ(at(A, i, j, b), at(u0, i, j, b)) << "in place " << i << "," << j;
 }
 
 TEST(LinalgLayer, TriangularMaskRejectsMismatchedShapes) {
@@ -780,18 +836,6 @@ TEST(LinalgLayer, TriangularMaskRejectsMismatchedShapes) {
     auto C = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
     EXPECT_THROW((void)linalg::triangular_mask_into<float>(q, A, C, Uplo::Upper, 0),
                  std::invalid_argument);
-}
-
-TEST(LinalgLayer, InvReproducesTheIdentity) {
-    Queue q;
-    const int n = 8, batch = 2;
-    auto A = spd(n, batch);
-    auto Ai = linalg::inv(q, A);
-    q.wait();
-
-    // ||A A^-1 - I||_F / (||A||_F ||A^-1||_F): an empty B0 is the identity.
-    EXPECT_VERIFY(float, verify::Check::solve, n,
-                  Dense::solve_residual(q, A, Ai, Dense(nullptr, 0, 0, 1), A.all_items()));
 }
 
 TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
@@ -813,21 +857,23 @@ TEST(LinalgLayer, TransposeSwapsExtentsAndElements) {
 // norm returns one value per batch item. Unlike the rest of the layer it has
 // already waited by the time it returns.
 TEST(LinalgLayer, NormMatchesTheHostFrobeniusNorm) {
-    Queue q;
     const int rows = 4, cols = 3, batch = 3;
+    Queue q;
     auto A = from_fn(rows, cols, batch, [](int i, int j, int b) { return float(i - 2 * j + b); });
     auto n = linalg::norm(q, A);
 
     ASSERT_EQ(n.size(), size_t(batch));
+    std::vector<std::vector<double>> ref(batch);
+    double scale = 0.0;
     for (int b = 0; b < batch; ++b) {
         double acc = 0.0;
         for (int j = 0; j < cols; ++j)
-            for (int i = 0; i < rows; ++i) {
-                const double v = at(A, i, j, b);
-                acc += v * v;
-            }
-        ASSERT_NEAR(n[b], float(std::sqrt(acc)), 1e-3f) << "batch " << b;
+            for (int i = 0; i < rows; ++i) acc += double(at(A, i, j, b)) * at(A, i, j, b);
+        ref[b].push_back(std::sqrt(acc));
+        scale = std::max(scale, std::sqrt(acc));
     }
+    EXPECT_VERIFY(float, verify::Check::values, rows * cols,
+                  Dense::values_error(VectorView<float>(n.data(), 1, batch), ref, scale));
 }
 
 // cond on a diagonal matrix has a closed form: the Frobenius condition number is
@@ -844,59 +890,334 @@ TEST(LinalgLayer, CondMatchesTheDiagonalReference) {
         a2 += double(d[i]) * d[i];
         ai2 += 1.0 / (double(d[i]) * d[i]);
     }
-    const float expected = float(std::sqrt(a2) * std::sqrt(ai2));
+    const double expected = std::sqrt(a2) * std::sqrt(ai2);
     ASSERT_EQ(k.size(), size_t(batch));
-    for (int b = 0; b < batch; ++b) ASSERT_NEAR(k[b], expected, 1e-2f) << "batch " << b;
-}
-
-// The factors and the pivots are checked together, by solving with them: the
-// pivot convention (base, and whether the entries are interchanges or a
-// permutation) is a backend detail this layer does not promise.
-TEST(LinalgLayer, LuFactorsAndPivotsSolveTheSystem) {
-    Queue q;
-    const int n = 8, nrhs = 2, batch = 2;
-    auto A = spd(n, batch);
-    auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - j + b); });
-
-    auto f = linalg::lu(q, A);
-    ASSERT_EQ(f.pivots.size(), size_t(n) * size_t(batch));
-
-    Matrix<float, MatrixFormat::Dense> X(n, nrhs, batch);
-    (void)MatrixView<float, MatrixFormat::Dense>::copy(q, X, B);
-    (void)getrs(q, f.factors, X, f.pivots.to_span());
-    q.wait();
-
-    EXPECT_VERIFY(float, verify::Check::solve, n, Dense::solve_residual(q, A, X, B, A.all_items()));
-}
-
-// U diag(S) Vh == A, on a square well-conditioned input.
-TEST(LinalgLayer, SvdReconstructsInput) {
-    Queue q;
-    const int n = 6, batch = 2;
-    auto A = spd(n, batch);
-
-    auto s = linalg::svd(q, A);
-    q.wait();
-
-    ASSERT_EQ(s.U.rows(), n);
-    ASSERT_EQ(s.U.cols(), n);
-    ASSERT_EQ(s.Vh.rows(), n);
-    ASSERT_EQ(s.Vh.cols(), n);
-    ASSERT_EQ(s.values.size(), size_t(n) * size_t(batch));
-
-    EXPECT_VERIFY(float, verify::Check::factorization, n,
-                  Dense::svd_residual(q, A, s.U, VectorView<float>(s.values, n, batch), s.Vh,
-                                      A.all_items()));
+    EXPECT_VERIFY(float, verify::Check::values, n,
+                  Dense::values_error(VectorView<float>(k.data(), 1, batch),
+                                      std::vector<std::vector<double>>(batch, {expected}), expected));
 }
 
 TEST(LinalgLayer, SvdRejectsTheVectorlessJob) {
     Queue q;
     auto A = spd(4, 1);
     EXPECT_THROW(linalg::svd(q, A, SvdVectors::None), std::invalid_argument);
+    EXPECT_THROW(linalg::svd(q, A, GesvdOptions{.jobu = SvdVectors::None, .jobvh = SvdVectors::None}),
+                 std::invalid_argument);
 }
 
+TEST(LinalgLayer, EighSubsetRejectsExtremal) {
+    Queue q;
+    auto A = spd(6, 1);
+    EXPECT_THROW(linalg::eigh(q, A, SyevxParams<float>{}), std::invalid_argument);
+}
+
+// ---- every wrapper over float, double and complex<float> ----------------------
+// Inputs are padded views (ld = rows + 3, padded batch stride, poisoned padding), so a
+// wrapper that derives ld or stride instead of reading it fails.
+
+template <typename T>
+class LinalgTyped : public ::testing::Test {
+protected:
+    Queue q;
+};
+
+using LinalgTypes = ::testing::Types<float, double, std::complex<float>>;
+TYPED_TEST_SUITE(LinalgTyped, LinalgTypes);
+
+TYPED_TEST(LinalgTyped, MatmulTransposesAndRectangles) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int m = 5, k = 7, n = 3, batch = 3;
+    const T alpha = scalar_of<T>(1.5, -0.5);
+    for (Transpose ta : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+        for (Transpose tb : {Transpose::NoTrans, Transpose::ConjTrans}) {
+            const bool tA = ta != Transpose::NoTrans, tB = tb != Transpose::NoTrans;
+            auto A = padded<T>(q, make<T>(q, tA ? k : m, tA ? m : k, batch, Fill::general, 11));
+            auto B = padded<T>(q, make<T>(q, tB ? n : k, tB ? k : n, batch, Fill::general, 12));
+            auto C = linalg::matmul(q, A, B, {.alpha = alpha, .transA = ta, .transB = tb});
+            q.wait();
+            ASSERT_EQ(C.rows(), m);
+            ASSERT_EQ(C.cols(), n);
+            EXPECT_VERIFY(T, verify::Check::blas, k,
+                          MV<T>::gemm_backward_error(q, A, ta, B, tb, C, C, alpha, T(0), C.all_items()))
+                << "ta=" << int(ta) << " tb=" << int(tb);
+        }
+}
+
+TYPED_TEST(LinalgTyped, CholeskyBothTrianglesAndInfo) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int n = 12, batch = 6, bad = 4;
+    auto A = make<T>(q, n, n, batch, Fill::spd, 21);
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+        auto P = padded<T>(q, poison_other_triangle<T>(q, A, uplo));
+        auto c = linalg::cholesky(q, P, uplo);
+        q.wait();
+        EXPECT_VERIFY(T, verify::Check::factorization, n,
+                      MV<T>::potrf_residual(q, A, c.factor, uplo, A.all_items()))
+            << "uplo " << int(uplo);
+        expect_info(c.info, batch, -1, "cholesky");
+        const int i = uplo == Uplo::Lower ? 0 : n - 1, j = uplo == Uplo::Lower ? n - 1 : 0;
+        EXPECT_EQ(elem<T>(c.factor, i, j, batch - 1), T(0)) << "the other triangle is zeroed";
+    }
+
+    elem<T>(A, 0, 0, bad) = T(-1);  // leading minor of order 1 is negative
+    auto c = linalg::cholesky(q, A);
+    q.wait();
+    expect_info(c.info, batch, bad, "cholesky, one non-SPD item");
+    EXPECT_EQ(c.info[bad], 1);
+}
+
+TYPED_TEST(LinalgTyped, EighBothTrianglesAndInfo) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int n = 10, batch = 4;
+    auto A = make<T>(q, n, n, batch, Fill::hermitian, 31);
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+        auto P = padded<T>(q, poison_other_triangle<T>(q, A, uplo));
+        auto e = linalg::eigh(q, P, uplo);
+        auto w = linalg::eigvalsh(q, P, uplo);
+        q.wait();
+        test_utils::expect_eigenpairs<T>(q, A, e.vectors, e.values, n, std::span<const int>(A.all_items()));
+        test_utils::expect_eigenvalues_agree<T>(w, e.values, n, batch);
+        expect_info(e.info, batch, -1, "eigh");
+    }
+}
+
+TYPED_TEST(LinalgTyped, EighByIndexRange) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int n = 12, batch = 4, il = 3, iu = 7, k = iu - il + 1;
+    auto A = make<T>(q, n, n, batch, Fill::hermitian, 41);
+    auto P = padded<T>(q, A);
+    auto full = linalg::eigh(q, A);
+    auto e = linalg::eigh(q, P, SyevxParams<T>{.select = SyevxSelect::Index, .il = il, .iu = iu});
+    auto w = linalg::eigvalsh(q, P, SyevxParams<T>{.select = SyevxSelect::Index, .il = il, .iu = iu});
+    q.wait();
+
+    ASSERT_EQ(e.values.size(), size_t(k) * batch);
+    ASSERT_EQ(e.vectors.rows(), n);
+    ASSERT_EQ(e.vectors.cols(), k);
+    EXPECT_EQ(w.vectors.rows(), 0);
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(e.count[b], k) << b;
+        EXPECT_EQ(w.count[b], k) << b;
+    }
+    expect_info(e.info, batch, -1, "eigh subset");
+    const VectorView<Real<T>> wv(e.values.data(), k, batch);
+    const VectorView<Real<T>> ref(full.values.data() + il, k, batch, 1, n);
+    expect_vectors_agree<T>(wv, ref, n);
+    expect_vectors_agree<T>(VectorView<Real<T>>(w.values.data(), k, batch), ref, n);
+    EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV<T>::eigen_residual(q, A, e.vectors, wv));
+    EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV<T>::orthogonality(q, e.vectors));
+}
+
+// A value range has a per-item count; each must equal the full spectrum's count in (vl, vu].
+TYPED_TEST(LinalgTyped, EighByValueRangeReportsCounts) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int n = 12, batch = 4;
+    auto A = make<T>(q, n, n, batch, Fill::hermitian, 51);
+    auto full = linalg::eigh(q, A);
+    q.wait();
+    // Midpoints between eigenvalues of item 0, so no eigenvalue sits on an end.
+    const Real<T> vl = (full.values[2] + full.values[3]) / 2, vu = (full.values[8] + full.values[9]) / 2;
+    auto e = linalg::eigh(q, A, SyevxParams<T>{.select = SyevxSelect::Value, .vl = vl, .vu = vu});
+    q.wait();
+
+    ASSERT_EQ(e.vectors.cols(), n) << "capacity n";
+    std::vector<int> counts;
+    for (int b = 0; b < batch; ++b) {
+        int c = 0, first = -1;
+        for (int i = 0; i < n; ++i) {
+            const Real<T> v = full.values[size_t(b) * n + i];
+            if (v > vl && v <= vu) {
+                if (first < 0) first = i;
+                ++c;
+            }
+        }
+        ASSERT_EQ(e.count[b], c) << "item " << b;
+        counts.push_back(c);
+        if (c == 0) continue;
+        expect_vectors_agree<T>(VectorView<Real<T>>(e.values.data() + size_t(b) * n, c, 1),
+                                VectorView<Real<T>>(full.values.data() + size_t(b) * n + first, c, 1), n);
+    }
+    EXPECT_EQ(counts[0], 6);
+    expect_info(e.info, batch, -1, "eigh value range");
+}
+
+TYPED_TEST(LinalgTyped, SvdThinFullMixedAndRectangular) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int batch = 3;
+    struct Case { int m, n; SvdVectors ju, jv; };
+    for (Case c : {Case{9, 6, SvdVectors::All, SvdVectors::All}, Case{9, 6, SvdVectors::Thin, SvdVectors::Thin},
+                   Case{6, 9, SvdVectors::Thin, SvdVectors::Thin}, Case{6, 9, SvdVectors::All, SvdVectors::Thin},
+                   Case{9, 6, SvdVectors::Thin, SvdVectors::All}}) {
+        const int k = std::min(c.m, c.n);
+        auto A = make<T>(q, c.m, c.n, batch, Fill::general, 61);
+        auto s = linalg::svd(q, padded<T>(q, A), GesvdOptions{.jobu = c.ju, .jobvh = c.jv});
+        ASSERT_EQ(s.U.cols(), c.ju == SvdVectors::All ? c.m : k);
+        ASSERT_EQ(s.Vh.rows(), c.jv == SvdVectors::All ? c.n : k);
+        EXPECT_VERIFY(T, verify::Check::factorization, std::max(c.m, c.n),
+                      MV<T>::svd_residual(q, A, s.U, VectorView<Real<T>>(s.values.data(), k, batch), s.Vh))
+            << c.m << "x" << c.n << " ju=" << int(c.ju) << " jv=" << int(c.jv);
+        EXPECT_VERIFY(T, verify::Check::orthogonality, std::max(c.m, c.n), MV<T>::orthogonality(q, s.U));
+        expect_info(s.info, batch, -1, "svd");
+    }
+}
+
+// One side None: the other factor and the values must still come out.
+TYPED_TEST(LinalgTyped, SvdOneSidedAndHermitian) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int m = 8, n = 5, k = 5, batch = 2;
+    auto A = make<T>(q, m, n, batch, Fill::general, 71);
+    auto full = linalg::svd(q, A, SvdVectors::Thin);
+    auto u_only = linalg::svd(q, A, GesvdOptions{.jobu = SvdVectors::Thin, .jobvh = SvdVectors::None});
+    EXPECT_EQ(u_only.Vh.rows(), 0);
+    EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV<T>::orthogonality(q, u_only.U));
+    expect_vectors_agree<T>(VectorView<Real<T>>(u_only.values.data(), k, batch),
+                            VectorView<Real<T>>(full.values.data(), k, batch), m);
+
+    const int h = 8;
+    auto H = make<T>(q, h, h, batch, Fill::hermitian, 72);
+    auto sh = linalg::svd(q, poison_other_triangle<T>(q, H, Uplo::Lower),
+                          GesvdOptions{.hermitian_uplo = Uplo::Lower});
+    EXPECT_VERIFY(T, verify::Check::factorization, h,
+                  MV<T>::svd_residual(q, H, sh.U, VectorView<Real<T>>(sh.values.data(), h, batch), sh.Vh));
+    expect_info(sh.info, batch, -1, "hermitian svd");
+}
+
+TYPED_TEST(LinalgTyped, LuSolveSolveSpdInvReportSingularItems) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int nrhs = 3, batch = 6, bad = 3;
+    for (int n : {16, 40}) {
+        auto A = make<T>(q, n, n, batch, Fill::pivoted, 81);
+        auto S = make<T>(q, n, n, batch, Fill::spd, 82);
+        auto B = make<T>(q, n, nrhs, batch, Fill::general, 83);
+        auto Ap = padded<T>(q, A), Sp = padded<T>(q, S), Bp = padded<T>(q, B);
+
+        auto f = linalg::lu(q, Ap);
+        auto x = linalg::solve(q, Ap, Bp);
+        auto xt = linalg::solve(q, Ap, Bp, Transpose::ConjTrans);
+        auto y = linalg::solve_spd(q, Sp, Bp);
+        auto yu = linalg::solve_spd(q, padded<T>(q, poison_other_triangle<T>(q, S, Uplo::Upper)), Bp, Uplo::Upper);
+        auto ai = linalg::inv(q, Ap);
+        q.wait();
+
+        Matrix<T> X(n, nrhs, batch);
+        (void)MV<T>::copy(q, X, B);
+        (void)getrs(q, f.factors, X, f.pivots.to_span());
+        q.wait();
+        const auto items = A.all_items();
+        EXPECT_VERIFY(T, verify::Check::solve, n, MV<T>::solve_residual(q, A, X, B, items)) << "lu, n=" << n;
+        EXPECT_VERIFY(T, verify::Check::solve, n, MV<T>::solve_residual(q, A, x.x, B, items)) << "solve, n=" << n;
+        EXPECT_VERIFY(T, verify::Check::solve, n,
+                      MV<T>::solve_residual(q, A, Transpose::ConjTrans, xt.x, B, items)) << "solve^H, n=" << n;
+        EXPECT_VERIFY(T, verify::Check::solve, n, MV<T>::solve_residual(q, S, y.x, B, items)) << "solve_spd";
+        EXPECT_VERIFY(T, verify::Check::solve, n, MV<T>::solve_residual(q, S, yu.x, B, items)) << "solve_spd U";
+        EXPECT_VERIFY(T, verify::Check::solve, n,
+                      MV<T>::solve_residual(q, A, ai.inverse, MV<T>(nullptr, 0, 0, 1), items)) << "inv";
+        for (auto* info : {&f.info, &x.info, &xt.info, &y.info, &yu.info, &ai.info})
+            expect_info(*info, batch, -1, "well-posed");
+
+        for (int i = 0; i < n; ++i) elem<T>(A, i, 0, bad) = T(0);  // U(1,1) == 0 exactly
+        elem<T>(S, 0, 0, bad) = T(-1);
+        auto fs = linalg::lu(q, A);
+        auto xs = linalg::solve(q, A, B);
+        auto xts = linalg::solve(q, A, B, Transpose::Trans);
+        auto ys = linalg::solve_spd(q, S, B);
+        auto ais = linalg::inv(q, A);
+        q.wait();
+        expect_info(fs.info, batch, bad, "lu, singular item");
+        expect_info(xs.info, batch, bad, "solve, singular item");
+        expect_info(xts.info, batch, bad, "solve^T, singular item");
+        expect_info(ys.info, batch, bad, "solve_spd, non-SPD item");
+        expect_info(ais.info, batch, bad, "inv, singular item");
+    }
+}
+
+TYPED_TEST(LinalgTyped, SolveTriangularEverySideTriangleAndOp) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int m = 9, n = 4, batch = 3;
+    auto L = make<T>(q, m, m, batch, Fill::spd, 91);
+    auto R = make<T>(q, n, n, batch, Fill::spd, 92);
+    auto B = make<T>(q, m, n, batch, Fill::general, 93);
+    auto Bp = padded<T>(q, B);
+    const T alpha = scalar_of<T>(2.0, 0.5);
+    for (Side side : {Side::Left, Side::Right})
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                for (Diag diag : {Diag::NonUnit, Diag::Unit}) {
+                    const auto& A = side == Side::Left ? L : R;
+                    auto X = linalg::solve_triangular(
+                        q, padded<T>(q, A), Bp,
+                        {.alpha = alpha, .side = side, .uplo = uplo, .trans = t, .diag = diag});
+                    q.wait();
+                    EXPECT_VERIFY(T, verify::Check::solve, m,
+                                  MV<T>::trsm_residual(q, A, side, uplo, t, diag, X, B, alpha))
+                        << "side " << int(side) << " uplo " << int(uplo) << " t " << int(t) << " diag " << int(diag);
+                }
+}
+
+TYPED_TEST(LinalgTyped, MatvecBothOps) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int m = 7, n = 5, batch = 3;
+    auto A = padded<T>(q, make<T>(q, m, n, batch, Fill::general, 101));
+    for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+        const int len = t == Transpose::NoTrans ? n : m;
+        // inc 2 and a padded stride, poison in the gaps.
+        Vector<T> x(len, batch, Stride{2 * len + 3}, Inc{2});
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < 2 * len + 3; ++i) x.data_ptr()[b * (2 * len + 3) + i] = kPoison<T>;
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < len; ++i) x(i, b) = scalar_of<T>(0.5 * i - b, 0.25 * (i + b));
+        auto y = linalg::matvec(q, A, x, t);
+        q.wait();
+        ASSERT_EQ(y.size(), t == Transpose::NoTrans ? m : n);
+        EXPECT_VERIFY(T, verify::Check::blas, std::max(m, n),
+                      MV<T>::gemv_backward_error(q, A, t, x, y, y, T(1), T(0))) << "t " << int(t);
+    }
+}
+
+TYPED_TEST(LinalgTyped, GramBothSidesBothTriangles) {
+    using T = TypeParam;
+    auto& q = this->q;
+    const int m = 9, n = 5, batch = 3;
+    const Transpose h = kIsComplex<T> ? Transpose::ConjTrans : Transpose::Trans;
+    auto A = padded<T>(q, make<T>(q, m, n, batch, Fill::general, 111));
+    // Complex gram is herk, which has no native family: vendor-free it must throw, not fall back.
+    if (kIsComplex<T> && !(BATCHLAS_HAS_CUBLAS || BATCHLAS_HAS_ROCBLAS)) {
+        EXPECT_THROW((void)linalg::gram(q, A), NoRouteError);
+        return;
+    }
+    auto inner = linalg::gram(q, A);
+    auto outer = linalg::gram(q, A, Transpose::NoTrans);
+    q.wait();
+    ASSERT_EQ(inner.rows(), n);
+    ASSERT_EQ(outer.rows(), m);
+    EXPECT_VERIFY(T, verify::Check::blas, m,
+                  MV<T>::gemm_backward_error(q, A, h, A, Transpose::NoTrans, inner, inner, T(1), T(0)))
+        << "A^H A";
+    EXPECT_VERIFY(T, verify::Check::blas, n,
+                  MV<T>::gemm_backward_error(q, A, Transpose::NoTrans, A, h, outer, outer, T(1), T(0)))
+        << "A A^H";
+}
+
+// ---- out-of-order queues -------------------------------------------------------
+// A wrapper that copies A and then factors the copy is two launches: on an out-of-order
+// Queue they need an explicit order. Saturating batches give the race room to show.
+
+namespace {
+constexpr int kRaceN = 32, kRaceBatch = 16384, kRaceReps = 3;
+}  // namespace
+
 // posv and syev run an out-of-order caller's call on a temporary in-order queue; the caller's
-// Queue::wait() must still cover that work (the linalg wrappers free their scratch after it).
+// Queue::wait() must still cover that work.
 TEST(LinalgWrappers, OutOfOrderWaitCoversInOrderDrivers) {
     Queue base;
     Queue q(base, false);
@@ -917,6 +1238,73 @@ TEST(LinalgWrappers, OutOfOrderWaitCoversInOrderDrivers) {
     EXPECT_EQ(sycl_event(values).get_info<sycl::info::event::command_execution_status>(), complete) << "syev";
 }
 
+TEST(LinalgWrappers, OutOfOrderCholeskyLuInvOrderTheirCopy) {
+    Queue base;
+    Queue q(base, false);
+    auto A = make<float>(base, kRaceN, kRaceN, kRaceBatch, Fill::spd, 7);
+    auto B = make<float>(base, kRaceN, 2, kRaceBatch, Fill::general, 3);
+    for (int rep = 0; rep < kRaceReps; ++rep) {
+        auto c = linalg::cholesky(q, A);
+        auto f = linalg::lu(q, A);
+        auto ai = linalg::inv(q, A);
+        q.wait();
+        EXPECT_VERIFY(float, verify::Check::factorization, kRaceN,
+                      Dense::potrf_residual(base, A, c.factor, Uplo::Lower)) << "cholesky " << rep;
+        expect_info(c.info, kRaceBatch, -1, "cholesky");
+        Matrix<float> X(kRaceN, 2, kRaceBatch);
+        (void)Dense::copy(base, X, B);
+        (void)getrs(base, f.factors, X, f.pivots.to_span());
+        base.wait();
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN, Dense::solve_residual(base, A, X, B)) << "lu " << rep;
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN,
+                      Dense::solve_residual(base, A, ai.inverse, Dense(nullptr, 0, 0, 1))) << "inv " << rep;
+    }
+}
+
+TEST(LinalgWrappers, OutOfOrderSolvesOrderTheirCopies) {
+    Queue base;
+    Queue q(base, false);
+    auto A = make<float>(base, kRaceN, kRaceN, kRaceBatch, Fill::spd, 7);
+    auto B = make<float>(base, kRaceN, 2, kRaceBatch, Fill::general, 3);
+    for (int rep = 0; rep < kRaceReps; ++rep) {
+        auto x = linalg::solve(q, A, B);
+        auto xt = linalg::solve(q, A, B, Transpose::Trans);
+        auto y = linalg::solve_spd(q, A, B);
+        auto z = linalg::solve_triangular(q, A, B);
+        q.wait();
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN, Dense::solve_residual(base, A, x.x, B)) << rep;
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN,
+                      Dense::solve_residual(base, A, Transpose::Trans, xt.x, B)) << rep;
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN, Dense::solve_residual(base, A, y.x, B)) << rep;
+        EXPECT_VERIFY(float, verify::Check::solve, kRaceN,
+                      Dense::trsm_residual(base, A, Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit,
+                                           z, B, 1.0)) << rep;
+    }
+}
+
+TEST(LinalgWrappers, OutOfOrderEighSvdGramOrderTheirLaunches) {
+    Queue base;
+    Queue q(base, false);
+    auto A = make<float>(base, kRaceN, kRaceN, kRaceBatch, Fill::hermitian, 7);
+    for (int rep = 0; rep < kRaceReps; ++rep) {
+        auto e = linalg::eigh(q, A);
+        auto es = linalg::eigh(q, A, SyevxParams<float>{.select = SyevxSelect::Index, .il = 4, .iu = 9});
+        auto s = linalg::svd(q, A);
+        auto g = linalg::gram(q, A);
+        q.wait();
+        test_utils::expect_eigenpairs<float>(base, A, e.vectors, e.values, kRaceN);
+        EXPECT_VERIFY(float, verify::Check::eigen_residual, kRaceN,
+                      Dense::eigen_residual(base, A, es.vectors, VectorView<float>(es.values.data(), 6, kRaceBatch)))
+            << rep;
+        EXPECT_VERIFY(float, verify::Check::factorization, kRaceN,
+                      Dense::svd_residual(base, A, s.U, VectorView<float>(s.values.data(), kRaceN, kRaceBatch), s.Vh))
+            << rep;
+        EXPECT_VERIFY(float, verify::Check::blas, kRaceN,
+                      Dense::gemm_backward_error(base, A, Transpose::Trans, A, Transpose::NoTrans, g, g, 1.0, 0.0))
+            << rep;
+    }
+}
+
 // The value-returning wrappers own their scratch (the copied A, the factor); returning while
 // the kernels that read it are still enqueued frees it under them. Many calls with no wait in
 // between, on an out-of-order queue, give the freed memory every chance to be reused.
@@ -927,7 +1315,7 @@ TEST(LinalgWrappers, ScratchOutlivesKernels) {
     auto A = spd(n, batch);
     auto B = from_fn(n, nrhs, batch, [](int i, int j, int b) { return float(1 + i - 2 * j + (b % 7)); });
 
-    std::vector<Matrix<float, MatrixFormat::Dense>> X, Y;
+    std::vector<linalg::Solve<float>> X, Y;
     std::vector<UnifiedVector<float>> W;
     for (int r = 0; r < reps; ++r) {
         X.push_back(linalg::solve(q, A, B));
@@ -943,10 +1331,9 @@ TEST(LinalgWrappers, ScratchOutlivesKernels) {
         scale = std::max(scale, std::fabs(ref[static_cast<size_t>(b)].back()));
     }
     for (int r = 0; r < reps; ++r) {
-        // Checked on the in-order `base`: the verify helpers chain kernels and must not race.
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, X[r], B))
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, X[r].x, B))
             << "solve, rep " << r;
-        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, Y[r], B))
+        EXPECT_VERIFY(float, batchlas::verify::Check::solve, n, Dense::solve_residual(base, A, Y[r].x, B))
             << "solve_spd, rep " << r;
         const VectorView<float> w(W[r].data(), n, batch);
         EXPECT_VERIFY(float, batchlas::verify::Check::values, n, Dense::values_error(w, ref, scale)) << "eigvalsh, rep " << r;

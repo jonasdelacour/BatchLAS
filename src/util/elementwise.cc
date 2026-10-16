@@ -134,9 +134,9 @@ Event triangular_mask_into(Queue& ctx,
     auto [global_size, local_size] =
         compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
 
-    // Same reasoning as elementwise_into: kernel views so that a submatrix
-    // (linalg::qr masks a row slice of the factored array) is indexed correctly,
-    // and A may alias C because each work-item touches one element of each.
+    // Same reasoning as elementwise_into: kernel views so that a submatrix (any
+    // ld > rows view) is indexed correctly, and A may alias C because each
+    // work-item touches one element of each.
     auto Av = A.kernel_view();
     auto Cv = C.kernel_view();
     const bool upper = (uplo == Uplo::Upper);

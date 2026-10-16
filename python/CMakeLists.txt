@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.17)
 
+include(GNUInstallDirs)
 find_package(Python COMPONENTS Interpreter Development REQUIRED)
 find_package(pybind11 CONFIG QUIET)
 
@@ -27,6 +28,7 @@ set(BATCHLAS_PY_EXTENSION_SOURCES
     batchlas/bindings/ops_spectral.cc
     batchlas/bindings/ops_misc.cc
     batchlas/bindings/ops_linalg.cc
+    batchlas/bindings/runtime.cc
 )
 
 pybind11_add_module(_batchlas ${BATCHLAS_PY_EXTENSION_SOURCES})
@@ -40,18 +42,32 @@ target_include_directories(_batchlas PRIVATE
 )
 target_link_libraries(_batchlas PRIVATE BatchLAS::batchlas)
 
+# Relative to the install prefix: an absolute Python_SITEARCH escapes `cmake --install --prefix`.
+set(BATCHLAS_PYTHON_INSTALL_DIR
+    "${CMAKE_INSTALL_LIBDIR}/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages"
+    CACHE STRING "Directory (relative to the install prefix, or absolute) that receives the batchlas package")
+# $ORIGIN-relative so the package finds libbatchlas under whatever prefix `cmake --install` is given.
+if(IS_ABSOLUTE "${BATCHLAS_PYTHON_INSTALL_DIR}")
+    set(_batchlas_py_libdir_rpath "${CMAKE_INSTALL_FULL_LIBDIR}")
+else()
+    file(RELATIVE_PATH _batchlas_py_libdir_rpath
+         "/prefix/${BATCHLAS_PYTHON_INSTALL_DIR}/batchlas" "/prefix/${CMAKE_INSTALL_LIBDIR}")
+    set(_batchlas_py_libdir_rpath "$ORIGIN/${_batchlas_py_libdir_rpath}")
+endif()
+
 set_target_properties(_batchlas PROPERTIES
     PREFIX ""
     OUTPUT_NAME "_batchlas"
     LIBRARY_OUTPUT_DIRECTORY "${BATCHLAS_PY_PACKAGE_BUILD}"
     BUILD_RPATH "${CMAKE_BINARY_DIR}/src"
-    INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}"
+    INSTALL_RPATH "${_batchlas_py_libdir_rpath};${CMAKE_INSTALL_RPATH}"
 )
 
 set(BATCHLAS_PY_PACKAGE_FILES
     batchlas/__init__.py
     batchlas/_api.py
     batchlas/_options.py
+    batchlas/linalg.py
 )
 
 foreach(_py_file IN LISTS BATCHLAS_PY_PACKAGE_FILES)
@@ -65,8 +81,8 @@ foreach(_py_file IN LISTS BATCHLAS_PY_PACKAGE_FILES)
     )
 endforeach()
 
-install(TARGETS _batchlas DESTINATION "${Python_SITEARCH}/batchlas")
-install(FILES ${BATCHLAS_PY_PACKAGE_FILES} DESTINATION "${Python_SITEARCH}/batchlas")
+install(TARGETS _batchlas DESTINATION "${BATCHLAS_PYTHON_INSTALL_DIR}/batchlas")
+install(FILES ${BATCHLAS_PY_PACKAGE_FILES} DESTINATION "${BATCHLAS_PYTHON_INSTALL_DIR}/batchlas")
 
 if(BATCHLAS_BUILD_TESTS)
     execute_process(
