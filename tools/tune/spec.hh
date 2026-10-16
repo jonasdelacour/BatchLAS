@@ -95,6 +95,7 @@ std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out,  // o
                                        const std::vector<std::string>& wanted);
 void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit);  // bad/error there: bad here
 std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req);  // run_cell + its ld audit
+Phases& cell_phases();  // this thread's cell: run_cell_audited resets it, sets setup and ld; ArmBench adds the rest
 
 void register_spec(const OpSpec* spec);
 const OpSpec* find_spec(std::string_view op);

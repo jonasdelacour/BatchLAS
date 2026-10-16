@@ -415,6 +415,32 @@ std::vector<Record> read_records(const std::string& path) {
     return out;
 }
 
+const std::vector<std::pair<std::string, double Phases::*>>& Phases::fields() {
+    static const std::vector<std::pair<std::string, double Phases::*>> f{
+        {"setup", &Phases::setup}, {"warm", &Phases::warm},   {"timed", &Phases::timed},
+        {"verify", &Phases::verify}, {"ld", &Phases::ld},     {"guard", &Phases::guard},
+        {"ipc", &Phases::ipc},     {"spawn", &Phases::spawn}, {"start", &Phases::start}};
+    return f;
+}
+
+void Phases::add(double Phases::*f, double s) {
+    if (std::isnan(s)) return;
+    this->*f = std::isnan(this->*f) ? s : this->*f + s;
+}
+
+Phases& Phases::operator+=(const Phases& o) {
+    for (const auto& [name, f] : fields()) add(f, o.*f);
+    if (mode.empty()) mode = o.mode;
+    return *this;
+}
+
+double Phases::worker_s() const {
+    double s = 0;
+    for (std::size_t i = 0; i < kWorkerFields; ++i)
+        if (const double v = this->*fields()[i].second; !std::isnan(v)) s += v;
+    return s;
+}
+
 // ---- SHA-256 (FIPS 180-4) -------------------------------------------------------------------
 
 namespace {

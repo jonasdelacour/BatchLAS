@@ -31,6 +31,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace batchlas::tune {
@@ -134,10 +135,12 @@ public:
         do {
             for (std::size_t i : order) once(arms[i]);
         } while (std::chrono::duration<double>(clock::now() - w0).count() < seconds);
+        spent(&Phases::warm, w0);
     }
 
     bool timed(ArmOutcome& a, int slot) {
         double ms = 0;
+        const auto c0 = clock::now();
         const bool ran = guarded(a, [&] {
             p_.reset();
             const auto t0 = clock::now();
@@ -148,14 +151,18 @@ public:
             a.ms.push_back(ms);
             a.slot.push_back(slot);
         }
+        spent(&Phases::timed, c0);  // the call's wall, reset included: more than ms
         return ran;
     }
 
     // Correctness in the same process, from one more untimed run: a fast wrong answer is "bad".
     void verify(ArmOutcome& a, double tol) {
+        const auto v0 = clock::now();
         p_.clear_info();
-        if (!once(a)) return;
-        const auto [res, info] = p_.verify();
+        const bool ran = once(a);
+        const auto [res, info] = ran ? p_.verify() : std::pair<double, int>{0.0, 0};
+        spent(&Phases::verify, v0);
+        if (!ran) return;
         a.residual = res;
         a.info_nonzero = info;
         if (!std::isfinite(res)) fail(a, "bad", "residual_nonfinite");
@@ -168,6 +175,7 @@ private:
     Problem& p_;
     std::unique_ptr<UnifiedVector<std::byte>> ws_;
 
+    static void spent(double Phases::*f, clock::time_point t0) { cell_phases().add(f, seconds_since(t0)); }
     static void fail(ArmOutcome& a, const char* status, const std::string& why) {
         a.status = status;
         a.reason = why;

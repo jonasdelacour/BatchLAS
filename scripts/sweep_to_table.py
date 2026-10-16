@@ -1093,6 +1093,15 @@ def self_test():
         led = build(base, d)
         expect(tiers(rows_of(led)) == {8: "preview", 32: "coarse", 64: "deep", 256: "preview"},
                f"gap fill drops a lower tier inside a higher bracket -> {tiers(rows_of(led))}")
+        # phase timers, the run's protocol and an audit's seconds leave the table byte-identical
+        plain = ledger_text("posv", "sm_0", build(base, d, "ph.jsonl"), fh, "k").text
+        phases = {"ph_setup": 0.5, "ph_warm": 0.2, "ph_timed": 1.25, "ph_verify": 0.1, "ph_ld": 0.3, "ph_guard": 0.05,
+                  "ph_ipc": 0.01, "ph_start": 3.5, "ph_mode": "worker"}
+        timed = [dict(x, **phases) if x["kind"] == "cell" else dict(x, protocol="full") for x in base]
+        audit = {"kind": "audit", "dtype": "float", "run_id": r1, "key": "uplo=L,n=64,nrhs=1,batch=128",
+                 "verdict": "ok", "fresh_ms": 1.0, "warm_ms": 1.0, "audit_s": 2.5}
+        expect(ledger_text("posv", "sm_0", build(timed + [audit], d, "ph.jsonl"), fh, "k").text == plain,
+               "ph_* fields changed the table")
         # an empty ranking emits no row; a stale winner is skipped so the lower tier stands
         led2 = build([run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 8), cell(r3, "preview", 256),
                       run_line(r4, "2026-10-04"), cell(r4, "deep", 8, ranked=()),

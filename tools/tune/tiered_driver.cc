@@ -203,6 +203,7 @@ private:
     void audit(Job& j, const CellJob& job, const ArmBatch& warm);
     bool over_budget() const;
     bool named_only() const { return o_.tier == Tier::custom || o_.only_named; }
+    std::string mode(const Job& j) const { return (m_ ? m_->persistent() : o_.worker) && !j.fresh ? "worker" : "fresh"; }
     void refine(Job& j);
 };
 
@@ -263,27 +264,32 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
 
 std::vector<PlannedCell> TieredRun::plan(Job& j) {
     j.planned.insert(j.next.begin(), j.next.end());
-    return plan_round(j.plan_spec(), o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable,
-                      o_.max_dim, j.round == 0 ? &j.remeasure : nullptr);
+    PlanSpec spec = j.plan_spec();
+    spec.mode = mode(j);
+    return plan_round(spec, o_.tier, j.next, j.ledger, j.fh, o_.cap_gib, o_.overhead_s, &j.runnable, o_.max_dim,
+                      j.round == 0 ? &j.remeasure : nullptr);
 }
 
 std::string TieredRun::print_plan(const Job& j, const std::vector<PlannedCell>& plan, bool cells) {
     std::map<std::string, int> n;
     double est = 0;
+    std::size_t history = 0, model = 0;
     for (const PlannedCell& c : plan) {
         n[c.reason.empty() ? "measure" : c.reason.rfind("partial:", 0) == 0 ? "partial" : c.reason]++;
         est += c.est_s;
+        if (measurable(c)) ++(c.history ? history : model);
     }
     std::string mix;
     for (const auto& [why, count] : n) mix += (mix.empty() ? "" : ", ") + std::to_string(count) + " " + why;
-    std::printf("== plan %s %s %s tier=%s: %zu cells (%s); est %s\n", j.spec->op().c_str(), j.dtype.c_str(),
-                id_.device.c_str(), to_string(o_.tier).c_str(), plan.size(), mix.c_str(), hours(est).c_str());
+    std::printf("== plan %s %s %s tier=%s: %zu cells (%s); est %s (%zu cells from %s phase history, %zu from the model)\n",
+                j.spec->op().c_str(), j.dtype.c_str(), id_.device.c_str(), to_string(o_.tier).c_str(), plan.size(),
+                mix.c_str(), hours(est).c_str(), history, kProtocol, model);
     if (!cells) return mix;
     for (const PlannedCell& c : plan) {
         std::string line = "  " + key_text(c.key) + "  " + (c.reason.empty() ? std::string("measure") : c.reason);
         if (!c.arms.empty()) line += "  arms=" + join(c.arms, "|");
         if (c.tier != o_.tier) line += "  tier=" + to_string(c.tier);
-        if (c.est_s > 0) line += "  est=" + fmt(c.est_s, "%.2fs");
+        if (c.est_s > 0) line += "  est=" + fmt(c.est_s, "%.2fs") + (c.history ? " (history)" : "");
         std::puts(line.c_str());
     }
     return mix;
@@ -307,6 +313,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.argv = o_.argv;
         m.date = date_;
         m.tier = o_.tier;
+        m.protocol = kProtocol;
         // Always the full lists: table generation derives the current families from the newest run.
         m.keys = join(j.spec->key_names(), " ");
         m.candidates = join(j.cands, "|");
@@ -337,7 +344,7 @@ void TieredRun::retract(Job& j, const std::vector<std::string>& arms) {
             CellRecord c = *r;
             bool ranked = false;
             for (const std::string& a : arms) ranked = ld_retract(c, a, j.ld.bad.at(a)) || ranked;
-            if (ranked) hit.push_back(*r);
+            if (ranked) hit.push_back(*r), hit.back().phases = {};  // the time was spent once
         }
     }
     for (const CellRecord& r : hit) record(j, r, r.tier);
@@ -359,7 +366,9 @@ void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
         });
     };
     job.arms.erase(std::remove_if(job.arms.begin(), job.arms.end(), ld_failed), job.arms.end());
+    const auto t0 = std::chrono::steady_clock::now();
     const ArmBatch f = m_->measure_fresh(job);
+    const double spent = seconds_since(t0);
     std::vector<ArmOutcome> on_worker;
     for (const ArmOutcome& x : warm.arms)
         if (std::find(warm.alone.begin(), warm.alone.end(), x.arm) == warm.alone.end() && !ld_failed(x.arm))
@@ -369,7 +378,7 @@ void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
     bool flipped = false;
     {
         std::lock_guard<std::mutex> lock(mu_);
-        if (j.writer) j.writer->audit(job.key, a.verdict, a.fresh_ms, a.warm_ms);
+        if (j.writer) j.writer->audit(job.key, a.verdict, a.fresh_ms, a.warm_ms, spent);
         if (a.mismatch() && !j.fresh) {
             j.fresh = flipped = true;
             j.meta.worker_mode[od] = "fresh";
@@ -380,7 +389,7 @@ void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
                 flipped ? " -> fresh children for the rest of this run" : "");
     std::fflush(stdout);
     emit(Json().str("ev", "audit").str("op", j.spec->op()).str("dtype", j.dtype).key(job.key).str("verdict", a.verdict)
-             .num("fresh_ms", a.fresh_ms).num("warm_ms", a.warm_ms).boolean("fresh", flipped));
+             .num("fresh_ms", a.fresh_ms).num("warm_ms", a.warm_ms).boolean("fresh", flipped).num("audit_s", spent));
 }
 
 void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
@@ -439,6 +448,8 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
     }
     if (c.round >= 0) round = c.round;  // a re-measured refinement midpoint stays a refinement record
     CellRecord r = record_from_arms(c.key, round, b.arms, j.cands, j.fh, c.stored);
+    r.phases = b.phases;
+    r.phases.arms = static_cast<int>(job.arms.size());
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto& live = j.runnable[c.key];
@@ -642,11 +653,24 @@ int TieredRun::go() {
         j->plan = plan(*j);
         const std::string mix = print_plan(*j, j->plan, o_.plan);
         double est_measure = 0, est_job = 0;
-        std::size_t n_measure = 0;
+        std::size_t n_measure = 0, n_history = 0;
         for (const PlannedCell& c : j->plan) {
             est += c.est_s, est_job += c.est_s;
             to_measure += measurable(c) || c.reason == "skip:single";
-            if (measurable(c)) est_measure += c.est_s, ++n_measure;
+            if (measurable(c)) est_measure += c.est_s, ++n_measure, n_history += c.history;
+        }
+        // Worker starts and fresh-process audits per history cell (a model cell's overhead_s holds its
+        // start), and one run's ld audits, when this protocol has history at this tier and mode.
+        bool run_history = false;
+        double ld_once = 0;
+        const double fraction = o_.audit_fraction >= 0 ? o_.audit_fraction : params(o_.tier).audit_fraction;
+        const double per_cell = history_cell_overhead_s(j->ledger, o_.tier, mode(*j), fraction, &run_history, &ld_once);
+        if (run_history && n_history > 0) {
+            const double run_s = per_cell * double(n_history) + ld_once;
+            est += run_s, est_job += run_s, est_measure += per_cell * double(n_history);  // ld: once a run
+            std::printf("   worker starts and audits: %s per history cell (%zu), ld audits %s once, from %s history, "
+                        "est %s\n", fmt(per_cell, "%.2f s").c_str(), n_history, fmt(ld_once, "%.2f s").c_str(),
+                        kProtocol, hours(run_s).c_str());
         }
         // Refinement cells follow the lattice cells measured now, at their mean estimate.
         bool history = false;

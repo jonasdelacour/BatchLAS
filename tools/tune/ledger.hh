@@ -28,7 +28,11 @@ struct CellRecord {
     std::vector<CandResult> cands;
     std::vector<std::string> ranked;  // winner first; empty = nothing timed (still a record)
     std::string date;                 // ISO, compares as text
+    Phases phases;                    // this measurement's; none on a copy (retract) or an untimed record
 };
+
+// RunMeta::protocol of this engine's runs; --plan estimates from history of the same protocol only.
+inline constexpr const char* kProtocol = "full";
 
 struct RunMeta {
     std::string run_id, dtype, host, device, device_name, batchlas, argv, date;
@@ -36,6 +40,7 @@ struct RunMeta {
     std::string candidates;  // '|'-joined spellings in candidate order (the tie order)
     Tier tier = Tier::deep;
     std::map<std::string, std::string> worker_mode;
+    std::string protocol;  // the per-cell protocol (kProtocol); "" = a ledger from before the field
 };
 
 std::string make_run_id();  // <UTC yyyymmddThhmmss>-<host>-<pid>
@@ -52,7 +57,7 @@ public:
     LedgerWriter& operator=(const LedgerWriter&) = delete;
     void cell(const CellRecord& r);
     void cell(const CellRecord& r, Tier tier);  // a partial re-race keeps its stored record's tier
-    void audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms);
+    void audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms, double audit_s = NAN);
     void update_run(const RunMeta& meta);  // a later run line with the same run id; readers keep the last
 
 private:
@@ -67,6 +72,7 @@ struct Ledger {
     std::vector<RunMeta> runs;
     std::vector<CellRecord> cells;
     std::vector<std::string> warnings;
+    std::map<std::string, std::vector<double>> audit_s;  // run id -> its fresh-process audits' wall seconds
 };
 
 // `dtype`'s lines of one ledger file in file order (a missing file is an empty ledger); a malformed

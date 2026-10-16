@@ -1,6 +1,7 @@
 #include <tools/tune/spec.hh>
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 
 namespace batchlas::tune {
@@ -49,8 +50,18 @@ void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>&
         }
 }
 
+Phases& cell_phases() {
+    thread_local Phases p;
+    return p;
+}
+
 std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req) {
+    using clock = std::chrono::steady_clock;
+    Phases& ph = cell_phases();
+    ph = Phases{};
+    const auto t0 = clock::now();
     std::vector<ArmOutcome> out = spec.run_cell(req);
+    ph.setup = seconds_since(t0) - ph.worker_s();  // Queue, Problem, fill and the per-arm workspace probe
     if (req.ld_audit.empty() || (req.mode != "race" && req.mode != "time")) return out;
     CellRequest a = req;
     a.mode = "verify";
@@ -60,11 +71,15 @@ std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& 
     a.ld_audit.clear();
     if (a.arms.empty()) return out;
     std::vector<ArmOutcome> got;
+    const Phases cell = ph;  // the audit's own verify runs count as ld, not as verify
+    const auto t1 = clock::now();
     try {
         got = spec.run_cell(a);
     } catch (const std::exception& e) {
         for (const std::string& arm : a.arms) got.push_back({arm, "error", e.what(), {}, {}, 0, 0, ""});
     }
+    ph = cell;
+    ph.ld = seconds_since(t1);
     apply_ld_audit(out, got);
     return out;
 }

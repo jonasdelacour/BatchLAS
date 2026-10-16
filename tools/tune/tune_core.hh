@@ -3,6 +3,8 @@
 // The tuner's host-only logic (flat-kernel-selection.md §6): §6.3 statistics and tie rule, §6.2
 // refinement, the JSONL records, the §6.4 hash. No SYCL: tests/tune_tests.cc links it alone.
 
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -109,6 +111,22 @@ struct Record {
 std::optional<Record> parse_record(std::string_view line, std::string* err = nullptr);
 std::vector<Record> read_records(const std::string& path);  // throws std::runtime_error
 
+struct Phases {  // wall seconds of one cell by phase; NaN = not measured. evidence: docs/design/tuning-data.md#tuning-data-ledger-file
+    double setup = NAN, warm = NAN, timed = NAN, verify = NAN, ld = NAN;  // the worker or child process
+    double guard = NAN, ipc = NAN, spawn = NAN, start = NAN;              // the driver
+    std::string mode;  // "" (none) | worker | fresh | fallback
+    int arms = 0;      // arms this measurement raced (a partial re-race: not its stored record's); 0 = unknown
+    static const std::vector<std::pair<std::string, double Phases::*>>& fields();  // name, member; worker side first
+    static constexpr std::size_t kWorkerFields = 5;
+    void add(double Phases::*f, double s);  // a NaN field counts as 0
+    Phases& operator+=(const Phases& o);    // field by field; an empty mode takes o's
+    double worker_s() const;                // setup + warm + timed + verify + ld
+};
+
+inline double seconds_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 std::string sha256_hex(std::string_view data);
 
 // Quoted paths between the kernel-sources-begin/-end markers (CI and CMake parse the same block).
@@ -141,8 +159,7 @@ std::optional<std::string> kernel_hash(const std::string& repo, const std::vecto
 
 std::string gate_verdict(double ratio_p1, double ratio_p2, bool bad_row, double limit = 1.05);  // §10.3
 
-// --old-csv (dtype, every key, old): a row of another width or of a dtype outside non-empty `dtypes`
-// is an error, never a skipped cell.
+// --old-csv (dtype, every key, old): a row of another width or a dtype outside `dtypes` is an error, not a skip.
 struct OldChoice {
     std::string dtype;
     CellKey key;

@@ -26,6 +26,7 @@ struct PlanSpec {  // plain data, so tests need no OpSpec
     std::vector<std::string> candidates;  // the full current list, in tie order
     std::function<double(const CellKey&)> bytes;
     std::function<std::int64_t(const CellKey&)> max_dim;  // empty = no extents known (never skip:dim)
+    std::string mode;  // worker | fresh: the phase history the estimates read; "" = either
 };
 
 struct PlannedCell {
@@ -36,13 +37,19 @@ struct PlannedCell {
     Tier tier = Tier::preview;            // a partial re-race keeps the stored record's tier
     const CellRecord* stored = nullptr;   // partial: the record the new arms merge into
     int round = -1;                       // remeasure: the stored record's round (-1: the running round)
+    bool history = false;                 // est_s from recorded phases, not the model
 };
 
 double estimate_ms(const Ledger& l, const CellKey& key, const std::string& cand,
                    double bytes);  // nearest record (equal non-int fields, log distance), else bytes / 500 GB/s
 
 double cell_estimate_s(const Ledger& l, const CellKey& key, const std::vector<std::string>& arms, double bytes,
-                       const TierParams& p, double overhead_s);
+                       Tier tier, double overhead_s, bool* from_history = nullptr,
+                       const std::string& mode = "");  // the plan's rule: kProtocol history at tier + mode, else the model
+
+double history_cell_overhead_s(const Ledger& l, Tier tier, const std::string& mode, double audit_fraction,
+                               bool* from_history = nullptr,  // per history cell: worker starts + audits
+                               double* ld_once_s = nullptr);  // one run's ld audits (its cells' sum, median)
 
 // Ascending bytes (stable). `runnable`: probe results per cell, nullptr = unknown (no skip:single).
 std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::vector<CellKey>& cells, const Ledger& l,

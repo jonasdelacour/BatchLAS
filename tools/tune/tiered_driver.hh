@@ -25,6 +25,7 @@ struct TieredOpts {
     double refine_cap_factor = -1;  // < 0: the tier's
     bool plan = false;
     bool allow_dirty = false;  // else a dirty --repo tree is refused (docs/design/tuning-data.md)
+    bool worker = true;        // --no-worker: a --plan reads fresh-child phase history
     int progress_fd = -1;
     std::string repo, ledger_root, out, argv;
     std::string run_id;  // empty: make_run_id()
@@ -58,6 +59,7 @@ struct ArmBatch {
     int worker_restarts = 0;  // the worker died on this cell and was restarted
     bool fallback = false;    // ... and the cell ran in a fresh child after all
     std::vector<std::string> alone;  // arms raced alone in fresh children: not the worker's numbers
+    Phases phases;                   // the cell's wall time, every try and child summed
 };
 
 // The GPU seam: measure() is the default path, the persistent worker when persistent();

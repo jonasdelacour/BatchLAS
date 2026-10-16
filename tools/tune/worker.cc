@@ -68,7 +68,7 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
     return std::pair(op, std::move(r));
 }
 
-std::string outcome_text(const std::vector<ArmOutcome>& arms) {
+std::string outcome_text(const std::vector<ArmOutcome>& arms, const Phases* ph) {
     std::string out;
     for (const ArmOutcome& o : arms) {
         out += Json().str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
@@ -78,7 +78,20 @@ std::string outcome_text(const std::vector<ArmOutcome>& arms) {
             out += Json().str("kind", "rep").str("arm", o.arm).integer("rep", static_cast<std::int64_t>(r))
                        .integer("slot", r < o.slot.size() ? o.slot[r] : 0).num("ms", o.ms[r]).line();
     }
-    return out;
+    if (!ph) return out;
+    Json j;
+    j.str("kind", "phase");
+    for (std::size_t i = 0; i < Phases::kWorkerFields; ++i)
+        if (const auto& [name, f] = Phases::fields()[i]; !std::isnan(ph->*f)) j.num(name, ph->*f);
+    return out + j.line();
+}
+
+Phases phases_from_records(const std::vector<Record>& recs) {
+    Phases p;
+    for (const Record& r : recs)
+        if (r.get("kind") == "phase")
+            for (const auto& [name, f] : Phases::fields()) p.add(f, r.number(name));
+    return p;
 }
 
 std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs) {
@@ -229,14 +242,16 @@ ArmBatch race_pool(const std::vector<std::string>& arms, ArmErrors& errs,
                    const std::function<void()>& restart, const std::function<ArmBatch(const std::vector<std::string>&)>& fresh) {
     int restarts = 0;
     std::vector<std::string> erred;
+    Phases spent;  // every try's, a discarded one too
     for (int i = 0; i < 2; ++i) {
         WorkerTry r = attempt(arms);
+        spent += r.phases;
         if (r.ok) {
             for (const ArmOutcome& a : r.arms)
                 if (is_error(a)) erred.push_back(a.arm);
             if (erred.empty()) {
                 for (const ArmOutcome& a : r.arms) errs.note(a.arm, false);
-                return {std::move(r.arms), "", restarts, false};
+                return {std::move(r.arms), "", restarts, false, {}, spent};
             }
             restart();
             ++restarts;
@@ -250,6 +265,7 @@ ArmBatch race_pool(const std::vector<std::string>& arms, ArmErrors& errs,
     ArmBatch b = fresh(arms);
     b.worker_restarts = restarts;
     b.fallback = true;
+    b.phases += spent;
     for (const ArmOutcome& a : b.arms) {
         const bool worker_erred = std::find(erred.begin(), erred.end(), a.arm) != erred.end();
         if (!is_error(a)) errs.note(a.arm, false);
@@ -276,6 +292,7 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
             continue;
         }
         ArmBatch f = fresh({a});
+        b.phases += f.phases;
         const auto it = std::find_if(f.arms.begin(), f.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; });
         if (it != f.arms.end()) b.arms.push_back(std::move(*it));
         else b.arms.push_back({a, "error", "child: " + f.error, {}, {}, 0, 0});
@@ -286,6 +303,7 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
         }
     }
     b.fallback = b.fallback || pool.empty();  // nothing ran on the worker
+    b.phases.mode = b.fallback ? "fallback" : "worker";
     std::stable_sort(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x, const ArmOutcome& y) {
         return std::find(arms.begin(), arms.end(), x.arm) < std::find(arms.begin(), arms.end(), y.arm);
     });

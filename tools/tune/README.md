@@ -172,10 +172,13 @@ and planning is in `schedule.cc`.
   lines are appended under `flock`, one `write()` each, and carry `dtype`. A run writes one `run`
   line per dtype with the full key spec and candidate list, whatever `--grid` narrowed. A dirty
   `--repo` tree is refused without `--allow-dirty`.
-- **Estimate.** Per cell: `--cell-overhead-s` plus, per candidate, `max_reps` times the nearest ledger
-  median (else bytes / 500 GB/s), the warm-up top-up and 0.05 s of verification. `--plan` prints the
-  lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so divide by
-  `--devices`; it ran 1.3x to 1.8x high on threadripper02.
+- **Estimate.** Per cell: the recorded phases (`ph_*`) of the nearest ledger cell of the same
+  protocol, tier and mode, per-arm phases scaled by the arm count, plus per history cell the recorded
+  worker-start and audit share, and once a run the ld audits. Without that history: `--cell-overhead-s` plus, per candidate, `max_reps` times
+  the nearest ledger median (else bytes / 500 GB/s), the warm-up top-up and 0.05 s of verification
+  (this model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
+  history, and the lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so
+  divide by `--devices`.
 
 Progress events (`--progress-fd`), one JSON object per line; every event also carries `t`, Unix time in seconds:
 
@@ -187,7 +190,7 @@ Progress events (`--progress-fd`), one JSON object per line; every event also ca
 | `cell_start` | op, dtype, key fields, `gpu` |
 | `cell_done` | op, dtype, key fields, `ranked` (`a\|b`), `tier`, `round` (absent on a single-candidate cell) |
 | `eliminated` | op, dtype, key fields, `cand`, `round` |
-| `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh` |
+| `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh`, `audit_s` |
 | `worker_restart` | op, dtype, key fields, `gpu`, `restarts`, `fallback` |
 | `ld_audit` | op, dtype, key fields, `cand`, `verdict` (`fail`), `reason` |
 | `ld_audit_summary` | `op`, `dtype`, `passed`, `skipped`, `failed`, `failures` |

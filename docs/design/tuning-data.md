@@ -21,10 +21,19 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 
 - `run`: one per (run id, dtype): host, device, device name, `batchlas` (commit), argv, date,
   tier, `keys` (the `# keys:` text from `choice.hh`), `candidates` (`|`-joined spellings in
-  candidate order). A later `run` line with the same (run id, dtype) replaces the earlier one.
+  candidate order), `protocol` (the per-cell protocol, `full`; absent in ledgers written before
+  the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
-  `h/s/r/m/lo/hi/n`).
-- `audit`: the ld audit verdicts.
+  `h/s/r/m/lo/hi/n`), plus the cell's wall seconds by phase, each written only when measured:
+  `ph_setup` (Queue, Problem, fill, workspace probe), `ph_warm`, `ph_timed` (wall, resets included),
+  `ph_verify`, `ph_ld` (the ld audit's second run), `ph_guard`, `ph_ipc` (worker round trip less the
+  worker's phases), `ph_spawn` (fresh child start and exit less its phases), `ph_start` (a worker
+  start: guard, spawn, CUDA init, clock warm-up), `ph_mode` (`worker`, `fresh`, `fallback`) and
+  `ph_arms` (the arms raced now; a partial re-race's record also holds its stored arms).
+  Every try and child of the cell is summed. A retract copy and an untimed record carry none.
+  Table generation ignores them.
+- `audit`: one fresh-process audit (the carve-out check): `key`, `verdict`, `fresh_ms`, `warm_ms`,
+  `audit_s` (its wall seconds). ld audit verdicts are cell statuses, not audit lines.
 - `rehash`: `{"kind":"rehash","family":F,"from":<stored hash>,"to":<hash now>,"at":<commit>,"proof":...,"why":...}`
   for the op and device, no dtype ("Kernel hashes" below).
 

@@ -86,8 +86,13 @@ Across cells:
   bisect geometrically, `exact` axes (uplo, side, trans) never, and `batch` refills only its own
   axis values. Nothing is interpolated. `select::choose` takes the nearest row.
 - **Estimate and budget.** The driver predicts cost from earlier ledger timings for the same op,
-  dtype and device, or from a flop/byte model against the device ceilings. `--budget <h>` stops
-  refinement; the starting lattice always completes.
+  dtype and device, or from a byte model. A cell takes the recorded phases of the nearest cell of
+  the same protocol, tier and mode (worker or fresh; exact keys equal, log distance), its per-arm
+  phases (warm, timed, verify) scaled by the arm count over `ph_arms`; without such a cell,
+  `--cell-overhead-s` plus `max_reps` × the nearest median per arm. Each history cell also carries
+  the recorded worker-start rate × median start and the audit fraction × median audit; the run once
+  carries the ld audits (`ph_ld` summed per run, median over runs). `--plan` says how many cells came from
+  history. `--budget <h>` stops refinement; the starting lattice always completes.
 - **Op order follows dependencies.** potrf and trsm are tuned before posv, whose times depend on
   their choices (@ref tune_tool_readme, section Specs). The map over all 19 ops is in "Engine: op
   order over all 19 ops".
@@ -101,9 +106,9 @@ directory per (op, dtype, device) with one file per run on 2026-10-11.
 
 | Record | Fields |
 | --- | --- |
-| `run` | dtype, run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date, keys, candidates |
-| `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set |
-| `audit` | run id, cell key, persistent and fresh-process medians and winners, verdict |
+| `run` | dtype, run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date, keys, candidates, protocol |
+| `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set; wall seconds per phase (`ph_*`) and `ph_mode` |
+| `audit` | run id, cell key, fresh-process and persistent medians, verdict, `audit_s` |
 
 Results merge by device key (sm_89, sm_120); the host is recorded.
 

@@ -24,8 +24,9 @@ std::string request_line(const std::string& op, const CellRequest& r);
 // (op, request); nullopt with *err on a malformed line.
 std::optional<std::pair<std::string, CellRequest>> parse_request(const std::string& line, std::string* err = nullptr);
 
-std::string outcome_text(const std::vector<ArmOutcome>& arms);
+std::string outcome_text(const std::vector<ArmOutcome>& arms, const Phases* ph = nullptr);  // ph: a "phase" line last
 std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs);
+Phases phases_from_records(const std::vector<Record>& recs);  // every phase line, summed
 
 class WorkerProcess {
 public:
@@ -72,6 +73,7 @@ struct WorkerTry {
     bool ok = false, guard = false;  // guard: numbers discarded for a foreign process, the worker is fine
     std::string error;
     std::vector<ArmOutcome> arms;
+    Phases phases;  // the worker's, plus guard and ipc (start when this try started the worker)
 };
 
 // Consecutive confirmed errors per arm in one (op, dtype): the worker and the fresh child that re-raced
@@ -94,7 +96,7 @@ private:
 // The worker path's failure handling: a failed try restarts the worker (not after a guard discard)
 // and retries once, then `fresh` races the cell. An `error` arm in a finished cell may be a sticky
 // CUDA error that poisons the process: restart, and the fresh child's result is the one recorded.
-// A benched arm skips the worker and races alone in its own fresh child.
+// A benched arm skips the worker and races alone in its own fresh child. Phases sum every try and child.
 ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
                         const std::function<WorkerTry(const std::vector<std::string>&)>& attempt,
                         const std::function<void()>& restart,

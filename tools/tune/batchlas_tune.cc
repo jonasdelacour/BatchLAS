@@ -250,7 +250,7 @@ int child_main(const std::vector<std::string>& a) {
     const OpSpec* spec = find_spec(op);
     if (!spec || req.key.empty() || req.arms.empty() || result.empty()) die("--cell needs a known op, --key, --arms, --result");
     std::ofstream out(result);
-    out << outcome_text(run_cell_audited(*spec, req));
+    out << outcome_text(run_cell_audited(*spec, req), &cell_phases());
     return out ? 0 : 1;
 }
 
@@ -294,7 +294,8 @@ int worker_main(const std::vector<std::string>& a) {
         if (!req) die("--worker: bad request (" + err + "): " + line);
         const OpSpec* spec = find_spec(req->first);
         if (!spec) die("--worker: unknown op " + req->first);
-        const std::string text = outcome_text(run_cell_audited(*spec, req->second)) + Json().str("kind", "done").line();
+        const std::string text =
+            outcome_text(run_cell_audited(*spec, req->second), &cell_phases()) + Json().str("kind", "done").line();
         for (std::size_t done = 0; done < text.size();) {
             const ssize_t n = ::write(out, text.data() + done, text.size() - done);
             if (n <= 0) return 1;
@@ -344,6 +345,7 @@ struct ChildOut {
     std::vector<std::string> tolerated;  // idle foreign pids accepted before the child
     std::vector<Record> records;
     pid_t pid = -1;
+    Phases phases;  // the child's, plus guard and spawn (process start, CUDA init, exit)
 };
 
 class Driver {
@@ -367,7 +369,10 @@ public:
                    const std::vector<std::string>& arms, const std::string& mode, bool reverse,
                    const std::string& coverage = "", int reps = -1, double warm = -1,
                    const std::vector<std::string>& extra = {}) {
+        ChildOut c;
+        auto t = std::chrono::steady_clock::now();
         const std::vector<std::string> tolerated = guard(gpu);
+        c.phases.guard = seconds_since(t);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
         std::vector<std::string> argv{bin, "--cell", spec_.op(), "--dtype", dtype, "--key", key_arg(key),
@@ -380,8 +385,10 @@ public:
         std::vector<std::pair<std::string, std::string>> env{{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"},
                                                              {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}};
         if (!coverage.empty()) env.push_back({"BATCHLAS_COVERAGE_OUT", coverage});
+        t = std::chrono::steady_clock::now();
         const Spawned s = spawn_wait(argv, env, log, o_.cell_timeout);
-        ChildOut c;
+        c.phases.spawn = seconds_since(t);
+        c.phases.mode = "fresh";
         c.pid = s.pid;
         c.tolerated = tolerated;
         if (s.status != 0) {
@@ -390,8 +397,10 @@ public:
         }
         // gpu_guard.sh's after-check: a process that landed on the GPU mid-child voids its numbers.
         // Strict mode tolerated nothing, so any foreign entry is new.
-        if (const auto fresh = o_.guard ? guard_new_foreign(apps(gpu), tolerated) : std::vector<std::string>{};
-            !fresh.empty()) {
+        t = std::chrono::steady_clock::now();
+        const auto fresh = o_.guard ? guard_new_foreign(apps(gpu), tolerated) : std::vector<std::string>{};
+        c.phases.add(&Phases::guard, seconds_since(t));
+        if (!fresh.empty()) {
             c.guard = true;
             c.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(gpu) + " after the child; numbers discarded";
             return c;
@@ -402,6 +411,9 @@ public:
         } catch (const std::exception& e) {
             c.error = e.what();
         }
+        const Phases inner = phases_from_records(c.records);
+        c.phases.spawn -= inner.worker_s();
+        c.phases += inner;
         std::error_code ec;
         fs::remove(res, ec);
         fs::remove(log, ec);
@@ -421,7 +433,9 @@ public:
         if (raw_.is_open())
             write(Json().str("kind", "retry").str("op", spec_.op()).str("dtype", dtype).key(key).str("mode", mode)
                       .str("error", c.error).line());
-        return child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
+        ChildOut again = child(gpu, bin, dtype, key, arms, mode, reverse, coverage, reps, warm, extra);
+        again.phases += c.phases;
+        return again;
     }
 
     // The spelling a binary's Auto picks at a cell, from its coverage `reached` row.
@@ -622,6 +636,7 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
                       .integer("slot", std::stoll(r.get("slot"))).num("ms", r.number("ms")).line());
             continue;
         }
+        if (r.get("kind") != "arm") continue;  // phase lines: no arm
         p.arms[arm] = {r.get("status"), r.get("reason"), r.number("median_ms")};
         write(base("pass").str("cand", arm).str("status", r.get("status")).str("reason", r.get("reason"))
                   .num("median_ms", r.number("median_ms")).num("residual", r.number("residual"))
@@ -674,19 +689,25 @@ ArmBatch Driver::race_fresh(const CellJob& j) {
     const auto extra = race_args(j);
     const double warm = j.p.warm_topup_s;
     ChildOut ch = child_retry(j.gpu, self_, j.dtype, j.key, j.arms, "race", false, "", 1, warm, extra);
+    Phases spent = ch.phases;
     std::map<std::string, std::string> alone;
     if (!ch.ok && !ch.guard) {
         std::vector<std::string> keep;
         for (const auto& a : j.arms) {
             const ChildOut one = child(j.gpu, self_, j.dtype, j.key, {a}, "jit", false);
+            spent += one.phases;
             if (one.ok) keep.push_back(a);
             else alone[a] = one.error;
         }
-        if (!alone.empty() && !keep.empty()) ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, warm, extra);
+        if (!alone.empty() && !keep.empty()) {
+            ch = child(j.gpu, self_, j.dtype, j.key, keep, "race", false, "", 1, warm, extra);
+            spent += ch.phases;
+        }
     }
     std::map<std::string, ArmOutcome> got;
     for (ArmOutcome& o : outcomes_from_records(ch.records)) got[o.arm] = std::move(o);
     ArmBatch b;
+    b.phases = spent;
     if (!ch.ok) b.error = ch.error;
     for (const auto& a : j.arms) {
         if (alone.count(a)) b.arms.push_back({a, "error", "crashed alone: " + alone[a], {}, {}, 0, 0});
@@ -710,9 +731,12 @@ void Driver::start_worker(WorkerProcess& w, int gpu) {
 // `full_guard` first idles 1 s so the worker's own last cell leaves the utilization sample.
 WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guard) {
     WorkerTry r;
+    r.phases.mode = "worker";
+    auto t = std::chrono::steady_clock::now();
     std::vector<std::string> tolerated;
     if (full_guard && o_.guard) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
+        t = std::chrono::steady_clock::now();  // the periodic idle second is no cell's guard cost
         tolerated = guard(j.gpu);
     }
     for (double waited = 0; o_.guard && !full_guard; waited += 1) {
@@ -724,16 +748,22 @@ WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guar
         if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + g.refuse + "); refusing to measure");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+    r.phases.guard = seconds_since(t);
     std::vector<Record> recs;
     WorkerProcess::Got got = WorkerProcess::Got::eof;
+    t = std::chrono::steady_clock::now();
     if (w.send(request_line(spec_.op(), race_request(j)))) got = w.receive(o_.cell_timeout, &recs);
+    r.phases += phases_from_records(recs);
+    r.phases.ipc = seconds_since(t) - r.phases.worker_s();
     if (got != WorkerProcess::Got::done) {
         r.error = std::string(got == WorkerProcess::Got::timeout ? "worker timeout" : "worker exited") + ": " +
                   tail(w.log());
         return r;
     }
-    if (const auto fresh = o_.guard ? guard_new_foreign(apps(j.gpu), tolerated) : std::vector<std::string>{};
-        !fresh.empty()) {
+    t = std::chrono::steady_clock::now();
+    const auto fresh = o_.guard ? guard_new_foreign(apps(j.gpu), tolerated) : std::vector<std::string>{};
+    r.phases.add(&Phases::guard, seconds_since(t));
+    if (!fresh.empty()) {
         r.guard = true;
         r.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(j.gpu) +
                   " during the cell; numbers discarded";
@@ -1030,13 +1060,18 @@ public:
         auto attempt = [&](const std::vector<std::string>& arms) {
             CellJob part = j;
             part.arms = arms;
+            double started = NAN;
             if (!w.alive()) {
+                const auto t = std::chrono::steady_clock::now();
                 d.start_worker(w, j.gpu);
+                started = seconds_since(t);
                 gate.started();
                 gate.guarded(now());
             }
             const bool full = gate.full_guard_due(now());
             WorkerTry r = d.race_worker(w, part, full);
+            // The first cell's wait holds the worker's CUDA init and clock warm-up: start, not ipc.
+            if (!std::isnan(started)) r.phases.start = started + r.phases.ipc, r.phases.ipc = 0;
             if (full) gate.guarded(now());
             if (r.ok) gate.ran(j.footprint);
             for (const ArmOutcome& a : r.arms)
@@ -1143,6 +1178,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.audit_fraction = o.audit_fraction;
     t.plan = o.plan;
     t.allow_dirty = o.allow_dirty;
+    t.worker = o.worker;
     t.progress_fd = o.progress_fd;
     t.repo = o.repo;
     t.ledger_root = o.ledger;
