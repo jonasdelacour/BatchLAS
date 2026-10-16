@@ -88,7 +88,7 @@ families changed are re-raced (`partial:<family>`).
 | `--device-key sm_NN` | compute capability of the first `--devices` GPU | device whose ledger `--plan` reads |
 | `--cell-overhead-s` | 0.49 | per-child start-up in the estimate |
 | `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
-| `--audit-fraction F` | preview and coarse 0.02; deep 0.10 | share of worker cells re-raced in a fresh child |
+| `--audit-fraction F` | preview and coarse 0.02; deep 0.01 | share of worker cells re-raced in a fresh child |
 | `--status` | | op x dtype x device matrix: runs, cells, tier mix, stale and partly stale counts, newest run and age, table source, tier mix and date. No GPU |
 | `--import-raw F` | | schema-1 raw sweep into the ledger as a deep run; op, dtype and device come from its meta |
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
@@ -121,9 +121,9 @@ and planning is in `schedule.cc`.
   syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd ("Engine: op order
   over all 19 ops" in the design page).
 - **Rounds.** Round 0 is the tier's starting set for every op and dtype, in op order (frontier: stride
-  2; gemm: preview's stride-2 lattice, coarse and deep's full lattice). Later rounds follow over each
-  cell ranked inside the requested grid, until nothing is left, `--budget` is spent or, for gemm, the
-  refinement cap is hit.
+  2; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): preview's stride-2 lattice, coarse and deep's full
+  lattice). Later rounds follow over each cell ranked inside the requested grid, until nothing is left,
+  `--budget` is spent or, for those ops, the refinement cap is hit.
 - **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
   (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
   Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
@@ -197,7 +197,7 @@ and planning is in `schedule.cc`.
   protocol, tier and mode, per-arm phases scaled by the arm count, plus per history cell the recorded
   worker-start and audit share, and once a run the ld audits. Without that history: `--cell-overhead-s`
   plus, per candidate, (the rep cap of the slowest candidate + 3) times the nearest ledger median
-  (else bytes / 500 GB/s), two warm rounds capped at 0.2 s, and 0.05 s of verification (the `full`
+  (else bytes / 500 GB/s) and two warm rounds capped at 0.2 s, plus 0.05 s of verification once a cell (the `full`
   protocol's model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
   history, and the lattice-only and with-refinement estimates. A frontier's cell count depends on the
   winners it finds: `--plan` prices 0.86 of the grid cells round 0 leaves (`kFrontierShare`, the
@@ -301,10 +301,13 @@ is `ok` in every pass of that attempt, and the run becomes a `custom` run of the
 Host-only, no GPU (`build/tools/tune/tune_replay`).
 
 - `--raw <jsonl> --tier <t>`: re-races a raw exhaustive sweep at a tier and scores table misrank
-  (one JSON line).
+  (one JSON line). It models the pre-frontier plan (stride-1 lattice, refinement cap, `TierParams`
+  rep cap), not the lean race or the frontier; `--slowdown`'s `stride2+frontier+bisect` models
+  today's driver.
 - `--slowdown` (implied by `--table`/`--ledger`): `--table tuned/<op>.<dev>.txt`, `--ledger
-  <op>.<dev>.jsonl` (needs the matching `--table` for its family hashes, and lends it its round-0
-  lattice) and `--raw <jsonl>`, each repeatable. `--scheme a,b` picks from `full`, `lattice`,
+  <op>.<dev>.jsonl` (needs the matching `--table` for its family hashes, and lends it its lattice:
+  the newest run's recorded `grid`, else the round-0 values of runs that predate the field; calibrate
+  cells with unraced arms are no oracle cells) and `--raw <jsonl>`, each repeatable. `--scheme a,b` picks from `full`, `lattice`,
   `stride2`, `stride4`, `stride2+frontier`, `stride4+frontier`, `stride2+frontier+prune`,
   `lattice+bisect`, `stride2+frontier+bisect` (default: all); `--k` (6) and `--slower` (0.05) set the
   frontier rule. The `+bisect` schemes model the driver: the frontier picks lattice cells only, and

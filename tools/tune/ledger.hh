@@ -46,6 +46,7 @@ struct RunMeta {
     std::string protocol;  // the per-cell protocol (kProtocol); "" = a ledger from before the field
     std::string guard;     // guard backend: nvml, nvidia-smi or off; "" = a ledger from before the field
     std::string prior;     // calibrate: the borrowed table, <device>@<header date>; "" otherwise
+    std::string grid;      // the log axes' full lattice, "n=1,2,4 batch=8,16"; "" = a ledger from before the field
 };
 
 std::string make_run_id();  // <UTC yyyymmddThhmmss>-<host>-<pid>

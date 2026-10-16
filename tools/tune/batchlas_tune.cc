@@ -1453,7 +1453,7 @@ int main(int argc, char** argv) {
     if (!o.gate && !o.custom_flag.empty() && o.tier)
         die(o.custom_flag + " sets tier custom (the two-pass protocol); drop it or --tier");
     if (tiered && !o.tier)
-        die("give --tier preview|coarse|deep, or a protocol flag (--reps, --warm, --passes, --remeasure, --refine-ratio, "
+        die("give --tier preview|coarse|deep|calibrate, or a protocol flag (--reps, --warm, --passes, --remeasure, --refine-ratio, "
             "--no-refine, --no-jit, --ld-pad, --raw) for a custom two-pass run");
     if (tiered && *o.tier == Tier::custom && o.remeasure_keys.empty())
         die("--tier custom measures exactly the --remeasure-keys cells (a rehash sample); give them");

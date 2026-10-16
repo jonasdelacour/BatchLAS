@@ -32,11 +32,13 @@ TIERS = list(stt.LEDGER_TIERS)
 DTYPES = list(stt.DTYPES)
 TIMED = set(stt.LEDGER_STATUS_TIMED)
 TIER_NOTES = {
-    "preview": "every 2nd lattice point, short races: a first look, not a table",
+    "preview": "every 2nd lattice point plus flip-frontier rounds, short races: a first look, not a table",
     "calibrate": "every 4th lattice point raced against the nearest shipped table (prior), measured only where "
                  "the device disagrees; the prior fills the rest: a new GPU's first table",
-    "coarse": "the full lattice, refined to 1.1x; the default fill",
-    "deep": "the full lattice, long races at 0.98 confidence; the shipped tables",
+    "coarse": "every 2nd lattice point plus flip-frontier rounds (gemm, geqrf, getri, orgqr, spmm: the full "
+              "lattice, refined to 1.1x), 0.90 confidence; the default fill",
+    "deep": "every 2nd lattice point plus flip-frontier rounds (the five stride-1 ops: the full lattice), long races "
+            "at 0.98 confidence; the shipped tables",
     "custom": "exactly the cells listed below, every candidate, no lattice: a rehash sample",
 }
 # Flags this tab passes; a tuner whose --help lacks one predates the current tuner.
@@ -355,7 +357,7 @@ class Ledgers:
             pass
         row.update(runs=len(v.runs), cells=len(v.latest), best=len(v.best), stale=len(v.latest) - len(v.best),
                    partial=sum(v.freshness(c) == "partly_stale" for c in v.best.values()),
-                   refined=sum(1 for c in v.best.values() if c["round"] > 0), newest=newest, error=v.error)
+                   refined=sum(1 for c in v.best.values() if c["round"] > 0 and c["tier"] not in stt.UNHASHED), newest=newest, error=v.error)
         return row
 
     def op_view(self, op: str, dtype: str, device: str) -> dict:

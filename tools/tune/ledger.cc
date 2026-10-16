@@ -45,6 +45,7 @@ std::string run_line(const RunMeta& m) {
     if (!m.protocol.empty()) j.str("protocol", m.protocol);
     if (!m.guard.empty()) j.str("guard", m.guard);
     if (!m.prior.empty()) j.str("prior", m.prior);
+    if (!m.grid.empty()) j.str("grid", m.grid);
     for (const auto& [k, v] : m.worker_mode) j.str("wm." + k, v);
     return j.line();
 }
@@ -94,6 +95,7 @@ RunMeta parse_run(const Record& r) {
     m.protocol = r.get("protocol");
     m.guard = r.get("guard");
     m.prior = r.get("prior");
+    m.grid = r.get("grid");
     for (const auto& [k, v] : r.s)
         if (k.rfind("wm.", 0) == 0) m.worker_mode[k.substr(3)] = v;
     return m;

@@ -57,6 +57,7 @@ LEDGER = "ledger:"
 LEDGER_TIERS = ("deep", "coarse", "calibrate", "preview", "custom", "converted", "prior", "transcribed")  # highest first
 LEDGER_STRIDE = {"deep": 1, "coarse": 1, "calibrate": 2, "preview": 2, "custom": 2, "converted": 2, "prior": 0,
                  "transcribed": 2}  # 0: its own key only
+PRIOR_ABOVE_STRIDE = 2  # a coarse or deep row brackets a prior row as it does a transcribed one
 UNHASHED = ("converted", "prior", "transcribed")
 LEDGER_STATUS_TIMED = ("ok", "eliminated")
 TIE = 0.03  # the tuner's tie band (tune_core.cc rank())
@@ -350,7 +351,8 @@ def ledger_rows(keyspec, cells, family_hash):
     """One dtype's {key: (tier, [(spelling, ms or None)])}: each cell's best record, minus rows of a
     lower tier that a higher-tier row brackets (equal exact keys, index distance < the tier's stride
     on every log key); converted and transcribed rows are bracketed by any measured row, transcribed rows
-    by a prior row too, and a prior row only by a measured record at its own key."""
+    by a prior row too, and a prior row by a measured record at its own key or a coarse or deep row
+    within PRIOR_ABOVE_STRIDE (a frontier run measures every 2nd cell and reads the rest from them)."""
     problem = hidden_axes_problem(keyspec, cells)
     if problem:
         raise SystemExit(problem)
@@ -415,6 +417,10 @@ def ledger_rows(keyspec, cells, family_hash):
             against = list(kept)
         near = (lambda key, own=set(against): key in own) if LEDGER_STRIDE[tier] == 0 else \
             bracketed_by(against, LEDGER_STRIDE[tier])
+        if tier == "prior":
+            above = bracketed_by([k for k, t, _ in cand_rows if LEDGER_TIERS.index(t) < LEDGER_TIERS.index("calibrate")],
+                                 PRIOR_ABOVE_STRIDE)
+            near = (lambda key, own=near, wide=above: own(key) or wide(key))
         for key, t, entries in cand_rows:
             if t != tier or key in kept:
                 continue
@@ -1147,6 +1153,18 @@ def self_test():
         stale = [run_line(r4, "2026-10-04"), cell(r4, "deep", 64, hashes=dict(fh, tiny="deadbeef"))]
         got6b = rows_of(build(stale + pr + tr6, d, "p2.jsonl"))
         expect(tiers(got6b) == {16: "prior", 512: "prior", 4096: "transcribed"}, f"prior-only lattice -> {tiers(got6b)}")
+        # after calibrate (probes 8, 128; prior rows between), a stride-2 deep run (8, 32, 128) leaves no prior
+        # row between its rows: a coarse or deep row brackets a prior row within 2 steps, a calibrate row only at its key
+        rc, rd = "20261006T000000-h-6", "20261007T000000-h-7"
+        cal = [run_line(rc, "2026-10-06", "calibrate")] + [cell(rc, "calibrate", n, date="2026-10-06") for n in (8, 128)]
+        pr7 = [dict(cell(rc, "prior", n, date="2026-10-06"), **{f"h{i}": "" for i in range(3)},
+                    **{f"m{i}": None for i in range(3)}) for n in (16, 32, 64)]
+        got7 = rows_of(build(cal + pr7, d, "q.jsonl"))
+        expect(tiers(got7) == {8: "calibrate", 16: "prior", 32: "prior", 64: "prior", 128: "calibrate"},
+               f"calibrate keeps its prior rows -> {tiers(got7)}")
+        deep7 = [run_line(rd, "2026-10-07")] + [cell(rd, "deep", n, date="2026-10-07") for n in (8, 32, 128)]
+        got7b = rows_of(build(cal + pr7 + deep7, d, "q2.jsonl"))
+        expect(tiers(got7b) == {8: "deep", 32: "deep", 128: "deep"}, f"a stride-2 deep run drops prior rows -> {tiers(got7b)}")
         # converted rows are timed, never stale, and give way to a measured row the same way
         cv = cell("converted-x", "converted", 64, hashes={c: "" for c in cands}, date="2026-09-01")
         cv2 = dict(cell("converted-x", "converted", 2048, hashes={c: "" for c in cands}, date="2026-09-01"))

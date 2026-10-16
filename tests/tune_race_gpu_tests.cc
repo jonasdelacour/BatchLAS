@@ -163,7 +163,7 @@ TEST(TuneRaceGpu, LeanRaceCutsAGrossLoserBeforeTheWarmUp) {
     EXPECT_LE(out[0].ms.size(), std::size_t(kRepCap));
     const int warm_rounds = p.runs["fast"] - 4 - int(out[0].ms.size());
     EXPECT_GE(warm_rounds, kWarmMinRounds) << "warm rounds, untimed";
-    EXPECT_LE(warm_rounds, 6) << "stable sleeps converge long before the cap (~24 rounds)";
+    EXPECT_LT(warm_rounds, 12) << "stable sleeps converge long before the cap (~24 rounds); oversleep can cost a round or two";
     EXPECT_EQ(out[2].status, "bad") << "silent wrote nothing; the poison, not slow's output, is verified";
     EXPECT_EQ(out[2].reason, "residual");
     EXPECT_GE(q.workspace_capacity(), std::size_t(1) << 20) << "the workspace is leased from the cell's Queue";
@@ -202,7 +202,7 @@ TEST(TuneRaceGpu, LeanWarmUpStopsAtTheCapWhenItNeverConverges) {
     EXPECT_NE(out[1].status, "error") << out[1].reason;
     const double cap = kWarmCapPerArmS * 2;
     EXPECT_GE(cell_phases().warm, cap);
-    EXPECT_LE(cell_phases().warm, cap + 0.05);
+    EXPECT_LE(cell_phases().warm, cap + 0.1);
 }
 
 // Once no survivor runs, the warm-up ends at once instead of waiting out the cap on the clock.

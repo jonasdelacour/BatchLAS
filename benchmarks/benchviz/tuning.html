@@ -186,8 +186,8 @@ async function loadStatus() {
   const devs = ST.devices.filter(d => ST.rows.some(r => r.device === d && r.best));
   const all = devs.length ? devs : ST.devices;
   let saved = null; try { saved = localStorage.getItem("bv-tune-device"); } catch (e) {}
-  // Default: the device with the most measured records (converted and transcribed ones are not measurements here).
-  const measured = (d) => ST.rows.filter(r => r.device === d).reduce((s, r) => s + r.best - r.tiers.converted - r.tiers.transcribed, 0);
+  // Default: the device with the most measured records (converted, prior and transcribed ones are not measurements here).
+  const measured = (d) => ST.rows.filter(r => r.device === d).reduce((s, r) => s + r.best - r.tiers.converted - (r.tiers.prior || 0) - r.tiers.transcribed, 0);
   if (!device || !all.includes(device)) device = all.includes(saved) ? saved : all.slice().sort((a, b) => measured(b) - measured(a))[0];
   patch($("device"), ST.devices.map(d => `<option ${d === device ? "selected" : ""}>${esc(d)}</option>`).join(""));
   render();
@@ -387,9 +387,9 @@ function drawOp() {
   patch($("op-lede"), `Each ${esc(v.dtype)} cell's best record from <span class="mono">${esc(v.op)}.${esc(v.device)}.jsonl</span>: ${v.cands.length} candidates in ${fams.length} families,
     keys <span class="mono">${esc(v.keys.map(k => k.name).join(" "))}</span>. Shipped table: ${t ? `${esc(t.source)}, ${esc(t.date)}, ${t.rows} ${esc(v.dtype)} rows` : "none"}.${sync}${next}
     ${v.table_error ? `<span style="color:var(--warn)">${esc(v.table_error)}</span>` : ""}${v.error ? ` <span style="color:var(--bad)">${esc(v.error)}</span>` : ""}`);
-  const hashed = cells.some(c => !["converted", "transcribed"].includes(v.tiers[c[1]]));
+  const hashed = cells.some(c => !["converted", "prior", "transcribed"].includes(v.tiers[c[1]]));
   patch($("op-fams"), v.family_status.length ? `<table><thead><tr><th>Family</th><th>Table header</th><th>Sources now</th><th>State</th><th class="r">${esc(v.dtype)} keys stale in it</th></tr></thead><tbody>${v.family_status.map(x => {
-      const n = x.stale[v.dtype] || 0, state = !fams.includes(x.name) ? `not a ${v.dtype} candidate` : famChanged(x) ? (n ? "changed: retune" : !hashed ? "changed; this ledger's records carry no hash (converted or transcribed)"
+      const n = x.stale[v.dtype] || 0, state = !fams.includes(x.name) ? `not a ${v.dtype} candidate` : famChanged(x) ? (n ? "changed: retune" : !hashed ? "changed; this ledger's records carry no hash (converted, prior or transcribed)"
           : "changed; the ledger's records are current (rehashed or re-measured): regenerate the table")
         : !x.table ? "not in the table" : n ? "table current; older records in the ledger" : "current";
       return `<tr><td class="mono" style="color:${famColor(fams, x.name)}">${esc(x.name)}</td><td class="mono">${esc(x.table || "—")}</td><td class="mono">${esc(x.now || "—")}</td>
@@ -509,6 +509,8 @@ function drawMap(pool, ix) {
       else if (tier === "custom") h += `<path d="M${cx - r} ${cy - r}L${cx + r} ${cy + r}M${cx + r} ${cy - r}L${cx - r} ${cy + r}" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
       else if (tier === "converted") h += `<path d="M${cx} ${cy - r * 1.3}L${cx + r * 1.3} ${cy}L${cx} ${cy + r * 1.3}L${cx - r * 1.3} ${cy}Z" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
       else if (tier === "transcribed") h += `<path d="M${cx - r * 1.3} ${cy}h${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
+      else if (tier === "prior") h += `<path d="M${cx} ${cy - r * 1.3}v${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
+      else if (tier === "calibrate") h += `<rect x="${cx - r}" y="${cy - r}" width="${2 * r}" height="${2 * r}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
       if (c[5]) h += `<path d="M${x0 + cw - 1 - Math.min(cw, ch) * .35} ${y0 + 1}h${Math.min(cw, ch) * .35}v${Math.min(cw, ch) * .35}z" fill="var(--warn)" pointer-events="none"/>`;
     });
   });
@@ -524,7 +526,7 @@ function drawMap(pool, ix) {
   else {
     const present = [...new Set(pool.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
     patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") + hatch +
-      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, ◇ converted, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
+      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, □ calibrate, ◇ converted, | prior, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
   }
 }
 

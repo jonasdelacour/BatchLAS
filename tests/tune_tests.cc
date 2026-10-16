@@ -4495,7 +4495,7 @@ const FakeVerifySpec kFakeVerify;
 // FakeVerifySpec bytes: n * 1e3, so n <= 8 is bucket e3, n >= 16 bucket e4.
 class VerifyMeasurer : public CellMeasurer {
 public:
-    std::set<int> wrong, fast;
+    std::set<int> wrong, fast, fresh_wrong;  // fresh_wrong: c is wrong in the fresh child only
     bool worker = false, fresh_tie = false;
     int ld_refuse_a = -1;  // >= 0: a's ld audit is refused that many times, then fails
     std::map<int, int> calls;
@@ -4521,7 +4521,7 @@ public:
                 if (std::find(want.begin(), want.end(), o.arm) == want.end()) continue;
                 o.verified = true;
                 if (!fresh) verified[n].push_back(o.arm);
-                if (o.arm == "c" && wrong.count(n)) o.status = "bad", o.reason = "residual";
+                if (o.arm == "c" && (wrong.count(n) || (fresh && fresh_wrong.count(n)))) o.status = "bad", o.reason = "residual";
             }
         return b;
     }
@@ -4654,6 +4654,90 @@ TEST(TuneVerify, ARetractedWinnerWithAnUnverifiedRunnerUpIsRacedAgain) {
         EXPECT_EQ(c.ranked.front(), "b") << n;
         EXPECT_TRUE(cand(c, "b").verified) << "a record's winner is an arm it verified: " << n;
     }
+}
+
+// A row copied in untimed (prior, transcribed) was never verified on this device: a bucket's verify fail
+// retracts it whatever its v<i> says.
+TEST(TuneVerify, ABucketFailRetractsAPriorRowsArmThoughItReadsVerified) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    RunMeta pm;
+    pm.dtype = "float", pm.run_id = "r0", pm.tier = Tier::calibrate, pm.device = "sm_fake", pm.date = "2026-10-01";
+    pm.keys = "n:log:3", pm.candidates = "a|b|c";
+    {
+        LedgerWriter w(ledger_file(ledger.str(), "fakeverify", "sm_fake"), pm);
+        CellRecord r;
+        r.key = {{"n", "24"}};  // off the grid, bucket e4 (n=16's)
+        r.ranked = {"c", "a", "b"};
+        for (const std::string& a : r.ranked) r.cands.push_back({a, "", "ok", "", NAN, NAN, NAN, 0, true});
+        r.date = pm.date;
+        w.cell(r, Tier::prior);
+    }
+    VerifyMeasurer m;
+    m.wrong = {16, 32, 64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    const auto cells = newest_cells(ledger);
+    ASSERT_TRUE(cells.count(24));
+    const CellRecord& p = cells.at(24);
+    EXPECT_EQ(p.tier, Tier::prior);
+    EXPECT_EQ(cand(p, "c").status, "bad");
+    EXPECT_EQ(cand(p, "c").reason, "verify failed @ n=16");
+    EXPECT_EQ(p.ranked, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(m.calls.count(24), 0u) << "a prior row is not raced again";
+}
+
+// The worker verified and passed c at n=1; the fresh audit child verified it and found it wrong: the
+// audited cell itself loses c, though D9 keeps cells that verified an arm and passed.
+TEST(TuneVerify, AFreshAuditsVerifyFailRetractsTheAuditedCellItself) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    o.audit_fraction = 1.0;
+    VerifyMeasurer m;
+    m.worker = true;
+    m.fast = {1};
+    m.fresh_wrong = {1};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(sorted(m.verified[1]), (std::vector<std::string>{"a", "b", "c"})) << "n=1 verified c on the worker";
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(1), "c").status, "bad") << out;
+    EXPECT_EQ(cand(cells.at(1), "c").reason, "verify failed @ n=1");
+    ASSERT_FALSE(cells.at(1).ranked.empty());
+    EXPECT_EQ(cells.at(1).ranked.front(), "a");
+    for (int n : {16, 32}) EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << "bucket e4 is unaffected: " << n;
+}
+
+// Run 2 re-races every cell partially (family b changed: b plus the stored top 2, c carried over). a's ld
+// audit fails at n=4, after n=2's partial race; n=2's front becomes the unverified b, so it is raced again
+// over every arm not known unrunnable: c comes back, not only the partial race's {a, b}.
+TEST(TuneVerify, ARequeuedPartialReRaceRacesTheCarriedArmsToo) {
+    TempDir repo, ledger;
+    {
+        TieredOpts o = verify_opts(repo, ledger);
+        VerifyMeasurer m;
+        ::testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        (void)::testing::internal::GetCapturedStdout();
+    }
+    TieredOpts o = verify_opts(repo, ledger);
+    std::ofstream(repo.path / "b.cc") << "b changed";
+    VerifyMeasurer m;
+    m.ld_refuse_a = 2;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find("partial:b"), std::string::npos) << out;
+    EXPECT_EQ(m.calls[2], 2) << out;
+    EXPECT_EQ(m.timed[2], (std::vector<std::string>{"b", "c"})) << "the requeue races c, which the partial race carried";
+    const CellRecord n2 = newest_cells(ledger).at(2);
+    EXPECT_TRUE(std::any_of(n2.cands.begin(), n2.cands.end(), [](const CandResult& c) { return c.cand == "c"; }));
+    EXPECT_EQ(n2.ranked.front(), "b");
 }
 
 namespace {
@@ -5235,6 +5319,34 @@ TEST(TuneReplay, LedgerOracleTakesBestRecordsAndTheRoundZeroLattice) {
     EXPECT_TRUE(load_ledger_oracle(d.led(), {}).cells.empty());  // every record stale without the hashes
 }
 
+// A frontier run's round 0 is every 2nd value: the run's recorded `grid` is the lattice. A calibrate cell
+// off the probes raced two arms, so it is no oracle cell.
+TEST(TuneReplay, LedgerOracleTakesTheRecordedGridAndSkipsCalibrateCellsOffTheProbes) {
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float", m.run_id = "r2", m.tier = Tier::deep, m.date = "2026-10-15", m.keys = "n:log:3 batch:log";
+    m.protocol = kProtocol, m.grid = "n=32,48,64,96,128 batch=1024";
+    {
+        LedgerWriter w(d.led(), m);
+        auto put = [&](int n, int round, const std::string& vendor_reason = "") {
+            CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0),
+                                     cres("vendor", "v1", vendor_reason.empty() ? "ok" : "skipped")},
+                                    {"lpanel:panel=8"}, n);
+            c.cands[1].reason = vendor_reason;
+            c.round = round, c.date = m.date;
+            w.cell(c);
+        };
+        for (int i = 0; i < 20; ++i) put(32, 0), put(64, 0), put(128, 0);
+        put(48, 1);
+        put(96, 1, kUnraced);
+    }
+    const OracleSet o = load_ledger_oracle(d.led(), kHashes);
+    ASSERT_EQ(o.axes.size(), 3u);
+    EXPECT_EQ(o.axes[1].values, (std::vector<std::string>{"32", "48", "64", "96", "128"})) << "the recorded grid, not round 0";
+    EXPECT_EQ(o.cells.size(), 4u);
+    EXPECT_FALSE(o.cells.count(CellKey{{"dtype", "float"}, {"n", "96"}, {"batch", "1024"}})) << "unraced arms: not exhaustive";
+}
+
 // --tier calibrate (docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table)
 
 namespace {
@@ -5317,8 +5429,9 @@ struct CalResult {
 };
 
 CalResult run_calibrate(const TempDir& repo, const TempDir& ledger, CalMeasurer& m, const std::string& prior = "",
-                        double budget_h = 0, int probe_stride = 0) {
+                        double budget_h = 0, int probe_stride = 0, const std::string& b_src = "") {
     TieredOpts o = fake_opts(repo, ledger, Tier::calibrate);
+    if (!b_src.empty()) std::ofstream(repo.path / "b.cc") << b_src;
     o.probe_stride = probe_stride;
     if (!find_spec("fakecal")) register_spec(&kFakeCal);
     o.ops = {"fakecal"};
@@ -5491,6 +5604,35 @@ TEST(TuneCalibrate, AnAgreeingDeviceIsProbedOnlyAndTheRerunMeasuresNothing) {
     CalResult r2 = run_calibrate(repo, ledger, again);
     EXPECT_TRUE(again.arms.empty()) << "probes current at calibrate";
     EXPECT_EQ(r2.ledger.cells.size(), r.ledger.cells.size()) << "the same prior rows are not appended again";
+}
+
+// Family b's kernel changes: every calibrate grid record off the probes is partly stale and re-raced (b plus
+// its top 2), as the lattice tiers and the frontier do, not only where the prior is contradicted.
+TEST(TuneCalibrate, ARerunReRacesPartlyStaleRecordsOffTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    auto on_grid = [](const CellKey& k) {
+        return std::count(kCalN.begin(), kCalN.end(), *key_get(k, "n")) &&
+               std::count(kCalBatch.begin(), kCalBatch.end(), *key_get(k, "batch"));
+    };
+    std::size_t off_probe = 0;
+    for (const auto& [k, c] : r.best) off_probe += c->tier == Tier::calibrate && c->round > 0 && on_grid(k);
+    ASSERT_GT(off_probe, 0u);
+    EXPECT_EQ(r.ledger.runs.back().grid, "n=1,2,4,8,16,32,64,128,256,512,1024 batch=1,2,4,8,16,32,64") << "the run's lattice";
+    CalMeasurer again({40, {}});
+    CalResult r2 = run_calibrate(repo, ledger, again, "", 0, 0, "b changed");
+    for (const auto& [k, c] : r.best) {
+        if (c->tier != Tier::calibrate || !on_grid(k)) continue;
+        ASSERT_TRUE(again.arms.count(key_arg(k))) << key_arg(k) << ": partly stale, re-raced";
+        const auto& a = again.arms.at(key_arg(k));
+        EXPECT_NE(std::find(a.begin(), a.end(), "b"), a.end()) << key_arg(k);
+    }
+    const auto fh = family_hashes(repo.str(), kFakeCal.kernel_block(repo.str()), {"a", "b", "c"});
+    for (const auto& [k, c] : best_records(r2.ledger, fh))
+        if (c->tier == Tier::calibrate && on_grid(k)) EXPECT_EQ(freshness(*c, fh), Freshness::current) << key_arg(k);
 }
 
 TEST(TuneCalibrate, ABudgetStopLeavesContradictedCellsToTheirMeasuredNeighbours) {

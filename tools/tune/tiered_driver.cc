@@ -261,7 +261,7 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
     // Every tier plans by flip frontier unless the spec keeps the full lattice; a partly stale record joins
-    // round 0, as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    // round 0 (frontier and calibrate), as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     j->fp = s.frontier();
     j->frontier = !named_only() && !calibrate() && j->fp.stride > 1;
     if (calibrate()) {
@@ -280,7 +280,7 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (named_only()) j->next.clear();
     else if (j->frontier) j->next = frontier_start(grid, j->axes, j->fp.stride);
     else if (!calibrate()) j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
-    if (j->frontier) {
+    if (j->frontier || calibrate()) {
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
         const std::set<CellKey> r0(j->next.begin(), j->next.end());
         for (const auto& [k, r] : best_records(j->ledger, j->fh))
@@ -375,6 +375,8 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         m.protocol = kProtocol;
         m.guard = o_.guard ? o_.guard() : "";
         if (j.prior) m.prior = j.prior->device + "@" + j.prior->date;
+        for (const AxisSpec& a : j.axes)
+            if (a.log) m.grid += (m.grid.empty() ? "" : " ") + a.name + "=" + join(a.values, ",");
         // Always the full lists: table generation derives the current families from the newest run.
         m.keys = join(j.spec->key_names(), " ");
         m.candidates = join(j.cands, "|");
@@ -391,7 +393,7 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
     // Under the lock that note() takes: a cell finishing on another GPU never ranks a failed arm.
     for (const auto& [arm, why] : j.ld.bad) (void)ld_retract(c, arm, why);
     if (const auto vb = j.verify.bad.find(j.bucket(c.key)); vb != j.verify.bad.end())
-        for (const auto& [arm, why] : vb->second) (void)ld_retract(c, arm, why, true);
+        for (const auto& [arm, why] : vb->second) (void)ld_retract(c, arm, why, !unhashed(c.tier));  // never verified here
     // A retraction (or a partial re-race whose arms all failed) promoted an arm this cell never
     // verified: it goes out below the first verified arm, and the cell is raced again over its live
     // arms, verifying the new tie set. evidence: docs/design/tiered-tuning.md#engine-tie-set-verification
@@ -401,8 +403,9 @@ void TieredRun::record(Job& j, const CellRecord& r, Tier tier) {
         p.tier = c.tier;
         p.round = c.round;
         p.reason = "remeasure";
-        const auto live = j.runnable.find(c.key);
-        p.arms = live != j.runnable.end() && !live->second.empty() ? live->second : j.cands;
+        for (const std::string& a : j.cands)
+            if (std::none_of(c.cands.begin(), c.cands.end(), [&](const CandResult& x) { return x.cand == a && x.status == "skipped"; }))
+                p.arms.push_back(a);
         j.requeue.push_back(std::move(p));
     }
     j.writer->cell(c, tier);
@@ -426,7 +429,7 @@ void TieredRun::retract(Job& j, const std::vector<std::string>& arms, const std:
             bool ranked = false;
             for (const std::string& a : arms)
                 ranked = (bucket.empty() ? ld_retract(c, a, j.ld.bad.at(a))
-                                         : ld_retract(c, a, j.verify.bad.at(bucket).at(a), true)) || ranked;
+                                         : ld_retract(c, a, j.verify.bad.at(bucket).at(a), !unhashed(c.tier))) || ranked;
             if (ranked) hit.push_back(*r), hit.back().phases = {};  // the time was spent once
         }
     }
@@ -471,6 +474,20 @@ void TieredRun::audit(Job& j, const CellJob& job_in, const ArmBatch& warm) {
             on_worker.push_back(x);
     const AuditResult a = audit_compare(on_worker, f.arms, j.cands);
     verdicts(j, job.key, f.arms);
+    std::optional<CellRecord> mine;  // the worker verified and passed what the fresh child failed: retracted anyway
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        const auto r = j.mine.find(job.key);
+        const auto vb = j.verify.bad.find(j.bucket(job.key));
+        if (r != j.mine.end() && vb != j.verify.bad.end()) {
+            CellRecord c = r->second;
+            bool hit = false;
+            for (const ArmOutcome& x : f.arms)
+                if (x.verified && x.status == "bad" && vb->second.count(x.arm)) hit = ld_retract(c, x.arm, vb->second.at(x.arm)) || hit;
+            if (hit) c.phases = {}, mine = std::move(c);
+        }
+    }
+    if (mine) record(j, *mine, mine->tier);
     const std::string od = j.spec->op() + "." + j.dtype;
     bool flipped = false;
     {
@@ -668,7 +685,9 @@ void TieredRun::gpu_loop(std::size_t g) {
                 again.swap(j->requeue);
             }
             lk.lock();
-            for (PlannedCell& p : again) j->again.push_back(std::move(p)), j->queue.push_back(&j->again.back());
+            for (PlannedCell& p : again)
+                j->planned.insert(p.key), j->again.push_back(std::move(p)), j->queue.push_back(&j->again.back());
+            if (!again.empty() && !j->per_round.empty()) j->per_round.back() += again.size();
             if (!again.empty()) cv_.notify_all();
             --j->running;
         } else {
@@ -736,8 +755,8 @@ std::map<CellKey, RefineCell> TieredRun::refine_cells(const Job& j, std::map<Cel
             if (ranked) (*ranked)[k] = r->ranked;
         }
     for (const auto& [k, r] : j.mine) {
-        if (unhashed(r.tier)) continue;
-        cells[k] = refine_cell(r, r.round == 0);
+        if (!j.region->contains(k) || tier_rank(r.tier) < tier_rank(o_.tier)) continue;
+        cells[k] = refine_cell(r, r.round == 0 && r.tier == o_.tier);
         if (ranked) (*ranked)[k] = r.ranked;
     }
     return cells;

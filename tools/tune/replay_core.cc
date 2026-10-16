@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <tuple>
@@ -385,9 +386,12 @@ OracleSet load_ledger_oracle(const std::string& ledger_jsonl, const std::map<std
     o.label = ledger_jsonl;
     std::vector<std::string> key_names, names;
     std::map<std::string, std::map<std::string, std::size_t>> round0;  // key -> value -> round-0 records
+    std::optional<RunMeta> gridded;  // the newest run that recorded its lattice
     for (const char* dtype : {"float", "double", "cfloat", "cdouble"}) {
         const Ledger l = read_ledger(ledger_jsonl, dtype);
         if (l.runs.empty()) continue;
+        for (const RunMeta& m : l.runs)
+            if (!m.grid.empty() && (!gridded || std::tie(m.date, m.run_id) > std::tie(gridded->date, gridded->run_id))) gridded = m;
         if (key_names.empty()) key_names = split("dtype:exact " + l.runs.back().keys, ' ');
         for (const auto& [rkey, r] : best_records(l, family_hash)) {
             if (names.empty())
@@ -395,6 +399,8 @@ OracleSet load_ledger_oracle(const std::string& ledger_jsonl, const std::map<std
             CellKey key{{"dtype", dtype}};
             for (const std::string& n : names)
                 if (const std::string* v = key_get(rkey, n)) key.push_back({n, *v});
+            // A calibrate cell off the probes raced a few arms: not an oracle for the rest.
+            if (std::any_of(r->cands.begin(), r->cands.end(), [](const CandResult& x) { return x.reason == kUnraced; })) continue;
             RefineCell c;
             for (const CandResult& cr : r->cands)
                 if ((cr.status == "ok" || cr.status == "eliminated") && cr.median_ms > 0) c.ms[cr.cand] = cr.median_ms;
@@ -407,7 +413,12 @@ OracleSet load_ledger_oracle(const std::string& ledger_jsonl, const std::map<std
     finish(o, key_names);
     o.lattice = "ledger";
     std::vector<AxisSpec> lattice;
-    for (const auto& [name, count] : round0) {
+    // A frontier or calibrate round 0 is a stride-2 or stride-4 subset: only a run without `grid` infers it.
+    for (const std::string& axis : gridded ? split(gridded->grid, ' ') : std::vector<std::string>{}) {
+        const auto eq = axis.find('=');
+        if (eq != std::string::npos) lattice.push_back({axis.substr(0, eq), true, split(axis.substr(eq + 1), ',')});
+    }
+    for (const auto& [name, count] : gridded ? decltype(round0){} : round0) {
         std::size_t most = 0;
         for (const auto& [v, n] : count) most = std::max(most, n);
         AxisSpec a{name, true, {}};

@@ -24,7 +24,8 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
   candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
   before it; absent in ledgers written before the field), `guard` (the guard backend: `nvml`,
   `nvidia-smi` or `off`; absent before the field), `prior` (calibrate runs only: the borrowed table as
-  `<device>@<header date>`; table generation ignores it). A later `run` line with the same (run id, dtype) replaces the earlier one.
+  `<device>@<header date>`; table generation ignores it), `grid` (the log axes' full lattice the run planned
+  on, `n=1,2,4 batch=8,16`; `tune_replay --ledger` reads it; absent before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
 - `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
   `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
   lean race's tie set, already verified in its size decade; absent = verified, as in every older
@@ -58,8 +59,8 @@ Tiers, best first: `deep`, `coarse`, `calibrate`, `preview`, `custom`, `converte
   They compete only among themselves for a cell, so one still stands where the measured record's
   ranking is empty. A measured row within 2 lattice steps on every log key (equal exact keys)
   removes a converted or transcribed row from the table, kept or not; a prior row does too. A prior
-  row gives way only to a measured record with its own key (stride 0), so the copies fill a sparse
-  calibrate run's gaps (@ref design_tiered_tuning, "Engine: calibrate tier from a borrowed table").
+  row gives way to a measured record with its own key, or to a coarse or deep row within 2 lattice
+  steps, so the copies fill only a calibrate run's gaps (@ref design_tiered_tuning, "Engine: calibrate tier from a borrowed table").
 
 Writers append under `flock(LOCK_EX)`, one `write()` per line, and repair a torn last line under
 the same lock. Several dtype jobs and processes share one file. A reader ignores a truncated last
