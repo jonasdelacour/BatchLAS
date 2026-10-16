@@ -16,7 +16,6 @@
 #include <src/ops/gesv/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -126,11 +125,10 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesv_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const int n = int(key_int(req.key, "n"));
-            GesvProblem<T> p(*q, n, int(key_int(req.key, "nrhs")), gesv_batch(req.dtype, n), req.ld_pad);
+            GesvProblem<T> p(q, n, int(key_int(req.key, "nrhs")), gesv_batch(req.dtype, n), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::solve, p.n);
             if (req.mode == "race") return run_race<G::GesvChoice>("gesv", p, req, tol);
             return run_arms<G::GesvChoice>("gesv", p, req, tol);

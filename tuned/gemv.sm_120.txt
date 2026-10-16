@@ -1,5 +1,5 @@
 # op=gemv device=sm_120 batchlas=2606d367 kernels=49842c75 family_kernels=cta:7637167c,direct:7637167c,vendor:7637167c date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/gemv.sm_120.jsonl tiers=deep:8558,coarse:0,preview:0,custom:29,converted:0,transcribed:620
+# source=ledger:benchmarks/results/tuning/ledger/gemv.sm_120.jsonl tiers=deep:8558,coarse:0,calibrate:0,preview:0,custom:29,converted:0,prior:0,transcribed:620
 # keys: dtype:exact trans:exact out:log red:log batch:log
 dtype=float trans=N out=1 red=1 batch=1 | direct 0.006891 | vendor 0.008217 # deep
 dtype=float trans=N out=1 red=1 batch=16 | direct 0.007006 | vendor 0.007963 # deep

@@ -20,7 +20,6 @@
 #include <src/ops/symm/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -119,6 +118,8 @@ public:
         return (m * m + 3.0 * m * n) * double(key_int(k, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "m"; }
+    // k = 8: the cheapest frontier passing the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    FrontierPlan frontier() const override { return {2, 8, 0.05}; }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -139,13 +140,12 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_real_dtype("symm", req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             if (*key_get(req.key, "form") != Y::form_of(m, n))
                 throw std::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
-            SymmProblem<T> p(*q, m, n, int(key_int(req.key, "batch")), req.ld_pad);
+            SymmProblem<T> p(q, m, n, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.m);
             if (req.mode == "race") return run_race<Y::SymmChoice>("symm", p, req, tol);
             return run_arms<Y::SymmChoice>("symm", p, req, tol);

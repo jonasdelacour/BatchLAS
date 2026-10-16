@@ -14,7 +14,6 @@
 #include <src/ops/getrf/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -122,10 +121,9 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/getrf_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
-            GetrfProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad);
+            GetrfProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad);
             if (req.mode == "race") return run_race<F::GetrfChoice>("getrf", p, req, 1.0);
             return run_arms<F::GetrfChoice>("getrf", p, req, 1.0);
         });

@@ -10,7 +10,9 @@ add_executable(batchlas_tune_impl
     ledger.cc
     schedule.cc
     tiered_driver.cc
+    replay_core.cc
     worker.cc
+    nvml_guard.cc
     spec.cc
     potrf_spec.cc
     posv_spec.cc
@@ -35,6 +37,8 @@ add_executable(batchlas_tune_impl
 batchlas_configure_binary_target(batchlas_tune_impl LIBRARIES batchlas::verify)
 # The §6.4 kernel hash and the spec-list check read sources relative to the repository.
 target_compile_definitions(batchlas_tune_impl PRIVATE BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# The guard dlopens libnvidia-ml (nvml_guard.cc); no link-time NVML dependency.
+target_link_libraries(batchlas_tune_impl PRIVATE ${CMAKE_DL_LIBS})
 
 # The command users run. It must stay SYCL-free (no batchlas_configure_binary_target): linking
 # libbatchlas or libsycl would put a CUDA context on every visible GPU (see launcher.cc).
@@ -45,6 +49,6 @@ target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE
 
 # Offline replay of the tiers against a raw sweep (docs/design/tiered-tuning.md). Host-only, like the tests:
 # no batchlas_configure_binary_target, no SYCL.
-add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc tune_core.cc)
+add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc ledger.cc tune_core.cc)
 target_compile_features(tune_replay PRIVATE cxx_std_20)
 target_include_directories(tune_replay PRIVATE "${PROJECT_SOURCE_DIR}")

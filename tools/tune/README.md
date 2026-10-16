@@ -58,8 +58,8 @@ Tiered runs are the normal workflow: plan, measure, inspect, write tables.
 
 Modes:
 
-- **Tiered** (`--tier preview|coarse|deep`): records per-cell results in the ledger and skips cells
-  it already holds. A run with no `--out` updates the ledger only.
+- **Tiered** (`--tier preview|coarse|deep|calibrate`): records per-cell results in the ledger and skips
+  cells it already holds. A run with no `--out` updates the ledger only.
 - **Custom** (any of `--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`, `--no-refine`,
   `--no-jit`, `--ld-pad`, `--raw`): the two-pass protocol below. Recorded in the ledger as tier
   `custom` (ranked below preview) only when `--ledger DIR` is given explicitly.
@@ -75,7 +75,9 @@ families changed are re-raced (`partial:<family>`).
 | flag | default | meaning |
 |---|---|---|
 | `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all` (every registered spec). Tiered runs take the ops in dependency order ("Op order" below) and skip, with one note, a dtype a spec refuses. Gate and custom runs take one op |
-| `--tier` | none | `preview`, `coarse` or `deep`; `custom` with `--remeasure-keys`: exactly the named cells, every candidate, no lattice and no refinement (a rehash sample, [kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)) |
+| `--prior DEVICE` | newest fully timed table | `--tier calibrate`: the prior is `tuned/<op>.DEVICE.txt`; default: of `tuned/<op>.*.txt` (not the device's own, not cpu), the newest `date=` among the fully timed (>= 90% timed rows), else the largest timed-row share |
+| `--probe-stride N` | 4 | `--tier calibrate`: probe every N-th value of each log axis (8: a cheaper probe) |
+| `--tier` | none | `preview`, `coarse`, `deep` or `calibrate` (probe the prior table at stride 4, race all arms there; measure only where the device disagrees, racing the prior's top 2 + families it lacks + the neighbours' winners; copy the prior's rows to the rest as tier `prior`: [tiered tuning](../../docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table)); `custom` with `--remeasure-keys`: exactly the named cells, every candidate, no lattice and no refinement (a rehash sample, [kernel hashes](../../docs/design/tuning-data.md#tuning-data-kernel-hash)) |
 | `--plan` | off | print cells, skips with reasons and the estimate, then exit. No GPU |
 | `--budget H` | none | stop refinement after H hours; the starting lattice always completes. `--plan` warns if its estimate exceeds H |
 | `--only-named` | off | with `--remeasure-keys` and a tiered `--tier`: round 0 is exactly the named cells at the run's tier, no lattice and no refinement (how the cells a rehash sample disagrees on are re-measured at deep) |
@@ -86,7 +88,7 @@ families changed are re-raced (`partial:<family>`).
 | `--device-key sm_NN` | compute capability of the first `--devices` GPU | device whose ledger `--plan` reads |
 | `--cell-overhead-s` | 0.49 | per-child start-up in the estimate |
 | `--no-worker` | off | race every cell in a fresh `--cell --mode race` child instead of the per-GPU worker |
-| `--audit-fraction F` | preview and coarse 0.02; deep 0.10 | share of worker cells re-raced in a fresh child |
+| `--audit-fraction F` | preview and coarse 0.02; deep 0.01 | share of worker cells re-raced in a fresh child |
 | `--status` | | op x dtype x device matrix: runs, cells, tier mix, stale and partly stale counts, newest run and age, table source, tier mix and date. No GPU |
 | `--import-raw F` | | schema-1 raw sweep into the ledger as a deep run; op, dtype and device come from its meta |
 | `--dtype` | `float` (gate with `--old-csv`: every dtype in the CSV) | comma list; one raw file and one table per dtype |
@@ -103,6 +105,7 @@ families changed are re-raced (`partial:<family>`).
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
 | `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts (see "Guard") |
+| `--guard-backend` | auto | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
 | `--lock-dir` | `/tmp` | per-GPU flock files `batchlas_tune_gpu<N>.lock` |
 | `--cell-timeout` | 1800 s | a child running longer is killed and counts as a failed child |
 | `--gate`, `--old-csv`, `--parent-bin`, `--gate-csv`, `--gate-limit` | `--gate-limit` 1.05 | gate mode |
@@ -117,9 +120,17 @@ and planning is in `schedule.cc`.
   breaking ties. `all` starts from the canonical order gemm, trsm, syr2k, gemv, spmm, trmm, symm,
   syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv, gesv, orgqr, syev, gesvd ("Engine: op order
   over all 19 ops" in the design page).
-- **Rounds.** Round 0 is the tier's starting lattice for every op and dtype, in op order. Refinement
-  rounds follow over each cell ranked inside the requested grid, until no midpoint is left, `--budget`
-  is spent or the refinement cap is hit.
+- **Rounds.** Round 0 is the tier's starting set for every op and dtype, in op order (frontier: stride
+  2; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): preview's stride-2 lattice, coarse and deep's full
+  lattice). Later rounds follow over each cell ranked inside the requested grid, until nothing is left,
+  `--budget` is spent or, for those ops, the refinement cap is hit.
+- **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
+  (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
+  Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
+  and trmm 8; same exact keys; ledger cells of the same or a higher tier count) hold a winner more than 5%
+  slower at another of them, or not runnable there, plus bisection midpoints off the grid between
+  adjacent grid values. No cap, no margin: only `--budget` stops it. gemm, geqrf, getri, orgqr
+  and spmm keep today's path (`frontier()` stride 1). See "Engine: round planning by flip frontier".
 - **Pipelined queues.** Rounds are per (op, dtype) job. Each round is one queue sorted by (per-item
   footprint, bytes); every GPU pops the next cell of the earliest job (op order) that has queued
   cells, and a job's next round is planned only once all of its current round's cells are recorded.
@@ -129,8 +140,8 @@ and planning is in `schedule.cc`.
 - **Refinement.** A bracket is a flip when its two winners differ and the other end's winner is more
   than the 3% tie slower there (or cannot win there). Near-tie alternation refines nothing. The preview
   margin (runner-up within 10%) applies only between round-0 cells at the running tier. Refinement per
-  op and dtype is capped at `refine_cap_factor` x round-0 records (preview 3.0, coarse 1.0, deep 2.0).
-  Past the cap the run prints `refinement cap hit` and emits `refine_cap`.
+  op and dtype is capped at `refine_cap_factor` x round-0 records (preview 3.0, coarse 1.0, deep 2.0)
+  for full-lattice runs. Past the cap the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell.** A dimension over `--max-dim` (`OpSpec::dims`, checked first): `skip:dim`. Over `--cap-gib`: `skip:cap`. A current record at the same or higher tier: `skip:current`.
   A partly stale record re-races only the changed or added families, plus its stored winner and
   runner-up (`partial:<families>`). A candidate stored `skipped` is not compared, but one skipped
@@ -138,12 +149,21 @@ and planning is in `schedule.cc`.
   of every family.
   A stale record, or one where every candidate is `error`, counts as missing. A cell whose probe found
   at most one runnable candidate is `skip:single` and is written as an untimed row.
-- **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`): a warm-up per live candidate,
-  then interleaved rounds of one timed run per candidate until a winner, a tie or `max_reps` rounds.
-  Eliminated candidates are still verified; a passing one keeps its median with status `eliminated`
-  (ranked after the survivors). A failing one is `bad` and left out. From the second round on,
-  whatever `min_reps` says, an arm whose lower median paired ratio to the leader exceeds 4.0 is
-  eliminated (a gross loser); one stalled round never kills an arm.
+- **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`, the lean protocol; ledger
+  `protocol=lean`): one untimed run per candidate; two timed rounds that cut gross losers (lower
+  median paired ratio to the leader above 4.0, so both runs; they keep that median and get no
+  warm-up); untimed warm rounds over the survivors until two round totals agree within 2% (at least
+  2 rounds, at most 0.2 s per arm); then interleaved rounds of one timed run per candidate until a
+  winner, a tie or the rep cap: ceil(50 ms / the slowest survivor's warm median), within
+  [3, 16] preview, [4, 16] coarse, [6, 16] deep. From the second round on, whatever `min_reps` says,
+  the gross rule still applies; one stalled round never kills an arm. Eliminated candidates keep
+  their median with status `eliminated` (ranked after the survivors). Rationale:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-lean-cell).
+- **Verification.** Only the candidates that can rank first (the 3% tie set) are verified, plus each
+  candidate's first cell per (op, dtype, exact keys, size decade). A failing one is `bad` and left
+  out; the others are kept unverified (ledger `v<i>: 0`). A failure is also `bad` in that bucket's
+  later cells, untimed, and in its earlier records that did not verify it (appended again). Rationale:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-tie-set-verification).
 - **Strict pins.** Every arm is pinned strictly (`select::StrictPin`): a `vendor` (or `native`) pin
   that its class cannot serve is `skipped`, reason `pin refused (strict): ...`, instead of timing Auto
   under the vendor's name.
@@ -157,9 +177,10 @@ and planning is in `schedule.cc`.
   consecutive such cells it is dropped for the rest of that op and dtype (`error`, reason
   `dropped after 5 consecutive errors`, not run).
 - **Audit.** A worker cell is re-raced in a fresh child when `fnv1a64(run_id + key) % 1000` falls
-  below `audit_fraction * 1000`. The first worker cell of each op and dtype is always audited. A
+  below `audit_fraction * 1000` (2% preview and coarse, 1% deep; `--audit-fraction`). The first worker cell of each op and dtype is always audited. A
   mismatch (usable in one run and refused or failing in the other, or a different winner more than
-  10% slower in the fresh run) is logged as an `audit` record. The rest of that op and dtype then runs
+  10% slower in the fresh run; an arm unverified on either side only has to have run on both) is
+  logged as an `audit` record. The rest of that op and dtype then runs
   in fresh children.
 - **ld audit.** Each candidate's first verified cell per op and dtype is verified once more, in the
   same worker or child, at `ld_pad + 3`; a pin that refuses the padded shape is asked again at the
@@ -172,10 +193,16 @@ and planning is in `schedule.cc`.
   lines are appended under `flock`, one `write()` each, and carry `dtype`. A run writes one `run`
   line per dtype with the full key spec and candidate list, whatever `--grid` narrowed. A dirty
   `--repo` tree is refused without `--allow-dirty`.
-- **Estimate.** Per cell: `--cell-overhead-s` plus, per candidate, `max_reps` times the nearest ledger
-  median (else bytes / 500 GB/s), the warm-up top-up and 0.05 s of verification. `--plan` prints the
-  lattice-only and with-refinement estimates. The estimate is the sum over GPUs, so divide by
-  `--devices`; it ran 1.3x to 1.8x high on threadripper02.
+- **Estimate.** Per cell: the recorded phases (`ph_*`) of the nearest ledger cell of the same
+  protocol, tier and mode, per-arm phases scaled by the arm count, plus per history cell the recorded
+  worker-start and audit share, and once a run the ld audits. Without that history: `--cell-overhead-s`
+  plus, per candidate, (the rep cap of the slowest candidate + 3) times the nearest ledger median
+  (else bytes / 500 GB/s) and two warm rounds capped at 0.2 s, plus 0.05 s of verification once a cell (the `full`
+  protocol's model ran 1.3x to 1.8x high on threadripper02). `--plan` prints how many cells came from
+  history, and the lattice-only and with-refinement estimates. A frontier's cell count depends on the
+  winners it finds: `--plan` prices 0.86 of the grid cells round 0 leaves (`kFrontierShare`, the
+  driver-model replay's share) and says so (`frontier (stride 2, k 6, 5%): ~N cells,
+  data-dependent`). The estimate is the sum over GPUs, so divide by `--devices`.
 
 Progress events (`--progress-fd`), one JSON object per line; every event also carries `t`, Unix time in seconds:
 
@@ -187,7 +214,7 @@ Progress events (`--progress-fd`), one JSON object per line; every event also ca
 | `cell_start` | op, dtype, key fields, `gpu` |
 | `cell_done` | op, dtype, key fields, `ranked` (`a\|b`), `tier`, `round` (absent on a single-candidate cell) |
 | `eliminated` | op, dtype, key fields, `cand`, `round` |
-| `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh` |
+| `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh`, `audit_s` |
 | `worker_restart` | op, dtype, key fields, `gpu`, `restarts`, `fallback` |
 | `ld_audit` | op, dtype, key fields, `cand`, `verdict` (`fail`), `reason` |
 | `ld_audit_summary` | `op`, `dtype`, `passed`, `skipped`, `failed`, `failures` |
@@ -231,16 +258,24 @@ device key, because one run writes one device's tables.
 
 ## Guard
 
-Before each child: no compute process on the GPU and utilization at most `--util-ceiling`. Otherwise
-the tuner waits up to `--guard-wait` and then stops. After each child: a compute process on the GPU
-discards that child's numbers and the child is retried. Any process with a context counts, and an
-entry nvidia-smi shows as `[N/A]` counts as foreign. The tuner warns at start when a listed GPU drives
-a display, or when another GPU has compute processes. Without nvidia-smi the tuner stops; `--no-guard`
-skips the guard.
+The guard reads NVML in the driver process (`--guard-backend auto`, the default), or nvidia-smi when
+NVML does not load (with a warning) or with `--guard-backend nvidia-smi`. Details, costs and the
+retry rules: [tiered tuning](../../docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query).
+`batchlas_tune --guard-probe` prints both backends' view of every GPU (read-only).
 
-`--allow-idle-foreign` tolerates other users' idle contexts while utilization is at most
-`--util-ceiling`. Each child remembers their pids, and only a new pid discards its numbers. A busy GPU,
-or an `[N/A]` entry, still refuses. The raw files record `allow_idle_foreign` and `tolerated_foreign`
+Before each cell or child: no compute process on the GPU and no foreign activity (NVML: per-process SM
+load in the last second; nvidia-smi: whole-GPU utilization at most `--util-ceiling`, checked only at a
+full guard, every 60 s on a worker and before each fresh child). Otherwise the tuner waits up to
+`--guard-wait` and then stops. After each: a new compute process, or (NVML) foreign activity since it
+started, discards its numbers. A discarded run is re-run at once; after a second discard the tuner
+waits for a quiet GPU before each re-run and stops after `--guard-wait`. A discard is never an arm error. Any process with a context counts,
+and an entry nvidia-smi shows as `[N/A]` counts as foreign. The tuner warns at start when a listed GPU
+drives a display, or when another GPU has compute processes. Without NVML or nvidia-smi the tuner
+stops; `--no-guard` skips the guard.
+
+`--allow-idle-foreign` tolerates other users' idle contexts. Each child remembers their pids; a new
+pid, or (NVML) a tolerated pid above `--util-ceiling`, discards its numbers. A busy GPU, or an `[N/A]` entry,
+still refuses. The raw files record `allow_idle_foreign` and `tolerated_foreign`
 (`gpu:pid(user),..;..`) in `meta`. Each `pass` and `rep` record carries the pids the child ran beside.
 
 ## Raw JSONL (schema 1)
@@ -250,7 +285,7 @@ Times are milliseconds per call for the whole batch.
 
 | kind | fields |
 |---|---|
-| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign`, `argv` |
+| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign`, `guard_backend`, `argv` |
 | `rep` | `op`, `dtype`, `device`, key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `tolerated_foreign`, `cand`, `rep`, `slot` (position in the rotated order), `ms` |
 | `pass` | as `rep` without `rep`, `slot`, `ms`; plus `status` (`ok`, `skipped`, `bad`, `error`), `reason`, `median_ms`, `residual`, `info_nonzero`, `reps` |
 | `retry` | `op`, `dtype`, key fields, `mode`, `error` (a failed child that was run again) |
@@ -260,6 +295,33 @@ Times are milliseconds per call for the whole batch.
 Key fields use the op's key names. Integer values are JSON integers. With `--ledger`, `import_schema1` reads `meta` and the
 `pass` records of each cell's highest attempt that timed anything. A candidate enters the table when it
 is `ok` in every pass of that attempt, and the run becomes a `custom` run of the ledger.
+
+## Offline replay (`tune_replay`)
+
+Host-only, no GPU (`build/tools/tune/tune_replay`).
+
+- `--raw <jsonl> --tier <t>`: re-races a raw exhaustive sweep at a tier and scores table misrank
+  (one JSON line). It models the pre-frontier plan (stride-1 lattice, refinement cap, `TierParams`
+  rep cap), not the lean race or the frontier; `--slowdown`'s `stride2+frontier+bisect` models
+  today's driver.
+- `--slowdown` (implied by `--table`/`--ledger`): `--table tuned/<op>.<dev>.txt`, `--ledger
+  <op>.<dev>.jsonl` (needs the matching `--table` for its family hashes, and lends it its lattice:
+  the newest run's recorded `grid`, else the round-0 values of runs that predate the field; calibrate
+  cells with unraced arms are no oracle cells) and `--raw <jsonl>`, each repeatable. `--scheme a,b` picks from `full`, `lattice`,
+  `stride2`, `stride4`, `stride2+frontier`, `stride4+frontier`, `stride2+frontier+prune`,
+  `lattice+bisect`, `stride2+frontier+bisect` (default: all); `--k` (6) and `--slower` (0.05) set the
+  frontier rule. The `+bisect` schemes model the driver: the frontier picks lattice cells only, and
+  bisection (3% tie) reaches the cells off it (`bisect_missing`: midpoints the universe lacks).
+  Output is one JSON line per (scheme, source), then per (scheme, `overall/<table|ledger|raw>`):
+  `lattice` (`ledger`, `raw` or `inferred`), `kept`, `arm_runs`, `geomean` (geomean slowdown − 1), `p99`, `p999` (nearest rank),
+  `slow10`, `misrank`, `worst`, `worst_key`, `measured_geomean`, `measured_p99`, `measured_p999`,
+  `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
+  failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:
+  [tiered tuning](../../docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay).
+- `--prior tuned/<op>.<dev>.txt` (repeatable, matched to sources by op) adds the calibrate schemes
+  `calibrate` (probe stride 4), `calibrate8`, `calibrate-probe` (no refinement) and `prior` (borrow
+  blindly), scored by `calibrate_replay`, with `probes`, `disagreed` and `prior_rows` in the output.
+  Results: [tiered tuning](../../docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table).
 
 ## Gate mode (§10.3)
 

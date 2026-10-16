@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -37,6 +38,7 @@
 #include <vector>
 
 using namespace batchlas::tune;
+using batchlas::Queue;
 namespace fs = std::filesystem;
 
 namespace {
@@ -545,6 +547,7 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
         m.tier = tier;
         m.keys = keys;
         m.candidates = "tiny|cta|blocked";
+        m.protocol = kProtocol;
         LedgerWriter w(file, m);
         for (int n : ns) {
             CellRecord c;
@@ -559,6 +562,7 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
                 c.cands.push_back(r);
             }
             c.ranked = {"cta", "tiny"};
+            c.phases.setup = 0.125, c.phases.timed = 0.75, c.phases.mode = "worker";  // the tables below ignore them
             w.cell(c);
         }
     };
@@ -589,7 +593,7 @@ TEST(TuneConverter, LedgerRoundTripsThroughSweepToTable) {
     for (const auto& name : cands) fam += (fam.empty() ? "" : ",") + name + ":" + fh.at(name);
     EXPECT_NE(table.find("# op=posv device=sm_999 batchlas=abc12345 kernels="), std::string::npos) << table;
     EXPECT_NE(table.find(" family_kernels=" + fam + " date=2026-10-03\n"), std::string::npos) << table;
-    EXPECT_NE(table.find(" tiers=deep:3,coarse:0,preview:3,custom:0,converted:0,transcribed:0\n"), std::string::npos) << table;
+    EXPECT_NE(table.find(" tiers=deep:3,coarse:0,calibrate:0,preview:3,custom:0,converted:0,prior:0,transcribed:0\n"), std::string::npos) << table;
     EXPECT_NE(table.find("# keys: dtype:exact " + keys + "\n"), std::string::npos) << table;
     EXPECT_NE(table.find("dtype=float uplo=L n=64 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # deep\n"), std::string::npos) << table;
     EXPECT_NE(table.find("dtype=float uplo=L n=8 nrhs=1 batch=128 | cta 0.5000 | tiny 1.250 # preview\n"), std::string::npos) << table;
@@ -761,9 +765,8 @@ TEST(TuneGuard, EveryOtherLineIsForeignIncludingUnparseableOnes) {
 AppScan foreign(std::vector<std::string> f) { return AppScan{std::move(f), false}; }
 
 TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), 0, 5, false).refuse, "compute processes [610696]");
-    EXPECT_EQ(guard_before(foreign({}), 6, 5, false).refuse, "utilization 6%");
-    const GuardCheck ok = guard_before(foreign({}), 5, 5, false);
+    EXPECT_EQ(guard_before(foreign({"610696"}), false).refuse, "compute processes [610696]");
+    const GuardCheck ok = guard_before(foreign({}), false);
     EXPECT_EQ(ok.refuse, "");
     EXPECT_TRUE(ok.tolerated.empty());
     EXPECT_EQ(guard_new_foreign(foreign({"610696"}), ok.tolerated), (std::vector<std::string>{"610696"}));
@@ -771,7 +774,7 @@ TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
 }
 
 TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
-    const GuardCheck g = guard_before(foreign({"610696", "671125"}), 3, 5, true);
+    const GuardCheck g = guard_before(foreign({"610696", "671125"}), true);
     EXPECT_EQ(g.refuse, "");
     EXPECT_EQ(g.tolerated, (std::vector<std::string>{"610696", "671125"}));
     EXPECT_TRUE(guard_new_foreign(foreign({"671125", "610696"}), g.tolerated).empty());
@@ -779,21 +782,24 @@ TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
 }
 
 TEST(TuneGuard, NewForeignPidDuringTheChildDiscards) {
-    const GuardCheck g = guard_before(foreign({"610696"}), 0, 5, true);
+    const GuardCheck g = guard_before(foreign({"610696"}), true);
     ASSERT_EQ(g.refuse, "");
     EXPECT_EQ(guard_new_foreign(foreign({"610696", "700001"}), g.tolerated), (std::vector<std::string>{"700001"}));
     EXPECT_EQ(guard_new_foreign(foreign({"[N/A]"}), g.tolerated), (std::vector<std::string>{"[N/A]"}));
 }
 
+// The whole-GPU figure (nvidia-smi) refuses above the ceiling whatever pids are tolerated.
 TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), 57, 5, true).refuse,
-              "utilization 57% with compute processes [610696]");
-    EXPECT_EQ(guard_before(foreign({}), 6, 5, true).refuse, "utilization 6%");
-    EXPECT_TRUE(guard_before(foreign({"610696"}), 57, 5, true).tolerated.empty());
+    const GuardCheck g = guard_before(foreign({"610696"}), true);
+    ASSERT_EQ(g.refuse, "");
+    EXPECT_EQ(foreign_active({{"", 57}}, g.tolerated, 5), (std::vector<std::string>{"GPU at 57%"}));
+    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_TRUE(foreign_active({{"", 5}}, g.tolerated, 5).empty());
+    EXPECT_TRUE(foreign_active({{"", 3}}, g.tolerated, 5).empty()) << "idle tolerated contexts at 3%";
 }
 
 TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), 0, 5, true).refuse, "compute processes [610696,[N/A]]");
+    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), true).refuse, "compute processes [610696,[N/A]]");
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
@@ -823,6 +829,70 @@ TEST(TuneGuard, AFailedQueryRetriesWithDoublingBackoffUntilTheWaitExpires) {
     EXPECT_EQ(query_with_backoff(fails_until(1000), 0, sleep), std::nullopt);
     EXPECT_TRUE(slept.empty()) << "--guard-wait 0: one try";
     EXPECT_EQ(calls, 1);
+}
+
+// evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+TEST(TuneGuard, ToleratedPidsAndTheWholeGpuAreActiveOnlyAboveTheCeiling) {
+    const std::vector<std::string> tol{"610696", "671125"};
+    EXPECT_TRUE(foreign_active({}, tol, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
+    EXPECT_TRUE(foreign_active({{"610696", 0}, {"671125", 5}}, tol, 5).empty()) << "idle tolerated pids, 5 is not above 5";
+    EXPECT_EQ(foreign_active({{"610696", 0}, {"671125", 6}}, tol, 5), (std::vector<std::string>{"671125 at 6%"}));
+    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, tol, 5),
+              (std::vector<std::string>{"671125 at 37%"}))
+        << "one entry per pid, at its peak sample";
+    EXPECT_TRUE(foreign_active({{"", 5}}, {}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
+    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_EQ(foreign_active({{"", 57}}, tol, 5), (std::vector<std::string>{"GPU at 57%"}));
+    EXPECT_EQ(foreign_active({{"671125", 6}}, tol, 10), std::vector<std::string>{}) << "the ceiling is the caller's";
+}
+
+TEST(TuneGuard, AnUntoleratedPidIsActiveAtAnySmLoad) {
+    EXPECT_EQ(foreign_active({{"700001", 1}}, {"610696"}, 5), (std::vector<std::string>{"700001 at 1%"}));
+    EXPECT_EQ(foreign_active({{"700001", 1}}, {}, 5), (std::vector<std::string>{"700001 at 1%"})) << "strict mode";
+    EXPECT_TRUE(foreign_active({{"700001", 0}}, {}, 5).empty()) << "a sample with no SM load (memory or video only)";
+}
+
+TEST(TuneGuard, BackendAutoPrefersNvmlAndFallsBackToNvidiaSmiWithAWarning) {
+    const GuardChoice nvml = choose_guard_backend("auto", "");
+    EXPECT_EQ(nvml.backend, "nvml");
+    EXPECT_TRUE(nvml.warning.empty() && nvml.error.empty());
+    const GuardChoice fb = choose_guard_backend("auto", "dlopen libnvidia-ml.so.1: not found");
+    EXPECT_EQ(fb.backend, "nvidia-smi");
+    EXPECT_NE(fb.warning.find("dlopen libnvidia-ml.so.1: not found"), std::string::npos) << fb.warning;
+    EXPECT_TRUE(fb.error.empty());
+    EXPECT_EQ(choose_guard_backend("nvml", "").backend, "nvml");
+    EXPECT_NE(choose_guard_backend("nvml", "nvmlInit_v2 returned 9").error, "") << "an explicit nvml never degrades";
+    EXPECT_EQ(choose_guard_backend("nvidia-smi", "").backend, "nvidia-smi") << "forced fallback even with NVML loaded";
+    EXPECT_EQ(choose_guard_backend("off", "").backend, "off");
+    EXPECT_NE(choose_guard_backend("smi", "").error, "");
+}
+
+// D12: discard, re-run at once, then refuse (wait) before every further run, until --guard-wait.
+TEST(TuneGuard, ADiscardedRunRerunsOnceThenWaitsBeforeEachRerunUntilTheWaitExpires) {
+    auto run = [](int discards, double wait_s, double per_refuse, int& attempts, int& refusals) {
+        attempts = refusals = 0;
+        return rerun_discarded([&] { return ++attempts <= discards ? "guard: foreign [671125 at 37%]" : std::string(); },
+                               [&] { ++refusals; return per_refuse; }, wait_s);
+    };
+    int at = 0, rf = 0;
+    EXPECT_EQ(run(0, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 1);
+    EXPECT_EQ(rf, 0);
+    EXPECT_EQ(run(1, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 2) << "the first discard re-runs at once";
+    EXPECT_EQ(rf, 0);
+    EXPECT_EQ(run(2, 300, 1, at, rf), "");
+    EXPECT_EQ(at, 3);
+    EXPECT_EQ(rf, 1) << "the second discard refuses and waits first";
+    EXPECT_EQ(run(1000, 3, 1, at, rf), "guard: foreign [671125 at 37%]") << "a burst that never stops";
+    EXPECT_EQ(rf, 3);
+    EXPECT_EQ(at, 5);
+    EXPECT_EQ(run(1000, 3, 0, at, rf), "guard: foreign [671125 at 37%]") << "a refusal that took no time counts 1 s";
+    EXPECT_EQ(rf, 3);
+    EXPECT_EQ(run(1000, 3.5, 2, at, rf), "guard: foreign [671125 at 37%]");
+    EXPECT_EQ(rf, 2) << "2 s, 4 s: past 3.5";
+    EXPECT_EQ(run(4, 3, 1, at, rf), "") << "quiet on the last allowed run";
+    EXPECT_EQ(at, 5);
 }
 
 namespace {
@@ -998,6 +1068,48 @@ TEST(TuneRace, LowerOrderStatMatchesTheBinomial) {
     EXPECT_EQ(lower_order_stat(2, 0.98), 0u);
 }
 
+// The first n with 0.5^n <= 1 - confidence; every tier's min_reps is that n (decision D4).
+TEST(TuneRace, MinRepsForIsTheFirstRoundCountTheConfidenceRuleCanUse) {
+    EXPECT_EQ(min_reps_for(0.80), 3);
+    EXPECT_EQ(min_reps_for(0.90), 4);
+    EXPECT_EQ(min_reps_for(0.98), 6);
+    for (double c : {0.80, 0.90, 0.98}) {
+        EXPECT_EQ(lower_order_stat(min_reps_for(c) - 1, c), 0u) << c;
+        EXPECT_GE(lower_order_stat(min_reps_for(c), c), 1u) << c;
+    }
+    for (Tier t : {Tier::preview, Tier::coarse, Tier::deep})
+        EXPECT_EQ(params(t).min_reps, min_reps_for(params(t).confidence)) << to_string(t);
+}
+
+// 50 ms of timed work for the slowest surviving arm, within [min_reps_for, kRepCap = 16] in every tier.
+TEST(TuneRace, LeanMaxRepsSpendsTheBudgetOnTheSlowestArm) {
+    const TierParams& deep = params(Tier::deep);
+    EXPECT_EQ(lean_max_reps(0.001, deep), 16);
+    EXPECT_EQ(lean_max_reps(3.0, deep), 16) << "17 wanted, capped";
+    EXPECT_EQ(lean_max_reps(50.0 / 15, deep), 15);
+    EXPECT_EQ(lean_max_reps(5.0, deep), 10);
+    EXPECT_EQ(lean_max_reps(8.0, deep), 7);
+    EXPECT_EQ(lean_max_reps(9.0, deep), 6) << "5.6 wanted, floored";
+    EXPECT_EQ(lean_max_reps(1000.0, deep), 6);
+    EXPECT_EQ(lean_max_reps(std::nan(""), deep), 16) << "no timing: the cap";
+    EXPECT_EQ(lean_max_reps(0.001, params(Tier::coarse)), 16) << "not the tier's max_reps (12)";
+    EXPECT_EQ(lean_max_reps(5.0, params(Tier::coarse)), 10);
+    EXPECT_EQ(lean_max_reps(1000.0, params(Tier::coarse)), 4);
+    EXPECT_EQ(lean_max_reps(0.001, params(Tier::preview)), 16) << "not the tier's max_reps (6)";
+    EXPECT_EQ(lean_max_reps(1000.0, params(Tier::preview)), 3);
+}
+
+TEST(TuneRace, WarmConvergesOnTwoConsecutiveRoundsWithinTwoPercent) {
+    EXPECT_FALSE(warm_converged(0, 1.0, 1)) << "no earlier round";
+    EXPECT_FALSE(warm_converged(1.0, 1.0, 1)) << "below kWarmMinRounds";
+    EXPECT_TRUE(warm_converged(1.0, 1.0, 2));
+    EXPECT_TRUE(warm_converged(1.0, 1.019, 2));
+    EXPECT_FALSE(warm_converged(1.0, 1.021, 2));
+    EXPECT_TRUE(warm_converged(1.0, 0.981, 3));
+    EXPECT_FALSE(warm_converged(1.0, 0.979, 3)) << "a clock still ramping down a round is not stable either";
+    EXPECT_FALSE(warm_converged(4.0, 2.0, 5)) << "the clocks came up between the rounds";
+}
+
 TEST(TuneRace, RankingPutsSurvivorsBeforeTheEliminated) {
     RaceState s;
     s.cands = {"a", "b", "c"};
@@ -1011,8 +1123,19 @@ TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     EXPECT_LT(tier_rank(Tier::preview), tier_rank(Tier::coarse));
     EXPECT_LT(tier_rank(Tier::custom), tier_rank(Tier::preview));
     EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::custom));
-    for (Tier t : {Tier::transcribed, Tier::custom, Tier::preview, Tier::coarse, Tier::deep})
+    // calibrate: a coarse race on a sparse probe lattice, between preview and coarse; prior: below every measured tier.
+    EXPECT_LT(tier_rank(Tier::preview), tier_rank(Tier::calibrate));
+    EXPECT_LT(tier_rank(Tier::calibrate), tier_rank(Tier::coarse));
+    EXPECT_LT(tier_rank(Tier::prior), tier_rank(Tier::converted));
+    EXPECT_LT(tier_rank(Tier::transcribed), tier_rank(Tier::prior));
+    EXPECT_TRUE(unhashed(Tier::prior));
+    EXPECT_FALSE(unhashed(Tier::calibrate));
+    for (Tier t : {Tier::transcribed, Tier::prior, Tier::converted, Tier::custom, Tier::preview, Tier::calibrate,
+                   Tier::coarse, Tier::deep})
         EXPECT_EQ(parse_tier(to_string(t)), t);
+    EXPECT_EQ(params(Tier::calibrate).stride, 4);
+    EXPECT_EQ(params(Tier::calibrate).min_reps, params(Tier::coarse).min_reps);
+    EXPECT_EQ(params(Tier::calibrate).confidence, params(Tier::coarse).confidence);
     EXPECT_FALSE(parse_tier("fast").has_value());
     EXPECT_EQ(params(Tier::preview).stride, 2);
     EXPECT_EQ(params(Tier::coarse).stride, 1);
@@ -1349,7 +1472,8 @@ TEST(TuneReplay, HoldoutRacesOnPassOneAndScoresAgainstPassTwo) {
     EXPECT_NEAR(h.measure_s, 16 * (1.0 + 1.5) / 1000, 1e-12) << "16 pass-1 rounds of both candidates, nothing from pass 2";
     EXPECT_EQ(h.race_misrank, 1.0);
     EXPECT_NEAR(h.max_loss, 0.5, 1e-9) << "reference a = 1.5 (pass 2), best b = 1.0";
-    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + 2 * (p.warm_topup_s + 0.05)) / 3600, 1e-12);
+    EXPECT_NEAR(h.est_gpu_h, (h.measure_s + (5 * 1.0 + 5 * 1.5) / 1000 + 0.05) / 3600, 1e-12)
+        << "per arm: 3 runs + 2 warm rounds (below the 0.2 s cap); one verify for the cell's tie set";
     p.min_reps = p.max_reps = 32;
     const ReplayReport all = replay(rc, meta.axes, Tier::coarse, p);
     EXPECT_NEAR(all.measure_s, 32 * (1.0 + 1.5) / 1000, 1e-12) << "without holdout every round of both passes is raced";
@@ -2136,7 +2260,7 @@ TEST(TuneLedger, UnhashedTiersAreNeverStale) {
     for (CandResult& c : r.cands) c.hash.clear();
     r.tier = Tier::coarse;
     EXPECT_EQ(freshness(r, kHashes), Freshness::stale);
-    for (Tier t : {Tier::transcribed, Tier::converted}) {
+    for (Tier t : {Tier::transcribed, Tier::prior, Tier::converted}) {
         r.tier = t;
         EXPECT_EQ(freshness(r, kHashes), Freshness::current) << to_string(t);
         EXPECT_TRUE(stale_candidates(r, kHashes).empty());
@@ -2372,9 +2496,141 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
     CellKey lower = nkey(100);
     lower.insert(lower.begin(), {"uplo", "L"});
     EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
-    const TierParams& p = params(Tier::coarse);
-    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, p, 0.49),
-                     0.49 + p.max_reps * 2.0e-3 + p.warm_topup_s + kVerifyS);
+    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s; one verify a cell.
+    // 2 ms: 50 ms / 2 ms = 25 reps, capped at 16. 200 ms: 1 rep, raised to coarse's floor 4.
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, Tier::coarse, 0.49),
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS);
+    l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 200.0)}, {"vendor"}, 4096));
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + kVerifyS);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor", "cta"}, 1e9, Tier::coarse, 0.49),
+                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3))
+        << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16; one verification (the tie set)";
+}
+
+TEST(TuneLedger, PhasesProtocolAndAuditSecondsRoundTripAndStayOutWhenUnset) {
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float";
+    m.run_id = "r1";
+    m.protocol = kProtocol;
+    m.guard = "nvml";
+    CellRecord c = two_family_cell();
+    c.phases.setup = 0.5, c.phases.timed = 1.25, c.phases.ipc = 0.01, c.phases.start = 3.5, c.phases.mode = "worker";
+    c.phases.arms = 2;
+    CellRecord bare = two_family_cell();
+    bare.key = nkey(128);
+    {
+        LedgerWriter w(d.led(), m);
+        w.cell(c);
+        w.cell(bare);
+        w.audit(c.key, "ok", 1.0, 1.0, 2.5);
+        w.audit(bare.key, "ok", 1.0, 1.0);
+        RunMeta old = m;
+        old.run_id = "r0";
+        old.protocol.clear();
+        old.guard.clear();
+        LedgerWriter o(d.led(), old);
+        RunMeta dirty = m;
+        dirty.run_id = "rd";
+        dirty.batchlas = "0123abcd-dirty";
+        LedgerWriter x(d.led(), dirty);
+        x.audit(c.key, "ok", 1.0, 1.0, 7.0);
+    }
+    const std::string text = read_file(d.led());
+    EXPECT_EQ(std::count(text.begin(), text.end(), '\n'), 8);
+    EXPECT_EQ(text.find("ph_warm"), std::string::npos) << "an unmeasured phase is not written";
+    const auto lines = split(text, '\n');
+    EXPECT_EQ(lines[2].find("ph_"), std::string::npos) << "a record without phases has no ph_ field";
+    EXPECT_EQ(lines[4].find("audit_s"), std::string::npos) << lines[4];
+    EXPECT_EQ(lines[5].find("protocol"), std::string::npos) << "unset: absent, as in an old ledger";
+    EXPECT_EQ(lines[5].find("\"guard\""), std::string::npos) << "unset: absent, as in an old ledger";
+    const Ledger l = read_ledger(d.led(), "float");
+    ASSERT_EQ(l.runs.size(), 2u);
+    EXPECT_EQ(l.runs[0].protocol, kProtocol);
+    EXPECT_EQ(l.runs[1].protocol, "");
+    EXPECT_EQ(l.runs[0].guard, "nvml");
+    EXPECT_EQ(l.runs[1].guard, "");
+    ASSERT_EQ(l.cells.size(), 2u);
+    const Phases& p = l.cells[0].phases;
+    EXPECT_DOUBLE_EQ(p.setup, 0.5);
+    EXPECT_DOUBLE_EQ(p.timed, 1.25);
+    EXPECT_DOUBLE_EQ(p.ipc, 0.01);
+    EXPECT_DOUBLE_EQ(p.start, 3.5);
+    EXPECT_TRUE(std::isnan(p.warm));
+    EXPECT_EQ(p.mode, "worker");
+    EXPECT_EQ(p.arms, 2);
+    for (const auto& [name, f] : Phases::fields()) EXPECT_TRUE(std::isnan(l.cells[1].phases.*f)) << name;
+    EXPECT_EQ(l.cells[1].phases.mode, "");
+    EXPECT_EQ(l.cells[1].phases.arms, 0);
+    EXPECT_EQ(l.audit_s, (std::map<std::string, std::vector<double>>{{"r1", {2.5}}})) << "a dirty run's audit is out";
+}
+
+// --plan's history: the nearest same-protocol record with phases at the planned tier and mode, per-arm
+// phases scaled by the arm count, worker starts and ld audits left to the run term. Anything else
+// falls back to the model, unchanged.
+TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
+    Ledger l;
+    RunMeta now, old;
+    now.run_id = "now", now.protocol = kProtocol;
+    old.run_id = "old";
+    l.runs = {now, old};
+    auto phased = [](int n, double setup, const std::string& run, const std::string& mode = "worker") {
+        CellRecord r = cell_rec({cres("a", "h", "ok", 2.0), cres("b", "h", "ok", 3.0), cres("c", "h", "skipped")}, {"a", "b"}, n);
+        r.run_id = run;
+        r.tier = Tier::coarse;
+        r.phases.setup = setup, r.phases.warm = 0.2, r.phases.timed = 1.0, r.phases.verify = 0.1, r.phases.ld = 0.3;
+        r.phases.guard = 0.05, r.phases.ipc = 0.01, r.phases.start = 4.0, r.phases.mode = mode;
+        return r;
+    };
+    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS;  // coarse: 16 reps of 2 ms
+    bool hist = true;
+    const Tier co = Tier::coarse;
+    l.cells = {phased(64, 0.5, "old")};
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist), model) << "another protocol's phases";
+    EXPECT_FALSE(hist);
+    l.cells = {phased(64, 0.5, "now", "fallback")};
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist), model) << "a fallback cell is no sample";
+    EXPECT_FALSE(hist);
+    l.cells = {phased(64, 0.5, "now"), phased(256, 7.5, "now")};
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist), 0.5 + 0.05 + 0.01 + 1.3 * 0.5) << "no ld";
+    EXPECT_TRUE(hist);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(100), {"a", "b", "c", "d"}, 1e9, co, 0.49), 0.56 + 1.3 * 2.0) << "nearest: n=64";
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(200), {"a", "b"}, 1e9, co, 0.49), 7.5 + 0.06 + 1.3) << "nearest: n=256";
+    CellKey upper = nkey(64);
+    upper.insert(upper.begin(), {"uplo", "U"});
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, upper, {"a"}, 1e9, co, 0.49, &hist), model) << "exact fields must match";
+    EXPECT_FALSE(hist);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, Tier::deep, 0.49, &hist),
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS) << "coarse history prices no deep cell (16 reps)";
+    EXPECT_FALSE(hist);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist, "fresh"), model) << "worker history, fresh run";
+    EXPECT_FALSE(hist);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist, "worker"), 0.56 + 1.3 * 0.5);
+    EXPECT_TRUE(hist);
+    l.cells[0].phases.arms = 1;  // a partial re-race: 1 arm raced now, 2 timed arms in the merged record
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a", "b"}, 1e9, co, 0.49), 0.56 + 1.3 * 2.0);
+    l.cells[0].phases.arms = 0;
+
+    // Worker starts: 1 of 2 phased cells started one (4 s); audits: median 2 s x the audit fraction;
+    // ld: one run's cells' sum. A fallback cell's start, another tier's or mode's cell count for nothing.
+    l.cells[1].phases.start = NAN;
+    l.cells.push_back(phased(512, 0.5, "now", "fallback"));
+    l.cells.push_back(phased(1024, 0.5, "now"));
+    l.cells.back().tier = Tier::deep;
+    l.cells.push_back(phased(2048, 0.5, "now", "fresh"));
+    l.audit_s = {{"now", {1.0, 3.0}}, {"old", {100.0}}};
+    double ld = 0;
+    EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, co, "worker", 0.1, &hist, &ld), 0.5 * 4.0 + 0.1 * 2.0);
+    EXPECT_TRUE(hist);
+    EXPECT_DOUBLE_EQ(ld, 0.6);
+    EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, co, "", 0.1, &hist, &ld), 2.0 / 3.0 * 4.0 + 0.1 * 2.0) << "either mode";
+    EXPECT_DOUBLE_EQ(ld, 0.9);
+    EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, Tier::preview, "worker", 0.1, &hist, &ld), 0.0);
+    EXPECT_FALSE(hist);
+    EXPECT_DOUBLE_EQ(ld, 0.0);
+    l.runs[0].protocol = "full";  // the fixed warm-up engine: its history prices no lean cell
+    EXPECT_DOUBLE_EQ(history_cell_overhead_s(l, co, "worker", 0.1, &hist), 0.0);
+    EXPECT_FALSE(hist);
 }
 
 TEST(TuneSchedule, RefineCellReadsTheRecord) {
@@ -2387,6 +2643,7 @@ TEST(TuneSchedule, RefineCellReadsTheRecord) {
     const RefineCell c = refine_cell(r, true);
     EXPECT_EQ(c.ms, (std::map<std::string, double>{{"a", 1.0}, {"d", 1.5}, {"f", 3.0}}));
     EXPECT_EQ(c.out, (std::set<std::string>{"b", "c", "e"})) << "an untimed ok (skip:single) is runnable";
+    EXPECT_EQ(c.single, "g");
     EXPECT_TRUE(c.lattice);
     EXPECT_FALSE(refine_cell(r, false).lattice);
 }
@@ -2414,10 +2671,12 @@ TEST(TuneSchedule, RefineRatioEstimateReadsTheTiersHistory) {
 
 namespace {
 
-// A host-only op for the tiered driver: winner b up to n=10, a above.
+// A host-only op for the tiered driver: winner b up to n=10, a above. Full lattice in coarse and deep too:
+// the tests built on it assert per-cell mechanisms (audits, verification, re-measures) on every lattice cell.
 class FakeSpec : public OpSpec {
 public:
     std::string op() const override { return "fakeop"; }
+    FrontierPlan frontier() const override { return {1}; }
     std::vector<std::string> key_names() const override { return {"n:log:3"}; }
     std::vector<std::string> candidates(const std::string&) const override { return {"a", "b"}; }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -2426,7 +2685,7 @@ public:
     double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
     std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
     std::string spec_file() const override { return "fake_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest&) const override { return {}; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
 };
 
 const FakeSpec kFake;
@@ -2832,7 +3091,7 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
               "mismatch:winner b/a");
     const std::vector<ArmOutcome> warm_elim{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "ok", {3.0})};
     EXPECT_EQ(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "bad", {2.0}), arm("c", "ok", {3.0})}, order).verdict,
-              "mismatch:feasibility b eliminated/bad") << "run_race verifies eliminated arms too";
+              "mismatch:feasibility b eliminated/bad") << "both sides verified b (TuneVerify: the unverified case)";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "ok", {2.0}), arm("c", "bad", {3.0})}, order)
                     .mismatch()) << "ok in the worker, bad in a fresh process";
     EXPECT_TRUE(audit_compare(warm_elim, {arm("a", "ok", {1.0}), arm("b", "skipped"), arm("c", "ok", {3.0})}, order)
@@ -2842,11 +3101,15 @@ TEST(TuneSchedule, AuditComparesFeasibilityAndTheWinnerBeyondTheTie) {
     EXPECT_EQ(audit_compare(warm, {arm("a", "error"), arm("b", "error"), arm("c", "error")}, order).verdict, "inconclusive");
 }
 
+// The lean protocol audits 1% of deep cells (was 10%); preview and coarse keep 2%.
 TEST(TuneSchedule, AuditPickIsAStableHashFraction) {
+    EXPECT_EQ(params(Tier::deep).audit_fraction, 0.01);
+    EXPECT_EQ(params(Tier::coarse).audit_fraction, 0.02);
+    EXPECT_EQ(params(Tier::preview).audit_fraction, 0.02);
     int picked = 0;
-    for (int n = 1; n <= 2000; ++n) picked += audit_pick("run1", nkey(n), 0.10);
-    EXPECT_GT(picked, 140);
-    EXPECT_LT(picked, 260);
+    for (int n = 1; n <= 4000; ++n) picked += audit_pick("run1", nkey(n), params(Tier::deep).audit_fraction);
+    EXPECT_GT(picked, 20);
+    EXPECT_LT(picked, 65);
     EXPECT_EQ(audit_pick("run1", nkey(7), 0.10), audit_pick("run1", nkey(7), 0.10));
     EXPECT_FALSE(audit_pick("run1", nkey(7), 0.0));
     EXPECT_TRUE(audit_pick("run1", nkey(7), 1.0));
@@ -2878,7 +3141,7 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     r.key = nkey(32);
     r.arms = {"cta", "lpanel:panel=8"};
     r.mode = "race";
-    r.warm_s = 0.2;
+    r.warm_s = 0.2;  // not sent: a race warms until stable
     r.ld_pad = 3;
     r.tier = "deep";
     r.min_reps = 6;
@@ -2894,7 +3157,8 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     EXPECT_EQ(g.key, r.key);
     EXPECT_EQ(g.arms, r.arms);
     EXPECT_EQ(g.mode, "race");
-    EXPECT_DOUBLE_EQ(g.warm_s, 0.2);
+    EXPECT_DOUBLE_EQ(g.warm_s, CellRequest{}.warm_s);
+    EXPECT_EQ(request_line("potrf", r).find("\"warm\""), std::string::npos);
     EXPECT_EQ(g.ld_pad, 3);
     EXPECT_EQ(g.tier, "deep");
     EXPECT_EQ(g.min_reps, 6);
@@ -2902,6 +3166,12 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     EXPECT_DOUBLE_EQ(g.confidence, 0.98);
     EXPECT_TRUE(g.alternate_reverse);
     EXPECT_EQ(g.seed_order, r.seed_order);
+    r.mode = "time";
+    EXPECT_DOUBLE_EQ(parse_request(request_line("potrf", r))->second.warm_s, 0.2);
+    std::string no_warm = request_line("potrf", r);
+    const std::size_t at = no_warm.find("\"warm\"");
+    no_warm.erase(at, no_warm.find(',', at) + 1 - at);
+    EXPECT_FALSE(parse_request(no_warm)) << "mode time needs warm: " << no_warm;
     EXPECT_FALSE(parse_request("{\"op\": \"potrf\"}"));
     EXPECT_FALSE(parse_request("not json"));
 
@@ -2918,6 +3188,34 @@ TEST(TuneWorker, RequestAndOutcomeRoundTrip) {
     EXPECT_EQ(back[0].ms, a.ms);
     EXPECT_EQ(back[0].slot, a.slot);
     EXPECT_EQ(back[1].status, "skipped");
+}
+
+// The phase line follows the arms: no reader takes it for an arm (Driver::timed skips it too), and
+// only the worker-side fields travel; several lines sum (a cell raced in more than one child).
+TEST(TuneWorker, PhaseLineRidesWithTheOutcomesAndIsNoArm) {
+    Phases p;
+    p.setup = 0.5, p.warm = 0.25, p.timed = 1.0, p.verify = 0.125, p.guard = 9.0, p.mode = "worker";
+    const std::string text = outcome_text({arm("cta", "ok", {1.0}), arm("tiny", "skipped")}, &p);
+    EXPECT_EQ(outcome_text({arm("cta", "ok", {1.0})}).find("phase"), std::string::npos) << "no phases, no line";
+    std::vector<Record> recs;
+    for (const std::string& line : split(text, '\n')) recs.push_back(*parse_record(line));
+    ASSERT_EQ(recs.back().get("kind"), "phase");
+    EXPECT_FALSE(recs.back().has("guard")) << "driver-side fields stay out of the worker's stream";
+    EXPECT_FALSE(recs.back().has("ld")) << "an unmeasured phase is left out";
+    const auto back = outcomes_from_records(recs);
+    ASSERT_EQ(back.size(), 2u);
+    EXPECT_EQ(back[0].arm, "cta");
+    EXPECT_EQ(back[1].arm, "tiny");
+    const Phases got = phases_from_records(recs);
+    EXPECT_DOUBLE_EQ(got.setup, 0.5);
+    EXPECT_DOUBLE_EQ(got.warm, 0.25);
+    EXPECT_DOUBLE_EQ(got.timed, 1.0);
+    EXPECT_DOUBLE_EQ(got.verify, 0.125);
+    EXPECT_TRUE(std::isnan(got.ld));
+    EXPECT_TRUE(std::isnan(got.guard));
+    EXPECT_DOUBLE_EQ(got.worker_s(), 1.875);
+    recs.push_back(recs.back());
+    EXPECT_DOUBLE_EQ(phases_from_records(recs).timed, 2.0);
 }
 
 TEST(TuneWorker, ProcessReturnsRecordsUntilDoneThenEofAndTimesOut) {
@@ -3318,6 +3616,48 @@ TEST(TuneWorker, AllBenchedArmsAreAFallbackAndMarkedAlone) {
     ASSERT_EQ(b.arms.size(), 2u);
 }
 
+TEST(TuneWorker, PhasesSumEveryTryAndChildOfACell) {
+    auto ph = [](double timed, const char* mode) {
+        Phases p;
+        p.timed = timed, p.guard = 0.5, p.mode = mode;
+        return p;
+    };
+    auto fresh = [&](const std::vector<std::string>& arms) {
+        ArmBatch b;
+        for (const std::string& a : arms) b.arms.push_back(arm(a, "ok", {2.0}));
+        b.phases = ph(10.0, "fresh");
+        b.phases.spawn = 0.25;
+        return b;
+    };
+    ArmErrors errs;
+    int tries = 0;
+    auto flaky = [&](const std::vector<std::string>& arms) {
+        WorkerTry t{++tries > 1, false, tries > 1 ? "" : "worker exited", {}, ph(1.0, "worker")};
+        for (const std::string& a : arms) t.arms.push_back(arm(a, "ok", {1.0}));
+        return t;
+    };
+    ArmBatch b = race_on_worker({"a", "b"}, errs, flaky, [] {}, fresh);
+    EXPECT_FALSE(b.fallback);
+    EXPECT_EQ(b.phases.mode, "worker");
+    EXPECT_DOUBLE_EQ(b.phases.timed, 2.0) << "the failed try's time is spent too";
+    EXPECT_DOUBLE_EQ(b.phases.guard, 1.0);
+    EXPECT_TRUE(std::isnan(b.phases.spawn));
+
+    auto dead = [&](const std::vector<std::string>&) { return WorkerTry{false, false, "worker exited", {}, ph(1.0, "worker")}; };
+    b = race_on_worker({"a", "b"}, errs, dead, [] {}, fresh);
+    EXPECT_TRUE(b.fallback);
+    EXPECT_EQ(b.phases.mode, "fallback");
+    EXPECT_DOUBLE_EQ(b.phases.timed, 12.0) << "two worker tries and the fresh child";
+    EXPECT_DOUBLE_EQ(b.phases.spawn, 0.25);
+
+    for (int i = 0; i < 2; ++i) errs.note("b", true);
+    tries = 1;
+    b = race_on_worker({"a", "b"}, errs, flaky, [] {}, fresh);
+    EXPECT_EQ(b.alone, std::vector<std::string>{"b"});
+    EXPECT_EQ(b.phases.mode, "worker");
+    EXPECT_DOUBLE_EQ(b.phases.timed, 11.0) << "the worker's cell and b's own fresh child";
+}
+
 TEST(TuneWorker, ABenchedArmErringInFiveFreshCellsIsDropped) {
     ArmErrors errs;
     for (int i = 0; i < 2; ++i) errs.note("b", true);
@@ -3401,6 +3741,75 @@ TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
     EXPECT_NE(ev.find("\"est_refine_s\""), std::string::npos) << ev;
     EXPECT_NE(out.find("with refinement"), std::string::npos) << out;
     EXPECT_NE(out.find("lattice only"), std::string::npos) << out;
+}
+
+namespace {
+
+class PhasedMeasurer : public FakeMeasurer {
+public:
+    ArmBatch measure(const CellJob& j) override {
+        ArmBatch b = FakeMeasurer::measure(j);
+        b.phases.setup = 0.25, b.phases.timed = 1.0, b.phases.mode = "worker";
+        if (calls++ == 0) b.phases.start = 4.0, b.phases.ld = 0.5;  // the first cell started the worker
+        return b;
+    }
+    int calls = 0;
+};
+
+}  // namespace
+
+TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    o.plan = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << out;
+    EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
+    o.plan = false;
+    o.tier = Tier::preview;
+    PhasedMeasurer m;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    (void)testing::internal::GetCapturedStdout();
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+    ASSERT_FALSE(l.cells.empty());
+    EXPECT_EQ(l.runs.back().protocol, kProtocol);
+    for (const CellRecord& c : l.cells) EXPECT_DOUBLE_EQ(c.phases.timed, 1.0) << key_text(c.key);
+    for (const CellRecord& c : l.cells) EXPECT_EQ(c.phases.arms, 2) << key_text(c.key);
+    o.plan = true;
+    o.tier = Tier::coarse;  // preview records are lower: every coarse lattice cell is measured again
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    out = testing::internal::GetCapturedStdout();
+    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
+    EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
+
+    // A changed family-b source: every preview lattice cell is raced again at preview, from history.
+    std::ofstream(repo.path / "b.cc") << "b2";
+    o.tier = Tier::preview;
+    o.audit_fraction = 0;
+    const fs::path events = ledger.path / "events.jsonl";
+    const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    o.progress_fd = fd;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    out = testing::internal::GetCapturedStdout();
+    ::close(fd);
+    EXPECT_NE(out.find("(2 measure, 2 partial)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(4 cells from lean phase history, 0 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("est=1.25s (history)"), std::string::npos) << out;
+    const double per_cell = 4.0 / double(l.cells.size());  // 1 worker start over every preview record
+    char line[96];
+    std::snprintf(line, sizeof line, "worker starts and audits: %.2f s per history cell (4), ld audits 0.50 s once", per_cell);
+    EXPECT_NE(out.find(line), std::string::npos) << out;
+    const std::string ev = read_file(events);
+    const auto at = ev.find("\"ev\": \"plan_job\"");
+    ASSERT_NE(at, std::string::npos) << ev;
+    const auto est = ev.find("\"est_s\": ", at);
+    ASSERT_NE(est, std::string::npos) << ev;
+    EXPECT_NEAR(std::stod(ev.substr(est + 9)), 4 * 1.25 + 4 * per_cell + 0.5, 1e-9) << "cells + starts x 4 + ld once";
 }
 
 TEST(TuneTieredDriver, AHashPickedFallbackCellDoesNotUseUpTheForcedAudit) {
@@ -3619,10 +4028,12 @@ namespace {
 class LdAuditSpec : public FakeSpec {
 public:
     mutable std::vector<CellRequest> calls;
+    mutable std::vector<const Queue*> queues;
     bool throw_on_verify = false;
     std::string op() const override { return "ldauditop"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         calls.push_back(req);
+        queues.push_back(&q);
         if (req.mode == "verify" && throw_on_verify) throw std::runtime_error("device lost");
         std::vector<ArmOutcome> out;
         for (const std::string& a : req.arms) {
@@ -3640,6 +4051,12 @@ const ArmOutcome& outcome(const std::vector<ArmOutcome>& v, const std::string& a
     return *std::find_if(v.begin(), v.end(), [&](const ArmOutcome& o) { return o.arm == a; });
 }
 
+// The worker's Queue as the fake specs see it: an address only (tune_tests links no library).
+Queue& worker_queue() {
+    alignas(std::max_align_t) static std::byte storage[64];
+    return *reinterpret_cast<Queue*>(storage);
+}
+
 }  // namespace
 
 TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
@@ -3651,8 +4068,9 @@ TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
     r.mode = "race";
     r.ld_pad = 1;
     r.ld_audit = {"a", "b", "c", "d"};
-    const auto out = run_cell_audited(s, r);
+    const auto out = run_cell_audited(s, r, worker_queue());
     ASSERT_EQ(s.calls.size(), 2u);
+    EXPECT_EQ(s.queues, (std::vector<const Queue*>{&worker_queue(), &worker_queue()})) << "the audit reuses the Queue";
     EXPECT_EQ(s.calls[1].mode, "verify");
     EXPECT_EQ(s.calls[1].ld_pad, 1 + kLdAuditPad);
     EXPECT_EQ(s.calls[1].arms, (std::vector<std::string>{"a", "b", "c"})) << "d failed at the natural ld; e was not asked";
@@ -3670,20 +4088,58 @@ TEST(TuneLdAudit, ACellReverifiesItsVerifiedAuditArmsAtAPaddedLd) {
 
     s.calls.clear();
     r.mode = "jit";
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(s.calls.size(), 1u) << "only a timed cell is audited";
     s.calls.clear();
     r.mode = "race";
     r.ld_audit.clear();
-    (void)run_cell_audited(s, r);
+    (void)run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(s.calls.size(), 1u) << "nothing asked, nothing audited";
 
     s.throw_on_verify = true;
     r.ld_audit = {"b"};
-    const auto thrown = run_cell_audited(s, r);
+    const auto thrown = run_cell_audited(s, r, worker_queue());
     EXPECT_EQ(outcome(thrown, "b").status, "bad");
     EXPECT_EQ(outcome(thrown, "b").ld_audit, "fail");
     EXPECT_NE(outcome(thrown, "b").reason.find("device lost"), std::string::npos);
+}
+
+namespace {
+
+// Adds to cell_phases() as ArmBench does; the ld audit's run (verify mode) adds a large verify.
+class PhaseSpec : public LdAuditSpec {
+public:
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
+        std::this_thread::sleep_for(std::chrono::milliseconds(req.mode == "verify" ? 30 : 20));
+        cell_phases().add(&Phases::warm, req.mode == "verify" ? 0 : 0.004);
+        cell_phases().add(&Phases::verify, req.mode == "verify" ? 1.0 : 0.002);
+        return LdAuditSpec::run_cell(req, q);
+    }
+};
+
+}  // namespace
+
+TEST(TuneLdAudit, PhasesSplitSetupFromTheBenchAndTheLdAuditFromVerify) {
+    PhaseSpec s;
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b"};
+    r.mode = "race";
+    r.ld_audit = {"b"};
+    (void)run_cell_audited(s, r, worker_queue());
+    const Phases p = cell_phases();
+    EXPECT_DOUBLE_EQ(p.warm, 0.004);
+    EXPECT_DOUBLE_EQ(p.verify, 0.002) << "the audit's verify runs are ld, not verify";
+    EXPECT_GE(p.ld, 0.03);
+    EXPECT_LT(p.ld, 1.0);
+    EXPECT_GE(p.setup, 0.02 - 0.006) << "setup = run_cell's wall less the bench phases";
+    EXPECT_LT(p.setup, 0.5);
+    EXPECT_TRUE(std::isnan(p.timed));
+    r.ld_audit.clear();
+    (void)run_cell_audited(s, r, worker_queue());
+    EXPECT_DOUBLE_EQ(cell_phases().warm, 0.004) << "each cell starts from zero";
+    EXPECT_TRUE(std::isnan(cell_phases().ld)) << "no audit, no ld phase";
 }
 
 TEST(TuneLdAudit, TheBookAuditsEachArmOnceAndKeepsUnverifiedArmsWanted) {
@@ -3741,7 +4197,6 @@ TEST(TuneLdAudit, RequestsAndOutcomesCarryTheAudit) {
     r.key = nkey(8);
     r.arms = {"a", "b"};
     r.mode = "race";
-    r.warm_s = 0.1;
     r.ld_audit = {"b", "a"};
     const auto got = parse_request(request_line("fakeop", r));
     ASSERT_TRUE(got);
@@ -3781,6 +4236,7 @@ public:
             }
             b.arms.push_back(o);
         }
+        b.phases.timed = 0.5, b.phases.mode = "worker";
         return b;
     }
 };
@@ -3840,6 +4296,12 @@ TEST(TuneLdAudit, ARefusedAuditIsAskedAgainAndALaterFailUnranksEarlierCells) {
     std::map<CellKey, const CellRecord*> last;  // equal tier, date and run: the later line wins
     for (const CellRecord& c : l.cells) last[c.key] = &c;
     EXPECT_EQ(l.cells.size(), last.size() + 1) << "cell 0 appended once more, with a bad";
+    std::set<CellKey> seen;
+    for (const CellRecord& c : l.cells) {
+        const bool copy = !seen.insert(c.key).second;
+        EXPECT_EQ(c.phases.mode, copy ? "" : "worker") << key_text(c.key);
+        EXPECT_EQ(std::isnan(c.phases.timed), copy) << "the retract copy spent no time: " << key_text(c.key);
+    }
     for (const auto& [k, c] : last) {
         EXPECT_EQ(c->ranked, std::vector<std::string>{"b"}) << key_text(k);
         const auto a = std::find_if(c->cands.begin(), c->cands.end(), [](const CandResult& x) { return x.cand == "a"; });
@@ -3860,4 +4322,1444 @@ TEST(TuneLdAudit, AnLdAuditFailureIsNotACarveOutMismatch) {
     EXPECT_NE(out.find(" audit: ok"), std::string::npos) << out;
     EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos)
         << "the fresh child re-verifies at the natural ld, where the arm passes: no worker defect\n" << out;
+}
+
+TEST(TuneVerify, VerifyNextIsTheUnverifiedTieSetPlusTheExtras) {
+    auto unv = [](ArmOutcome a) { return a.verified = false, a; };
+    std::vector<ArmOutcome> arms{unv(arm("a", "ok", {1.0})), unv(arm("b", "ok", {1.029})), unv(arm("c", "ok", {1.031})),
+                                 unv(arm("d", "eliminated", {0.5})), unv(arm("e", "skipped")), unv(arm("f", "bad", {0.9}))};
+    EXPECT_EQ(verify_next(arms, {}), (std::vector<std::string>{"a", "b"})) << "1.029 ties, 1.031 does not; an eliminated arm never ranks above a survivor";
+    EXPECT_EQ(verify_next(arms, {"d", "e", "zz"}), (std::vector<std::string>{"a", "b", "d"})) << "extras that raced";
+    arms[0].verified = true;
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"b"}) << "a verdict is never asked twice";
+    arms[0].status = arms[1].status = "bad";
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"c"}) << "the tie set failed: the next survivor can rank first";
+    arms[2].status = "error";
+    EXPECT_EQ(verify_next(arms, {}), std::vector<std::string>{"d"}) << "no survivor: the fastest eliminated ranks first";
+    arms[3].verified = true;
+    EXPECT_TRUE(verify_next(arms, {}).empty());
+}
+
+TEST(TuneVerify, TheBucketIsTheExactKeysAndThePerItemDecade) {
+    const std::vector<AxisSpec> axes{{"uplo", false, {"L", "U"}}, {"n", true, {"8", "16"}}, {"batch", true, {"128"}}};
+    const CellKey k{{"uplo", "L"}, {"n", "8"}, {"batch", "128"}};
+    EXPECT_EQ(verify_bucket(k, axes, 1000), "uplo=L,e3");
+    EXPECT_EQ(verify_bucket(k, axes, 999.9), "uplo=L,e2");
+    EXPECT_EQ(verify_bucket(k, axes, 9999), "uplo=L,e3");
+    EXPECT_EQ(verify_bucket({{"uplo", "U"}, {"n", "16"}, {"batch", "128"}}, axes, 5000), "uplo=U,e3");
+    EXPECT_EQ(verify_bucket({{"n", "8"}, {"side", "R"}}, axes, 0), "side=R,e0") << "an axis-less key is exact";
+}
+
+TEST(TuneVerify, TheBookVerifiesEachArmOncePerBucketAndBooksVerificationFails) {
+    VerifyBook book;
+    EXPECT_EQ(book.want("e3", {"a", "b", "c"}), (std::vector<std::string>{"a", "b", "c"}));
+    std::vector<ArmOutcome> cell{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0}), arm("c", "eliminated", {9.0}),
+                                 arm("d", "skipped"), arm("e", "bad", {1.0}), arm("f", "bad", {1.0})};
+    cell[2].verified = false;
+    cell[4].reason = "residual";
+    cell[5].reason = "ld audit: ld_pad +3: bad", cell[5].ld_audit = "fail";
+    EXPECT_EQ(book.note("e3", nkey(8), cell), std::vector<std::string>{"e"});
+    EXPECT_EQ(book.want("e3", {"a", "b", "c", "d", "e", "f"}), (std::vector<std::string>{"c", "d", "f"}))
+        << "unverified, refused and ld-audit fails stay wanted";
+    EXPECT_EQ(book.bad.at("e3").at("e"), "verify failed @ n=8 batch=1024");
+    EXPECT_EQ(book.bad.at("e3").size(), 1u);
+    EXPECT_EQ(book.want("e4", {"a", "e"}), (std::vector<std::string>{"a", "e"})) << "another bucket starts over";
+    EXPECT_TRUE(book.note("e3", nkey(9), cell).empty()) << "a second fail is no new verdict";
+    std::vector<ArmOutcome> info{arm("c", "bad", {1.0})};
+    info[0].reason = "info";
+    EXPECT_EQ(book.note("e3", nkey(9), info), std::vector<std::string>{"c"});
+    EXPECT_EQ(book.want("e3", {"a", "b", "c"}), std::vector<std::string>{});
+}
+
+TEST(TuneVerify, AuditIgnoresAVerdictTheOtherSideNeverAsked) {
+    const std::vector<std::string> order{"a", "b"};
+    ArmOutcome unverified = arm("b", "eliminated", {3.0});
+    unverified.verified = false;
+    const std::vector<ArmOutcome> warm{arm("a", "ok", {1.0}), unverified};
+    EXPECT_EQ(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, order).verdict, "ok")
+        << "the worker left b unverified; the fresh child's tie set held it";
+    EXPECT_EQ(audit_compare({arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, warm, order).verdict, "ok") << "either side";
+    EXPECT_EQ(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "skipped")}, order).verdict,
+              "mismatch:feasibility b eliminated/skipped") << "whether it launched is still compared";
+    EXPECT_TRUE(audit_compare(warm, {arm("a", "ok", {1.0}), arm("b", "error")}, order).mismatch());
+    EXPECT_TRUE(audit_compare({arm("a", "ok", {1.0}), arm("b", "eliminated", {3.0})},
+                              {arm("a", "ok", {1.0}), arm("b", "bad", {1.0})}, order).mismatch())
+        << "verified on both sides: compared as before";
+}
+
+TEST(TuneVerify, RequestsOutcomesRecordsAndTheLedgerCarryTheVerifyFlags) {
+    CellRequest r;
+    r.dtype = "float";
+    r.key = nkey(8);
+    r.arms = {"a", "b"};
+    r.mode = "race";
+    r.verify = {"b"};
+    EXPECT_EQ(parse_request(request_line("fakeop", r))->second.verify, r.verify);
+    r.verify.clear();
+    EXPECT_TRUE(parse_request(request_line("fakeop", r))->second.verify.empty());
+
+    std::vector<ArmOutcome> arms{arm("a", "ok", {1.0}), arm("b", "eliminated", {2.0})};
+    arms[1].verified = false;
+    const std::string text = outcome_text(arms);
+    EXPECT_EQ(count_of(text, "\"verified\""), 1u) << "only the unverified arm says so: " << text;
+    std::vector<Record> recs;
+    for (const std::string& line : split(text, '\n')) recs.push_back(*parse_record(line));
+    const auto back = outcomes_from_records(recs);
+    EXPECT_TRUE(outcome(back, "a").verified);
+    EXPECT_FALSE(outcome(back, "b").verified);
+    EXPECT_EQ(ld_audit_arms(back, {"a", "b"}), std::vector<std::string>{"a"}) << "the ld audit asks a verified cell";
+
+    CellRecord rec = record_from_arms(nkey(8), 0, back, {"a", "b"}, {});
+    ASSERT_EQ(rec.cands.size(), 2u);
+    EXPECT_TRUE(rec.cands[0].verified);
+    EXPECT_FALSE(rec.cands[1].verified);
+    EXPECT_EQ(rec.ranked, (std::vector<std::string>{"a", "b"})) << "an unverified arm stays in the row";
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float";
+    m.run_id = "r1";
+    {
+        LedgerWriter w(d.led(), m);
+        w.cell(rec);
+    }
+    const std::string line = read_file(d.led());
+    EXPECT_EQ(count_of(line, "\"v1\": 0"), 1u) << line;
+    EXPECT_EQ(line.find("\"v0\""), std::string::npos) << "absent = verified, as in every older ledger: " << line;
+    const Ledger l = read_ledger(d.led(), "float");
+    ASSERT_EQ(l.cells.size(), 1u);
+    EXPECT_TRUE(l.cells[0].cands[0].verified);
+    EXPECT_FALSE(l.cells[0].cands[1].verified);
+    CellRecord x = l.cells[0];
+    EXPECT_FALSE(ld_retract(x, "a", "verify failed", true)) << "a verified arm is not retracted by a bucket verdict";
+    EXPECT_TRUE(ld_retract(x, "b", "verify failed", true));
+    EXPECT_EQ(x.ranked, std::vector<std::string>{"a"});
+}
+
+TEST(TuneVerify, AFreshChildsArgvCarriesEveryRaceField) {
+    CellRequest r;
+    r.tier = "coarse";
+    r.min_reps = 4;
+    r.max_reps = 12;
+    r.confidence = 0.95;
+    r.alternate_reverse = true;
+    r.seed_order = {"b", "a"};
+    r.ld_audit = {"a"};
+    r.verify = {"b", "c"};
+    const std::vector<std::string> argv = race_argv(r);
+    CellRequest back;
+    for (std::size_t i = 0; i < argv.size(); ++i) ASSERT_TRUE(parse_race_arg(argv, i, back)) << argv[i];
+    EXPECT_EQ(back.verify, r.verify) << "the bucket's first-sight arms reach a fresh child";
+    EXPECT_EQ(back.ld_audit, r.ld_audit);
+    EXPECT_EQ(back.seed_order, r.seed_order);
+    EXPECT_EQ(back.tier, r.tier);
+    EXPECT_EQ(back.min_reps, r.min_reps);
+    EXPECT_EQ(back.max_reps, r.max_reps);
+    EXPECT_EQ(back.confidence, r.confidence);
+    EXPECT_TRUE(back.alternate_reverse);
+    r.verify.clear();
+    const std::vector<std::string> none = race_argv(r);
+    EXPECT_EQ(std::count(none.begin(), none.end(), "--verify"), 0);
+    const std::vector<std::string> other{"--result", "x"};
+    std::size_t i = 0;
+    EXPECT_FALSE(parse_race_arg(other, i, back));
+    EXPECT_EQ(i, 0u);
+}
+
+TEST(TuneVerify, TheFrontOfARankingIsAlwaysAVerifiedArm) {
+    auto unv = [](CandResult c) { return c.verified = false, c; };
+    CellRecord r;
+    r.cands = {unv(cres("a", "h", "ok", 1.0)), unv(cres("b", "h", "eliminated")), cres("c", "h", "eliminated"),
+               unv(cres("d", "h", "eliminated"))};
+    r.ranked = {"c", "a"};
+    EXPECT_FALSE(verified_front(r));
+    r.ranked = {"a", "b", "c", "d"};
+    EXPECT_TRUE(verified_front(r)) << "a retraction or a partial re-race promoted a and b, never verified here";
+    EXPECT_EQ(r.ranked, (std::vector<std::string>{"c", "a", "b", "d"})) << "they stay in the row, below c";
+    r.ranked = {"a", "b", "d"};
+    EXPECT_TRUE(verified_front(r));
+    EXPECT_TRUE(r.ranked.empty()) << "no verified arm: no row";
+    EXPECT_FALSE(verified_front(r));
+}
+
+namespace {
+
+class FakeVerifySpec : public FakeSpec {
+public:
+    std::string op() const override { return "fakeverify"; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b", "c"}; }
+};
+const FakeVerifySpec kFakeVerify;
+
+// Races as run_race does, verify_next included: a 1 ms, b 2 ms (eliminated), c 5 ms (eliminated) or,
+// at `fast`, 0.5 ms. c gives a wrong answer at `wrong`. The fresh child (`fresh_tie`) times c tied with a.
+// FakeVerifySpec bytes: n * 1e3, so n <= 8 is bucket e3, n >= 16 bucket e4.
+class VerifyMeasurer : public CellMeasurer {
+public:
+    std::set<int> wrong, fast, fresh_wrong;  // fresh_wrong: c is wrong in the fresh child only
+    bool worker = false, fresh_tie = false;
+    int ld_refuse_a = -1;  // >= 0: a's ld audit is refused that many times, then fails
+    std::map<int, int> calls;
+    std::map<int, std::vector<std::string>> asked, fresh_asked, verified, timed;
+    bool persistent() const override { return worker; }
+    ArmBatch race(const CellJob& j, bool fresh) {
+        const int n = static_cast<int>(key_int(j.key, "n"));
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const bool c_fast = fast.count(n) != 0;
+            const double t = a == "a" ? 1.0 : a == "b" ? 2.0 : c_fast ? 0.5 : fresh && fresh_tie ? 1.0 : 5.0;
+            const bool alive = a == "c" ? t <= 1.0 : a == "a" ? !c_fast : false;
+            ArmOutcome o = arm(a, alive ? "ok" : "eliminated", {t, t, t});
+            o.verified = false;
+            if (a == "a" && ld_refuse_a >= 0 && std::count(j.ld_audit.begin(), j.ld_audit.end(), a)) {
+                o.ld_audit = ld_refuse_a-- > 0 ? "skipped" : "fail";
+                if (o.ld_audit == "fail") o.status = "bad", o.reason = "ld audit: ld_pad +3: bad residual";
+            }
+            b.arms.push_back(o);
+        }
+        for (auto want = verify_next(b.arms, j.verify); !want.empty(); want = verify_next(b.arms, j.verify))
+            for (ArmOutcome& o : b.arms) {
+                if (std::find(want.begin(), want.end(), o.arm) == want.end()) continue;
+                o.verified = true;
+                if (!fresh) verified[n].push_back(o.arm);
+                if (o.arm == "c" && (wrong.count(n) || (fresh && fresh_wrong.count(n)))) o.status = "bad", o.reason = "residual";
+            }
+        return b;
+    }
+    ArmBatch measure(const CellJob& j) override {
+        const int n = static_cast<int>(key_int(j.key, "n"));
+        asked[n] = sorted(j.verify);
+        timed[n] = sorted(j.arms);
+        ++calls[n];
+        return race(j, false);
+    }
+    ArmBatch measure_fresh(const CellJob& j) override {
+        if (!worker) return measure(j);
+        fresh_asked[static_cast<int>(key_int(j.key, "n"))] = sorted(j.verify);
+        return race(j, true);
+    }
+};
+
+TieredOpts verify_opts(const TempDir& repo, const TempDir& ledger) {
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakeverify")) register_spec(&kFakeVerify);
+    o.ops = {"fakeverify"};
+    return o;
+}
+
+// The newest line per key (equal tier, date and run: a retract copy wins).
+std::map<int, CellRecord> newest_cells(const TempDir& ledger) {
+    std::map<int, CellRecord> out;
+    for (const CellRecord& c : read_ledger(ledger_file(ledger.str(), "fakeverify", "sm_fake"), "float").cells)
+        out[static_cast<int>(key_int(c.key, "n"))] = c;
+    return out;
+}
+
+const CandResult& cand(const CellRecord& r, const std::string& name) {
+    return *std::find_if(r.cands.begin(), r.cands.end(), [&](const CandResult& c) { return c.cand == name; });
+}
+
+}  // namespace
+
+TEST(TuneVerify, AWrongArmOutsideTheTieSetIsCaughtAtItsBucketsFirstCell) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.wrong = {16, 32, 64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    const std::vector<std::string> all{"a", "b", "c"};
+    EXPECT_EQ(m.asked[1], all) << "bucket e3's first cell";
+    EXPECT_EQ(m.asked[16], all) << "bucket e4's first cell";
+    for (int n : {2, 4, 8}) EXPECT_TRUE(m.asked[n].empty()) << n;
+    for (int n : {2, 4, 8}) EXPECT_EQ(m.verified[n], std::vector<std::string>{"a"}) << "the tie set only: " << n;
+    EXPECT_EQ(m.verified[16], all);
+    for (int n : {32, 64}) EXPECT_EQ(m.timed[n], (std::vector<std::string>{"a", "b"})) << "bad in e4: not raced " << n;
+    const auto cells = newest_cells(ledger);
+    ASSERT_EQ(cells.size(), 7u);
+    EXPECT_EQ(cand(cells.at(16), "c").status, "bad");
+    EXPECT_EQ(cand(cells.at(16), "c").reason, "residual");
+    for (int n : {32, 64}) {
+        EXPECT_EQ(cand(cells.at(n), "c").status, "bad") << n;
+        EXPECT_EQ(cand(cells.at(n), "c").reason, "verify failed @ n=16") << n;
+    }
+    EXPECT_TRUE(cand(cells.at(1), "c").verified);
+    for (int n : {2, 4, 8}) {
+        EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << n;
+        EXPECT_FALSE(cand(cells.at(n), "c").verified) << n;
+        EXPECT_EQ(cells.at(n).ranked, all) << "an unverified arm keeps its place in the row: " << n;
+    }
+}
+
+TEST(TuneVerify, ALaterFailInTheBucketRetractsItsUnverifiedEarlierCellsOnly) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.wrong = m.fast = {64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(m.verified[64], (std::vector<std::string>{"c", "a"})) << "c ranked first and failed; then a could";
+    EXPECT_NE(out.find("verify: c marked bad in 1 recorded cells of bucket e4"), std::string::npos) << out;
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(64), "c").reason, "residual");
+    EXPECT_EQ(cells.at(64).ranked.front(), "a");
+    EXPECT_EQ(cand(cells.at(32), "c").status, "bad") << "unverified at 32";
+    EXPECT_EQ(cand(cells.at(32), "c").reason, "verify failed @ n=64");
+    EXPECT_EQ(cells.at(32).ranked, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(cand(cells.at(16), "c").status, "eliminated") << "verified (and passed) at 16: kept";
+    for (int n : {1, 2, 4, 8}) EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << "bucket e3: " << n;
+}
+
+TEST(TuneVerify, ALeanWorkerAndAFreshAuditGiveNoSpuriousFeasibilityMismatch) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    o.audit_fraction = 1.0;
+    VerifyMeasurer m;
+    m.worker = m.fresh_tie = true;
+    m.wrong = {2};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(out.find("mismatch"), std::string::npos) << out;
+    EXPECT_EQ(out.find("fresh children for the rest"), std::string::npos) << out;
+    EXPECT_EQ(m.fresh_asked, m.asked) << "the fresh child gets the worker's verify list";
+    EXPECT_FALSE(m.fresh_asked.at(1).empty());
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(2), "c").status, "bad") << "the fresh child's verdict is booked and retracts the worker's cell";
+    EXPECT_EQ(cand(cells.at(2), "c").reason, "verify failed @ n=2");
+    for (int n : {4, 8}) EXPECT_EQ(m.timed[n], (std::vector<std::string>{"a", "b"})) << n;
+    EXPECT_EQ(cand(cells.at(16), "c").status, "eliminated") << "bucket e4 is unaffected";
+}
+
+TEST(TuneVerify, ARetractedWinnerWithAnUnverifiedRunnerUpIsRacedAgain) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    VerifyMeasurer m;
+    m.ld_refuse_a = 2;  // a's ld audit fails at n=4, after a won n=1 and n=2
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find("ld audit: a marked bad in 2 recorded cells"), std::string::npos) << out;
+    EXPECT_EQ(m.calls[2], 2) << "n=2 verified only a; b came first after the retraction: raced again\n" << out;
+    EXPECT_EQ(m.timed[2], (std::vector<std::string>{"b", "c"}));
+    EXPECT_EQ(m.calls[1], 1) << "the bucket's first cell verified b";
+    EXPECT_EQ(m.calls[4], 1) << "a failed in the cell, so the cell verified b";
+    for (const auto& [n, c] : newest_cells(ledger)) {
+        ASSERT_FALSE(c.ranked.empty()) << n;
+        EXPECT_EQ(c.ranked.front(), "b") << n;
+        EXPECT_TRUE(cand(c, "b").verified) << "a record's winner is an arm it verified: " << n;
+    }
+}
+
+// A row copied in untimed (prior, transcribed) was never verified on this device: a bucket's verify fail
+// retracts it whatever its v<i> says.
+TEST(TuneVerify, ABucketFailRetractsAPriorRowsArmThoughItReadsVerified) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    RunMeta pm;
+    pm.dtype = "float", pm.run_id = "r0", pm.tier = Tier::calibrate, pm.device = "sm_fake", pm.date = "2026-10-01";
+    pm.keys = "n:log:3", pm.candidates = "a|b|c";
+    {
+        LedgerWriter w(ledger_file(ledger.str(), "fakeverify", "sm_fake"), pm);
+        CellRecord r;
+        r.key = {{"n", "24"}};  // off the grid, bucket e4 (n=16's)
+        r.ranked = {"c", "a", "b"};
+        for (const std::string& a : r.ranked) r.cands.push_back({a, "", "ok", "", NAN, NAN, NAN, 0, true});
+        r.date = pm.date;
+        w.cell(r, Tier::prior);
+    }
+    VerifyMeasurer m;
+    m.wrong = {16, 32, 64};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    const auto cells = newest_cells(ledger);
+    ASSERT_TRUE(cells.count(24));
+    const CellRecord& p = cells.at(24);
+    EXPECT_EQ(p.tier, Tier::prior);
+    EXPECT_EQ(cand(p, "c").status, "bad");
+    EXPECT_EQ(cand(p, "c").reason, "verify failed @ n=16");
+    EXPECT_EQ(p.ranked, (std::vector<std::string>{"a", "b"}));
+    EXPECT_EQ(m.calls.count(24), 0u) << "a prior row is not raced again";
+}
+
+// The worker verified and passed c at n=1; the fresh audit child verified it and found it wrong: the
+// audited cell itself loses c, though D9 keeps cells that verified an arm and passed.
+TEST(TuneVerify, AFreshAuditsVerifyFailRetractsTheAuditedCellItself) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    o.audit_fraction = 1.0;
+    VerifyMeasurer m;
+    m.worker = true;
+    m.fast = {1};
+    m.fresh_wrong = {1};
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_EQ(sorted(m.verified[1]), (std::vector<std::string>{"a", "b", "c"})) << "n=1 verified c on the worker";
+    const auto cells = newest_cells(ledger);
+    EXPECT_EQ(cand(cells.at(1), "c").status, "bad") << out;
+    EXPECT_EQ(cand(cells.at(1), "c").reason, "verify failed @ n=1");
+    ASSERT_FALSE(cells.at(1).ranked.empty());
+    EXPECT_EQ(cells.at(1).ranked.front(), "a");
+    for (int n : {16, 32}) EXPECT_EQ(cand(cells.at(n), "c").status, "eliminated") << "bucket e4 is unaffected: " << n;
+}
+
+// Run 2 re-races every cell partially (family b changed: b plus the stored top 2, c carried over). a's ld
+// audit fails at n=4, after n=2's partial race; n=2's front becomes the unverified b, so it is raced again
+// over every arm not known unrunnable: c comes back, not only the partial race's {a, b}.
+TEST(TuneVerify, ARequeuedPartialReRaceRacesTheCarriedArmsToo) {
+    TempDir repo, ledger;
+    {
+        TieredOpts o = verify_opts(repo, ledger);
+        VerifyMeasurer m;
+        ::testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        (void)::testing::internal::GetCapturedStdout();
+    }
+    TieredOpts o = verify_opts(repo, ledger);
+    std::ofstream(repo.path / "b.cc") << "b changed";
+    VerifyMeasurer m;
+    m.ld_refuse_a = 2;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    EXPECT_NE(out.find("partial:b"), std::string::npos) << out;
+    EXPECT_EQ(m.calls[2], 2) << out;
+    EXPECT_EQ(m.timed[2], (std::vector<std::string>{"b", "c"})) << "the requeue races c, which the partial race carried";
+    const CellRecord n2 = newest_cells(ledger).at(2);
+    EXPECT_TRUE(std::any_of(n2.cands.begin(), n2.cands.end(), [](const CandResult& c) { return c.cand == "c"; }));
+    EXPECT_EQ(n2.ranked.front(), "b");
+}
+
+namespace {
+
+class FakeBucketSpec : public FakeVerifySpec {
+public:
+    std::string op() const override { return "fakebucket"; }
+    std::vector<std::string> key_names() const override { return {"uplo", "n:log:3", "batch:log:1"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"uplo", {"L", "U"}}, {"n", {"1", "16"}}, {"batch", {"128", "1024"}}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override {
+        return double(key_int(k, "n")) * double(key_int(k, "batch")) * 1e3;
+    }
+};
+const FakeBucketSpec kFakeBucket;
+
+class BucketMeasurer : public CellMeasurer {
+public:
+    std::map<std::string, std::vector<std::string>> asked;
+    ArmBatch measure(const CellJob& j) override {
+        asked[key_arg(j.key)] = j.verify;
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            b.arms.push_back(arm(a, a == "a" ? "ok" : "eliminated", {a == "a" ? 1.0 : 3.0}));
+            b.arms.back().verified = a == "a" || std::count(j.verify.begin(), j.verify.end(), a);
+        }
+        return b;
+    }
+};
+
+}  // namespace
+
+TEST(TuneVerify, TheDriversBucketIsTheExactKeysAndThePerItemDecade) {
+    TempDir repo, ledger;
+    TieredOpts o = verify_opts(repo, ledger);
+    if (!find_spec("fakebucket")) register_spec(&kFakeBucket);
+    o.ops = {"fakebucket"};
+    BucketMeasurer m;
+    ::testing::internal::CaptureStdout();
+    const int rc = run_tiered(o, {"sm_fake", "Fake"}, &m);
+    const std::string out = ::testing::internal::GetCapturedStdout();
+    ASSERT_EQ(rc, 0) << out;
+    ASSERT_EQ(m.asked.size(), 8u) << out;
+    // Per item n * 1e3 bytes: e3 at n=1, e4 at n=16, whatever the batch (batch 128 runs first).
+    for (const auto& [k, want] : m.asked)
+        EXPECT_EQ(want.size(), k.find("batch=128") != std::string::npos ? 3u : 0u) << k << ": one bucket per (uplo, decade)";
+}
+
+// ---- Flip frontier and the slowdown replay (grid.cc flip_frontier, replay_core.cc slowdown_replay) ----
+
+namespace {
+
+const std::vector<std::string> kPow2{"1", "2", "4", "8", "16", "32", "64"};
+
+CellKey fcell(const std::string& g, int n, int b = 0) {
+    CellKey k{{"x", g}, {"n", std::to_string(n)}};
+    if (b) k.push_back({"b", std::to_string(b)});
+    return k;
+}
+
+RefineCell rcell(std::map<std::string, double> ms, std::set<std::string> out = {}) {
+    RefineCell c;
+    c.ms = std::move(ms);
+    c.out = std::move(out);
+    return c;
+}
+
+std::vector<CellKey> frontier_1d(const std::map<CellKey, RefineCell>& m, std::size_t k = 2) {
+    const std::vector<AxisSpec> axes{{"x", false, {"g"}}, {"n", true, {"1", "2", "4"}}};
+    return flip_frontier(m, {fcell("g", 1), fcell("g", 2), fcell("g", 4)}, axes, k);
+}
+
+}  // namespace
+
+TEST(TuneFrontier, TwoDimensionalFlipRegionIsTheUnmeasuredCellsBesideTheEdge) {
+    // a wins n <= 8, b from n = 16 (each 1.5x slower where it loses); stride-2 start n, b in {1, 4, 16, 64}.
+    const std::vector<AxisSpec> axes{{"x", false, {"g"}}, {"n", true, kPow2}, {"b", true, kPow2}};
+    std::map<CellKey, RefineCell> m;
+    std::vector<CellKey> universe;
+    for (int n = 1; n <= 64; n *= 2)
+        for (int b = 1; b <= 64; b *= 2) {
+            universe.push_back(fcell("g", n, b));
+            if ((n == 1 || n == 4 || n == 16 || n == 64) && (b == 1 || b == 4 || b == 16 || b == 64))
+                m[fcell("g", n, b)] = rcell({{"a", n <= 8 ? 1.0 : 1.5}, {"b", n <= 8 ? 1.5 : 1.0}});
+        }
+    std::set<std::string> got, want;
+    for (const CellKey& k : flip_frontier(m, universe, axes, 4)) got.insert(key_arg(k));
+    for (int b = 1; b <= 64; b *= 2) want.insert(key_arg(fcell("g", 8, b)));
+    for (int b : {2, 8, 32}) want.insert(key_arg(fcell("g", 16, b)));
+    // n=32 on a lattice b: two neighbours at distance 1, then a tie at 3 that goes to the smaller log keys (n=4).
+    for (int b : {1, 4, 16, 64}) want.insert(key_arg(fcell("g", 32, b)));
+    EXPECT_EQ(got, want);
+}
+
+TEST(TuneFrontier, ANearTieNeverTriggersAndJustAboveTheFivePercentDoesAtEitherEnd) {
+    auto at = [](double a1, double b1, double a4, double b4) {
+        return frontier_1d({{fcell("g", 1), rcell({{"a", a1}, {"b", b1}})}, {fcell("g", 4), rcell({{"a", a4}, {"b", b4}})}});
+    };
+    EXPECT_TRUE(at(1.0, 1.04, 1.04, 1.0).empty());
+    EXPECT_EQ(at(1.0, 1.06, 1.04, 1.0), std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_EQ(at(1.0, 1.04, 1.06, 1.0), std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_TRUE(at(1.0, 1.5, 0.9, 1.0).empty());  // same winner at both ends
+}
+
+TEST(TuneFrontier, ANeighboursWinnerThatCannotRunAtAnotherTriggers) {
+    const RefineCell a_wins = rcell({{"a", 1.0}, {"b", 1.01}});
+    EXPECT_EQ(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}}, {"a"})}}),
+              std::vector<CellKey>{fcell("g", 2)});
+    EXPECT_TRUE(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), rcell({{"b", 1.0}})}}).empty());  // untimed, not out
+    // A skip:single record (no timings) is a neighbour too: its one arm wins, the rest cannot run.
+    RefineCell single = rcell({}, {"a"});
+    single.single = "b";
+    EXPECT_EQ(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), single}}), std::vector<CellKey>{fcell("g", 2)});
+    single.out.clear();
+    EXPECT_TRUE(frontier_1d({{fcell("g", 1), a_wins}, {fcell("g", 4), single}}).empty());
+}
+
+TEST(TuneFrontier, NeighboursAreSelectsWeightedLog2Distance) {
+    // n weighs 3. From (4, 4): (4, 1) and (4, 16) cost 2, (8, 4) costs 3, so the two nearest agree on a.
+    // Unweighted, (8, 4) costs 1 and its b flips against (4, 1).
+    const auto axes = axis_specs({"x:exact", "n:log:3", "b:log"}, {{"x", {"g"}}, {"n", {"4", "8"}}, {"b", {"1", "4", "16"}}});
+    const std::map<CellKey, RefineCell> m{{fcell("g", 4, 1), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 4, 16), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 8, 4), rcell({{"a", 2.0}, {"b", 1.0}})}};
+    EXPECT_TRUE(flip_frontier(m, {fcell("g", 4, 4)}, axes, 2).empty());
+    const NearestIndex index({fcell("g", 4, 1), fcell("g", 4, 16), fcell("g", 8, 4)}, axes);
+    EXPECT_EQ(index.k_nearest(fcell("g", 4, 4), 3), (std::vector<std::size_t>{0, 1, 2}));
+}
+
+TEST(TuneFrontier, ExactKeyGroupsNeverMix) {
+    // Group h sits at the query's own log coordinate with the other winner; group g alone has no flip.
+    const std::map<CellKey, RefineCell> m{{fcell("g", 1), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("g", 4), rcell({{"a", 1.0}, {"b", 2.0}})},
+                                          {fcell("h", 2), rcell({{"a", 2.0}, {"b", 1.0}})}};
+    const std::vector<AxisSpec> axes{{"x", false, {"g", "h"}}, {"n", true, {"1", "2", "4"}}};
+    EXPECT_TRUE(flip_frontier(m, {fcell("g", 2)}, axes, 3).empty());
+    const NearestIndex index({fcell("g", 1), fcell("g", 4), fcell("h", 2)}, axes);
+    EXPECT_EQ(index.k_nearest(fcell("g", 2), 3), (std::vector<std::size_t>{0, 1}));
+    EXPECT_TRUE(index.k_nearest(fcell("z", 2), 3).empty());
+    EXPECT_EQ(index.find(fcell("z", 2)), 2u);  // find still falls back past the exact keys: n=2 is exact in h
+}
+
+TEST(TuneFrontier, FindDropsExactKeysButNeverALeadingDtype) {
+    const std::vector<AxisSpec> axes{{"dtype", false, {"float", "double"}}, {"x", false, {"g", "h"}}, {"n", true, {"1", "8"}}};
+    auto key = [](const char* d, const char* x, int n) { return CellKey{{"dtype", d}, {"x", x}, {"n", std::to_string(n)}}; };
+    const NearestIndex index({key("float", "g", 1), key("double", "h", 8)}, axes);
+    EXPECT_EQ(index.find(key("float", "h", 8)), 0u);  // x dropped, dtype kept: float's row, not double's nearer one
+    EXPECT_EQ(index.find(key("cfloat", "h", 8)), NearestIndex::npos);
+}
+
+namespace {
+
+// 1D universe n = 1..128: a wins n <= 4, b from n = 8 (the loser 1.5x); at n = 32 only arm c runs.
+OracleSet flip_oracle() {
+    OracleSet o;
+    o.label = "syn";
+    std::vector<std::string> ns;
+    for (int n = 1; n <= 128; n *= 2) {
+        ns.push_back(std::to_string(n));
+        o.cells[fcell("g", n)].ms = n == 32 ? std::map<std::string, double>{{"c", 1.0}}
+                                            : std::map<std::string, double>{{"a", n <= 4 ? 1.0 : 1.5}, {"b", n <= 4 ? 1.5 : 1.0}};
+    }
+    o.axes = {{"x", false, {"g"}}, {"n", true, ns}};
+    for (auto& [k, c] : o.cells)
+        for (const char* arm : {"a", "b", "c"})
+            if (!c.ms.count(arm)) c.out.insert(arm);
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneReplay, SlowdownScoresEveryCellAgainstItsFastestArmAndListsUnrunnablePicks) {
+    const OracleSet o = flip_oracle();
+    // Stride 2 measures n = 1, 4, 16, 64, 128. n = 8 ties between 4 and 16 and reads 4 (a, 1.5x); n = 32 reads 16,
+    // whose a and b cannot run there: a failure, not scored.
+    const SlowdownReport s2 = slowdown_replay(o, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(s2.cells, 8u);
+    EXPECT_EQ(s2.measured, 5u);
+    EXPECT_DOUBLE_EQ(s2.arm_runs, 10.0);
+    EXPECT_DOUBLE_EQ(s2.arm_total, 15.0);
+    ASSERT_EQ(s2.failures.size(), 1u);
+    EXPECT_NE(s2.failures[0].find("n=32"), std::string::npos) << s2.failures[0];
+    ASSERT_EQ(s2.ratio.size(), 7u);
+    EXPECT_EQ(s2.ratio_measured, std::vector<double>(5, 1.0));
+    EXPECT_DOUBLE_EQ(s2.worst, 1.5);
+    EXPECT_NE(s2.worst_key.find("n=8 picked a"), std::string::npos) << s2.worst_key;
+    const SlowdownStats st = slowdown_stats(s2.ratio);
+    EXPECT_NEAR(st.geomean, std::pow(1.5, 1.0 / 7) - 1, 1e-12);
+    EXPECT_DOUBLE_EQ(st.p99, 1.5);
+    EXPECT_DOUBLE_EQ(st.p999, 1.5);
+    EXPECT_DOUBLE_EQ(st.slow10, 1.0 / 7);
+    EXPECT_DOUBLE_EQ(st.misrank, 1.0 / 7);
+    // The frontier measures n = 8 (4 and 16 disagree). n = 32 stays a failure: 16 and 64 agree, and c runs at neither.
+    const SlowdownReport f = slowdown_replay(o, {"stride2+frontier", 2, true, 0}, 2);
+    EXPECT_EQ(f.measured, 6u);
+    EXPECT_EQ(f.rounds, 1u);
+    EXPECT_EQ(f.failures.size(), 1u);
+    EXPECT_EQ(slowdown_stats(f.ratio).worst, 1.0);
+    OracleSet only_b = o;  // n = 8 cannot run row 4's front (a): the pick falls through to b, no failure
+    only_b.cells.at(fcell("g", 8)) = rcell({{"b", 1.0}}, {"a", "c"});
+    const SlowdownReport fb = slowdown_replay(only_b, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(fb.failures.size(), 1u);
+    EXPECT_EQ(slowdown_stats(fb.ratio).worst, 1.0);
+    EXPECT_EQ(slowdown_replay(o, {"full", 0, false, 0}).measured, 8u);
+    EXPECT_EQ(slowdown_replay(o, {"lattice", 1, false, 0}).measured, 8u);
+    EXPECT_FALSE(slowdown_gate(f));  // one unscored cell fails the gate: the scored ones are all 1.0
+    EXPECT_TRUE(slowdown_gate(slowdown_replay(o, {"full", 0, false, 0})));
+    EXPECT_FALSE(slowdown_gate(slowdown_replay(OracleSet{}, {"stride2", 2, false, 0})));  // nothing measured
+}
+
+TEST(TuneReplay, SlowdownQuantilesAreNearestRank) {
+    std::vector<double> r;
+    for (int i = 1000; i >= 1; --i) r.push_back(1.0 + i / 1000.0);  // 1.001 .. 2.000, reversed
+    const SlowdownStats st = slowdown_stats(r);
+    EXPECT_DOUBLE_EQ(st.p99, 1.990);  // sorted[ceil(0.99 x 1000) - 1] = sorted[989]
+    EXPECT_DOUBLE_EQ(st.p999, 1.999);
+    EXPECT_DOUBLE_EQ(st.worst, 2.0);
+    r.pop_back();  // 999 cells: sorted[ceil(989.01) - 1] = sorted[989] = 1.991
+    EXPECT_DOUBLE_EQ(slowdown_stats(r).p99, 1.991);
+}
+
+TEST(TuneReplay, AGroupOffTheStartLatticeTakesItsOwnStrideAndNeverBorrowsAnotherGroup) {
+    OracleSet o = flip_oracle();
+    o.lattice = "ledger";
+    o.axes[0].values.push_back("h");
+    o.axes[1].values = {"1", "4", "16", "64", "128"};  // ledger round-0 values: h's 2, 8 and 32 are off it
+    for (int n : {2, 8, 32}) o.cells[fcell("h", n)] = rcell({{"b", n == 8 ? 3.0 : 2.0}, {"c", 1.0}}, {"a"});
+    const SlowdownReport r = slowdown_replay(o, {"stride2", 2, false, 0}, 2);
+    EXPECT_EQ(r.measured, 3u + 2u);  // g at 1, 16, 128 (the ledger values' stride); h at 2 and 32 (its own)
+    ASSERT_EQ(r.failures.size(), 1u);  // g's n = 32 reads g's 16, as before
+    EXPECT_NE(r.failures[0].find("x=g"), std::string::npos) << r.failures[0];
+    EXPECT_EQ(r.ratio.size(), 10u);
+    EXPECT_DOUBLE_EQ(r.worst, 1.0);  // h's n = 8 reads h's 2 (c); borrowing g's 16 would pick b, 3x
+    o.lattice = "inferred";  // every group starts from its own values: g at 1, 4, 16, 64, 128
+    EXPECT_EQ(slowdown_replay(o, {"stride2", 2, false, 0}, 2).measured, 5u + 2u);
+}
+
+TEST(TuneReplay, ArmPruningRacesOnlyArmsWithinTheRatioAtANeighbour) {
+    OracleSet o = flip_oracle();
+    // Neighbours 4 (best a 1.0) and 16 (best b 1.0): d is exactly 1.5x at 4 and 1.6x at 16, c 1.6x at both.
+    // At n = 8, c is fastest (0.5), then d (0.6): prune races a, b and d, never c.
+    const std::map<int, std::pair<double, double>> cd{{4, {1.6, 1.5}}, {8, {0.5, 0.6}}, {16, {1.6, 1.6}}};
+    for (const auto& [n, t] : cd) {
+        RefineCell& c = o.cells.at(fcell("g", n));
+        c.ms["c"] = t.first, c.ms["d"] = t.second;
+        c.out.erase("c");
+    }
+    for (auto& [k, c] : o.cells)
+        if (!c.ms.count("d")) c.out.insert("d");
+    const SlowdownReport p = slowdown_replay(o, {"prune", 2, true, 1.5}, 2);
+    const SlowdownReport full = slowdown_replay(o, {"frontier", 2, true, 0}, 2);
+    EXPECT_DOUBLE_EQ(p.arm_runs, full.arm_runs - 1);
+    EXPECT_DOUBLE_EQ(slowdown_stats(p.ratio_measured).worst, 1.2);  // d 0.6 against c 0.5
+    EXPECT_DOUBLE_EQ(slowdown_stats(full.ratio).worst, 1.0);
+    EXPECT_EQ(replay_schemes().size(), 9u);  // step 2b added lattice+bisect and stride2+frontier+bisect
+}
+
+TEST(TuneReplay, BisectSchemesReachMidpointsOffTheLatticeOnlyByBisection) {
+    OracleSet o = flip_oracle();
+    o.lattice = "ledger";  // axes hold the powers of two; n = 6 is a refinement midpoint, a wins there
+    o.cells[fcell("g", 6)] = rcell({{"a", 1.0}, {"b", 1.5}}, {"c"});
+    const SlowdownReport lat = slowdown_replay(o, {"lattice", 1, false, 0}, 2);
+    EXPECT_EQ(lat.measured, 8u);  // the 8 lattice cells
+    EXPECT_DOUBLE_EQ(lat.worst, 1.5);  // n = 6 reads n = 8 (b)
+    const SlowdownReport today = slowdown_replay(o, {"lattice+bisect", 1, false, 0, true}, 2);
+    EXPECT_EQ(today.measured, 9u);  // + 6 between 4 (a) and 8 (b)
+    EXPECT_EQ(today.bisect_missing, 3u);  // 7 (6..8), 23 (16..32, c) and 45 (32..64) are not in the universe
+    EXPECT_DOUBLE_EQ(today.worst, 1.0);
+    // Round 0 1, 4, 16, 64, 128; the frontier picks lattice 8 (4 and 16 flip), never 6; bisection 4..8 reaches 6.
+    const SlowdownReport fb = slowdown_replay(o, {"stride2+frontier+bisect", 2, true, 0, true}, 2);
+    EXPECT_EQ(fb.measured, 7u);
+    EXPECT_EQ(fb.rounds, 2u);
+    EXPECT_EQ(fb.bisect_missing, 1u);  // 7
+    ASSERT_EQ(fb.failures.size(), 1u);  // n = 32 (c only) still reads 16
+    EXPECT_DOUBLE_EQ(fb.worst, 1.0);
+}
+
+TEST(TuneFrontier, StartTakesEveryStrideOfEachGroupsOwnValuesAndAWholeGroupWithoutAHit) {
+    const std::vector<AxisSpec> axes{{"x", false, {"g", "h"}}, {"n", true, kPow2}, {"b", true, kPow2}};
+    EXPECT_EQ(frontier_start(tier_lattice(axes, 1), axes, 2), tier_lattice(axes, 2));
+    const std::vector<CellKey> own{fcell("h", 2, 1), fcell("h", 8, 1), fcell("h", 32, 1), fcell("g", 4, 4)};
+    EXPECT_EQ(frontier_start(own, axes, 2), (std::vector<CellKey>{fcell("h", 2, 1), fcell("h", 32, 1), fcell("g", 4, 4)}));
+    const std::vector<CellKey> none{fcell("g", 1, 2), fcell("g", 2, 1), fcell("g", 2, 4), fcell("g", 4, 2)};
+    EXPECT_EQ(frontier_start(none, axes, 2), none);  // own values {1, 2, 4} keep 1 and 4: no cell has both
+    // The start lattice first (n = 4, 16 of kPow2's stride 2); own values {2..32} only for an inferred lattice.
+    const std::vector<CellKey> h{fcell("h", 2, 1), fcell("h", 4, 1), fcell("h", 8, 1), fcell("h", 16, 1), fcell("h", 32, 1)};
+    EXPECT_EQ(frontier_start(h, axes, 2), (std::vector<CellKey>{fcell("h", 4, 1), fcell("h", 16, 1)}));
+    EXPECT_EQ(frontier_start(h, axes, 2, false), (std::vector<CellKey>{fcell("h", 2, 1), fcell("h", 8, 1), fcell("h", 32, 1)}));
+}
+
+namespace {
+
+// The default round plan (stride-2 start, k = 6, 5%) unless `plan` says otherwise; n = 2^0..2^20 (max_dim off),
+// or n x m = 2^0..2^8 squared.
+class FrontierSpec : public FakeSpec {
+public:
+    explicit FrontierSpec(bool two) : two_d(two) {}
+    std::string op() const override { return two_d ? "frontier2d" : "frontier1d"; }
+    FrontierPlan frontier() const override { return plan; }
+    std::vector<std::string> key_names() const override {
+        return two_d ? std::vector<std::string>{"n:log", "m:log"} : std::vector<std::string>{"n:log"};
+    }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        std::vector<std::string> v;
+        for (int e = 0; e <= (two_d ? 8 : 20); ++e) v.push_back(std::to_string(1 << e));
+        if (two_d) return {{"n", v}, {"m", v}};
+        return {{"n", v}};
+    }
+    FrontierPlan plan;
+    bool two_d;
+};
+
+FrontierSpec g_frontier1d(false), g_frontier2d(true);
+
+// Arms a and b with medians from `times` (a, b).
+class MapMeasurer : public CellMeasurer {
+public:
+    explicit MapMeasurer(std::function<std::pair<double, double>(const CellKey&)> t) : times(std::move(t)) {}
+    std::function<std::pair<double, double>(const CellKey&)> times;
+    std::vector<std::string> keys;
+    ArmBatch measure(const CellJob& j) override {
+        keys.push_back(key_arg(j.key));
+        const auto [ta, tb] = times(j.key);
+        ArmBatch b;
+        for (const std::string& a : j.arms) b.arms.push_back(arm(a, "ok", std::vector<double>(3, a == "a" ? ta : tb)));
+        return b;
+    }
+};
+
+TieredOpts frontier_opts(const TempDir& repo, const TempDir& ledger, const FrontierSpec& s) {
+    TieredOpts o = fake_opts(repo, ledger, Tier::deep);
+    if (!find_spec(s.op())) register_spec(&s);
+    o.ops = {s.op()};
+    o.max_dim = 0;
+    return o;
+}
+
+// b wins n <= 10 by 2x, a above by 2x: one crossover, between the stride-2 cells 4 and 16.
+std::pair<double, double> crossover_at_10(const CellKey& k) { return {1.0, key_int(k, "n") <= 10 ? 0.5 : 2.0}; }
+
+std::set<std::string> ns(std::initializer_list<int> v) {
+    std::set<std::string> out;
+    for (int n : v) out.insert("n=" + std::to_string(n));
+    return out;
+}
+
+}  // namespace
+
+// evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+TEST(TuneTieredDriver, FrontierMeasuresTheCrossoverRegionAndSkipsTheFlatParts) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    o.refine_cap_factor = 0.01;  // no cap in frontier mode: only the budget stops it
+    o.plan = true;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+    const std::string plan = testing::internal::GetCapturedStdout();
+    EXPECT_NE(plan.find("tier=deep: 11 cells (11 measure)"), std::string::npos) << plan;
+    EXPECT_NE(plan.find("frontier (stride 2, k 6, 5%): ~9 cells, data-dependent (0.86 x the 10 grid cells round 0 "
+                        "leaves"), std::string::npos) << plan;
+    o.plan = false;
+    MapMeasurer m(crossover_at_10);
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    ASSERT_EQ(m.keys.size(), 18u) << out;
+    std::set<std::string> round0(m.keys.begin(), m.keys.begin() + 11);
+    std::set<std::string> lattice2;
+    for (int e = 0; e <= 20; e += 2) lattice2.insert("n=" + std::to_string(1 << e));
+    EXPECT_EQ(round0, lattice2);
+    // The frontier: 2, 8, 32 and 128 have n = 1 or 4 (b) among their 6 nearest; n = 512 and up do not.
+    // Bisection then places the edge off the grid: 11, 9, 10.
+    const std::set<std::string> later(m.keys.begin() + 11, m.keys.end());
+    EXPECT_EQ(later, ns({2, 8, 32, 128, 11, 9, 10}));
+    EXPECT_NE(out.find("measured 11 round-0 (stride 2) + 7 frontier and bisection cells, per round 11,4,1,1,1"),
+              std::string::npos) << out;
+
+    // The full lattice (gemm's plan) measures every grid cell, then the same bisection.
+    TempDir full;
+    g_frontier1d.plan = {1};
+    o = frontier_opts(repo, full, g_frontier1d);
+    MapMeasurer every(crossover_at_10);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &every), 0);
+    EXPECT_EQ(every.keys.size(), 21u + 3u);
+    // Its stride-1 records count as measured: the frontier plan on that ledger measures nothing.
+    g_frontier1d.plan = {};
+    MapMeasurer again(crossover_at_10);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
+    EXPECT_TRUE(again.keys.empty()) << again.keys.size();
+}
+
+TEST(TuneTieredDriver, FrontierNeighboursIncludeTheLedgersOlderCells) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    for (int e = 0; e <= 10; ++e) o.grid["n"].push_back(std::to_string(1 << e));
+    auto at_3000 = [](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 3000 ? 0.5 : 2.0}; };
+    MapMeasurer old(at_3000);  // a full-lattice run up to n = 1024, where b wins everywhere
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &old), 0);
+    ASSERT_EQ(old.keys.size(), 11u);
+    g_frontier1d.plan = {};
+    o.grid.clear();
+    MapMeasurer m(at_3000);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::set<std::string> got(m.keys.begin(), m.keys.end());
+    for (int e = 12; e <= 20; e += 2) EXPECT_TRUE(got.count("n=" + std::to_string(1 << e))) << e;
+    // 2048 is beside the old n = 1024 (b) and the new 4096 (a); bisection then places the edge between them.
+    EXPECT_TRUE(got.count("n=2048")) << m.keys.size();
+    EXPECT_TRUE(got.count("n=2896")) << m.keys.size();
+    EXPECT_FALSE(got.count("n=1024")) << "current in the ledger";
+}
+
+TEST(TuneTieredDriver, FrontierNeighboursNeverIncludeALowerTiersCells) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    o.tier = Tier::preview;
+    for (int e = 0; e <= 11; ++e) o.grid["n"].push_back(std::to_string(1 << e));
+    auto at_3000 = [](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 3000 ? 0.5 : 2.0}; };
+    MapMeasurer old(at_3000);  // preview's lattice up to n = 2048, where b wins everywhere
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &old), 0);
+    ASSERT_TRUE(std::count(old.keys.begin(), old.keys.end(), "n=2048")) << old.keys.size();
+    g_frontier1d.plan = {};
+    o.grid.clear();
+    o.tier = Tier::deep;
+    MapMeasurer m(at_3000);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    // The preview 2048 (b) is no bracket end: the frontier between 1024 and 4096 measures it at deep.
+    EXPECT_TRUE(std::count(m.keys.begin(), m.keys.end(), "n=2048")) << m.keys.size();
+    EXPECT_TRUE(std::count(m.keys.begin(), m.keys.end(), "n=1024")) << "a preview record is re-measured";
+}
+
+TEST(TuneTieredDriver, FrontierNearTiesAndFlipsUnderFivePercentMeasureNothingBeyondRoundZero) {
+    g_frontier1d.plan = {};
+    for (const double margin : {0.01, 0.04}) {
+        TempDir repo, ledger;
+        const TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+        // 1%: winners alternate cell by cell, no flip is decisive. 4%: one crossover at n = 10, decisive for the
+        // bisection (3%) but under the frontier's 5%, and its midpoint 8 is a grid cell: the frontier's to pick.
+        MapMeasurer m([margin](const CellKey& k) {
+            const std::int64_t n = key_int(k, "n");
+            const bool b = margin < 0.03 ? (std::countr_zero(std::uint64_t(n)) / 2) % 2 == 0 : n <= 10;
+            return std::pair{1.0, b ? 1 - margin : 1 + margin};
+        });
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        EXPECT_EQ(m.keys.size(), 11u) << margin;
+    }
+}
+
+TEST(TuneTieredDriver, FrontierReadsTheSpecsKAndThreshold) {
+    // The cells measured after round 0 for a crossover at n = 10 that is `margin` decisive.
+    auto later = [](FrontierPlan p, double margin) {
+        g_frontier1d.plan = p;
+        TempDir repo, ledger;
+        MapMeasurer m([margin](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 10 ? 1 - margin : 1 + margin}; });
+        EXPECT_EQ(run_tiered(frontier_opts(repo, ledger, g_frontier1d), {"sm_fake", "Fake"}, &m), 0);
+        return std::set<std::string>(m.keys.begin() + std::min<std::size_t>(11, m.keys.size()), m.keys.end());
+    };
+    EXPECT_TRUE(later({}, 0.04).empty());
+    EXPECT_TRUE(later({}, 0.06).count("n=8"));               // 6% > 5%
+    EXPECT_TRUE(later({2, 6, 0.03}, 0.04).count("n=8"));     // 4% > the spec's 3%
+    EXPECT_EQ(later({}, 1.0 / 3), ns({2, 8, 32, 128, 11, 9, 10}));
+    EXPECT_EQ(later({2, 2, 0.05}, 1.0 / 3), ns({8, 11, 9, 10}));  // k = 2: only 8 has both winners among its two nearest
+    g_frontier1d.plan = {};
+}
+
+TEST(TuneTieredDriver, FrontierReRacesEveryPartlyStaleCellInRoundZero) {
+    TempDir repo, ledger;
+    g_frontier1d.plan = {1};
+    TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+    auto a_wins = [](const CellKey&) { return std::pair{1.0, 2.0}; };
+    MapMeasurer full(a_wins);
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &full), 0);
+    ASSERT_EQ(full.keys.size(), 21u);
+    std::ofstream(repo.path / "b.cc") << "b changed";  // b's hash moves, a still wins: every record partly stale
+    g_frontier1d.plan = {};
+    MapMeasurer m(a_wins);
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_EQ(m.keys.size(), 21u) << out;
+    EXPECT_NE(out.find("(21 partial)"), std::string::npos) << out;
+}
+
+TEST(TuneTieredDriver, PreviewPlansByFrontierUnlessTheSpecKeepsTheLattice) {
+    for (const int stride : {2, 1}) {
+        TempDir repo, ledger;
+        g_frontier1d.plan = {stride};
+        TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
+        o.tier = Tier::preview;
+        o.refine_cap_factor = 0.1;
+        MapMeasurer m(crossover_at_10);
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        const std::string out = testing::internal::GetCapturedStdout();
+        if (stride == 2) {
+            EXPECT_EQ(m.keys.size(), 18u) << out;
+            EXPECT_NE(out.find("measured 11 round-0 (stride 2) + 7 frontier"), std::string::npos) << out;
+            EXPECT_EQ(out.find("refinement cap hit"), std::string::npos) << out;
+        } else {  // preview's own lattice (stride 2), index refill, margin hedge and cap
+            EXPECT_NE(out.find("measured 11 lattice + 1 refinement"), std::string::npos) << out;
+            EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
+        }
+    }
+    g_frontier1d.plan = {};
+}
+
+TEST(TuneTieredDriver, FrontierOnAGridPicksEveryCellRightAndSkipsTheFarCorners) {
+    TempDir repo, ledger;
+    g_frontier2d.plan = {};
+    const TieredOpts o = frontier_opts(repo, ledger, g_frontier2d);
+    auto b_wins = [](const CellKey& k) { return key_int(k, "n") * key_int(k, "m") <= 64; };
+    MapMeasurer m([&](const CellKey& k) { return std::pair{1.0, b_wins(k) ? 0.5 : 2.0}; });
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+    std::set<std::string> round0(m.keys.begin(), m.keys.begin() + std::min<std::size_t>(25, m.keys.size()));
+    std::set<std::string> want0;
+    for (const CellKey& k : tier_lattice(axis_specs(g_frontier2d.key_names(), g_frontier2d.axes()), 2)) want0.insert(key_arg(k));
+    EXPECT_EQ(round0, want0);
+    const auto axes = axis_specs(g_frontier2d.key_names(), g_frontier2d.axes());
+    const std::vector<CellKey> grid = tier_lattice(axes, 1);
+    std::vector<CellKey> measured;
+    for (const CellKey& k : grid)
+        if (std::find(m.keys.begin(), m.keys.end(), key_arg(k)) != m.keys.end()) measured.push_back(k);
+    EXPECT_LT(measured.size(), grid.size());
+    EXPECT_EQ(std::count(m.keys.begin(), m.keys.end(), "n=256,m=128"), 0) << "far from the edge";
+    const NearestIndex index(measured, axes);
+    for (const CellKey& k : grid)  // select::choose over the measured grid cells picks the true winner everywhere
+        EXPECT_EQ(b_wins(measured[index.find(k)]), b_wins(k)) << key_arg(k);
+}
+
+TEST(TuneReplay, TableOracleReadsTimedRowsTheirMediansAndTheHeader) {
+    const std::string path = (scratch("oracle") / "op.sm_0.txt").string();
+    std::ofstream(path) << "# op=potrf device=sm_0 family_kernels=tiny:aa11,vendor:bb22 date=2026-10-11\n"
+                        << "# keys: dtype:exact uplo:exact n:log:3 batch:log\n"
+                        << "dtype=float uplo=L n=4 batch=128 | tiny 0.5 | vendor 1.25 # deep\n"
+                        << "dtype=float uplo=L n=8 batch=128 | vendor - # transcribed\n"
+                        << "dtype=double uplo=L n=16 batch=128 | reg:m=8:n=8 0.25 # deep\n";
+    const OracleSet o = load_table_oracle(path);
+    EXPECT_EQ(o.label, "potrf");
+    ASSERT_EQ(o.cells.size(), 2u);
+    const CellKey k{{"dtype", "float"}, {"uplo", "L"}, {"n", "4"}, {"batch", "128"}};
+    ASSERT_TRUE(o.cells.count(k));
+    EXPECT_EQ(o.cells.at(k).ms, (std::map<std::string, double>{{"tiny", 0.5}, {"vendor", 1.25}}));
+    EXPECT_EQ(o.cells.at(k).out, std::set<std::string>{"reg:m=8:n=8"});
+    ASSERT_EQ(o.axes.size(), 4u);
+    EXPECT_FALSE(o.axes[0].log);
+    EXPECT_EQ(o.axes[2].weight, 3.0);
+    EXPECT_EQ(o.axes[2].values, (std::vector<std::string>{"4", "16"}));  // the transcribed n=8 is no cell
+    EXPECT_EQ(table_family_hashes(path), (std::map<std::string, std::string>{{"tiny", "aa11"}, {"vendor", "bb22"}}));
+}
+
+TEST(TuneReplay, LedgerOracleTakesBestRecordsAndTheRoundZeroLattice) {
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float", m.run_id = "r1", m.tier = Tier::deep, m.date = "2026-10-08", m.keys = "n:log:3 batch:log";
+    {
+        LedgerWriter w(d.led(), m);
+        auto put = [&](int n, int round, double lp) {
+            CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", lp), cres("vendor", "v1", "ok", 2.0)}, {"lpanel:panel=8", "vendor"}, n);
+            c.round = round, c.date = m.date;
+            w.cell(c);
+        };
+        for (int i = 0; i < 101; ++i) put(64, 0, 1.0), put(128, 0, i < 2 ? 3.0 : 2.5);
+        put(96, 1, 1.0);
+        put(40, 0, 1.0);  // one round-0 record against 101: a re-measure stray, not lattice
+        put(48, 0, 1.0), put(48, 0, 1.0);  // two against 101 (2%): kept
+    }
+    const OracleSet o = load_ledger_oracle(d.led(), kHashes);
+    EXPECT_EQ(o.lattice, "ledger");
+    ASSERT_EQ(o.cells.size(), 5u);
+    const CellKey k{{"dtype", "float"}, {"n", "128"}, {"batch", "1024"}};
+    ASSERT_TRUE(o.cells.count(k));
+    EXPECT_EQ(o.cells.at(k).ms, (std::map<std::string, double>{{"lpanel:panel=8", 2.5}, {"vendor", 2.0}}));
+    ASSERT_EQ(o.axes.size(), 3u);
+    EXPECT_EQ(o.axes[1].weight, 3.0);
+    EXPECT_EQ(o.axes[1].values, (std::vector<std::string>{"48", "64", "128"}));
+    EXPECT_TRUE(load_ledger_oracle(d.led(), {}).cells.empty());  // every record stale without the hashes
+}
+
+// A frontier run's round 0 is every 2nd value: the run's recorded `grid` is the lattice. A calibrate cell
+// off the probes raced two arms, so it is no oracle cell.
+TEST(TuneReplay, LedgerOracleTakesTheRecordedGridAndSkipsCalibrateCellsOffTheProbes) {
+    TempDir d;
+    RunMeta m;
+    m.dtype = "float", m.run_id = "r2", m.tier = Tier::deep, m.date = "2026-10-15", m.keys = "n:log:3 batch:log";
+    m.protocol = kProtocol, m.grid = "n=32,48,64,96,128 batch=1024";
+    {
+        LedgerWriter w(d.led(), m);
+        auto put = [&](int n, int round, const std::string& vendor_reason = "") {
+            CellRecord c = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0),
+                                     cres("vendor", "v1", vendor_reason.empty() ? "ok" : "skipped")},
+                                    {"lpanel:panel=8"}, n);
+            c.cands[1].reason = vendor_reason;
+            c.round = round, c.date = m.date;
+            w.cell(c);
+        };
+        for (int i = 0; i < 20; ++i) put(32, 0), put(64, 0), put(128, 0);
+        put(48, 1);
+        put(96, 1, kUnraced);
+    }
+    const OracleSet o = load_ledger_oracle(d.led(), kHashes);
+    ASSERT_EQ(o.axes.size(), 3u);
+    EXPECT_EQ(o.axes[1].values, (std::vector<std::string>{"32", "48", "64", "96", "128"})) << "the recorded grid, not round 0";
+    EXPECT_EQ(o.cells.size(), 4u);
+    EXPECT_FALSE(o.cells.count(CellKey{{"dtype", "float"}, {"n", "96"}, {"batch", "1024"}})) << "unraced arms: not exhaustive";
+}
+
+// --tier calibrate (docs/design/tiered-tuning.md#engine-calibrate-tier-from-a-borrowed-table)
+
+namespace {
+
+const std::vector<std::string> kCalN{"1", "2", "4", "8", "16", "32", "64", "128", "256", "512", "1024"};
+const std::vector<std::string> kCalBatch{"1", "2", "4", "8", "16", "32", "64"};
+
+// Two log axes, three families: b wins up to the crossover, a above; c only where a test says so.
+class FakeCalSpec : public OpSpec {
+public:
+    std::string op() const override { return "fakecal"; }
+    std::vector<std::string> key_names() const override { return {"n:log:3", "batch:log"}; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b", "c"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"n", kCalN}, {"batch", kCalBatch}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "n")) * 1e3; }
+    std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
+    std::string spec_file() const override { return "fake_spec.cc"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
+};
+
+const FakeCalSpec kFakeCal;
+
+struct CalDevice {
+    std::int64_t cross = 40;
+    std::set<std::int64_t> c_wins;  // n values where c beats both
+    double near = 0.5;              // b's time up to the crossover (a takes 1.0)
+    std::set<std::int64_t> a_off;   // n values where a's pin is refused
+    double ms(const std::string& a, std::int64_t n) const {
+        if (a == "c") return c_wins.count(n) ? 0.25 : 3.0;
+        return a == "a" ? 1.0 : n <= cross ? near : 2.0;
+    }
+    std::string winner(std::int64_t n) const { return c_wins.count(n) ? "c" : n <= cross ? "b" : "a"; }
+};
+
+class CalMeasurer : public CellMeasurer {
+public:
+    explicit CalMeasurer(CalDevice d) : dev(std::move(d)) {}
+    CalDevice dev;
+    std::map<std::string, std::vector<std::string>> arms;  // key_arg -> the arms raced there
+    ArmBatch measure(const CellJob& j) override {
+        arms[key_arg(j.key)] = j.arms;
+        ArmBatch b;
+        for (const std::string& a : j.arms) {
+            const double t = dev.ms(a, key_int(j.key, "n"));
+            const bool off = a == "a" && dev.a_off.count(key_int(j.key, "n"));
+            b.arms.push_back(off ? arm(a, "skipped", {}) : arm(a, "ok", {t, t, t}));
+        }
+        return b;
+    }
+};
+
+// tuned/fakecal.<device>.txt over the full grid: b first up to `cross`, a above, c at entry c_pos (< 0: never
+// named); untimed when transcribed, except its first `timed_rows` rows.
+void write_prior(const TempDir& repo, const std::string& device, std::int64_t cross, bool transcribed = false,
+                 const std::string& date = "2026-10-01", int c_pos = 2, const std::string& dtype = "float",
+                 int timed_rows = 0) {
+    fs::create_directories(repo.path / "tuned");
+    std::ofstream f(repo.path / "tuned" / ("fakecal." + device + ".txt"));
+    f << "# op=fakecal device=" << device << " kernels=x family_kernels=a:x,b:x date=" << date << "\n"
+      << "# source=" << (transcribed ? "transcribed:2b46acab" : "ledger:x tiers=deep:77") << "\n"
+      << "# keys: dtype:exact n:log:3 batch:log\n";
+    int row = 0;
+    for (const std::string& n : kCalN)
+        for (const std::string& batch : kCalBatch) {
+            const bool small = std::stoll(n) <= cross, untimed = transcribed && row++ >= timed_rows;
+            std::vector<std::pair<std::string, double>> e{{small ? "b" : "a", 1.0}, {small ? "a" : "b", 2.0}};
+            if (c_pos >= 0) e.insert(e.begin() + c_pos, {"c", 3.0});
+            f << "dtype=" << dtype << " n=" << n << " batch=" << batch;
+            for (const auto& [a, t] : e) f << " | " << a << " " << (untimed ? std::string("-") : std::to_string(t));
+            f << " # " << (untimed ? "transcribed" : "deep") << "\n";
+        }
+}
+
+struct CalResult {
+    std::map<CellKey, const CellRecord*> best;
+    Ledger ledger;
+    std::set<std::string> probes, refined, prior;  // key_args by record kind
+};
+
+CalResult run_calibrate(const TempDir& repo, const TempDir& ledger, CalMeasurer& m, const std::string& prior = "",
+                        double budget_h = 0, int probe_stride = 0, const std::string& b_src = "") {
+    TieredOpts o = fake_opts(repo, ledger, Tier::calibrate);
+    if (!b_src.empty()) std::ofstream(repo.path / "b.cc") << b_src;
+    o.probe_stride = probe_stride;
+    if (!find_spec("fakecal")) register_spec(&kFakeCal);
+    o.ops = {"fakecal"};
+    o.prior = prior;
+    o.budget_h = budget_h;
+    EXPECT_EQ(run_tiered(o, {"sm_dev", "Dev"}, &m), 0);
+    CalResult r;
+    r.ledger = read_ledger(ledger_file(ledger.str(), "fakecal", "sm_dev"), "float");
+    return r;
+}
+
+void classify(CalResult& r, const std::map<std::string, std::string>& fh) {
+    r.best = best_records(r.ledger, fh);
+    for (const auto& [k, c] : r.best)
+        (c->tier == Tier::prior ? r.prior : c->round == 0 ? r.probes : r.refined).insert(key_arg(k));
+}
+
+std::map<std::string, std::string> cal_hashes(const TempDir& repo) {
+    return family_hashes(repo.str(), kFakeCal.kernel_block(repo.str()), {"a", "b", "c"});
+}
+
+// Every grid cell has a record, and its first entry is the device's winner: the table select reads is right.
+void expect_device_winners(const CalResult& r, const CalDevice& dev) {
+    for (const std::string& n : kCalN)
+        for (const std::string& batch : kCalBatch) {
+            const CellKey k{{"n", n}, {"batch", batch}};
+            const auto it = r.best.find(k);
+            ASSERT_NE(it, r.best.end()) << key_arg(k);
+            ASSERT_FALSE(it->second->ranked.empty()) << key_arg(k);
+            EXPECT_EQ(it->second->ranked.front(), dev.winner(std::stoll(n))) << key_arg(k) << " " << to_string(it->second->tier);
+        }
+}
+
+std::set<std::int64_t> n_values(const std::set<std::string>& args) {
+    std::set<std::int64_t> out;
+    for (const std::string& a : args) out.insert(std::stoll(a.substr(2, a.find(',') - 2)));
+    return out;
+}
+
+// Bisection closed in on the device's crossover: measured n_lo <= cross < n_hi, adjacent or n_hi / n_lo < 1.1.
+bool brackets(const CalResult& r, std::int64_t cross) {
+    std::set<std::int64_t> n = n_values(r.refined), p = n_values(r.probes);
+    n.insert(p.begin(), p.end());
+    const auto hi = n.upper_bound(cross);
+    if (hi == n.end() || hi == n.begin()) return false;
+    return *hi - *std::prev(hi) == 1 || double(*hi) / double(*std::prev(hi)) < params(Tier::calibrate).refine_ratio;
+}
+
+}  // namespace
+
+TEST(TuneCalibrate, PriorCrossoverTenDeviceFortyRefinesBetweenAndCopiesThePriorElsewhere) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_EQ(r.probes.size(), 4u * 3u) << "n 1,16,256,1024 x batch 1,16,64";
+    ASSERT_FALSE(r.refined.empty());
+    const auto nr = n_values(r.refined);
+    EXPECT_TRUE(nr.count(32) && nr.count(64)) << "the device's crossover lies between 32 and 64";
+    EXPECT_TRUE(brackets(r, 40));
+    EXPECT_GE(*nr.begin(), 2) << "never below the probes that agree";
+    EXPECT_LE(*nr.rbegin(), 128) << "never past 256, where the device agrees with the prior";
+    const auto np = n_values(r.prior);
+    EXPECT_TRUE(np.count(512) && np.count(2)) << "agreeing regions take the prior's rows";
+    std::size_t grid_refined = 0;
+    for (const std::string& k : r.refined) grid_refined += std::count(kCalN.begin(), kCalN.end(), k.substr(2, k.find(',') - 2));
+    EXPECT_EQ(r.probes.size() + grid_refined + r.prior.size(), kCalN.size() * kCalBatch.size());
+    for (const auto& [k, c] : r.best)
+        if (c->tier == Tier::prior) {
+            EXPECT_TRUE(std::all_of(c->cands.begin(), c->cands.end(), [](const CandResult& x) {
+                return std::isnan(x.median_ms) && x.hash.empty();
+            })) << "prior rows are untimed and unhashed: " << key_arg(k);
+        }
+    for (const std::string& k : r.refined) EXPECT_LT(m.arms.at(k).size(), 3u) << k << ": off the probes, not every arm";
+    for (const auto& [k, c] : r.best)
+        if (c->tier == Tier::calibrate)
+            EXPECT_EQ(freshness(*c, cal_hashes(repo)), Freshness::current) << key_arg(k) << ": an unraced arm is not stale";
+    for (const std::string& k : r.probes) EXPECT_EQ(m.arms.at(k).size(), 3u) << k << ": probes race every arm";
+}
+
+TEST(TuneCalibrate, PriorCrossoverFortyDeviceTenRefinesTheOtherWay) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 40);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    const auto nr = n_values(r.refined);
+    ASSERT_FALSE(nr.empty());
+    EXPECT_TRUE(nr.count(8) && nr.count(32)) << "between the device's crossover and the prior's";
+    EXPECT_TRUE(brackets(r, 10));
+    EXPECT_LE(*nr.rbegin(), 128);
+    EXPECT_TRUE(n_values(r.prior).count(512));
+}
+
+// The 5% disagreement threshold, straddled: b 4% faster than the prior's a at probe n=16 agrees, 6% disagrees.
+TEST(TuneCalibrate, TheFivePercentDisagreementThresholdIsStraddled) {
+    for (const double near : {0.96, 0.94}) {
+        TempDir repo, ledger;
+        write_prior(repo, "sm_prior", 10);
+        CalMeasurer m({40, {}, near});
+        CalResult r = run_calibrate(repo, ledger, m);
+        classify(r, cal_hashes(repo));
+        if (near > 0.95) {
+            EXPECT_TRUE(r.refined.empty()) << "within 5%: the probe agrees";
+            const auto it = r.best.find(CellKey{{"n", "32"}, {"batch", "16"}});
+            ASSERT_NE(it, r.best.end());
+            EXPECT_EQ(it->second->tier, Tier::prior);
+            EXPECT_EQ(it->second->ranked.front(), "a");
+        } else {
+            const auto nr = n_values(r.refined);
+            EXPECT_TRUE(nr.count(32) && nr.count(64)) << "past 5%: refined around the device's crossover";
+            EXPECT_FALSE(n_values(r.prior).count(32));
+        }
+    }
+}
+
+TEST(TuneCalibrate, APriorPickThatCannotRunDisagrees) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}, 0.5, {256}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    const auto nr = n_values(r.refined), np = n_values(r.prior);
+    ASSERT_FALSE(nr.empty());
+    EXPECT_TRUE(nr.count(128) && nr.count(512)) << "the prior's a is refused at the n=256 probes";
+    EXPECT_FALSE(np.count(128) || np.count(512)) << "no prior row beside a contradicted probe";
+    EXPECT_TRUE(np.count(2)) << "the agreeing region keeps the prior's rows";
+    EXPECT_GE(*nr.begin(), 16) << "nothing refined below the n=16 probes";
+}
+
+TEST(TuneCalibrate, ADtypeThePriorLacksIsPlannedByTheFlipFrontier) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10, false, "2026-10-01", 2, "double");
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    EXPECT_TRUE(r.prior.empty()) << "no prior row to copy";
+    ASSERT_FALSE(r.refined.empty());
+    EXPECT_TRUE(brackets(r, 40));
+    const auto nr = n_values(r.refined);
+    EXPECT_GE(*nr.begin(), 16) << "flips only between the probes at 16 and 256";
+    EXPECT_LE(*nr.rbegin(), 128);
+    for (const std::string& k : r.refined) EXPECT_EQ(m.arms.at(k).size(), 3u) << k << ": no prior row restricts the arms";
+}
+
+TEST(TuneCalibrate, ProbeStrideEightHalvesTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "", 0, 8);
+    classify(r, cal_hashes(repo));
+    EXPECT_EQ(r.probes, (std::set<std::string>{"n=1,batch=1", "n=1,batch=64", "n=256,batch=1", "n=256,batch=64",
+                                               "n=1024,batch=1", "n=1024,batch=64"}));
+}
+
+TEST(TuneCalibrate, AnAgreeingDeviceIsProbedOnlyAndTheRerunMeasuresNothing) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({10, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_TRUE(r.refined.empty()) << "the prior places the crossover; nothing disagrees";
+    EXPECT_EQ(r.probes.size(), 12u);
+    EXPECT_EQ(m.arms.size(), 12u);
+    CalMeasurer again({10, {}});
+    CalResult r2 = run_calibrate(repo, ledger, again);
+    EXPECT_TRUE(again.arms.empty()) << "probes current at calibrate";
+    EXPECT_EQ(r2.ledger.cells.size(), r.ledger.cells.size()) << "the same prior rows are not appended again";
+}
+
+// Family b's kernel changes: every calibrate grid record off the probes is partly stale and re-raced (b plus
+// its top 2), as the lattice tiers and the frontier do, not only where the prior is contradicted.
+TEST(TuneCalibrate, ARerunReRacesPartlyStaleRecordsOffTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    auto on_grid = [](const CellKey& k) {
+        return std::count(kCalN.begin(), kCalN.end(), *key_get(k, "n")) &&
+               std::count(kCalBatch.begin(), kCalBatch.end(), *key_get(k, "batch"));
+    };
+    std::size_t off_probe = 0;
+    for (const auto& [k, c] : r.best) off_probe += c->tier == Tier::calibrate && c->round > 0 && on_grid(k);
+    ASSERT_GT(off_probe, 0u);
+    EXPECT_EQ(r.ledger.runs.back().grid, "n=1,2,4,8,16,32,64,128,256,512,1024 batch=1,2,4,8,16,32,64") << "the run's lattice";
+    CalMeasurer again({40, {}});
+    CalResult r2 = run_calibrate(repo, ledger, again, "", 0, 0, "b changed");
+    for (const auto& [k, c] : r.best) {
+        if (c->tier != Tier::calibrate || !on_grid(k)) continue;
+        ASSERT_TRUE(again.arms.count(key_arg(k))) << key_arg(k) << ": partly stale, re-raced";
+        const auto& a = again.arms.at(key_arg(k));
+        EXPECT_NE(std::find(a.begin(), a.end(), "b"), a.end()) << key_arg(k);
+    }
+    const auto fh = family_hashes(repo.str(), kFakeCal.kernel_block(repo.str()), {"a", "b", "c"});
+    for (const auto& [k, c] : best_records(r2.ledger, fh))
+        if (c->tier == Tier::calibrate && on_grid(k)) EXPECT_EQ(freshness(*c, fh), Freshness::current) << key_arg(k);
+}
+
+TEST(TuneCalibrate, ABudgetStopLeavesContradictedCellsToTheirMeasuredNeighbours) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10);
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "", 1e-12);
+    classify(r, cal_hashes(repo));
+    EXPECT_TRUE(r.refined.empty()) << "the budget stops every round after the probes";
+    const auto np = n_values(r.prior);
+    EXPECT_TRUE(np.count(2) && np.count(512)) << "agreeing regions still take the prior's rows";
+    EXPECT_FALSE(np.count(32)) << "the prior's a at 32 is beaten at the disagreeing probe n=16: no prior row";
+    EXPECT_LT(r.probes.size() + r.prior.size(), kCalN.size() * kCalBatch.size());
+}
+
+TEST(TuneCalibrate, AFamilyThePriorNeverNamesIsRacedOffTheProbes) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_prior", 10, false, "2026-10-01", -1);
+    CalMeasurer m({40, {32}});
+    CalResult r = run_calibrate(repo, ledger, m);
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    for (const std::string& k : r.refined) {
+        const auto& a = m.arms.at(k);
+        EXPECT_NE(std::find(a.begin(), a.end(), "c"), a.end()) << k;
+    }
+}
+
+TEST(TuneCalibrate, PriorTableFollowsTheDefaultRuleAndTheOverride) {
+    TempDir repo, ledger;
+    write_prior(repo, "sm_old", 10, false, "2026-09-01");
+    write_prior(repo, "sm_new", 40, false, "2026-10-01");
+    write_prior(repo, "sm_tr", 10, true, "2026-11-01");
+    write_prior(repo, "sm_dev", 10, false, "2026-12-01");
+    write_prior(repo, "cpu", 10, false, "2026-12-01");
+    const std::string tuned = (repo.path / "tuned").string();
+    auto stem = [](const std::string& p) { return fs::path(p).stem().string(); };
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_new") << "newest timed; never its own, never cpu";
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "apple_m4")), "fakecal.sm_dev") << "an unseen device key: the newest timed";
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_new")), "fakecal.sm_dev");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev", "sm_tr")), "fakecal.sm_tr") << "--prior";
+    EXPECT_EQ(prior_table(tuned, "fakecal", "sm_dev", "sm_none"), "");
+    EXPECT_EQ(prior_table(tuned, "nosuchop", "sm_dev"), "");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_old.txt");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_new.txt");
+    fs::remove(repo.path / "tuned" / "fakecal.sm_dev.txt");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_tr") << "untimed only when nothing timed is left";
+    CalMeasurer m({40, {}});
+    write_prior(repo, "sm_new", 40, false, "2026-10-01");
+    CalResult r = run_calibrate(repo, ledger, m, "sm_tr");
+    classify(r, cal_hashes(repo));
+    EXPECT_FALSE(r.refined.empty()) << "--prior sm_tr (crossover 10) was used, not the default sm_new (40)";
+}
+
+TEST(TuneCalibrate, PriorTableFullyTimedBeatsANewerPartlyTimedOne) {
+    TempDir repo;
+    write_prior(repo, "sm_full", 10, false, "2026-09-01");
+    write_prior(repo, "sm_few", 10, true, "2026-11-01", 2, "float", 3);
+    write_prior(repo, "sm_half", 10, true, "2026-08-01", 2, "float", 40);
+    const std::string tuned = (repo.path / "tuned").string();
+    auto stem = [](const std::string& p) { return fs::path(p).stem().string(); };
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_full") << "fully timed, though older";
+    fs::remove(repo.path / "tuned" / "fakecal.sm_full.txt");
+    EXPECT_EQ(stem(prior_table(tuned, "fakecal", "sm_dev")), "fakecal.sm_half") << "none fully timed: the larger share";
+}
+
+TEST(TuneCalibrate, ATranscribedPriorGivesOrderOnlyTopTwo) {
+    TempDir repo;
+    write_prior(repo, "sm_tr", 10, true, "2026-10-01", 1);
+    const Prior p((repo.path / "tuned" / "fakecal.sm_tr.txt").string());
+    EXPECT_EQ(p.timed, 0u);
+    EXPECT_EQ(p.rows, kCalN.size() * kCalBatch.size());
+    EXPECT_EQ(p.device, "sm_tr");
+    const std::vector<std::string> cands{"a", "b", "c"};
+    const CellKey small{{"n", "6"}, {"batch", "3"}}, large{{"n", "300"}, {"batch", "64"}};
+    EXPECT_EQ(p.row("float", small, cands), (std::vector<std::string>{"b", "c", "a"}));
+    EXPECT_EQ(p.arms("float", small, cands, {}), (std::vector<std::string>{"b", "c"})) << "row order, cands order";
+    EXPECT_EQ(p.arms("float", large, cands, {}), (std::vector<std::string>{"a", "c"}));
+    EXPECT_EQ(p.arms("float", large, cands, {"b"}), cands) << "a neighbour's winner joins";
+    EXPECT_EQ(p.arms("float", large, {"a", "c", "d:x=1"}, {}), (std::vector<std::string>{"a", "c", "d:x=1"}))
+        << "a family the prior never names";
+    EXPECT_TRUE(p.row("double", small, cands).empty()) << "no row of the dtype";
+    EXPECT_TRUE(p.row("float", {{"batch", "3"}}, cands).empty()) << "a key the table needs is missing";
+    TempDir ledger;
+    CalMeasurer m({40, {}});
+    CalResult r = run_calibrate(repo, ledger, m, "sm_tr");
+    classify(r, cal_hashes(repo));
+    expect_device_winners(r, m.dev);
+    EXPECT_FALSE(r.refined.empty());
+}
+
+TEST(TuneCalibrate, ReplayRefinesOnlyWhereTheDeviceDisagrees) {
+    TempDir repo;
+    write_prior(repo, "sm_prior", 10);
+    const Prior prior((repo.path / "tuned" / "fakecal.sm_prior.txt").string());
+    auto universe = [](const CalDevice& dev) {
+        OracleSet o;
+        o.lattice = "raw";
+        std::vector<std::string> names{"dtype:exact", "n:log:3", "batch:log"};
+        for (const std::string& n : kCalN)
+            for (const std::string& b : kCalBatch)
+                for (const char* a : {"a", "b", "c"})
+                    o.cells[{{"dtype", "float"}, {"n", n}, {"batch", b}}].ms[a] = dev.ms(a, std::stoll(n));
+        o.axes = axis_specs(names, {{"dtype", {"float"}}, {"n", kCalN}, {"batch", kCalBatch}});
+        return o;
+    };
+    const auto schemes = calibrate_schemes();
+    auto scheme = [&](const std::string& name) {
+        return *std::find_if(schemes.begin(), schemes.end(), [&](const Scheme& s) { return s.name == name; });
+    };
+    const SlowdownReport agree = calibrate_replay(universe({10, {}}), prior, scheme("calibrate"));
+    EXPECT_EQ(agree.measured, agree.probes);
+    EXPECT_EQ(agree.disagreed, 0u);
+    EXPECT_EQ(agree.prior_rows, agree.cells - agree.probes);
+    EXPECT_EQ(slowdown_stats(agree.ratio).worst, 1.0);
+    const SlowdownReport cal = calibrate_replay(universe({40, {}}), prior, scheme("calibrate"));
+    EXPECT_GT(cal.disagreed, 0u);
+    EXPECT_GT(cal.measured, cal.probes);
+    EXPECT_LT(cal.measured, cal.cells);
+    EXPECT_TRUE(cal.failures.empty());
+    EXPECT_EQ(slowdown_stats(cal.ratio).worst, 1.0) << cal.worst_key;
+    const SlowdownReport blind = calibrate_replay(universe({40, {}}), prior, scheme("prior"));
+    EXPECT_EQ(blind.measured, 0u);
+    EXPECT_EQ(slowdown_stats(blind.ratio).worst, 2.0) << "the prior's a at n 16, 32, where b runs in half its time";
+    const SlowdownReport probe = calibrate_replay(universe({40, {}}), prior, scheme("calibrate-probe"));
+    EXPECT_EQ(probe.measured, probe.probes);
+    EXPECT_LT(calibrate_replay(universe({40, {}}), prior, scheme("calibrate8")).probes, cal.probes);
+    EXPECT_EQ(calibrate_replay(universe({40, {}, 0.96}), prior, scheme("calibrate")).disagreed, 0u) << "4%: agrees";
+    EXPECT_GT(calibrate_replay(universe({40, {}, 0.94}), prior, scheme("calibrate")).disagreed, 0u) << "6%: disagrees";
 }

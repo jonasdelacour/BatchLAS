@@ -2,6 +2,7 @@
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).
 
+#include <tools/tune/cell_runner.hh>
 #include <tools/tune/schedule.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tune_core.hh>
@@ -11,17 +12,25 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace batchlas::tune;
 namespace fs = std::filesystem;
 
 namespace {
+
+batchlas::Queue& gpu_queue() {  // the worker's one Queue; leaked, as a static SYCL object must be
+    static auto* q = new batchlas::Queue(batchlas::Device("gpu"), kBackend);
+    return *q;
+}
 
 CellRequest request(const std::string& op, const std::string& dtype, const std::string& key, const std::string& mode) {
     const OpSpec* spec = find_spec(op);
@@ -56,10 +65,10 @@ std::string winner(const std::vector<ArmOutcome>& v, const std::vector<std::stri
 TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
     const std::string key = "uplo=L,n=32,batch=8192";
     CellRequest r = request("potrf", "float", key, "race");
-    const auto race = find_spec("potrf")->run_cell(r);
+    const auto race = find_spec("potrf")->run_cell(r, gpu_queue());
     r.mode = "time";
     r.reps = 16;
-    const auto timed = find_spec("potrf")->run_cell(r);
+    const auto timed = find_spec("potrf")->run_cell(r, gpu_queue());
     ASSERT_EQ(race.size(), r.arms.size());
     int raced = 0, eliminated = 0;
     for (const ArmOutcome& a : race) {
@@ -71,11 +80,12 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
         if (a.status == "skipped" || a.status == "error") continue;
         ++raced;
         eliminated += a.status == "eliminated";
-        EXPECT_GE(a.ms.size(), 3u) << a.arm;
-        EXPECT_LE(a.ms.size(), 6u) << a.arm;
+        EXPECT_GE(a.ms.size(), a.status == "eliminated" ? 2u : 3u) << a.arm << ": a gross loser keeps its 2 cut runs";
+        EXPECT_LE(a.ms.size(), std::size_t(kRepCap)) << a.arm;
         if (a.status == "eliminated") {
             EXPECT_EQ(t->status, "ok") << a.arm;
-            EXPECT_GT(a.residual, 0.0) << a.arm << ": an eliminated arm is verified too (0 = never verified)";
+            EXPECT_FALSE(a.verified) << a.arm << ": outside the tie set and not in CellRequest::verify";
+            EXPECT_EQ(a.residual, 0.0) << a.arm;
         } else {
             EXPECT_EQ(a.status, t->status) << a.arm;
         }
@@ -94,11 +104,119 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
 TEST(TuneRaceGpu, AnArmRacedAloneGetsMinReps) {
     CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
     r.arms = {"tiny"};
-    const auto race = find_spec("potrf")->run_cell(r);
+    const auto race = find_spec("potrf")->run_cell(r, gpu_queue());
     ASSERT_EQ(race.size(), 1u);
     EXPECT_EQ(race[0].status, "ok") << race[0].reason;
     EXPECT_EQ(race[0].ms.size(), std::size_t(r.min_reps));
     EXPECT_GT(race[0].residual, 0.0);
+}
+
+namespace {
+
+// Arms that sleep instead of launching, named by the pin: "fast" 5 ms, "mid" 15 ms (3x: below the
+// gross cut), "slow" 50 ms (a gross loser), "silent" 5 ms that writes nothing to the output (clear_info
+// poisons it, as the specs do), "wobble" 5 and 10 ms alternately (its warm-up never converges),
+// "dies" 5 ms that throws from its 4th run on (the first warm-up run), "wrongslow" a slow that writes nothing.
+struct SleepProblem {
+    batchlas::Queue& q;
+    std::map<std::string, int> runs;
+    double out = 0;
+    std::size_t workspace() { return std::size_t(1) << 20; }
+    void reset() {}
+    void clear_info() { out = 1e6; }
+    void run(batchlas::Span<std::byte>) {
+        std::string src;
+        const std::string arm = batchlas::select::detail::pin_text("sleepop", &src).value_or("");
+        const int ms = arm == "slow" || arm == "wrongslow" ? 50 : arm == "mid" ? 15 : arm == "wobble" && runs[arm] % 2 ? 10 : 5;
+        ++runs[arm];
+        if (arm == "dies" && runs[arm] >= 4) throw std::runtime_error("dies");
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        if (arm != "silent" && arm != "wrongslow") out = 42;
+    }
+    std::pair<double, int> verify() { return {std::fabs(out - 42), 0}; }
+};
+
+}  // namespace
+
+// The lean cell: a gross loser leaves after one untimed and two timed runs, with no warm-up share
+// and no verification; a 3x arm is not cut there, it warms and races to min_reps; the survivors
+// warm at least kWarmMinRounds rounds, stop once stable (sleeps are), and keep only the samples after
+// it; the tie set is verified, each arm from its own run, so "silent" cannot pass on "slow"'s output.
+TEST(TuneRaceGpu, LeanRaceCutsAGrossLoserBeforeTheWarmUp) {
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);
+    SleepProblem p{q};
+    CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
+    r.arms = {"fast", "slow", "silent", "mid"};
+    const auto out = run_race<int>("sleepop", p, r, 1e-3);
+    ASSERT_EQ(out.size(), 4u);
+    EXPECT_EQ(out[1].status, "eliminated") << out[1].reason;
+    EXPECT_EQ(out[1].ms.size(), 2u);
+    EXPECT_EQ(p.runs["slow"], 3) << "untimed + 2 cut rounds: no warm-up, no reps, no verify";
+    EXPECT_FALSE(out[1].verified);
+    EXPECT_FALSE(out[3].verified) << "eliminated, outside the tie set";
+    EXPECT_TRUE(out[0].verified);
+    EXPECT_EQ(out[3].status, "eliminated") << out[3].reason;
+    EXPECT_GE(out[3].ms.size(), std::size_t(r.min_reps)) << "3x is no gross loser: eliminated by the paired rule";
+    EXPECT_GE(p.runs["mid"], 3 + kWarmMinRounds + r.min_reps) << "mid warmed with the survivors (and is not verified)";
+    EXPECT_EQ(out[0].status, "ok") << out[0].reason;
+    EXPECT_GE(out[0].ms.size(), std::size_t(r.min_reps));
+    EXPECT_LE(out[0].ms.size(), std::size_t(kRepCap));
+    const int warm_rounds = p.runs["fast"] - 4 - int(out[0].ms.size());
+    EXPECT_GE(warm_rounds, kWarmMinRounds) << "warm rounds, untimed";
+    EXPECT_LT(warm_rounds, 12) << "stable sleeps converge long before the cap (~24 rounds); oversleep can cost a round or two";
+    EXPECT_EQ(out[2].status, "bad") << "silent wrote nothing; the poison, not slow's output, is verified";
+    EXPECT_EQ(out[2].reason, "residual");
+    EXPECT_GE(q.workspace_capacity(), std::size_t(1) << 20) << "the workspace is leased from the cell's Queue";
+}
+
+// The bucket's first sight of an arm (CellRequest::verify) verifies it outside the tie set: a gross
+// loser with a wrong answer is caught there; without the request it stays unverified, not bad.
+TEST(TuneRaceGpu, LeanRaceVerifiesTheRequestedArmsOutsideTheTieSet) {
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);
+    SleepProblem p{q};
+    CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
+    r.arms = {"fast", "wrongslow", "slow"};
+    auto out = run_race<int>("sleepop", p, r, 1e-3);
+    EXPECT_EQ(out[1].status, "eliminated") << out[1].reason;
+    EXPECT_FALSE(out[1].verified);
+    r.verify = {"wrongslow", "slow"};
+    out = run_race<int>("sleepop", p, r, 1e-3);
+    EXPECT_EQ(out[1].status, "bad");
+    EXPECT_EQ(out[1].reason, "residual");
+    EXPECT_TRUE(out[1].verified);
+    EXPECT_EQ(out[2].status, "eliminated") << "verified and passed: keeps its cut median";
+    EXPECT_TRUE(out[2].verified);
+    EXPECT_EQ(p.runs["slow"], 3 + 4) << "this race verified it once more";
+}
+
+// A warm-up whose round totals alternate 10 and 15 ms never agrees within 2%: the cap ends it, at
+// kWarmCapPerArmS per survivor (plus the untimed first runs and one round's overshoot).
+TEST(TuneRaceGpu, LeanWarmUpStopsAtTheCapWhenItNeverConverges) {
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);
+    SleepProblem p{q};
+    CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
+    r.arms = {"fast", "wobble"};
+    cell_phases() = Phases{};
+    const auto out = run_race<int>("sleepop", p, r, 1e-3);
+    ASSERT_EQ(out.size(), 2u);
+    EXPECT_NE(out[1].status, "error") << out[1].reason;
+    const double cap = kWarmCapPerArmS * 2;
+    EXPECT_GE(cell_phases().warm, cap);
+    EXPECT_LE(cell_phases().warm, cap + 0.1);
+}
+
+// Once no survivor runs, the warm-up ends at once instead of waiting out the cap on the clock.
+TEST(TuneRaceGpu, LeanWarmUpEndsWhenEverySurvivorFails) {
+    batchlas::Queue q(batchlas::Device("gpu"), kBackend);
+    SleepProblem p{q};
+    CellRequest r = request("potrf", "float", "uplo=L,n=32,batch=8192", "race");
+    r.arms = {"dies"};
+    cell_phases() = Phases{};
+    const auto out = run_race<int>("sleepop", p, r, 1e-3);
+    ASSERT_EQ(out.size(), 1u);
+    EXPECT_EQ(out[0].status, "error");
+    EXPECT_EQ(p.runs["dies"], 4) << "untimed + 2 cut rounds + the throwing warm run";
+    EXPECT_LT(cell_phases().warm, 0.5 * kWarmCapPerArmS);
 }
 
 #ifdef BATCHLAS_TUNE_IMPL

@@ -18,7 +18,6 @@
 
 #include <algorithm>
 #include <complex>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -126,6 +125,7 @@ public:
         return (nnz * (s + 4.0) + (m + 1.0) * 4.0 + 3.0 * m * q * s) * double(key_int(key, "batch"));
     }
     std::string refine_key() const override { return "m"; }
+    FrontierPlan frontier() const override { return {1}; }  // p99.9 fails at every k. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -143,11 +143,10 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/spmm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             constexpr bool kComplex = !std::is_same_v<T, typename base_type<T>::type>;
-            SpmmProblem<T> p(*q, trans_of(*key_get(req.key, "transA"), kComplex),
+            SpmmProblem<T> p(q, trans_of(*key_get(req.key, "transA"), kComplex),
                              trans_of(*key_get(req.key, "transB"), kComplex), int(key_int(req.key, "m")),
                              int(key_int(req.key, "nrhs")), int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.m);

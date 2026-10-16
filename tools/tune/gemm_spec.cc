@@ -20,7 +20,6 @@
 #include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
-#include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -198,6 +197,8 @@ public:
         return (m * k + k * n + 2.0 * m * n) * double(key_int(key, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "k"; }
+    // No stricter frontier passes the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    FrontierPlan frontier() const override { return {1}; }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -230,16 +231,15 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gemm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             auto get = [&](std::string_view name, const char* dflt) {
                 const std::string* v = key_get(req.key, name);
                 return v ? *v : std::string(dflt);
             };
             constexpr bool kComplex = G::is_complex_v<T>;
             const bool packed = get("layout", "strided") == "packed";
-            GemmProblem<T> p(*q, trans_of(get("ta", "N"), kComplex), trans_of(get("tb", "N"), kComplex),
+            GemmProblem<T> p(q, trans_of(get("ta", "N"), kComplex), trans_of(get("tb", "N"), kComplex),
                              int(key_int(req.key, "m")), int(key_int(req.key, "n")), int(key_int(req.key, "k")),
                              int(key_int(req.key, "batch")), packed ? 0 : std::max(1, req.ld_pad));
             const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::blas, p.k);

@@ -13,16 +13,19 @@
 #include <string_view>
 #include <vector>
 
+namespace batchlas {
+struct Queue;  // the worker's, one per process: run_cell takes it, so the spec stays SYCL-free
+}
+
 namespace batchlas::tune {
 
-// One cell for a child or the worker; `arms` are ScopedPin words (spellings; "auto" in --gate).
-struct CellRequest {
+struct CellRequest {  // one cell for a child or the worker; `arms` are ScopedPin words ("auto" in --gate)
     std::string dtype;
     CellKey key;
     std::vector<std::string> arms;
     std::string mode;  // "time" | "race" | "jit" | "probe" | "verify" (the ld audit: verify only)
     int reps = 16;
-    double warm_s = 1.5;   // race: the per-arm warm top-up
+    double warm_s = 1.5;   // time (custom): the per-arm warm-up; a race warms until stable (race.hh)
     bool reverse = false;  // pass 2: the base arm order reversed (§6.3 step 4)
     int ld_pad = 0;        // non-natural ld = n + ld_pad
     std::string tier;  // race: the tier's protocol (docs/design/tiered-tuning.md)
@@ -31,6 +34,7 @@ struct CellRequest {
     bool alternate_reverse = false;
     std::vector<std::string> seed_order;  // arms to put first (the nearest finished cell's winner)
     std::vector<std::string> ld_audit;    // arms to re-verify at ld_pad + kLdAuditPad if this cell verifies them
+    std::vector<std::string> verify;      // race: verified besides the tie set (the bucket's first sight of them)
 };
 
 inline constexpr int kLdAuditPad = 3;  // ld audit; evidence: docs/design/tiered-tuning.md#engine-the-ld-audit
@@ -44,6 +48,13 @@ struct ArmOutcome {
     double residual = 0;
     int info_nonzero = 0;
     std::string ld_audit;  // "" not audited | pass | fail | skipped (the pin refused the padded shape)
+    bool verified = true;  // false: raced (ok or eliminated) but never verified in this cell
+};
+
+struct FrontierPlan {  // per op, from the replay. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    int stride = 2;        // round 0: every stride-th value of each log axis; 1 = the full lattice, no frontier
+    std::size_t k = 6;     // then flip_frontier(k, slower) rounds and bisection until neither adds a cell
+    double slower = 0.05;
 };
 
 class OpSpec {
@@ -59,6 +70,7 @@ public:
     // Bytes of the op's inputs at a cell (the 4 GiB cap) and the key §6.2 bisects.
     virtual double bytes(const std::string& dtype, const CellKey& key) const = 0;
     virtual std::string refine_key() const { return "n"; }
+    virtual FrontierPlan frontier() const { return {}; }
     // The matrix extents a cell allocates (rows/cols of every operand); --max-dim caps their max. Default:
     // every integer-valued key but `batch`. Override where an extent is derived rather than keyed.
     virtual std::vector<std::int64_t> dims(const std::string& dtype, const CellKey& key) const;
@@ -69,8 +81,8 @@ public:
     KernelBlock kernel_block(const std::string& repo) const;
     // Family -> repo-relative files (own section plus deps; common is kernel_block().common).
     virtual std::map<std::string, std::vector<std::string>> family_sources(const std::string& repo) const;
-    // The child side: run one cell.
-    virtual std::vector<ArmOutcome> run_cell(const CellRequest& req) const = 0;
+    // The child side: run one cell on the process's Queue (its workspace arena outlives the cell).
+    virtual std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const = 0;
 
     // The coarse grid: the full lattice of axes(), unless overridden (gemm's demand-driven shapes).
     virtual std::vector<CellKey> grid(const std::string& dtype,
@@ -94,7 +106,8 @@ inline int qr_batch(double item_bytes) {
 std::vector<std::string> ld_audit_arms(const std::vector<ArmOutcome>& out,  // of `wanted`, those out verified
                                        const std::vector<std::string>& wanted);
 void apply_ld_audit(std::vector<ArmOutcome>& out, const std::vector<ArmOutcome>& audit);  // bad/error there: bad here
-std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req);  // run_cell + its ld audit
+std::vector<ArmOutcome> run_cell_audited(const OpSpec& spec, const CellRequest& req, Queue& q);  // + its ld audit
+Phases& cell_phases();  // this thread's cell: run_cell_audited resets it, sets setup and ld; ArmBench adds the rest
 
 void register_spec(const OpSpec* spec);
 const OpSpec* find_spec(std::string_view op);

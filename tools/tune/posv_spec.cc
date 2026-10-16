@@ -11,7 +11,6 @@
 #include <src/ops/posv/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -117,11 +116,10 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
-            PosvProblem<T> p(*q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
+            PosvProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                              int(key_int(req.key, "batch")), req.ld_pad, uplo);
             const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::solve, p.n);
             if (req.mode == "race") return run_race<S::PosvChoice>("posv", p, req, tol);

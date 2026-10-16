@@ -19,7 +19,6 @@
 #include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -138,6 +137,7 @@ public:
         const double item = m * double(n) * dtype_bytes(dtype);
         return 2.0 * item * double(qr_batch(item));
     }
+    FrontierPlan frontier() const override { return {1}; }  // p99.9 fails at every k. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -176,13 +176,12 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int n = int(key_int(req.key, "n"));
             const auto m = rows_of(*key_get(req.key, "form"), n, int(key_int(req.key, "aspect")));
             if (!m) throw std::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
-            GeqrfProblem<T> p(*q, *m, n, qr_batch(double(*m) * double(n) * sizeof(T)), req.ld_pad);
+            GeqrfProblem<T> p(q, *m, n, qr_batch(double(*m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
             return run_arms<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
         });

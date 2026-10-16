@@ -1,5 +1,5 @@
 # op=trmm device=sm_120 batchlas=a549338b kernels=ed96f220 family_kernels=triangular:2679b4bf,expand:3d052bc4,vendor:39039ba3 date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/trmm.sm_120.jsonl tiers=deep:2549,coarse:0,preview:0,custom:17,converted:0,transcribed:180
+# source=ledger:benchmarks/results/tuning/ledger/trmm.sm_120.jsonl tiers=deep:2549,coarse:0,calibrate:0,preview:0,custom:17,converted:0,prior:0,transcribed:180
 # keys: dtype:exact side:exact order:log:2 q:log batch:log
 dtype=float side=L order=1 q=1 batch=1 | triangular 0.008933 | vendor 0.009624 | expand 0.01321 # deep
 dtype=float side=L order=1 q=1 batch=128 | triangular 0.008452 | expand 0.01032 | vendor 0.4295 # deep

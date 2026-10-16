@@ -1,5 +1,5 @@
 # op=syrk device=sm_120 batchlas=2606d367 kernels=3094b456 family_kernels=gram:b6650d9e,triangular:9edd48fe,vendor:7472aaec date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/syrk.sm_120.jsonl tiers=deep:12805,coarse:0,preview:0,custom:0,converted:0,transcribed:21162
+# source=ledger:benchmarks/results/tuning/ledger/syrk.sm_120.jsonl tiers=deep:12805,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:21162
 # keys: dtype:exact form:exact trans:exact n:log:2 k:log batch:log
 dtype=float form=sq trans=C n=1 k=1 batch=1 | gram 0.008863 | vendor 0.01040 | triangular 0.01069 # deep
 dtype=float form=sq trans=C n=2 k=1 batch=1 | gram 0.009319 | vendor 0.009670 | triangular 0.01122 # deep

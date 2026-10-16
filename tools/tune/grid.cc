@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <tuple>
 
 namespace batchlas::tune {
 
@@ -39,8 +40,9 @@ std::vector<std::string> subsample_axis(const std::vector<std::string>& values, 
     return out;
 }
 
-std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t) {
-    const int stride = params(t).stride;
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t) { return tier_lattice(axes, params(t).stride); }
+
+std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, int stride) {
     std::vector<CellKey> cells{{}};
     for (const AxisSpec& a : axes) {
         const auto vals = a.log ? subsample_axis(a.values, stride) : a.values;
@@ -64,6 +66,77 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
     return out;
 }
 
+NearestIndex::NearestIndex(const std::vector<CellKey>& rows, const std::vector<AxisSpec>& axes)
+    : axes_(axes), min_prefix_(!axes.empty() && !axes[0].log && axes[0].name == "dtype") {
+    for (const AxisSpec& a : axes)
+        if (a.log) weights_.push_back(a.weight);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        order_.push_back(i);
+        rows_.push_back(prepare(rows[i], false));
+    }
+    std::sort(order_.begin(), order_.end(), [&](std::size_t a, std::size_t b) {
+        return std::tie(rows_[a].exact, rows_[a].logs) < std::tie(rows_[b].exact, rows_[b].logs);
+    });
+    for (std::size_t i : order_) group_[rows_[i].exact].push_back(i);
+}
+
+NearestIndex::Row NearestIndex::prepare(const CellKey& k, bool query) const {
+    Row r;
+    for (std::size_t i = 0; i < axes_.size(); ++i) {
+        if (!axes_[i].log) {
+            r.exact.push_back(k[i].value);
+            continue;
+        }
+        r.logs.push_back(std::stoll(k[i].value));
+        r.lg.push_back(std::log2(double(query ? std::max<std::int64_t>(1, r.logs.back()) : r.logs.back())));
+    }
+    return r;
+}
+
+double NearestIndex::distance(const Row& r, const Row& q) const {
+    double d = 0;
+    for (std::size_t j = 0; j < weights_.size(); ++j) d += weights_[j] * std::abs(r.lg[j] - q.lg[j]);
+    return d;
+}
+
+std::size_t NearestIndex::find(const CellKey& key) const {
+    const Row q = prepare(key, true);
+    for (std::size_t p = q.exact.size() + 1; p-- > min_prefix_;) {
+        const auto g = group_.find(q.exact);
+        if (p == q.exact.size() && g == group_.end()) continue;
+        bool have = false;
+        std::size_t best = 0;
+        double best_d = 0;
+        for (std::size_t i : p == q.exact.size() ? g->second : order_) {
+            if (!std::equal(q.exact.begin(), q.exact.begin() + std::ptrdiff_t(p), rows_[i].exact.begin())) continue;
+            const double d = distance(rows_[i], q);
+            const bool tie = have && std::abs(d - best_d) <= 1e-9;
+            if (!have || (!tie && d < best_d) || (tie && rows_[i].logs < rows_[best].logs)) best = i, best_d = d, have = true;
+        }
+        if (have) return best;
+    }
+    return npos;
+}
+
+std::vector<std::size_t> NearestIndex::k_nearest(const CellKey& key, std::size_t k) const {
+    const Row q = prepare(key, true);
+    const auto g = group_.find(q.exact);
+    if (g == group_.end()) return {};
+    std::vector<std::pair<double, std::size_t>> by;
+    for (std::size_t i : g->second) by.emplace_back(distance(rows_[i], q), i);
+    const auto n = std::ptrdiff_t(std::min(k, by.size()));
+    std::partial_sort(by.begin(), by.begin() + n, by.end(), [&](const auto& a, const auto& b) {
+        if (std::abs(a.first - b.first) > 1e-9) return a.first < b.first;
+        return rows_[a.second].logs < rows_[b.second].logs;
+    });
+    std::vector<std::size_t> out;
+    for (std::ptrdiff_t i = 0; i < n; ++i) out.push_back(by[std::size_t(i)].second);
+    return out;
+}
+
+std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, const std::vector<AxisSpec>& axes) {
+    return NearestIndex(rows, axes).find(key);
+}
 
 std::size_t refine_allowance(std::size_t lattice_cells, std::size_t refined, double cap_factor) {
     const auto cap = std::size_t(std::floor(std::max(cap_factor, 0.0) * double(lattice_cells) + 1e-9));
@@ -80,6 +153,11 @@ const RefineCell* info_of(const RefineOpts& o, const CellKey& k) {
     if (!o.cells) return nullptr;
     const auto it = o.cells->find(k);
     return it == o.cells->end() ? nullptr : &it->second;
+}
+
+std::string winner_of(const RefineCell& c) {
+    if (c.ms.empty()) return c.single;
+    return std::min_element(c.ms.begin(), c.ms.end(), [](const auto& x, const auto& y) { return x.second < y.second; })->first;
 }
 
 // At a cell won by `w`: `other` is more than the tie slower, or cannot win there (not runnable, eliminated untimed).
@@ -160,6 +238,123 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
     for (auto& kind : by_kind)
         for (CellKey& k : kind)
             if (seen.insert(k).second) out.next.push_back(std::move(k));
+    return out;
+}
+
+std::vector<CellKey> flip_frontier(const std::map<CellKey, RefineCell>& measured, const std::vector<CellKey>& universe,
+                                   const std::vector<AxisSpec>& axes, std::size_t k, double slower) {
+    return CalibrateRound(measured, axes, {}, k, slower).flips(universe);
+}
+
+CalibrateRound::CalibrateRound(const std::map<CellKey, RefineCell>& measured, const std::vector<AxisSpec>& axes, Pick pick,
+                               std::size_t k, double slower)
+    : measured_(measured), axes_(axes), pick_(std::move(pick)), k_(k), slower_(slower) {
+    for (const auto& [key, c] : measured) {
+        if (c.ms.empty() && c.single.empty()) continue;
+        rows_.push_back(key);
+        info_.push_back(&c);
+        winner_.push_back(winner_of(c));
+        const std::string p = pick_ ? pick_(key) : std::string();
+        dis_.push_back(pick_ && (p.empty() || (p != winner_.back() && decisive(c, winner_.back(), p, slower_))));
+    }
+    if (!rows_.empty()) index_.emplace(rows_, axes_);
+}
+
+bool CalibrateRound::disagrees(const CellKey& m) const {
+    const auto it = std::find(rows_.begin(), rows_.end(), m);
+    return it != rows_.end() && dis_[std::size_t(it - rows_.begin())];
+}
+
+bool CalibrateRound::disagrees_near(const CellKey& u, std::size_t n) const {
+    if (!index_) return false;
+    const auto nb = index_->k_nearest(u, n);
+    return std::any_of(nb.begin(), nb.end(), [&](std::size_t r) { return bool(dis_[r]); });
+}
+
+// A cell with no prior pick has nothing to copy: flip_frontier's rule over the device's cells decides it.
+std::vector<CellKey> CalibrateRound::frontier(const std::vector<CellKey>& open) const {
+    std::vector<CellKey> out, unpicked;
+    if (!index_) return out;
+    for (const CellKey& u : open) {
+        if (measured_.count(u)) continue;
+        const std::string p = pick_(u);
+        if (p.empty()) {
+            unpicked.push_back(u);
+            continue;
+        }
+        for (std::size_t r : index_->k_nearest(u, k_))
+            if (dis_[r] && winner_[r] != p && decisive(*info_[r], winner_[r], p, slower_)) {
+                out.push_back(u);
+                break;
+            }
+    }
+    for (CellKey& u : flips(unpicked)) out.push_back(std::move(u));
+    return out;
+}
+
+// Two of u's k nearest measured cells have different winners and one decisively beats the other there.
+std::vector<CellKey> CalibrateRound::flips(const std::vector<CellKey>& open) const {
+    std::vector<CellKey> out;
+    if (!index_) return out;
+    for (const CellKey& u : open) {
+        if (measured_.count(u)) continue;
+        const auto nb = index_->k_nearest(u, k_);
+        bool flip = false;
+        for (std::size_t a = 0; a < nb.size() && !flip; ++a)
+            for (std::size_t b = 0; b < nb.size() && !flip; ++b)
+                flip = a != b && winner_[nb[a]] != winner_[nb[b]] &&
+                       decisive(*info_[nb[b]], winner_[nb[b]], winner_[nb[a]], slower_);
+        if (flip) out.push_back(u);
+    }
+    return out;
+}
+
+std::set<std::string> CalibrateRound::winners(const CellKey& u) const {
+    std::set<std::string> out;
+    if (index_)
+        for (std::size_t r : index_->k_nearest(u, k_)) out.insert(winner_[r]);
+    return out;
+}
+
+std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std::vector<AxisSpec>& axes, int stride,
+                                    bool global) {
+    std::vector<std::set<std::string>> start(axes.size());
+    for (std::size_t i = 0; i < axes.size(); ++i)
+        if (axes[i].log)
+            for (const std::string& v : subsample_axis(axes[i].values, stride)) start[i].insert(v);
+    std::set<const CellKey*> keep;
+    std::map<std::vector<std::string>, std::vector<const CellKey*>> groups;
+    for (const CellKey& c : cells) {
+        bool on = global;
+        for (std::size_t i = 0; i < c.size() && on; ++i) on = !axes[i].log || start[i].count(c[i].value);
+        if (on) keep.insert(&c);
+        std::vector<std::string> g;
+        for (std::size_t i = 0; i < c.size(); ++i)
+            if (!axes[i].log) g.push_back(c[i].value);
+        groups[g].push_back(&c);
+    }
+    for (const auto& [g, group] : groups) {
+        if (std::any_of(group.begin(), group.end(), [&](const CellKey* c) { return keep.count(c) != 0; })) continue;
+        std::vector<std::set<std::string>> sub(axes.size());
+        for (std::size_t i = 0; i < axes.size(); ++i) {
+            if (!axes[i].log) continue;
+            std::set<std::int64_t> own;
+            for (const CellKey* c : group) own.insert(std::stoll((*c)[i].value));
+            std::vector<std::string> v;
+            for (std::int64_t x : own) v.push_back(std::to_string(x));
+            for (const std::string& x : subsample_axis(v, stride)) sub[i].insert(x);
+        }
+        std::size_t hit = 0;
+        for (const CellKey* c : group) {
+            bool on = true;
+            for (std::size_t i = 0; i < axes.size() && on; ++i) on = !axes[i].log || sub[i].count((*c)[i].value);
+            if (on) keep.insert(c), ++hit;
+        }
+        if (hit == 0) keep.insert(group.begin(), group.end());
+    }
+    std::vector<CellKey> out;
+    for (const CellKey& c : cells)
+        if (keep.count(&c)) out.push_back(c);
     return out;
 }
 

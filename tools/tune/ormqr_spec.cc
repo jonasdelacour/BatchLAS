@@ -20,7 +20,6 @@
 #include <tools/tune/cell_runner.hh>
 
 #include <algorithm>
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -146,13 +145,12 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/ormqr_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), k = int(key_int(req.key, "k"));
             if (k > m) throw std::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
-            OrmqrProblem<T> p(*q, side, trans_of(*key_get(req.key, "trans")), m, k, int(key_int(req.key, "q")),
+            OrmqrProblem<T> p(q, side, trans_of(*key_get(req.key, "trans")), m, k, int(key_int(req.key, "q")),
                               int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, m);
             if (req.mode == "race") return run_race<ops::ormqr::OrmqrChoice>("ormqr", p, req, tol);

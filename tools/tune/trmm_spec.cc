@@ -16,7 +16,6 @@
 #include <src/ops/trmm/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -103,6 +102,7 @@ public:
         return (o * o + 3.0 * o * double(key_int(k, "q"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "order"; }
+    FrontierPlan frontier() const override { return {2, 8, 0.05}; }  // k = 8 passes the per-op gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -126,11 +126,10 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/trmm_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
-            TrmmProblem<T> p(*q, side, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
+            TrmmProblem<T> p(q, side, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.order);
             if (req.mode == "race") return run_race<M::TrmmChoice>("trmm", p, req, tol);

@@ -1,5 +1,5 @@
 # op=spmm device=sm_89 batchlas=424a45bc kernels=d1c8ed8b family_kernels=direct:b1945f46,vendor:57512a62 date=2026-10-05
-# source=ledger:benchmarks/results/tuning/ledger/spmm.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:2000
+# source=ledger:benchmarks/results/tuning/ledger/spmm.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2000
 # keys: dtype:exact transA:exact transB:exact m:log nrhs:log batch:log
 dtype=float transA=N transB=N m=1 nrhs=1 batch=1 | direct - | vendor - # transcribed
 dtype=float transA=N transB=N m=1 nrhs=1 batch=8 | direct - | vendor - # transcribed
