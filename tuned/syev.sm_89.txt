@@ -1,5 +1,5 @@
 # op=syev device=sm_89 batchlas=424a45bc kernels=49cb4c34 family_kernels=cta:c4e7686d,cta_fused:70b1f941,jacobi:5c11d9ef,blocked:f5e8938b,two_stage:d7dc4464,vendor:93a68a66 date=2026-10-05
-# source=ledger:benchmarks/results/tuning/ledger/syev.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:1480
+# source=ledger:benchmarks/results/tuning/ledger/syev.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:1480
 # keys: dtype:exact jobz:exact n:log:3 batch:log
 dtype=float jobz=N n=1 batch=128 | jacobi - | blocked - | two_stage - | vendor - # transcribed
 dtype=float jobz=N n=1 batch=512 | jacobi - | blocked - | two_stage - | vendor - # transcribed

@@ -42,11 +42,16 @@ std::string run_line(const RunMeta& m) {
     j.str("kind", "run").str("dtype", m.dtype).str("run_id", m.run_id).str("host", m.host).str("device", m.device)
         .str("device_name", m.device_name).str("batchlas", m.batchlas).str("argv", m.argv).str("date", m.date)
         .str("tier", to_string(m.tier)).str("keys", m.keys).str("candidates", m.candidates);
+    if (!m.protocol.empty()) j.str("protocol", m.protocol);
+    if (!m.guard.empty()) j.str("guard", m.guard);
+    if (!m.prior.empty()) j.str("prior", m.prior);
+    if (!m.grid.empty()) j.str("grid", m.grid);
     for (const auto& [k, v] : m.worker_mode) j.str("wm." + k, v);
     return j.line();
 }
 
-// Candidate i of a cell is spread over fields h<i> s<i> r<i> m<i> lo<i> hi<i> n<i>, so a cell is one line.
+// Candidate i of a cell is spread over fields h<i> s<i> r<i> m<i> lo<i> hi<i> n<i> (and v<i> = 0 when
+// unverified), so a cell is one line.
 std::string cell_line(const CellRecord& r, const std::string& dtype) {
     Json j;
     j.str("kind", "cell").str("dtype", dtype).str("run_id", r.run_id).str("tier", to_string(r.tier)).str("key", key_arg(r.key))
@@ -59,7 +64,12 @@ std::string cell_line(const CellRecord& r, const std::string& dtype) {
         const std::string n = std::to_string(i);
         j.str("h" + n, c.hash).str("s" + n, c.status).str("r" + n, c.reason).num("m" + n, c.median_ms)
             .num("lo" + n, c.lo).num("hi" + n, c.hi).integer("n" + n, c.reps);
+        if (!c.verified) j.integer("v" + n, 0);
     }
+    for (const auto& [name, f] : Phases::fields())
+        if (!std::isnan(r.phases.*f)) j.num("ph_" + name, r.phases.*f);
+    if (!r.phases.mode.empty()) j.str("ph_mode", r.phases.mode);
+    if (r.phases.arms > 0) j.integer("ph_arms", r.phases.arms);
     return j.line();
 }
 
@@ -82,6 +92,10 @@ RunMeta parse_run(const Record& r) {
     m.keys = r.get("keys");
     m.candidates = r.get("candidates");
     m.tier = need_tier(r);
+    m.protocol = r.get("protocol");
+    m.guard = r.get("guard");
+    m.prior = r.get("prior");
+    m.grid = r.get("grid");
     for (const auto& [k, v] : r.s)
         if (k.rfind("wm.", 0) == 0) m.worker_mode[k.substr(3)] = v;
     return m;
@@ -110,8 +124,12 @@ CellRecord parse_cell(const Record& r) {
         cr.lo = r.number("lo" + n);
         cr.hi = r.number("hi" + n);
         cr.reps = static_cast<int>(r.number("n" + n));
+        cr.verified = r.number("v" + n) != 0;  // absent (NaN): verified, as every pre-v<i> ledger is
         c.cands.push_back(std::move(cr));
     }
+    for (const auto& [name, f] : Phases::fields()) c.phases.*f = r.number("ph_" + name);
+    c.phases.mode = r.get("ph_mode");
+    if (const double a = r.number("ph_arms"); std::isfinite(a)) c.phases.arms = static_cast<int>(a);
     return c;
 }
 
@@ -198,9 +216,12 @@ void LedgerWriter::cell(const CellRecord& r, Tier tier) {
     put(cell_line(c, meta_.dtype));
 }
 
-void LedgerWriter::audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms) {
-    put(Json().str("kind", "audit").str("dtype", meta_.dtype).str("run_id", meta_.run_id).str("key", key_arg(key))
-            .str("verdict", verdict).num("fresh_ms", fresh_ms).num("warm_ms", warm_ms).line());
+void LedgerWriter::audit(const CellKey& key, const std::string& verdict, double fresh_ms, double warm_ms, double audit_s) {
+    Json j;
+    j.str("kind", "audit").str("dtype", meta_.dtype).str("run_id", meta_.run_id).str("key", key_arg(key))
+        .str("verdict", verdict).num("fresh_ms", fresh_ms).num("warm_ms", warm_ms);
+    if (!std::isnan(audit_s)) j.num("audit_s", audit_s);
+    put(j.line());
 }
 
 void LedgerWriter::update_run(const RunMeta& meta) {
@@ -237,6 +258,8 @@ Ledger read_ledger(const std::string& path, const std::string& dtype) {
                 l.runs.push_back(std::move(m));
             } else if (kind == "cell") {
                 l.cells.push_back(parse_cell(*rec));
+            } else if (kind == "audit" && std::isfinite(rec->number("audit_s"))) {
+                l.audit_s[rec->get("run_id")].push_back(rec->number("audit_s"));
             }
         } catch (const std::exception& e) {
             const std::string where = path + ":" + std::to_string(lines[i].first) + ": " + e.what();
@@ -252,6 +275,7 @@ Ledger read_ledger(const std::string& path, const std::string& dtype) {
         }
     std::erase_if(l.runs, [&](const RunMeta& m) { return dirty.count(m.run_id) != 0; });
     std::erase_if(l.cells, [&](const CellRecord& c) { return dirty.count(c.run_id) != 0; });
+    for (const std::string& id : dirty) l.audit_s.erase(id);
     for (CellRecord& c : l.cells)
         for (CandResult& r : c.cands)
             if (const auto fam = rehash.find(family_of(r.cand)); fam != rehash.end()) {

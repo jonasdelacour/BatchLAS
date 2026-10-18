@@ -27,7 +27,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -101,8 +100,12 @@ struct GesvdProblem {
         (void)MV::copy(q, Av, A0v);
         q.wait();
     }
-    void clear_info() {
+    void clear_info() {  // an earlier arm's s, U and Vh must not pass for this one's
         for (int b = 0; b < batch; ++b) info[std::size_t(b)] = 0;
+        for (R& x : s) x = R(1e6);
+        (void)Uv.fill(q, MV::make(1e6, 0.0));
+        (void)Vhv.fill(q, MV::make(1e6, 0.0));
+        q.wait();
     }
     void run(Span<std::byte> ws) {
         if (herm)
@@ -218,14 +221,13 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const std::string h = *key_get(req.key, "herm");
             const std::optional<Uplo> herm =
                 h == "N" ? std::nullopt : std::optional<Uplo>(h == "U" ? Uplo::Upper : Uplo::Lower);
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
-            GesvdProblem<T> p(*q, herm, job_of(*key_get(req.key, "vec")), m, n, req.ld_pad);
+            GesvdProblem<T> p(q, herm, job_of(*key_get(req.key, "vec")), m, n, req.ld_pad);
             if (req.mode == "race") return run_race<G::GesvdChoice>("gesvd", p, req, 1.0);
             return run_arms<G::GesvdChoice>("gesvd", p, req, 1.0);
         });

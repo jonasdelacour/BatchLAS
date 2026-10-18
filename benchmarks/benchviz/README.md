@@ -340,7 +340,7 @@ python3 benchmarks/benchviz tune --tier custom --ops potrf --dtype float --devic
 
 | View | Shows |
 |---|---|
-| Status | op × precision for one device. Per op: its kernel families, `!` where a family's hash v2 differs from the table header's `family_kernels` (hover: both hashes and the ledger keys stale in it per precision), and the `retune` warning `sweep_to_table.py` prints. Per precision: the tier mix of the best records (deep, coarse, preview, custom, converted, transcribed), refined share, stale and partly stale cells, audit mismatches, age, the table's rows of that precision, and `behind` when the table header does not name the ledger's newest run |
+| Status | op × precision for one device. Per op: its kernel families, `!` where a family's hash v2 differs from the table header's `family_kernels` (hover: both hashes and the ledger keys stale in it per precision), and the `retune` warning `sweep_to_table.py` prints. Per precision: the tier mix of the best records (deep, coarse, calibrate, preview, custom, converted, prior, transcribed), refined share, stale and partly stale cells, audit mismatches, age, the table's rows of that precision, and `behind` when the table header does not name the ledger's newest run |
 | Op (click a status cell) | the kernel families with table and current hashes and a verdict (current, retune, regenerate). The winner map over two keys with the others fixed: colour is the winning family, paler is a closer runner-up, a mark gives the tier. Click a cell for every record and candidate with its interval. "Change vs table" colours the predicted speedup instead, and the table below lists every changed pick. The lede says whether the table's rows equal the ledger's as `--check` judges them, and how many rows a table written now would hold |
 | Runs | per-GPU current cell, per-job progress against the plan, eliminations, audits, worker restarts, rate and ETA, the feed and the log |
 
@@ -355,7 +355,7 @@ A run needs a build with the `batchlas_tune` target. The tab uses the first buil
 `batchlas_tune --help` lists every flag it passes (`--tier`, `--plan`, `--progress-fd`, `--ledger`,
 `--device-key`, `--remeasure-keys`, `--allow-dirty`); otherwise the drawer says which build is
 missing or too old, and planning and starting are refused. The drawer offers the tiers preview,
-coarse and deep, plus custom, which measures exactly the cells listed under "Cells to measure
+calibrate, coarse and deep, plus custom, which measures exactly the cells listed under "Cells to measure
 again" (`--remeasure-keys`, also usable with the other tiers). A checkout with uncommitted changes
 to tracked files can be planned but not measured unless "Allow a dirty tree" is ticked; such a run
 never reaches `tuned/`. With no GPU visible, the plan reads the shown device's ledger

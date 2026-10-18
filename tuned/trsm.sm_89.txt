@@ -1,5 +1,5 @@
 # op=trsm device=sm_89 batchlas=8b9adeb3 kernels=a0d3dc71 family_kernels=cta:9dbd58f2,sg_left:e4327b35,blocked:9dbd58f2,vendor:9dbd58f2 date=2026-10-04
-# source=ledger:benchmarks/results/tuning/ledger/trsm.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:17280
+# source=ledger:benchmarks/results/tuning/ledger/trsm.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:17280
 # keys: dtype:exact side:exact trans:exact order:log:2 q:log batch:log
 dtype=float side=L trans=N order=1 q=1 batch=128 | cta - | blocked - | vendor - # transcribed
 dtype=float side=L trans=N order=1 q=1 batch=512 | cta - | blocked - | vendor - # transcribed

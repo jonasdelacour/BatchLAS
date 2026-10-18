@@ -19,7 +19,6 @@
 #include <src/ops/syrk/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
-#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -144,15 +143,14 @@ public:
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/syrk_spec.cc"; }
-    std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
+    std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_real_dtype("syrk", req.dtype, [&]<class T>() {
-            auto q = std::make_shared<Queue>(Device("gpu"), kBackend);
             const std::string& t = *key_get(req.key, "trans");
             const Transpose trans = t == "N" ? Transpose::NoTrans : t == "T" ? Transpose::Trans : Transpose::ConjTrans;
             const int n = int(key_int(req.key, "n")), k = int(key_int(req.key, "k"));
             if (*key_get(req.key, "form") != K::form_of(n, k))
                 throw std::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
-            SyrkProblem<T> p(*q, trans, n, k, int(key_int(req.key, "batch")), req.ld_pad);
+            SyrkProblem<T> p(q, trans, n, k, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.k);
             if (req.mode == "race") return run_race<K::SyrkChoice>("syrk", p, req, tol);
             return run_arms<K::SyrkChoice>("syrk", p, req, tol);

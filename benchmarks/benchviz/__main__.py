@@ -453,7 +453,7 @@ def main():
     tu = sub.add_parser("tune", parents=[common], help="plan or start a batchlas_tune run the Tuning tab watches")
     tu.add_argument("--ops", default="all", help="comma list or 'all'")
     tu.add_argument("--dtype", default="float,double,cfloat,cdouble")
-    tu.add_argument("--tier", required=True, choices=["preview", "coarse", "deep", "custom"],
+    tu.add_argument("--tier", required=True, choices=["preview", "calibrate", "coarse", "deep", "custom"],
                     help="custom measures exactly the --remeasure-keys cells (a rehash sample)")
     tu.add_argument("--devices", default="0", help="GPU indices, e.g. 0,1,2,3 ('' with --plan --device-key)")
     tu.add_argument("--device-key", help="--plan: the device whose ledger is planned against (sm_120), no GPU query")

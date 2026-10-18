@@ -170,6 +170,13 @@ class Status(unittest.TestCase):
         s = tuning.Ledgers(self.root, self.tuned).status()
         self.assertIn("git lfs pull", s["files"]["potrf.sm_120"]["error"])
 
+    def test_every_ledger_tier_has_a_colour(self):
+        html = (Path(tuning.__file__).parent / "tuning.html").read_text()
+        var = html.split("const TIER_VAR = {", 1)[1].split("};", 1)[0]
+        for t in stt.LEDGER_TIERS:
+            self.assertIn(f'{t}: "--t-{t}"', var)
+            self.assertIn(f"--t-{t}:", html.split("</style>", 1)[0])
+
     def test_the_checked_in_data_loads(self):
         """Every shipped table equals its ledger (what `sweep_to_table.py --check` proves)."""
         L = tuning.Ledgers()

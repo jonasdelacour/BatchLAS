@@ -415,6 +415,32 @@ std::vector<Record> read_records(const std::string& path) {
     return out;
 }
 
+const std::vector<std::pair<std::string, double Phases::*>>& Phases::fields() {
+    static const std::vector<std::pair<std::string, double Phases::*>> f{
+        {"setup", &Phases::setup}, {"warm", &Phases::warm},   {"timed", &Phases::timed},
+        {"verify", &Phases::verify}, {"ld", &Phases::ld},     {"guard", &Phases::guard},
+        {"ipc", &Phases::ipc},     {"spawn", &Phases::spawn}, {"start", &Phases::start}};
+    return f;
+}
+
+void Phases::add(double Phases::*f, double s) {
+    if (std::isnan(s)) return;
+    this->*f = std::isnan(this->*f) ? s : this->*f + s;
+}
+
+Phases& Phases::operator+=(const Phases& o) {
+    for (const auto& [name, f] : fields()) add(f, o.*f);
+    if (mode.empty()) mode = o.mode;
+    return *this;
+}
+
+double Phases::worker_s() const {
+    double s = 0;
+    for (std::size_t i = 0; i < kWorkerFields; ++i)
+        if (const double v = this->*fields()[i].second; !std::isnan(v)) s += v;
+    return s;
+}
+
 // ---- SHA-256 (FIPS 180-4) -------------------------------------------------------------------
 
 namespace {
@@ -736,18 +762,11 @@ std::string bracket(const std::vector<std::string>& v) {
 }
 }  // namespace
 
-GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign) {
+GuardCheck guard_before(const AppScan& scan, bool allow_idle_foreign) {
     GuardCheck g;
     const bool all_pids = std::all_of(scan.foreign.begin(), scan.foreign.end(), is_pid);
     if (!scan.foreign.empty() && (!allow_idle_foreign || !all_pids)) {
         g.refuse = "compute processes " + bracket(scan.foreign);
-        return g;
-    }
-    char u[32];
-    std::snprintf(u, sizeof(u), "%g", util);
-    if (util > ceiling) {
-        g.refuse = "utilization " + std::string(u) + "%";
-        if (!scan.foreign.empty()) g.refuse += " with compute processes " + bracket(scan.foreign);
         return g;
     }
     g.tolerated = scan.foreign;
@@ -759,6 +778,42 @@ std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vect
     for (const auto& f : after.foreign)
         if (!is_pid(f) || std::find(tolerated.begin(), tolerated.end(), f) == tolerated.end()) fresh.push_back(f);
     return fresh;
+}
+
+std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, const std::vector<std::string>& tolerated,
+                                        double ceiling) {
+    std::map<std::string, double> peak;
+    for (const ProcUtil& s : samples) peak[s.pid] = std::max(peak[s.pid], s.sm);
+    std::vector<std::string> active;
+    for (const auto& [pid, sm] : peak) {
+        const bool known = pid.empty() || std::find(tolerated.begin(), tolerated.end(), pid) != tolerated.end();
+        if (known ? sm <= ceiling : sm <= 0) continue;
+        char u[32];
+        std::snprintf(u, sizeof(u), "%g", sm);
+        active.push_back((pid.empty() ? "GPU" : pid) + " at " + u + "%");
+    }
+    return active;
+}
+
+GuardChoice choose_guard_backend(const std::string& requested, const std::string& nvml_error) {
+    if (requested == "off" || requested == "nvidia-smi") return {requested, "", ""};
+    if (requested != "auto" && requested != "nvml")
+        return {"", "", "--guard-backend takes auto, nvml or nvidia-smi, not '" + requested + "'"};
+    if (nvml_error.empty()) return {"nvml", "", ""};
+    if (requested == "nvml") return {"", "", "--guard-backend nvml: " + nvml_error};
+    return {"nvidia-smi", "NVML unavailable (" + nvml_error + "); the guard uses nvidia-smi", ""};
+}
+
+std::string rerun_discarded(const std::function<std::string()>& attempt, const std::function<double()>& refuse,
+                            double wait_s) {
+    double waited = 0;
+    for (int discards = 0;; ++discards) {
+        std::string why = attempt();
+        if (why.empty()) return why;
+        if (discards == 0) continue;
+        if (waited >= wait_s) return why;
+        waited += std::max(1.0, refuse());
+    }
 }
 
 std::optional<std::string> query_with_backoff(const std::function<std::optional<std::string>()>& query, double wait_s,

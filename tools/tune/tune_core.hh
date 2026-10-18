@@ -3,6 +3,8 @@
 // The tuner's host-only logic (flat-kernel-selection.md §6): §6.3 statistics and tie rule, §6.2
 // refinement, the JSONL records, the §6.4 hash. No SYCL: tests/tune_tests.cc links it alone.
 
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -109,6 +111,22 @@ struct Record {
 std::optional<Record> parse_record(std::string_view line, std::string* err = nullptr);
 std::vector<Record> read_records(const std::string& path);  // throws std::runtime_error
 
+struct Phases {  // wall seconds of one cell by phase; NaN = not measured. evidence: docs/design/tuning-data.md#tuning-data-ledger-file
+    double setup = NAN, warm = NAN, timed = NAN, verify = NAN, ld = NAN;  // the worker or child process
+    double guard = NAN, ipc = NAN, spawn = NAN, start = NAN;              // the driver
+    std::string mode;  // "" (none) | worker | fresh | fallback
+    int arms = 0;      // arms this measurement raced (a partial re-race: not its stored record's); 0 = unknown
+    static const std::vector<std::pair<std::string, double Phases::*>>& fields();  // name, member; worker side first
+    static constexpr std::size_t kWorkerFields = 5;
+    void add(double Phases::*f, double s);  // a NaN field counts as 0
+    Phases& operator+=(const Phases& o);    // field by field; an empty mode takes o's
+    double worker_s() const;                // setup + warm + timed + verify + ld
+};
+
+inline double seconds_since(std::chrono::steady_clock::time_point t0) {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
 std::string sha256_hex(std::string_view data);
 
 // Quoted paths between the kernel-sources-begin/-end markers (CI and CMake parse the same block).
@@ -141,8 +159,7 @@ std::optional<std::string> kernel_hash(const std::string& repo, const std::vecto
 
 std::string gate_verdict(double ratio_p1, double ratio_p2, bool bad_row, double limit = 1.05);  // §10.3
 
-// --old-csv (dtype, every key, old): a row of another width or of a dtype outside non-empty `dtypes`
-// is an error, never a skipped cell.
+// --old-csv (dtype, every key, old): a row of another width or a dtype outside `dtypes` is an error, not a skip.
 struct OldChoice {
     std::string dtype;
     CellKey key;
@@ -177,8 +194,26 @@ struct GuardCheck {
     std::string refuse;
     std::vector<std::string> tolerated;
 };
-GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign);
+GuardCheck guard_before(const AppScan& scan, bool allow_idle_foreign);
 std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+
+struct ProcUtil {
+    std::string pid;  // "" = the whole GPU (nvidia-smi's only figure); our own pids are dropped first
+    double sm = 0;    // SM utilization, percent
+};
+// A tolerated pid or the whole GPU above `ceiling`, any other pid at any SM load ("610696 at 37%").
+std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, const std::vector<std::string>& tolerated,
+                                        double ceiling);
+
+struct GuardChoice {
+    std::string backend, warning, error;
+};
+GuardChoice choose_guard_backend(const std::string& requested, const std::string& nvml_error);  // nvml_error "" = loaded
+
+// `attempt` returns why the after-check discarded it ("" = kept); re-run at once, then after each
+// `refuse` (seconds waited) until `wait_s`: the last reason. evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
+std::string rerun_discarded(const std::function<std::string()>& attempt, const std::function<double()>& refuse,
+                            double wait_s);
 
 // A guard query that fails (nvidia-smi errors while a GPU is reset) is retried after `first_s`,
 // doubling to `max_s`, until `wait_s` of sleeping has passed; then nullopt (the caller stops).

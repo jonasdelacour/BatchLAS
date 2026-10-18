@@ -1,5 +1,5 @@
 # op=posv device=sm_120 batchlas=a549338b kernels=b0bdeee4 family_kernels=tiny:52ec666d,cta:d476366f,blocked:b33e5230 date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/posv.sm_120.jsonl tiers=deep:8614,coarse:0,preview:0,custom:2,converted:0,transcribed:0
+# source=ledger:benchmarks/results/tuning/ledger/posv.sm_120.jsonl tiers=deep:8614,coarse:0,calibrate:0,preview:0,custom:2,converted:0,prior:0,transcribed:0
 # keys: dtype:exact uplo:exact n:log:3 nrhs:log batch:log
 dtype=float uplo=L n=1 nrhs=1 batch=128 | tiny 0.008233 | cta 0.01150 | blocked 0.01375 # deep
 dtype=float uplo=L n=1 nrhs=1 batch=512 | tiny 0.007872 | cta 0.01071 | blocked 0.01310 # deep

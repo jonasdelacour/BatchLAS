@@ -1,5 +1,5 @@
 # op=orgqr device=sm_89 batchlas=424a45bc kernels=5a352c8b family_kernels=blocked:cad87277,vendor:9d16cb56 date=2026-10-05
-# source=ledger:benchmarks/results/tuning/ledger/orgqr.sm_89.jsonl tiers=deep:0,coarse:0,preview:0,custom:0,converted:0,transcribed:612
+# source=ledger:benchmarks/results/tuning/ledger/orgqr.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:612
 # keys: dtype:exact m:log n:log:2
 dtype=float m=1 n=1 | blocked - | vendor - # transcribed
 dtype=float m=2 n=1 | blocked - | vendor - # transcribed

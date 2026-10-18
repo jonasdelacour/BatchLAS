@@ -1,5 +1,5 @@
 # op=potrf device=sm_120 batchlas=a549338b kernels=0ad6e00a family_kernels=tiny:0bf1ed4c,cta:97105257,lpanel:6db9e9e1,blocked:c43aa2d8,vendor:59a368ab date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_120.jsonl tiers=deep:1374,coarse:0,preview:0,custom:0,converted:0,transcribed:0
+# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_120.jsonl tiers=deep:1374,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:0
 # keys: dtype:exact uplo:exact n:log:3 batch:log
 dtype=float uplo=L n=1 batch=128 | tiny 0.007602 | lpanel:panel=8 0.007852 | blocked 0.01286 | lpanel:panel=16 0.007707 | cta 0.008693 | vendor 0.01423 # deep
 dtype=float uplo=L n=1 batch=512 | tiny 0.007781 | lpanel:panel=8 0.007852 | blocked 0.01297 | lpanel:panel=16 0.007677 | cta 0.008709 | vendor 0.01437 # deep

@@ -28,13 +28,14 @@ The sm_120 tables come from the engine ("Engine: the sm_120 deep run").
 | --- | --- |
 | Main purpose | Initial fill of every table for a machine. Incremental retune and exploration come second. |
 | Speed versus rigor | The user picks a tier per run. Budgets come from a cost model printed by `--plan`. More GPUs shard the work. |
-| Grid reduction | Only preview is sparse. Coarse and deep use the full lattice, because sparse grids misrank 4-13% of cells. |
+| Grid reduction | Every tier starts at stride 2 and adds flip-frontier rounds; gemm, geqrf, getri, orgqr and spmm keep preview's sparse start and the full coarse and deep lattice ("Engine: round planning by flip frontier", 2026-10-16). Until then coarse and deep used the full lattice, because sparse starts with bisection alone misrank 4-13% of cells ("Engine: replay results on trsm"). |
 | Precedence | Higher fidelity wins per cell. A lower tier fills gaps and replaces stale results, never current ones. |
 | Op scope | All 19 routed ops, plus the `tuning_params.hh` constants, under the same tiers, ledger and UI. The header is generated. |
 | Result store | `benchmarks/results/tuning/` under Git LFS, so precedence holds across machines and clones. |
 | Raw per-rep timings | Kept for deep runs only (deferred, see [open risks](#open-risks)). |
 | UI | A Tuning tab in `benchviz serve`, driving `batchlas_tune`. |
 | Worker | One persistent worker per GPU, with a fresh-process audit. See [persistent workers](#engine-persistent-workers-and-the-carve-out-audit). |
+| New machine | `--tier calibrate` probes the nearest shipped table and measures where the device disagrees; the rest is copied as `prior` rows ("Engine: calibrate tier from a borrowed table"). |
 
 ## Sub-projects
 
@@ -54,14 +55,16 @@ deep results.
 
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | every 2nd point of each `choice.hh` axis, ends kept | full lattice | full lattice |
-| Bisection | index space until adjacent, then geometric to hi/lo < 1.1; also between cells when a runner-up is within 10% | geometric to hi/lo < 1.1 | geometric to hi/lo < 1.1 |
-| Refinement cap (x round-0 cells, per op and dtype) | 3.0 | 1.0 | 2.0 |
-| Race reps, min / max per candidate | 3 / 6 | 4 / 12 | 6 / 16 |
+| Starting lattice | every 2nd point of each `choice.hh` axis, ends kept, then flip-frontier rounds | as preview; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
+| Bisection | geometric to hi/lo < 1.1 between adjacent grid values (grid midpoints are the frontier's); stride-1 ops: index space until adjacent, then geometric, plus a 10% runner-up margin | as preview; stride-1 ops: geometric to hi/lo < 1.1 | as coarse |
+| Refinement cap (x round-0 cells, per op and dtype; stride-1 ops only, a frontier has none) | 3.0 | 1.0 | 2.0 |
+| Race reps, floor per candidate; cap 50 ms of the slowest arm, at most 16 ("Engine: the lean cell") | 3 | 4 | 6 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
-| Fresh-process audit sample | 2% of cells | 2% | 10% |
+| Fresh-process audit sample | 2% of cells | 2% | 1% |
 
-The tie margin is 3% in every tier. The lattices nest (preview ⊂ coarse ⊂ deep). An op whose grid
+`calibrate` races at coarse quality on a stride-4 probe lattice against a prior table ("Engine:
+calibrate tier from a borrowed table"). The tie margin is 3% in every tier. The lattices nest
+(preview ⊂ coarse ⊂ deep). An op whose grid
 is not a lattice is subsampled by a stable hash of the cell key, so subsets still nest.
 
 Each cell goes through three steps:
@@ -71,12 +74,13 @@ Each cell goes through three steps:
    recorded and nothing is timed.
 2. **Skip.** A current ledger result at the same or higher tier skips the cell. A partly stale
    result re-races only the changed candidates, against the stored winner and runner-up.
-3. **Race.** Survivors are timed in interleaved rounds, with the order rotated per round and inputs
-   restored untimed. A candidate is eliminated when it is confidently slower than the leader by more
-   than the tie margin. The race stops when one candidate remains, when the survivors are confidently
-   within the margin, or at the max reps. The race starts from the winner of the nearest finished
-   neighbour. Before its times count, each candidate is verified on the default items
-   (`batchlas::verify`, @ref design_verification).
+3. **Race.** Gross losers are cut and the survivors warmed ("Engine: the lean cell"). Survivors are
+   then timed in interleaved rounds, with the order rotated per round and inputs restored untimed. A
+   candidate is eliminated when it is confidently slower than the leader by more than the tie
+   margin. The race stops when one candidate remains, when the survivors are confidently within the
+   margin, or at the rep cap. The race starts from the winner of the nearest finished neighbour.
+   Each candidate that can rank first is verified on the default items (`batchlas::verify`,
+   @ref design_verification), every candidate once per size decade ("Engine: tie-set verification").
 
 Across cells:
 
@@ -86,8 +90,14 @@ Across cells:
   bisect geometrically, `exact` axes (uplo, side, trans) never, and `batch` refills only its own
   axis values. Nothing is interpolated. `select::choose` takes the nearest row.
 - **Estimate and budget.** The driver predicts cost from earlier ledger timings for the same op,
-  dtype and device, or from a flop/byte model against the device ceilings. `--budget <h>` stops
-  refinement; the starting lattice always completes.
+  dtype and device, or from a byte model. A cell takes the recorded phases of the nearest cell of
+  the same protocol, tier and mode (worker or fresh; exact keys equal, log distance), its per-arm
+  phases (warm, timed, verify) scaled by the arm count over `ph_arms`; without such a cell, the lean
+  model: `--cell-overhead-s` plus, per arm, (`lean_max_reps` of the slowest arm + 3) × its nearest
+  median + min(0.2 s, 2 × median), plus 0.05 s verify once a cell. Each history cell also carries
+  the recorded worker-start rate × median start and the audit fraction × median audit; the run once
+  carries the ld audits (`ph_ld` summed per run, median over runs). `--plan` says how many cells came from
+  history. `--budget <h>` stops refinement; the starting lattice always completes.
 - **Op order follows dependencies.** potrf and trsm are tuned before posv, whose times depend on
   their choices (@ref tune_tool_readme, section Specs). The map over all 19 ops is in "Engine: op
   order over all 19 ops".
@@ -101,9 +111,9 @@ directory per (op, dtype, device) with one file per run on 2026-10-11.
 
 | Record | Fields |
 | --- | --- |
-| `run` | dtype, run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date, keys, candidates |
-| `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set |
-| `audit` | run id, cell key, persistent and fresh-process medians and winners, verdict |
+| `run` | dtype, run id, tier, host, device key and name, batchlas git sha (`-dirty`), argv, worker mode per op and dtype, date, keys, candidates, protocol |
+| `cell` | run id, tier, key fields, `round` (0 = starting lattice); per candidate: family hash, status (`ok`, `skipped`, `bad`, `error`, `eliminated`), reason, median ms, interval, reps; the ranked tie set; wall seconds per phase (`ph_*`) and `ph_mode` |
+| `audit` | run id, cell key, fresh-process and persistent medians, verdict, `audit_s` |
 
 Results merge by device key (sm_89, sm_120); the host is recorded.
 
@@ -122,13 +132,72 @@ coupling is explicit: posv's families list the potrf and trsm families they call
 **Import.** `batchlas_tune --import-raw` turns a schema-1 raw sweep into a deep run. Its hashes are
 `legacy:<kernels>` unless the raw file's op hash equals today's, so an old sweep imports stale.
 
+## Engine: the lean cell
+
+The race of one cell (`run_race`, `tools/tune/cell_runner.hh`; constants in `race.hh`). Ledgers
+record it as `protocol=lean`; `full` is the engine before it (a fixed 0.2 s warm-up per arm), and an
+absent field is older still. `--plan` history reads only `lean` cells.
+
+1. **One untimed run per arm**, so JIT and module loads stay out of the cut.
+2. **Gross cut.** Two timed interleaved rounds, then `race_step`. Two pairs are below every tier's
+   floor, so only the gross rule can fire: an arm above 4x the leader on both runs leaves, with the
+   median of those two runs ("Engine: readiness for a deep run over all 19 ops"). It gets no
+   warm-up share and no reps.
+3. **Warm until stable.** The survivors' samples are dropped, then interleaved untimed rounds run
+   until two consecutive round totals (run spans only) agree within 2%, after at least 2 rounds and
+   at most 0.2 s per arm (`kWarmTol`, `kWarmMinRounds`, `kWarmCapPerArmS`; `warm_converged`).
+4. **Rep cap from a time budget.** `lean_max_reps` = ceil(50 ms / the slowest survivor's median over
+   the last two warm rounds), clamped to [`min_reps_for(confidence)`, 16] (`kRepCap`). The
+   floor is the first round count at which the paired-ratio rule can decide (3 / 4 / 6), so the
+   confidence rule stays satisfiable; a tier's `min_reps` equals it. Rounds are shared, so the
+   slowest arm sets the count.
+5. **Verification** of the tie set and `CellRequest::verify` only ("Engine: tie-set verification").
+
+The cell runs on the worker's one `Queue` (`OpSpec::run_cell(req, q)`; the ld audit's re-run reuses
+it). The bench's workspace is a lease from that Queue's arena, which keeps its blocks across cells,
+and `~ArmBench` drains the Queue so an async error cannot surface in the next cell. Each spec's
+`clear_info` poisons outputs that `reset` does not restore (syev `w`, gesvd `s`/U/Vh, getrf
+pivots, geqrf `tau`), so an arm that writes nothing cannot pass on an earlier arm's output.
+
+## Engine: tie-set verification
+
+A cell verifies only the arms that can rank first, plus the arms its bucket has not verified yet.
+Rules (`verify_next` in `race.hh`, `VerifyBook` and `verify_bucket` in `schedule.hh`):
+
+- **Tie set.** After the race, the unverified arms within the 3% tie of the fastest survivor's median
+  (with no survivor: of the fastest eliminated arm), the order `record_from_arms` ranks by. A failure
+  leaves the set, and the next arms that can rank first are verified, until the set holds no
+  unverified arm. Gross-cut and eliminated arms outside it are not verified.
+- **Once per bucket.** Bucket = (op, dtype, exact keys, floor(log10 per-item bytes)). The driver
+  sends each cell the arms that have no verdict in its bucket yet (`CellJob::verify`, worker request
+  `verify`, child `--verify`). A pin refusal or an unverified arm stays wanted.
+- **Unverified arms stay in the row** with ledger flag `v<i> = 0` (@ref design_tuning_data): a pin
+  that falls through needs them.
+- **A failure** (residual or info) is a verdict on the kernel in its bucket. Later cells of the bucket
+  record the arm `bad` (`verify failed @ <key>`) without timing it. Each current record of the bucket
+  that ranks it unverified, this run's or the ledger's, is appended again with it `bad`, through the
+  ld audit's retract path. Records that verified it keep it. The driver prints `verify: <arm> marked
+  bad in N recorded cells of bucket <b>` and emits `verify_retract`.
+- **A verified winner.** A record's front arm is one it verified (`verified_front`). When a retraction
+  (ld audit or bucket fail) or a partial re-race whose arms all failed would put an unverified arm
+  first, unverified arms move below the first verified one (none: the ranking empties), and the cell
+  is queued again once in the run (`remeasure`, all live arms), which verifies the new tie set.
+- **Fresh audit.** The fresh child gets the cell's `verify` list. `audit_compare` treats an arm one
+  side left unverified as feasible if it ran there (ok, eliminated or bad), so `bad` against
+  unverified is no mismatch. Refused or `error` against ran still is. The fresh child's own verdicts go
+  into the book like a cell's.
+
+Evidence: `TuneVerify.*` in `tests/tune_tests.cc`. Deliberate breaks, each with its own red set:
+`want()` asking nothing, retracting verified records, `audit_compare` ignoring the flag, a strict tie
+(no 3%), no `v<i>` field, no retract, the audit's verdicts not booked, verifying every arm.
+
 ## Engine: persistent workers and the carve-out audit
 
 **Worker.** Each GPU gets one long-lived `batchlas_tune_impl --worker`, started by the driver under
 the existing `CUDA_VISIBLE_DEVICES` fence and per-GPU flock. Cells arrive on a pipe and come back as
 `cell` records.
 
-- The worker warms the clocks for 3 s at start, then tops up each cell by about 0.2 s per candidate.
+- The worker warms the clocks for 3 s at start; each cell then warms its survivors until stable.
 - Each kernel is JIT-compiled once per worker. The on-disk JIT cache stays shared.
 - The idle guard runs between cells. If the worker dies, it restarts and the cell is retried. A
   candidate that crashes alone is recorded as `error`.
@@ -145,7 +214,8 @@ fails in a fresh process. Two defences:
 2. **Fresh-process audit.** A sample of cells is re-measured in one-cell fresh processes. The sample
    is chosen by `fnv1a64(run_id + key) % 1000 < audit_fraction * 1000`, and each op and dtype gets one
    audit before its first unaudited worker cell. A mismatch is a candidate usable in one process and
-   refused or failing in the other, or a winner more than 10% slower in the fresh run. A mismatch
+   refused or failing in the other, or a winner more than 10% slower in the fresh run. An arm left
+   unverified on either side only has to have run on both ("Engine: tie-set verification"). A mismatch
    marks that op and dtype fresh-process only. Each audited cell gets an `audit` record.
 
 **Result.** No carve-out mismatch was found (threadripper02, GPU 1, 2026-10-07, `tune_race_gpu_tests`).
@@ -177,7 +247,8 @@ ran three children per cell, about 1.5 s of start-up per cell, so per-cell proce
 
 ## Engine: driver interface
 
-- `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep --dtype ... --devices ...`. The old
+- `batchlas_tune <op>[,<op>...|all] --tier preview|coarse|deep|calibrate --dtype ... --devices ...`
+  (calibrate: `--prior <device>`, `--probe-stride 4`). The old
   protocol flags (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio`) remain as expert
   overrides. A run that uses them is tier `custom`, ranked below preview, and writes to the shared
   ledger only with an explicit `--ledger DIR`.
@@ -202,11 +273,14 @@ cell's raced medians arrive as a `RefineCell`.
    starting-lattice cells at the running tier. A refinement midpoint never re-triggers it.
 3. **Batch.** `batch` is never bisected below its lattice spacing. It refills its own axis values.
 4. **Cap.** Refinement cells per op and dtype are at most `refine_cap_factor` × round-0 cells
-   (preview 3.0, coarse 1.0, deep 2.0). Both counts include the ledger's current records, so a run
-   stopped by Ctrl-C or `--budget` resumes within the same total. Flips are refined before margin
-   hedges. Past the cap, refinement stops and the run reports it.
+   (preview 3.0, coarse 1.0, deep 2.0) without a frontier; a frontier run has no cap. Both counts
+   include the ledger's current records, so a run stopped by Ctrl-C or `--budget` resumes within the
+   same total. Flips are refined before margin hedges. Past the cap, refinement stops and the run
+   reports it.
 5. **Estimate.** The refinement estimate is ratio × lattice cells measured now, where ratio is the
    ledger's refined / round-0 count at the tier (at most the cap factor), else half the cap factor.
+   A frontier run instead prices `kFrontierShare` = 0.86 × the grid cells round 0 leaves ("Engine:
+   round planning by flip frontier").
 
 The rule must be two-sided: requiring rule 1 at *both* ends dropped the trsm flips, whose crossover
 sits near one end of the bracket, and failed every tier in replay.
@@ -221,10 +295,12 @@ lattice cell.
 Tests follow the agent guide's "guards that cannot fail" rules (@ref dev_agent_guide §8).
 
 - **Offline replay.** `tune_replay` (`tools/tune/replay.cc`) replays a tier's racing and bisection
-  against the exhaustive trsm sweeps (4452 float and 4098 double cells, every rep of every candidate),
+  as planned before the frontier (stride-1 lattice, refinement cap, `TierParams` rep cap; not the lean
+  race, whose model is `--slowdown`'s `stride2+frontier+bisect`) against the exhaustive trsm sweeps (4452 float and 4098 double cells, every rep of every candidate),
   without a GPU. The score is the table misrank: the fraction of cells where the nearest row's first
   runnable entry is more than 3% slower than the exhaustive best. Acceptance: deep at most 0.2%,
-  coarse at most 1%, preview at most 5%, each measured as the excess over the noise floor.
+  coarse at most 1%, preview at most 5%, each measured as the excess over the noise floor. Its
+  `--slowdown` mode scores planning schemes on shipped tables, ledgers and raw sweeps (next sections).
 - **Unit tests without a GPU.** Precedence (a coarse record never displaces a current deep one; a
   stale deep one is displaced), gap fill, partly-stale selection, lattice nesting and `--check`
   reproducibility. Each has a deliberate break that turns only its own test red.
@@ -250,10 +326,11 @@ cell and picks from all pass-1 reps scores that same floor, so the verdict is th
 | deep | float | 0.2% | 4427 (3480 + 947) | 0.01% / 0.09% | PASS |
 | deep | double | 0.2% | 4068 (3219 + 849) | -0.02% / 0.07% | PASS |
 
-The estimated cost for trsm float on sm_120 is 0.57 GPU-h for preview, 0.86 for coarse and 0.86 for
-deep. The estimate is `est_gpu_h = [measure_s + live_candidates × (warm_topup_s + verify_s) +
-cell_overhead_s per cell] / 3600`, with `warm_topup_s` 0.2, `verify_s` 0.05 and `cell_overhead_s` 0
-for a persistent worker. Per-candidate warm-up dominates; the summed rep time is 0.07 GPU-h.
+The estimated cost for trsm float on sm_120 was 0.57 GPU-h for preview, 0.86 for coarse and 0.86 for
+deep under the `full` protocol's model (0.2 s warm-up per candidate). The estimate is now `est_gpu_h = [measure_s + Σ_candidates
+(3 × median + min(0.2 s, 2 × median)) + (verify_s + cell_overhead_s) per cell] / 3600` (`lean_arm_fixed_s`,
+the same per-arm term as `--plan`'s model; `verify_s` once a cell, for the tie set), with `verify_s` 0.05
+and `cell_overhead_s` 0 for a persistent worker. The summed rep time is 0.07 GPU-h.
 
 **Alternatives** (same-sample replay, table misrank over all raw cells, float / double):
 
@@ -274,6 +351,277 @@ for a persistent worker. Per-candidate warm-up dominates; the summed rep time is
 
 Batch is the costliest axis to shrink, because the winner flips along it. No shrunken grid meets the
 1% coarse bound. The full lattice does.
+
+## Engine: flip frontier and the slowdown replay
+
+**Rule** (`flip_frontier`, `tools/tune/grid.cc`). After a stride-2 start, an unmeasured cell is
+measured when its k = 6 nearest measured cells hold a decisive flip: one neighbour's winner (fastest
+median) is more than 5% slower than the best at another neighbour, or is not runnable there.
+Neighbours come only from the cell's own exact-key group. Distance is `select::choose`'s: sum of
+weight × |log2 a − log2 b| over the log keys (`NearestIndex`, the one host port). Rounds repeat
+until none is left. Tiered runs plan by it ("Engine: round planning by flip frontier").
+
+**Slowdown replay** (`tune_replay --slowdown`, `slowdown_replay` in `tools/tune/replay_core.cc`).
+- **Universe.** Every timed row of a shipped table (`--table`, deep and custom rows), every current
+  best record of a ledger (`--ledger`, family hashes from the table header), or every ok cell of a raw
+  sweep (`--raw`).
+- **Start lattice** (the `lattice` field of each output line).
+  - `ledger`: the ledger's round-0 values per log axis. Values under 1% of the axis's commonest are
+    re-measure strays and are dropped. A table adopts the lattice of the ledger it was built from. Deep
+    runs race at stride 1, so round 0 is the spec lattice: this models the driver.
+  - `raw`: the sweep's round-0 values.
+  - `inferred` (a table with no ledger): each exact-key group's own distinct row values. Refinement
+    midpoints land on the lattice, so this start is denser at the old crossovers than the driver's.
+  - An exact-key group with no cell on the start lattice takes the stride of its own values, as
+    the driver's round 0 covers every group.
+- **Score.** t(pick) / t(fastest arm) per universe cell. A measured cell picks its fastest raced arm.
+  Any other cell picks from the nearest measured row (`NearestIndex::find`, as `select::choose`, never
+  crossing `dtype`): its first entry, fastest first, that runs there. A cell where no entry runs, or with
+  no row of its dtype, is a failure: listed in full, not scored. Truth is the shipped medians, so race
+  noise and the 3% tie order are not modelled. Quantiles are nearest rank, sorted[⌈f·n⌉ − 1]: below
+  1000 cells p99.9 is the worst cell, and below 100 cells p99 is too.
+- **Gate** (per line): every cell scored (no failures, something measured), geomean ≤ 0.05% and
+  p99.9 ≤ 1.10.
+- **Schemes.** `full` (every cell), `lattice` (round 0 at stride 1, no refinement), `stride2`,
+  `stride4`, `stride2+frontier`, `stride4+frontier`, and `stride2+frontier+prune`. Prune races a
+  frontier cell only on arms within 1.5x of the best at one of its neighbours. `lattice+bisect` and
+  `stride2+frontier+bisect` model the driver (next section).
+- **Measured cells** are scored separately (`measured_*` fields). They score exactly 1.0 by
+  construction except under prune, where a frontier cell may not race its fastest arm.
+
+**Gate run** (2026-10-16, threadripper02, one core, 44 s). Shipped `tuned/*.sm_120.txt` with their
+ledgers, plus the two raw trsm sweeps:
+
+```
+tune_replay $(for t in tuned/*.sm_120.txt; do echo --table $t; done) \
+    $(for l in benchmarks/results/tuning/ledger/*.sm_120.jsonl; do echo --ledger $l; done) \
+    --raw benchmarks/results/tuning/trsm.float.sm_120.jsonl --raw benchmarks/results/tuning/trsm.double.sm_120.jsonl
+```
+
+All 19 tables, 115,595 cells, `ledger` lattice:
+
+| Scheme | Cells kept | Arm runs | Geomean slowdown | p99 | p99.9 | Cells >10% slow | >3% (misrank) | Worst | Failures |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| full | 100% | 100% | 0.000% | 1.000 | 1.000 | 0.00% | 0.00% | 1.00x | 0 |
+| lattice | 59% | 47% | 3.079% | 1.747 | 4.241 | 8.74% | 13.86% | 16.92x | 0 |
+| stride2 | 12% | 10% | 5.129% | 2.055 | 5.237 | 14.03% | 21.20% | 42.69x | 6 |
+| stride4 | 3% | 2% | 8.905% | 3.516 | 40.767 | 17.40% | 24.52% | 578.78x | 32 |
+| stride2+frontier | 76% | 82% | 0.044% | 1.000 | 1.072 | 0.08% | 0.15% | 5.28x | 0 |
+| stride4+frontier | 82% | 88% | 0.073% | 1.000 | 1.234 | 0.17% | 0.24% | 5.28x | 0 |
+| stride2+frontier+prune | 76% | 63% | 0.074% | 1.000 | 1.255 | 0.16% | 0.29% | 5.28x | 0 |
+
+Prune's measured cells alone: geomean 0.037%, p99.9 1.104, 0.10% over 10% slow, worst 2.01x.
+
+The ledgers as the universe give the same `stride2+frontier` row (0.044%, p99.9 1.072). Raw trsm
+(8550 cells): `stride2+frontier` keeps 78% for 0.006% geomean, p99.9 1.014, misrank 0.00% / 0.02%
+(float / double), against 3.6% / 4.3% for the preview scheme (stride 2, index bisection, margin) in
+the race replay above. `lattice` misranks 4.99% / 5.59% here and 6.4% / 6.1% there.
+
+**Against the plan's replay.** The tuner-overhaul plan (2026-10) scored the same tables with an
+`inferred` lattice on deep rows only (115,547 cells). That replay reproduces it: geomean / p99.9 /
+worst, here then there.
+
+| Scheme | `inferred`, deep rows | Plan | `inferred`, deep + custom | `ledger` |
+| --- | --- | --- | --- | --- |
+| stride2 | 4.324% / 5.952 / 204.28x | 4.32% / 5.928 / 204.28x | 4.345% / 6.108 / 204.28x | 5.129% / 5.237 / 42.69x |
+| stride4 | 9.124% / 35.041 / 578.78x | 9.12% / 35.023 / 578.78x | 9.064% / 33.822 / 578.78x | 8.905% / 40.767 / 578.78x |
+| stride2+frontier | 0.018% / 1.054 / 1.78x | 0.02% / 1.052 / 1.78x | 0.018% / 1.052 / 1.78x | 0.044% / 1.072 / 5.28x |
+| stride4+frontier | 0.013% / 1.027 / 1.77x | 0.01% / 1.016 / 1.77x | 0.013% / 1.021 / 1.77x | 0.073% / 1.234 / 5.28x |
+| stride2+frontier+prune | 0.044% / 1.166 / 2.27x | 0.04% / 1.171 / 2.27x | 0.045% / 1.174 / 2.27x | 0.074% / 1.255 / 5.28x |
+
+The p99.9 residue is the quantile rule. The custom rows move gemv (29 rows: p99.9 1.167 to 1.052) and
+trmm (17 rows: 1.060 to 1.187). The `ledger` lattice is the whole gap to the plan: its start holds only
+spec values, so the per-op failures below are cells the plan's start measured as midpoints.
+
+`stride2+frontier` per op (`ledger` lattice; raw trsm last). The two right columns are p99.9 / worst
+with the `inferred` lattice here and in the plan:
+
+| Op | Cells | Kept | Arm runs | Geomean | p99.9 | Worst | Gate | Inferred p99.9 / worst | Plan p99.9 / worst |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| gemm | 32225 | 81% | 84% | 0.110% | 1.339 | 5.28x | FAIL | 1.100 / 1.31x | 1.100 / 1.31x |
+| gemv | 8587 | 89% | 91% | 0.017% | 1.063 | 1.29x | PASS | 1.052 / 1.78x | 1.163 / 1.78x |
+| geqrf | 2186 | 58% | 60% | 0.037% | 1.140 | 1.32x | FAIL | 1.121 / 1.32x | 1.104 / 1.32x |
+| gesvd | 2034 | 66% | 77% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| gesv | 877 | 59% | 65% | 0.007% | 1.061 | 1.06x | PASS | 1.061 / 1.06x | 1.008 / 1.06x |
+| getrf | 1141 | 70% | 68% | 0.001% | 1.000 | 1.01x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| getri | 363 | 80% | 80% | 0.057% | 1.113 | 1.11x | FAIL | 1.113 / 1.11x | 1.111 / 1.11x |
+| getrs | 10653 | 77% | 78% | 0.002% | 1.000 | 1.06x | PASS | 1.000 / 1.21x | 1.000 / 1.21x |
+| orgqr | 497 | 40% | 40% | 0.062% | 1.262 | 1.26x | FAIL | 1.000 / 1.00x | 1.000 / 1.00x |
+| ormqr | 1370 | 26% | 26% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| posv | 8616 | 81% | 86% | 0.018% | 1.058 | 1.54x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| potrf | 1374 | 80% | 85% | 0.001% | 1.000 | 1.01x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| spmm | 2894 | 75% | 76% | 0.047% | 1.183 | 1.24x | FAIL | 1.224 / 1.39x | 1.187 / 1.39x |
+| syev | 1226 | 93% | 95% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.01x | 1.000 / 1.01x |
+| symm | 3604 | 65% | 66% | 0.112% | 1.851 | 1.87x | FAIL | 1.000 / 1.00x | 1.000 / 1.00x |
+| syr2k | 941 | 60% | 69% | 0.000% | 1.000 | 1.00x | PASS | 1.000 / 1.00x | 1.000 / 1.00x |
+| syrk | 12805 | 56% | 64% | 0.003% | 1.002 | 1.25x | PASS | 1.000 / 1.25x | 1.000 / 1.03x |
+| trmm | 2566 | 94% | 95% | 0.071% | 1.299 | 1.40x | FAIL | 1.187 / 1.73x | 1.037 / 1.43x |
+| trsm | 21636 | 80% | 83% | 0.014% | 1.022 | 1.24x | PASS | 1.013 / 1.23x | 1.012 / 1.23x |
+| trsm float (raw) | 4452 | 79% | 77% | 0.004% | 1.011 | 1.02x | PASS | - | - |
+| trsm double (raw) | 4098 | 76% | 77% | 0.008% | 1.015 | 1.04x | PASS | - | - |
+
+**Verdict.** The gate (overall geomean ≤ 0.05%, p99.9 ≤ 1.10, no failures) passes for
+`stride2+frontier` with both lattices: 0.044% and 1.072 with the `ledger` lattice (the driver's start;
+the binding number), 0.018% and 1.052 with the `inferred` one. Per op, with the `ledger` lattice, gemm
+fails both bounds (0.110%, 1.339; worst 5.28x at cdouble T/N 8×8×8, batch 32768), and symm fails both
+(0.112%, 1.851). geqrf, getri, orgqr, spmm and trmm meet the geomean bound but fail p99.9: getri (363
+cells) and orgqr (497) on their worst cell, the others on their third-worst. With the
+`inferred` lattice, gemm passes the geomean (0.036%) and sits on the p99.9 bound (1.100), and symm and
+orgqr pass. `stride4+frontier` measures more and, with the `ledger` lattice, scores worse. Pruning cuts
+arm runs from 82% to 63% but raises the geomean to 0.074% and p99.9 to 1.255, so it stays opt-in.
+
+## Engine: round planning by flip frontier
+
+Preview, coarse and deep runs plan their rounds by the flip frontier since 2026-10-16
+(`TieredRun::build` and `refine`, `tools/tune/tiered_driver.cc`); in frontier mode preview's index
+refill, margin and cap are off. Tests: `TuneTieredDriver.Frontier*`, `TuneTieredDriver.Preview*`,
+`TuneFrontier.Start*`, `TuneReplay.BisectSchemes*`.
+
+- **Round 0** (`frontier_start`, shared with the replay). The grid cells on `tier_lattice(axes, 2)`;
+  an exact-key group with none of them (a form or aspect filtered by `grid()`, a `--grid` override)
+  takes every second value of its own log values, ends kept, and with none of those starts whole.
+  Every grid cell whose best current record at the running tier or higher is partly stale joins
+  round 0, so its `partial:` re-race runs as on the full lattice.
+- **Frontier rounds.** The grid cells not yet planned whose k nearest measured cells hold a decisive
+  flip (`flip_frontier`, previous section). Measured: this run's records and the ledger's current ones
+  of the same or a higher tier, refinement midpoints and older stride-1 runs included. A `skip:single`
+  record (no timings) counts: its one arm wins, the others cannot run.
+- **Bisection** (3% tie, `refine_all_axes` in index mode) runs in the same rounds. A midpoint on the
+  grid is dropped: it is the frontier's to pick. What is left are geometric midpoints between adjacent
+  grid values, which place a crossover inside a frontier bracket.
+- **Stop.** Rounds repeat until neither adds a cell. There is no refinement cap; `--budget` still stops
+  rounds after round 0.
+- **`--plan`** counts round 0 as usual. The rest is data-dependent: it prices `kFrontierShare` = 0.86 of
+  the grid cells after round 0 that `plan_round` would measure (the driver-model share below) and
+  prints `frontier (stride 2, k 6, 5%): ~N cells, data-dependent`.
+
+**Per op** (`OpSpec::frontier()`: stride, k, slower). The rule: the cheapest variant that passes the
+per-op gate (geomean ≤ 0.05%, p99.9 ≤ 1.10) in the previous section's replay (`ledger` lattice), else
+the full lattice. gemm and symm were searched in full (k 6, 8, 10; slower 5%, 3%, 2%; stride 2 and 4):
+
+| Op | Variant | Kept | Geomean | p99.9 | Gate |
+| --- | --- | --- | --- | --- | --- |
+| gemm | stride 2, k 6, 5% | 81.0% | 0.110% | 1.339 | FAIL |
+| gemm | stride 2, k 6, 3% | 82.2% | 0.106% | 1.339 | FAIL |
+| gemm | stride 2, k 8, 5% | 82.8% | 0.104% | 1.320 | FAIL |
+| gemm | stride 2, k 10, 5% (3%, 2% alike) | 85.1% | 0.089% | 1.090 | FAIL |
+| gemm | stride 4, k 8 or 10 | 91.8-95.9% | 0.093% | 1.095 | FAIL |
+| symm | stride 2, k 6 (3%, 2% alike) | 65.4% | 0.112% | 1.851 | FAIL |
+| symm | stride 4, k 6 | 81.7% | 0.039% | 1.106 | FAIL |
+| symm | stride 2, k 8, 5% | 70.6% | 0.000% | 1.000 | PASS |
+| symm | stride 2, k 10, 5% | 74.0% | 0.000% | 1.000 | PASS |
+
+The rule applies to every op:
+
+| Op | Plan | Why |
+| --- | --- | --- |
+| gemm | stride 1 (full lattice, demand-driven grid, bisection and cap as before) | no variant passes |
+| geqrf, getri, orgqr, spmm | stride 1 | p99.9 fails at k 6, 8 and 10 alike, on the same worst cells |
+| symm | stride 2, k 8 | cheapest passing variant |
+| trmm | stride 2, k 8 | passes at k 8 (97.0% kept), fails at k 6 |
+| every other op | stride 2, k 6, 5% (default) | passes |
+
+**Driver-model replay.** The previous section's frontier picks any universe cell, old refinement
+midpoints included; the driver can pick only grid cells and reaches the rest by bisection. The schemes
+`lattice+bisect` (the pre-frontier coarse and deep plan: full lattice, geometric bisection) and
+`stride2+frontier+bisect` (this driver) model that; a midpoint the universe lacks is not measured
+(`bisect_missing`). Run 2026-10-16, k 6, same inputs as the gate run:
+
+| Universe | Scheme | Measured | Geomean | p99.9 | Midpoints missing |
+| --- | --- | --- | --- | --- | --- |
+| raw trsm (8550 cells) | `lattice+bisect` | 95.4% | 0.009% | 1.030 | 687 |
+| raw trsm | `stride2+frontier+bisect` | 71.7% | 0.023% | 1.036 | 675 |
+| tables but gemm (83,370) | `lattice+bisect` | 73,217 | 0.412% | - | - |
+| tables but gemm | `stride2+frontier+bisect` | 51,048 | 0.582% | - | - |
+| gemm table (32,225) | `lattice+bisect` | 58.4% | 1.049% | 1.730 | 1488 |
+
+On the tables both schemes fail the gate, the pre-frontier plan included: a table is the union of several runs and
+re-measures, so bisection from its medians stalls on midpoints those runs never measured. Read the
+table rows as a comparison. The frontier measures 30% fewer cells for +0.17% pooled geomean; per op the
+excess is under 0.05% for geqrf, gesv, gesvd, getrf, ormqr, posv, potrf, syev, syrk and trmm, and
+largest for spmm (+1.32%), trsm (+0.25%), symm (+0.24% at k 6, +0.08% at k 8), gemv (+0.23%) and getrs
+(+0.09%). The raw trsm sweeps, one clean run each, give +0.005% (float) and +0.022% (double).
+
+**Cells a deep run measures.** In the driver model over the shipped universe, the pre-frontier coarse
+and deep plan (full lattice, geometric bisection) measures about 92,000 of the 115,595 table cells (79.6%); the frontier plan with only gemm on the
+full lattice (symm k 8) about 70,000, 24% fewer. geqrf, getri, orgqr and spmm (5,940 table cells) now
+also take the full lattice, which gives back part of that. The 2026-10-08/09 deep run wrote 124,724 records, re-runs included, with
+refinement unfinished for nine ops ("Engine: the sm_120 deep run").
+
+## Engine: calibrate tier from a borrowed table
+
+`--tier calibrate` (2026-10-16) fills a new device's tables from the nearest shipped table instead of
+from nothing: it probes that table (the prior) on the device and measures only where the device
+disagrees. Code: `CalibrateRound` (`tools/tune/grid.cc`), `Prior`, `prior_table` and
+`calibrate_replay` (`tools/tune/replay_core.cc`), `TieredRun::build`, `plan`, `refine` and
+`copy_prior` (`tools/tune/tiered_driver.cc`). Tests: `TuneCalibrate.*`, `TuneTier.*`,
+`sweep_to_table.py --self-test` ("prior rows").
+
+- **Prior.** `--prior <device>` reads `tuned/<op>.<device>.txt`. Default (`prior_table`): among
+  `tuned/<op>.<d>.txt` with `d` neither the device's own key nor `cpu`, the newest header `date=` among
+  the fully timed (>= 90% timed rows); if none is, the larger timed-row share, then the newest date, then
+  the device name, so a table with no timed row only when no other is left. Today that is sm_120 for
+  every op (sm_89 is transcribed, potrf `converted` but older). The whole table is read host-side (`load_table_oracle`, untimed rows included in
+  `OracleSet::rows`); a cell looks up the prior's nearest row with `NearestIndex::find` (select's rule:
+  exact-key prefix, then weighted log distance), fields beyond the table keys ignored. The prior's
+  pick is that row's first entry that is a current candidate.
+- **Probe** (round 0). `frontier_start(grid, axes, 4)`: every 4th value of each log axis, ends kept
+  (`--probe-stride 8` for a cheaper probe). Probe cells race every arm at coarse quality (calibrate's
+  `TierParams`: reps floor 4, confidence 0.90). A probe *disagrees* when the device's winner is more
+  than 5% faster than the prior's pick there, or the pick cannot run (`decisive`, as the frontier).
+- **Refinement.** Each round measures the open grid cells u whose prior pick is decisively beaten at one
+  of u's 6 nearest measured cells (`OpSpec::frontier().k`, same exact keys) that disagrees with the
+  prior: the step-2 flip predicate with one side the prior's expectation at u. A cell with no prior row
+  takes `flip_frontier`'s rule. Bisection (3% tie) adds off-grid midpoints only next to a disagreeing
+  cell (one of its 2 nearest). Rounds repeat until neither adds a cell; `--budget` stops them.
+- **Arms off the probes.** The prior's top 2 at the nearest prior row (row order: for a transcribed
+  prior, order only), every candidate of a family the prior's rows for the dtype never name (trsm.sm_89
+  has no `sg_left`), and the winners of the 6 nearest measured cells (so a winner the probes found
+  beyond the prior's top 2 is raced). Probes and `--remeasure-keys` cells race every arm. The arms left
+  out are recorded `skipped` with reason `unraced:calibrate`: seen, so never stale, and never "not
+  runnable" to the frontier. `--only-named` is refused with calibrate (a sample cannot judge the whole grid).
+- **Prior rows.** When the job ends, every grid cell with no measured record and no contradiction (the
+  refinement predicate) gets the prior's nearest row as a `prior` record: untimed (`-`), unhashed, never
+  stale, ranked below every measured tier (@ref design_tuning_data). Without them the
+  device's own sparse table would shadow the borrowed one everywhere: `select::walk` reads the own table
+  first and `nearest` always finds a row in it. A contradicted cell left unmeasured (budget) gets no row:
+  its measured neighbours answer. A rerun appends no row whose ranking is unchanged.
+- **Ranking.** `calibrate` sits between preview and coarse; a coarse or deep run re-measures its cells,
+  a preview run does not. `prior` sits between `transcribed` and `converted`: a measured record at
+  its key replaces it, and `sweep_to_table.py` drops a prior row where a measured record has its own
+  key, or a coarse or deep row lies within 2 lattice steps (a frontier run measures every 2nd cell
+  and reads the rest from its rows), so the copies fill only a calibrate run's gaps. A transcribed
+  row near a prior row is dropped as near a measured one.
+- **`--plan`** prices the probe; refinement is data-dependent and printed as such (cells off the probe
+  lattice). The summary prints probes, disagreeing probes, prior rows copied and contradicted cells.
+
+**Replay** (`tune_replay --table tuned/*.sm_120.txt --ledger ...sm_120.jsonl --prior tuned/*.sm_89.txt`,
+2026-10-16, CPU only). The universe is the shipped sm_120 tables; sm_120's own table is hidden and the
+sm_89 tables are the prior, because they are the only real cross-device data in the tree (a perturbed
+sm_120 copy would grade the mechanism against its own answer). They are a weak prior: every sm_89 table
+but potrf is the old routers' untimed order. `calibrate_replay` emulates the driver without bisection
+(the universe has no off-grid midpoints) and scores select's pick on the generated table: measured rows
+plus copied prior rows, nearest row elsewhere. `arm runs` = timed arms raced / timed arms in the
+universe.
+
+| Scheme | Probes (disagree) | Measured | Arm runs | Prior rows | Geomean | p99 | p99.9 | > 10% slow |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `prior` (borrow blindly, nothing measured) | - | 0% | 0% | 115,595 | 19.8% | 12.3 | 451 | 29.6% |
+| `calibrate-probe` (probe, no refinement) | 3,403 (1,322) | 2.9% | 2.1% | 27,245 | 8.46% | 3.20 | 37.6 | 16.8% |
+| `calibrate8` | 1,406 (511) | 70.1% | 51.1% | 34,573 | 1.47% | 1.259 | 10.1 | 2.83% |
+| `calibrate` (stride 4) | 3,403 (1,322) | 80.7% | 61.3% | 22,255 | 0.291% | 1.074 | 1.770 | 0.79% |
+| `stride2+frontier` (from scratch, reference) | - | 76.1% | 81.8% | - | 0.044% | 1.000 | 1.072 | 0.08% |
+| `calibrate`, prior = sm_120 itself (sanity) | 3,403 (0) | 2.9% | 2.1% | 112,192 | 0.132% | 1.027 | 1.030 | 0% |
+
+With the sm_89 prior, 39% of probes disagree, refinement spreads over most of the grid, and calibrate
+measures more cells than a from-scratch frontier, with fewer arms per cell (61% against 82% of arm
+runs) and a worse table (geomean 0.29% against 0.044%). The loss sits where the prior is trusted between
+two agreeing probes: syr2k (2 of 32 probes disagree) 5.6% geomean, gesvd 2.0%, spmm 0.79%, geqrf 0.68%,
+gemm 0.48%. Requiring a device flip next to a contradicted cell as well (measured 76.2%, geomean 0.39%,
+p99.9 2.23) was worse and is not shipped. The sanity row is the floor of a perfect prior: select's tie
+rule (a row lists arms within 3% in tie order) costs 0.13%. Calibrate pays off only with a prior close
+to the device; whether a shipped table is that close for a real second device is the open gate: a lean
+deep run on the 2x4090 box, then this replay with the sm_120 prior against it.
 
 ## Coverage: interface for sub-project 2
 
@@ -311,7 +659,7 @@ interface above:
 | --- | --- | --- |
 | reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (`read_ledger`, best record, staleness, `ledger_rows`, `parse_table`, `nearest`) | the views show exactly what `sweep_to_table.py` would write next and need no build |
 | status matrix: staleness | per kernel family: the table header's hash against hash v2 of the sources now, the keys the ledger holds stale in it per dtype, and `stale_kernel_warnings`; per dtype, the table's rows and `behind` when its header does not name the newest run | one table per (op, device) carries the hashes; a row-exact check per dtype (the `--check` rule, header hashes) is in the op view, where it costs one `ledger_rows` |
-| launch: tiers | preview, coarse, deep, and custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible | the tuner's flags since the tuning data layout (@ref design_tuning_data) |
+| launch: tiers | preview, calibrate, coarse, deep, and custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible | the tuner's flags since the tuning data layout (@ref design_tuning_data) |
 | `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`) | the tuner already guards every GPU it uses; a run is not a campaign |
 | figure style | interactive SVG | the map is clicked, not printed |
 
@@ -350,7 +698,8 @@ call faults the device (known defect 15), which no pin rule can see.
 **Gross losers.** After every round from the second on, whatever `min_reps` says, the race
 eliminates an arm whose lower median paired ratio to the leader exceeds 4.0 (`kGrossLoserRatio`,
 `race.hh`; the lower of the two middle ratios, so at two rounds both must exceed it). One stalled
-round never kills an arm. It is recorded `eliminated` with the median of the rounds it ran. geqrf's vendor
+round never kills an arm. It is recorded `eliminated` with the median of the rounds it ran. The lean
+cell applies it first, after two rounds and before the warm-up ("Engine: the lean cell"). geqrf's vendor
 (`geqrfBatched`, one CTA per matrix) is tens to hundreds of times slower than blocked on large
 cells, and before this rule each of its timed rounds cost minutes.
 
@@ -382,13 +731,39 @@ the stored winner and runner-up at the stored tier and writes a merged record (`
 `ledger.cc`, and `stale_families` in `sweep_to_table.py`; shared fixture
 `tests/data/ledger_dominated`).
 
-## Engine: guard retries a failed nvidia-smi query
+## Engine: the guard reads NVML, falls back to nvidia-smi {#engine-guard-retries-a-failed-nvidia-smi-query}
 
-The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer reset
-GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed guard query
-(`--query-compute-apps` or the utilization sample) is now retried after 5 s, doubling to 60 s,
-until `--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry;
-only then does the run stop (`query_with_backoff`, `tune_core.hh`).
+**Backend.** `--guard-backend auto` (default) loads `libnvidia-ml.so.1` with `dlopen` in the driver
+(`nvml_guard.cc`; structs declared locally, no `nvml.h`). NVML creates no CUDA context and ignores
+`CUDA_VISIBLE_DEVICES`. Its index is nvidia-smi's `--id`; preflight dies if the UUIDs differ. If NVML
+does not load, `auto` warns and uses nvidia-smi; `nvml` refuses to start; `nvidia-smi` forces the
+old path. A query that fails mid-run warns once and switches the run to nvidia-smi. The run line
+records `guard` (`nvml`, `nvidia-smi`, `off`; `nvml->nvidia-smi` once a run fell back, rewritten at the
+next cell).
+The custom-run `meta` and the gate's `guard` record hold the backend at start. `batchlas_tune --guard-probe` prints what both
+backends see on every GPU, read-only, and exits 1 on a disagreement.
+
+**Activity.** NVML samples SM load per process (`nvmlDeviceGetProcessUtilization`). The driver drops
+every live worker, and each exited child or worker for 10 s (NVML's sample lag; pids get reused). `foreign_active` (`tune_core.hh`) flags a tolerated pid or the
+whole GPU above `--util-ceiling`, and any other pid at any SM load.
+
+| check | NVML | nvidia-smi |
+| --- | --- | --- |
+| before a cell or child | compute pids, foreign activity in the last 1 s | compute pids; whole-GPU utilization at a full guard (after a 1 s idle on a worker, every 60 s) |
+| after it | new pids, foreign activity since its start | new pids |
+| `ph_guard` per worker cell (one potrf coarse smoke, GPU 2; an observation) | 0.002-0.003 s | 0.09-0.10 s, plus the 1 s idle per minute |
+
+A tolerated pid that becomes active during a cell discards it (`rerun_discarded`, `tune_core.hh`).
+The run, worker cell or fresh child, is re-run at once; after a second discard each re-run first
+idles 1 s and waits for a quiet GPU, and after `--guard-wait` of that the run stops. A discard never
+becomes an arm outcome, an arm error or a candidate drop. NVML reports a process's last sample
+period only, so a burst that ended before the after-check can escape.
+
+**Retries.** The sm_120 deep run died with `cannot query GPU 3 with nvidia-smi` while the maintainer
+reset GPU 0: `nvidia-smi` fails for every GPU for a moment during a reset. A failed nvidia-smi query
+(`--query-compute-apps` or the utilization sample) is retried after 5 s, doubling to 60 s, until
+`--guard-wait` (default 300 s) of retrying has passed, with one line on stderr per retry; only then
+does the run stop (`query_with_backoff`, `tune_core.hh`).
 
 ## Engine: repeat crashers are dropped
 
@@ -458,7 +833,7 @@ could have caught such a defect if it had been real.
 
 **The rule.** For each (op, dtype) in a tiered run, the driver asks every candidate's *first verified
 cell* (status `ok`, or `eliminated` after passing verification) for one extra verification at
-`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`). The check runs in the same worker or child,
+`ld_pad + 3` (`kLdAuditPad`, `tools/tune/spec.hh`); an arm the lean race left unverified waits. The check runs in the same worker or child,
 straight after the timed cell, as a `verify`-mode cell, which is a fresh problem built by the spec
 at the padded `ld`. `LdAuditBook` (`schedule.hh`) records which arms have a verdict (pass or
 fail). A candidate that the cell did not verify, or whose pin refused the padded shape there
@@ -558,7 +933,7 @@ microseconds of their neighbours.
 - *Idle tails:* GPUs waited at every (op, dtype) round boundary. Fixed by the pipelined queues
   ("Engine: pipelined cell queues across op and dtype jobs").
 - *A transient `nvidia-smi` failure* killed the second start. The guard now retries
-  ("Engine: guard retries a failed nvidia-smi query").
+  ("Engine: the guard reads NVML, falls back to nvidia-smi").
 - *Repeat crashers:* the complex<double> cuBLAS gemv segfaults on every shape. The tuner now drops
   such an arm ("Engine: repeat crashers are dropped"), and the library refuses it in `can_run`
   (known defects, defect 13).
@@ -572,9 +947,10 @@ microseconds of their neighbours.
 ## Open risks
 
 - Racing assumes timing noise is stationary within a cell. Clock ramps after idle gaps break that.
-  The worker's warm start and top-up are the defence. The replay cannot test this, because the raw
+  The worker's warm start and each cell's warm-until-stable are the defence. The replay cannot test this, because the raw
   files come from warm, back-to-back runs.
 - If the audit fails often, the speedup depends mostly on racing and the adaptive grid.
-- Deferred, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and guard settings
-  and tolerated foreign pids in `run` records.
+- Deferred, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and tolerated foreign
+  pids and the guard thresholds (`--util-ceiling`, `--allow-idle-foreign`) in `run` records; the guard
+  backend is recorded (`guard`).
 - Budgets assume one GPU on a quiet box. On the shared 4090 box, guard waits come on top.

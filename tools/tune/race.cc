@@ -23,6 +23,26 @@ std::size_t lower_order_stat(int n, double confidence) {
     return k;
 }
 
+bool warm_converged(double prev, double total, int rounds) {
+    return rounds >= kWarmMinRounds && prev > 0 && std::fabs(total - prev) <= kWarmTol * prev;
+}
+
+int min_reps_for(double confidence) {
+    int n = 1;
+    while (n < 64 && lower_order_stat(n, confidence) < 1) ++n;
+    return n;
+}
+
+int lean_max_reps(double slowest_ms, const TierParams& p) {
+    const int lo = min_reps_for(p.confidence);
+    const double want = std::ceil(kRepBudgetS * 1e3 / (slowest_ms > 1e-6 ? slowest_ms : 1e-6));  // NaN: the cap
+    return static_cast<int>(std::clamp(want, double(lo), double(std::max(lo, kRepCap))));
+}
+
+double lean_arm_fixed_s(double ms) {
+    return 3 * ms * 1e-3 + std::min(kWarmCapPerArmS, kWarmMinRounds * ms * 1e-3);
+}
+
 namespace {
 
 double run_median(const std::vector<double>& v) {
@@ -95,6 +115,28 @@ std::vector<std::string> race_ranking(const RaceState& s, const std::vector<std:
         return std::pair(a.first, pos(s.cands[a.second])) < std::pair(b.first, pos(s.cands[b.second]));
     });
     for (const auto& d : dead) out.push_back(s.cands[d.second]);
+    return out;
+}
+
+std::vector<std::string> verify_next(const std::vector<ArmOutcome>& arms, const std::vector<std::string>& extra,
+                                     double tie) {
+    auto best_of = [&](const std::string& status) {
+        double b = std::numeric_limits<double>::infinity();
+        for (const ArmOutcome& a : arms)
+            if (const double m = median(a.ms); a.status == status && std::isfinite(m)) b = std::min(b, m);
+        return b;
+    };
+    std::string top = "ok";
+    double best = best_of(top);
+    if (!std::isfinite(best)) top = "eliminated", best = best_of(top);
+    std::vector<std::string> out;
+    for (const ArmOutcome& a : arms) {
+        if (a.verified || (a.status != "ok" && a.status != "eliminated")) continue;
+        const double m = median(a.ms);
+        if ((a.status == top && std::isfinite(m) && m <= best * (1.0 + tie)) ||
+            std::find(extra.begin(), extra.end(), a.arm) != extra.end())
+            out.push_back(a.arm);
+    }
     return out;
 }
 

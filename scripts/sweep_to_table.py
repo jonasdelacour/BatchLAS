@@ -15,12 +15,14 @@ tier bracketing); docs/design/flat-kernel-selection.md section 5.4 (table format
 The one input is benchmarks/results/tuning/ledger/<op>.<device>.jsonl (--ledger DIR names another
 root). Every line carries "dtype" except `rehash`. Keys and candidates come from each dtype's newest
 `run` line (date, then run id), never from this script. Per dtype and cell the best record wins:
-tier deep > coarse > preview > custom > converted > transcribed, then newest date, run id, later
-line; a record whose winner's family hash is stale, or whose every candidate is "error", is no
-record. converted and transcribed records carry no hash and are never stale. A lower-tier row is
-dropped when a higher-tier row has equal exact keys and lies within the tier's stride (deep and
-coarse 1, the rest 2, in index steps of the per-key lattice of the dtype's current measured cells)
-on every log key; converted and transcribed rows are dropped near any measured row, kept or not.
+tier deep > coarse > calibrate > preview > custom > converted > prior > transcribed, then newest
+date, run id, later line; a record whose winner's family hash is stale, or whose every candidate is
+"error", is no record. converted, prior and transcribed records carry no hash and are never stale.
+A lower-tier row is dropped when a higher-tier row has equal exact keys and lies within the tier's
+stride (deep and coarse 1, the rest 2, in index steps of the per-key lattice of the dtype's current
+measured cells) on every log key; converted and transcribed rows are dropped near any measured row,
+kept or not, transcribed rows near a prior row too; a prior row (calibrate's copy of a borrowed
+table) only where a measured record has its own key.
 
 Hashes: kernel hash v2 over the spec's kernel-sources block, sha256 of "<sha256(normalized file)>
 <path>\\n" lines, first 8 hex; normalized = /* */ blocks removed (an unterminated one runs to the
@@ -52,9 +54,11 @@ LEDGER_ROOT = "benchmarks/results/tuning/ledger"
 DTYPES = ("float", "double", "cfloat", "cdouble")
 
 LEDGER = "ledger:"
-LEDGER_TIERS = ("deep", "coarse", "preview", "custom", "converted", "transcribed")  # precedence, highest first
-LEDGER_STRIDE = {"deep": 1, "coarse": 1, "preview": 2, "custom": 2, "converted": 2, "transcribed": 2}
-UNHASHED = ("converted", "transcribed")
+LEDGER_TIERS = ("deep", "coarse", "calibrate", "preview", "custom", "converted", "prior", "transcribed")  # highest first
+LEDGER_STRIDE = {"deep": 1, "coarse": 1, "calibrate": 2, "preview": 2, "custom": 2, "converted": 2, "prior": 0,
+                 "transcribed": 2}  # 0: its own key only
+PRIOR_ABOVE_STRIDE = 2  # a coarse or deep row brackets a prior row as it does a transcribed one
+UNHASHED = ("converted", "prior", "transcribed")
 LEDGER_STATUS_TIMED = ("ok", "eliminated")
 TIE = 0.03  # the tuner's tie band (tune_core.cc rank())
 LFS_POINTER = "version https://git-lfs.github.com/spec/v1"  # the first line of an unfetched LFS file
@@ -198,7 +202,7 @@ def read_cell(rec):
     names = [n for n in rec["cands"].split("|") if n]
     cands = [{"cand": n, "hash": rec.get(f"h{i}", ""), "status": rec.get(f"s{i}", ""),
               "reason": rec.get(f"r{i}") or "", "median": rec.get(f"m{i}"), "lo": rec.get(f"lo{i}"),
-              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}")}
+              "hi": rec.get(f"hi{i}"), "reps": rec.get(f"n{i}"), "verified": rec.get(f"v{i}", 1) != 0}
              for i, n in enumerate(names)]
     return {"run_id": rec["run_id"], "dtype": rec["dtype"], "tier": rec["tier"], "key": key,
             "date": rec.get("date", ""), "round": int(rec.get("round", 0)),
@@ -346,7 +350,9 @@ def lattice_index(values, v):
 def ledger_rows(keyspec, cells, family_hash):
     """One dtype's {key: (tier, [(spelling, ms or None)])}: each cell's best record, minus rows of a
     lower tier that a higher-tier row brackets (equal exact keys, index distance < the tier's stride
-    on every log key); converted and transcribed rows are bracketed by any measured row."""
+    on every log key); converted and transcribed rows are bracketed by any measured row, transcribed rows
+    by a prior row too, and a prior row by a measured record at its own key or a coarse or deep row
+    within PRIOR_ABOVE_STRIDE (a frontier run measures every 2nd cell and reads the rest from them)."""
     problem = hidden_axes_problem(keyspec, cells)
     if problem:
         raise SystemExit(problem)
@@ -371,6 +377,8 @@ def ledger_rows(keyspec, cells, family_hash):
             entries = [(name, None) for name in c["ranked"]]
         if entries:
             cand_rows.append((key_tuple(keyspec, key), c["tier"], entries))
+    if not measured:  # no current measured cell: transcribed rows are bracketed by prior rows on the prior's lattice
+        lattice = {i: sorted({k[i] for k, t, _ in cand_rows if t == "prior"}) for i in log_pos}
     pos = {}
 
     def index_of(k):
@@ -403,10 +411,16 @@ def ledger_rows(keyspec, cells, family_hash):
         # Measured rows are bracketed by kept higher rows; an unhashed row by any measured row,
         # kept or dropped, since a dropped preview row still says the region was measured.
         if tier in UNHASHED:
-            against = [k for k, t, _ in cand_rows if t not in UNHASHED]
+            below_prior = LEDGER_TIERS.index(tier) > LEDGER_TIERS.index("prior")
+            against = [k for k, t, _ in cand_rows if t not in UNHASHED or (below_prior and t == "prior")]
         else:
             against = list(kept)
-        near = bracketed_by(against, LEDGER_STRIDE[tier])
+        near = (lambda key, own=set(against): key in own) if LEDGER_STRIDE[tier] == 0 else \
+            bracketed_by(against, LEDGER_STRIDE[tier])
+        if tier == "prior":
+            above = bracketed_by([k for k, t, _ in cand_rows if LEDGER_TIERS.index(t) < LEDGER_TIERS.index("calibrate")],
+                                 PRIOR_ABOVE_STRIDE)
+            near = (lambda key, own=near, wide=above: own(key) or wide(key))
         for key, t, entries in cand_rows:
             if t != tier or key in kept:
                 continue
@@ -630,7 +644,7 @@ def check_table(path, failures, notes, repo=REPO):
 
 def stale_kernel_warnings(table_path, repo=REPO):
     """Header hashes against tools/tune/<op>_spec.cc now: a kernel edit since the table was made.
-    A table with no measured row (tiers= counts only converted/transcribed) carries no hash and is
+    A table with no measured row (tiers= counts only unhashed tiers) carries no hash and is
     never stale; a missing or unparsable tiers= is checked. A missing spec is a note, not a warning."""
     rel = os.path.relpath(table_path, repo)
     with open(table_path) as f:
@@ -1093,6 +1107,21 @@ def self_test():
         led = build(base, d)
         expect(tiers(rows_of(led)) == {8: "preview", 32: "coarse", 64: "deep", 256: "preview"},
                f"gap fill drops a lower tier inside a higher bracket -> {tiers(rows_of(led))}")
+        # phase timers, the run's protocol and an audit's seconds leave the table byte-identical
+        plain = ledger_text("posv", "sm_0", build(base, d, "ph.jsonl"), fh, "k").text
+        phases = {"ph_setup": 0.5, "ph_warm": 0.2, "ph_timed": 1.25, "ph_verify": 0.1, "ph_ld": 0.3, "ph_guard": 0.05,
+                  "ph_ipc": 0.01, "ph_start": 3.5, "ph_mode": "worker"}
+        timed = [dict(x, **phases) if x["kind"] == "cell" else dict(x, protocol="full") for x in base]
+        audit = {"kind": "audit", "dtype": "float", "run_id": r1, "key": "uplo=L,n=64,nrhs=1,batch=128",
+                 "verdict": "ok", "fresh_ms": 1.0, "warm_ms": 1.0, "audit_s": 2.5}
+        expect(ledger_text("posv", "sm_0", build(timed + [audit], d, "ph.jsonl"), fh, "k").text == plain,
+               "ph_* fields changed the table")
+        # v<i> = 0 (timed, never verified: the lean race's non-tie arms) stays in the row; absent = verified
+        unver = [dict(x, v1=0) if x["kind"] == "cell" else x for x in base]
+        vpath = build(unver, d, "ph.jsonl")
+        expect(ledger_text("posv", "sm_0", vpath, fh, "k").text == plain, "v<i> = 0 changed the table")
+        vc = read_ledger(vpath, "float").cells[0]["cands"]
+        expect([c["verified"] for c in vc] == [True, False, True], f"v<i> read back -> {[c['verified'] for c in vc]}")
         # an empty ranking emits no row; a stale winner is skipped so the lower tier stands
         led2 = build([run_line(r3, "2026-10-03", "preview"), cell(r3, "preview", 8), cell(r3, "preview", 256),
                       run_line(r4, "2026-10-04"), cell(r4, "deep", 8, ranked=()),
@@ -1111,6 +1140,31 @@ def self_test():
         got3b = rows_of(build(base + [tru, cell(r4, "deep", 64, ranked=(), date="2026-10-04", uplo="U")], d, "c2.jsonl"))
         expect(got3b.get(("U", 64, 1, 128), ("",))[0] == "transcribed",
                f"empty measured ranking keeps the transcribed row -> {got3b.get(('U', 64, 1, 128))}")
+        # prior rows give way only to a measured record at their own key (16: a dropped preview record), never
+        # to a neighbour (512); transcribed rows give way to them as to a measured row (512 same key, 1024 near)
+        pr = [dict(cell("20261005T000000-h-5", "prior", n, date="2026-10-05"), **{f"h{i}": "" for i in range(3)},
+                   **{f"m{i}": None for i in range(3)}) for n in (16, 512)]
+        tr6 = [dict(t, key=t["key"].replace("n=16,", f"n={n},")) for t in tr[:1] for n in (512, 1024, 4096)]
+        got6 = rows_of(build(base + pr + tr6, d, "p.jsonl"))
+        expect(tiers(got6) == {8: "preview", 32: "coarse", 64: "deep", 256: "preview", 512: "prior", 4096: "transcribed"},
+               f"prior rows -> {tiers(got6)}")
+        expect(got6[("L", 512, 1, 128)][1] == [("tiny", None), ("cta", None)], "a prior row is untimed")
+        # a dtype with only prior and transcribed records (every measured winner stale) still derives
+        stale = [run_line(r4, "2026-10-04"), cell(r4, "deep", 64, hashes=dict(fh, tiny="deadbeef"))]
+        got6b = rows_of(build(stale + pr + tr6, d, "p2.jsonl"))
+        expect(tiers(got6b) == {16: "prior", 512: "prior", 4096: "transcribed"}, f"prior-only lattice -> {tiers(got6b)}")
+        # after calibrate (probes 8, 128; prior rows between), a stride-2 deep run (8, 32, 128) leaves no prior
+        # row between its rows: a coarse or deep row brackets a prior row within 2 steps, a calibrate row only at its key
+        rc, rd = "20261006T000000-h-6", "20261007T000000-h-7"
+        cal = [run_line(rc, "2026-10-06", "calibrate")] + [cell(rc, "calibrate", n, date="2026-10-06") for n in (8, 128)]
+        pr7 = [dict(cell(rc, "prior", n, date="2026-10-06"), **{f"h{i}": "" for i in range(3)},
+                    **{f"m{i}": None for i in range(3)}) for n in (16, 32, 64)]
+        got7 = rows_of(build(cal + pr7, d, "q.jsonl"))
+        expect(tiers(got7) == {8: "calibrate", 16: "prior", 32: "prior", 64: "prior", 128: "calibrate"},
+               f"calibrate keeps its prior rows -> {tiers(got7)}")
+        deep7 = [run_line(rd, "2026-10-07")] + [cell(rd, "deep", n, date="2026-10-07") for n in (8, 32, 128)]
+        got7b = rows_of(build(cal + pr7 + deep7, d, "q2.jsonl"))
+        expect(tiers(got7b) == {8: "deep", 32: "deep", 128: "deep"}, f"a stride-2 deep run drops prior rows -> {tiers(got7b)}")
         # converted rows are timed, never stale, and give way to a measured row the same way
         cv = cell("converted-x", "converted", 64, hashes={c: "" for c in cands}, date="2026-09-01")
         cv2 = dict(cell("converted-x", "converted", 2048, hashes={c: "" for c in cands}, date="2026-09-01"))
@@ -1193,7 +1247,8 @@ def self_test():
         lines = der.text.splitlines()
         expect(lines[0] == f"# op=posv device=sm_0 batchlas=bl3 kernels={hk} family_kernels=tiny:{hk},cta:{hk},"
                f"blocked:{hk} date=2026-10-03", f"header line 1 -> {lines[0]!r}")
-        expect(lines[1].endswith(" tiers=deep:2,coarse:1,preview:2,custom:0,converted:0,transcribed:0"), f"line 2 {lines[1]!r}")
+        expect(lines[1].endswith(" tiers=deep:2,coarse:1,calibrate:0,preview:2,custom:0,converted:0,prior:0,transcribed:0"),
+               f"line 2 {lines[1]!r}")
         expect(lines[2] == f"# keys: dtype:exact {keys}", f"line 3 {lines[2]!r}")
         expect(lines[3].startswith("dtype=float ") and lines[-1].startswith("dtype=double uplo=L n=64 "), "dtype order")
         tab = os.path.join(repo, "tuned", "posv.sm_0.txt")
@@ -1217,9 +1272,10 @@ def self_test():
         # staleness by tier: an all-transcribed table is never stale; a measured one names its stale family
         os.makedirs(os.path.join(repo, "fix"))
         hk2 = kernel_hash(["src/k.cc"], repo)
-        one = "deep:{},coarse:{},preview:{},custom:{},converted:0,transcribed:5".format
+        one = "deep:{},coarse:{},calibrate:0,preview:{},custom:{},converted:0,prior:0,transcribed:5".format
         for name, fams, tier_counts, want in (
-                ("posv.sm_t.txt", "tiny:deadbeef", "deep:0,coarse:0,preview:0,custom:0,converted:4,transcribed:3", []),
+                ("posv.sm_t.txt", "tiny:deadbeef",
+                 "deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:4,prior:2,transcribed:3", []),
                 ("posv.sm_d.txt", f"tiny:{hk2},cta:deadbeef", one(5, 0, 0, 0), ["cta:deadbeef"]),
                 ("posv.sm_c.txt", f"tiny:{hk2},cta:deadbeef", one(0, 2, 0, 0), ["cta:deadbeef"]),
                 ("posv.sm_p.txt", f"tiny:{hk2},cta:deadbeef", one(0, 0, 2, 0), ["cta:deadbeef"]),

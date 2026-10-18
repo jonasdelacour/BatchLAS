@@ -28,12 +28,15 @@ std::string join(const std::vector<std::string>& v, const char* sep) {
 }  // namespace
 
 std::string request_line(const std::string& op, const CellRequest& r) {
-    return Json().str("op", op).str("dtype", r.dtype).str("key", key_arg(r.key)).str("arms", join(r.arms, ","))
-        .str("mode", r.mode).integer("reps", r.reps).num("warm", r.warm_s).boolean("reverse", r.reverse)
+    Json j;
+    j.str("op", op).str("dtype", r.dtype).str("key", key_arg(r.key)).str("arms", join(r.arms, ","))
+        .str("mode", r.mode).integer("reps", r.reps);
+    if (r.mode == "time") j.num("warm", r.warm_s);  // a race warms until stable
+    return j.boolean("reverse", r.reverse)
         .integer("ld_pad", r.ld_pad).str("tier", r.tier).integer("min_reps", r.min_reps)
         .integer("max_reps", r.max_reps).num("confidence", r.confidence)
         .boolean("alternate_reverse", r.alternate_reverse).str("seed_order", join(r.seed_order, ","))
-        .str("ld_audit", join(r.ld_audit, ",")).line();
+        .str("ld_audit", join(r.ld_audit, ",")).str("verify", join(r.verify, ",")).line();
 }
 
 std::optional<std::pair<std::string, CellRequest>> parse_request(const std::string& line, std::string* err) {
@@ -46,7 +49,7 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
         r.arms = split(rec->get("arms"), ',');
         r.mode = rec->get("mode");
         r.reps = static_cast<int>(rec->number("reps"));
-        r.warm_s = rec->number("warm");
+        if (r.mode == "time") r.warm_s = rec->number("warm");
         r.reverse = rec->get("reverse") == "true";
         r.ld_pad = static_cast<int>(rec->number("ld_pad"));
         r.tier = rec->get("tier");
@@ -56,29 +59,71 @@ std::optional<std::pair<std::string, CellRequest>> parse_request(const std::stri
         r.alternate_reverse = rec->get("alternate_reverse") == "true";
         r.seed_order = split(rec->get("seed_order"), ',');
         r.ld_audit = split(rec->get("ld_audit"), ',');
+        r.verify = split(rec->get("verify"), ',');
     } catch (const std::exception& e) {
         if (err) *err = e.what();
         return std::nullopt;
     }
     const std::string op = rec->get("op");
     if (op.empty() || r.key.empty() || r.arms.empty() || std::isnan(r.warm_s)) {
-        if (err) *err = "a request needs op, key, arms and warm";
+        if (err) *err = "a request needs op, key, arms, and warm in mode time";
         return std::nullopt;
     }
     return std::pair(op, std::move(r));
 }
 
-std::string outcome_text(const std::vector<ArmOutcome>& arms) {
+std::vector<std::string> race_argv(const CellRequest& r) {
+    char conf[32];
+    std::snprintf(conf, sizeof conf, "%.17g", r.confidence);
+    std::vector<std::string> a{"--tier", r.tier, "--min-reps", std::to_string(r.min_reps), "--max-reps",
+                               std::to_string(r.max_reps), "--confidence", conf, "--seed-order", join(r.seed_order, ",")};
+    if (r.alternate_reverse) a.push_back("--alternate-reverse");
+    if (!r.ld_audit.empty()) a.insert(a.end(), {"--ld-audit", join(r.ld_audit, ",")});
+    if (!r.verify.empty()) a.insert(a.end(), {"--verify", join(r.verify, ",")});
+    return a;
+}
+
+bool parse_race_arg(const std::vector<std::string>& a, std::size_t& i, CellRequest& r) {
+    auto val = [&] { return i + 1 < a.size() ? a[++i] : std::string(); };
+    if (a[i] == "--tier") r.tier = val();
+    else if (a[i] == "--min-reps") r.min_reps = std::stoi(val());
+    else if (a[i] == "--max-reps") r.max_reps = std::stoi(val());
+    else if (a[i] == "--confidence") r.confidence = std::stod(val());
+    else if (a[i] == "--alternate-reverse") r.alternate_reverse = true;
+    else if (a[i] == "--seed-order") r.seed_order = split(val(), ',');
+    else if (a[i] == "--ld-audit") r.ld_audit = split(val(), ',');
+    else if (a[i] == "--verify") r.verify = split(val(), ',');
+    else return false;
+    return true;
+}
+
+std::string outcome_text(const std::vector<ArmOutcome>& arms, const Phases* ph) {
     std::string out;
     for (const ArmOutcome& o : arms) {
-        out += Json().str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
-                   .num("median_ms", median(o.ms)).num("residual", o.residual).integer("info_nonzero", o.info_nonzero)
-                   .integer("reps", static_cast<std::int64_t>(o.ms.size())).str("ld_audit", o.ld_audit).line();
+        Json a;
+        a.str("kind", "arm").str("arm", o.arm).str("status", o.status).str("reason", o.reason)
+            .num("median_ms", median(o.ms)).num("residual", o.residual).integer("info_nonzero", o.info_nonzero)
+            .integer("reps", static_cast<std::int64_t>(o.ms.size())).str("ld_audit", o.ld_audit);
+        if (!o.verified) a.boolean("verified", false);
+        out += a.line();
         for (std::size_t r = 0; r < o.ms.size(); ++r)
             out += Json().str("kind", "rep").str("arm", o.arm).integer("rep", static_cast<std::int64_t>(r))
                        .integer("slot", r < o.slot.size() ? o.slot[r] : 0).num("ms", o.ms[r]).line();
     }
-    return out;
+    if (!ph) return out;
+    Json j;
+    j.str("kind", "phase");
+    for (std::size_t i = 0; i < Phases::kWorkerFields; ++i)
+        if (const auto& [name, f] = Phases::fields()[i]; !std::isnan(ph->*f)) j.num(name, ph->*f);
+    return out + j.line();
+}
+
+Phases phases_from_records(const std::vector<Record>& recs) {
+    Phases p;
+    for (const Record& r : recs)
+        if (r.get("kind") == "phase")
+            for (const auto& [name, f] : Phases::fields()) p.add(f, r.number(name));
+    return p;
 }
 
 std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs) {
@@ -102,6 +147,7 @@ std::vector<ArmOutcome> outcomes_from_records(const std::vector<Record>& recs) {
             o.residual = r.number("residual");
             o.info_nonzero = static_cast<int>(std::atoll(r.get("info_nonzero", "0").c_str()));
             o.ld_audit = r.get("ld_audit");
+            o.verified = r.get("verified") != "false";
         }
     }
     return out;
@@ -229,14 +275,16 @@ ArmBatch race_pool(const std::vector<std::string>& arms, ArmErrors& errs,
                    const std::function<void()>& restart, const std::function<ArmBatch(const std::vector<std::string>&)>& fresh) {
     int restarts = 0;
     std::vector<std::string> erred;
+    Phases spent;  // every try's, a discarded one too
     for (int i = 0; i < 2; ++i) {
         WorkerTry r = attempt(arms);
+        spent += r.phases;
         if (r.ok) {
             for (const ArmOutcome& a : r.arms)
                 if (is_error(a)) erred.push_back(a.arm);
             if (erred.empty()) {
                 for (const ArmOutcome& a : r.arms) errs.note(a.arm, false);
-                return {std::move(r.arms), "", restarts, false};
+                return {std::move(r.arms), "", restarts, false, {}, spent};
             }
             restart();
             ++restarts;
@@ -250,6 +298,7 @@ ArmBatch race_pool(const std::vector<std::string>& arms, ArmErrors& errs,
     ArmBatch b = fresh(arms);
     b.worker_restarts = restarts;
     b.fallback = true;
+    b.phases += spent;
     for (const ArmOutcome& a : b.arms) {
         const bool worker_erred = std::find(erred.begin(), erred.end(), a.arm) != erred.end();
         if (!is_error(a)) errs.note(a.arm, false);
@@ -276,6 +325,7 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
             continue;
         }
         ArmBatch f = fresh({a});
+        b.phases += f.phases;
         const auto it = std::find_if(f.arms.begin(), f.arms.end(), [&](const ArmOutcome& x) { return x.arm == a; });
         if (it != f.arms.end()) b.arms.push_back(std::move(*it));
         else b.arms.push_back({a, "error", "child: " + f.error, {}, {}, 0, 0});
@@ -286,6 +336,7 @@ ArmBatch race_on_worker(const std::vector<std::string>& arms, ArmErrors& errs,
         }
     }
     b.fallback = b.fallback || pool.empty();  // nothing ran on the worker
+    b.phases.mode = b.fallback ? "fallback" : "worker";
     std::stable_sort(b.arms.begin(), b.arms.end(), [&](const ArmOutcome& x, const ArmOutcome& y) {
         return std::find(arms.begin(), arms.end(), x.arm) < std::find(arms.begin(), arms.end(), y.arm);
     });

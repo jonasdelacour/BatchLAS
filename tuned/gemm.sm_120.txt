@@ -1,5 +1,5 @@
 # op=gemm device=sm_120 batchlas=a549338b kernels=ea07a304 family_kernels=direct:44933c69,tiled:11d080a6,small:e56cbfb5,reg:1bdb21b0,wide:12740369,vendor:44933c69 date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/gemm.sm_120.jsonl tiers=deep:32225,coarse:0,preview:0,custom:0,converted:0,transcribed:14733
+# source=ledger:benchmarks/results/tuning/ledger/gemm.sm_120.jsonl tiers=deep:32225,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:14733
 # keys: dtype:exact ta:exact tb:exact layout:exact m:log n:log k:log batch:log
 dtype=float ta=N tb=N layout=packed m=1 n=1 k=1 batch=1 | vendor - | small - | direct - | tiled - # transcribed
 dtype=float ta=N tb=N layout=packed m=1 n=1 k=1 batch=63 | vendor - | small - | direct - | tiled - # transcribed

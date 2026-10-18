@@ -1,5 +1,5 @@
 # op=getrs device=sm_120 batchlas=2606d367 kernels=c2c5deac family_kernels=cta:d7b49018,blocked:5dc0329a,vendor:4ed5f93d date=2026-10-11
-# source=ledger:benchmarks/results/tuning/ledger/getrs.sm_120.jsonl tiers=deep:10653,coarse:0,preview:0,custom:0,converted:0,transcribed:790
+# source=ledger:benchmarks/results/tuning/ledger/getrs.sm_120.jsonl tiers=deep:10653,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:790
 # keys: dtype:exact n:log:2 nrhs:log batch:log
 dtype=float n=1 nrhs=1 batch=1 | cta 0.008593 | blocked 0.01356 | vendor 0.02108 # deep
 dtype=float n=1 nrhs=1 batch=16 | cta 0.008308 | blocked 0.01284 | vendor 0.02062 # deep
