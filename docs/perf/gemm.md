@@ -1166,6 +1166,52 @@ Deliberate breaks, unrun:
 
 **Pending:** the A/B (pass ≤ 1.05× vendor) on float NN strided 384³ b128 and 256×256×64 b128.
 
+## GEMM: WP-K, pipelined staging for the transposed wide tiles
+
+*Unmeasured* (2026-10-19, sm_120 build only; no GPU was free). Design, budgets and test coverage.
+
+Target: the skinny and panel tiles `launch_wide_transposed` serves, 128x32, 32x128, 64x32, 32x64,
+32x32 and 16x16 in every scalar. The 2026-10-18 sm_120 loss map: cdouble with one dim ≤ 64 at median
+1.17 (504 ms), cfloat skinny 132 ms, float with one dim ≤ 64 161 ms. The old mainloop did load,
+barrier, compute, barrier with element loads, so at low tile counts no other group hid the latency.
+
+| piece | rule |
+|---|---|
+| stages | `og::wide_stages<T>`: 2 when 2·k·(m+n)·sizeof(T) ≤ 40 KiB, else 1. 1 for cdouble 128x32, 32x128, 64x32 and 32x64 (80 and 48 KiB double-buffered). 64x64 double stays at 1 (cdouble 64x64 is wide v2 since WP-J). `wide_slm_bytes` reads the same function |
+| barriers | two stages: one per slab, slab s+1 stored into the stage slab s−1 was read from. One stage: two per slab, as before |
+| prefetch | the next slab's granules go into registers before the current FMAs: (m+n)·k / threads elements per thread (128x32: 10, 64x32: 12, 32x32: 16, 16x16: 8). Off on 64x64 double |
+| granules | 16 bytes along the contiguous dimension: k for A^T and B, i for A and B^T. Along k a warp takes 32/KG columns of KG granules, i fastest across lanes |
+| swizzle | the k-contiguous store XORs its granule column by (kk/VecN)·(32/TileK) mod granules-per-row, the fragment read applies the same XOR. Conflict-free except float 16x16 (2-way) |
+| leg | `wide64_v2_vec_loads` per launch (bases 16-byte aligned, ld and stride whole granules). A group's slab is predicated (element loads, zero fill) when the group is an edge or the slab is the k tail |
+| conj | applied in registers at the shared store |
+| epilogue | unchanged. The staged path takes both stages as its space, behind one barrier after the last compute |
+
+No new spelling, row or key: the tiles keep their `wide:m=..:n=..:k=16` spellings, so a
+`partial:wide` re-race picks the change up. Metal (about 26 KiB at 256 lanes) loses double-buffered
+cfloat 128x32 and 32x128 through `can_run`'s local-memory term.
+
+Test: `GemmCandidates.WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch` runs every form of
+the six tiles on six shapes and the wide v2 leg layouts:
+
+- 2TM×2TN×48 padded (16-byte leg, three slabs) and ×64 at ld = m+1 (element leg, four slabs, staged
+  epilogue), each at batch 1024 (256 for 16-byte scalars), 7 distinct problems;
+- TM+1×TN+1 at k = 16, 17 and 37, NaN in the gaps, on both legs.
+
+`GemmWideSlm.SlmBytesMatchWhatTheKernelsAllocate` holds literal bytes per tile and scalar.
+
+Deliberate breaks, unrun:
+
+- `store(cur)` in place of `store(cur ^ 1)`: red at every k > 16 on the two-stage tiles. Green at
+  k = 16, and for cdouble 128x32, 32x128, 64x32 and 32x64.
+- `soff<false, …>` for A in `compute`: red only in the forms with A transposed (TN, CN, CT).
+- dropping `gk + q < k` in `gload`: red only in the k = 17 and 37 NaN cases.
+- dropping the barrier before `staged_c_store`: possible item mismatches in the ld = m+1 batch cases
+  only (a race, so not guaranteed).
+
+**Pending:** registers from the probe (the table below), and the A/B on
+`ta=C,tb=N,layout=strided,m=1024,n=32,k=1024,batch=128` (cdouble) and
+`ta=N,tb=T,layout=strided,m=32,n=1024,k=256,batch=2048` (float, 1.73× before).
+
 ## GEMM: WP-J, complex double on wide v2
 
 *Unmeasured* (2026-10-19): no GPU was available at implementation time. Design, registers and tests only;

@@ -112,12 +112,18 @@ constexpr bool wide_serves(const WideCfg& c, int a, int b) {
     else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
 }
 
-/// Local memory a wide config asks for: one k x (m + n) tile, double-buffered by wide v2 (64x64,
-/// every scalar but double); gemm_kernels.cc static_asserts it against the kernels.
+/// Shared stages of a wide config's k x (m + n) tile: two for wide v2 (64x64, every scalar but
+/// double) and for a transposed tile other than 64x64 whose two stages fit 40 KiB; else one.
+template <class T>
+constexpr int wide_stages(const WideCfg& c) {
+    if (c.m == 64 && c.n == 64) return std::is_same_v<T, double> ? 1 : 2;
+    return 2 * c.k * (c.m + c.n) * std::int64_t(sizeof(T)) <= 40960 ? 2 : 1;
+}
+
+/// Local memory a wide config asks for; gemm_kernels.cc static_asserts it against the kernels.
 template <class T>
 constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
-    const bool v2 = c.m == 64 && c.n == 64 && !std::is_same_v<T, double>;
-    return std::int64_t(v2 ? 2 : 1) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
+    return std::int64_t(wide_stages<T>(c)) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
 }
 
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.

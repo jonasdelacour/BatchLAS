@@ -211,10 +211,13 @@ const WideRow* wide_row(const og::Wide& w) {
 // The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
 // (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
 // complex<double> 64x64x16 is 64 KiB, over acpp's 48 KiB without the opt-in.
+// WP-K: every non-64x64 tile double-buffers too while two stages stay within 40 KiB.
 template <typename T>
 std::int64_t wide_slm(const WideRow& row) {
     const bool v2 = row.m == 64 && row.n == 64 && !std::is_same_v<T, double>;
-    return (v2 ? 2 : 1) * std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
+    const std::int64_t one = std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
+    const bool two = v2 || ((row.m != 64 || row.n != 64) && 2 * one <= 40960);
+    return (two ? 2 : 1) * one;
 }
 template <typename T>
 bool wide_fits(const WideRow& row) {
@@ -711,6 +714,18 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16384);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
+    // WP-K's transposed tiles: two stages except complex<double> 128x32, 32x128, 64x32 and 32x64.
+    const struct { int m, n; std::int64_t f, d, cf, cd; } trans[] = {
+        {128, 32, 20480, 40960, 40960, 40960}, {32, 128, 20480, 40960, 40960, 40960},
+        {64, 32, 12288, 24576, 24576, 24576},  {32, 64, 12288, 24576, 24576, 24576},
+        {32, 32, 8192, 16384, 16384, 32768},   {16, 16, 4096, 8192, 8192, 16384}};
+    for (const auto& t : trans) {
+        const og::WideCfg c{t.m, t.n, 16, 4, 4, og::kWideAll};
+        EXPECT_EQ(og::wide_slm_bytes<float>(c), t.f) << t.m << "x" << t.n;
+        EXPECT_EQ(og::wide_slm_bytes<double>(c), t.d) << t.m << "x" << t.n;
+        EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(c), t.cf) << t.m << "x" << t.n;
+        EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(c), t.cd) << t.m << "x" << t.n;
+    }
     for (const og::WideCfg& c : og::wide_configs) {
         const WideRow* row = wide_row(og::Wide{c.m, c.n, c.k});
         ASSERT_NE(row, nullptr) << c.m << "x" << c.n;
@@ -1349,6 +1364,68 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
                 }
     EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
 }
+
+// WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
+// on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
+// 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
+// at ld = m + 1 (element leg, four slabs, staged epilogue) at a saturating batch, 7 distinct
+// problems, each item bit-identical to its representative. Then TM+1 x TN+1 (edge groups) at
+// k = 16 (one slab: no prefetch, no flip), 17 and 37 (a predicated k tail) on both legs with NaN
+// in the gaps, so one dropped k bound is NaN, not a silent -0. Then the v2 leg layouts at
+// 2TM x 2TN x 48. A stage flip the store and compute disagree on is wrong only at k > 16; a
+// swizzle the store and fragment read disagree on is wrong in the forms staging that operand
+// along k (A transposed, B not).
+// evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
+TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    struct Shape { int m, n, k; Layout layout; int batch; bool nan; };
+    const int big = sizeof(T) == 16 ? 256 : 1024;
+    int ran = 0, expected = 0, leg_ran = 0;
+    for (const og::Wide w : {og::Wide{128, 32, 16}, og::Wide{32, 128, 16}, og::Wide{64, 32, 16},
+                             og::Wide{32, 64, 16}, og::Wide{32, 32, 16}, og::Wide{16, 16, 16}}) {
+        const C c{w};
+        if (!wide_fits<T>(*wide_row(w))) continue;
+        const std::vector<Shape> shapes{{2 * w.m, 2 * w.n, 48, Layout::Padded, big, false},
+                                        {2 * w.m, 2 * w.n, 64, Layout::Gap1, big, false},
+                                        {w.m + 1, w.n + 1, 16, Layout::Padded, 3, true},
+                                        {w.m + 1, w.n + 1, 17, Layout::Padded, 3, true},
+                                        {w.m + 1, w.n + 1, 37, Layout::Gap1, 3, true},
+                                        {w.m + 1, w.n + 1, 37, Layout::Padded, 3, true}};
+        const bool skinny = w.m == 128 || w.n == 128;
+        expected += int(shapes.size()) * (skinny ? 4 : (kCx<T> ? 6 : 5));
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                Spec probe{ta, tb, 2 * w.m, 2 * w.n, 48, 3, Layout::Padded};
+                if (!TestFixture::expect_runs(c, probe)) continue;
+                for (const Shape& sh : shapes) {
+                    Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                    s.period = sh.batch > 3 ? 7 : 0;
+                    s.nan_poison = sh.nan;
+                    s.seed = 10100u + sh.m + 3u * sh.n + 7u * sh.k;
+                    ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+                for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
+                    static_cast<void>(vec);
+                    Spec s{ta, tb, 2 * w.m, 2 * w.n, 48, 4, la};
+                    if (lb != la) s.layout_b = lb;
+                    s.seed = 10300u + 13u * unsigned(la) + unsigned(lb);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s) + " (leg layout)");
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++leg_ran;
+                }
+            }
+    }
+    EXPECT_EQ(ran, expected);
+    EXPECT_GT(leg_ran, 0);
+}
+
 
 // WP-D, wide v2 (64x64x16: float, complex<float>, since WP-J complex<double>) in all 9 forms at
 // batch 1024, 7 distinct problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1

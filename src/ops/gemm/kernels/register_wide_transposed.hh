@@ -31,9 +31,10 @@ struct WideTile {
     int TTN = 4;                            // thread tile cols
     Transpose OpA = Transpose::NoTrans;
     Transpose OpB = Transpose::NoTrans;
+    int Stages = 1;                         // shared-memory stages: og::wide_stages
 };
 
-template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB>
+template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec>
 class GemmWideTransposedKernel;
 
 namespace wide_transposed {
@@ -44,6 +45,8 @@ using batchlas::sycl_device::dev_conj;
 using batchlas::sycl_device::dev_is_zero;
 using batchlas::sycl_device::fma_acc;
 using wide_scalar::lin_epi;
+using wide_scalar::raw16_load;
+using wide_scalar::raw16_store;
 using wide_scalar::staged_c_store;
 using wide_scalar::Vec16;
 using wide_scalar::vec_ref;
@@ -66,6 +69,66 @@ BATCHLAS_UNROLL_FULL
         for (int w = 0; w < W; ++w) {
             dst[w] = src[w];
         }
+    }
+}
+
+// Staging moves 16-byte granules along the operand's contiguous dimension: k when KC (A^T, B),
+// i (m for A, n for B) otherwise. Shared layout stays s[kk][i], TI wide. The KC store is a
+// transposing scatter, so its granule column is XORed per row group: a conflict phase then
+// covers 32 / TileK adjacent granules x distinct row groups on distinct banks. The XOR is a
+// bijection within a row and the fragment read applies the same one.
+template <bool KC, int TI, int TileK, int VecN>
+constexpr int soff(int kk, int i) {
+    constexpr int GPR = TI / VecN;
+    const int x = KC ? ((kk / VecN) * (32 / TileK)) & (GPR - 1) : 0;
+    return kk * TI + ((i / VecN) ^ x) * VecN + i % VecN;
+}
+
+// Granule g of a slab -> its first element (i, kk). KC: a warp takes 32 / KG consecutive i of
+// KG granules each (whole TileK runs of 32 / KG columns, i fastest across lanes); otherwise
+// consecutive granules of one shared row.
+template <bool KC, int TI, int TileK, int VecN>
+inline void granule(int g, int& i, int& kk) {
+    if constexpr (KC) {
+        constexpr int IL = 32 / (TileK / VecN);
+        i = (g / 32) * IL + (g % 32) % IL;
+        kk = ((g % 32) / IL) * VecN;
+    } else {
+        i = (g % (TI / VecN)) * VecN;
+        kk = g / (TI / VecN);
+    }
+}
+
+// One granule into r[0..VecN): a 16-byte move on the Vec leg when the group's slab is full,
+// else element loads, zero outside (i_lim, k) unless full.
+template <bool KC, bool Vec, typename D>
+inline void gload(D* r, const D* base, int ld, int gi, int gk, int i_lim, int k, bool full) {
+    constexpr int VecN = Vec16<D>::N;
+    const D* p = base + (KC ? static_cast<std::ptrdiff_t>(gi) * ld + gk : gi + static_cast<std::ptrdiff_t>(gk) * ld);
+    if constexpr (Vec) {
+        if (full) {
+            raw16_store(r, raw16_load(p));
+            return;
+        }
+    }
+BATCHLAS_UNROLL_FULL
+    for (int q = 0; q < VecN; ++q) {
+        const bool ok = full || (KC ? gi < i_lim && gk + q < k : gi + q < i_lim && gk < k);
+        r[q] = ok ? p[q] : D{};
+    }
+}
+
+template <bool KC, bool Conj, int TI, int TileK, typename D>
+inline void sstore(D* s, const D* r, int i, int kk) {
+    constexpr int VecN = Vec16<D>::N;
+    alignas(16) D e[VecN];
+BATCHLAS_UNROLL_FULL
+    for (int q = 0; q < VecN; ++q) e[q] = Conj ? dev_conj(r[q]) : r[q];
+    if constexpr (!KC) {
+        raw16_store(s + soff<false, TI, TileK, VecN>(kk, i), raw16_load(e));
+    } else {
+BATCHLAS_UNROLL_FULL
+        for (int q = 0; q < VecN; ++q) s[soff<true, TI, TileK, VecN>(kk + q, i)] = e[q];
     }
 }
 
@@ -92,14 +155,19 @@ inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
     }
 }
 
-template <typename T, WideTile P>
-Event launch_wide_transposed(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             const MatrixView<T, MatrixFormat::Dense>& B,
-                             const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha,
-                             T beta,
-                             const char* trace) {
+// Two shared stages (P.Stages == 2) take one barrier per slab: slab s+1 is stored into the
+// stage slab s-1 was read from, and every read of it ended before the barrier closing s-1.
+// The next slab is fetched into registers before the current one's FMAs, except on the 64x64
+// tiles (double and complex<double>), whose registers sit at the two-group cap already.
+// evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
+template <typename T, WideTile P, bool VecLoads>
+Event launch_wide_transposed_leg(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& A,
+                                 const MatrixView<T, MatrixFormat::Dense>& B,
+                                 const MatrixView<T, MatrixFormat::Dense>& C,
+                                 T alpha,
+                                 T beta,
+                                 const char* trace) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
 
     using namespace wide_transposed;
@@ -112,10 +180,14 @@ Event launch_wide_transposed(Queue& ctx,
     constexpr int TileK = P.K;
     constexpr int TTM = P.TTM;
     constexpr int TTN = P.TTN;
+    constexpr int Stages = P.Stages;
+    constexpr bool Prefetch = !(TileM == 64 && TileN == 64);
     constexpr bool TransA = P.OpA != Transpose::NoTrans;
     constexpr bool TransB = P.OpB != Transpose::NoTrans;
     constexpr bool ConjA = P.OpA == Transpose::ConjTrans;
     constexpr bool ConjB = P.OpB == Transpose::ConjTrans;
+    constexpr bool KCA = TransA;   // A^T is stored k x m: k contiguous
+    constexpr bool KCB = !TransB;  // B is stored k x n: k contiguous
 
     constexpr int LocalRows = TileM / TTM;
     constexpr int LocalCols = TileN / TTN;
@@ -125,6 +197,8 @@ Event launch_wide_transposed(Queue& ctx,
     // defeats the compiler's alignment proof and fragment loads go scalar.
     constexpr int AStride = TileM;
     constexpr int BStride = TileN;
+    constexpr int BufA = TileK * AStride;
+    constexpr int BufB = TileK * BStride;
 
     constexpr int VecN = Vec16<D>::N;
     constexpr int WbM = (VecN < TTM) ? VecN : TTM;
@@ -133,14 +207,20 @@ Event launch_wide_transposed(Queue& ctx,
     constexpr int NBN = TTN / WbN;
     constexpr int MSep = TileM / NBM;
     constexpr int NSep = TileN / NBN;
+    constexpr int CountA = TileM * TileK / VecN;  // granules per slab
+    constexpr int CountB = TileN * TileK / VecN;
+    constexpr int NGA = (CountA + Threads - 1) / Threads;
+    constexpr int NGB = (CountB + Threads - 1) / Threads;
 
     static_assert(TileM % TTM == 0 && TileN % TTN == 0,
                   "macro tile must split into thread tiles");
     static_assert(TTM % WbM == 0 && TTN % WbN == 0,
                   "thread tile must split into whole bands");
-    static_assert(Threads >= 32 && Threads <= 1024, "work-group size out of range");
-    static_assert((TileK * AStride) % VecN == 0 && (TileK * BStride) % VecN == 0,
-                  "shared tile must be a whole number of 16-byte granules");
+    static_assert(Threads >= 32 && Threads <= 1024 && Threads % 32 == 0, "work-group size out of range");
+    static_assert(Stages == 1 || Stages == 2, "one or two shared stages");
+    static_assert(TileK % VecN == 0 && TileK <= 32 && 32 % (TileK / VecN) == 0,
+                  "a warp covers whole k runs of the k-contiguous operand");
+    static_assert(CountA % 32 == 0 && CountB % 32 == 0, "a slab is whole warps of granules");
     static_assert(WbM != VecN || (AStride % VecN == 0 && MSep % VecN == 0),
                   "vectorised A fragment needs an aligned band base");
     static_assert(WbN != VecN || (BStride % VecN == 0 && NSep % VecN == 0),
@@ -163,9 +243,9 @@ Event launch_wide_transposed(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<Vec16<D>, 1> tile_a(
-            sycl::range<1>(static_cast<size_t>(TileK) * AStride / VecN), h);
+            sycl::range<1>(static_cast<size_t>(Stages) * BufA / VecN), h);
         sycl::local_accessor<Vec16<D>, 1> tile_b(
-            sycl::range<1>(static_cast<size_t>(TileK) * BStride / VecN), h);
+            sycl::range<1>(static_cast<size_t>(Stages) * BufB / VecN), h);
 
         const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
         const D* b_ptr = reinterpret_cast<const D*>(B.data_ptr());
@@ -185,7 +265,7 @@ Event launch_wide_transposed(Queue& ctx,
 
         batchlas::impl::parallel_for<GemmWideTransposedKernel<T, TileM, TileN, TileK, TTM, TTN,
                                                 static_cast<int>(P.OpA),
-                                                static_cast<int>(P.OpB)>>(h,
+                                                static_cast<int>(P.OpB), Stages, VecLoads>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {
@@ -200,6 +280,8 @@ Event launch_wide_transposed(Queue& ctx,
 
                 const int m0 = static_cast<int>(item.get_group(2)) * TileM;
                 const int n0 = static_cast<int>(item.get_group(1)) * TileN;
+                const bool a_in = m0 + TileM <= m;
+                const bool b_in = n0 + TileN <= n;
 
                 const D* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
                 const D* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
@@ -219,65 +301,50 @@ BATCHLAS_UNROLL_FULL
                     }
                 }
 
-                for (int k0 = 0; k0 < k; k0 += TileK) {
-                    // Staging always produces the SAME shared layout,
-                    // sa[kk][i] and sb[kk][j], whatever the operand layout was,
-                    // which keeps the inner loop and epilogue identical across
-                    // all four forms. The index decomposition is per layout so
-                    // consecutive `tid` reads consecutive global addresses: a
-                    // transposed operand pays on the shared STORE, never on the
-                    // global load.
-                    for (int idx = tid; idx < TileM * TileK; idx += Threads) {
-                        int i;
-                        int kk;
-                        if constexpr (TransA) {
-                            kk = idx % TileK;
-                            i = idx / TileK;
-                        } else {
-                            i = idx % TileM;
-                            kk = idx / TileM;
-                        }
-                        const int gm = m0 + i;
-                        const int gk = k0 + kk;
-                        D value = D{};
-                        if (gm < m && gk < k) {
-                            value = TransA
-                                ? Ab[gk + static_cast<std::ptrdiff_t>(gm) * lda]
-                                : Ab[gm + static_cast<std::ptrdiff_t>(gk) * lda];
-                            if constexpr (ConjA) {
-                                value = dev_conj(value);
-                            }
-                        }
-                        sa[kk * AStride + i] = value;
+                alignas(16) D ra[NGA * VecN];
+                alignas(16) D rb[NGB * VecN];
+                auto load = [&](int k0) __attribute__((always_inline)) {
+                    const bool kin = k0 + TileK <= k;
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGA; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountA % Threads != 0 && g >= CountA) continue;
+                        int i, kk;
+                        granule<KCA, TileM, TileK, VecN>(g, i, kk);
+                        gload<KCA, VecLoads>(&ra[r * VecN], Ab, lda, m0 + i, k0 + kk, m, k, a_in && kin);
                     }
-
-                    for (int idx = tid; idx < TileK * TileN; idx += Threads) {
-                        int j;
-                        int kk;
-                        if constexpr (TransB) {
-                            j = idx % TileN;
-                            kk = idx / TileN;
-                        } else {
-                            kk = idx % TileK;
-                            j = idx / TileK;
-                        }
-                        const int gn = n0 + j;
-                        const int gk = k0 + kk;
-                        D value = D{};
-                        if (gn < n && gk < k) {
-                            value = TransB
-                                ? Bb[gn + static_cast<std::ptrdiff_t>(gk) * ldb]
-                                : Bb[gk + static_cast<std::ptrdiff_t>(gn) * ldb];
-                            if constexpr (ConjB) {
-                                value = dev_conj(value);
-                            }
-                        }
-                        sb[kk * BStride + j] = value;
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGB; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountB % Threads != 0 && g >= CountB) continue;
+                        int i, kk;
+                        granule<KCB, TileN, TileK, VecN>(g, i, kk);
+                        gload<KCB, VecLoads>(&rb[r * VecN], Bb, ldb, n0 + i, k0 + kk, n, k, b_in && kin);
                     }
-                    item.barrier(sycl::access::fence_space::local_space);
-
-                    // Out-of-range staging wrote a zero rather than being
-                    // skipped, so the accumulation needs no bounds test.
+                };
+                auto store = [&](int stage) __attribute__((always_inline)) {
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGA; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountA % Threads != 0 && g >= CountA) continue;
+                        int i, kk;
+                        granule<KCA, TileM, TileK, VecN>(g, i, kk);
+                        sstore<KCA, ConjA, TileM, TileK>(sa + stage * BufA, &ra[r * VecN], i, kk);
+                    }
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGB; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountB % Threads != 0 && g >= CountB) continue;
+                        int i, kk;
+                        granule<KCB, TileN, TileK, VecN>(g, i, kk);
+                        sstore<KCB, ConjB, TileN, TileK>(sb + stage * BufB, &rb[r * VecN], i, kk);
+                    }
+                };
+                // Out-of-range staging wrote a zero rather than being skipped,
+                // so the accumulation needs no bounds test.
+                auto compute = [&](int stage) __attribute__((always_inline)) {
+                    const D* xa = sa + stage * BufA;
+                    const D* xb = sb + stage * BufB;
 BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
                         D af[TTM];
@@ -285,12 +352,12 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NBM; ++band) {
                             load_fragment<WbM, VecN>(
-                                &af[band * WbM], &sa[kk * AStride + band * MSep + ty * WbM]);
+                                &af[band * WbM], xa + soff<KCA, TileM, TileK, VecN>(kk, band * MSep + ty * WbM));
                         }
 BATCHLAS_UNROLL_FULL
                         for (int band = 0; band < NBN; ++band) {
                             load_fragment<WbN, VecN>(
-                                &bf[band * WbN], &sb[kk * BStride + band * NSep + tx * WbN]);
+                                &bf[band * WbN], xb + soff<KCB, TileN, TileK, VecN>(kk, band * NSep + tx * WbN));
                         }
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < TTM; ++i) {
@@ -300,7 +367,25 @@ BATCHLAS_UNROLL_FULL
                             }
                         }
                     }
-                    item.barrier(sycl::access::fence_space::local_space);
+                };
+
+                const int slabs = (k + TileK - 1) / TileK;
+                load(0);
+                store(0);
+                item.barrier(sycl::access::fence_space::local_space);
+                for (int s = 0; s < slabs; ++s) {
+                    const int cur = Stages == 2 ? (s & 1) : 0;
+                    const bool more = s + 1 < slabs;
+                    if constexpr (Prefetch) {
+                        if (more) load((s + 1) * TileK);
+                    }
+                    compute(cur);
+                    if (more) {
+                        if constexpr (Stages == 1) item.barrier(sycl::access::fence_space::local_space);
+                        if constexpr (!Prefetch) load((s + 1) * TileK);
+                        store(Stages == 2 ? cur ^ 1 : 0);
+                        item.barrier(sycl::access::fence_space::local_space);
+                    }
                 }
 
                 // Per group: the 16-byte band store when this tile is inside
@@ -335,7 +420,8 @@ BATCHLAS_UNROLL_FULL
                             return;
                         }
                     }
-                    staged_c_store<TileM, TileN, Threads, TileK * AStride, TileK * BStride>(
+                    item.barrier(sycl::access::fence_space::local_space);  // the last compute's reads
+                    staged_c_store<TileM, TileN, Threads, Stages * BufA, Stages * BufB>(
                         item, sa, sb, Cb, ldc, m0, n0, m, n, tid, alpha_d, beta_d, beta_zero,
                         [&](int c0, int cw, auto slot) {
 BATCHLAS_UNROLL_FULL
@@ -387,6 +473,16 @@ BATCHLAS_UNROLL_FULL
     });
 
     return ctx.get_event();
+}
+
+// The leg (16-byte or element global loads) is wide v2's predicate, per launch; whether a slab
+// is predicated is per work-group. One trace name for both legs.
+template <typename T, WideTile P>
+Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
+                             T alpha, T beta, const char* trace) {
+    if (wide64_v2_vec_loads<T>(A, B)) return launch_wide_transposed_leg<T, P, true>(ctx, A, B, C, alpha, beta, trace);
+    return launch_wide_transposed_leg<T, P, false>(ctx, A, B, C, alpha, beta, trace);
 }
 
 }  // namespace batchlas::sycl_gemm
