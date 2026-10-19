@@ -1283,8 +1283,9 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
 // k8 slab, half a k16 one), 9 and 17 (a one-deep predicated tail), 16 (two k8 slabs, odd vs even
 // count into the staged epilogue). Ragged 100 x 70 at ld = m + 1 (element loads, edge groups) at
 // batch 1024, 7 distinct problems, each item bit-identical to its representative; 200 x 136 padded
-// (wide v2's 16-byte leg, interior and edge groups); packed 128 x 128 x 24 at batch 1024 (all
-// interior, three full k8 slabs, the band store). Then beta = 0 and NaN in C. Wide v2 at k = 8
+// (wide v2's 16-byte leg, interior and edge groups; k = 9 again at batch 1024, the vector leg's
+// predicated tail slab saturated); packed 128 x 128 x 24 at batch 1024 (all interior, three full
+// k8 slabs, the band store). Then beta = 0 and NaN in C. Wide v2 at k = 8
 // splits staging: warps 0-3 stage A, 4-7 B, with a KStep and lane map of their own. A B lane
 // staging A leaves B unstaged in every form; a k-contiguous map or swizzle copied from k = 16 is
 // wrong in the forms with that operand layout; a k-tail `<=` reads the poison past column k.
@@ -1298,6 +1299,7 @@ TYPED_TEST(GemmCandidates, WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch) {
         shapes.push_back({100, 70, k, Layout::Gap1, 1024});
         shapes.push_back({200, 136, k, Layout::Padded, 128});
     }
+    shapes.push_back({200, 136, 9, Layout::Padded, big});
     shapes.push_back({128, 128, 24, Layout::Packed, big});
     int ran = 0, nan_checked = 0, tiles = 0;
     for (const C c : {C{og::Wide{64, 64, 8}}, C{og::Wide{64, 64, 16}}}) {

@@ -29,7 +29,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 |---|---|---|---|
 | `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:115-120`) |
+| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:141-152`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
@@ -44,7 +44,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 ```
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
+batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
 `small`. Candidate counts: float 22, double 12 (no `reg`), complex 11 (no `small`, no `reg`).
 
 Forms are folded after the real-scalar C→T fold:

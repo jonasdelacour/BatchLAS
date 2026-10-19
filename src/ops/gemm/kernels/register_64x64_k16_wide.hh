@@ -737,7 +737,7 @@ BATCHLAS_UNROLL_FULL
         if (s < slabs) compute(0);  // an odd slab count ends in buffer 0, with no barrier after
 
         // The NN kernel's epilogue: the 16-byte band store for a group inside C with 16-byte
-        // columns, the WP-B staged store (lo = both A buffers, one pass) for any other.
+        // columns, the WP-B staged store (lo = both A buffers, hi = both B; two passes at TileK = 8) for any other.
         const bool beta_zero = wide_scalar::dev_is_zero(beta);
         const bool c_vec = a_in && b_in && ldc % VecN == 0 && reinterpret_cast<std::uintptr_t>(Cb) % 16u == 0;
         if (!c_vec) {
