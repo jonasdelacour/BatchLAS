@@ -31,7 +31,12 @@ textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resi
 .ctl select { min-width: 84px; }
 .map { padding: 14px; }
 .map svg { display: block; width: 100%; height: auto; }
-.map svg rect.c { cursor: pointer; }
+.map svg rect.c, .map svg g.h { cursor: pointer; }
+.facets { display: grid; gap: 6px 8px; overflow-x: auto; align-items: center; }
+.facets .fh { font: 11px var(--mono); color: var(--ink-2); text-align: center; white-space: nowrap; }
+.facets .fr { font: 11px var(--mono); color: var(--ink-2); text-align: right; white-space: nowrap; padding-right: 2px; }
+.facets .fp { min-width: 0; }
+#op-fchips:empty { display: none; }
 .detail { margin-top: 12px; }
 .detail table td, .detail table th { padding: 6px 10px; }
 .ival { position: relative; height: 10px; min-width: 120px; background: var(--sunken); border-radius: 2px; }
@@ -125,7 +130,7 @@ const TIER_VAR = { deep: "--t-deep", coarse: "--t-coarse", calibrate: "--t-calib
 const PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#e377c2", "#bcbd22", "#17becf", "#8c564b", "#393b79"];
 const VENDOR = "#7f7f7f";
 let meta = null, ST = null, RUN = null, route = { page: "status" }, device = null, es = null, built = null;
-let OPV = null, opKey = null, mapCfg = {}, sel = null, mode = "winner", diffSort = 1;
+let OPV = null, opKey = null, mapCfg = {}, sel = null, mode = "winner", diffSort = { col: "saved", dir: 1 }, diffNoise = false;
 
 // ---------------------------------------------------------------- utils
 function patch(el, html) { if (el && el.__h !== html) { el.innerHTML = html; el.__h = html; } }
@@ -326,8 +331,8 @@ function buildOp() {
     <div class="panel stats" id="op-stats"></div>
     <div class="sec"><h2>Kernel families</h2><span class="sp-grow"></span><span class="muted">hash v2 of each family's sources</span></div>
     <div class="panel"><div class="scroll" id="op-fams"></div></div>
-    <div class="sec"><h2>Winner map</h2><span class="sp-grow"></span><div class="seg" id="op-mode"></div></div>
-    <div class="panel map"><div class="ctl" id="op-ctl"></div><div id="op-svg"><div class="empty">Loading…</div></div><div class="legend" id="op-leg" style="margin-top:10px"></div></div>
+    <div class="sec"><h2>Decision map</h2><span class="sp-grow"></span><div class="seg" id="op-mode"></div></div>
+    <div class="panel map"><div class="ctl" id="op-ctl"></div><div class="chips" id="op-fchips" style="margin:-4px 0 10px"></div><div id="op-svg"><div class="empty">Loading…</div></div><div class="legend" id="op-leg" style="margin-top:10px"></div></div>
     <div class="panel detail" id="op-detail" hidden></div>
     <div class="sec"><h2>Against the shipped table</h2><span class="sp-grow"></span><span class="muted" id="op-dsum"></span></div>
     <div class="panel"><div class="scroll" id="op-diff"><div class="empty">Loading…</div></div></div>`;
@@ -342,40 +347,116 @@ async function updateOp() {
     OPV = v; initMap(); drawOp();
   }
 }
+const cmp = (a, b) => a > b ? 1 : a < b ? -1 : 0;
+const keyIx = () => Object.fromEntries(OPV.keys.map((k, i) => [k.name, i]));
+const facetKeys = (spec) => spec ? spec.split("×") : [];
+// Margin: viridis from coin-flip (yellow) to decisive (purple); vendor: orange = vendor faster, purple = native faster.
+const RAMP_MARGIN = ["#fde725", "#b5de2b", "#6ece58", "#35b779", "#1f9e89", "#26828e", "#31688e", "#3e4989", "#482878", "#440154"];
+const RAMP_VENDOR = ["#7f3b08", "#b35806", "#e08214", "#fdb863", "#fee0b6", "#ecebe8", "#d8daeb", "#b2abd2", "#8073ac", "#542788", "#2d004b"];
+function ramp(stops, t) {
+  t = Math.max(0, Math.min(1, t));
+  const x = t * (stops.length - 1), i = Math.min(stops.length - 2, Math.floor(x)), f = x - i, h = (s, o) => parseInt(s.slice(o, o + 2), 16);
+  return "#" + [1, 3, 5].map(o => Math.round(h(stops[i], o) + (h(stops[i + 1], o) - h(stops[i], o)) * f).toString(16).padStart(2, "0")).join("");
+}
+const marginT = (ratio) => Math.log2(ratio);            // 1x -> 0, 2x -> 1
+const vendorT = (ratio) => (Math.log2(ratio) + 1.5) / 3; // 0.35x -> 0, 2.8x -> 1
+// Every value a key takes in the cells and the next table's rows, commonest first (N before T before C for gemm).
+function keyVals(name) {
+  const i = keyIx()[name], n = new Map();
+  OPV.cells.forEach(c => n.set(c[0][i], (n.get(c[0][i]) || 0) + 1));
+  (OPV.rows || []).forEach(r => { if (!n.has(r[0][i])) n.set(r[0][i], 0); });
+  const k = OPV.keys.find(x => x.name === name);
+  return [...n.entries()].sort((a, b) => k.log ? a[0] - b[0] : b[1] - a[1] || cmp(a[0], b[0])).map(e => e[0]);
+}
+// Facet tuples: a log key's planned lattice (else its values); two exact keys, the combinations present.
+function facetTuples(spec) {
+  const ks = facetKeys(spec);
+  if (!ks.length) return [[]];
+  if (ks.length === 1) {
+    const k = OPV.keys.find(x => x.name === ks[0]);
+    return (k.log && OPV.grid && OPV.grid[k.name] ? OPV.grid[k.name] : keyVals(k.name)).map(v => [v]);
+  }
+  const ix = keyIx(), order = ks.map(n => keyVals(n)), seen = new Map();
+  [...OPV.cells.map(c => c[0]), ...(OPV.rows || []).map(r => r[0])].forEach(k => { const t = ks.map(n => k[ix[n]]); seen.set(t.join("|"), t); });
+  return [...seen.values()].sort((a, b) => { for (let q = 0; q < ks.length; q++) { const d = order[q].indexOf(a[q]) - order[q].indexOf(b[q]); if (d) return d; } return 0; });
+}
+function facetOptions() {
+  const free = OPV.keys.filter(k => k.name !== mapCfg.x && k.name !== mapCfg.y && keyVals(k.name).length > 1);
+  const ex = free.filter(k => !k.log).map(k => k.name), out = [["", "—"]];
+  free.forEach(k => out.push([k.name, k.name]));
+  for (let i = 0; i < ex.length; i++) for (let j = i + 1; j < ex.length; j++) out.push([`${ex[i]}×${ex[j]}`, `${ex[i]} × ${ex[j]}`]);
+  return out;
+}
+const facetOk = (spec, other) => facetKeys(spec).every(n => OPV.keys.some(k => k.name === n) && n !== mapCfg.x && n !== mapCfg.y && !facetKeys(other).includes(n));
+// A long log facet shows four slices spread over its lattice; anything else shows every value.
+function defaultPick(which) {
+  const spec = mapCfg[which], ts = facetTuples(spec), k = OPV.keys.find(x => x.name === spec);
+  const pick = k && k.log && ts.length > 5 ? [0, 1, 2, 3].map(i => ts[Math.round(i * (ts.length - 1) / 3)]) : ts;
+  mapCfg.pick[which] = pick.map(t => t.join("|"));
+}
+const selTuples = (which) => facetTuples(mapCfg[which]).filter(t => !facetKeys(mapCfg[which]).length || mapCfg.pick[which].includes(t.join("|")));
+
 function initMap() {
   const logs = OPV.keys.filter(x => x.log).map(x => x.name);
   const keep = mapCfg.op === route.op ? mapCfg : null;
   const y = keep && logs.includes(keep.y) ? keep.y : logs[0];
-  // Two shape keys make the map shape x shape at the commonest batch; one shape key pairs it with batch.
+  // Two shape keys make the map shape x shape; one shape key pairs it with batch.
   const shapes = logs.filter(n => n !== "batch");
   const x = keep && logs.includes(keep.x) && keep.x !== y ? keep.x : shapes.length > 1 ? shapes.find(n => n !== y) : logs.find(n => n !== y) || y;
-  mapCfg = { op: route.op, x, y, fixed: {} };
-  pickFixed();
+  mapCfg = { op: route.op, x, y, cols: "", rows: "", fixed: {}, pick: { cols: [], rows: [] }, axes: keep ? keep.axes : "lattice" };
+  const multi = (n) => keyVals(n).length > 1;
+  const exact = OPV.keys.filter(k => !k.log && multi(k.name)).map(k => k.name);
+  const spare = logs.filter(n => n !== x && n !== y && n !== "batch" && multi(n));
+  mapCfg.cols = keep && facetOk(keep.cols, keep.rows) ? keep.cols : exact.length >= 2 ? exact.slice(0, 2).join("×") : exact[0] || "";
+  mapCfg.rows = keep && facetOk(keep.rows, mapCfg.cols) ? keep.rows : spare.find(n => !facetKeys(mapCfg.cols).includes(n)) || "";
+  defaultPick("cols"); defaultPick("rows");
+  if (keep) ["cols", "rows"].forEach(w => { if (keep[w] === mapCfg[w]) mapCfg.pick[w] = keep.pick[w]; });
+  pickFixed(keep ? keep.fixed : null);
 }
-// Fixed keys default to their most common value among the cells, so the first slice is the densest.
+// Fixed keys default to their commonest value among the measured cells (all cells when none are),
+// so the first slice is the densest; batch defaults to the largest value holding a quarter of the
+// commonest one's cells (saturation).
 function pickFixed(prefer) {
-  const ix = Object.fromEntries(OPV.keys.map((k, i) => [k.name, i]));
-  let pool = OPV.cells;
+  const ix = keyIx(), facets = [...facetKeys(mapCfg.cols), ...facetKeys(mapCfg.rows)];
+  const timed = OPV.cells.filter(c => !UNHASHED_TIERS.includes(OPV.tiers[c[1]]));
+  let pool = timed.length ? timed : OPV.cells;
   for (const k of OPV.keys) {
-    if (k.name === mapCfg.x || k.name === mapCfg.y) continue;
+    if (k.name === mapCfg.x || k.name === mapCfg.y || facets.includes(k.name)) { delete mapCfg.fixed[k.name]; continue; }
     const counts = new Map();
     pool.forEach(c => counts.set(c[0][ix[k.name]], (counts.get(c[0][ix[k.name]]) || 0) + 1));
     const want = prefer && prefer[k.name] !== undefined ? prefer[k.name] : mapCfg.fixed[k.name];
-    const v = counts.has(want) ? want : [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] > b[0] ? 1 : -1))[0]?.[0];
+    const byN = [...counts.entries()].sort((a, b) => b[1] - a[1] || cmp(a[0], b[0]));
+    let v = counts.has(want) ? want : byN[0]?.[0];
+    if (!counts.has(want) && k.name === "batch" && byN.length) v = Math.max(...byN.filter(e => e[1] >= byN[0][1] / 4).map(e => e[0]));
     mapCfg.fixed[k.name] = v;
     pool = pool.filter(c => c[0][ix[k.name]] === v);
   }
 }
-function setAxis(which, v) { mapCfg[which] = v; if (mapCfg.x === mapCfg.y) mapCfg[which === "x" ? "y" : "x"] = OPV.keys.find(k => k.log && k.name !== v).name; pickFixed(); sel = null; drawOp(); }
+function setAxis(which, v) {
+  mapCfg[which] = v;
+  if (mapCfg.x === mapCfg.y) mapCfg[which === "x" ? "y" : "x"] = OPV.keys.find(k => k.log && k.name !== v).name;
+  ["cols", "rows"].forEach(w => { if (facetKeys(mapCfg[w]).some(n => n === mapCfg.x || n === mapCfg.y)) { mapCfg[w] = ""; defaultPick(w); } });
+  pickFixed(); sel = null; drawOp();
+}
+function setFacet(which, spec) {
+  const other = which === "cols" ? "rows" : "cols";
+  mapCfg[which] = spec;
+  if (facetKeys(spec).some(n => facetKeys(mapCfg[other]).includes(n))) { mapCfg[other] = ""; defaultPick(other); }
+  defaultPick(which); pickFixed(); sel = null; drawOp();
+}
+function toggleFacet(which, t) {
+  const p = mapCfg.pick[which], i = p.indexOf(t);
+  if (i >= 0) { if (p.length > 1) p.splice(i, 1); } else p.push(t);
+  drawOp();
+}
 function setFixed(name, raw) { const k = OPV.keys.find(x => x.name === name); mapCfg.fixed[name] = k.log ? +raw : raw; pickFixed(mapCfg.fixed); sel = null; drawOp(); }
+function setAxes(m) { mapCfg.axes = m; drawOp(); }
 function setMode(m) { mode = m; drawOp(); }
 
 function drawOp() {
-  const v = OPV, ix = Object.fromEntries(v.keys.map((k, i) => [k.name, i]));
+  const v = OPV, ix = keyIx();
   const cells = v.cells, fams = v.families;
   const changed = cells.filter(c => c[7] >= 0 && c[9] >= 0 && c[7] !== c[9]);
-  const sps = changed.map(c => c[8]).filter(x => x);
-  const gm = sps.length ? Math.exp(sps.reduce((a, s) => a + Math.log(s), 0) / sps.length) : null;
   const tiers = {}; cells.forEach(c => tiers[v.tiers[c[1]]] = (tiers[v.tiers[c[1]]] || 0) + 1);
   const wins = {}; cells.forEach(c => { const f = c[3] >= 0 ? family(v.cands[c[3]]) : "none"; wins[f] = (wins[f] || 0) + 1; });
   const top = Object.entries(wins).sort((a, b) => b[1] - a[1]);
@@ -394,30 +475,46 @@ function drawOp() {
         : !x.table ? "not in the table" : n ? "table current; older records in the ledger" : "current";
       return `<tr><td class="mono" style="color:${famColor(fams, x.name)}">${esc(x.name)}</td><td class="mono">${esc(x.table || "—")}</td><td class="mono">${esc(x.now || "—")}</td>
         <td${famChanged(x) ? ' style="color:var(--warn)"' : ""}>${esc(state)}</td><td class="r num">${n || ""}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty">No families.</div>`);
+  const matter = changed.filter(c => c[10] != null && !c[11] && c[8] > 1);
+  const saved = matter.reduce((a, c) => a + c[10], 0);
   patch($("op-stats"), `
     <div><div class="k">Cells</div><div class="v">${cells.length.toLocaleString()}</div><div class="f">${tierBar(tiers, cells.length)}${Object.entries(tiers).map(([t, n]) => `${t} ${n}`).join(" · ")}</div></div>
     <div><div class="k">Refined</div><div class="v">${pct(cells.filter(c => c[2] > 0).length, cells.length)}</div><div class="f">cells added between lattice points</div></div>
     <div><div class="k">Winning families</div><div class="v" style="font-size:18px">${top.slice(0, 3).map(([f, n]) => `<span style="color:${famColor(fams, f)}">${esc(f)}</span> <small>${pct(n, cells.length)}</small>`).join("<br>")}</div><div class="f"></div></div>
-    <div><div class="k">Pick changes vs the table</div><div class="v" ${changed.length ? 'style="color:var(--accent)"' : ""}>${changed.length}</div><div class="f">${gm ? `geomean ${fmtX(gm)} where timed` : "the table matches this ledger"}</div></div>`);
-  patch($("op-mode"), [["winner", "Winner"], ["diff", "Change vs table"]].map(([k, l]) => `<button class="${mode === k ? "on" : ""}" onclick="setMode('${k}')">${l}</button>`).join(""));
+    <div><div class="k">Pick changes vs the table</div><div class="v" ${matter.length ? 'style="color:var(--accent)"' : ""}>${matter.length}</div><div class="f">${changed.length ? `faster outside noise, of ${changed.length} changed${matter.length ? ` · saves ${fmtMs(saved)} ms in all` : ""}` : "the table matches this ledger"}</div></div>`);
+  patch($("op-mode"), [["winner", "Winner"], ["margin", "Margin"], ["vendor", "vs vendor"], ["diff", "Change vs table"]].map(([k, l]) => `<button class="${mode === k ? "on" : ""}" onclick="setMode('${k}')">${l}</button>`).join(""));
   const logs = v.keys.filter(k => k.log).map(k => k.name);
   const opt = (vals, cur) => vals.map(x => `<option value="${esc(x)}" ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
+  const fopt = (cur) => facetOptions().map(([val, l]) => `<option value="${esc(val)}" ${val === cur ? "selected" : ""}>${esc(l)}</option>`).join("");
   let ctl = `<label>Y<select class="sel" onchange="setAxis('y', this.value)">${opt(logs, mapCfg.y)}</select></label>
-    <label>X<select class="sel" onchange="setAxis('x', this.value)">${opt(logs.filter(n => n !== mapCfg.y), mapCfg.x)}</select></label>`;
+    <label>X<select class="sel" onchange="setAxis('x', this.value)">${opt(logs.filter(n => n !== mapCfg.y), mapCfg.x)}</select></label>
+    <label>Columns<select class="sel" onchange="setFacet('cols', this.value)">${fopt(mapCfg.cols)}</select></label>
+    <label>Rows<select class="sel" onchange="setFacet('rows', this.value)">${fopt(mapCfg.rows)}</select></label>`;
+  const facets = [...facetKeys(mapCfg.cols), ...facetKeys(mapCfg.rows)];
   let pool = cells;
   for (const k of v.keys) {
-    if (k.name === mapCfg.x || k.name === mapCfg.y) continue;
+    if (k.name === mapCfg.x || k.name === mapCfg.y || facets.includes(k.name)) continue;
     const vals = [...new Set(pool.map(c => c[0][ix[k.name]]))].sort((a, b) => a > b ? 1 : a < b ? -1 : 0);
     ctl += `<label>${esc(k.name)}<select class="sel" onchange="setFixed('${k.name}', this.value)">${opt(vals, mapCfg.fixed[k.name])}</select></label>`;
     pool = pool.filter(c => c[0][ix[k.name]] === mapCfg.fixed[k.name]);
   }
+  if (v.grid && (v.grid[mapCfg.x] || v.grid[mapCfg.y]))
+    ctl += `<label>Axes<select class="sel" onchange="setAxes(this.value)">${[["lattice", "planned lattice"], ["measured", "measured values"]].map(([k, l]) => `<option value="${k}" ${mapCfg.axes === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>`;
   patch($("op-ctl"), ctl);
-  drawMap(pool, ix);
-  drawDiff(changed, ix);
+  // A long log facet chooses its slices here; exact facets always show every value present.
+  patch($("op-fchips"), ["cols", "rows"].map(w => {
+    const k = OPV.keys.find(x => x.name === mapCfg[w]);
+    if (!k || !k.log || facetTuples(mapCfg[w]).length <= 5) return "";
+    return `<span class="muted" style="font-size:12px">${esc(k.name)}</span>` + facetTuples(mapCfg[w]).map(t => { const s = t.join("|");
+      return `<button class="chip ${mapCfg.pick[w].includes(s) ? "on" : ""}" onclick="toggleFacet('${w}', '${esc(s)}')">${fmtN(t[0])}</button>`; }).join("");
+  }).join(""));
+  drawPanels();
+  drawDiff(changed);
 }
 
 // Tuning.Nearest (sweep_to_table.nearest) in the page: exact keys drop from the right until a pool exists,
 // then min sum w*|log2(row/key)| with the 1e-9 tie window, ties to the smaller log keys, then the earlier row.
+// Returns [row, distance].
 function nearestOf(rows) {
   const ks = OPV.keys, exact = [], logs = [];
   ks.forEach((k, i) => (k.log ? logs : exact).push(i));
@@ -438,95 +535,152 @@ function nearestOf(rows) {
         const c = a.findIndex((x, t) => x !== b[t]);
         if (c >= 0 && a[c] < b[c]) best = ri;
       });
-      return rows[best];
+      return [rows[best], m];
     }
-    return null;
+    return [null, null];
   };
 }
 // A key with no record: what the next table and the shipped one pick there (their nearest row's first entry).
 function holeOf(key) {
-  if (!OPV.__near) OPV.__near = [nearestOf(OPV.rows || []), nearestOf(OPV.table_rows || [])];
-  const [nr, tr] = OPV.__near.map(f => f(key));
-  return nr || tr ? { key, row: nr, trow: tr, pick: nr ? nr[1][0] : -1, old: tr ? tr[1][0] : -1 } : null;
+  if (!OPV.__near) { OPV.__near = [nearestOf(OPV.rows || []), nearestOf(OPV.table_rows || [])]; OPV.__holes = new Map(); }
+  const s = key.join("|");
+  if (OPV.__holes.has(s)) return OPV.__holes.get(s);
+  const [[nr, d], [tr]] = OPV.__near.map(f => f(key));
+  const h = nr || tr ? { key, row: nr, trow: tr, dist: d, pick: nr ? nr[1][0] : -1, old: tr ? tr[1][0] : -1,
+    tier: nr && nr[3] != null ? OPV.tiers[nr[3]] : null } : null;
+  OPV.__holes.set(s, h);
+  return h;
+}
+// Extrapolated cells fade with their weighted log2 distance to the serving row.
+const distAlpha = (d) => d == null ? .3 : d < 1e-9 ? .9 : d <= 1 ? .7 : d <= 2 ? .45 : .22;
+function rowRatios(row) {
+  const ms = row[2] || [], ix = row[1];
+  const margin = ms.length > 1 && ms[0] && ms[1] ? ms[1] / ms[0] : null;
+  const vi = ix.findIndex(i => i >= 0 && OPV.cands[i] === "vendor"), ni = ix.findIndex((i, q) => i >= 0 && OPV.cands[i] !== "vendor" && ms[q]);
+  return { margin, vendor: vi >= 0 && ni >= 0 && ms[vi] ? ms[vi] / ms[ni] : null };
 }
 function holeFill(h) {
   if (mode === "diff") {
     if (h.pick < 0 || h.old < 0 || h.pick === h.old) return ["var(--sunken)", 1];
     return ["var(--muted)", .35];
   }
-  if (h.pick < 0) return null;
-  return [famColor(OPV.families, family(OPV.cands[h.pick])), .5];
+  if (h.pick < 0 || !h.row) return null;
+  const a = distAlpha(h.dist);
+  if (mode === "margin") { const r = rowRatios(h.row).margin; return r ? [ramp(RAMP_MARGIN, marginT(r)), a] : null; }
+  if (mode === "vendor") { const r = rowRatios(h.row).vendor; return r ? [ramp(RAMP_VENDOR, vendorT(r)), a] : null; }
+  return [famColor(OPV.families, family(OPV.cands[h.pick])), a];
 }
 function holeTip(h) {
   const v = OPV, kt = k => v.keys.map((x, q) => `${x.name}=${k[q]}`).join(" "), nm = i => i >= 0 ? v.cands[i] : "a candidate this ledger does not list";
-  return `${kt(h.key)}\nnot measured: extrapolated, no timing` +
-    (h.row ? `\nnext table picks ${nm(h.pick)}, from its nearest row ${kt(h.row[0])}` : "\nthe next table has no row") +
+  return `${kt(h.key)}\nnot measured: extrapolated` +
+    (h.row ? `\nnext table picks ${nm(h.pick)}, from its nearest row ${kt(h.row[0])} (${h.tier || "?"}, log2 distance ${h.dist.toFixed(2)})` : "\nthe next table has no row") +
     (h.trow ? `\nshipped table picks ${nm(h.old)}, from its nearest row ${kt(h.trow[0])}` : "");
 }
 function cellFill(c) {
   const v = OPV;
   if (mode === "diff") {
     if (c[7] < 0 || c[9] < 0 || c[7] === c[9]) return ["var(--sunken)", 1];
-    if (c[8] == null) return ["var(--muted)", .35];
+    if (c[8] == null || c[11]) return ["var(--muted)", .35];
     const s = Math.min(1, Math.abs(Math.log(c[8])) / Math.log(2));
     return [c[8] >= 1 ? "var(--win)" : "var(--lose)", .25 + .75 * s];
   }
+  if (mode === "margin") return c[4] == null ? ["var(--muted)", .25] : [ramp(RAMP_MARGIN, marginT(1 + c[4])), 1];
+  if (mode === "vendor") return c[12] == null ? ["var(--muted)", .25] : [ramp(RAMP_VENDOR, vendorT(c[12])), 1];
   if (c[3] < 0) return ["var(--muted)", .25];
   const m = c[4] == null ? .5 : .3 + .7 * Math.min(1, Math.log1p(c[4]) / Math.log(1.5));
   return [famColor(v.families, family(v.cands[c[3]])), m];
 }
-function drawMap(pool, ix) {
-  const v = OPV, xi = ix[mapCfg.x], yi = ix[mapCfg.y];
-  if (!pool.length) { patch($("op-svg"), `<div class="empty">No cells in this slice${v.cells.length ? "" : ": this ledger is empty on " + esc(device)}.</div>`); patch($("op-leg"), ""); return; }
-  const xs = [...new Set(pool.map(c => c[0][xi]))].sort((a, b) => a - b), ys = [...new Set(pool.map(c => c[0][yi]))].sort((a, b) => a - b);
-  const L = 58, T = 8, W = 900, B = 34, cw = Math.max(6, Math.min(90, (W - L - 8) / xs.length)), ch = Math.max(10, Math.min(28, 760 / ys.length));
-  const H = T + ys.length * ch + B, at = new Map(pool.map(c => [`${c[0][xi]}|${c[0][yi]}`, c]));
-  let h = `<defs><pattern id="hatch" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v5" stroke="var(--surface)" stroke-width="1.6"/></pattern></defs>`, holes = 0;
-  ys.forEach((yv, i) => {
-    if (ys.length <= 40 || i % Math.ceil(ys.length / 40) === 0)
-      h += `<text x="${L - 6}" y="${T + i * ch + ch * .68}" text-anchor="end" font-size="${Math.min(11, ch * .8)}" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(yv)}</text>`;
-    xs.forEach((xv, j) => {
-      const c = at.get(`${xv}|${yv}`);
-      if (!c) {
-        const key = v.keys.map(k => k.name === mapCfg.x ? xv : k.name === mapCfg.y ? yv : mapCfg.fixed[k.name]);
-        const hole = holeOf(key), f = hole && holeFill(hole);
-        if (!f) return;
-        holes++;
-        const x0 = L + j * cw, y0 = T + i * ch, isSel = sel && sel.join("|") === key.join("|");
-        h += `<g class="h" data-k="${esc(JSON.stringify(key))}"><rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="${f[0]}" fill-opacity="${f[1]}"
-          stroke="${isSel ? "var(--ink)" : "none"}" stroke-width="2"/><rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="url(#hatch)"/><title>${esc(holeTip(hole))}</title></g>`;
-        return;
-      }
-      const [fill, op] = cellFill(c), x0 = L + j * cw, y0 = T + i * ch, tier = v.tiers[c[1]];
-      const isSel = sel && sel.join("|") === c[0].join("|");
-      const tip = `${v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" ")}\nwinner ${c[3] >= 0 ? v.cands[c[3]] : "none"}${c[4] != null ? `, runner-up +${(100 * c[4]).toFixed(1)}%` : ""}\n${tier}, round ${c[2]}${c[5] ? ", partly stale" : ""}${c[6] && c[6] !== "ok" ? `\naudit: ${c[6]}` : ""}` +
-        (c[7] >= 0 && c[9] >= 0 && c[7] !== c[9] ? `\ntable picks ${v.cands[c[7]]}, ledger ${v.cands[c[9]]}: ${fmtX(c[8])}` : "");
-      h += `<rect class="c" data-k="${esc(JSON.stringify(c[0]))}" x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="2" fill="${fill}" fill-opacity="${op}"
-        stroke="${isSel ? "var(--ink)" : c[6] && c[6] !== "ok" && c[6] !== "inconclusive" ? "var(--bad)" : "none"}" stroke-width="${isSel ? 2 : 1.5}"><title>${esc(tip)}</title></rect>`;
-      const cx = x0 + cw / 2, cy = y0 + ch / 2, r = Math.min(cw, ch) * .16;
-      if (tier === "coarse") h += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--surface)" pointer-events="none"/>`;
-      else if (tier === "preview") h += `<circle cx="${cx}" cy="${cy}" r="${r * 1.3}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
-      else if (tier === "custom") h += `<path d="M${cx - r} ${cy - r}L${cx + r} ${cy + r}M${cx + r} ${cy - r}L${cx - r} ${cy + r}" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
-      else if (tier === "converted") h += `<path d="M${cx} ${cy - r * 1.3}L${cx + r * 1.3} ${cy}L${cx} ${cy + r * 1.3}L${cx - r * 1.3} ${cy}Z" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
-      else if (tier === "transcribed") h += `<path d="M${cx - r * 1.3} ${cy}h${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
-      else if (tier === "prior") h += `<path d="M${cx} ${cy - r * 1.3}v${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
-      else if (tier === "calibrate") h += `<rect x="${cx - r}" y="${cy - r}" width="${2 * r}" height="${2 * r}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
-      if (c[5]) h += `<path d="M${x0 + cw - 1 - Math.min(cw, ch) * .35} ${y0 + 1}h${Math.min(cw, ch) * .35}v${Math.min(cw, ch) * .35}z" fill="var(--warn)" pointer-events="none"/>`;
+const facetLabel = (ks, t) => ks.map((n, q) => `${n}=${fmtN(t[q])}`).join(" ");
+const UNHASHED_TIERS = ["converted", "prior", "transcribed"];
+
+// Small multiples: columns and rows facet the cube, x and y are two log keys, every other key is fixed.
+// A measured cell is solid; an unmeasured one shows the next table's pick, fading with distance to its row.
+function drawPanels() {
+  const v = OPV, ix = keyIx(), xi = ix[mapCfg.x], yi = ix[mapCfg.y];
+  const cK = facetKeys(mapCfg.cols), rK = facetKeys(mapCfg.rows), cT = selTuples("cols"), rT = selTuples("rows");
+  const free = (n) => n === mapCfg.x || n === mapCfg.y || cK.includes(n) || rK.includes(n);
+  const inFacet = (key, ks, ts) => !ks.length || ts.some(t => ks.every((n, q) => key[ix[n]] === t[q]));
+  const slice = v.cells.filter(c => v.keys.every((k, i) => free(k.name) || c[0][i] === mapCfg.fixed[k.name]) && inFacet(c[0], cK, cT) && inFacet(c[0], rK, rT));
+  const axisVals = (name, i) => mapCfg.axes === "lattice" && v.grid && v.grid[name] ? v.grid[name] : [...new Set(slice.map(c => c[0][i]))].sort((a, b) => a - b);
+  const xs = axisVals(mapCfg.x, xi), ys = axisVals(mapCfg.y, yi);
+  if (!v.cells.length || !xs.length || !ys.length) {
+    patch($("op-svg"), `<div class="empty">No cells in this slice${v.cells.length ? "" : ": this ledger is empty on " + esc(device)}.</div>`); patch($("op-leg"), ""); return;
+  }
+  const at = new Map(slice.map(c => [c[0].join("|"), c]));
+  const hidden = slice.filter(c => !UNHASHED_TIERS.includes(v.tiers[c[1]]) && (!xs.includes(c[0][xi]) || !ys.includes(c[0][yi]))).length;
+  const single = cT.length * rT.length === 1;
+  const cw = single ? Math.max(8, Math.min(60, 840 / xs.length)) : 10, ch = single ? Math.max(10, Math.min(28, 640 / ys.length)) : 10;
+  const L = single ? 52 : 26, T = 4, B = single ? 30 : 14, W = L + xs.length * cw + 4, H = T + ys.length * ch + B;
+  const fs = single ? 10 : 7, tick = (n) => Math.max(1, Math.ceil(n / (single ? 16 : 4)));
+  let holes = 0, untimed = 0;
+  const panel = (ct, rt, firstCol, lastRow) => {
+    let h = "";
+    ys.forEach((yv, i) => {
+      const y0 = T + (ys.length - 1 - i) * ch;
+      if ((single || firstCol) && i % tick(ys.length) === 0)
+        h += `<text x="${L - 3}" y="${y0 + ch * .7}" text-anchor="end" font-size="${fs}" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(yv)}</text>`;
+      xs.forEach((xv, j) => {
+        const key = v.keys.map(k => k.name === mapCfg.x ? xv : k.name === mapCfg.y ? yv : cK.includes(k.name) ? ct[cK.indexOf(k.name)]
+          : rK.includes(k.name) ? rt[rK.indexOf(k.name)] : mapCfg.fixed[k.name]);
+        const x0 = L + j * cw, isSel = sel && sel.join("|") === key.join("|"), c = at.get(key.join("|"));
+        if (!c) {
+          const hole = holeOf(key), f = hole && holeFill(hole);
+          if (!f) return;
+          holes++;
+          const flat = hole.tier && UNHASHED_TIERS.includes(hole.tier);
+          if (flat) untimed++;
+          h += `<g class="h" data-k="${esc(JSON.stringify(key))}"><rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="1.5" fill="${f[0]}" fill-opacity="${f[1]}"
+            stroke="${isSel ? "var(--ink)" : "none"}" stroke-width="1.5"/>${flat ? `<rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="1.5" fill="url(#hatch)"/>` : ""}<title>${esc(holeTip(hole))}</title></g>`;
+          return;
+        }
+        const [fill, op] = cellFill(c), tier = v.tiers[c[1]];
+        const tip = `${v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" ")}\nmeasured: winner ${c[3] >= 0 ? v.cands[c[3]] : "none"}${c[4] != null ? `, runner-up +${(100 * c[4]).toFixed(1)}%` : ""}${c[12] != null ? `\nvendor ${fmtX(c[12])} the best native time` : ""}\n${tier}, round ${c[2]}${c[5] ? ", partly stale" : ""}${c[6] && c[6] !== "ok" ? `\naudit: ${c[6]}` : ""}` +
+          (c[7] >= 0 && c[9] >= 0 && c[7] !== c[9] ? `\ntable picks ${v.cands[c[7]]}, ledger ${v.cands[c[9]]}: ${fmtX(c[8])}${c[10] != null ? `, ${fmtMs(c[10])} ms` : ""}${c[11] ? " (within noise)" : ""}` : "");
+        h += `<rect class="c" data-k="${esc(JSON.stringify(c[0]))}" x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="1.5" fill="${fill}" fill-opacity="${op}"
+          stroke="${isSel ? "var(--ink)" : c[6] && c[6] !== "ok" && c[6] !== "inconclusive" ? "var(--bad)" : "none"}" stroke-width="${isSel ? 2 : 1.5}"><title>${esc(tip)}</title></rect>`;
+        const cx = x0 + cw / 2, cy = y0 + ch / 2, r = Math.min(cw, ch) * .16;
+        if (!single && UNHASHED_TIERS.includes(tier)) { untimed++; h += `<rect x="${x0 + .5}" y="${y0 + .5}" width="${cw - 1}" height="${ch - 1}" rx="1.5" fill="url(#hatch)" pointer-events="none"/>`; }
+        else if (!single) h += `<circle cx="${cx}" cy="${cy}" r="${Math.min(cw, ch) * .17}" fill="var(--surface)" stroke="var(--ink)" stroke-width=".4" pointer-events="none"/>`;
+        else if (tier === "coarse") h += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="var(--surface)" pointer-events="none"/>`;
+        else if (tier === "preview") h += `<circle cx="${cx}" cy="${cy}" r="${r * 1.3}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+        else if (tier === "custom") h += `<path d="M${cx - r} ${cy - r}L${cx + r} ${cy + r}M${cx + r} ${cy - r}L${cx - r} ${cy + r}" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+        else if (tier === "converted") h += `<path d="M${cx} ${cy - r * 1.3}L${cx + r * 1.3} ${cy}L${cx} ${cy + r * 1.3}L${cx - r * 1.3} ${cy}Z" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+        else if (tier === "transcribed") h += `<path d="M${cx - r * 1.3} ${cy}h${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
+        else if (tier === "prior") h += `<path d="M${cx} ${cy - r * 1.3}v${r * 2.6}" stroke="var(--surface)" stroke-width="1.4" pointer-events="none"/>`;
+        else if (tier === "calibrate") h += `<rect x="${cx - r}" y="${cy - r}" width="${2 * r}" height="${2 * r}" fill="none" stroke="var(--surface)" stroke-width="1.2" pointer-events="none"/>`;
+        if (c[5] && single) h += `<path d="M${x0 + cw - 1 - Math.min(cw, ch) * .35} ${y0 + 1}h${Math.min(cw, ch) * .35}v${Math.min(cw, ch) * .35}z" fill="var(--warn)" pointer-events="none"/>`;
+      });
     });
+    if (single || lastRow) xs.forEach((xv, j) => { if (j % tick(xs.length) === 0)
+      h += `<text x="${L + j * cw + cw / 2}" y="${T + ys.length * ch + fs + 2}" text-anchor="middle" font-size="${fs}" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(xv)}</text>`; });
+    if (single) {
+      h += `<text x="${L + xs.length * cw / 2}" y="${H - 3}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7">${esc(mapCfg.x)}</text>`;
+      h += `<text x="12" y="${T + ys.length * ch / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7" transform="rotate(-90 12 ${T + ys.length * ch / 2})">${esc(mapCfg.y)}</text>`;
+    }
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(facetLabel(cK, ct) + " " + facetLabel(rK, rt))}">${h}</svg>`;
+  };
+  const defs = `<svg width="0" height="0" style="position:absolute"><defs><pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v4" stroke="var(--surface)" stroke-width="1.3"/></pattern></defs></svg>`;
+  let html = defs + `<div class="facets" style="grid-template-columns:${rK.length ? "max-content " : ""}repeat(${cT.length}, minmax(${single ? 0 : 120}px, ${single ? "1fr" : "260px"}))">`;
+  if (cK.length) { if (rK.length) html += `<div></div>`; cT.forEach(t => html += `<div class="fh">${esc(facetLabel(cK, t))}</div>`); }
+  rT.forEach((rt, ri) => {
+    if (rK.length) html += `<div class="fr">${esc(facetLabel(rK, rt))}</div>`;
+    cT.forEach((ct, ci) => html += `<div class="fp">${panel(ct, rt, ci === 0, ri === rT.length - 1)}</div>`);
   });
-  const step = Math.ceil(xs.length / 16);
-  xs.forEach((xv, j) => { if (j % step === 0) h += `<text x="${L + j * cw + cw / 2}" y="${T + ys.length * ch + 14}" text-anchor="middle" font-size="10" fill="currentColor" opacity=".6" font-family="ui-monospace,monospace">${fmtN(xv)}</text>`; });
-  h += `<text x="${L + xs.length * cw / 2}" y="${H - 4}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7">${esc(mapCfg.x)}</text>`;
-  h += `<text x="12" y="${T + ys.length * ch / 2}" text-anchor="middle" font-size="11" fill="currentColor" opacity=".7" transform="rotate(-90 12 ${T + ys.length * ch / 2})">${esc(mapCfg.y)}</text>`;
-  patch($("op-svg"), `<svg viewBox="0 0 ${Math.max(W, L + xs.length * cw + 8)} ${H}" role="img" aria-label="Winner map">${h}</svg>`);
-  $("op-svg").querySelector("svg").onclick = (e) => { const r = e.target.closest("rect.c, g.h"); if (r) selectCell(JSON.parse(r.dataset.k)); };
-  const hatch = holes ? `<span><i style="background:repeating-linear-gradient(45deg,var(--muted) 0 2px,transparent 2px 4px)"></i>${holes} not measured: the nearest row's pick, extrapolated</span>` : "";
+  html += `</div>${single ? "" : `<div class="muted" style="font-size:11.5px;margin-top:6px">y: ${esc(mapCfg.y)} · x: ${esc(mapCfg.x)}${v.keys.filter(k => !free(k.name)).map(k => ` · ${esc(k.name)}=${esc(mapCfg.fixed[k.name])}`).join("")}</div>`}`;
+  patch($("op-svg"), html);
+  $("op-svg").onclick = (e) => { const r = e.target.closest("rect.c, g.h"); if (r) selectCell(JSON.parse(r.dataset.k)); };
+  const fade = holes ? `<span><i style="background:linear-gradient(90deg,var(--ink-2),transparent)"></i>${holes} not measured: the next table's pick, fading with distance to its row</span>` : "";
+  const hatch = untimed ? `<span><i style="background:repeating-linear-gradient(45deg,var(--muted) 0 2px,transparent 2px 4px)"></i>served by an untimed (transcribed, prior or converted) row</span>` : "";
+  const off = hidden ? `<span class="muted">${hidden} measured cells sit between lattice points: Axes → measured values shows them</span>` : "";
+  const dot = single ? "" : `<span class="muted">◦ measured</span>`;
   if (mode === "diff") patch($("op-leg"), `<span><i style="background:var(--win)"></i>the ledger's pick is faster than the table's</span><span><i style="background:var(--lose)"></i>slower</span>
-    <span><i style="background:var(--sunken);border:1px solid var(--hair-2)"></i>same pick</span><span><i style="background:var(--muted);opacity:.35"></i>changed, not timed at the cell</span>${hatch}<span class="muted">full colour at 2×</span>`);
+    <span><i style="background:var(--sunken);border:1px solid var(--hair-2)"></i>same pick</span><span><i style="background:var(--muted);opacity:.35"></i>changed, within noise or not timed</span>${fade}${hatch}${off}<span class="muted">full colour at 2×</span>`);
+  else if (mode === "margin") patch($("op-leg"), `<span>runner-up / winner <i style="width:120px;background:linear-gradient(90deg,${RAMP_MARGIN.join(",")})"></i>1× → 2×</span><span class="muted">yellow: a coin-flip, purple: decisive</span>${dot}${fade}${hatch}${off}`);
+  else if (mode === "vendor") patch($("op-leg"), `<span>vendor / best native <i style="width:120px;background:linear-gradient(90deg,${RAMP_VENDOR.join(",")})"></i>0.35× → 2.8×</span><span class="muted">orange: vendor faster, purple: native faster</span>${dot}${fade}${hatch}${off}`);
   else {
-    const present = [...new Set(pool.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
-    patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") + hatch +
-      `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, □ calibrate, ◇ converted, | prior, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>`);
+    const present = [...new Set(slice.map(c => c[3] >= 0 ? family(v.cands[c[3]]) : null).filter(Boolean))];
+    patch($("op-leg"), present.map(f => `<span><i style="background:${famColor(v.families, f)}"></i>${esc(f)}</span>`).join("") + dot + fade + hatch + off +
+      (single ? `<span class="muted">· paler: runner-up within a few % · ○ preview, • coarse, × custom, □ calibrate, ◇ converted, | prior, – transcribed, plain deep · <span style="color:var(--warn)">◥</span> partly stale · <span style="color:var(--bad)">□</span> audit mismatch</span>` : `<span class="muted">· paler: runner-up within a few %</span>`));
   }
 }
 
@@ -559,26 +713,36 @@ async function selectCell(key) {
       </tbody></table></div></details>`; }).join(""));
 }
 
-function drawDiff(changed, ix) {
+// Ranked by consequence: the ms the new pick saves at the cell (both medians from its own record);
+// a change whose two intervals overlap is noise and hidden unless asked for.
+function drawDiff(changed) {
   const v = OPV;
-  patch($("op-dsum"), changed.length ? `${changed.length} cells pick a different candidate than the shipped table` : "");
+  const noise = changed.filter(c => c[11]).length, untimed = changed.filter(c => c[10] == null).length;
+  const shown = diffNoise ? changed : changed.filter(c => !c[11]);
+  patch($("op-dsum"), changed.length ? `${changed.length} changed · ${noise} within noise · ${untimed} not timed at the cell
+    <label style="margin-left:10px;cursor:pointer"><input type="checkbox" ${diffNoise ? "checked" : ""} onchange="diffNoise=this.checked;drawOp()"> show noise</label>` : "");
   if (!v.table) { patch($("op-diff"), `<div class="empty">No shipped table for ${esc(v.op)} ${esc(v.dtype)} on ${esc(v.device)}: every cell is new.</div>`); return; }
   if (!changed.length) { patch($("op-diff"), `<div class="empty">The table <span class="mono">sweep_to_table.py</span> would write now picks what the shipped one picks at every measured cell.</div>`); return; }
-  const rows = changed.slice().sort((a, b) => ((a[8] ?? 1) - (b[8] ?? 1)) * diffSort).slice(0, 400);
-  patch($("op-diff"), `<table><thead><tr><th>Cell</th><th>Tier</th><th>Table picks</th><th>Ledger picks</th>
-    <th class="r s" onclick="diffSort=-diffSort;drawOp()">Predicted ${diffSort > 0 ? "↑" : "↓"}</th></tr></thead><tbody>${rows.map(c =>
+  const val = (c) => diffSort.col === "saved" ? c[10] : c[8];
+  const rows = shown.slice().sort((a, b) => (val(a) == null) - (val(b) == null) || (val(b) - val(a)) * diffSort.dir).slice(0, 400);
+  const th = (col, label) => `<th class="r s" onclick="diffSort=diffSort.col==='${col}'?{col:'${col}',dir:-diffSort.dir}:{col:'${col}',dir:1};drawOp()">${label}${diffSort.col === col ? (diffSort.dir > 0 ? " ↓" : " ↑") : ""}</th>`;
+  patch($("op-diff"), `<table><thead><tr><th>Cell</th><th>Tier</th><th>Table picks</th><th>Ledger picks</th>${th("saved", "Saved [ms]")}${th("speedup", "Speed-up")}</tr></thead><tbody>${rows.map(c =>
       `<tr class="link" onclick='jumpTo(${JSON.stringify(c[0])})'><td class="mono" style="font-size:12px">${esc(v.keys.map((k, q) => `${k.name}=${c[0][q]}`).join(" "))}</td>
-      <td>${esc(v.tiers[c[1]])}</td><td class="route">${esc(v.cands[c[7]])}</td><td class="route">${esc(v.cands[c[9]])}</td>
-      <td class="r"><span class="sp ${c[8] == null ? "" : c[8] >= 1 ? "win" : "lose"}">${fmtX(c[8])}</span></td></tr>`).join("")}</tbody></table>
+      <td>${esc(v.tiers[c[1]])}</td><td class="route" style="color:${famColor(v.families, family(v.cands[c[7]]))}">${esc(v.cands[c[7]])}</td>
+      <td class="route" style="color:${famColor(v.families, family(v.cands[c[9]]))}">${esc(v.cands[c[9]])}</td>
+      <td class="r num">${c[10] == null ? "—" : fmtMs(c[10])}${c[11] ? ' <span class="badge">noise</span>' : ""}</td>
+      <td class="r"><span class="sp ${c[8] == null || c[11] ? "" : c[8] >= 1 ? "win" : "lose"}">${fmtX(c[8])}</span></td></tr>`).join("")}</tbody></table>
     <p class="msg" style="padding:0 14px 12px">The table's pick is the first entry of its nearest row that this cell's record did not refuse; the ledger's is the same
-      lookup in the table <span class="mono">sweep_to_table.py</span> would write now. Predicted = the table pick's median over the ledger pick's, both from the
-      cell's own record; above 1× the new table is faster there. A race calls two candidates within 3% a tie and keeps the
-      earlier one, so a change can read as low as 0.971×.${changed.length > 400 ? ` Showing 400 of ${changed.length}.` : ""}</p>`);
+      lookup in the table <span class="mono">sweep_to_table.py</span> would write now. Saved = the table pick's median minus the ledger pick's, speed-up = their ratio,
+      both from the cell's own record. Noise: the two picks' intervals overlap (a race calls candidates within 3% a tie and keeps the earlier one).
+      Click a row to see it on the map.${shown.length > 400 ? ` Showing 400 of ${shown.length}.` : ""}</p>`);
 }
 function jumpTo(key) {
-  const ix = Object.fromEntries(OPV.keys.map((k, i) => [k.name, i]));
-  const fixed = {}; OPV.keys.forEach(k => { if (k.name !== mapCfg.x && k.name !== mapCfg.y) fixed[k.name] = key[ix[k.name]]; });
-  mapCfg.fixed = fixed; pickFixed(fixed); selectCell(key);
+  const ix = keyIx(), fixed = {};
+  ["cols", "rows"].forEach(w => { const ks = facetKeys(mapCfg[w]); if (!ks.length) return;
+    const t = ks.map(n => key[ix[n]]).join("|"); if (!mapCfg.pick[w].includes(t)) mapCfg.pick[w].push(t); });
+  OPV.keys.forEach(k => { fixed[k.name] = key[ix[k.name]]; });
+  mapCfg.fixed = {}; pickFixed(fixed); selectCell(key);
   $("op-svg").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 

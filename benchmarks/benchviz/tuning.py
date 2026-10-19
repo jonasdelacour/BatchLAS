@@ -370,13 +370,16 @@ class Ledgers:
         """Every best record of one dtype, compact, plus the shipped table's pick at it.
 
         cells[i] = [key values in '# keys:' order, tier, round, winner, runner-up margin,
-        partly stale, audit, shipped pick, predicted speedup, new pick]. A pick is the first entry
-        of the nearest row (shipped, or the rows ledger_rows gives now) that the cell's record did
-        not refuse (status skipped is can_run false); the speedup is the shipped pick's median over
-        the new pick's, both at this cell.
+        partly stale, audit, shipped pick, predicted speedup, new pick, saved ms, within noise,
+        vendor over best native]. A pick is the first entry of the nearest row (shipped, or the rows
+        ledger_rows gives now) that the cell's record did not refuse (status skipped is can_run
+        false); the speedup is the shipped pick's median over the new pick's, both at this cell,
+        and saved ms their difference. Within noise: the two picks' intervals overlap.
 
-        rows / table_rows = [[key values, [candidate index of each entry, -1 if not a candidate]]],
-        the next and the shipped table, so the map can show what either picks where nothing was measured.
+        rows / table_rows = [[key values, [candidate index of each entry, -1 if not a candidate],
+        [median ms of each entry or None], tier index (rows only)]], the next and the shipped table,
+        so the map can show what either picks where nothing was measured. grid = the newest run's
+        planned lattice per log key ({} before the run line carried it).
         """
         keyspec = v.keyspec if v else (t.keyspec if t and t.ok else [])
         names = [n for n, _, _ in keyspec]
@@ -390,6 +393,7 @@ class Ledgers:
         if v is None:
             return out
         out["next_rows"] = len(v.rows)
+        out["grid"] = run_grid(stt.newest(v.runs).get("grid", "")) if v.runs else {}
         cand_ix = {c: i for i, c in enumerate(v.cands)}
         cells = list(v.best.values())
         tkeys = [stt.key_tuple(keyspec, c["key"]) for c in cells]
@@ -399,24 +403,32 @@ class Ledgers:
             shipped = []
         if t:
             out["table"]["differ"] = self.sync(v, t)
-        out["rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e]] for k, (_, e) in v.rows.items()]
-        out["table_rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e]] for k, e in shipped]
+        out["rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e], [ms for _, ms in e], TIERS.index(tier)]
+                       for k, (tier, e) in v.rows.items()]
+        out["table_rows"] = [[list(k), [cand_ix.get(c, -1) for c, _ in e], [ms for _, ms in e]] for k, e in shipped]
         old_pick = Nearest(shipped, keyspec).lookup(tkeys) if shipped else [None] * len(cells)
         new_pick = Nearest([(k, e) for k, (_, e) in v.rows.items()], keyspec).lookup(tkeys)
         for c, tk, orow, nrow in zip(cells, tkeys, old_pick, new_pick):
-            med = {r["cand"]: float(r["median"]) for r in c["cands"]
-                   if r["status"] in TIMED and r["median"] and r["median"] > 0}
+            timed = [r for r in c["cands"] if r["status"] in TIMED and r["median"] and r["median"] > 0]
+            med = {r["cand"]: float(r["median"]) for r in timed}
+            ival = {r["cand"]: (r["lo"] or r["median"], r["hi"] or r["median"]) for r in timed}
             ranked = [r for r in c["ranked"] if r in med]
             margin = med[ranked[1]] / med[ranked[0]] - 1 if len(ranked) > 1 else None
             win = c["ranked"][0] if c["ranked"] else None
             refused = {r["cand"] for r in c["cands"] if r["status"] == "skipped" and r.get("reason") != "unraced:calibrate"}
             old = next((s for s, _ in orow if s not in refused), None) if orow else None
             new = next((s for s, _ in nrow if s not in refused), None) if nrow else None
-            sp = med[old] / med[new] if old in med and new in med else None
+            both = old in med and new in med
+            sp = med[old] / med[new] if both else None
+            noise = both and old != new and ival[old][0] <= ival[new][1] and ival[new][0] <= ival[old][1]
+            native = min((t for s, t in med.items() if stt.spelling_family(s) != "vendor"), default=None)
+            vr = med["vendor"] / native if "vendor" in med and native else None
             out["cells"].append([list(tk), TIERS.index(c["tier"]), c["round"], cand_ix.get(win, -1),
                                  None if margin is None else round(margin, 4), v.freshness(c) == "partly_stale",
                                  v.audit(c), cand_ix.get(old, -1) if old else -1,
-                                 None if sp is None else round(sp, 4), cand_ix.get(new, -1) if new else -1])
+                                 None if sp is None else round(sp, 4), cand_ix.get(new, -1) if new else -1,
+                                 round(med[old] - med[new], 6) if both else None, noise,
+                                 None if vr is None else round(vr, 4)])
         return out
 
     def cell(self, op: str, dtype: str, device: str, key: list) -> dict:
@@ -438,6 +450,18 @@ class Ledgers:
                                    for r in c["cands"]]})
         recs.sort(key=lambda r: (not r["best"], TIERS.index(r["tier"]), r["date"]))
         return {"records": recs}
+
+
+def run_grid(text: str) -> dict:
+    """A run line's `grid` ("n=1,2,4 batch=8,16") as {key: [ints]}; malformed words are skipped."""
+    out = {}
+    for word in text.split():
+        name, _, vals = word.partition("=")
+        try:
+            out[name] = sorted(int(x) for x in vals.split(",") if x)
+        except ValueError:
+            continue
+    return out
 
 
 class Nearest:

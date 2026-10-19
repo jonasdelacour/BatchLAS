@@ -674,6 +674,23 @@ medians in that one record. A race calls candidates within 3% a tie and keeps th
 a changed pick can read as low as 0.971×. Against main's tables (2026-10-09), gemm double
 on sm_120 changes 2918 picks, geomean 1.08× where both are timed.
 
+**Decision map and ranked diff (2026-10-19).** A table over three log keys and three exact keys,
+such as gemm, cannot be read one slice at a time. The map is therefore small multiples. Columns
+and rows each facet one key, or the pair of two exact keys (gemm: columns ta × tb, rows four k
+slices chosen from the planned lattice). The axes are the run's planned lattice (the `grid` of its
+run line), and the remaining keys are fixed, by default to the densest *measured* slice, with
+batch at the largest value holding a quarter of the commonest one's cells. An unmeasured cell shows
+the next table's pick and fades with the weighted log2 distance to its serving row (the section 5.4
+lookup distance). Cells served by an untimed row (converted, prior, transcribed) are hatched.
+Without the fading, gemm float TT on sm_89 reads as a clean rule when it rests on 10 measured
+cells. Two more colourings come from the same data: margin (runner-up over winner, 1× to 2×) shows
+where a boundary is a coin-flip; vs vendor (vendor over the best native time) shows where native
+work would pay. The diff is ranked by the milliseconds the new pick saves at the cell. A change
+whose two picks' intervals overlap is marked as noise and hidden by default. On the 2026-10-18
+coarse gemm sm_89 run, 2549 float picks change, 281 within noise and 1709 not timed at the cell
+(transcribed). The cells that matter come first: batch-32768 8×8×8 TT moves from cuBLAS to `small`
+(43×).
+
 Two engine additions came with it: every progress event carries `t` (Unix seconds), and `--plan`
 emits one `plan_job` event per (op, dtype) (tools/tune/README.md). `ledger_rows` now compares a row
 only with keys in its own and the adjacent `floor(index / stride)` buckets. All 70 sm_120 ledger

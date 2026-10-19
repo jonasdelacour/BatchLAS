@@ -147,10 +147,16 @@ class Status(unittest.TestCase):
         u8 = by[("U", 8, 128)]
         self.assertEqual(u8[7], u8[9])
         self.assertAlmostEqual(n8[4], 2.0)  # runner-up margin: cta 3.0 over tiny 1.0, minus 1
+        # saved ms (cta 3 - tiny 1), not within noise (point intervals), vendor 4 over best native tiny 1
+        self.assertEqual((n8[10], n8[11], n8[12]), (2.0, False, 4.0))
+        self.assertEqual((n64[10], n64[12]), (1.0, 2.0))
+        self.assertEqual((u8[10], u8[11], u8[12]), (0.0, False, None))
+        rows3 = {tuple(r[0]): r for r in v["rows"]}
+        self.assertEqual((rows3[("L", 8, 128)][2], v["tiers"][rows3[("L", 8, 128)][3]]), ([1.0, 3.0, 4.0], "deep"))
         # the map fills unmeasured keys from these: every entry in order, -1 for a spelling the ledger lacks
-        rows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e in v["rows"]}
+        rows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e, *_ in v["rows"]}
         self.assertEqual(rows[("L", 8, 128)], ["tiny", "cta", "vendor"])
-        trows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e in v["table_rows"]}
+        trows = {tuple(k): [v["cands"][i] if i >= 0 else None for i in e] for k, e, *_ in v["table_rows"]}
         self.assertEqual(trows[("L", 64, 128)], ["blocked", "vendor", "cta"])
 
     def test_cell_lists_every_record_best_first(self):
