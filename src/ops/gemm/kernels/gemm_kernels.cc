@@ -422,6 +422,16 @@ void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T,
     throw batchlas::unsupported("gemm: " + what + " (the choice's can_run should have refused it)");
 }
 
+// can_run's slm_budget_for(wg) term, so a pin it refuses throws here rather than at submit.
+// Only a request above 48 KiB less the reserve can miss a non-Metal budget, so those skip the query.
+void refuse_over_budget(Queue& ctx, const char* who, std::int64_t bytes, int wg) {
+    if (!BATCHLAS_HAS_SYCL_BACKEND && bytes <= std::int64_t(resident::device_slm_budget(48 * 1024))) return;
+    const auto budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), wg));
+    if (bytes > static_cast<std::int64_t>(budget))
+        refuse(std::string(who) + " needs " + std::to_string(bytes) + " B of local memory; the device budgets " +
+               std::to_string(budget));
+}
+
 } // namespace
 
 template <typename T>
@@ -444,6 +454,9 @@ Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
     static_cast<void>(k_b);
     if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDimFor<T>)
         refuse("small serves max(m, n, k) <= " + std::to_string(sycl_gemm_small::kSmallMaxDimFor<T>));
+    const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
+    const int mx = static_cast<int>(std::max({m, n, k}));
+    refuse_over_budget(ctx, "small", og::small_slm_bytes<T>(nn, mx), og::small_wg<T>(nn, mx));
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
     return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
 }
@@ -489,6 +502,7 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
     static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
         constexpr og::WideCfg c = og::wide_configs[I];
         if (out || c.m != tm || c.n != tn || c.k != tk) return;
+        refuse_over_budget(ctx, "wide", og::wide_slm_bytes<T>(c), c.threads());
         static_for<9>([&](auto F) {
             launch_wide_form<T, decltype(I)::value, decltype(F)::value>(out, ctx, A, B, C, alpha, beta, transA,
                                                                         transB);

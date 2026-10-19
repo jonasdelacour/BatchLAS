@@ -220,9 +220,11 @@ public:
             "src/ops/gemm/kernels/register_tiled_common.hh",
             // family: wide
             "src/ops/gemm/kernels/register_wide_transposed.hh",
+            "src/sycl/device_scalar.hh",
             // family: small
             "src/ops/gemm/kernels/small_batched.hh",
             "src/ops/gemm/kernels/vec4.hh",
+            "src/sycl/device_scalar.hh",
             // family: tiled
             "src/ops/gemm/kernels/tiled_general.hh",
             // common

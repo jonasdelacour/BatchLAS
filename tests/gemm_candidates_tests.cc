@@ -984,8 +984,9 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 // nine forms, at batch 1024 repeating 7 problems: complex alpha and beta != 0 with nonzero imaginary
 // parts, on odd ld, stride and base (strided) and 16-byte bases with odd ld (aligned-odd-ld). Each
 // again at batch 3 with beta = 0 and NaN in C. A transposed A goes through local memory before op(B)
-// does, so a dropped conj (C forms only), a swapped stage index (T and C forms of A), a missing
-// barrier between the two stages (a race across items) or a real-only epilogue each go red here.
+// does, so a dropped conj (C forms only), a swapped stage index (T and C forms of A) or a real-only
+// epilogue each go red here. A missing barrier between the two stages races the warps of one slot
+// (2 NB lanes), so only NB 32 and 64 can see it, and only when batch 1024 happens to expose it.
 // complex<double> above 32 is refused by the pin and leaves C bit for bit.
 TYPED_TEST(GemmCandidates, SmallEveryBucketEveryFormAtSaturatingBatch) {
     using T = typename TestFixture::T;

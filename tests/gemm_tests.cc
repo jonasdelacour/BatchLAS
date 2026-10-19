@@ -346,34 +346,49 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     A.set_active_dims(ar.to_span(), ac.to_span());
     B.set_active_dims(br.to_span(), bc.to_span());
     C.set_active_dims(cr.to_span(), cc.to_span());
-    const ScalarType alpha = ScalarType(Real(1.5)), beta = ScalarType(Real(-0.5));
-    for (const char* word : {"tiled", "direct", "wide:m=64:n=64:k=16"}) {
-        SCOPED_TRACE(word);
+    // Complex alpha and beta with nonzero imaginary parts, so a dropped imaginary term is red.
+    ScalarType alpha = ScalarType(Real(1.5)), beta = ScalarType(Real(-0.5));
+    if constexpr (batchlas::is_std_complex_v<ScalarType>)
+        alpha = ScalarType(Real(1.5), Real(-0.75)), beta = ScalarType(Real(-0.5), Real(0.25));
+    const auto reset = [&] {
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < mn; ++j)
                 for (int i = 0; i < mm; ++i) C(i, j, b) = C0(i, j, b);
+    };
+    const auto item_matches = [&](int b) {
+        return GemmMatchesDefinition<ScalarType>(*(this->ctx), ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans,
+                                                 ActiveItem(B, b, br[b], bc[b]), Transpose::NoTrans,
+                                                 ActiveItem(C0, b, cr[b], cc[b]), ActiveItem(C, b, cr[b], cc[b]),
+                                                 alpha, beta, ac[b]);
+    };
+    // item 1 is 64 x 64 x 32: small runs it below a 16-byte scalar (complex<double> stops at 32)
+    std::vector<const char*> words{"tiled", "direct", "wide:m=64:n=64:k=16"};
+    if constexpr (sizeof(ScalarType) < 16) words.push_back("small");
+    for (const char* word : words) {
+        SCOPED_TRACE(word);
+        reset();
         {
             const GemmPin pin(word);
             (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
                        Transpose::NoTrans, ComputePrecision::Default);
             this->ctx->wait();
         }
-        for (int b = 0; b < batch; ++b)
-            ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans, ActiveItem(B, b, br[b], bc[b]),
-                                                          Transpose::NoTrans, ActiveItem(C0, b, cr[b], cc[b]), ActiveItem(C, b, cr[b], cc[b]),
-                                                          alpha, beta, ac[b]))
-                << "item " << b;
+        for (int b = 0; b < batch; ++b) ASSERT_TRUE(item_matches(b)) << "item " << b;
     }
-    if constexpr (sizeof(ScalarType) < 16) {
-        const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 (complex<double>: 33) would not
-        (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                   ComputePrecision::Default);
-        this->ctx->wait();
-    } else {
-        const GemmPin pin("small");
-        EXPECT_THROW(((void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
-                                 Transpose::NoTrans, ComputePrecision::Default)),
-                     std::invalid_argument);
+    if constexpr (sizeof(ScalarType) >= 16) {
+        // The loop launches items in order with no rollback (gemm_heterogeneous.hh): item 0 is
+        // written by small before item 1 refuses, and the refused item stays untouched.
+        reset();
+        {
+            const GemmPin pin("small");
+            EXPECT_THROW(((void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
+                                     Transpose::NoTrans, ComputePrecision::Default)),
+                         std::invalid_argument);
+            this->ctx->wait();
+        }
+        EXPECT_TRUE(item_matches(0)) << "item 0, launched before item 1 refused";
+        for (int j = 0; j < cc[1]; ++j)
+            for (int i = 0; i < cr[1]; ++i) ASSERT_EQ(C(i, j, 1), C0(i, j, 1)) << "refused item 1 at " << i << "," << j;
     }
 }
 
