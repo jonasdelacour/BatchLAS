@@ -496,7 +496,7 @@ using batchlas::sycl_device::Cx;
 // floats per element. It makes the k-contiguous operand's transposing store conflict-free: one
 // bank-conflict set (an 8-lane phase of a 16-byte store, a warp of float ones) spans 4 row groups
 // (kk / VecN) x 2 adjacent granules (GemmWide64Body::first_k), so bits 1-2 follow the row
-// group. Four values, so the fragment read needs only four offsets. Float at TileK = 8 has two
+// group. For CF <= 2 that is four values, so the fragment read needs four offsets. Float at TileK = 8 has two
 // row groups x 4 granules per warp, so its row group flips bit 2. complex<double> (one element
 // per granule) puts 8 consecutive kk in a phase, so kk & 7 spreads them over all 32 banks.
 // evidence: docs/perf/gemm.md#gemm-wp-j-complex-double-on-wide-v2
@@ -529,13 +529,16 @@ inline void fma_signed(Cx<R>& acc, Cx<R> a, Cx<R> b) {
     acc.im = sycl::fma(CA ? -a.im : a.im, b.re, acc.im);
 }
 
-// complex<double> is the whole granule, re-typed through private memory (a register move).
+// complex<double> is the whole granule, bit-cast (a register move; acpp leaves a memcpy'd private
+// copy of a 16-byte complex<double> on the stack). Metal's struct Vec4 is not trivially copyable.
 template <typename D>
 inline D elem(const Vec4<float>& t, int w) {
     if constexpr (std::is_same_v<D, float>) {
         return t[w];
     } else if constexpr (std::is_same_v<D, Cx<float>>) {
         return D{t[2 * w], t[2 * w + 1]};
+    } else if constexpr (std::is_trivially_copyable_v<Vec4<float>>) {
+        return __builtin_bit_cast(D, t);
     } else {
         const float f[4] = {t[0], t[1], t[2], t[3]};
         D d;

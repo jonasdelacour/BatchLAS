@@ -261,8 +261,9 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
 }
 
 // The kernel-trace name the pinned choice must launch; "" for the vendor (no SYCL kernel).
+// base8: the operands sit 8 bytes past a 16-byte boundary (run_pinned_base8).
 template <typename T>
-std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_layout) {
+std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_layout, bool base8 = false) {
     return std::visit(overloaded{
         [](og::Direct) { return std::string("gemm_sycl_direct"); },
         [](og::Tiled) { return std::string("gemm_sycl_tiled16"); },
@@ -279,7 +280,7 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
             // Wide v2 (64x64, every scalar but double) has the 16-byte leg in every form; of the
             // others only double's NN 64x64x16 kernel has an aligned leg (64x64x8 NN is transposed's).
-            const bool aligned = aligned_layout || sizeof(T) == 16;
+            const bool aligned = !base8 && (aligned_layout || sizeof(T) == 16);
             const bool v2 = w.m == 64 && w.n == 64 && !std::is_same_v<T, double>;
             const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
@@ -597,6 +598,25 @@ protected:
         const Pin pin("gemm", c);
         run(p);
     }
+    // p's buffer moved one real in (complex<double>: 8 bytes, its alignof), so every base is 8 mod
+    // 16 and wide v2 takes its element leg; copied back for expect_gemm.
+    void run_pinned_base8(const C& c, Problem<T>& p) {
+        static_assert(sizeof(T) == 2 * sizeof(RealOf<T>), "a complex scalar");
+        UnifiedVector<RealOf<T>> raw(2 * p.mem.size() + 1, RealOf<T>(0));
+        T* base = reinterpret_cast<T*>(raw.data() + 1);
+        ASSERT_EQ(reinterpret_cast<std::uintptr_t>(base) % 16u, sizeof(T) / 2);
+        std::memcpy(base, p.mem.data(), p.mem.size() * sizeof(T));
+        UnifiedVector<T*> pa(p.s.batch, nullptr), pb(p.s.batch, nullptr), pc(p.s.batch, nullptr);
+        auto view = [&](const Region& g, UnifiedVector<T*>& ptrs) {
+            return MVof<T>(base + g.off, g.rows, g.cols, g.ld, g.stride, p.s.batch, ptrs.data());
+        };
+        {
+            const Pin pin("gemm", c);
+            (void)gemm<B, T>(*this->ctx, view(p.a, pa), view(p.b, pb), view(p.c, pc), p.alpha, p.beta, p.s.ta, p.s.tb);
+            this->ctx->wait();
+        }
+        std::memcpy(p.mem.data(), base, p.mem.size() * sizeof(T));
+    }
     std::string auto_choice(const Spec& s) {
         const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
         auto p = make_problem<T>(s);
@@ -856,13 +876,14 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 // on a packed tile multiple, predicated on a strided view, so a fast-leg predicate stuck at false
 // goes red here. 128x128x8 adds a padded view (aligned) and, per transposed form, a packed shape
 // whose stored dims divide the tiles while the effective m or n does not (predicated). Wide v2
-// adds every wide_v2_leg_layouts row on a ragged shape (the leg is layout only). A swapped
+// adds every wide_v2_leg_layouts row on a ragged shape (the leg is layout only) and, for
+// complex<double>, a padded view at an 8-byte base (its only element-leg layout). A swapped
 // launch arm shows here even where both kernels give the same bits. threadsafe: the child
 // re-executes the binary with BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     using T = typename TestFixture::T;
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    struct Case { C c; Spec s; std::string kernel; };
+    struct Case { C c; Spec s; std::string kernel; bool base8 = false; };
     std::vector<Case> cases;
     for (const C& c : og::candidates<T>()) {
         if (std::holds_alternative<og::Vendor>(c)) continue;
@@ -876,11 +897,16 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                 }
                 if (const auto* w = std::get_if<og::Wide>(&c);
                     w && w->m == 64 && w->n == 64 && kWideV2<T> && oracle_native<T>(c, ta, tb, 160, 136, 48))
+                {
                     for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
                         Spec s{ta, tb, 160, 136, 48, 2, la};
                         if (lb != la) s.layout_b = lb;
                         cases.push_back({c, s, expected_kernel<T>(c, ta, tb, vec)});
                     }
+                    if (std::is_same_v<T, std::complex<double>>)
+                        cases.push_back({c, Spec{ta, tb, 160, 136, 48, 2, Layout::Padded},
+                                         expected_kernel<T>(c, ta, tb, true, true), true});
+                }
                 const auto* r = std::get_if<og::Reg>(&c);
                 if (!r || r->m != 128 || r->n != 128 || !oracle_native<T>(c, ta, tb, 128, 128, 64)) continue;
                 cases.push_back({c, Spec{ta, tb, 128, 128, 64, 2, Layout::Padded}, expected_kernel<T>(c, ta, tb, true)});
@@ -896,6 +922,12 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     auto child = [&] {
         for (const auto& k : cases) {
             auto p = make_problem<T>(k.s);
+            if constexpr (std::is_same_v<T, std::complex<double>>) {
+                if (k.base8) {
+                    this->run_pinned_base8(k.c, p);
+                    continue;
+                }
+            }
             this->run_pinned(k.c, p);
         }
         std::exit(0);
@@ -1482,6 +1514,46 @@ TYPED_TEST(GemmCandidates, WideV2TileAndSlabEdgesUnderNaNPoison) {
         EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
         EXPECT_EQ(ran, tiles * 9 * 5 * 7);
         EXPECT_EQ(saturated, tiles * 9);
+    }
+}
+
+// WP-J, complex<double> wide v2's element leg (VecLoads = false), reachable only through an 8-byte
+// base: every other layout is whole granules. Both slabs, all 9 forms, beta != 0, NaN in every
+// gap: 160 x 136 x 48 padded (interior groups, unpredicated full slabs), 100 x 70 x 37 at
+// ld = m + 1 (edge groups, the zero-filled k tail), then 160 x 136 x 48 at batch 1024, 7 distinct
+// problems, each item bit-identical to its representative. The element load's re-typed zero fill
+// or the four-float reassembly is wrong here and in no 16-byte-leg case.
+// evidence: docs/perf/gemm.md#gemm-wp-j-complex-double-on-wide-v2
+TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, std::complex<double>>) {
+        GTEST_SKIP() << "only complex<double> has an 8-byte base inside its 16-byte granule";
+    } else {
+        struct Shape { int m, n, k; Layout layout; int batch; };
+        const Shape shapes[] = {{160, 136, 48, Layout::Padded, 4}, {100, 70, 37, Layout::Gap1, 4},
+                                {160, 136, 48, Layout::Padded, 1024}};
+        int ran = 0, tiles = 0;
+        for (const C c : {C{og::Wide{64, 64, 8}}, C{og::Wide{64, 64, 16}}}) {
+            if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) continue;
+            ++tiles;
+            for (Transpose ta : kForms)
+                for (Transpose tb : kForms)
+                    for (const Shape& sh : shapes) {
+                        Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                        s.nan_poison = true;
+                        if (sh.batch > 8) s.period = 7;
+                        s.seed = 9300u + sh.m + 3u * sh.k + unsigned(sh.batch);
+                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        auto p = make_problem<T>(s);
+                        this->run_pinned_base8(c, p);
+                        if (::testing::Test::HasFatalFailure()) return;
+                        expect_gemm(*this->ctx, p, name(c, s) + " (8-byte base)");
+                        if (::testing::Test::HasFatalFailure()) return;
+                        ++ran;
+                    }
+        }
+        EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
+        EXPECT_EQ(ran, tiles * 9 * 3);
     }
 }
 

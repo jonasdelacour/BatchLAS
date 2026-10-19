@@ -87,7 +87,8 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
     return false;
 }
 
-// The same for a wide pin: complex<double> wide v2 64x64x16 asks for 64 KiB, over acpp's 48 KiB.
+// The same for a wide pin: complex<double> wide v2 64x64x16 asks for 64 KiB, over acpp's 48 KiB
+// and any 64 KiB device's budget, so the refusal is checked wherever it does not fit.
 template <typename T>
 bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
     int m = 0, n = 0, k = 0;
@@ -98,13 +99,11 @@ bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
     const std::int64_t budget =
         select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
     if (ops::gemm::wide_slm_bytes<T>(*cfg) <= budget) return true;
-    EXPECT_TRUE(test_utils::kSlmCappedAt48KiB)
-        << word << " needs " << ops::gemm::wide_slm_bytes<T>(*cfg) << " B of local memory; this device budgets " << budget;
     ExpectPinRefused<T>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
     return false;
 }
 #define SKIP_UNLESS_WIDE_FITS(T, ctx, word) \
-    if (!WideTileFitsOrIsRefused<T>(ctx, word)) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead"
+    if (!WideTileFitsOrIsRefused<T>(ctx, word)) GTEST_SKIP() << word << " is above this device's local memory budget; the refusal was checked instead"
 
 // C against alpha op(A) op(B) + beta C0, componentwise in double on every item (Check::blas, k the inner
 // dimension). The reference is the library's, not another gemm: the vendor and the other native kernels

@@ -1185,12 +1185,17 @@ double keeps the old kernels.
   so without the XOR all 8 lanes hit the same 4 banks. The fragment read and the i-contiguous store stay
   conflict-free under any per-row XOR.
 - **`fma_signed` and `elem`** are templated over the real type; a complex<double> fragment is the 16-byte
-  granule re-typed through private memory, a register move.
+  granule bit-cast (`__builtin_bit_cast`), a register move. A `memcpy` through a private array is the
+  pattern acpp leaves on the stack for 16-byte complex<double> (`check_acpp_jit.py` STACK_KNOWN); not yet
+  checked on an acpp tree.
 - **Launch bound** 1 group per CU (8 warps): FP64 runs at 1/64 rate, so the kernel is compute-bound and needs no
   more warps. 2 groups would cap registers at 128 against 134-224 used.
 - **Local memory:** 64 KiB at k = 16 and 32 KiB at k = 8 (`wide_slm_bytes`, static_asserted against the
-  kernel). The k = 16 tile is over acpp's 48 KiB without `BATCHLAS_ACPP_SLM_OPTIN`, so can_run refuses it
-  there; `gemm_tests` checks the refusal through `WideTileFitsOrIsRefused`.
+  kernel). **Capability loss:** the k = 16 tile no longer fits a budget under 64 KiB (local memory less the
+  4 KiB reserve): acpp without `BATCHLAS_ACPP_SLM_OPTIN` (48 KiB) and any 64 KiB device such as Intel Arc
+  (60 KiB budget), where the old 32 KiB kernels ran it. can_run refuses `wide:m=64:n=64:k=16` there and Auto
+  falls through the table; `gemm_tests` checks the refusal wherever the tile is over budget
+  (`WideTileFitsOrIsRefused`). k = 8 (32 KiB) still runs.
 
 **Registers** (`scripts/register_probe.sh`, ptxas, sm_120): zero spill and no stack frame on all 457 entry
 functions of `libbatchlas_sycl`. The 36 complex<double> v2 instances:
@@ -1209,9 +1214,11 @@ Tests:
 - `WideV2TileAndSlabEdgesUnderNaNPoison` covers both slabs and all 9 forms. Its shapes are m, n ∈ {63..65,
   127..129} and k ∈ {7, 8, 9, 15, 16, 17, 33}, with NaN in every gap, then 129×65×33 at batch 1024 with
   bit-identical items.
-- complex<double> takes the 16-byte leg on every test layout: ld and stride are always whole granules, and
-  element offsets keep 16-byte bases. Only an 8-byte-aligned base reaches the element leg, and no test builds
-  one.
+- complex<double> takes the 16-byte leg on every element-offset layout: ld and stride are always whole
+  granules and bases stay 16-byte aligned. Only an 8-byte base reaches the element leg:
+  `WideV2ComplexDoubleElementLegAtAnEightByteBase` copies each problem one double in (both slabs, 9 forms,
+  NaN gaps, beta ≠ 0, 160×136×48 padded and 100×70×37 at ld = m + 1, then batch 1024), and
+  `PinnedChoiceLaunchesItsOwnKernel` checks that view launches the element-leg kernel.
 
 Deliberate breaks, unrun:
 
@@ -1230,6 +1237,12 @@ Deliberate breaks, unrun:
 - NC strided 1024×32×1024 b128;
 - CT packed 512³ b128;
 - NN packed 512³ b128 against the parent's NN kernel.
+
+**Stale table rows:** the cdouble rows of `tuned/gemm.sm_120.txt` and `tuned/gemm.sm_89.txt` that rank a
+64x64 wide spelling first (e.g. m = n = k = 64 b2048, 128×128×8) were timed on the old NN and
+`launch_wide_transposed` kernels. The wide family hash marks them stale but Auto still follows them, so those
+cells now run an unmeasured kernel. Before merge: a saturation A/B (batch ≥ 128, beta = 1, strided ld) against
+the parent, or a retune of the cdouble wide rows.
 
 ## GEMM: the register-tiled launcher table
 
