@@ -147,6 +147,12 @@ const std::vector<WideRow>& wide_rows() {
         {16, 16, 16, {{"NN", "gemm_sycl_register_16x16_k16_wide"}, {"NT", "gemm_sycl_register_16x16_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_16x16_k16_wide_nc"}, {"TN", "gemm_sycl_register_16x16_k16_wide_tn"},
                       {"CN", "gemm_sycl_register_16x16_k16_wide_cn"}, {"CT", "gemm_sycl_register_16x16_k16_wide_ct"}}},
+        {64, 32, 16, {{"NN", "gemm_sycl_register_64x32_k16_wide"}, {"NT", "gemm_sycl_register_64x32_k16_wide_nt"},
+                      {"NC", "gemm_sycl_register_64x32_k16_wide_nc"}, {"TN", "gemm_sycl_register_64x32_k16_wide_tn"},
+                      {"CN", "gemm_sycl_register_64x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_64x32_k16_wide_ct"}}},
+        {32, 64, 16, {{"NN", "gemm_sycl_register_32x64_k16_wide"}, {"NT", "gemm_sycl_register_32x64_k16_wide_nt"},
+                      {"NC", "gemm_sycl_register_32x64_k16_wide_nc"}, {"TN", "gemm_sycl_register_32x64_k16_wide_tn"},
+                      {"CN", "gemm_sycl_register_32x64_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x64_k16_wide_ct"}}},
     };
     return rows;
 }
@@ -675,8 +681,8 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
     }
     const auto [reg_missing, wide_missing] = missing_instantiations<T>();
     EXPECT_GE(checked, reg_missing + wide_missing) << "every (config, form) the oracle rows do not list";
-    // Pinned apart from the rows: complex 0+5+5+3+3, real (T folds to C) 0+5+5+4+4.
-    EXPECT_EQ(wide_missing, kCx<T> ? 16 : 18) << "a wide oracle row changed its forms";
+    // Pinned apart from the rows: complex 0+5+5+3+3+3+3, real (T folds to C) 0+5+5+4+4+4+4.
+    EXPECT_EQ(wide_missing, kCx<T> ? 22 : 26) << "a wide oracle row changed its forms";
     // Float: four NN-only tiles x 8 transposed (ta, tb), 128x64x16's NN, 32x128x16's NT and NC.
     if constexpr (std::is_same_v<T, float>) EXPECT_EQ(reg_missing, 4 * 8 + 1 + 2) << "a reg oracle row changed its forms";
     EXPECT_GT(checked, 0);
@@ -1060,13 +1066,45 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
             }
     }
     // Float: reg 15 + 4 x 26 (a 48 KiB cap drops only u4 and u2, NN only: 2 x 5),
-    // wide 8 + 4 x 14; double and complex<float> wide 8 + 4 x 14; complex<double> wide 4 x 14.
+    // wide 12 + 4 x 20; double and complex<float> wide 12 + 4 x 20; complex<double> wide 4 x 20.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
         EXPECT_GE(reg, g_slm_budget < 49920 ? 109 : 119);
     }
-    EXPECT_GE(wide, kWide16 ? 56 : 64);
-    EXPECT_GE(nan_checked, 3 * 14);
+    EXPECT_GE(wide, kWide16 ? 80 : 92);
+    EXPECT_GE(nan_checked, 3 * 20);
+}
+
+// WP-E, the skinny wide tiles 64x32 and 32x64 (128 lanes) in every form they instantiate (complex
+// six, real five: CT folds to the uncompiled CC). The NN 64x32x256 b128 target and its mirror at
+// batch 1024 strided (staged epilogue) and 128 padded (band store), 7 distinct problems; then m and
+// n straddling the 32 and 64 tile edges both ways, ragged k on the +1 side, on both layouts. A
+// band separation or tile count derived from the other extent is wrong only on a non-square tile;
+// an off-by-one edge predicate writes outside C at 33 or 65, or drops the last row at 32 or 64.
+TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges) {
+    using T = typename TestFixture::T;
+    struct Shape { int m, n, k; Layout layout; int batch; };
+    std::vector<Shape> shapes{{64, 32, 256, Layout::Strided, 1024}, {32, 64, 256, Layout::Strided, 1024},
+                              {64, 32, 256, Layout::Padded, 128},   {32, 64, 256, Layout::Padded, 128}};
+    const std::pair<int, int> edges[] = {{32, 64}, {33, 65}, {64, 32}, {65, 33}, {32, 32}, {33, 33}, {64, 64}, {65, 65}};
+    for (Layout lay : {Layout::Strided, Layout::Padded})
+        for (auto [m, n] : edges) shapes.push_back({m, n, m % 2 ? 17 : 48, lay, 3});
+    int ran = 0;
+    for (const C c : {C{og::Wide{64, 32, 16}}, C{og::Wide{32, 64, 16}}})
+        for (const Shape& sh : shapes)
+            for (Transpose ta : kForms)
+                for (Transpose tb : kForms) {
+                    Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                    s.period = sh.batch > 3 ? 7 : 0;
+                    s.seed = 9800u + sh.m + 3u * sh.n;
+                    if (!TestFixture::expect_runs(c, s)) continue;
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+    EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers
@@ -1237,6 +1275,8 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
         {"Wide:M=64:N=64:K=16", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=64:n=64:k=16"},
         {"wide:128:32:16", Spec{kN, kC, 64, 48, 32, 4, Layout::Packed}, "wide:m=128:n=32:k=16"},
         {"wide:m=32:n=32:k=16", nn, "wide:m=32:n=32:k=16"}, {"wide:m=16:n=16:k=16", nn, "wide:m=16:n=16:k=16"},
+        {"wide:m=64:n=32:k=16", nn, "wide:m=64:n=32:k=16"},
+        {"wide:32:64:16", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=32:n=64:k=16"},
         {"native", nn, native_best}, {"Native", nn, native_best}, {"vendor", nn, vendor_pick},
         {"auto", nn, auto_pick}};
     if constexpr (!kCx<T>) want.push_back({"small", nn, "small"});

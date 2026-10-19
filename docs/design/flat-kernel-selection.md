@@ -384,14 +384,14 @@ unless a line says otherwise.
 ### gemm
 
 - **Families:** `direct`, `tiled`, `small` (real only), `reg:m=..:n=..:k=..:u=..` (float only, 10
-  configurations), `wide:m=..:n=..:k=..` (5 configurations, every scalar), `vendor`.
-  Candidates: float 19, double 9, complex 8.
+  configurations), `wide:m=..:n=..:k=..` (7 configurations, every scalar), `vendor`.
+  Candidates: float 21, double 11, complex 10.
 - **Keys:** `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to T for
   real scalars. `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, otherwise
   `strided`.
 - **Last resort:** `direct`, then `vendor`.
 - **Forms:** `can_run` lists the instantiated (configuration, ta, tb) forms. A real Trans uses a wide
-  ConjTrans instantiation, and a complex Trans has none.
+  ConjTrans instantiation; a complex form must be instantiated exactly.
 
   | Choice | Forms |
   |---|---|

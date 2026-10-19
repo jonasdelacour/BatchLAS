@@ -1376,17 +1376,20 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
-// The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
+// The small wide tiles (32x32, 16x16, 64x32 and 32x64 macro tiles), shared by the tests below.
+const char* const kSmallWideTiles[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16", "wide:m=64:n=32:k=16",
+                                       "wide:m=32:n=64:k=16"};
+
+// The small wide tiles on NN. Ragged
 // in every dimension, k from 1 to past two staged blocks, both betas, sub-views
 // of a wider parent (inherited ld, offset base).
 // ARMED BREAK: pass beta = T(0) to the 16x16 tile only. OBSERVED on this branch:
 // red only on GemmTest/{4..7} (CUDA), only the 16x16x16wide beta=-1 cases.
 TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     using ScalarType = typename TestFixture::ScalarType;
-    const char* kernels[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"};
     const int shapes[][3] = {{32, 32, 1}, {32, 32, 70}, {29, 31, 257}, {16, 16, 33},
                              {13, 7, 100}, {32, 17, 8}, {40, 70, 65}, {5, 3, 16}};
-    for (const char* kname : kernels) {
+    for (const char* kname : kSmallWideTiles) {
         for (const auto& s : shapes) {
             for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
                 SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " n=" +
@@ -1407,7 +1410,7 @@ TYPED_TEST(GemmTest, SmallWideTilesRefuseBothTransposedRequest) {
     SKIP_UNLESS_NATIVE(*this->ctx);
     const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
     const Transpose pairs[][2] = {{T, Cj}, {T, T}, {Cj, Cj}};
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
+    for (const char* kname : kSmallWideTiles)
         for (const auto& p : pairs) ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
 }
 
@@ -1418,7 +1421,7 @@ TYPED_TEST(GemmTest, SmallWideTilesRunTheirTransposedForms) {
     SKIP_UNLESS_NATIVE(*this->ctx);
     const Transpose N = Transpose::NoTrans, T = Transpose::Trans, Cj = Transpose::ConjTrans;
     const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}};
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
+    for (const char* kname : kSmallWideTiles)
         for (const auto& p : pairs) {
             SCOPED_TRACE(std::string(kname) + " ta=" + std::to_string(int(p[0])) + " tb=" + std::to_string(int(p[1])));
             if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
@@ -1464,7 +1467,7 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
     SKIP_UNLESS_NATIVE(*this->ctx);
     using Real = typename batchlas::base_type<ScalarType>::type;
     constexpr int parent = 300, off = 3, batch = 3, m = 29, n = 21, k = 70;
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
+    for (const char* kname : kSmallWideTiles) {
         SCOPED_TRACE(kname);
         auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch);
         auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch);
@@ -1501,7 +1504,7 @@ TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
     auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
     Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
     auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
+    for (const char* kname : kSmallWideTiles) {
         Matrix<ScalarType> C(m, n, batch);
         auto a = A.data(), b = B.data(), c = C.data();
         for (int item = 0; item < batch; ++item) {

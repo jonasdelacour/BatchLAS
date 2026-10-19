@@ -100,6 +100,18 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled16x16RegisterK16WideTN: return "gemm_sycl_register_16x16_k16_wide_tn";
     case KernelVariant::Tiled16x16RegisterK16WideCN: return "gemm_sycl_register_16x16_k16_wide_cn";
     case KernelVariant::Tiled16x16RegisterK16WideCT: return "gemm_sycl_register_16x16_k16_wide_ct";
+    case KernelVariant::Tiled64x32RegisterK16Wide: return "gemm_sycl_register_64x32_k16_wide";
+    case KernelVariant::Tiled64x32RegisterK16WideNT: return "gemm_sycl_register_64x32_k16_wide_nt";
+    case KernelVariant::Tiled64x32RegisterK16WideNC: return "gemm_sycl_register_64x32_k16_wide_nc";
+    case KernelVariant::Tiled64x32RegisterK16WideTN: return "gemm_sycl_register_64x32_k16_wide_tn";
+    case KernelVariant::Tiled64x32RegisterK16WideCN: return "gemm_sycl_register_64x32_k16_wide_cn";
+    case KernelVariant::Tiled64x32RegisterK16WideCT: return "gemm_sycl_register_64x32_k16_wide_ct";
+    case KernelVariant::Tiled32x64RegisterK16Wide: return "gemm_sycl_register_32x64_k16_wide";
+    case KernelVariant::Tiled32x64RegisterK16WideNT: return "gemm_sycl_register_32x64_k16_wide_nt";
+    case KernelVariant::Tiled32x64RegisterK16WideNC: return "gemm_sycl_register_32x64_k16_wide_nc";
+    case KernelVariant::Tiled32x64RegisterK16WideTN: return "gemm_sycl_register_32x64_k16_wide_tn";
+    case KernelVariant::Tiled32x64RegisterK16WideCN: return "gemm_sycl_register_32x64_k16_wide_cn";
+    case KernelVariant::Tiled32x64RegisterK16WideCT: return "gemm_sycl_register_32x64_k16_wide_ct";
     }
     return "gemm_sycl_unknown";
 }
@@ -295,7 +307,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
 constexpr KernelVariant wide_variant(std::size_t i, int form) {
     using K = KernelVariant;
     constexpr K x = K::Direct;
-    constexpr K table[5][9] = {
+    constexpr K table[7][9] = {
         {K::Tiled64x64RegisterK16Wide, K::Tiled64x64RegisterK16WideNT, K::Tiled64x64RegisterK16WideNC,
          K::Tiled64x64RegisterK16WideTN, K::Tiled64x64RegisterK16WideTT, K::Tiled64x64RegisterK16WideTC,
          K::Tiled64x64RegisterK16WideCN, K::Tiled64x64RegisterK16WideCT, K::Tiled64x64RegisterK16WideCC},
@@ -307,6 +319,10 @@ constexpr KernelVariant wide_variant(std::size_t i, int form) {
          K::Tiled32x32RegisterK16WideTN, x, x, K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, x},
         {K::Tiled16x16RegisterK16Wide, K::Tiled16x16RegisterK16WideNT, K::Tiled16x16RegisterK16WideNC,
          K::Tiled16x16RegisterK16WideTN, x, x, K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, x},
+        {K::Tiled64x32RegisterK16Wide, K::Tiled64x32RegisterK16WideNT, K::Tiled64x32RegisterK16WideNC,
+         K::Tiled64x32RegisterK16WideTN, x, x, K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, x},
+        {K::Tiled32x64RegisterK16Wide, K::Tiled32x64RegisterK16WideNT, K::Tiled32x64RegisterK16WideNC,
+         K::Tiled32x64RegisterK16WideTN, x, x, K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, x},
     };
     static_assert(std::size(table) == og::wide_configs.size(), "one trace row per wide_configs row");
     return table[i][form];

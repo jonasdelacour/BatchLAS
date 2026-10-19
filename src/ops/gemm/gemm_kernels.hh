@@ -51,6 +51,10 @@ enum class KernelVariant {
     Tiled32x32RegisterK16WideCT,
     Tiled16x16RegisterK16WideNT, Tiled16x16RegisterK16WideNC, Tiled16x16RegisterK16WideTN, Tiled16x16RegisterK16WideCN,
     Tiled16x16RegisterK16WideCT,
+    Tiled64x32RegisterK16Wide, Tiled64x32RegisterK16WideNT, Tiled64x32RegisterK16WideNC, Tiled64x32RegisterK16WideTN,
+    Tiled64x32RegisterK16WideCN, Tiled64x32RegisterK16WideCT,
+    Tiled32x64RegisterK16Wide, Tiled32x64RegisterK16WideNT, Tiled32x64RegisterK16WideNC, Tiled32x64RegisterK16WideTN,
+    Tiled32x64RegisterK16WideCN, Tiled32x64RegisterK16WideCT,
     Tiled128x128RegisterK8NT, Tiled128x128RegisterK8TN, Tiled128x128RegisterK8TT,
 };
 

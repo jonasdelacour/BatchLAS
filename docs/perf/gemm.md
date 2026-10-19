@@ -45,7 +45,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
-`small`. Candidate counts: float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
+`small`. Candidate counts: float 21, double 11 (no `reg`), complex 10 (no `small`, no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -62,6 +62,7 @@ Forms are folded after the real-scalar C→T fold:
 | `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
 | `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
 | `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
+| `wide:m=64:n=32:k=16`, `wide:m=32:n=64:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [the skinny tiles](#gemm-skinny-64x32-and-32x64-wide-tiles)) |
 
 The wide forms are the complex instantiations; a real scalar compiles only their N/C builds, so a real form is
 served when its C-folded form is listed. See [GEMM: wide instantiations in every transpose
@@ -677,6 +678,32 @@ where the old CN/NC instances do: cfloat 64-72, cdouble 124-136 (32×32 CT the h
 `reg:m=64:n=64:k=16:u=1`) and a coarse re-race. The 16-way
 shared-store bank conflict of a transposed A operand (the CN tile today) applies to every new T/C A form; that is
 WP-D's work, not this change's.
+
+## GEMM: skinny 64x32 and 32x64 wide tiles
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). No timing below; the A/B and the re-race are
+pending.
+
+Before this change only `wide:m=64:n=64:k=16` served complex CN and NC at a skinny output (min(m, n) ≤ 64),
+with half or more of its 256 lanes computing padding: cfloat CN strided 256×32×128 b128 lost 2.19x to the vendor
+and NC 32×256×256 b128 2.31x on the 2026-10-18 coarse run. NN 64×32×256 b128 launches 128 work-groups of 256
+lanes, half of them padding; the 64×32 tile launches the same 128 with none idle (only sliced K, below, raises
+the count). Two rows are appended to `wide_configs`, `{64, 32, 16, 4, 4}` and `{32, 64, 16, 4, 4}` (128 lanes, a
+4×4 thread tile), as configs of the existing `launch_wide_transposed` kernel; no kernel code changed. They take
+the small-tile mask (`kWideSmallTileForms`: every form but TT, TC and CC), the rule WP-A settled on for build
+cost.
+
+* Spellings `wide:m=64:n=32:k=16` and `wide:m=32:n=64:k=16`; candidates float 21, double 11, complex 10. Both are
+  appended after `wide:m=16:n=16:k=16`, so no existing tie-break moves.
+* **Build cost**, measured as above (link alone, two runs each): 53.8-54.4 s before, 62.6 s after (+16%).
+* **Registers** (`scripts/register_probe.sh`): zero spill on all 702 entries of `libbatchlas_sycl`; every new
+  instance passes the four-partition gate at 128 lanes. float 48, double 71-76, cfloat 72, cdouble 124-136.
+* **Not done: sliced K** inside a work-group (a 64×32 output on 256 lanes as two k-slices reduced through shared
+  memory). It needs a new field or family and is worth building only if the A/B shows the 128-lane tiles still
+  short of the vendor at the skinny shapes; bracket it by work-group count, not batch.
+
+**Pending:** the A/B (pass ≤ 1.10x vendor) on cfloat NC strided 32×256×256 b128, CN strided 256×32×128 b128, CN
+packed 32³ b2048 and NN 64×32×256 b128.
 
 ## GEMM: the 128x128 kernel in every real transpose form
 

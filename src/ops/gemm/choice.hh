@@ -81,6 +81,7 @@ inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kW
 inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
 inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
 inline constexpr unsigned kWideAll = 0x1FF;
+inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC | kWideCC);
 
 /// One compiled wide config and the forms a complex scalar instantiates. A real scalar compiles
 /// only the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
@@ -90,12 +91,14 @@ struct WideCfg {
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
     constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
 };
-inline constexpr std::array<WideCfg, 5> wide_configs{{
+inline constexpr std::array<WideCfg, 7> wide_configs{{
     {64, 64, 16, 4, 4, kWideAll},
     {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
     {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, kWideAll & ~(kWideTT | kWideTC | kWideCC)},
-    {16, 16, 16, 2, 2, kWideAll & ~(kWideTT | kWideTC | kWideCC)},
+    {32, 32, 16, 4, 4, kWideSmallTileForms},
+    {16, 16, 16, 2, 2, kWideSmallTileForms},
+    {64, 32, 16, 4, 4, kWideSmallTileForms},
+    {32, 64, 16, 4, 4, kWideSmallTileForms},
 }};
 
 template <class T>
@@ -142,10 +145,10 @@ bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>
 constexpr auto candidates() {
-    constexpr std::array<Wide, 5> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
-                                        Wide{16, 16, 16}};
+    constexpr std::array<Wide, 7> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
+                                        Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}};
     if constexpr (std::is_same_v<T, float>) {
-        std::array<GemmChoice, 19> out{};
+        std::array<GemmChoice, 21> out{};
         std::size_t i = 0;
         out[i++] = Direct{};
         out[i++] = Tiled{};
@@ -155,11 +158,11 @@ constexpr auto candidates() {
         out[i++] = Vendor{};
         return out;
     } else if constexpr (std::is_same_v<T, double>) {
-        return std::array<GemmChoice, 9>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2], wides[3],
-                                         wides[4], Vendor{}};
+        return std::array<GemmChoice, 11>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
+                                          wides[3], wides[4], wides[5], wides[6], Vendor{}};
     } else {
-        return std::array<GemmChoice, 8>{Direct{}, Tiled{}, wides[0], wides[1], wides[2], wides[3], wides[4],
-                                         Vendor{}};
+        return std::array<GemmChoice, 10>{Direct{}, Tiled{}, wides[0], wides[1], wides[2],
+                                          wides[3], wides[4], wides[5], wides[6], Vendor{}};
     }
 }
 
