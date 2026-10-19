@@ -306,6 +306,7 @@ struct Spec {
     int period = 0;        // > 0: item it repeats item it % period
     bool beta_zero = false;
     bool nan_c = false;    // C holds NaN (with beta_zero: a kernel that reads C returns NaN)
+    bool nan_poison = false;  // the poison is NaN: a gap read times a zero is NaN, not a silent -0
     unsigned seed = 1;
 };
 
@@ -345,14 +346,14 @@ void init(Problem<T>& p, std::size_t total) {
     const Spec& s = p.s;
     p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
     p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
-    p.mem = UnifiedVector<T>(total, poison<T>());
+    const R nan = std::numeric_limits<R>::quiet_NaN();
+    p.mem = UnifiedVector<T>(total, s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>());
     p.pa = UnifiedVector<T*>(s.batch, nullptr);
     p.pb = UnifiedVector<T*>(s.batch, nullptr);
     p.pc = UnifiedVector<T*>(s.batch, nullptr);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    const R nan = std::numeric_limits<R>::quiet_NaN();
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
         auto put = [&](const Region& g, bool is_c) {
@@ -496,7 +497,7 @@ std::string label(const Spec& s) {
     const std::string lay = std::string(layout_word(s.layout)) + (s.layout_b ? std::string(" B") + layout_word(*s.layout_b) : "");
     return std::string(tw(s.ta)) + tw(s.tb) + lay +
            " m=" + std::to_string(s.m) + " n=" + std::to_string(s.n) + " k=" + std::to_string(s.k) +
-           " batch=" + std::to_string(s.batch) + (s.beta_zero ? " beta=0" : "");
+            " batch=" + std::to_string(s.batch) + (s.beta_zero ? " beta=0" : "") + (s.nan_poison ? " NaN-poison" : "");
 }
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
 
@@ -1126,13 +1127,15 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
     }
 }
 
-// WP-I, the predicated leg's interior loop copy (odd ld, so every leg below is predicated). 384 x 384:
-// all nine groups interior, k = 72 (nine full slabs, direct epilogue) and k = 37 (the interior copy's
-// k tail, staged epilogue). 300 x 200: interior, m-edge, n-edge and corner groups in one launch, k = 45
-// at ld = m + 1 and k = 72 strided. Batch 1024, each item bit-identical to its representative. A wrong
-// element in the interior copy turns the 384 legs red; a k-tail bound dropped from it, the k = 37 and
-// k = 45 legs. An interior test that admits an edge group only over-reads (rows and columns past m and
-// n feed only discarded accumulators), so no numeric test sees it.
+// WP-I, the predicated leg's interior loop copy (odd bases, so every leg below is predicated whatever
+// its ld). 256 x 256: all four groups interior, k = 72 (nine full slabs, direct epilogue), k = 37 (the
+// k tail after full slabs) and k = 5 (one partial slab, the prologue alone). 300 x 200: interior,
+// m-edge, n-edge and corner groups in one launch, k = 45 at ld = m + 1 and k = 72 strided. Batch 1024,
+// each item bit-identical to its representative. The k-tail legs poison with NaN: a finite poison times
+// the other operand's zero is a bit-exact -0, so one operand's dropped k bound would stay green. A wrong
+// element in the interior copy turns the 256 legs red; either k-tail bound dropped, the k = 37, 5 and 45
+// legs. An interior test that admits an edge group only over-reads (rows and columns past m and n feed
+// only discarded accumulators), so no numeric test sees it.
 // evidence: docs/perf/gemm.md#gemm-wp-i-an-unpredicated-interior-loop-on-the-128x128-predicated-leg
 TYPED_TEST(GemmCandidates, Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch) {
     using T = typename TestFixture::T;
@@ -1144,14 +1147,16 @@ TYPED_TEST(GemmCandidates, Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturating
         ASSERT_NE(row, nullptr);
         if (!reg_fits(*row)) GTEST_SKIP() << "128x128 is above this device's local memory budget";
         const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
-        struct Leg { int m, n, k; Layout layout; };
-        const Leg legs[] = {{384, 384, 72, Layout::Strided}, {384, 384, 37, Layout::Strided},
-                            {300, 200, 45, Layout::Gap1}, {300, 200, 72, Layout::Strided}};
+        struct Leg { int m, n, k; Layout layout; bool nan; };
+        const Leg legs[] = {{256, 256, 72, Layout::Strided, false}, {256, 256, 37, Layout::Strided, true},
+                            {256, 256, 5, Layout::Strided, true}, {300, 200, 45, Layout::Gap1, true},
+                            {300, 200, 72, Layout::Strided, false}};
         int ran = 0;
         for (auto [ta, tb] : forms)
             for (const Leg& leg : legs) {
                 Spec s{ta, tb, leg.m, leg.n, leg.k, 1024, leg.layout};
                 s.period = 7;
+                s.nan_poison = leg.nan;
                 s.seed = 9200u + leg.m + leg.k;
                 ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
                 auto p = make_problem<T>(s);
@@ -1160,7 +1165,7 @@ TYPED_TEST(GemmCandidates, Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturating
                 if (::testing::Test::HasFatalFailure()) return;
                 ++ran;
             }
-        EXPECT_EQ(ran, 20);
+        EXPECT_EQ(ran, 25);
     }
 }
 

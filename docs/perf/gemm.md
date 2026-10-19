@@ -1139,19 +1139,27 @@ ptxas is chaotic at this cap: a logically equivalent rewrite moves spill between
 here needs a fresh probe. Build cost: the probe's `libbatchlas_sycl` link, one run each, 88.6 s (parent)
 and 88.8 s.
 
-Test: `GemmCandidates.Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch` covers 5 forms × 4 legs
-at batch 1024, each item bit-identical to its representative:
+Test: `GemmCandidates.Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch` covers 5 forms × 5 legs
+at batch 1024, each item bit-identical to its representative. Every leg has odd operand bases, which is
+what keeps it on the predicated leg (several of the lds are multiples of 4):
 
-- 384×384×72 strided: all nine groups interior, nine full slabs, the direct epilogue.
-- 384×384×37: the interior copy's k tail, the staged epilogue.
+- 256×256×72 strided: all four groups interior, nine full slabs, the direct epilogue. 256 has the
+  `m0 + 128 == m` boundary on the interior path; 384 added only a middle group at 2.25× the host work.
+- 256×256×37: the interior copy's k tail after full slabs, the staged epilogue.
+- 256×256×5: one partial slab, so the prologue's load is the only one bounded and the loop body never runs.
 - 300×200×45 at ld = m + 1, and 300×200×72 strided: interior, m-edge, n-edge and corner groups in one
   launch.
 
+The k-tail legs (37, 5, 45) fill every gap with NaN instead of the finite poison. With a finite poison,
+dropping only one operand's k bound multiplies the poison by the other operand's correctly zeroed value,
+a bit-exact -0, and the result stays green; NaN × 0 is NaN.
+
 Deliberate breaks, unrun:
 
-- A wrong element index in the interior copy should turn the 384 legs red in that form.
-- Treating every interior slab as full should turn red the k = 37 and k = 45 legs, and leave the k = 72
-  legs green.
+- A wrong element index in the interior copy should turn the 256 legs red in that form.
+- Treating every interior slab as full, or dropping either operand's k bound alone, should turn red the
+  k = 37, 5 and 45 legs, and leave the k = 72 legs green. A break confined to the prologue (`kfull`
+  forced true at `k0 == 0`) should turn red only k = 5.
 - An interior test that admits an edge group is invisible to every numeric test. It only over-reads rows
   and columns past m and n, which feed accumulators the epilogue discards. Such a bug faults only when
   the over-read leaves the allocation.
