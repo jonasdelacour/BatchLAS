@@ -920,16 +920,29 @@ each item bit-identical to its representative) on four shapes:
 - 128×128×64 packed: all interior, 4 slabs, the band store.
 - 130×70×64 at ld = m + 1: an even slab count into the staged epilogue.
 
-Then β = 0 with NaN in C per form. `PinnedChoiceLaunchesItsOwnKernel` expects a `_aligned` trace name in every form
-on packed data (`aligned_trace_name`).
+Then β = 0 with NaN in C per form, and every leg layout (`wide_v2_leg_layouts`) at 160×136×48 batch 4: four
+interior groups over three full slabs, the only place the 16-byte load runs. The layouts take each refusing term
+alone on A and on B (odd ld, item stride = 1 mod 4, odd base), plus Ld2 (ld = 2 mod 4), which complex<float>
+takes on the 16-byte leg (odd columns 16- but not 32-byte aligned) and float refuses. `PinnedChoiceLaunchesItsOwnKernel`
+expects a `_aligned` trace name in every form on packed data, and the same leg layouts at 160×136×48 (ragged
+in m and n) with the leg each must take, so a tile-multiple term copied into the leg predicate goes red.
+
+**Local memory.** complex<float> v2 asks for 32 KiB (two buffers per operand), over an Apple GPU's 32 KiB limit
+once the runtime's 8 B per item is added. can_run's wide arm checks `wide_slm_bytes<T>` (choice.hh, static_asserted
+against the kernel) against `slm_budget_for(threads)`, so Metal refuses it there instead of failing at launch.
 
 Deliberate breaks, unrun:
 
 - Dropping the A conjugation sign should turn red only CN, CT and CC (complex<float>); the B sign only NC, TC
   and CC.
 - Dropping the swizzle on the read side only should turn every v2 form red for both scalars, and nothing else.
-- Swapping the k-contiguous lane map's row group and column bits should turn red every form except NT and NC
-  (float: except NC), the forms with no k-contiguous operand.
+- A k-contiguous lane map that puts two lanes on one granule (complex<float>: drop the `(tid >> 1) & 4` term of
+  `first_k`, so rows 8-15 are never staged) should turn red every complex<float> form except NT and NC, the forms
+  with no k-contiguous operand. Swapping two lane-map bits is not such a break: `first_k`/`first_i` feed both the
+  global address and the shared store, so a bijective remap stays right and changes only bank conflicts, which no
+  test observes (the conflict-free claim waits for an `l1tex` bank-conflict count once CUDA is back).
+- Dropping a term of `wide64_v2_vec_loads` (A's or B's base, ld or batch stride, or the whole B conjunct) should
+  turn red the matching `wide_v2_leg_layouts` rows in the trace test, and fault or go wrong in the numeric one.
 - `<=` for `<` in the k-tail predicate should turn red the three ragged-k shapes, and leave 128×128×64 and
   130×70×64 green.
 - Dropping the per-slab barrier should show as bit-identity failures across items.

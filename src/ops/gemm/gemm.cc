@@ -117,7 +117,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads();
+            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+                   d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
         [&](Vendor) { return d.has_vendor; },
     }, c);

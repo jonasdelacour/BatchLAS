@@ -349,6 +349,9 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
         constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
         static_assert(c.k == 16 && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x16 4x4 tile");
+        static_assert(og::wide_slm_bytes<T>(c) ==
+                          std::int64_t(2 * 2) * GemmWide64Body<T, OA, OB, true>::BufF * std::int64_t(sizeof(float)),
+                      "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
         return launch_wide64_v2<T, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name(v), aligned_trace_name(v));
     } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64) {
         // The NN 64x64 tile is its own kernel; its leg is derived from the layout.

@@ -111,6 +111,14 @@ constexpr bool wide_serves(const WideCfg& c, int a, int b) {
     else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
 }
 
+/// Local memory a wide config asks for: one k x (m + n) tile, double-buffered by wide v2 (64x64,
+/// float and complex<float>); gemm_kernels.cc static_asserts it against the kernels.
+template <class T>
+constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
+    const bool v2 = c.m == 64 && c.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    return std::int64_t(v2 ? 2 : 1) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
+}
+
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.
 inline constexpr int kSmallMaxDim = 64;
 inline constexpr int kSmallWg = 128;

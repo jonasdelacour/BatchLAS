@@ -194,6 +194,20 @@ const WideRow* wide_row(const og::Wide& w) {
         if (row.m == w.m && row.n == w.n && row.k == w.k) return &row;
     return nullptr;
 }
+// The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
+// (64x64, float and complex<float>) double-buffers; complex<float> v2 is 32 KiB, a Metal limit.
+template <typename T>
+std::int64_t wide_slm(const WideRow& row) {
+    const bool v2 = row.m == 64 && row.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    return (v2 ? 2 : 1) * std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
+}
+template <typename T>
+bool wide_fits(const WideRow& row) {
+    int wg = g_max_wg;
+    for (const og::WideCfg& c : og::wide_configs)
+        if (c.m == row.m && c.n == row.n && c.k == row.k) wg = c.threads();
+    return wide_slm<T>(row) <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
+}
 
 // Does this native choice have an instantiation for (ta, tb) at this shape, on a GPU?
 template <typename T>
@@ -211,7 +225,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
-            return row && row->trace.count(wide_form<T>(ta, tb)) > 0;
+            return row && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
         },
         [](og::Vendor) { return false; },
     }, c);
@@ -252,12 +266,13 @@ struct Region {
     int rows = 0, cols = 0, ld = 0, stride = 0;
 };
 
-enum class Layout { Packed, Strided, Padded, Gap1, OddLd, ItemSkew };
+enum class Layout { Packed, Strided, Padded, Gap1, OddLd, ItemSkew, Ld2 };
 
 struct Spec {
     Transpose ta = kN, tb = kN;
     int m = 8, n = 8, k = 8, batch = 3;
     Layout layout = Layout::Strided;
+    std::optional<Layout> layout_b;  // B's own layout (A and C keep `layout`)
     int period = 0;        // > 0: item it repeats item it % period
     bool beta_zero = false;
     bool nan_c = false;    // C holds NaN (with beta_zero: a kernel that reads C returns NaN)
@@ -269,7 +284,8 @@ struct Spec {
 // tuner's strided cell, ld = rows + 1, odd stride and bases (one poison element per column). Padded:
 // 16-byte bases, ld and stride multiples of 4 but neither natural (an aligned-leg view). OddLd:
 // every item's base 16-byte aligned, ld odd. ItemSkew: Padded's ld, stride = 1 (mod 4), so item i
-// starts i (mod 4) elements past a 16-byte boundary. The
+// starts i (mod 4) elements past a 16-byte boundary. Ld2: Padded with ld = 2 (mod 4), so
+// complex<float> columns alternate 32- and 16-byte aligned and float's ld is not whole granules. The
 // panel form carves A, B and C from one parent at its ld and stride, B aliasing A.
 template <typename T>
 struct Problem {
@@ -336,22 +352,41 @@ Problem<T> make_problem(const Spec& s) {
     p.s = s;
     const int ar = s.ta == kN ? s.m : s.k, ac = s.ta == kN ? s.k : s.m;
     const int br = s.tb == kN ? s.k : s.n, bc = s.tb == kN ? s.n : s.k;
-    auto region = [&](std::size_t off, int rows, int cols) {
-        if (s.layout == Layout::Packed) return Region{up4(off), rows, cols, rows, rows * cols};
+    auto region = [&](std::size_t off, int rows, int cols, Layout lay) {
+        if (lay == Layout::Packed) return Region{up4(off), rows, cols, rows, rows * cols};
         const int pad = int(up4(std::size_t(rows))) + 4;
-        if (s.layout == Layout::Padded) return Region{up4(off), rows, cols, pad, pad * cols + 4};
-        if (s.layout == Layout::OddLd)
+        if (lay == Layout::Padded) return Region{up4(off), rows, cols, pad, pad * cols + 4};
+        if (lay == Layout::Ld2) return Region{up4(off), rows, cols, pad + 2, int(up4(std::size_t(pad + 2) * cols))};
+        if (lay == Layout::OddLd)
             return Region{up4(off), rows, cols, pad + 1, int(up4(std::size_t(pad + 1) * cols))};
-        if (s.layout == Layout::ItemSkew) return Region{up4(off), rows, cols, pad, pad * cols + 1};
-        if (s.layout == Layout::Gap1) return Region{off | 1, rows, cols, rows + 1, (rows + 1) * cols + 3};
+        if (lay == Layout::ItemSkew) return Region{up4(off), rows, cols, pad, pad * cols + 1};
+        if (lay == Layout::Gap1) return Region{off | 1, rows, cols, rows + 1, (rows + 1) * cols + 3};
         return Region{off | 1, rows, cols, rows + 3, (rows + 3) * cols + 5};
     };
     auto end = [&](const Region& g) { return g.off + std::size_t(g.stride) * s.batch + 9; };
-    p.a = region(8, ar, ac);
-    p.b = region(end(p.a), br, bc);
-    p.c = region(end(p.b), s.m, s.n);
+    p.a = region(8, ar, ac, s.layout);
+    p.b = region(end(p.a), br, bc, s.layout_b.value_or(s.layout));
+    p.c = region(end(p.b), s.m, s.n, s.layout);
     init(p, end(p.c) + 4);
     return p;
+}
+
+template <typename T>
+inline constexpr bool kWideV2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+
+// Wide v2's leg against (A layout, B layout): 16-byte loads only when both bases are 16-byte
+// aligned and both ld and batch stride are whole granules, never from the shape (160 x 136 x 48
+// is ragged in m and n). Each refusing term appears alone on A and on B, so a dropped term (or the
+// whole B conjunct) launches the 16-byte leg on a misaligned operand. Ld2 straddles the ld term:
+// complex<float> (2 per granule) takes it, float (4) does not.
+template <typename T>
+std::vector<std::tuple<Layout, Layout, bool>> wide_v2_leg_layouts() {
+    using L = Layout;
+    const bool cf = std::is_same_v<T, std::complex<float>>;
+    return {{L::Padded, L::Padded, true}, {L::Ld2, L::Ld2, cf},       {L::OddLd, L::OddLd, false},
+            {L::ItemSkew, L::ItemSkew, false}, {L::Padded, L::OddLd, false}, {L::OddLd, L::Padded, false},
+            {L::Padded, L::ItemSkew, false}, {L::ItemSkew, L::Padded, false}, {L::Padded, L::Gap1, false},
+            {L::Gap1, L::Padded, false},   {L::Padded, L::Ld2, cf},     {L::Ld2, L::Padded, cf}};
 }
 
 // A panel update in one parent, all three operands at the parent's ld and stride: potrf's
@@ -418,13 +453,17 @@ void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
                         << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
 }
 
+const char* layout_word(Layout l) {
+    return l == Layout::Packed ? " packed"
+        : l == Layout::Padded   ? " padded"
+        : l == Layout::Gap1     ? " ld+1"
+        : l == Layout::OddLd    ? " aligned-odd-ld"
+        : l == Layout::ItemSkew ? " item-skewed"
+        : l == Layout::Ld2      ? " ld=2(mod 4)"
+                                : " strided";
+}
 std::string label(const Spec& s) {
-    const char* lay = s.layout == Layout::Packed ? " packed"
-        : s.layout == Layout::Padded               ? " padded"
-        : s.layout == Layout::Gap1                 ? " ld+1"
-        : s.layout == Layout::OddLd                ? " aligned-odd-ld"
-        : s.layout == Layout::ItemSkew             ? " item-skewed"
-                                                   : " strided";
+    const std::string lay = std::string(layout_word(s.layout)) + (s.layout_b ? std::string(" B") + layout_word(*s.layout_b) : "");
     return std::string(tw(s.ta)) + tw(s.tb) + lay +
            " m=" + std::to_string(s.m) + " n=" + std::to_string(s.n) + " k=" + std::to_string(s.k) +
            " batch=" + std::to_string(s.batch) + (s.beta_zero ? " beta=0" : "");
@@ -610,6 +649,34 @@ TEST(GemmRegSlm, SlmBytesMatchWhatTheDriverWasAskedFor) {
     }
 }
 
+// can_run's wide local memory term: literal bytes per row and scalar, so a wide kernel that grows
+// its staging must update choice.hh's wide_slm_bytes and this oracle together.
+TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
+    const og::WideCfg& w64 = og::wide_configs[0];
+    ASSERT_TRUE(w64.m == 64 && w64.n == 64 && w64.k == 16);
+    EXPECT_EQ(og::wide_slm_bytes<float>(w64), 16384);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64), 32768);
+    EXPECT_EQ(og::wide_slm_bytes<double>(w64), 16384);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64), 32768);
+    for (const og::WideCfg& c : og::wide_configs) {
+        const WideRow* row = wide_row(og::Wide{c.m, c.n, c.k});
+        ASSERT_NE(row, nullptr) << c.m << "x" << c.n;
+        EXPECT_EQ(og::wide_slm_bytes<float>(c), wide_slm<float>(*row)) << c.m << "x" << c.n;
+        EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(c), wide_slm<std::complex<float>>(*row)) << c.m << "x" << c.n;
+        EXPECT_EQ(og::wide_slm_bytes<double>(c), wide_slm<double>(*row)) << c.m << "x" << c.n;
+        EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(c), wide_slm<std::complex<double>>(*row)) << c.m << "x" << c.n;
+    }
+    // The M5 Max's selector figures (docs/design/sycl-implementations.md#sycl-impl-metal-launch-limits:
+    // 32 KiB less 8 B x 1024 lanes less the 4 KiB reserve, 8 B back per missing lane) refuse only
+    // complex<float> v2 among the single-precision 64x64 launches.
+    select::Device apple = select::device_from_key("sm_89");
+    apple.max_wg = 1024;
+    apple.slm_budget = 20480;
+    apple.slm_per_item = 8;
+    EXPECT_GE(apple.slm_budget_for(w64.threads()), og::wide_slm_bytes<float>(w64));
+    EXPECT_LT(apple.slm_budget_for(w64.threads()), og::wide_slm_bytes<std::complex<float>>(w64));
+}
+
 TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
     using T = typename TestFixture::T;
     int ran = 0, refused = 0;
@@ -755,7 +822,8 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 // 128x64x32 u4/u2 and wide 64x64; every form of reg 128x128x8 and of wide v2) derived from the layout: aligned
 // on a packed tile multiple, predicated on a strided view, so a fast-leg predicate stuck at false
 // goes red here. 128x128x8 adds a padded view (aligned) and, per transposed form, a packed shape
-// whose stored dims divide the tiles while the effective m or n does not (predicated). A swapped
+// whose stored dims divide the tiles while the effective m or n does not (predicated). Wide v2
+// adds every wide_v2_leg_layouts row on a ragged shape (the leg is layout only). A swapped
 // launch arm shows here even where both kernels give the same bits. threadsafe: the child
 // re-executes the binary with BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
@@ -773,6 +841,13 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     if (!oracle_native<T>(c, ta, tb, s.m, s.n, s.k)) continue;
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
+                if (const auto* w = std::get_if<og::Wide>(&c);
+                    w && w->m == 64 && w->n == 64 && kWideV2<T> && oracle_native<T>(c, ta, tb, 160, 136, 48))
+                    for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
+                        Spec s{ta, tb, 160, 136, 48, 2, la};
+                        if (lb != la) s.layout_b = lb;
+                        cases.push_back({c, s, expected_kernel<T>(c, ta, tb, vec)});
+                    }
                 const auto* r = std::get_if<og::Reg>(&c);
                 if (!r || r->m != 128 || r->n != 128 || !oracle_native<T>(c, ta, tb, 128, 128, 64)) continue;
                 cases.push_back({c, Spec{ta, tb, 128, 128, 64, 2, Layout::Padded}, expected_kernel<T>(c, ta, tb, true)});
@@ -1127,8 +1202,9 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
 // slabs, the band store); 130 x 70 x 64 at ld = m + 1 (an even slab count into the staged
 // epilogue). Then each form with beta = 0 and NaN in C. A conjugation sign dropped on A or on B
 // is wrong exactly in the forms that conjugate that operand; a swizzle the store and the read
-// disagree on, or a wrong k-contiguous lane map, is wrong in every form staging that operand
-// layout; a missing barrier between the two buffers differs across items.
+// disagree on, or a k-contiguous lane map that puts two lanes on one granule, is wrong in every
+// form staging that operand layout (a bit swap is a bijection and stays right); a missing barrier
+// between the two buffers differs across items. Then the leg layouts (wide_v2_leg_layouts).
 // evidence: docs/perf/gemm.md#gemm-wide-v2-one-double-buffered-64x64-kernel-for-every-form
 TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
     using T = typename TestFixture::T;
@@ -1136,10 +1212,11 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
         GTEST_SKIP() << "wide v2 serves float and complex<float>";
     } else {
         const C c{og::Wide{64, 64, 16}};
+        if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) GTEST_SKIP() << "above this device's local memory budget";
         struct Shape { int m, n, k; Layout layout; };
         const Shape shapes[] = {{100, 70, 37, Layout::Gap1}, {200, 136, 40, Layout::Padded},
                                 {128, 128, 64, Layout::Packed}, {130, 70, 64, Layout::Gap1}};
-        int ran = 0, nan_checked = 0;
+        int ran = 0, nan_checked = 0, leg_ran = 0;
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 for (const Shape& sh : shapes) {
@@ -1153,6 +1230,19 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
                     if (::testing::Test::HasFatalFailure()) return;
                     ++ran;
                 }
+                // Every leg layout at 160 x 136 x 48: four interior groups over three full slabs,
+                // the only place the 16-byte load runs, so a leg term dropped from
+                // wide64_v2_vec_loads issues misaligned 16-byte loads here.
+                for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
+                    Spec s{ta, tb, 160, 136, 48, 4, la};
+                    if (lb != la) s.layout_b = lb;
+                    s.seed = 9700u + 13u * unsigned(la) + unsigned(lb);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s) + (vec ? " (16-byte leg)" : " (element leg)"));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++leg_ran;
+                }
                 Spec s{ta, tb, 100, 70, 37, 3, Layout::Gap1};
                 s.beta_zero = s.nan_c = true;
                 auto p = make_problem<T>(s);
@@ -1162,6 +1252,7 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
                 ++nan_checked;
             }
         EXPECT_EQ(ran, 9 * 4);
+        EXPECT_EQ(leg_ran, 9 * int(wide_v2_leg_layouts<T>().size()));
         EXPECT_EQ(nan_checked, 9);
     }
 }

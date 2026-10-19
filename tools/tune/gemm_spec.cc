@@ -211,8 +211,10 @@ public:
             // family: reg
             "src/ops/gemm/kernels/load_policies.hh",
             "src/ops/gemm/kernels/register_128x128.hh",
+            "src/ops/gemm/kernels/vec4.hh",
             // family: wide
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
+            "src/ops/gemm/kernels/vec4.hh",
             // family: reg
             "src/ops/gemm/kernels/register_launchers.hh",
             "src/ops/gemm/kernels/register_tiled_common.hh",
@@ -220,6 +222,7 @@ public:
             "src/ops/gemm/kernels/register_wide_transposed.hh",
             // family: small
             "src/ops/gemm/kernels/small_batched.hh",
+            "src/ops/gemm/kernels/vec4.hh",
             // family: tiled
             "src/ops/gemm/kernels/tiled_general.hh",
             // common
