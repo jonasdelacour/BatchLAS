@@ -49,8 +49,8 @@ struct Forms {
     bool nn = false, nt = false, tn = false, tt = false;
 };
 
-/// One compiled register config: tr/tc thread tile, stages, the forms instantiated, and whether
-/// NN takes the unpredicated leg when the layout allows (derived per call, never a gate).
+/// One compiled register config: tr/tc thread tile, stages, forms, and whether NN (every form at
+/// 128x128) takes the unpredicated leg when the layout allows (derived per call, never a gate).
 struct RegCfg {
     int m, n, k, u, tr, tc, stages;
     Forms forms;
@@ -72,7 +72,7 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {32, 128, 16, 1, 4, 4, 1, {true, false, true, true}, false},
     {128, 64, 32, 4, 8, 4, 2, {true, false, false, false}, true},
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
-    {128, 128, 8, 1, 8, 8, 2, {true, false, false, false}, true},  // its own kernel (register_128x128.hh)
+    {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
 }};
 
 /// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.

@@ -65,6 +65,9 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large";
     case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2";
     case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8";
+    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt";
+    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn";
+    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt";
     case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide";
     case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn";
     case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc";
@@ -108,6 +111,9 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
     case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
     case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
+    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt_aligned";
     case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
     default: return kernel_trace_name(variant);
     }
@@ -245,7 +251,9 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
                             : K::Tiled32x128RegisterK16TT;
     case 7: return K::Tiled128x64RegisterK32Large;
     case 8: return K::Tiled128x64RegisterK32LargeU2;
-    default: return K::Tiled128x128RegisterK8;
+    case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN
+                   : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
+    default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
 
@@ -257,16 +265,17 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OA = (F == kTN || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
-        static_assert(F == kNN && c.threads() == 256, "the 128x128 kernel is NN only, 256 threads");
-        using Staged = Gemm128x128Body<float, true, true>;
+        static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
+        using Staged = Gemm128x128Body<float, true, true, OA, OB>;
         static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
                                            (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
         // The leg is derived: the unpredicated path whenever the layout allows it.
-        if (can_use_128x128_fast_path<float>(A, B, C))
-            return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
-        return launch_register_128x128_k8<float, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (can_use_128x128_fast_path<float>(A, B, C, OA, OB))
+            return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+        return launch_register_128x128_k8<float, false, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
+        static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
         constexpr RegTile P{c.m, c.n, c.k, c.tr, c.tc, 4, 4, c.u, c.stages, OA, OB, aligned_leg};
         using Pol = RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>;

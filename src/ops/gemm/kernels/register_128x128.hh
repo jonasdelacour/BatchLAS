@@ -12,10 +12,11 @@
 //     struct copy into a memcpy sunk to the store: no prefetch at all);
 //   * the lane swizzle: m takes lane bit 0, n lane bit 1 (an LDS.128 whose address
 //     depends on both bits costs twice the wavefronts); warp sub-tile 64 x 32;
-//   * the L2::128B fetch hint on the B loads;
+//   * the L2::128B fetch hint on the k-contiguous loads (B, and A^T);
 //   * the launch bound, two groups per CU (128-register cap), is a guard: the
 //     kernel fits at 127, one register more is one group per SM, 3/CU spills.
 // evidence: docs/perf/gemm.md#the-128x128-float-kernel
+// evidence: docs/perf/gemm.md#gemm-the-128x128-kernel-in-every-real-transpose-form
 
 #include <src/ops/gemm/kernels/accessors.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
@@ -30,7 +31,7 @@
 
 namespace batchlas::sycl_gemm {
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue>
+template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB>
 class GemmRegister128x128Kernel;
 
 template <typename T>
@@ -95,22 +96,24 @@ inline T load1_l2_line(const T* p) {
     return *p;
 }
 
-// Does this problem satisfy everything the unpredicated path assumes?
+// Does this problem satisfy everything the unpredicated path assumes? A leg predicate only:
+// it picks aligned vs predicated inside the launcher and is never a routing term.
 template <typename T>
 inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
                                       const MatrixView<T, MatrixFormat::Dense>& B,
-                                      const MatrixView<T, MatrixFormat::Dense>& C) {
+                                      const MatrixView<T, MatrixFormat::Dense>& C,
+                                      Transpose transA, Transpose transB) {
     constexpr int TileM = 128, TileN = 128, TileK = 8;
-    const auto m = A.rows();
-    const auto k = A.cols();
-    const auto n = B.cols();
+    const auto [m, k] = get_effective_dims(A, transA);
+    const auto n = get_effective_dims(B, transB).second;
     // k == 0 would pass the modulus test, and the prefetch of slab 0 runs before the loop.
     if (k < TileK || (m % TileM) != 0 || (n % TileN) != 0 || (k % TileK) != 0) {
         return false;
     }
     // Every 128-bit access this kernel makes is at a multiple of 4 elements
     // from the base pointer, so the base itself must be 4-element aligned and
-    // the leading dimensions must preserve that.
+    // the leading dimensions must preserve that. A transposed operand's packet
+    // runs down k from a multiple of 4 instead of down m or n: the same terms.
     auto aligned = [](const T* p, int ld, int stride) {
         return p != nullptr && (reinterpret_cast<std::uintptr_t>(p) % (4 * sizeof(T))) == 0 &&
             (ld % 4) == 0 && (stride % 4) == 0;
@@ -123,7 +126,9 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled.
 // StagedEpilogue (aligned leg only) routes C through local memory so each
 // warp stores whole 128-row columns; see launch_register_128x128_k8.
-template <typename T, bool AlignedFastPath, bool StagedEpilogue>
+// A real scalar only: a transposed operand is read as Trans (ConjTrans folds to it).
+template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA = Transpose::NoTrans,
+          Transpose OpB = Transpose::NoTrans>
 struct Gemm128x128Body {
     static constexpr int TileM = 128, TileN = 128, TileK = 8;
     static constexpr int ThreadTile = 8, Band = 4, Threads = 256;
@@ -133,6 +138,12 @@ struct Gemm128x128Body {
     static constexpr int StageStride = TileM + 4;  // staged C column stride
     static constexpr int TileAElems = StagedEpilogue ? 32 * StageStride : 2 * TileK * AStride;
     static_assert(!StagedEpilogue || AlignedFastPath, "the staged epilogue stores unpredicated");
+    // Which operands are contiguous in k: A^T and B (the transposing loader), else down m or n.
+    static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
+    static constexpr KernelVariant kVariant = !AK ? (BK ? KernelVariant::Tiled128x128RegisterK8
+                                                        : KernelVariant::Tiled128x128RegisterK8NT)
+                                                  : (BK ? KernelVariant::Tiled128x128RegisterK8TN
+                                                        : KernelVariant::Tiled128x128RegisterK8TT);
 
     const T* a_ptr;
     const T* b_ptr;
@@ -173,37 +184,61 @@ BATCHLAS_UNROLL_FULL
             }
         }
 
-        // A is read down m, B down k and transposed into shared, both
-        // coalesced; one packet of each per thread per slab.
-        const int a_m = (tid % 32) * 4;
-        const int a_k = tid / 32;
-        const int b_k = (tid % 2) * 4;
-        const int b_n = tid / 2;
-        const T* ga = Ab + (m0 + a_m) + static_cast<std::ptrdiff_t>(a_k) * lda;
-        const T* gb = Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb;
+        // One packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
+        // a warp reads 128 contiguous elements of one k row and stores one vector each. Down k
+        // (B, A^T): two lanes per column read 4 k each and transpose into shared (2-way bank
+        // conflict); the L2::128B hint fetches the line the next three slabs read.
+        const int a_m = AK ? tid / 2 : (tid % 32) * 4;
+        const int a_k = AK ? (tid % 2) * 4 : tid / 32;
+        const int b_n = BK ? tid / 2 : (tid % 32) * 4;
+        const int b_k = BK ? (tid % 2) * 4 : tid / 32;
+        const T* ga = AK ? Ab + a_k + static_cast<std::ptrdiff_t>(m0 + a_m) * lda
+                         : Ab + (m0 + a_m) + static_cast<std::ptrdiff_t>(a_k) * lda;
+        const T* gb = BK ? Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb
+                         : Bb + (n0 + b_n) + static_cast<std::ptrdiff_t>(b_k) * ldb;
 
         Vec4<T> ra, rb;
         auto gload = [&](int k0) __attribute__((always_inline)) {
             if constexpr (AlignedFastPath) {
-                ra = vec4_ref(ga + static_cast<std::ptrdiff_t>(k0) * lda);
-                rb = load4_l2_line(gb + k0);
+                if constexpr (AK) ra = load4_l2_line(ga + k0);
+                else ra = vec4_ref(ga + static_cast<std::ptrdiff_t>(k0) * lda);
+                if constexpr (BK) rb = load4_l2_line(gb + k0);
+                else rb = vec4_ref(gb + k0 * ldb);  // int within an item: a 64-bit product spills NT
             } else {
-                // Zero outside the matrix, so the inner loop needs no bounds.
-                const int gk_a = k0 + a_k;
-                const int gn_b = n0 + b_n;
+                // Zero outside the matrix, so the inner loop needs no bounds. Same lane maps as
+                // the aligned leg, so an odd ld stays coalesced. B^T's bound is one live int, not
+                // four hoisted row predicates: with A's four, NT spilled at the 128 cap.
+                [[maybe_unused]] const int lim_b = BK ? 0 : (k0 + b_k < k ? n - (n0 + b_n) : 0);
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < 4; ++i) {
-                    const int gm = m0 + a_m + i;
-                    ra[i] = (gm < m && gk_a < k) ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
-                    rb[i] = (k0 + b_k + i < k && gn_b < n) ? load1_l2_line(gb + k0 + i) : T(0);
+                    if constexpr (AK)
+                        ra[i] = (k0 + a_k + i < k && m0 + a_m < m) ? load1_l2_line(ga + k0 + i) : T(0);
+                    else
+                        ra[i] = (m0 + a_m + i < m && k0 + a_k < k) ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i]
+                                                                   : T(0);
+                    if constexpr (BK)
+                        rb[i] = (k0 + b_k + i < k && n0 + b_n < n) ? load1_l2_line(gb + k0 + i) : T(0);
+                    else
+                        rb[i] = i < lim_b ? gb[k0 * ldb + i] : T(0);
                 }
             }
         };
         auto sstore = [&](int buf) __attribute__((always_inline)) {
-            vec4_ref(&sa[buf * TileK * AStride + a_k * AStride + a_m]) = ra;
+            if constexpr (AK) {
 BATCHLAS_UNROLL_FULL
-            for (int i = 0; i < 4; ++i) {
-                sb[buf * TileK * BStride + (b_k + i) * BStride + b_n] = rb[i];
+                for (int i = 0; i < 4; ++i) {
+                    sa[buf * TileK * AStride + (a_k + i) * AStride + a_m] = ra[i];
+                }
+            } else {
+                vec4_ref(&sa[buf * TileK * AStride + a_k * AStride + a_m]) = ra;
+            }
+            if constexpr (BK) {
+BATCHLAS_UNROLL_FULL
+                for (int i = 0; i < 4; ++i) {
+                    sb[buf * TileK * BStride + (b_k + i) * BStride + b_n] = rb[i];
+                }
+            } else {
+                vec4_ref(&sb[buf * TileK * BStride + b_k * BStride + b_n]) = rb;
             }
         };
         auto compute = [&](int buf) __attribute__((always_inline)) {
@@ -340,7 +375,7 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue>
+template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB>
 Event launch_register_128x128_k8_leg(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -348,12 +383,11 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(KernelVariant::Tiled128x128RegisterK8));
-    using Body = Gemm128x128Body<T, AlignedFastPath, StagedEpilogue>;
+    using Body = Gemm128x128Body<T, AlignedFastPath, StagedEpilogue, OpA, OpB>;
+    BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(Body::kVariant));
 
-    const int m = static_cast<int>(A.rows());
-    const int k = static_cast<int>(A.cols());
-    const int n = static_cast<int>(B.cols());
+    const auto [m, k] = get_effective_dims(A, OpA);
+    const int n = get_effective_dims(B, OpB).second;
     const int group_rows = (m + Body::TileM - 1) / Body::TileM;
     const int group_cols = (n + Body::TileN - 1) / Body::TileN;
 
@@ -366,7 +400,7 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
         sycl::local_accessor<T, 1> tile_b(sycl::range<1>(2 * Body::TileK * Body::BStride), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
                   A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b};
-        batchlas::impl::parallel_for<GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue>>(h,
+        batchlas::impl::parallel_for<GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB>>(h,
             sycl::nd_range<3>(global, local), body);
     });
 
@@ -377,7 +411,8 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
 // column pieces per store run DRAM measurably slower than whole columns; at
 // long k the staging round trip costs more than it saves.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
-template <typename T, bool AlignedFastPath = false>
+template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
+          Transpose OpB = Transpose::NoTrans>
 Event launch_register_128x128_k8(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -386,12 +421,13 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
     if constexpr (AlignedFastPath) {
-        if (A.cols() <= kStagedEpilogueMaxK) {
-            return launch_register_128x128_k8_leg<T, true, true>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
+            return launch_register_128x128_k8_leg<T, true, true, OpA, OpB>(ctx, A, B, C, alpha, beta,
+                                                                           kernel_trace_name);
         }
     }
-    return launch_register_128x128_k8_leg<T, AlignedFastPath, false>(ctx, A, B, C, alpha, beta,
-                                                                     kernel_trace_name);
+    return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB>(ctx, A, B, C, alpha, beta,
+                                                                               kernel_trace_name);
 }
 
 } // namespace batchlas::sycl_gemm

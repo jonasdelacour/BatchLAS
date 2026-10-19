@@ -52,8 +52,8 @@ Forms are folded after the real-scalar C→T fold:
 | choice | forms instantiated |
 |---|---|
 | `direct`, `tiled`, `small` | any |
-| `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1`, `reg:m=128:n=128:k=8:u=1` | NN |
-| `reg:m=64:n=64:k=16:u=1` | NN NT TN TT |
+| `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1` | NN |
+| `reg:m=64:n=64:k=16:u=1`, `reg:m=128:n=128:k=8:u=1` | NN NT TN TT |
 | `reg:m=128:n=32:k=16:u=1`, `reg:m=128:n=32:k=32:u=1` | NN NT TN TT |
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
@@ -677,6 +677,40 @@ where the old CN/NC instances do: cfloat 64-72, cdouble 124-136 (32×32 CT the h
 `reg:m=64:n=64:k=16:u=1`) and a coarse re-race. The 16-way
 shared-store bank conflict of a transposed A operand (the CN tile today) applies to every new T/C A form; that is
 WP-D's work, not this change's.
+
+## GEMM: the 128x128 kernel in every real transpose form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). No timing below; the A/B and the re-race are
+pending.
+
+Before this change `reg:m=128:n=128:k=8:u=1` instantiated NN only, so float NT, TN and TT fell to the 4×4 register
+tiles or `wide`, 19-27 TFLOP/s at 1024³ b128 against NN's 57. `Gemm128x128Body` now takes `OpA, OpB`. The shared
+layout (`sa` [k][m], `sb` [k][n]), the lane swizzle, the compute loop and both epilogues are unchanged; only the
+loaders differ, and both already existed:
+
+| operand | contiguous in | loader |
+|---|---|---|
+| A (N), B^T | m or n | a warp reads 128 contiguous elements of one k row, one 16-byte shared store |
+| B (N), A^T | k | two lanes per column read 4 k, four transposing scalar stores (2-way bank conflict), `L2::128B` |
+
+So NT uses two m/n loaders, TN two k loaders, TT a k loader for A and an m/n loader for B. The predicated leg
+uses the same lane maps with per-element zero fill, so an odd `ld` stays coalesced. `can_use_128x128_fast_path`
+reads the effective m, n, k (the alignment terms are the same: every packet starts at a multiple of 4 elements
+along its contiguous direction). Trace names gain `_nt`, `_tn`, `_tt`, each with an `_aligned` twin.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): all twelve legs (4 forms × predicated, aligned, aligned
+staged) at 123-128 registers, zero spill, library-wide zero spill. Two source details are load-bearing at the
+128 cap, both on the B^T loader only (NN's code is untouched): its in-item offset `k0 * ldb` is an `int` (the
+64-bit product spilled the staged NT leg, 20 B), and its predicated bound is one live `int` (four hoisted row
+predicates beside A's four spilled the predicated NT leg, 20 B).
+
+**Build cost**, `libbatchlas_sycl` link alone, GPU-only tree, two runs each: NN only 46.5-46.7 s, all four forms
+50.9-51.3 s (+9%).
+
+**Rejected: the plan's optional `reg:m=128:n=64:k=8:u=1` row.** As a config row it lands on the generic
+`register_tiled_common.hh` kernel, not this body; at an 8×8 thread tile ptxas gives it a 288-byte stack frame
+(48 registers, accumulators in local memory) in all four forms. A 128×64 variant of this body needs new loader
+code (128 threads), so it was left out.
 
 ## GEMM: the register-tiled launcher table
 

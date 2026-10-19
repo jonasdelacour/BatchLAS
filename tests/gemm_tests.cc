@@ -1446,7 +1446,7 @@ TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
     } else {
         RunForcedWideTransposedCheck<ScalarType>(*this->ctx, "reg:m=64:n=64:k=16:u=1", m, n, k, Cj, N, ScalarType(-1),
                                                           128, 3, 2);
-        for (const char* nn_only : {"reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=128:n=128:k=8:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2"}) {
+        for (const char* nn_only : {"reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2"}) {
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, N, T);
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, Cj, N);
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, T, Cj);

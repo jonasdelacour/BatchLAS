@@ -118,8 +118,11 @@ const std::vector<RegRow>& reg_rows() {
          {{"NN", "gemm_sycl_register_128x64_k32_large_u2"},
           {"NN+aligned", "gemm_sycl_register_128x64_k32_large_u2_aligned"}},
          49920},
-        {128, 128, 8, 1, {"NN"},
-         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"}},
+        {128, 128, 8, 1, {"NN", "NT", "TN", "TT"},
+         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"},
+          {"NT", "gemm_sycl_register_128x128_k8_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_nt_aligned"},
+          {"TN", "gemm_sycl_register_128x128_k8_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
+          {"TT", "gemm_sycl_register_128x128_k8_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
          25088},
     };
     return rows;
@@ -202,22 +205,22 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
 
 // The kernel-trace name the pinned choice must launch; "" for the vendor (no SYCL kernel).
 template <typename T>
-std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_nn) {
+std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_layout) {
     return std::visit(overloaded{
         [](og::Direct) { return std::string("gemm_sycl_direct"); },
         [](og::Tiled) { return std::string("gemm_sycl_tiled16"); },
         [](og::Small) { return std::string("gemm_sycl_small_batched"); },
         [&](const og::Reg& r) {
             const RegRow* row = reg_row(r);
-            std::string f = reg_form(ta, tb);
-            if (f == "NN" && aligned_nn && row->trace.count("NN+aligned")) f = "NN+aligned";
+            const std::string f = reg_form(ta, tb);
+            if (aligned_layout && row->trace.count(f + "+aligned")) return row->trace.at(f + "+aligned");
             return row->trace.at(f);
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
             std::string f = wide_form<T>(ta, tb);
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
-            const bool aligned = aligned_nn || sizeof(T) == 16;
+            const bool aligned = aligned_layout || sizeof(T) == 16;
             if (f == "NN" && aligned && row->trace.count("NN+aligned")) f = "NN+aligned";
             return row->trace.at(f);
         },
@@ -548,8 +551,10 @@ TYPED_TEST_SUITE(GemmCandidates, Types);
 
 // Shapes that are whole multiples of every macro tile (128 x 128 x 64), ragged in all three,
 // the small family's buckets (48, 33 x 17 x 5 and its 64 ceiling), the potrf panel (n exactly
-// 32) and the unit shape.
-const int kShapes[][3] = {{128, 128, 64}, {100, 70, 37}, {48, 48, 48}, {33, 17, 5}, {200, 32, 96}, {1, 1, 1}};
+// 32), the unit shape, and several 128-tiles in m and n over an odd slab count (300 x 260 x 72
+// ragged; 256 x 256 x 72 whole, the 128x128 aligned leg's unstaged epilogue when packed).
+const int kShapes[][3] = {{128, 128, 64}, {100, 70, 37}, {48, 48, 48}, {33, 17, 5}, {200, 32, 96}, {1, 1, 1},
+                          {300, 260, 72}, {256, 256, 72}};
 
 // §8.1: each candidate on every (ta, tb), both layouts, every shape. Accepted shapes run and
 // are right; refused ones throw from the pin. The oracle is the old KernelVariant list.
@@ -649,7 +654,8 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
     EXPECT_GE(checked, reg_missing + wide_missing) << "every (config, form) the oracle rows do not list";
     // Pinned apart from the rows: complex 0+5+5+3+3, real (T folds to C) 0+5+5+4+4.
     EXPECT_EQ(wide_missing, kCx<T> ? 16 : 18) << "a wide oracle row changed its forms";
-    if constexpr (std::is_same_v<T, float>) EXPECT_GE(reg_missing, 18 * 4) << "every NN-only reg tile on every transposed form";
+    // Float: four NN-only tiles x 8 transposed (ta, tb), 128x64x16's NN, 32x128x16's NT and NC.
+    if constexpr (std::is_same_v<T, float>) EXPECT_EQ(reg_missing, 4 * 8 + 1 + 2) << "a reg oracle row changed its forms";
     EXPECT_GT(checked, 0);
 }
 
@@ -822,6 +828,41 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 expect_gemm(*this->ctx, p, name(c, s));
                 if (::testing::Test::HasFatalFailure()) return;
             }
+    }
+}
+
+// The 128x128 kernel in every real form (CC folds to TT) at batch 1024, 7 distinct problems: its
+// three legs (packed 128 x 256 x 24 aligned + staged over two n tiles, packed 128 x 128 x 72
+// aligned + direct epilogue over an odd slab count, strided 200 x 150 x 37 predicated over 2 x 2
+// ragged tiles), each item bit-identical to its representative. A per-form loader that reads the
+// wrong lane map, or a missing barrier between slabs, differs across items or is wrong.
+TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const C c{og::Reg{128, 128, 8, 1}};
+        const RegRow* row = reg_row(std::get<og::Reg>(c));
+        ASSERT_NE(row, nullptr);
+        if (!reg_fits(*row)) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        struct Leg { int m, n, k; Layout layout; };
+        const Leg legs[] = {{128, 256, 24, Layout::Packed}, {128, 128, 72, Layout::Packed},
+                            {200, 150, 37, Layout::Strided}};
+        int ran = 0;
+        for (auto [ta, tb] : forms)
+            for (const Leg& leg : legs) {
+                Spec s{ta, tb, leg.m, leg.n, leg.k, 1024, leg.layout};
+                s.period = 7;
+                s.seed = 9100u + leg.k;
+                ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s));
+                if (::testing::Test::HasFatalFailure()) return;
+                ++ran;
+            }
+        EXPECT_EQ(ran, 15);
     }
 }
 
@@ -1008,7 +1049,10 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
             {"reg:m=32:n=128:k=16:u=1", tt, "reg:m=32:n=128:k=16:u=1"},
             {"reg:m=128:n=64:k=32:u=4", nn, "reg:m=128:n=64:k=32:u=4"},
             {"reg:m=128:n=64:k=32:u=2", nn, "reg:m=128:n=64:k=32:u=2"},
-            {"reg:m=128:n=128:k=8:u=1", nn, "reg:m=128:n=128:k=8:u=1"}};
+            {"reg:m=128:n=128:k=8:u=1", nn, "reg:m=128:n=128:k=8:u=1"},
+            {"reg:m=128:n=128:k=8:u=1", tt, "reg:m=128:n=128:k=8:u=1"},
+            {"reg:m=128:n=128:k=8:u=1", Spec{kN, kC, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=128:k=8:u=1"},
+            {"reg:m=128:n=128:k=8:u=1", Spec{kT, kN, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=128:k=8:u=1"}};
         for (const Want& w : reg) {
             const auto c = select::parse<og::GemmChoice>(w.spelling);
             ASSERT_TRUE(c && std::holds_alternative<og::Reg>(*c)) << w.spelling;
