@@ -20,8 +20,8 @@ namespace batchlas::ops::gemm {
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
 struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
-/// gemm_reg, float only: m x n x k macro tile with k unroll u; must name a reg_configs entry that
-/// instantiates the call's transpose form, and max_wg must cover its threads().
+/// gemm_reg, float only: m x n x k tile, k unroll u (128x128: u1 two stages, u4 the copy_async pipeline);
+/// must name a reg_configs entry instantiating the call's form, and max_wg must cover its threads().
 struct Reg {
     int m = 0, n = 0, k = 0, u = 1;
     static constexpr std::string_view name = "reg";
@@ -67,11 +67,12 @@ struct RegCfg {
     constexpr int threads() const { return (m / tr) * (n / tc); }
     /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
     constexpr std::int64_t slm_bytes() const {
-        if (m == 128 && n == 128) return std::int64_t(4) * ((32 * 132 > 2 * k * m ? 32 * 132 : 2 * k * m) + 2 * k * n);
+        if (m == 128 && n == 128)
+            return std::int64_t(4) * ((32 * 132 > stages * k * m ? 32 * 132 : stages * k * m) + stages * k * n);
         return std::int64_t(4) * stages * ((m + 1) * k + (k + 1) * n);
     }
 };
-inline constexpr std::array<RegCfg, 10> reg_configs{{
+inline constexpr std::array<RegCfg, 11> reg_configs{{
     {32, 32, 8, 1, 2, 2, 1, {true, false, false, false}, false},
     {64, 64, 8, 1, 4, 4, 1, {true, false, false, false}, false},
     {64, 64, 16, 1, 4, 4, 1, {true, true, true, true}, false},
@@ -82,6 +83,7 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {128, 64, 32, 4, 8, 4, 2, {true, false, false, false}, true},
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
     {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
+    {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // the same, 4 copy_async stages (aligned leg)
 }};
 
 /// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.

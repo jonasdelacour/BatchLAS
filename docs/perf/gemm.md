@@ -46,7 +46,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 22, double 12 (no `reg`), complex 12 (no `reg`).
+`small`. Candidate counts: float 23, double 12 (no `reg`), complex 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -54,7 +54,7 @@ Forms are folded after the real-scalar C→T fold:
 |---|---|
 | `direct`, `tiled`, `small` | any |
 | `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1` | NN |
-| `reg:m=64:n=64:k=16:u=1`, `reg:m=128:n=128:k=8:u=1` | NN NT TN TT |
+| `reg:m=64:n=64:k=16:u=1`, `reg:m=128:n=128:k=8:u=1`, `reg:m=128:n=128:k=8:u=4` | NN NT TN TT |
 | `reg:m=128:n=32:k=16:u=1`, `reg:m=128:n=32:k=32:u=1` | NN NT TN TT |
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
@@ -1376,6 +1376,54 @@ Deliberate breaks, unrun:
 `launch_wide_transposed` kernels. The wide family hash marks them stale but Auto still follows them, so those
 cells now run an unmeasured kernel. Before merge: a saturation A/B (batch ≥ 128, beta = 1, strided ld) against
 the parent, or a retune of the cdouble wide rows.
+
+## GEMM: WP-N, a four-stage cp.async 128x128 aligned leg
+
+*Unmeasured* (2026-10-19; built and probed for sm_120, no GPU run).
+
+Target: float NN at m, n ≥ 256 and k 65-256 on `reg` 128x128 (sm_120 median 1.16× vendor, max 1.81×). The
+k = 8 slab gives 8-32 barriers per tile there, and the register prefetch hides one slab of latency.
+
+| | `reg:m=128:n=128:k=8:u=1` | `reg:m=128:n=128:k=8:u=4` |
+|---|---|---|
+| aligned leg | 2 local slabs, register prefetch | 4 local slabs filled by `cp.async`, 3 in flight |
+| predicated leg | two-stage body | the same two-stage body (same instantiation) |
+| local memory (`RegCfg::slm_bytes`) | 25,088 B | 33,280 B (two groups per SM: 65 KB) |
+| trace names, aligned | `gemm_sycl_register_128x128_k8[_nt\|_tn\|_tt]_aligned` | `..._k8_s4[_nt\|_tn\|_tt]_aligned` |
+
+On the 128x128 row `u` names the stage count (1 = the register double buffer); the field list is unchanged.
+`copy_async` (`register_128x128.hh`) is `cp.async.cg.shared.global.L2::128B` (16 B) for the packet operand
+(A, B^T) and `cp.async.ca ... 4` per element for a k-contiguous one (B, A^T), whose `[k][m|n]` tile transposes
+the copy. Inline PTX under `__SYCL_DEVICE_ONLY__ && __NVPTX__ && __SYCL_CUDA_ARCH__ >= 800`; other targets
+(AdaptiveCpp, Metal, older NVIDIA) copy synchronously through the same pipeline. Step s: `wait_group 2`,
+barrier, refill buffer (s + 3) mod 4, commit (empty past the end), compute buffer s mod 4. Unrolled by 4 so
+the buffer index is a constant. `wait_group 0` before the staged epilogue reuses the A tile.
+
+Probe (`scripts/register_probe.sh`, sm_120, `libbatchlas_sycl`): all 8 u4 entries 128 registers, 0 spill,
+no stack frame; the gate `ceil(8/4)·32·128 = 8192 ≤ 16384` holds at two groups per SM. The same probe shows
+the two-stage body at 125-139 registers on sm_120 (identical before WP-N), over the two-group cap of 128 in
+aligned NN direct 139, NN staged 135, TN staged 130, TT staged 139 and predicated NT staged 133, TN staged
+129: those run one group per SM.
+
+Risk: the k-contiguous operand issues four 4-byte copies per slab where u1 issues one 16-byte load (more
+L1 wavefronts; NN's B is that operand).
+
+Test: `GemmCandidates.Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch`, 5 forms (CC folds to TT)
+× slab counts 1, 2, 3, 4, 5, 8, 9, 17 at batch 1024 (7 problems, items bit-identical), packed and padded,
+128 × 256 and 256 × 128; NaN C at beta = 0; a ragged and an odd-ld view on the predicated body.
+
+Deliberate breaks, unrun:
+
+- `copy_async_wait<Stages - 2>` → `<Stages - 1>`: slab s is read before it lands; red on the u4 aligned cases
+  of that test (every k), green for u1.
+- refill `(b + Stages - 1) % Stages` → `(b + 1) % Stages`: overwrites a buffer still to be read; red from
+  3 slabs (k ≥ 24), k = 8 and 16 green.
+- drop the B^T `gb +=` in `issue`: NT and TT red from 2 slabs; NN and TN green.
+- `(b_k + i)` → `b_k` in the 4-byte copies: NN and TN red; NT and TT green.
+
+A/B keys: `ta=N,tb=N,layout=strided,m=256,n=512,k=128,batch=2048` and
+`ta=N,tb=N,layout=packed,m=1512,n=1024,k=78,batch=128` (both odd or ragged: the predicated body), and a
+packed multiple, `m=n=1024,k=128,batch=128`, which the u4 aligned leg serves.
 
 ## GEMM: the register-tiled launcher table
 

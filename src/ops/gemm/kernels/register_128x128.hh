@@ -31,7 +31,7 @@
 
 namespace batchlas::sycl_gemm {
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB>
+template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 class GemmRegister128x128Kernel;
 
 template <typename T>
@@ -96,6 +96,40 @@ inline T load1_l2_line(const T* p) {
     return *p;
 }
 
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__) && defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
+#define BATCHLAS_GEMM_CP_ASYNC 1
+#else
+#define BATCHLAS_GEMM_CP_ASYNC 0
+#endif
+
+// One global -> local copy of Bytes (16: a float packet, 4: one element) that skips the registers:
+// cp.async on sm_80+ (dst_local is dst's shared-window address), a plain copy elsewhere, where the
+// barrier after the wait orders it the same way. evidence: docs/perf/gemm.md#gemm-wp-n-a-four-stage-cpasync-128x128-aligned-leg
+template <int Bytes, typename T>
+inline void copy_async(T* dst, [[maybe_unused]] std::uint32_t dst_local, const T* src) {
+#if BATCHLAS_GEMM_CP_ASYNC
+    if constexpr (Bytes == 16)
+        asm volatile("cp.async.cg.shared.global.L2::128B [%0], [%1], 16;" ::"r"(dst_local), "l"(src) : "memory");
+    else
+        asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], 4;" ::"r"(dst_local), "l"(src) : "memory");
+#else
+    if constexpr (Bytes == 16) vec4_ref(dst) = vec4_ref(src);
+    else *dst = *src;
+#endif
+}
+inline void copy_async_commit() {
+#if BATCHLAS_GEMM_CP_ASYNC
+    asm volatile("cp.async.commit_group;" ::: "memory");
+#endif
+}
+// Wait until at most N of this thread's committed groups are in flight.
+template <int N>
+inline void copy_async_wait() {
+#if BATCHLAS_GEMM_CP_ASYNC
+    asm volatile("cp.async.wait_group %0;" ::"n"(N) : "memory");
+#endif
+}
+
 // Does this problem satisfy everything the unpredicated path assumes? A leg predicate only:
 // it picks aligned vs predicated inside the launcher and is never a routing term.
 template <typename T>
@@ -127,8 +161,9 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
 // StagedEpilogue routes C through local memory so each warp stores whole
 // 128-row columns, on either leg; see launch_register_128x128_k8.
 // A real scalar only: a transposed operand is read as Trans (ConjTrans folds to it).
+// Stages > 2 (aligned leg only) fills Stages local slabs by copy_async instead of the register prefetch.
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA = Transpose::NoTrans,
-          Transpose OpB = Transpose::NoTrans>
+          Transpose OpB = Transpose::NoTrans, int Stages = 2>
 struct Gemm128x128Body {
     static constexpr int TileM = 128, TileN = 128, TileK = 8;
     static constexpr int ThreadTile = 8, Band = 4, Threads = 256;
@@ -136,13 +171,21 @@ struct Gemm128x128Body {
     static constexpr int AStride = TileM, BStride = TileN;
     static constexpr int kMinGroupsPerCu = 2;
     static constexpr int StageStride = TileM + 4;  // staged C column stride
-    static constexpr int TileAElems = StagedEpilogue ? 32 * StageStride : 2 * TileK * AStride;
+    static constexpr int kStages = Stages;
+    static constexpr int TileAElems = StagedEpilogue && 32 * StageStride > Stages * TileK * AStride
+                                          ? 32 * StageStride
+                                          : Stages * TileK * AStride;
+    static constexpr int TileBElems = Stages * TileK * BStride;
+    static_assert(Stages == 2 || (Stages == 4 && AlignedFastPath && sizeof(T) == 4),
+                  "the copy_async pipeline is the float aligned leg at four stages (trace names say s4)");
     // Which operands are contiguous in k: A^T and B (the transposing loader), else down m or n.
     static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
-    static constexpr KernelVariant kVariant = !AK ? (BK ? KernelVariant::Tiled128x128RegisterK8
-                                                        : KernelVariant::Tiled128x128RegisterK8NT)
-                                                  : (BK ? KernelVariant::Tiled128x128RegisterK8TN
-                                                        : KernelVariant::Tiled128x128RegisterK8TT);
+    static constexpr KernelVariant kVariant =
+        Stages == 2 ? (!AK ? (BK ? KernelVariant::Tiled128x128RegisterK8 : KernelVariant::Tiled128x128RegisterK8NT)
+                           : (BK ? KernelVariant::Tiled128x128RegisterK8TN : KernelVariant::Tiled128x128RegisterK8TT))
+                    : (!AK ? (BK ? KernelVariant::Tiled128x128RegisterK8S4 : KernelVariant::Tiled128x128RegisterK8S4NT)
+                           : (BK ? KernelVariant::Tiled128x128RegisterK8S4TN
+                                 : KernelVariant::Tiled128x128RegisterK8S4TT));
 
     const T* a_ptr;
     const T* b_ptr;
@@ -173,6 +216,15 @@ struct Gemm128x128Body {
         T* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
         T* sa = tile_a.template get_multi_ptr<sycl::access::decorated::no>().get();
         T* sb = tile_b.template get_multi_ptr<sycl::access::decorated::no>().get();
+        [[maybe_unused]] std::uint32_t sa_l = 0, sb_l = 0;  // shared-window byte addresses (cp.async)
+#if BATCHLAS_GEMM_CP_ASYNC
+        if constexpr (Stages > 2) {
+            sa_l = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
+                tile_a.template get_multi_ptr<sycl::access::decorated::yes>().get()));
+            sb_l = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(
+                tile_b.template get_multi_ptr<sycl::access::decorated::yes>().get()));
+        }
+#endif
 
         T accum[ThreadTile][ThreadTile];
 BATCHLAS_UNROLL_FULL
@@ -312,13 +364,62 @@ BATCHLAS_UNROLL_FULL
                 compute(0);  // an odd slab count leaves the last slab in buffer 0
             }
         };
-        // The predicated leg's interior groups (uniform test) run a copy of the loop with no row
-        // or column predicates. At the 128 cap a per-slab branch spilled 4-24 B, and so did this
-        // test written interior-first (4 B); ptxas is chaotic here, so re-probe any edit.
-        // evidence: docs/perf/gemm.md#gemm-wp-i-an-unpredicated-interior-loop-on-the-128x128-predicated-leg
-        if constexpr (AlignedFastPath) {
+        if constexpr (Stages > 2) {
+            // Stages - 1 slabs in flight. Step s waits for slab s (its own copies, then the
+            // barrier for everyone's), refills the buffer slab s - 1 was read from (every read of it ended
+            // before that barrier) and computes. One commit per step, empty past the end, keeps the wait
+            // count at Stages - 2. The packet operand (A, B^T) copies 16 B; a k-contiguous one copies its
+            // four elements apart into the [k][m|n] tile. Unrolled by Stages: the buffer is a constant.
+            auto issue = [&](int k0, auto buf) __attribute__((always_inline)) {
+                constexpr int oa = decltype(buf)::value * TileK * AStride, ob = decltype(buf)::value * TileK * BStride;
+                if constexpr (AK) {
+BATCHLAS_UNROLL_FULL
+                    for (int i = 0; i < 4; ++i) {
+                        const int o = oa + (a_k + i) * AStride + a_m;
+                        copy_async<4>(sa + o, sa_l + 4u * o, ga + k0 + i);
+                    }
+                } else {
+                    const int o = oa + a_k * AStride + a_m;
+                    copy_async<16>(sa + o, sa_l + 4u * o, ga + static_cast<std::ptrdiff_t>(k0) * lda);
+                }
+                if constexpr (BK) {
+BATCHLAS_UNROLL_FULL
+                    for (int i = 0; i < 4; ++i) {
+                        const int o = ob + (b_k + i) * BStride + b_n;
+                        copy_async<4>(sb + o, sb_l + 4u * o, gb + k0 + i);
+                    }
+                } else {
+                    const int o = ob + b_k * BStride + b_n;
+                    copy_async<16>(sb + o, sb_l + 4u * o, gb);
+                    gb += static_cast<std::ptrdiff_t>(TileK) * ldb;  // issue runs once per slab, in order
+                }
+            };
+            const int slabs = k / TileK;  // the aligned leg: k is a positive multiple of TileK
+            [&]<int... J>(std::integer_sequence<int, J...>) {
+                ((J < slabs ? issue(J * TileK, std::integral_constant<int, J>{}) : void(), copy_async_commit()), ...);
+            }(std::make_integer_sequence<int, Stages - 1>{});
+            auto step = [&](int s, auto buf) __attribute__((always_inline)) {
+                constexpr int b = decltype(buf)::value;
+                copy_async_wait<Stages - 2>();
+                item.barrier(sycl::access::fence_space::local_space);
+                if (s + Stages - 1 < slabs)
+                    issue((s + Stages - 1) * TileK, std::integral_constant<int, (b + Stages - 1) % Stages>{});
+                copy_async_commit();
+                compute(b);
+            };
+            for (int s0 = 0; s0 < slabs; s0 += Stages) {
+                [&]<int... J>(std::integer_sequence<int, J...>) {
+                    ((s0 + J < slabs && (step(s0 + J, std::integral_constant<int, J>{}), true)) && ...);
+                }(std::make_integer_sequence<int, Stages>{});
+            }
+            copy_async_wait<0>();
+        } else if constexpr (AlignedFastPath) {
             mainloop(std::true_type{});
         } else if (m0 + TileM > m || n0 + TileN > n) {
+            // The predicated leg's interior groups (uniform test) run a copy of the loop with no row
+            // or column predicates. At the 128 cap a per-slab branch spilled 4-24 B, and so did this
+            // test written interior-first (4 B); ptxas is chaotic here, so re-probe any edit.
+            // evidence: docs/perf/gemm.md#gemm-wp-i-an-unpredicated-interior-loop-on-the-128x128-predicated-leg
             mainloop(std::true_type{});
         } else {
             mainloop(std::false_type{});
@@ -447,7 +548,7 @@ struct Gemm128x128Inlined {
     }
 };
 
-template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB>
+template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB, int Stages>
 Event launch_register_128x128_k8_leg(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -455,7 +556,7 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    using Body = Gemm128x128Body<T, AlignedFastPath, StagedEpilogue, OpA, OpB>;
+    using Body = Gemm128x128Body<T, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
     BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(Body::kVariant));
 
     const auto [m, k] = get_effective_dims(A, OpA);
@@ -469,10 +570,10 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Body::TileAElems), h);
-        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(2 * Body::TileK * Body::BStride), h);
+        sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Body::TileBElems), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
                   A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b};
-        using Name = GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB>;
+        using Name = GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
         if constexpr (AlignedFastPath) {
             batchlas::impl::parallel_for<Name>(h, sycl::nd_range<3>(global, local), body);
         } else {
@@ -486,11 +587,11 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
 // Short k is store-bound, and there the direct epilogue's four 128-byte
 // column pieces per store run DRAM measurably slower than whole columns; at
 // long k the staging round trip costs more than it saves. An epilogue choice on
-// either leg, never a routing term.
+// either leg, never a routing term. Stages > 2 is the aligned leg's copy_async pipeline.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
 // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
 template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
-          Transpose OpB = Transpose::NoTrans>
+          Transpose OpB = Transpose::NoTrans, int Stages = 2>
 Event launch_register_128x128_k8(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -499,10 +600,10 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
     if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
-        return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB>(ctx, A, B, C, alpha, beta,
+        return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                   kernel_trace_name);
     }
-    return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB>(ctx, A, B, C, alpha, beta,
+    return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                kernel_trace_name);
 }
 

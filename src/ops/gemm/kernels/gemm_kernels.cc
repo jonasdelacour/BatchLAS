@@ -140,6 +140,10 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
+    case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4";
+    case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
+    case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
+    case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
     }
     return "gemm_sycl_unknown";
 }
@@ -183,6 +187,10 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4_aligned";
+    case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -321,6 +329,8 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
     case 8: return K::Tiled128x64RegisterK32LargeU2;
     case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
                    : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
+    case 10: return f == kNN ? K::Tiled128x128RegisterK8S4 : f == kTN ? K::Tiled128x128RegisterK8S4TN
+                    : f == kNT ? K::Tiled128x128RegisterK8S4NT : K::Tiled128x128RegisterK8S4TT;
     default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
@@ -334,14 +344,15 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
         static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
-        using Staged = Gemm128x128Body<float, true, true, OA, OB>;
+        using Staged = Gemm128x128Body<float, true, true, OA, OB, c.stages>;
         static_assert(Staged::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
-        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
-                                           (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * (Staged::TileAElems + Staged::TileBElems),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
-        // The leg is derived: the unpredicated path whenever the layout allows it.
+        // The leg is derived: the unpredicated path whenever the layout allows it. Every depth's
+        // predicated leg is the two-stage body (the copy_async pipeline is aligned-only).
         if (can_use_128x128_fast_path<float>(A, B, C, OA, OB))
-            return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+            return launch_register_128x128_k8<float, true, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
+                                                                              aligned_trace_name);
         return launch_register_128x128_k8<float, false, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
         static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");

@@ -126,6 +126,13 @@ const std::vector<RegRow>& reg_rows() {
           {"TN", "gemm_sycl_register_128x128_k8_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
           {"TT", "gemm_sycl_register_128x128_k8_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
          25088},
+        // The copy_async pipeline is the aligned leg only; the predicated leg is u1's two-stage body.
+        {128, 128, 8, 4, {"NN", "NT", "TN", "TT"},
+         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_s4_aligned"},
+          {"NT", "gemm_sycl_register_128x128_k8_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_s4_nt_aligned"},
+          {"TN", "gemm_sycl_register_128x128_k8_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_s4_tn_aligned"},
+          {"TT", "gemm_sycl_register_128x128_k8_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_s4_tt_aligned"}},
+         33280},
     };
     return rows;
 }
@@ -1295,6 +1302,61 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
     }
 }
 
+// WP-N, the four-stage copy_async pipeline of reg 128x128x8 u4 (aligned leg) in every real form, batch
+// 1024 repeating 7 problems, each item bit-identical to its representative. Slab counts 1, 2, 3, 4, 5,
+// 8, 9 and 17 straddle the prologue depth (3 slabs), the unroll by 4 and the staged/direct epilogue edge
+// (k = 64 / 72); 128 x 256 and 256 x 128 cover two n and two m tiles, packed and padded (ld and stride
+// multiples of 4, neither natural). Then beta = 0 with NaN in C, and two views the pin serves on the
+// two-stage predicated body (ragged and odd ld). A wait on the wrong group or a refill of a buffer still
+// to be read differs across items or is wrong from 2 or 4 slabs on; a lost B^T bump, NT and TT only.
+// evidence: docs/perf/gemm.md#gemm-wp-n-a-four-stage-cpasync-128x128-aligned-leg
+TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const C c{og::Reg{128, 128, 8, 4}};
+        const RegRow* row = reg_row(std::get<og::Reg>(c));
+        ASSERT_NE(row, nullptr);
+        if (!reg_fits(*row)) GTEST_SKIP() << "128x128 u4 is above this device's local memory budget";
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        struct Leg { int m, n, k; Layout layout; };
+        const Leg legs[] = {{128, 256, 8, Layout::Packed},  {256, 128, 16, Layout::Padded},
+                            {128, 256, 24, Layout::Padded}, {256, 128, 32, Layout::Packed},
+                            {128, 256, 40, Layout::Packed}, {256, 128, 64, Layout::Padded},
+                            {128, 256, 72, Layout::Padded}, {128, 128, 136, Layout::Packed}};
+        const Leg nan_legs[] = {{128, 256, 24, Layout::Padded}, {256, 128, 72, Layout::Packed}};
+        const Leg predicated[] = {{200, 150, 37, Layout::Strided}, {256, 256, 72, Layout::OddLd}};
+        int ran = 0;
+        auto check = [&](const Leg& leg, Transpose ta, Transpose tb, bool nan) {
+            Spec s{ta, tb, leg.m, leg.n, leg.k, nan ? 3 : 1024, leg.layout};
+            s.period = nan ? 0 : 7;
+            s.beta_zero = s.nan_c = nan;
+            s.seed = 9700u + leg.k;
+            ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+            auto p = make_problem<T>(s);
+            this->run_pinned(c, p);
+            expect_gemm(*this->ctx, p, name(c, s) + (nan ? " (NaN C)" : ""));
+            ++ran;
+        };
+        for (auto [ta, tb] : forms) {
+            for (const Leg& leg : legs) {
+                check(leg, ta, tb, false);
+                if (::testing::Test::HasFatalFailure()) return;
+            }
+            for (const Leg& leg : nan_legs) {
+                check(leg, ta, tb, true);
+                if (::testing::Test::HasFatalFailure()) return;
+            }
+            for (const Leg& leg : predicated) {
+                check(leg, ta, tb, false);
+                if (::testing::Test::HasFatalFailure()) return;
+            }
+        }
+        EXPECT_EQ(ran, 60);
+    }
+}
+
 // WP-B, the C epilogue of every reg and wide tile at a saturating batch, 7 distinct problems, beta != 0
 // (C is read). 256 x 256 x 16 strided: every group interior, odd ldc, so the staged store (wide at
 // 16-byte scalars stores direct, already coalesced). 200 x 136 x 8 ragged on four layouts: ld = m + 1
@@ -1325,8 +1387,8 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
         const RegRow* row = is_reg ? reg_row(std::get<og::Reg>(c)) : nullptr;
         if (is_reg && std::is_same_v<T, float>) {
             ASSERT_NE(row, nullptr) << select::to_string(c);
-            // Only a row over 48 KiB may be refused, and only on a device capped there.
-            if (!reg_fits(*row)) EXPECT_TRUE(row->slm >= 49920 && g_slm_budget < 49920) << select::to_string(c);
+            // Only a row over 32 KiB (128x128 u4, 128x64x32) may be refused, on a device budgeting less.
+            if (!reg_fits(*row)) EXPECT_TRUE(row->slm > 32768 && g_slm_budget < row->slm) << select::to_string(c);
         }
         for (const Shape& sh : shapes)
             for (auto [ta, tb] : forms) {
@@ -1355,11 +1417,12 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
                 ++nan_checked;
             }
     }
-    // Float: reg 15 + 4 x 26 (a 48 KiB cap drops only u4 and u2, NN only: 2 x 5),
+    // Float: reg 17 + 4 x 30 (a 48 KiB cap drops 128x64x32 u4 and u2, NN only: 2 x 5; under 33,280 B
+    // 128x128 u4 too: 2 + 4 x 4),
     // wide 14 + 4 x 24; double and complex<float> wide 14 + 4 x 24; complex<double> wide 4 x 24.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
-        EXPECT_GE(reg, g_slm_budget < 49920 ? 109 : 119);
+        EXPECT_GE(reg, g_slm_budget < 33280 ? 109 : g_slm_budget < 49920 ? 127 : 137);
     }
     EXPECT_GE(wide, kWide16 ? 96 : 110);
     EXPECT_GE(nan_checked, 3 * 24);
