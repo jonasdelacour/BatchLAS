@@ -32,7 +32,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
-| `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ `max_groups_yz`, a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX |
+| `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
 The common native term (`gemm.cc:97-101`):
@@ -1230,15 +1230,23 @@ the batch and each group walks k serially. Pre-188 sm_120 cells: float NT 32×64
   the partials at α = 1, β = 0. A slice past k stores zeros. `Split = false` compiles the old kernel unchanged.
 - **Partials** `[batch][s][ldw × n]`, ldw = m rounded up to 4 (`splitk_ld`), so interior tiles take the 16-byte band
   store. Leased from the Queue's arena for the call and sized with `BumpAllocator::measuring()`; no public
-  `gemm_buffer_size`. Bytes: s · ldw · n · batch · sizeof(T) (cdouble 32×64, s = 8, b128: 33.6 MB).
+  `gemm_buffer_size`. Bytes: s · ldw · n · batch · sizeof(T) (cdouble 32×64, s = 8, b128: 33.6 MB). The arena
+  keeps its peak until `trim_workspace()` ([the arena keeps its peak](../design/workspace.md#workspace-the-arena-keeps-its-peak)),
+  so one large split-k call pins its partials in the Queue.
 - **Reduction** (`splitk_reduce`, trace `gemm_splitk_reduce`): one work-item per element, m fastest, sums slices
   0..s-1 in that order (deterministic, no atomics), then C = α Σ + β C; β = 0 never reads C. An out-of-order
   Queue waits for the slices first.
-- **`can_run`** (correctness only): the native terms, s ∈ kSplitKSlices, batch × s ≤ `max_groups_yz`, a host row
-  that instantiates the form, the host's work-group and local-memory terms, ldw × n ≤ INT_MAX. No k or tile-count
-  term: the table decides the window.
+- **`can_run`** (correctness only): the native terms, s ∈ kSplitKSlices, batch × s ≤ `max_groups_yz` and ≤ INT_MAX
+  (the int group id), a host row that instantiates the form, the host's work-group and local-memory terms,
+  ldw × n ≤ INT_MAX, and the partials within `select::Device::scratch_budget` = min(MAX_MEM_ALLOC_SIZE,
+  GLOBAL_MEM_SIZE / 4); past it the lease throws `std::bad_alloc` after the choice (cdouble 32×2048, s = 8,
+  batch 2048 asks 17 GB). The launcher also refuses the INT_MAX, ldw × n and budget terms. No k or tile-count term: the table decides
+  the window.
 - **Tuning grid** (`choice.hh`, tuner only, not in the sm_89 transcription): Gram squares m = n ∈ {16, 32, 64} ×
   k ∈ {1024, 2048, 4096}, and 32 × {64..2048} both ways at k = 2048; panel forms, strided, every grid batch.
+  At batch 32768 batch × s ≥ 65536 refuses every s on CUDA, so split-k is timed at batch 128 and 2048 only, and a
+  call nearer the 32768 row (log distance: batch above about 8192) never picks it. Accepted: at that batch the
+  unsplit grid already fills the device.
 
 **Registers** (`scripts/register_probe.sh`, sm_120 GPU-only tree, ptxas only): zero spill on all 544 entry
 functions of `libbatchlas_sycl`; every split body passes the four-partition gate at its host's work-group.
@@ -1256,6 +1264,10 @@ Tests:
 - `GemmCandidates.SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdges`: every host, s and served form. Shapes
   (m + 1) × (n + 1) × 300 (136 for 16-byte scalars) at ld = m + 1, batch 1024 repeating 7 problems; m × n × 40
   padded; (m + 1) × (n - 1) × 1. Then β = 0 with NaN in C, and a second identical call compared bit for bit.
+  Before each pinned call the arena bytes the lease gets are filled with 1e6, and the call must not grow the
+  arena (same address), so a skipped store shows as poison rather than fresh zeros or the last call's partials.
+- `GemmCandidates.SplitKOnAnOutOfOrderQueueReducesAfterTheSlices`: `splitk:m=32:n=32:k=16:s=8`, 33×33×300 (136),
+  batch 1024 on an out-of-order Queue with poisoned partials, three repetitions.
 - `GemmCandidates.SplitKGridCeilingIsBatchTimesSlices`: s = 2 and 8 at batch ⌊65535 / s⌋ (a launch) and one past
   (a refusal, C untouched).
 - Every generic per-candidate test (pins, `CanRunEqualsLaunch`, the launcher bit for bit, the kernel trace name
@@ -1273,6 +1285,14 @@ Deliberate breaks, unrun:
 - `bid = z % batch` instead of `z / s`: items mix; red in the batch-1024 bit-identity checks.
 - Dropping `batch * s` from `can_run`: `SplitKGridCeilingIsBatchTimesSlices` turns red (the launch fails past
   the grid).
+- An empty slice returns before its store (`if (k_lo >= k_hi) return;` after the decode): red at s = 8, k = 300
+  (float, double, cfloat), s = 4 and 8 at k = 40, and s = 4 and 8 at k = 136 (16-byte scalars), all through the
+  poison, and the out-of-order test (s = 8 at k = 300 / 136); green at k = 1 (slice 0 only stores) and at s = 2.
+  Unpoisoned splitk calls elsewhere (generic cases, the grid ceiling at k = 20) go red only where the arena holds
+  nonzero stale bytes.
+- Deleting `if (!ctx.in_order()) out->wait();`: likely red in
+  `SplitKOnAnOutOfOrderQueueReducesAfterTheSlices` only (a race, not certain).
+- No test for the `scratch_budget` term: refusing needs partials past a quarter of device memory.
 
 **Pending:** the A/B (pass ≤ 1.05× vendor). float `ta=N,tb=T,layout=strided,m=32,n=64,k=1024,batch=128` and cfloat
 `ta=N,tb=C,…`, arms `splitk:m=32:n=64:k=16:s=4`, `splitk:m=32:n=64:k=16:s=8`, `wide:m=32:n=64:k=16`, `vendor`;

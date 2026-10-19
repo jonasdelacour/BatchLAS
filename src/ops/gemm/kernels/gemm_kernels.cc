@@ -448,8 +448,9 @@ Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int
                     const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta) {
     using D = typename sycl_device::DevMap<T>::type;
     constexpr int kWg = 256;
+    // mn <= ldw n <= INT_MAX (can_run), but the padded range and the global id can pass it.
     const int m = C.rows(), mn = C.rows() * C.cols();
-    const sycl::range<2> global(static_cast<size_t>(C.batch_size()), static_cast<size_t>((mn + kWg - 1) / kWg) * kWg);
+    const sycl::range<2> global(static_cast<size_t>(C.batch_size()), (static_cast<size_t>(mn) + kWg - 1) / kWg * kWg);
     ctx->submit([&](sycl::handler& h) {
         const D* w_ptr = reinterpret_cast<const D*>(W.data_ptr());
         D* c_ptr = reinterpret_cast<D*>(C.data_ptr());
@@ -460,8 +461,9 @@ Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int
         std::memcpy(&beta_d, &beta, sizeof(D));
         batchlas::impl::parallel_for<GemmSplitKReduceKernel<T>>(
             h, sycl::nd_range<2>(global, sycl::range<2>(1, kWg)), [=](sycl::nd_item<2> item) {
-                const int e = static_cast<int>(item.get_global_id(1));
-                if (e >= mn) return;
+                const size_t g = item.get_global_id(1);
+                if (g >= static_cast<size_t>(mn)) return;
+                const int e = static_cast<int>(g);
                 const auto b = static_cast<std::ptrdiff_t>(item.get_group(0));
                 const int j = e / m, i = e - j * m;
                 const D* p = w_ptr + b * splits * stride_w + i + static_cast<std::ptrdiff_t>(j) * ldw;
@@ -593,6 +595,10 @@ Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixVi
     const std::int64_t ldw = og::splitk_ld(m);
     if (ldw * n > INT_MAX) refuse(spelling + ": one item's partials pass int indexing");
     const int batch = A.batch_size();
+    if (std::int64_t(batch) * splits > INT_MAX) refuse(spelling + ": batch * s passes the int group id");
+    const auto budget = batchlas::select::describe(ctx.device(), ctx.backend(), false).scratch_budget;
+    if (batch > 0 && og::splitk_item_bytes<T>(m, n, splits) > budget / batch)
+        refuse(spelling + ": the partials pass the scratch budget of " + std::to_string(budget) + " B");
     const int kc = ((k + splits - 1) / splits + tk - 1) / tk * tk;
     const std::size_t elems = static_cast<std::size_t>(ldw * n) * static_cast<std::size_t>(splits) * batch;
     auto sizer = BumpAllocator::measuring();

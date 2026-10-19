@@ -122,14 +122,17 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
                    d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
         [&](const SplitK& sk) {
-            // The slices put batch * s in grid z; one item's partials are int-indexed.
+            // The slices put batch * s in grid z (an int group id); one item's partials are int-indexed;
+            // the partials lease must fit the scratch budget (past it the arena throws std::bad_alloc).
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == sk.m && g.n == sk.n && g.k == sk.k; });
             const bool slices = std::find(kSplitKSlices.begin(), kSplitKSlices.end(), sk.s) != kSplitKSlices.end();
-            return grid && slices && A.batch_size() * sk.s <= d.max_groups_yz && cfg != wide_configs.end() &&
-                   splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
-                   d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
-                   splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max();
+            const std::int64_t batch = A.batch_size(), groups_z = batch * sk.s;
+            return grid && slices && groups_z <= d.max_groups_yz && groups_z <= std::numeric_limits<int>::max() &&
+                   cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) &&
+                   d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
+                   splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
+                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
         },
         [&](Vendor) { return d.has_vendor; },
     }, c);

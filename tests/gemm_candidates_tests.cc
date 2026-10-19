@@ -12,7 +12,9 @@
 #include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/util/workspace.hh>
 
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -228,6 +230,8 @@ bool wide_fits(const WideRow& row) {
 }
 
 // split-k's host: a wide row other than 64x64 (launch_wide_transposed in every form), s 2, 4 or 8.
+// The oracle has no batch: can_run's batch * s, int group id and scratch budget terms are not modelled
+// (SplitKGridCeilingIsBatchTimesSlices covers the first; GridCeilingIsACanRunTerm skips split-k).
 const WideRow* splitk_row(const og::SplitK& sk) {
     if ((sk.m == 64 && sk.n == 64) || (sk.s != 2 && sk.s != 4 && sk.s != 8)) return nullptr;
     return wide_row(og::Wide{sk.m, sk.n, sk.k});
@@ -647,6 +651,19 @@ protected:
             if (std::string(e.what()).find("cannot run this shape") == std::string::npos) throw;
             return false;
         }
+    }
+
+    // The arena bytes the next split-k lease on `q` gets, filled with a large finite value: a slice
+    // that skips its store (an empty one included) leaves 1e6 in the sum, not fresh-arena zeros or
+    // the last call's partials. Returns the capacity; the caller checks the call did not grow it,
+    // so the lease came back at the poisoned address.
+    static std::size_t poison_partials(Queue& q, const Spec& s, int splits) {
+        q.wait();
+        const std::int64_t elems = og::splitk_item_bytes<T>(s.m, s.n, splits) / std::int64_t(sizeof(T)) * s.batch + 256;
+        auto lease = q.workspace(std::size_t(elems) * sizeof(T));
+        const Span<std::byte> w = lease.span();
+        MVof<T>(reinterpret_cast<T*>(w.data()), int(elems), 1, int(elems), int(elems), 1).fill(q, T(1.0e6)).wait();
+        return q.workspace_capacity();
     }
 
     // The family's own launcher, called directly; false when it refuses (batchlas::unsupported).
@@ -1411,7 +1428,9 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
                     s.period = sh.batch > 3 ? 7 : 0;
                     s.seed = 9500u + sh.m + 3u * sh.n + 11u * sh.k;
                     auto p = make_problem<T>(s);
+                    const std::size_t cap = TestFixture::poison_partials(*this->ctx, s, sk->s);
                     this->run_pinned(c, p);
+                    ASSERT_EQ(this->ctx->workspace_capacity(), cap) << name(c, s) << ": the lease missed the poison";
                     expect_gemm(*this->ctx, p, name(c, s));
                     if (::testing::Test::HasFatalFailure()) return;
                     ++ran;
@@ -1419,6 +1438,7 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
                 Spec s{ta, tb, sk->m + 1, sk->n + 1, deep, 3, Layout::Gap1};
                 s.beta_zero = s.nan_c = true;
                 auto p = make_problem<T>(s);
+                (void)TestFixture::poison_partials(*this->ctx, s, sk->s);
                 this->run_pinned(c, p);
                 expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
                 if (::testing::Test::HasFatalFailure()) return;
@@ -1436,6 +1456,32 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
     EXPECT_EQ(ran, 3 * forms);
     EXPECT_EQ(nan_checked, forms);
     EXPECT_EQ(repeated, forms);
+}
+
+// An out-of-order Queue: the reduction must wait for the slices (gemm_splitk's out->wait()). Poisoned
+// partials at batch 1024, s = 8: a reduction that overtakes the slices sums 1e6. A race, so a deleted
+// wait is likely, not certainly, red; three repetitions per scalar.
+TYPED_TEST(GemmCandidates, SplitKOnAnOutOfOrderQueueReducesAfterTheSlices) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    Queue ooo(*this->ctx, false);
+    const C c{og::SplitK{32, 32, 16, 8}};
+    Spec s{kN, kN, 33, 33, sizeof(T) == 16 ? 136 : 300, 1024, Layout::Gap1};
+    s.period = 7;
+    s.seed = 9900u;
+    if (!TestFixture::expect_runs(c, s)) GTEST_SKIP() << name(c, s) << " cannot run here";
+    for (int rep = 0; rep < 3; ++rep) {
+        auto p = make_problem<T>(s);
+        const std::size_t cap = TestFixture::poison_partials(ooo, s, 8);
+        {
+            const Pin pin("gemm", c);
+            (void)gemm<B, T>(ooo, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.ta, s.tb, ComputePrecision::Default);
+            ooo.wait();
+        }
+        ASSERT_EQ(ooo.workspace_capacity(), cap) << name(c, s) << ": the lease missed the poison";
+        expect_gemm(*this->ctx, p, name(c, s) + " (out-of-order Queue)");
+        if (::testing::Test::HasFatalFailure()) return;
+    }
 }
 
 // split-k puts batch * s groups in grid z: a pin is a launch at batch * s <= 65535 and a refusal

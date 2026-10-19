@@ -116,6 +116,11 @@ constexpr bool splitk_host(const WideCfg& c) { return !(c.m == 64 && c.n == 64);
 inline constexpr std::array<int, 3> kSplitKSlices{2, 4, 8};
 /// The partials' column stride: m rounded to 4, so a slice's columns are whole 16-byte granules.
 constexpr std::int64_t splitk_ld(std::int64_t m) { return (m + 3) / 4 * 4; }
+/// One item's partials (all s slices), bytes; can_run holds them to Device::scratch_budget / batch.
+template <class T>
+constexpr std::int64_t splitk_item_bytes(std::int64_t m, std::int64_t n, int s) {
+    return splitk_ld(m) * n * s * std::int64_t(sizeof(T));
+}
 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
