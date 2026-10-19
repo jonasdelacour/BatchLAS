@@ -91,7 +91,7 @@ struct WideCfg {
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
     constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
 };
-inline constexpr std::array<WideCfg, 7> wide_configs{{
+inline constexpr std::array<WideCfg, 8> wide_configs{{
     {64, 64, 16, 4, 4, kWideAll},
     {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
     {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
@@ -99,6 +99,7 @@ inline constexpr std::array<WideCfg, 7> wide_configs{{
     {16, 16, 16, 2, 2, kWideSmallTileForms},
     {64, 32, 16, 4, 4, kWideSmallTileForms},
     {32, 64, 16, 4, 4, kWideSmallTileForms},
+    {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
 }};
 
 template <class T>
@@ -153,10 +154,10 @@ bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>
 constexpr auto candidates() {
-    constexpr std::array<Wide, 7> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
-                                        Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}};
+    constexpr std::array<Wide, 8> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
+                                        Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}, Wide{64, 64, 8}};
     if constexpr (std::is_same_v<T, float>) {
-        std::array<GemmChoice, 21> out{};
+        std::array<GemmChoice, 22> out{};
         std::size_t i = 0;
         out[i++] = Direct{};
         out[i++] = Tiled{};
@@ -166,11 +167,11 @@ constexpr auto candidates() {
         out[i++] = Vendor{};
         return out;
     } else if constexpr (std::is_same_v<T, double>) {
-        return std::array<GemmChoice, 11>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
-                                          wides[3], wides[4], wides[5], wides[6], Vendor{}};
+        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
+                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
     } else {
-        return std::array<GemmChoice, 10>{Direct{}, Tiled{}, wides[0], wides[1], wides[2],
-                                          wides[3], wides[4], wides[5], wides[6], Vendor{}};
+        return std::array<GemmChoice, 11>{Direct{}, Tiled{}, wides[0], wides[1], wides[2],
+                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
     }
 }
 

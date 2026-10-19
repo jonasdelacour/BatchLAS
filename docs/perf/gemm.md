@@ -45,7 +45,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
-`small`. Candidate counts: float 21, double 11 (no `reg`), complex 10 (no `small`, no `reg`).
+`small`. Candidate counts: float 22, double 12 (no `reg`), complex 11 (no `small`, no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -58,7 +58,7 @@ Forms are folded after the real-scalar C→T fold:
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
 | `reg:m=128:n=64:k=32:u=4`, `reg:m=128:n=64:k=32:u=2` | NN |
-| `wide:m=64:n=64:k=16` | all nine complex forms; real NN, NT, TN, TT |
+| `wide:m=64:n=64:k=16`, `wide:m=64:n=64:k=8` | all nine complex forms; real NN, NT, TN, TT (see [the k=8 slab](#gemm-wp-f-a-k8-slab-for-the-64x64-wide-tile)) |
 | `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
 | `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
 | `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
@@ -959,6 +959,77 @@ Then a coarse re-race. Not done:
 
 - the C prefetch before the last slab (the plan's P2.5);
 - an 8-byte vector load for complex<float> on the element leg (it needs an 8-byte-aligned base, a third leg).
+
+## GEMM: WP-F, a k8 slab for the 64x64 wide tile
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B is pending.
+
+Every wide tile had a 16-deep slab, so at k ≤ 8 half of each slab was zero-filled and its FMAs wasted. The
+2026-10-18 loss map left 1778 cfloat cells at k ≤ 16 after WP-B (635 losing, gmL 1.21). One row is appended to
+`wide_configs`, `{64, 64, 8, 4, 4, kWideAll}`, spelled `wide:m=64:n=64:k=8`. It comes after every existing row, so
+no tie-break moves. Candidates: float 22, double 12, complex 11.
+
+- **float and complex<float>: wide v2 at `TileK = 8`.** `GemmWide64Body` takes the slab depth as a template
+  parameter; the kernel class gains a defaulted fifth argument, so the `device_calls_tests` pattern still matches.
+- **Each lane still stages CF 16-byte granules**, so at k = 8 one operand's slab needs only 128 lanes. Warps 0-3
+  stage A and warps 4-7 stage B. The branch is warp-uniform, a lane holds one prefetch set instead of two, and
+  `KStep` (the rows one staging pass covers along i) is `128 / GPR`.
+- **The k-contiguous lane map at k = 8** has 4 row groups (complex<float>) or 2 (float) in the low tid bits and
+  the column above them.
+  - For complex<float>, an 8-lane phase is still 4 row groups × 2 column pairs, so `swz` is unchanged.
+  - For float, a warp holds 2 row groups × 4 granules, so the swizzle flips granule bit 2 (`(kk / 4 & 1) << 2`)
+    to keep the transposing scalar store on 32 distinct banks.
+  - Correctness does not depend on the swizzle: store and fragment read apply the same bijection.
+- **Epilogue unchanged.** The stage (both A buffers + both B buffers) is now 32 columns, so `staged_c_store`
+  takes two passes instead of one.
+- **double and complex<double> run `launch_wide_transposed` with `K = 8` in every form, NN included.** The NN
+  64x64x16 kernel keeps `K = 16`, so the NN aligned-leg trace name exists only at k = 16.
+- **Local memory** halves: float 8 KiB, complex<float> 16 KiB, double 8 KiB, complex<double> 16 KiB
+  (`wide_slm_bytes`, static_asserted against the kernel).
+
+The launch bound stays 3 groups per CU for float and 2 for complex<float>.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill on all 802 entry functions of
+`libbatchlas_sycl`. Every new instance passes the four-partition gate at 256 lanes:
+
+| instance | k = 8 | k = 16 |
+|---|---|---|
+| float v2 | 78-80 | 79-80 |
+| complex<float> v2 | 121-126 | 126-128 |
+| double transposed | 66-70 | (NN kernel and transposed) |
+| complex<double> transposed | 128-132 | (NN kernel and transposed) |
+
+complex<float> at k = 8 stays above the 85-register cap of 3 groups, so its bound stays 2.
+
+**Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree: 87.0 s and 87.8 s.
+WP-D recorded 74.6-74.9 s by the same method, so the link grows about 17%. The two figures were not taken
+back to back.
+
+Tests: `GemmCandidates.WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch` runs 64x64x8 and 64x64x16 in all 9 forms:
+
+- k = 8, 9, 16 and 17 on 100×70 at ld = m + 1 (batch 1024, 7 distinct problems, bit-identical items);
+- the same k on 200×136 padded (the 16-byte leg, interior and edge groups);
+- packed 128×128×24 (three full k8 slabs, the band store);
+- β = 0 with NaN in C.
+
+The oracle row, the literal local-memory bytes and the spelling are added. The epilogue sweep, the trace test (every
+leg layout) and every pinned-candidate test pick the row up from `candidates<T>()`.
+
+Deliberate breaks, unrun:
+
+- Every lane staging A (`stage_a = true`) leaves B unstaged. That turns every float and complex<float> form red at
+  64x64x8 and nothing at 64x64x16.
+- The k = 16 k-contiguous map at k = 8 puts lanes outside the slab. That turns red every v2 form except NT and NC.
+- The k = 16 `KStep` for complex<float> writes row kb + 8 past the slab, into the other buffer. That turns red every
+  complex<float> form except TN and CN.
+- A float swizzle that store and read disagree on turns every float form red at k = 8.
+- `<=` in the k-tail predicate turns red the k = 9 and 17 shapes.
+- Routing the k8 row to the k16 kernel gives the same bits, so only `PinnedChoiceLaunchesItsOwnKernel`'s
+  `_k8_` trace names turn red.
+
+**Pending:** the A/B (pass ≤ 1.05x vendor). cfloat NN packed 128×256×8 b128, arms `wide:m=64:n=64:k=8`,
+`wide:m=64:n=64:k=16`, `vendor`; cfloat CN strided 512×64×8 b128. Large-m,n k ≤ 16 cells are DRAM-bound at parity
+on both sides and are not the target.
 
 ## GEMM: the register-tiled launcher table
 

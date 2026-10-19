@@ -384,8 +384,8 @@ unless a line says otherwise.
 ### gemm
 
 - **Families:** `direct`, `tiled`, `small` (real only), `reg:m=..:n=..:k=..:u=..` (float only, 10
-  configurations), `wide:m=..:n=..:k=..` (7 configurations, every scalar), `vendor`.
-  Candidates: float 21, double 11, complex 10.
+  configurations), `wide:m=..:n=..:k=..` (8 configurations, every scalar), `vendor`.
+  Candidates: float 22, double 12, complex 11.
 - **Keys:** `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to T for
   real scalars. `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, otherwise
   `strided`.

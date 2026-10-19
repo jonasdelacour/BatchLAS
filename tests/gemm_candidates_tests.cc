@@ -161,6 +161,20 @@ const std::vector<WideRow>& wide_rows() {
         {32, 64, 16, {{"NN", "gemm_sycl_register_32x64_k16_wide"}, {"NT", "gemm_sycl_register_32x64_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_32x64_k16_wide_nc"}, {"TN", "gemm_sycl_register_32x64_k16_wide_tn"},
                       {"CN", "gemm_sycl_register_32x64_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x64_k16_wide_ct"}}},
+        {64, 64, 8, {{"NN", "gemm_sycl_register_64x64_k8_wide"}, {"NT", "gemm_sycl_register_64x64_k8_wide_nt"},
+                     {"NC", "gemm_sycl_register_64x64_k8_wide_nc"}, {"TN", "gemm_sycl_register_64x64_k8_wide_tn"},
+                     {"TT", "gemm_sycl_register_64x64_k8_wide_tt"}, {"TC", "gemm_sycl_register_64x64_k8_wide_tc"},
+                     {"CN", "gemm_sycl_register_64x64_k8_wide_cn"}, {"CT", "gemm_sycl_register_64x64_k8_wide_ct"},
+                     {"CC", "gemm_sycl_register_64x64_k8_wide_cc"},
+                     {"NN+aligned", "gemm_sycl_register_64x64_k8_wide_aligned"},
+                     {"NT+aligned", "gemm_sycl_register_64x64_k8_wide_nt_aligned"},
+                     {"NC+aligned", "gemm_sycl_register_64x64_k8_wide_nc_aligned"},
+                     {"TN+aligned", "gemm_sycl_register_64x64_k8_wide_tn_aligned"},
+                     {"TT+aligned", "gemm_sycl_register_64x64_k8_wide_tt_aligned"},
+                     {"TC+aligned", "gemm_sycl_register_64x64_k8_wide_tc_aligned"},
+                     {"CN+aligned", "gemm_sycl_register_64x64_k8_wide_cn_aligned"},
+                     {"CT+aligned", "gemm_sycl_register_64x64_k8_wide_ct_aligned"},
+                     {"CC+aligned", "gemm_sycl_register_64x64_k8_wide_cc_aligned"}}},
     };
     return rows;
 }
@@ -248,10 +262,12 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             const WideRow* row = wide_row(w);
             std::string f = wide_form<T>(ta, tb);
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
-            // Wide v2 (64x64, float and complex<float>) has the 16-byte leg in every form.
+            // Wide v2 (64x64, float and complex<float>) has the 16-byte leg in every form; of the
+            // others only the NN 64x64x16 kernel has an aligned leg (double 64x64x8 NN is transposed's).
             const bool aligned = aligned_layout || sizeof(T) == 16;
             const bool v2 = w.m == 64 && w.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
-            if ((f == "NN" || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
+            const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
+            if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             return row->trace.at(f);
         },
         [](og::Vendor) { return std::string(); },
@@ -658,6 +674,12 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64), 32768);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64), 16384);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64), 32768);
+    const og::WideCfg& w64k8 = og::wide_configs[7];
+    ASSERT_TRUE(w64k8.m == 64 && w64k8.n == 64 && w64k8.k == 8);
+    EXPECT_EQ(og::wide_slm_bytes<float>(w64k8), 8192);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16384);
+    EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 16384);
     for (const og::WideCfg& c : og::wide_configs) {
         const WideRow* row = wide_row(og::Wide{c.m, c.n, c.k});
         ASSERT_NE(row, nullptr) << c.m << "x" << c.n;
@@ -1151,13 +1173,13 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
             }
     }
     // Float: reg 15 + 4 x 26 (a 48 KiB cap drops only u4 and u2, NN only: 2 x 5),
-    // wide 12 + 4 x 20; double and complex<float> wide 12 + 4 x 20; complex<double> wide 4 x 20.
+    // wide 14 + 4 x 24; double and complex<float> wide 14 + 4 x 24; complex<double> wide 4 x 24.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
         EXPECT_GE(reg, g_slm_budget < 49920 ? 109 : 119);
     }
-    EXPECT_GE(wide, kWide16 ? 80 : 92);
-    EXPECT_GE(nan_checked, 3 * 20);
+    EXPECT_GE(wide, kWide16 ? 96 : 110);
+    EXPECT_GE(nan_checked, 3 * 24);
 }
 
 // WP-E, the skinny wide tiles 64x32 and 32x64 (128 lanes) in every form they instantiate (complex
@@ -1255,6 +1277,57 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
         EXPECT_EQ(leg_ran, 9 * int(wide_v2_leg_layouts<T>().size()));
         EXPECT_EQ(nan_checked, 9);
     }
+}
+
+// WP-F, the 64x64x8 slab beside 64x64x16, in all 9 forms, k straddling both slab depths: 8 (one
+// k8 slab, half a k16 one), 9 and 17 (a one-deep predicated tail), 16 (two k8 slabs, odd vs even
+// count into the staged epilogue). Ragged 100 x 70 at ld = m + 1 (element loads, edge groups) at
+// batch 1024, 7 distinct problems, each item bit-identical to its representative; 200 x 136 padded
+// (wide v2's 16-byte leg, interior and edge groups); packed 128 x 128 x 24 at batch 1024 (all
+// interior, three full k8 slabs, the band store). Then beta = 0 and NaN in C. Wide v2 at k = 8
+// splits staging: warps 0-3 stage A, 4-7 B, with a KStep and lane map of their own. A B lane
+// staging A leaves B unstaged in every form; a k-contiguous map or swizzle copied from k = 16 is
+// wrong in the forms with that operand layout; a k-tail `<=` reads the poison past column k.
+// evidence: docs/perf/gemm.md#gemm-wp-f-a-k8-slab-for-the-64x64-wide-tile
+TYPED_TEST(GemmCandidates, WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    struct Shape { int m, n, k; Layout layout; int batch; };
+    const int big = sizeof(T) == 16 ? 256 : 1024;
+    std::vector<Shape> shapes;
+    for (int k : {8, 9, 16, 17}) {
+        shapes.push_back({100, 70, k, Layout::Gap1, 1024});
+        shapes.push_back({200, 136, k, Layout::Padded, 128});
+    }
+    shapes.push_back({128, 128, 24, Layout::Packed, big});
+    int ran = 0, nan_checked = 0, tiles = 0;
+    for (const C c : {C{og::Wide{64, 64, 8}}, C{og::Wide{64, 64, 16}}}) {
+        if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) continue;
+        ++tiles;
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                for (const Shape& sh : shapes) {
+                    Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                    s.period = 7;
+                    s.seed = 9600u + sh.m + 7u * sh.k;
+                    ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+                Spec s{ta, tb, 100, 70, 9, 3, Layout::Gap1};
+                s.beta_zero = s.nan_c = true;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++nan_checked;
+            }
+    }
+    EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
+    EXPECT_EQ(ran, tiles * 9 * int(shapes.size()));
+    EXPECT_EQ(nan_checked, tiles * 9);
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers
@@ -1427,6 +1500,7 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
         {"wide:m=32:n=32:k=16", nn, "wide:m=32:n=32:k=16"}, {"wide:m=16:n=16:k=16", nn, "wide:m=16:n=16:k=16"},
         {"wide:m=64:n=32:k=16", nn, "wide:m=64:n=32:k=16"},
         {"wide:32:64:16", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=32:n=64:k=16"},
+        {"wide:m=64:n=64:k=8", tt, "wide:m=64:n=64:k=8"},
         {"native", nn, native_best}, {"Native", nn, native_best}, {"vendor", nn, vendor_pick},
         {"auto", nn, auto_pick}};
     if constexpr (!kCx<T>) want.push_back({"small", nn, "small"});

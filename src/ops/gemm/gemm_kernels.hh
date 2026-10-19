@@ -56,6 +56,9 @@ enum class KernelVariant {
     Tiled32x64RegisterK16Wide, Tiled32x64RegisterK16WideNT, Tiled32x64RegisterK16WideNC, Tiled32x64RegisterK16WideTN,
     Tiled32x64RegisterK16WideCN, Tiled32x64RegisterK16WideCT,
     Tiled128x128RegisterK8NT, Tiled128x128RegisterK8TN, Tiled128x128RegisterK8TT,
+    Tiled64x64RegisterK8Wide, Tiled64x64RegisterK8WideNT, Tiled64x64RegisterK8WideNC, Tiled64x64RegisterK8WideTN,
+    Tiled64x64RegisterK8WideTT, Tiled64x64RegisterK8WideTC, Tiled64x64RegisterK8WideCN, Tiled64x64RegisterK8WideCT,
+    Tiled64x64RegisterK8WideCC,
 };
 
 // One launcher per gemm family (src/ops/gemm/choice.hh). Each serves exactly what its family's
