@@ -87,6 +87,25 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
     return false;
 }
 
+// The same for a wide pin: complex<double> wide v2 64x64x16 asks for 64 KiB, over acpp's 48 KiB.
+template <typename T>
+bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
+    int m = 0, n = 0, k = 0;
+    if (std::sscanf(word, "wide:m=%d:n=%d:k=%d", &m, &n, &k) != 3 || !NativePinsRun(ctx)) return true;
+    const auto* cfg = std::find_if(ops::gemm::wide_configs.begin(), ops::gemm::wide_configs.end(),
+                                   [&](const ops::gemm::WideCfg& c) { return c.m == m && c.n == n && c.k == k; });
+    if (cfg == ops::gemm::wide_configs.end()) return true;
+    const std::int64_t budget =
+        select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
+    if (ops::gemm::wide_slm_bytes<T>(*cfg) <= budget) return true;
+    EXPECT_TRUE(test_utils::kSlmCappedAt48KiB)
+        << word << " needs " << ops::gemm::wide_slm_bytes<T>(*cfg) << " B of local memory; this device budgets " << budget;
+    ExpectPinRefused<T>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
+    return false;
+}
+#define SKIP_UNLESS_WIDE_FITS(T, ctx, word) \
+    if (!WideTileFitsOrIsRefused<T>(ctx, word)) GTEST_SKIP() << test_utils::kSlmCappedReason << "; the refusal was checked instead"
+
 // C against alpha op(A) op(B) + beta C0, componentwise in double on every item (Check::blas, k the inner
 // dimension). The reference is the library's, not another gemm: the vendor and the other native kernels
 // are no oracle for each other, and a vendor pin is Auto vendor-free.
@@ -366,6 +385,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     if constexpr (sizeof(ScalarType) < 16) words.push_back("small");
     for (const char* word : words) {
         SCOPED_TRACE(word);
+        if (!WideTileFitsOrIsRefused<ScalarType>(*(this->ctx), word)) continue;
         reset();
         {
             const GemmPin pin(word);
@@ -1072,6 +1092,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
     auto C0 = C.clone();
 
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1103,6 +1124,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     // cannot see an epilogue defect, and the epilogue is where the two paths
     // differ most.
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1293,6 +1315,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedL
     auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
 
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1342,6 +1365,7 @@ void RunForcedWideTransposedCheck(Queue& ctx,
                                    int row_offset = 3,
                                    int batch_size = 3) {
     SKIP_UNLESS_NATIVE(ctx);
+    SKIP_UNLESS_WIDE_FITS(ScalarType, ctx, kernel_name);
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;

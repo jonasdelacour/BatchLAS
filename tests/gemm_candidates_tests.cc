@@ -209,10 +209,11 @@ const WideRow* wide_row(const og::Wide& w) {
     return nullptr;
 }
 // The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
-// (64x64, float and complex<float>) double-buffers; complex<float> v2 is 32 KiB, a Metal limit.
+// (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
+// complex<double> 64x64x16 is 64 KiB, over acpp's 48 KiB without the opt-in.
 template <typename T>
 std::int64_t wide_slm(const WideRow& row) {
-    const bool v2 = row.m == 64 && row.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    const bool v2 = row.m == 64 && row.n == 64 && !std::is_same_v<T, double>;
     return (v2 ? 2 : 1) * std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
 }
 template <typename T>
@@ -276,10 +277,10 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             const WideRow* row = wide_row(w);
             std::string f = wide_form<T>(ta, tb);
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
-            // Wide v2 (64x64, float and complex<float>) has the 16-byte leg in every form; of the
-            // others only the NN 64x64x16 kernel has an aligned leg (double 64x64x8 NN is transposed's).
+            // Wide v2 (64x64, every scalar but double) has the 16-byte leg in every form; of the
+            // others only double's NN 64x64x16 kernel has an aligned leg (64x64x8 NN is transposed's).
             const bool aligned = aligned_layout || sizeof(T) == 16;
-            const bool v2 = w.m == 64 && w.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+            const bool v2 = w.m == 64 && w.n == 64 && !std::is_same_v<T, double>;
             const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             return row->trace.at(f);
@@ -403,21 +404,24 @@ Problem<T> make_problem(const Spec& s) {
 }
 
 template <typename T>
-inline constexpr bool kWideV2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+inline constexpr bool kWideV2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>> ||
+                                std::is_same_v<T, std::complex<double>>;
 
 // Wide v2's leg against (A layout, B layout): 16-byte loads only when both bases are 16-byte
 // aligned and both ld and batch stride are whole granules, never from the shape (160 x 136 x 48
 // is ragged in m and n). Each refusing term appears alone on A and on B, so a dropped term (or the
 // whole B conjunct) launches the 16-byte leg on a misaligned operand. Ld2 straddles the ld term:
-// complex<float> (2 per granule) takes it, float (4) does not.
+// complex<float> (2 per granule) takes it, float (4) does not. complex<double> is one element per
+// granule, so every layout here is whole granules: all twelve take the 16-byte leg.
 template <typename T>
 std::vector<std::tuple<Layout, Layout, bool>> wide_v2_leg_layouts() {
     using L = Layout;
-    const bool cf = std::is_same_v<T, std::complex<float>>;
-    return {{L::Padded, L::Padded, true}, {L::Ld2, L::Ld2, cf},       {L::OddLd, L::OddLd, false},
-            {L::ItemSkew, L::ItemSkew, false}, {L::Padded, L::OddLd, false}, {L::OddLd, L::Padded, false},
-            {L::Padded, L::ItemSkew, false}, {L::ItemSkew, L::Padded, false}, {L::Padded, L::Gap1, false},
-            {L::Gap1, L::Padded, false},   {L::Padded, L::Ld2, cf},     {L::Ld2, L::Padded, cf}};
+    const bool cd = std::is_same_v<T, std::complex<double>>;
+    const bool cf = cd || std::is_same_v<T, std::complex<float>>;
+    return {{L::Padded, L::Padded, true}, {L::Ld2, L::Ld2, cf},       {L::OddLd, L::OddLd, cd},
+            {L::ItemSkew, L::ItemSkew, cd}, {L::Padded, L::OddLd, cd}, {L::OddLd, L::Padded, cd},
+            {L::Padded, L::ItemSkew, cd}, {L::ItemSkew, L::Padded, cd}, {L::Padded, L::Gap1, cd},
+            {L::Gap1, L::Padded, cd},   {L::Padded, L::Ld2, cf},     {L::Ld2, L::Padded, cf}};
 }
 
 // A panel update in one parent, all three operands at the parent's ld and stride: potrf's
@@ -680,13 +684,13 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<float>(w64), 16384);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64), 32768);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64), 16384);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64), 32768);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64), 65536);
     const og::WideCfg& w64k8 = og::wide_configs[7];
     ASSERT_TRUE(w64k8.m == 64 && w64k8.n == 64 && w64k8.k == 8);
     EXPECT_EQ(og::wide_slm_bytes<float>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16384);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 16384);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
     for (const og::WideCfg& c : og::wide_configs) {
         const WideRow* row = wide_row(og::Wide{c.m, c.n, c.k});
         ASSERT_NE(row, nullptr) << c.m << "x" << c.n;
@@ -1314,8 +1318,8 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
     EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
 }
 
-// WP-D, wide v2 (64x64x16 for float and complex<float>) in all 9 forms at batch 1024, 7 distinct
-// problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1
+// WP-D, wide v2 (64x64x16: float, complex<float>, since WP-J complex<double>) in all 9 forms at
+// batch 1024, 7 distinct problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1
 // (element loads, edge groups predicated, a k tail, 3 slabs: the odd-count barrier before the
 // staged epilogue); ragged 200 x 136 x 40 padded (the 16-byte leg: interior groups unpredicated,
 // ld and stride not derivable from the shape); packed 128 x 128 x 64 (every group interior, 4
@@ -1328,8 +1332,8 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
 // evidence: docs/perf/gemm.md#gemm-wide-v2-one-double-buffered-64x64-kernel-for-every-form
 TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
     using T = typename TestFixture::T;
-    if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, std::complex<float>>) {
-        GTEST_SKIP() << "wide v2 serves float and complex<float>";
+    if constexpr (!kWideV2<T>) {
+        GTEST_SKIP() << "wide v2 serves float, complex<float> and complex<double>";
     } else {
         const C c{og::Wide{64, 64, 16}};
         if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) GTEST_SKIP() << "above this device's local memory budget";
@@ -1391,7 +1395,7 @@ TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
 TYPED_TEST(GemmCandidates, WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch) {
     using T = typename TestFixture::T;
     struct Shape { int m, n, k; Layout layout; int batch; };
-    const int big = sizeof(T) == 16 ? 256 : 1024;
+    const int big = 1024;
     std::vector<Shape> shapes;
     for (int k : {8, 9, 16, 17}) {
         shapes.push_back({100, 70, k, Layout::Gap1, 1024});
@@ -1428,6 +1432,57 @@ TYPED_TEST(GemmCandidates, WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch) {
     EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
     EXPECT_EQ(ran, tiles * 9 * int(shapes.size()));
     EXPECT_EQ(nan_checked, tiles * 9);
+}
+
+// WP-J, wide v2 for complex<double> (one element per 16-byte granule, its own k-contiguous lane
+// map, store and swizzle), with float and complex<float> as the control. Both slab depths, all 9
+// forms, m and n straddling the 64 and 128 tile edges both ways, k straddling 8, 16 and 32 both
+// ways, every gap NaN (a dropped bound on one operand times the other's zero is NaN, not -0), at
+// ld = m + 1 and padded. Then 129 x 65 x 33 at batch 1024, 7 distinct problems, each item
+// bit-identical to its representative. A complex<double> store that drops the column offset, a
+// swizzle store and read disagree on, or the complex<float> lane map is wrong in every
+// complex<double> form with a k-contiguous operand (all but NT and NC) and in no other scalar.
+// evidence: docs/perf/gemm.md#gemm-wp-j-complex-double-on-wide-v2
+TYPED_TEST(GemmCandidates, WideV2TileAndSlabEdgesUnderNaNPoison) {
+    using T = typename TestFixture::T;
+    if constexpr (!kWideV2<T>) {
+        GTEST_SKIP() << "wide v2 serves float, complex<float> and complex<double>";
+    } else {
+        const std::pair<int, int> mn[] = {{63, 65}, {64, 64}, {65, 129}, {128, 127}, {129, 63}};
+        const int ks[] = {7, 8, 9, 15, 16, 17, 33};
+        int ran = 0, saturated = 0, tiles = 0;
+        for (const C c : {C{og::Wide{64, 64, 8}}, C{og::Wide{64, 64, 16}}}) {
+            if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) continue;
+            ++tiles;
+            for (Transpose ta : kForms)
+                for (Transpose tb : kForms) {
+                    for (auto [m, n] : mn)
+                        for (int k : ks) {
+                            Spec s{ta, tb, m, n, k, 3, (m + k) % 2 ? Layout::Gap1 : Layout::Padded};
+                            s.nan_poison = true;
+                            s.seed = 9500u + 3u * m + 5u * n + 7u * k;
+                            ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                            auto p = make_problem<T>(s);
+                            this->run_pinned(c, p);
+                            expect_gemm(*this->ctx, p, name(c, s));
+                            if (::testing::Test::HasFatalFailure()) return;
+                            ++ran;
+                        }
+                    Spec s{ta, tb, 129, 65, 33, 1024, Layout::Gap1};
+                    s.period = 7;
+                    s.nan_poison = true;
+                    s.seed = 9400u + 3u * unsigned(ta) + unsigned(tb);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++saturated;
+                }
+        }
+        EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
+        EXPECT_EQ(ran, tiles * 9 * 5 * 7);
+        EXPECT_EQ(saturated, tiles * 9);
+    }
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers

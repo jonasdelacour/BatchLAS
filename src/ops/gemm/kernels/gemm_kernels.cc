@@ -391,8 +391,8 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         return launch_wide64_v2<T, OA, OB, c.k>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
                                                 aligned_trace_name(v));
     } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64 && c.k == 16) {
-        // The NN 64x64x16 tile is its own kernel; its leg is derived from the layout. Double and
-        // complex<double> 64x64x8 run launch_wide_transposed in every form, NN included.
+        // The double NN 64x64x16 tile is its own kernel; its leg is derived from the layout.
+        // Double 64x64x8 runs launch_wide_transposed in every form, NN included.
         if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
             return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_64x64_k16_wide<T, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);

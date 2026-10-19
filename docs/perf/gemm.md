@@ -1166,6 +1166,71 @@ Deliberate breaks, unrun:
 
 **Pending:** the A/B (pass ≤ 1.05× vendor) on float NN strided 384³ b128 and 256×256×64 b128.
 
+## GEMM: WP-J, complex double on wide v2
+
+*Unmeasured* (2026-10-19): no GPU was available at implementation time. Design, registers and tests only;
+the A/B is pending.
+
+`wide:m=64:n=64:k=16` and `wide:m=64:n=64:k=8` for complex<double> now run `GemmWide64Body` in all 9 forms, NN
+included. Before this they ran the NN 64x64x16 kernel (NN at k = 16) and `launch_wide_transposed` (every other
+form, and every form at k = 8): one buffer, element loads, two barriers per slab. The spellings are unchanged;
+double keeps the old kernels.
+
+- **CF = 4, VecN = 1, NB = 4.** One element is one 16-byte granule. The staging identity
+  `GPR * TileK == CF * OpThreads` holds as it is (64 · 16 = 4 · 256; 64 · 8 = 4 · 128 for the split slab).
+- **k-contiguous operand** (Aᵀ, B): lane map `kk = tid % TileK`, `i = (tid / TileK) * 4`, so 16 consecutive
+  lanes read 256 contiguous bytes down one column. `sstore` writes the four columns of row kk as four
+  granules.
+- **Swizzle `swz = kk & 7`.** An 8-lane store phase holds 8 consecutive kk of one column; rows are 1 KiB apart,
+  so without the XOR all 8 lanes hit the same 4 banks. The fragment read and the i-contiguous store stay
+  conflict-free under any per-row XOR.
+- **`fma_signed` and `elem`** are templated over the real type; a complex<double> fragment is the 16-byte
+  granule re-typed through private memory, a register move.
+- **Launch bound** 1 group per CU (8 warps): FP64 runs at 1/64 rate, so the kernel is compute-bound and needs no
+  more warps. 2 groups would cap registers at 128 against 134-224 used.
+- **Local memory:** 64 KiB at k = 16 and 32 KiB at k = 8 (`wide_slm_bytes`, static_asserted against the
+  kernel). The k = 16 tile is over acpp's 48 KiB without `BATCHLAS_ACPP_SLM_OPTIN`, so can_run refuses it
+  there; `gemm_tests` checks the refusal through `WideTileFitsOrIsRefused`.
+
+**Registers** (`scripts/register_probe.sh`, ptxas, sm_120): zero spill and no stack frame on all 457 entry
+functions of `libbatchlas_sycl`. The 36 complex<double> v2 instances:
+
+| slab | registers |
+|---|---|
+| k = 8 | 134-168 (NN 136-156, TN/CN 146-168) |
+| k = 16 | 196-224 (TN/CN 224) |
+
+The gate at 256 lanes: ceil(8/4) · 32 · 224 = 14336 ≤ 16384.
+
+Tests:
+
+- `GemmCandidates.WideV2EveryFormAtSaturatingBatch` now covers complex<double>.
+- `WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch` runs it at batch 1024 (it was 256 for 16-byte scalars).
+- `WideV2TileAndSlabEdgesUnderNaNPoison` covers both slabs and all 9 forms. Its shapes are m, n ∈ {63..65,
+  127..129} and k ∈ {7, 8, 9, 15, 16, 17, 33}, with NaN in every gap, then 129×65×33 at batch 1024 with
+  bit-identical items.
+- complex<double> takes the 16-byte leg on every test layout: ld and stride are always whole granules, and
+  element offsets keep 16-byte bases. Only an 8-byte-aligned base reaches the element leg, and no test builds
+  one.
+
+Deliberate breaks, unrun:
+
+- Dropping `+ c` in the CF = 4 `sstore` column should turn red every complex<double> form except NT and NC,
+  the forms with no k-contiguous operand, and no float or complex<float> case.
+- `swz` returning 0 on the fragment read only, for CF = 4, should turn red every complex<double> v2 form and
+  nothing else.
+- Using the complex<float> lane map (`CF == 2` branch of `first_k`/`first_i`) for CF = 4 should turn red
+  complex<double> forms except NT and NC.
+- Flipping the A sign in `fma_signed` should turn red CN, CT and CC for both complex scalars. The template is
+  shared, so the break is not cdouble-only.
+
+**Pending:** the A/B (pass ≤ 1.05x vendor), arms `wide:m=64:n=64:k=16`, `wide:m=64:n=64:k=8`, `vendor`:
+
+- cdouble TN packed 512×1024×128 b128;
+- NC strided 1024×32×1024 b128;
+- CT packed 512³ b128;
+- NN packed 512³ b128 against the parent's NN kernel.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a

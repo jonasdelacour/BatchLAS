@@ -2,9 +2,9 @@
 
 // A 64x64x16 register-tiled GEMM with a 4x4 thread tile. The 4x4 tile is the widest
 // shape that stays inside the 65,536 registers-per-block limit -- the 128x128 kernel's 8x8
-// tile throws at launch for complex<double>. Two kernels: the NN one (double and
-// complex<double>; register_wide_transposed.hh serves their other forms) and wide v2 below,
-// every form for float and complex<float>.
+// tile throws at launch for complex<double>. Two kernels: the NN one (double;
+// register_wide_transposed.hh serves its other forms) and wide v2 below, every form for float,
+// complex<float> and complex<double>.
 // evidence: docs/perf/gemm.md#the-wide-scalar-kernel
 
 #include <src/sycl/device_scalar.hh>
@@ -475,7 +475,7 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-// ---- wide v2: every transpose form, float and complex<float> -----------------------------
+// ---- wide v2: every transpose form, float, complex<float> and complex<double> ------------
 //
 // One 64x64 kernel per (op(A), op(B)) over {N, T, C} and slab depth 16 or 8. Staging is a pure
 // copy into one shared layout, s[kk][i] in 16-byte granules (i = m for A, n for B); conjugation
@@ -485,7 +485,8 @@ BATCHLAS_UNROLL_FULL
 // evidence: docs/perf/gemm.md#gemm-wide-v2-one-double-buffered-64x64-kernel-for-every-form
 
 template <typename T>
-inline constexpr bool kWide64V2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+inline constexpr bool kWide64V2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>> ||
+                                  std::is_same_v<T, std::complex<double>>;
 
 namespace wide_v2 {
 
@@ -496,10 +497,13 @@ using batchlas::sycl_device::Cx;
 // bank-conflict set (an 8-lane phase of a 16-byte store, a warp of float ones) spans 4 row groups
 // (kk / VecN) x 2 adjacent granules (GemmWide64Body::first_k), so bits 1-2 follow the row
 // group. Four values, so the fragment read needs only four offsets. Float at TileK = 8 has two
-// row groups x 4 granules per warp, so its row group flips bit 2.
+// row groups x 4 granules per warp, so its row group flips bit 2. complex<double> (one element
+// per granule) puts 8 consecutive kk in a phase, so kk & 7 spreads them over all 32 banks.
+// evidence: docs/perf/gemm.md#gemm-wp-j-complex-double-on-wide-v2
 template <int CF, int TileK>
 constexpr int swz(int kk) {
-    if constexpr (CF == 1 && TileK == 8) return ((kk / 4) & 1) << 2;
+    if constexpr (CF == 4) return kk & 7;
+    else if constexpr (CF == 1 && TileK == 8) return ((kk / 4) & 1) << 2;
     else return ((kk / (4 / CF)) & 3) << 1;
 }
 
@@ -517,18 +521,27 @@ template <bool CA, bool CB>
 inline void fma_signed(float& acc, float a, float b) {
     acc = sycl::fma(a, b, acc);
 }
-template <bool CA, bool CB>
-inline void fma_signed(Cx<float>& acc, Cx<float> a, Cx<float> b) {
+template <bool CA, bool CB, typename R>
+inline void fma_signed(Cx<R>& acc, Cx<R> a, Cx<R> b) {
     acc.re = sycl::fma(a.re, b.re, acc.re);
     acc.re = sycl::fma(CA != CB ? a.im : -a.im, b.im, acc.re);
     acc.im = sycl::fma(CB ? -a.re : a.re, b.im, acc.im);
     acc.im = sycl::fma(CA ? -a.im : a.im, b.re, acc.im);
 }
 
+// complex<double> is the whole granule, re-typed through private memory (a register move).
 template <typename D>
 inline D elem(const Vec4<float>& t, int w) {
-    if constexpr (std::is_same_v<D, float>) return t[w];
-    else return D{t[2 * w], t[2 * w + 1]};
+    if constexpr (std::is_same_v<D, float>) {
+        return t[w];
+    } else if constexpr (std::is_same_v<D, Cx<float>>) {
+        return D{t[2 * w], t[2 * w + 1]};
+    } else {
+        const float f[4] = {t[0], t[1], t[2], t[3]};
+        D d;
+        __builtin_memcpy(&d, f, sizeof(D));
+        return d;
+    }
 }
 
 // One operand's slab into CF 16-byte registers. A thread's elements, relative to its first
@@ -558,7 +571,7 @@ BATCHLAS_UNROLL_FULL
 
 // The registers into shared row kk at granule (i / VecN) ^ swz(kk). Along i, a register is
 // one granule. Along k, complex<float> pairs its two columns into one granule per row;
-// float stores four scalars, one per row.
+// float stores four scalars, one per row; complex<double> stores its CF columns of row kb.
 template <bool KC, int CF, int KStep, int TileK>
 inline void sstore(float* s, const Vec4<float> (&r)[CF], int kb, int ib) {
     constexpr int VecN = 4 / CF, RowF = 64 * CF;
@@ -568,6 +581,9 @@ BATCHLAS_UNROLL_FULL
             const int kk = kb + c * KStep;
             st16(s + kk * RowF + (((ib / VecN) ^ swz<CF, TileK>(kk)) << 2), r[c]);
         }
+    } else if constexpr (CF == 4) {
+BATCHLAS_UNROLL_FULL
+        for (int c = 0; c < CF; ++c) st16(s + kb * RowF + (((ib + c) ^ swz<CF, TileK>(kb)) << 2), r[c]);
     } else if constexpr (CF == 2) {
 BATCHLAS_UNROLL_FULL
         for (int q = 0; q < 2; ++q) {
@@ -587,7 +603,8 @@ BATCHLAS_UNROLL_FULL
 }  // namespace wide_v2
 
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled. Two groups per CU for
-// complex<float> (its prefetch registers do not fit three groups' 85-register cap).
+// complex<float> (its prefetch registers do not fit three groups' 85-register cap), one for
+// complex<double> (64 accumulator registers; FP64 is compute-bound at 8 warps per SM).
 // TileK = 8 halves the slab; each lane still stages CF granules, so warps 0-3 stage A and 4-7 B.
 template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_>
 struct GemmWide64Body {
@@ -603,9 +620,9 @@ struct GemmWide64Body {
     static constexpr int OpThreads = Split ? Threads / 2 : Threads;  // staging lanes per operand
     static constexpr int KStep = OpThreads / GPR;
     static constexpr bool KA = OpA != Transpose::NoTrans, KB = OpB == Transpose::NoTrans;
-    static constexpr bool CA = CF == 2 && OpA == Transpose::ConjTrans;
-    static constexpr bool CB = CF == 2 && OpB == Transpose::ConjTrans;
-    static constexpr int kMinGroupsPerCu = CF == 1 ? 3 : 2;
+    static constexpr bool CA = batchlas::sycl_device::dev_is_complex_v<D> && OpA == Transpose::ConjTrans;
+    static constexpr bool CB = batchlas::sycl_device::dev_is_complex_v<D> && OpB == Transpose::ConjTrans;
+    static constexpr int kMinGroupsPerCu = CF == 4 ? 1 : (CF == 1 ? 3 : 2);
     static_assert(kWide64V2<T> && TileM == TileN, "one staging map serves A and B");
     static_assert(TileK == 16 || TileK == 8, "first_k and swz map these two slab depths");
     static_assert(GPR * TileK == CF * OpThreads, "CF granules per staging lane per operand");
@@ -624,18 +641,19 @@ struct GemmWide64Body {
     // complex<float> takes kq from tid bits 0, 1, 3 and its column pair from the rest, so an
     // 8-lane phase holds 4 row groups x 2 column pairs (the swizzle's premise, wide_v2::swz).
     // At TileK = 8 there are only 4 row groups (complex<float>) or 2 (float): tid bits 0-1 / 0.
+    // complex<double> (VecN = 1): kk = tid % TileK, so a phase is 8 consecutive kk of one column.
     // tid is the lane's index among its operand's OpThreads staging lanes.
     static constexpr int KG = TileK / VecN;  // row groups along k
     template <bool KC>
     static int first_k(int tid) {
         if constexpr (!KC) return tid / GPR;
-        else if constexpr (CF == 1 || TileK == 8) return (tid % KG) * VecN;
+        else if constexpr (CF != 2 || TileK == 8) return (tid % KG) * VecN;
         else return ((tid & 3) | ((tid >> 1) & 4)) * VecN;
     }
     template <bool KC>
     static int first_i(int tid) {
         if constexpr (!KC) return (tid % GPR) * VecN;
-        else if constexpr (CF == 1 || TileK == 8) return (tid / KG) * CF;
+        else if constexpr (CF != 2 || TileK == 8) return (tid / KG) * CF;
         else return (((tid >> 2) & 1) | ((tid >> 3) & ~1)) * CF;
     }
 
