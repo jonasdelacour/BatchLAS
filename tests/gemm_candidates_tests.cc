@@ -236,7 +236,7 @@ struct Region {
     int rows = 0, cols = 0, ld = 0, stride = 0;
 };
 
-enum class Layout { Packed, Strided, Padded };
+enum class Layout { Packed, Strided, Padded, Gap1 };
 
 struct Spec {
     Transpose ta = kN, tb = kN;
@@ -249,7 +249,8 @@ struct Spec {
 };
 
 // A, B and C live in one buffer of a large finite poison. Packed: contiguous operands with
-// 16-byte bases (layout=packed). Strided: ld = rows + 3, an odd batch stride, odd bases. Padded:
+// 16-byte bases (layout=packed). Strided: ld = rows + 3, an odd batch stride, odd bases. Gap1: the
+// tuner's strided cell, ld = rows + 1, odd stride and bases (one poison element per column). Padded:
 // 16-byte bases, ld and stride multiples of 4 but neither natural (an aligned-leg view). The
 // panel form carves A, B and C from one parent at its ld and stride, B aliasing A.
 template <typename T>
@@ -321,6 +322,7 @@ Problem<T> make_problem(const Spec& s) {
         if (s.layout == Layout::Packed) return Region{up4(off), rows, cols, rows, rows * cols};
         const int pad = int(up4(std::size_t(rows))) + 4;
         if (s.layout == Layout::Padded) return Region{up4(off), rows, cols, pad, pad * cols + 4};
+        if (s.layout == Layout::Gap1) return Region{off | 1, rows, cols, rows + 1, (rows + 1) * cols + 3};
         return Region{off | 1, rows, cols, rows + 3, (rows + 3) * cols + 5};
     };
     auto end = [&](const Region& g) { return g.off + std::size_t(g.stride) * s.batch + 9; };
@@ -396,7 +398,10 @@ void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
 }
 
 std::string label(const Spec& s) {
-    const char* lay = s.layout == Layout::Packed ? " packed" : s.layout == Layout::Padded ? " padded" : " strided";
+    const char* lay = s.layout == Layout::Packed ? " packed"
+        : s.layout == Layout::Padded               ? " padded"
+        : s.layout == Layout::Gap1                 ? " ld+1"
+                                                   : " strided";
     return std::string(tw(s.ta)) + tw(s.tb) + lay +
            " m=" + std::to_string(s.m) + " n=" + std::to_string(s.n) + " k=" + std::to_string(s.k) +
            " batch=" + std::to_string(s.batch) + (s.beta_zero ? " beta=0" : "");
@@ -911,9 +916,10 @@ TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
 }
 
 // The 128x128 kernel in every real form (CC folds to TT) at batch 1024, 7 distinct problems: its
-// three legs (packed 128 x 256 x 24 aligned + staged over two n tiles, packed 128 x 128 x 72
-// aligned + direct epilogue over an odd slab count, strided 200 x 150 x 37 predicated over 2 x 2
-// ragged tiles), each item bit-identical to its representative. A per-form loader that reads the
+// four legs (packed 128 x 256 x 24 aligned + staged over two n tiles, packed 128 x 128 x 72
+// aligned + direct epilogue over an odd slab count, strided 200 x 150 x 37 predicated + staged and
+// 200 x 150 x 72 predicated + direct over 2 x 2 ragged tiles), each item bit-identical to its
+// representative. A per-form loader that reads the
 // wrong lane map, or a missing barrier between slabs, differs across items or is wrong.
 TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
     using T = typename TestFixture::T;
@@ -927,7 +933,7 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
         const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
         struct Leg { int m, n, k; Layout layout; };
         const Leg legs[] = {{128, 256, 24, Layout::Packed}, {128, 128, 72, Layout::Packed},
-                            {200, 150, 37, Layout::Strided}};
+                            {200, 150, 37, Layout::Strided}, {200, 150, 72, Layout::Strided}};
         int ran = 0;
         for (auto [ta, tb] : forms)
             for (const Leg& leg : legs) {
@@ -941,7 +947,7 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
                 if (::testing::Test::HasFatalFailure()) return;
                 ++ran;
             }
-        EXPECT_EQ(ran, 15);
+        EXPECT_EQ(ran, 20);
     }
 }
 
@@ -984,6 +990,59 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
         }
         EXPECT_EQ(ran, 24);
     }
+}
+
+// WP-B, the C epilogue of every reg and wide tile at a saturating batch, 7 distinct problems, beta != 0
+// (C is read). 256 x 256 x 16 strided: every group interior, odd ldc, so the staged store (wide at
+// 16-byte scalars stores direct, already coalesced). 200 x 136 x 8 ragged on two layouts: ld = m + 1
+// (the tuner's strided cell; the poison element under each column is read or written by an
+// off-by-one predicate or an ldc derived from m), and padded (16-byte columns: interior groups take
+// the band store, edge groups the staged one). Then 200 x 136 x 8 at ld = m + 1 with beta = 0 and
+// NaN in C. A missing barrier around the stage, or a stage index the write and read-back disagree
+// on, differs across items or is wrong; a band store on an edge group writes outside C.
+// evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
+TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    constexpr bool kWide16 = sizeof(T) == 16;
+    struct Shape { int m, n, k; Layout layout; int batch; bool all_forms; };
+    std::vector<Shape> shapes;
+    if (!kWide16) shapes.push_back({256, 256, 16, Layout::Strided, 1024, false});
+    shapes.push_back({200, 136, 8, Layout::Gap1, kWide16 ? 64 : 1024, true});
+    shapes.push_back({200, 136, 8, Layout::Padded, kWide16 ? 64 : 128, true});
+    const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kC, kN}, {kN, kC}, {kC, kC}};
+    int reg = 0, wide = 0, nan_checked = 0;
+    for (const C& c : og::candidates<T>()) {
+        const bool is_reg = std::holds_alternative<og::Reg>(c);
+        if (!is_reg && !std::holds_alternative<og::Wide>(c)) continue;
+        for (const Shape& sh : shapes)
+            for (auto [ta, tb] : forms) {
+                if (!sh.all_forms && tb != kN) continue;
+                Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                s.period = 7;
+                s.seed = 9700u + sh.m + static_cast<unsigned>(sh.layout);
+                if (!TestFixture::expect_runs(c, s)) continue;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s));
+                if (::testing::Test::HasFatalFailure()) return;
+                ++(is_reg ? reg : wide);
+            }
+        for (auto [ta, tb] : forms) {
+            Spec s{ta, tb, 200, 136, 8, 3, Layout::Gap1};
+            s.beta_zero = s.nan_c = true;
+            if (!TestFixture::expect_runs(c, s)) continue;
+            auto p = make_problem<T>(s);
+            this->run_pinned(c, p);
+            expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+            if (::testing::Test::HasFatalFailure()) return;
+            ++nan_checked;
+        }
+    }
+    // Float: reg 15 + 2 x 26 (fewer only where a row is over the local memory budget), wide 8 + 2 x 14;
+    // double and complex<float> wide 8 + 2 x 14; complex<double> wide 2 x 14.
+    if constexpr (std::is_same_v<T, float>) EXPECT_GE(reg, 50);
+    EXPECT_GE(wide, kWide16 ? 28 : 36);
+    EXPECT_GE(nan_checked, 14);
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers

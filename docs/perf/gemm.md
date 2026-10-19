@@ -748,6 +748,91 @@ stores; packed 128x128x64 NN: the aligned leg of 128x32x32 and both 128x64x32 ro
 β = 0, NaN-C pass). A deliberate break of the transposed-B scalar split should turn NT and TT red on 64x64x16,
 128x32x16, 128x32x32 and 128x64x16, and TT on 32x128x16.
 
+## GEMM: WP-B coalesced C epilogue on the predicated legs
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B (float NT/TN/NN
+strided 256x256x16 b128, TN strided 256x512x8 b128, NN packed 256x256x16 b128 as the regression guard, cfloat NN
+packed 128x256x8 and CN strided 1024x32x8 b128) and the C read-modify-write rate check are pending.
+
+At small k a cell is one read-modify-write pass over C, and the predicated and transposed tiles stored C one
+element per lane with lanes 16 bytes (four rows) apart, or `ldc` apart in the generic register tiles. Only the
+aligned NN legs stored whole 16-byte bands, because the C alignment test was tied to A's and B's. Four kernels
+change, and only their epilogues:
+
+- **The band store is a per-group decision about C alone** in the wide kernels: the tile lies inside C, `ldc`
+  is a multiple of the 16-byte granule, and C's item base is 16-byte aligned. The test is uniform over the
+  work-group, so a predicated leg takes the band store on its interior groups. It is an epilogue choice inside the
+  kernel, never a routing term or a `can_run` term.
+- **Every other group stages C through the mainloop's local memory**, then stores it with lane = consecutive row,
+  predicated on row and column. One warp store is then one contiguous run of a column at any `ldc`.
+  - 128x128: the staged epilogue now runs on the predicated leg too (k ≤ `kStagedEpilogueMaxK`, both legs). Its
+    stage layout and the barrier before it (the odd-slab tail reads `sa`) are unchanged. The predicated leg
+    stores scalars at rows `lane + 32 i`, one load-then-store per element. The aligned leg's code is untouched,
+    and so is the direct epilogue at k > 64.
+  - 64x64 NN wide and `register_wide_transposed.hh`: `wide_scalar::staged_c_store`. `sa` then `sb` form one
+    column-major stage of stride TileM, so a chunk is (TileK·(TileM+TileN))/TileM columns: 2 chunks for
+    64x64, 128x32 and 32x128, 1 for 32x32 and 16x16. A 16-byte scalar (complex<double>) skips staging, because
+    its one-element store is already the band store.
+  - Generic `reg` (`register_tiled_common.hh`), both legs: the same chunked stage inline (a reg header cannot
+    include a wide one, or the family hashes would miss the dependency). The column stride is TileM + 1:
+    lanes run along n there, and an even stride would put the TC-strided writes on one bank. No band store.
+- **Barriers.** Every mainloop already ends on a barrier after its last read of the stage buffers (the 128x128
+  odd-slab tail is the exception, and it already had one), so no barrier is added before the first chunk. Each
+  chunk adds one barrier between the stage writes and the read-back. Every chunk but the last adds one more
+  between the read-back and the next chunk's writes. Prior C is read two elements per thread ahead of their
+  stores, and never at β = 0.
+- **Budgets.** No local memory is added and `slm_bytes` is unchanged.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill across all 315 entry functions of
+`libbatchlas_sycl`. The 128x128 legs are at 126-128 registers, the new predicated staged legs at 128. Getting
+there took four register-cap concessions, each found by a probe:
+
+- A per-group 16-byte branch in 128x128 (interior groups, or the direct epilogue at k > 64) spilled 20-36 B,
+  so 128x128 has no band store off the aligned leg.
+- Prefetching all 16 prior values before the pass barrier also spilled.
+- NN's predicated A loader now bounds its four rows with one live int, as B^T already did. With its four
+  hoisted predicates, the staged NN leg spilled 28-40 B even with no read-back at all. NT keeps the four,
+  because two ints spilled NT 48 B.
+- In the wide and generic kernels, the chunk loop is not unrolled and the read-back batch is 2. A batch of 4
+  with every chunk unrolled cost +8 to +24 registers.
+
+Against the WP-G probe, the ones that cost occupancy (256 threads):
+
+| kernel | registers | blocks/SM (registers) |
+|---|---|---|
+| wide double 128x32, 32x128 | 60-64 → 71-76 | 4 → 3 |
+| wide double 64x64 NC | 64 → 72 | 4 → 3 |
+| wide double 32x32 (64 threads) | 60 → 76 | 16 → 12 |
+| wide double 64x64 NN predicated | 72 → 78 | 3 → 3 |
+| wide float 64x64 NC | 45 → 55 | 5 → 4 |
+| reg 64x64x16 NT, reg 64x64x8 NN | 48 → 55 | 5 → 4 |
+| reg 128x64x16 TN | 48 → 56 | 5 → 4 |
+
+cfloat wide is unchanged at 72. Every other float wide or reg instantiation keeps its block count or gains one.
+The baseline is the WP-G probe log, taken before WP-G's two commits. Its kernel code is assumed to match the parent
+of this change; that was not re-checked.
+
+**Build cost**, `libbatchlas_sycl` link alone, GPU-only tree, two runs each: parent 50.5-50.7 s, WP-B 54.2-54.4 s
+(+7%). The four predicated staged 128x128 legs are the new instantiations.
+
+Tests:
+
+- `GemmCandidates.CoalescedCEpilogueEveryTileAtSaturatingBatch` covers every reg and wide candidate on 256x256x16
+  strided at batch 1024 (complex<double> skips it), then 200x136x8 at ld = m + 1 and padded, then β = 0 with NaN
+  in C.
+- `Reg128x128EveryFormEveryLegAtSaturatingBatch` gains a strided 200x150x72 leg. Its strided 200x150x37 leg now
+  runs the predicated staged epilogue, so the new leg keeps the predicated direct one covered.
+
+Deliberate breaks, unrun:
+
+- Dropping the barrier after the stage writes should turn the staged groups red: every reg row, and every wide
+  row except complex<double>. In 128x128 (the barrier after the pass's stage writes) it should turn the strided
+  and ld = m + 1 cases red, while the packed aligned legs stay green.
+- Dropping the barrier between chunks should turn red only the multi-chunk tiles (wide 64x64, 128x32 and 32x128;
+  reg 32x32x8, 64x64x8, 64x64x16, 128x64x16 and 32x128x16), as a bit-identity failure.
+- Dropping the `n0 + TileN <= n` term of the wide band-store test should turn only the padded wide cases red, by
+  writing outside C.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
@@ -786,7 +871,8 @@ is shared-load bound; 40..48 still lose to cuBLAS, which is why NN 33..56 has it
 At k ≤ 64 the 128×128 kernel is store-bound (512²×32 b4096 writes 4.3 GB of C). The direct epilogue stores four
 128-byte column pieces per warp instruction, and DRAM reaches 87.6% of peak against 89.6% for two 256-byte pieces,
 a 2–3% loss at k ≤ 32. The staged epilogue routes C through local memory (4 passes of 32 columns × 128 rows) so each
-warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64`, aligned leg only.
+warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64`. This was the aligned
+leg only until WP-B extended it (see the section on the coalesced C epilogue above).
 
 | k (512², β=0) | direct | staged |
 |---|---|---|

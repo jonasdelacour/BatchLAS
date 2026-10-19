@@ -184,15 +184,13 @@ Event launch_register_tiled(Queue& ctx,
                     return;
                 }
 
-                const int row_base = static_cast<int>(item.get_group(1)) * TileM + local_row * ThreadTileRows;
-                const int col_base = static_cast<int>(item.get_group(2)) * TileN + local_col * ThreadTileCols;
                 const int linear_tid = local_row * Policy::LocalCols + local_col;
 
                 // Rebased per item in 64 bits (bid * stride passes 2^31); offsets within an item stay int.
                 const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
                 const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
                 T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-                constexpr int batch_a = 0, batch_b = 0, batch_c = 0;
+                constexpr int batch_a = 0, batch_b = 0;
                 const int group_row = static_cast<int>(item.get_group(1));
                 const int group_col = static_cast<int>(item.get_group(2));
                 T accum[ThreadTileRows][ThreadTileCols];
@@ -482,28 +480,62 @@ Event launch_register_tiled(Queue& ctx,
                     }
                 }
 
-                if constexpr (AlignedFastPath) {
-                    for (int i = 0; i < ThreadTileRows; ++i) {
-                        const int row = row_base + i;
-                        for (int j = 0; j < ThreadTileCols; ++j) {
-                            const int col = col_base + j;
-                            LinearEpilogue<T>::store(c_item + batch_c + col * ldc + row, alpha, beta, accum[i][j]);
+                // C goes out through tile_a/tile_b, lane = consecutive row: lanes run along n here,
+                // so a direct store puts adjacent lanes ldc apart. Every mainloop path above ends on
+                // a barrier after its last read of both tiles; each chunk's first barrier orders the
+                // stage writes before the read-back, its second the read-back before the next chunk.
+                // The odd column stride spreads the TC-strided writes over the banks.
+                // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
+                constexpr int CS = TileM + 1;
+                constexpr int LoCols = Policy::Stages * Policy::StageASize / CS;
+                constexpr int HiCols = Policy::Stages * Policy::StageBSize / CS;
+                constexpr int CW = LoCols + HiCols;
+                constexpr int Passes = (TileN + CW - 1) / CW;
+                constexpr int Batch = 2;  // prior loads in flight per thread
+                static_assert(CW >= 1, "the stage must hold one C column");
+                T* const lo = &tile_a[0];
+                T* const hi = &tile_b[0];
+                auto slot = [&](int c, int r) -> T* { return c < LoCols ? lo + c * CS + r : hi + (c - LoCols) * CS + r; };
+                const int m0 = group_row * TileM, n0 = group_col * TileN;
+                const bool beta_zero = beta == T(0);
+#pragma unroll 1
+                for (int pass = 0; pass < Passes; ++pass) {
+                    const int c0 = pass * CW;
+                    const int cw = TileN - c0 < CW ? TileN - c0 : CW;
+#pragma unroll
+                    for (int j = 0; j < ThreadTileCols; ++j) {
+                        const int c = local_col * ThreadTileCols + j - c0;
+                        if (c < 0 || c >= cw) continue;
+#pragma unroll
+                        for (int i = 0; i < ThreadTileRows; ++i) *slot(c, local_row * ThreadTileRows + i) = accum[i][j];
+                    }
+                    item.barrier(sycl::access::fence_space::local_space);
+                    const int count = TileM * cw;
+                    auto at = [&](int e, bool& ok) {
+                        const int row = m0 + e % TileM, col = n0 + c0 + e / TileM;
+                        ok = e < count && row < m && col < n;
+                        return row + static_cast<std::ptrdiff_t>(col) * ldc;
+                    };
+#pragma unroll 1
+                    for (int e0 = linear_tid; e0 < count; e0 += Batch * Policy::ThreadsPerGroup) {
+                        T prior[Batch];
+#pragma unroll
+                        for (int b = 0; b < Batch; ++b) {
+                            bool ok;
+                            const std::ptrdiff_t off = at(e0 + b * Policy::ThreadsPerGroup, ok);
+                            prior[b] = (ok && !beta_zero) ? c_item[off] : T(0);
+                        }
+#pragma unroll
+                        for (int b = 0; b < Batch; ++b) {
+                            const int e = e0 + b * Policy::ThreadsPerGroup;
+                            bool ok;
+                            const std::ptrdiff_t off = at(e, ok);
+                            if (!ok) continue;
+                            const T v = *slot(e / TileM, e % TileM);
+                            c_item[off] = beta_zero ? alpha * v : LinearEpilogue<T>::apply(alpha, beta, v, prior[b]);
                         }
                     }
-                } else {
-                    for (int i = 0; i < ThreadTileRows; ++i) {
-                        const int row = row_base + i;
-                        if (row >= m) {
-                            continue;
-                        }
-                        for (int j = 0; j < ThreadTileCols; ++j) {
-                            const int col = col_base + j;
-                            if (col < n) {
-                                LinearEpilogue<T>::store(c_item + batch_c + col * ldc + row, alpha, beta,
-                                                         accum[i][j]);
-                            }
-                        }
-                    }
+                    if (pass + 1 < Passes) item.barrier(sycl::access::fence_space::local_space);
                 }
             });
     });

@@ -124,8 +124,8 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
 }
 
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled.
-// StagedEpilogue (aligned leg only) routes C through local memory so each
-// warp stores whole 128-row columns; see launch_register_128x128_k8.
+// StagedEpilogue routes C through local memory so each warp stores whole
+// 128-row columns, on either leg; see launch_register_128x128_k8.
 // A real scalar only: a transposed operand is read as Trans (ConjTrans folds to it).
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans>
@@ -137,7 +137,6 @@ struct Gemm128x128Body {
     static constexpr int kMinGroupsPerCu = 2;
     static constexpr int StageStride = TileM + 4;  // staged C column stride
     static constexpr int TileAElems = StagedEpilogue ? 32 * StageStride : 2 * TileK * AStride;
-    static_assert(!StagedEpilogue || AlignedFastPath, "the staged epilogue stores unpredicated");
     // Which operands are contiguous in k: A^T and B (the transposing loader), else down m or n.
     static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
     static constexpr KernelVariant kVariant = !AK ? (BK ? KernelVariant::Tiled128x128RegisterK8
@@ -208,13 +207,19 @@ BATCHLAS_UNROLL_FULL
                 else rb = vec4_ref(gb);
             } else {
                 // Zero outside the matrix, so the inner loop needs no bounds. Same lane maps as
-                // the aligned leg, so an odd ld stays coalesced. B^T's bound is one live int, not
-                // four hoisted row predicates: with A's four, NT spilled at the 128 cap.
+                // the aligned leg, so an odd ld stays coalesced. Register-cap choices (ptxas at 128):
+                // B^T's bound is one live int, not four hoisted row predicates (with A's four, NT
+                // spilled); NN's A takes one int too (its four spilled the staged NN leg), NT's
+                // keeps its four (two ints spilled NT).
+                constexpr bool kOneIntA = !AK && BK;
+                [[maybe_unused]] const int lim_a = kOneIntA ? (k0 + a_k < k ? m - (m0 + a_m) : 0) : 0;
                 [[maybe_unused]] const int lim_b = BK ? 0 : (k0 + b_k < k ? n - (n0 + b_n) : 0);
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < 4; ++i) {
                     if constexpr (AK)
                         ra[i] = (k0 + a_k + i < k && m0 + a_m < m) ? load1_l2_line(ga + k0 + i) : T(0);
+                    else if constexpr (kOneIntA)
+                        ra[i] = i < lim_a ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
                     else
                         ra[i] = (m0 + a_m + i < m && k0 + a_k < k) ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i]
                                                                    : T(0);
@@ -291,7 +296,9 @@ BATCHLAS_UNROLL_FULL
 
         if constexpr (StagedEpilogue) {
             // Pass p stages the 32 tile columns c with c % 4 == p, slot c / 4,
-            // then each warp stores 4 of them as whole 128-row columns.
+            // then each warp stores 4 of them as whole 128-row columns: 16-byte
+            // stores on the aligned leg, predicated scalars at rows lane + 32 i
+            // on the other (a per-group 16-byte branch there spilled at the cap).
             T* sc = sa;
             const int tid2 = static_cast<int>(item.get_local_id(2));
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
@@ -314,20 +321,39 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < 4; ++q) {
                     const int slot = (tid2 >> 5) * 4 + q;
-                    const int row = (tid2 & 31) * 4;
-                    T* dst = &Cb[m0 + row + static_cast<std::ptrdiff_t>(n0 + slot * 4 + p) * ldc];
-                    const Vec4<T> v = vec4_ref(&sc[slot * StageStride + row]);
-                    Vec4<T> out;
-                    if (beta == T(0)) {
-                        out = alpha * v;
-                    } else {
-                        const Vec4<T> prior = vec4_ref(const_cast<const T*>(dst));
+                    const int col = n0 + slot * 4 + p;
+                    if constexpr (AlignedFastPath) {
+                        const int row = (tid2 & 31) * 4;
+                        T* dst = &Cb[m0 + row + static_cast<std::ptrdiff_t>(col) * ldc];
+                        const Vec4<T> v = vec4_ref(&sc[slot * StageStride + row]);
+                        Vec4<T> out;
+                        if (beta == T(0)) {
+                            out = alpha * v;
+                        } else {
+                            const Vec4<T> prior = vec4_ref(const_cast<const T*>(dst));
 BATCHLAS_UNROLL_FULL
-                        for (int i = 0; i < 4; ++i) {
-                            out[i] = LinearEpilogue<T>::apply(alpha, beta, v[i], prior[i]);
+                            for (int i = 0; i < 4; ++i) {
+                                out[i] = LinearEpilogue<T>::apply(alpha, beta, v[i], prior[i]);
+                            }
+                        }
+                        vec4_ref(dst) = out;
+                    } else {
+                        // A warp store is a whole 128-byte piece of the column at any ldc.
+                        if (col >= n) continue;
+                        const int rows_left = m - m0 - (tid2 & 31);
+                        T* dst = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
+                        const T* src = &sc[slot * StageStride + (tid2 & 31)];
+                        if (beta == T(0)) {
+BATCHLAS_UNROLL_FULL
+                            for (int i = 0; i < 4; ++i)
+                                if (32 * i < rows_left) dst[32 * i] = alpha * src[32 * i];
+                        } else {
+BATCHLAS_UNROLL_FULL
+                            for (int i = 0; i < 4; ++i)
+                                if (32 * i < rows_left)
+                                    dst[32 * i] = LinearEpilogue<T>::apply(alpha, beta, src[32 * i], dst[32 * i]);
                         }
                     }
-                    vec4_ref(dst) = out;
                 }
                 item.barrier(sycl::access::fence_space::local_space);
             }
@@ -412,8 +438,10 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
 
 // Short k is store-bound, and there the direct epilogue's four 128-byte
 // column pieces per store run DRAM measurably slower than whole columns; at
-// long k the staging round trip costs more than it saves.
+// long k the staging round trip costs more than it saves. An epilogue choice on
+// either leg, never a routing term.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
+// evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
 template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans>
 Event launch_register_128x128_k8(Queue& ctx,
@@ -423,11 +451,9 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    if constexpr (AlignedFastPath) {
-        if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
-            return launch_register_128x128_k8_leg<T, true, true, OpA, OpB>(ctx, A, B, C, alpha, beta,
-                                                                           kernel_trace_name);
-        }
+    if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
+        return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB>(ctx, A, B, C, alpha, beta,
+                                                                                  kernel_trace_name);
     }
     return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB>(ctx, A, B, C, alpha, beta,
                                                                                kernel_trace_name);

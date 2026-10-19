@@ -78,6 +78,57 @@ typedef Raw16Base Raw16 __attribute__((may_alias));
 inline Raw16 raw16_load(const void* p) { return *reinterpret_cast<const Raw16*>(p); }
 inline void raw16_store(void* p, Raw16 v) { *reinterpret_cast<Raw16*>(p) = v; }
 
+// The C tile out through local memory, for a group the 16-byte band store cannot serve (odd
+// ldc, unaligned C, an edge). The stage is lo then hi as one column-major space of stride TileM,
+// so a chunk of CW columns fits; per chunk `put(c0, cw, slot)` writes the thread's accumulators
+// of tile columns [c0, c0 + cw) to *slot(column - c0, row), then the group stores the chunk with
+// lane = consecutive row, so a warp's store is contiguous at any ldc. The caller's mainloop ends
+// on a barrier after its last read of lo and hi; each chunk's barrier orders put before the
+// read-back, and the one after it the read-back before the next chunk's put.
+// evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
+template <int TileM, int TileN, int Threads, int LoElems, int HiElems, typename D, typename Put>
+inline void staged_c_store(const sycl::nd_item<3>& item, D* lo, D* hi, D* Cb, int ldc, int m0, int n0, int m,
+                           int n, int tid, D alpha, D beta, bool beta_zero, Put&& put) {
+    static_assert(LoElems % TileM == 0 && HiElems % TileM == 0, "a stage column never straddles lo and hi");
+    constexpr int CW = (LoElems + HiElems) / TileM;
+    constexpr int Passes = (TileN + CW - 1) / CW;
+    constexpr int Batch = 2;  // prior loads in flight per thread
+    auto slot = [&](int c, int r) -> D* {
+        const int e = c * TileM + r;
+        return e < LoElems ? lo + e : hi + (e - LoElems);
+    };
+#pragma unroll 1
+    for (int pass = 0; pass < Passes; ++pass) {
+        const int c0 = pass * CW;
+        const int cw = TileN - c0 < CW ? TileN - c0 : CW;
+        put(c0, cw, slot);
+        item.barrier(sycl::access::fence_space::local_space);
+        const int count = TileM * cw;
+        auto at = [&](int e, bool& ok) {
+            const int row = m0 + e % TileM, col = n0 + c0 + e / TileM;
+            ok = e < count && row < m && col < n;
+            return row + static_cast<std::ptrdiff_t>(col) * ldc;
+        };
+#pragma unroll 1
+        for (int e0 = tid; e0 < count; e0 += Batch * Threads) {
+            D prior[Batch];
+BATCHLAS_UNROLL_FULL
+            for (int b = 0; b < Batch; ++b) {
+                bool ok;
+                const std::ptrdiff_t off = at(e0 + b * Threads, ok);
+                prior[b] = (ok && !beta_zero) ? Cb[off] : D{};
+            }
+BATCHLAS_UNROLL_FULL
+            for (int b = 0; b < Batch; ++b) {
+                bool ok;
+                const std::ptrdiff_t off = at(e0 + b * Threads, ok);
+                if (ok) Cb[off] = lin_epi(alpha, beta_zero ? D{} : beta, *slot(0, e0 + b * Threads), prior[b]);
+            }
+        }
+        if (pass + 1 < Passes) item.barrier(sycl::access::fence_space::local_space);
+    }
+}
+
 struct Tile {
     static constexpr int M = 64;
     static constexpr int N = 64;
@@ -340,8 +391,37 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 // Within a band the Wb rows are consecutive in m, so a whole
-                // band is one 16-byte access into column-major C.
+                // band is one 16-byte access into column-major C. That needs only
+                // this tile inside C and 16-byte columns, per group, whatever A and
+                // B are; any other group of the predicated leg is staged (lanes Wb
+                // rows apart store one element each), except at VecN == 1, where
+                // that scalar store is already the band store.
                 const bool beta_zero = dev_is_zero(beta_d);
+                const bool c_vec = AlignedFastPath ||
+                    (m0 + TileM <= m && n0 + TileN <= n && ldc % VecN == 0 &&
+                     reinterpret_cast<std::uintptr_t>(Cb) % 16u == 0);
+                constexpr bool kVecOnly = AlignedFastPath || VecN > 1;  // past the staged return
+                if constexpr (!AlignedFastPath && VecN > 1) {
+                    if (!c_vec) {
+                        staged_c_store<TileM, TileN, Tile::Threads, TileK * AStride, TileK * BStride>(
+                            item, sa, sb, Cb, ldc, m0, n0, m, n, tid, alpha_d, beta_d, beta_zero,
+                            [&](int c0, int cw, auto slot) {
+BATCHLAS_UNROLL_FULL
+                                for (int bm = 0; bm < NB; ++bm) {
+BATCHLAS_UNROLL_FULL
+                                    for (int j = 0; j < TT; ++j) {
+                                        const int c = (j / Wb) * NSep + tx * Wb + j % Wb - c0;
+                                        if (c < 0 || c >= cw) continue;
+                                        Vec16<D> v;
+BATCHLAS_UNROLL_FULL
+                                        for (int w = 0; w < Wb; ++w) v.v[w] = accum[bm * Wb + w][j];
+                                        vec_ref(slot(c, bm * MSep + ty * Wb)) = v;
+                                    }
+                                }
+                            });
+                        return;
+                    }
+                }
 BATCHLAS_UNROLL_FULL
                 for (int bm = 0; bm < NB; ++bm) {
                     const int gm = m0 + bm * MSep + ty * Wb;
@@ -350,7 +430,7 @@ BATCHLAS_UNROLL_FULL
                         const int bn = j / Wb;
                         const int w_n = j % Wb;
                         const int gn = n0 + bn * NSep + tx * Wb + w_n;
-                        if constexpr (AlignedFastPath) {
+                        if (kVecOnly || c_vec) {
                             D* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
                             Vec16<D> out;
                             if (beta_zero) {
