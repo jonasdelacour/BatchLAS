@@ -849,41 +849,64 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
     }
 }
 
-// The 4x4 register tiles' scalar staging (strided: odd ld and base, so no packet) in every form
-// they instantiate, at batch 1024 repeating 7 problems. 136 x 100 x 45 is ragged in every tile
-// and k slab and spans all four 32-column groups of b_slot's swizzle; the skinny TN 130 x 33 x 100
-// is the WP-G target shape. A transposed operand staged with the wrong lane map, or a swizzle the
-// store and the fragment read disagree on, is wrong; a staging race differs across items.
+// The generic register tiles (2x2, 4x4 and 8x4: every reg row but 128x128) in every form they
+// instantiate, at batch 1024 repeating 7 problems, on two layouts: strided (odd ld and base: the
+// scalar staging helpers) and padded (ld and stride multiples of 4, neither natural: the packet
+// loaders and their b_slot stores, where an ld derived from the rows reads the poison in the gap).
+// 136 x 100 x 45 is ragged in every tile and k slab and spans all four 32-column groups of
+// b_slot's swizzle; the skinny TN 130 x 33 x 100 is the WP-G target shape. Each form again at
+// batch 3 with beta = 0 and NaN in C. Then the aligned NN leg of the rows that have one, packed
+// 128 x 128 x 64: b_slot swizzles its store and fragment read on TileN 64. A transposed operand
+// staged with the wrong lane map, or a swizzle the store and the read disagree on, is wrong; a
+// staging race differs across items.
 TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
     using T = typename TestFixture::T;
     if constexpr (!std::is_same_v<T, float>) {
         GTEST_SKIP() << "reg is float only";
     } else {
-        struct Shape { Transpose ta, tb; int m, n, k; };
+        struct Shape { Transpose ta, tb; int m, n, k; Layout layout; };
         std::vector<Shape> shapes;
-        for (Transpose ta : {kN, kT})
-            for (Transpose tb : {kN, kT}) shapes.push_back({ta, tb, 136, 100, 45});
-        shapes.push_back({kT, kN, 130, 33, 100});
-        int ran = 0, tn_skinny = 0;
+        for (Layout lay : {Layout::Strided, Layout::Padded}) {
+            for (Transpose ta : {kN, kT})
+                for (Transpose tb : {kN, kT}) shapes.push_back({ta, tb, 136, 100, 45, lay});
+            shapes.push_back({kT, kN, 130, 33, 100, lay});
+        }
+        int ran = 0, tn_skinny = 0, nan_checked = 0, aligned = 0;
+        auto check = [&](const C& c, Spec s) {
+            if (!TestFixture::expect_runs(c, s)) return false;
+            auto p = make_problem<T>(s);
+            this->run_pinned(c, p);
+            expect_gemm(*this->ctx, p, name(c, s) + (s.nan_c ? " (NaN C)" : ""));
+            return true;
+        };
         for (const og::RegCfg& cfg : og::reg_configs) {
             if (cfg.m == 128 && cfg.n == 128) continue;  // its own kernel and test
             const C c{og::Reg{cfg.m, cfg.n, cfg.k, cfg.u}};
-            for (const Shape& sh : shapes) {
-                Spec s{sh.ta, sh.tb, sh.m, sh.n, sh.k, 1024, Layout::Strided};
-                s.period = 7;
-                s.seed = 9500u + sh.n;
-                if (!TestFixture::expect_runs(c, s)) continue;
-                auto p = make_problem<T>(s);
-                this->run_pinned(c, p);
-                expect_gemm(*this->ctx, p, name(c, s));
-                if (::testing::Test::HasFatalFailure()) return;
-                ++ran;
-                tn_skinny += sh.n == 33;
-            }
+            for (const Shape& sh : shapes)
+                for (bool nan : {false, true}) {
+                    if (nan && sh.n == 33) continue;
+                    Spec s{sh.ta, sh.tb, sh.m, sh.n, sh.k, nan ? 3 : 1024, sh.layout};
+                    s.period = nan ? 0 : 7;
+                    s.beta_zero = s.nan_c = nan;
+                    s.seed = 9500u + sh.n;
+                    if (!check(c, s)) continue;
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++(nan ? nan_checked : ran);
+                    tn_skinny += sh.n == 33;
+                }
+            if (!cfg.aligned_leg) continue;
+            Spec s{kN, kN, 128, 128, 64, 1024, Layout::Packed};
+            s.period = 7;
+            s.seed = 9600u + cfg.u;
+            aligned += check(c, s);
+            if (::testing::Test::HasFatalFailure()) return;
         }
-        // 22 + 5 cases (forms: NN 8, NT 4, TN 5, TT 5); fewer only where a row is over the budget.
-        EXPECT_GE(ran, 20);
-        EXPECT_GE(tn_skinny, 4);
+        // Per layout 22 + 5 (forms: NN 8, NT 4, TN 5, TT 5) and 22 NaN; the aligned rows are
+        // 128x32x32 and 128x64x32 u4 and u2. Fewer only where a row is over the budget.
+        EXPECT_GE(ran, 40);
+        EXPECT_GE(tn_skinny, 8);
+        EXPECT_GE(nan_checked, 32);
+        EXPECT_GE(aligned, 2);
     }
 }
 

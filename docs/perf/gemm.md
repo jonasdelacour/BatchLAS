@@ -719,7 +719,8 @@ code (128 threads), so it was left out.
 strided 128x32x1024 b2048 against `reg:m=128:n=32`, `reg:m=32:n=128`, `wide:m=64:n=64:k=16` and the vendor; float TT
 strided 256³ b128) is pending.
 
-`register_tiled_common.hh`, the generic 4×4 register tiles (every `reg_configs` row except 128×128). Two changes:
+`register_tiled_common.hh`, the generic register tiles: 2×2 (32x32x8), 4×4, and 8×4 (both 128x64x32 rows), every
+`reg_configs` row except 128×128. Two changes:
 
 - **Scalar staging lane map.** With an odd `ld` or base the packet loaders are skipped and every operand is
   staged one element per lane. The lane-fastest index used to be m for A and k for B whatever the form, so a
@@ -742,7 +743,10 @@ the aligned 128x64x32 8×4 legs, 64 to 72 (u2) and 68 to 72 (u4): 256 threads, s
 against 2 by their 49,920 B of local memory, so not binding. Zero spill library-wide; the 128x64x32 rows keep the
 128-byte stack frame they already had.
 
-Test: `GemmCandidates.RegScalarStagingEveryFormAtSaturatingBatch`.
+Test: `GemmCandidates.RegScalarStagingEveryFormAtSaturatingBatch` (strided: the scalar helpers; padded: the packet
+stores; packed 128x128x64 NN: the aligned leg of 128x32x32 and both 128x64x32 rows; each at batch 1024, plus a
+β = 0, NaN-C pass). A deliberate break of the transposed-B scalar split should turn NT and TT red on 64x64x16,
+128x32x16, 128x32x32 and 128x64x16, and TT on 32x128x16.
 
 ## GEMM: the register-tiled launcher table
 
