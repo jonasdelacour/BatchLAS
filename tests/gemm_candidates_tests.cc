@@ -1081,10 +1081,12 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
 // n straddling the 32 and 64 tile edges both ways, ragged k on the +1 side, on both layouts. A
 // band separation or tile count derived from the other extent is wrong only on a non-square tile;
 // an off-by-one edge predicate writes outside C at 33 or 65, or drops the last row at 32 or 64.
+// 16-byte scalars keep batch 1024 at k = 64 (four staged blocks), a quarter of the memory.
 TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges) {
     using T = typename TestFixture::T;
     struct Shape { int m, n, k; Layout layout; int batch; };
-    std::vector<Shape> shapes{{64, 32, 256, Layout::Strided, 1024}, {32, 64, 256, Layout::Strided, 1024},
+    const int ks = sizeof(T) == 16 ? 64 : 256;
+    std::vector<Shape> shapes{{64, 32, ks, Layout::Strided, 1024}, {32, 64, ks, Layout::Strided, 1024},
                               {64, 32, 256, Layout::Padded, 128},   {32, 64, 256, Layout::Padded, 128}};
     const std::pair<int, int> edges[] = {{32, 64}, {33, 65}, {64, 32}, {65, 33}, {32, 32}, {33, 33}, {64, 64}, {65, 65}};
     for (Layout lay : {Layout::Strided, Layout::Padded})

@@ -1379,6 +1379,9 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
 // The small wide tiles (32x32, 16x16, 64x32 and 32x64 macro tiles), shared by the tests below.
 const char* const kSmallWideTiles[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16", "wide:m=64:n=32:k=16",
                                        "wide:m=32:n=64:k=16"};
+// 29 x 21 is one partial work-group on 64x32 and 32x64; 70 x 67 gives every tile full groups
+// (the coalesced store) beside partial ones in both m and n, so the tests below run both.
+const int kSmallWideShapes[][3] = {{29, 21, 70}, {70, 67, 40}};
 
 // The small wide tiles on NN. Ragged
 // in every dimension, k from 1 to past two staged blocks, both betas, sub-views
@@ -1422,13 +1425,16 @@ TYPED_TEST(GemmTest, SmallWideTilesRunTheirTransposedForms) {
     const Transpose N = Transpose::NoTrans, T = Transpose::Trans, Cj = Transpose::ConjTrans;
     const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}};
     for (const char* kname : kSmallWideTiles)
-        for (const auto& p : pairs) {
-            SCOPED_TRACE(std::string(kname) + " ta=" + std::to_string(int(p[0])) + " tb=" + std::to_string(int(p[1])));
-            if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
-                ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
-            else
-                RunForcedWideTransposedCheck<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1], ScalarType(-1), 300);
-        }
+        for (const auto& s : kSmallWideShapes)
+            for (const auto& p : pairs) {
+                SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " ta=" + std::to_string(int(p[0])) +
+                             " tb=" + std::to_string(int(p[1])));
+                if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
+                    ExpectPinRefused<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1]);
+                else
+                    RunForcedWideTransposedCheck<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1],
+                                                             ScalarType(-1), 300);
+            }
 }
 
 // The register launchers hard-wire OpA/OpB, so running one on a form it was not
@@ -1466,9 +1472,10 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
     using Real = typename batchlas::base_type<ScalarType>::type;
-    constexpr int parent = 300, off = 3, batch = 3, m = 29, n = 21, k = 70;
-    for (const char* kname : kSmallWideTiles) {
-        SCOPED_TRACE(kname);
+    constexpr int parent = 300, off = 3, batch = 3;
+    for (const char* kname : kSmallWideTiles) for (const auto& s : kSmallWideShapes) {
+        const int m = s[0], n = s[1], k = s[2];
+        SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(m));
         auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch);
         auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch);
         auto PC = Matrix<ScalarType>::Random(parent, parent, false, batch);
@@ -1498,36 +1505,41 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
 TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    constexpr int m = 31, n = 29, k = 300, batch = 2048;
-    auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
-    auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
-    auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
-    Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
-    auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
-    for (const char* kname : kSmallWideTiles) {
-        Matrix<ScalarType> C(m, n, batch);
-        auto a = A.data(), b = B.data(), c = C.data();
-        for (int item = 0; item < batch; ++item) {
-            for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
-            for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
-            for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
-        }
-        {
-            const GemmPin force_kernel(kname);
-            (void)gemm(*(this->ctx), A, B, C,
-                 {.alpha = ScalarType(2), .beta = ScalarType(-1)});
-        }
-        this->ctx->wait();
-        c = C.data();
-        int mismatched = 0;
-        for (int item = 1; item < batch; ++item) {
-            for (int i = 0; i < m * n; ++i) {
-                if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
-                    ++mismatched;
+    constexpr int batch = 2048;
+    // k = 40 on the multi-tile shape keeps three staged blocks at under half the memory of k = 300.
+    const int shapes[][3] = {{31, 29, 300}, {70, 67, 40}};
+    for (const auto& s : shapes) {
+        const int m = s[0], n = s[1], k = s[2];
+        auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
+        auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
+        auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
+        Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
+        auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
+        for (const char* kname : kSmallWideTiles) {
+            Matrix<ScalarType> C(m, n, batch);
+            auto a = A.data(), b = B.data(), c = C.data();
+            for (int item = 0; item < batch; ++item) {
+                for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
+                for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
+                for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
+            }
+            {
+                const GemmPin force_kernel(kname);
+                (void)gemm(*(this->ctx), A, B, C,
+                     {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+            }
+            this->ctx->wait();
+            c = C.data();
+            int mismatched = 0;
+            for (int item = 1; item < batch; ++item) {
+                for (int i = 0; i < m * n; ++i) {
+                    if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
+                        ++mismatched;
+                    }
                 }
             }
+            EXPECT_EQ(mismatched, 0) << kname << " m=" << m;
         }
-        EXPECT_EQ(mismatched, 0) << kname;
     }
 }
 
