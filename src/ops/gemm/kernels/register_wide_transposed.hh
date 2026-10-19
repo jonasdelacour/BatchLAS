@@ -84,19 +84,30 @@ BATCHLAS_UNROLL_FULL
 // transposing scatter, so its granule column is XORed per row group: a conflict phase then
 // covers 32 / TileK adjacent granules x distinct row groups on distinct banks. The XOR is a
 // bijection within a row and the fragment read applies the same one.
+// VecN == 1 (complex<double>) has no XOR: its fragment reads are one element per band, and the
+// per-kk XORed addresses are loop-invariant, so they were hoisted out of the slab loop (one
+// register per kk x band) and spilled. Its KC mapping below is conflict-free unswizzled instead.
+// evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
 template <bool KC, int TI, int TileK, int VecN>
 constexpr int soff(int kk, int i) {
     constexpr int GPR = TI / VecN;
-    const int x = KC ? ((kk / VecN) * (32 / TileK)) & (GPR - 1) : 0;
+    const int x = (KC && VecN > 1) ? ((kk / VecN) * (32 / TileK)) & (GPR - 1) : 0;
     return kk * TI + ((i / VecN) ^ x) * VecN + i % VecN;
 }
 
 // Granule g of a slab -> its first element (i, kk). KC: a warp takes 32 / KG consecutive i of
 // KG granules each (whole TileK runs of 32 / KG columns, i fastest across lanes); otherwise
-// consecutive granules of one shared row.
+// consecutive granules of one shared row. KC at VecN == 1: a warp takes 16 i x 2 kk, lanes l and
+// l + 8 one 32-byte sector, each 8-lane store phase 8 consecutive i of one shared row.
 template <bool KC, int TI, int TileK, int VecN>
 inline void granule(int g, int& i, int& kk) {
-    if constexpr (KC) {
+    if constexpr (KC && VecN == 1) {
+        static_assert(TI % 16 == 0 && TileK % 2 == 0, "16 i x 2 kk per warp");
+        const int w = g / 32;
+        const int l = g % 32;
+        i = (w % (TI / 16)) * 16 + l % 8 + 8 * (l / 16);
+        kk = (w / (TI / 16)) * 2 + (l / 8) % 2;
+    } else if constexpr (KC) {
         constexpr int IL = 32 / (TileK / VecN);
         i = (g / 32) * IL + (g % 32) % IL;
         kk = ((g % 32) / IL) * VecN;
@@ -112,7 +123,13 @@ template <bool KC, bool Vec, typename D>
 inline void gload(D* r, const D* base, int ld, int gi, int gk, int i_lim, int k, bool full) {
     constexpr int VecN = Vec16<D>::N;
     const D* p = base + (KC ? static_cast<std::ptrdiff_t>(gi) * ld + gk : gi + static_cast<std::ptrdiff_t>(gk) * ld);
-    if constexpr (Vec) {
+    if constexpr (Vec && VecN == 1) {
+        // One guarded load, not a full/predicated diamond: ptxas if-converts it, so the slab's
+        // FMAs (sunk below the staging) can be hoisted back. The diamond spilled every split tile.
+        if (full || (gi < i_lim && gk < k)) raw16_store(r, raw16_load(p));
+        else r[0] = D{};
+        return;
+    } else if constexpr (Vec) {
         if (full) {
             raw16_store(r, raw16_load(p));
             return;

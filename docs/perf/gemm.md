@@ -1182,7 +1182,7 @@ barrier, compute, barrier with element loads, so at low tile counts no other gro
 | barriers | two stages: one per slab, slab s+1 stored into the stage slab s−1 was read from. One stage: two per slab, as before |
 | prefetch | the next slab's granules go into registers before the current FMAs: (m+n)·k / threads elements per thread (128x32: 10, 64x32: 12, 32x32: 16, 16x16: 8). Off on 64x64 double and on every complex<double> tile (prefetch spilled all 85 cdouble instantiations, 255 registers, sm_120 probe) |
 | granules | 16 bytes along the contiguous dimension: k for A^T and B, i for A and B^T. Along k a warp takes 32/KG columns of KG granules, i fastest across lanes |
-| swizzle | the k-contiguous store XORs its granule column by (kk/VecN)·(32/TileK) mod granules-per-row, the fragment read applies the same XOR. Conflict-free except float 16x16 (2-way) |
+| swizzle | the k-contiguous store XORs its granule column by (kk/VecN)·(32/TileK) mod granules-per-row, the fragment read applies the same XOR. Conflict-free except float 16x16 (2-way). None for complex<double>: a warp stages 16 i × 2 kk instead, lanes l and l+8 one 32-byte sector, each 8-lane phase 8 consecutive i of one row |
 | leg | `wide64_v2_vec_loads` per launch (bases 16-byte aligned, ld and stride whole granules). A group's slab is predicated (element loads, zero fill) when the group is an edge or the slab is the k tail |
 | conj | applied in registers at the shared store |
 | epilogue | unchanged. The staged path takes both stages as its space, behind one barrier after the last compute |
@@ -1204,12 +1204,33 @@ Deliberate breaks, unrun:
 
 - `store(cur)` in place of `store(cur ^ 1)`: red at every k > 16 on the two-stage tiles. Green at
   k = 16, and for cdouble 128x32, 32x128, 64x32 and 32x64.
-- `soff<false, …>` for A in `compute`: red only in the forms with A transposed (TN, CN, CT).
+- `soff<false, …>` for A in `compute`: red only in the forms with A transposed (TN, CN, CT), and
+  never for cdouble (no XOR there).
 - dropping `gk + q < k` in `gload`: red only in the k = 17 and 37 NaN cases.
 - dropping the barrier before `staged_c_store`: possible item mismatches in the ld = m+1 batch cases
   only (a race, so not guaranteed).
 
-**Pending:** registers from the probe (the table below), and the A/B on
+**Registers** (`scripts/register_probe.sh`, sm_120 GPU-only tree): zero spill on every entry function of
+`libbatchlas_sycl`. Before the two fixes below, 50 complex<double> instantiations of
+`GemmWideTransposedKernel` spilled (255 registers, 2-4.7 KB), every 16-byte × split one among them;
+before WP-K every cdouble instance sat at 124-136 with zero spill.
+
+- **Hoisted swizzle addresses.** At VecN = 1 the XOR differs per kk, and the per-kk × band fragment
+  addresses are slab-invariant, so they were hoisted out of the slab loop, one register each. Fix: no XOR
+  and the sector-pair staging map above at VecN = 1 (50 → 32).
+- **The full/predicated diamond.** In the PTX the slab's FMAs sit in the join block after
+  `if (more) stage`, not before it, and ptxas pulls them back only across if-convertible code. The
+  16-byte leg's per-granule `full ? 16-byte : predicated loop` diamond is not if-convertible. Fix: at VecN = 1 one
+  guarded 16-byte load per granule (32 → 0). Peeling the last slab to drop `if (more)` instead spilled 54.
+
+| scalar | element leg | element, split | 16-byte leg | 16-byte, split |
+|---|---|---|---|---|
+| float | 40-96 | 38-80 | 48-85 | 40-87 |
+| double | 68-153 | 52-172 | 62-164 | 52-164 |
+| complex<float> | 72-168 | 64-168 | 64-168 | 64-168 |
+| complex<double> | 64-168 | 80-182 | 66-168 | 80-186 |
+
+**Pending:** the A/B on
 `ta=C,tb=N,layout=strided,m=1024,n=32,k=1024,batch=128` (cdouble) and
 `ta=N,tb=T,layout=strided,m=32,n=1024,k=256,batch=2048` (float, 1.73× before).
 
