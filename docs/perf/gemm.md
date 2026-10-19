@@ -959,7 +959,8 @@ Deliberate breaks, unrun:
 Then a coarse re-race. Not done:
 
 - the C prefetch before the last slab (the plan's P2.5);
-- an 8-byte vector load for complex<float> on the element leg (it needs an 8-byte-aligned base, a third leg).
+- an 8-byte vector load for complex<float> on the element leg (WP-Q measured an 8-byte `cp.async` instead: no gain,
+  [negative](#gemm-wp-q-element-leg-loads-negative)).
 
 ## GEMM: WP-F, a k8 slab for the 64x64 wide tile
 
@@ -1483,6 +1484,97 @@ A 16-byte-aligned ragged view (Padded 300×200×40) is in the test too, so an al
 is caught. **Accepted assumption:** a zero-filled copy (`src-size` 0) still names its computed address, which can
 lie past the allocation (rows ≥ m, up to ~127·ld; a slab bumped past k). PTX reads no bytes at `src-size` 0
 (CUTLASS relies on the same); the tests use one poison-padded buffer, so an unmapped address is never hit.
+
+## GEMM: WP-Q, a one-round staged epilogue for wide v2
+
+Measured 2026-10-19 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune
+--mode time` (beta = 1, every arm verified), 8 reps (4 at 1024³ and 512³ b2048), two passes in alternated
+build order per cell. Parent: the WP-J/K/L/N tree.
+
+Target: the element leg (odd ld). ncu shows the loss is mostly not the loads. float TN strided
+2048×1024×32 b128 spends its time in C. The parent staged epilogue (`staged_c_store`, 2 prior loads in
+flight per thread) ran 2.26 ms at 56% DRAM throughput; the 16-byte band store on the packed cell ran 1.45 ms
+at 86%.
+
+| piece | rule |
+|---|---|
+| batch | `staged_c_store<…, Batch>`; wide v2 passes `EpiBatch = 4·TileK·64/256` (16 at k = 16, 8 at k = 8): one round trip per chunk. The default 2 keeps the old loop for `launch_wide_transposed` and the NN kernel |
+| addressing | `Batch > 2`: a thread keeps one row (`tid % 64`) and every 4th column, so a load is `p + b·4·ldc`. `nc` (columns inside C, 0 on a row outside m) is the only guard. Priors load only when beta ≠ 0 (a NaN C at beta = 0 is never read) |
+| launch bound | `[[sycl::reqd_work_group_size(1, 1, 256)]]` on `GemmWide64Body::operator()`. Without it the bound was ignored ([below](#gemm-wp-q-the-launch-bound-was-ignored)) |
+
+| cell (b128 unless noted) | arm | parent / vendor | new / vendor | new / parent |
+|---|---|---|---|---|
+| cfloat NN strided 256×512×32 | k16 | 1.37 | 1.07 | 0.80 |
+| cfloat TN strided 724×128×32 | k16 | 1.25 | 0.98 | 0.80 |
+| cfloat CN strided 1448×64×16 | k16 | 1.28 | 0.96 | 0.76 |
+| cfloat NC strided 256×512×32 | k16 | 1.37 | 1.06 | 0.80 |
+| cfloat CN strided 304×256×8 | k8 | 1.31 | 1.02 | 0.79 |
+| cfloat NC strided 64×1448×8 | k8 | 1.39 | 0.94 | 0.74 |
+| float TN strided 2048×1024×32 | k16 | 1.51 | 1.16 | 0.77 |
+| float NN strided 1218×128×8 | k8 | 1.53 | 1.19 | 0.79 |
+| float NN strided 256×512×96 b2048 | k16 | 1.46 | 1.39 | 0.95 |
+| float TT strided 2048×256×32 | k8 | 1.49 | 1.22 | 0.82 |
+| float TT packed 362×512×8 | k8 | 1.47 | 1.14 | 0.82 |
+| float NT packed 181×1024×64 | k8 | 1.26 | 1.14 | 0.91 |
+| float TT packed 1218×256×64 | k16 | 1.26 | 1.00 | 0.81 |
+| float TN packed 1024×1024×362 | k16 | 1.49 | 1.48 | 1.00 |
+| cfloat NN strided 1024³ | k16 | 1.19 | 1.21 | 1.01 |
+| 16-byte leg: float TN packed 2048×1024×32 | k16 | 1.03 | 1.03 | 1.00 |
+| 16-byte leg: float TT packed 1024×1024×32 | k8 | 0.97 | 0.97 | 0.99 |
+| 16-byte leg: float NN packed 512³ b2048 | k16 | 1.40 | 1.39 | 1.00 |
+| 16-byte leg: cfloat NC packed 512×512×64 | k8 | 0.96 | 0.98 | 1.02 |
+| 16-byte leg: cfloat NN packed 1024³ | k16 | 1.15 | 1.15 | 1.00 |
+
+Both passes of every cell agree within 3%. The win is the small-k cells, where C traffic (2mn) dwarfs A and B
+((m+n)k). Large k (float TN packed k = 362, cfloat 1024³) is unchanged: the gap there is the mainloop.
+
+The complex<float> 16-byte leg lost 0.6-1.3% in every rerun: NC packed 512×512×64 k8 1.013 (16 reps),
+NN packed 1024³ k16 1.006, CT packed 512³ k8 1.006. The likely cause is the now-applied launch bound,
+which moves its register allocation (k8: 124-128 → 96). Not resolved.
+
+Tests: the existing wide v2 suites (`WideV2EveryFormAtSaturatingBatch`, `WideK8SlabStraddles…`,
+`WideV2TileAndSlabEdgesUnderNaNPoison`, `CoalescedCEpilogueEveryTileAtSaturatingBatch`) already run the
+staged path: odd and even ld, ragged m and n, beta ≠ 0, NaN C at beta = 0, batch 1024 bit-identical.
+Deliberate breaks, run on the GPU (filter: those four plus `PinnedCandidatesEveryFormShapeAndLayout`):
+
+- store guard `< nc` → `< cw` (writes past n and m): the binary aborts in the first float
+  `PinnedCandidatesEveryFormShapeAndLayout`.
+- priors read at beta = 0: red exactly `WideV2EveryForm`, `WideK8Slab` and `CoalescedCEpilogue` for float,
+  complex<float> and complex<double> (their NaN-C cases); 9 tests.
+- column step `4·ldc` → `4·(ldc | 1)`: red in the 16 tests with an even-ld staged group (float,
+  complex<float>, complex<double>); odd-ld cases stay green.
+
+### GEMM: WP-Q, the launch bound was ignored
+
+ptxas printed `.minnctapersm is ignored when neither .maxntid nor .reqntid is specified` 112 times for
+`libbatchlas_sycl` (sm_120): `intel::max_work_group_size(1, 1, N)` on these functors emits no `.maxntid`, so
+`BATCHLAS_LAUNCH_BOUNDS` never capped a register count. Adding `reqd_work_group_size` to wide v2 drops the
+count to 24 (the 128x128 functor, untouched here). Registers (`scripts/register_probe.sh`):
+
+| instances | parent (no bound) | new (bound applied) |
+|---|---|---|
+| float, all forms, k16 / k8 | 64-72 / 55-61 | 80 / 79-80 (3 groups) |
+| complex<float> k16 | 106-128 | 122-128 (2 groups) |
+| complex<float> k8 | 112-128 | 96 |
+| complex<double> | 196-224 / 134-168 | 222-230 / 152-154 (1 group) |
+
+Without the bound the new epilogue pushed complex<float> k8 NT/NC/TT to 130-135 registers (one group per
+SM). With it: zero spill on every gemm entry except the 50 known complex<double> `GemmWideTransposedKernel`
+ones. float at 4 groups per SM (`kMinGroupsPerCu = 4`, 64 registers, no spill) measured 0.99-1.03 of 3 groups
+on 8 cells, so the bound stays 3.
+
+### GEMM: WP-Q, element-leg loads (negative)
+
+On float TN packed 1024×1024×362 b128 (element leg, 3.79 ms) against 360 (16-byte leg, 3.13 ms), both run at
+89% L1/TEX throughput, mostly fragment reads (633M shared wavefronts each). The element leg adds 4.4× the global
+sectors (969M vs 218M) and 3.4× the requests. Three rewrites of the element leg each lost to the parent's
+4-scalar loads, so the leg is unchanged:
+
+| variant | result |
+|---|---|
+| `cp.async` 4 B (float) / 8 B (complex<float>, 8-byte base), coalesced lane map, swizzle `kk & 7` | complex<float> 110 → 185 registers (8 swizzle offsets in the fragment read): NN strided 256×512×32 1.26× slower |
+| `cp.async` with the parent lane map and swizzle | float 1.02-1.04× slower, complex<float> 0.98-1.01 |
+| register staging, float i-contiguous operand read 32 consecutive floats per load (scalar shared stores) | 1.02-1.04× slower at the 85-register cap. At a 64 cap it spilled and ran 1.14-1.28× slower |
 
 ## GEMM: the register-tiled launcher table
 

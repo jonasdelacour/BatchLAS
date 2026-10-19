@@ -87,13 +87,15 @@ inline void raw16_store(void* p, Raw16 v) { *reinterpret_cast<Raw16*>(p) = v; }
 // on a barrier after its last read of lo and hi; each chunk's barrier orders put before the
 // read-back, and the one after it the read-back before the next chunk's put.
 // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
-template <int TileM, int TileN, int Threads, int LoElems, int HiElems, typename D, typename Put>
+template <int TileM, int TileN, int Threads, int LoElems, int HiElems, int Batch = 2, typename D, typename Put>
 inline void staged_c_store(const sycl::nd_item<3>& item, D* lo, D* hi, D* Cb, int ldc, int m0, int n0, int m,
                            int n, int tid, D alpha, D beta, bool beta_zero, Put&& put) {
     static_assert(LoElems % TileM == 0 && HiElems % TileM == 0, "a stage column never straddles lo and hi");
     constexpr int CW = (LoElems + HiElems) / TileM;
     constexpr int Passes = (TileN + CW - 1) / CW;
-    constexpr int Batch = 2;  // prior loads in flight per thread
+    // Batch: prior loads in flight per thread. The accumulators are in the stage by now, so a
+    // caller with registers to spare (wide v2) takes a whole chunk in one round trip.
+    // evidence: docs/perf/gemm.md#gemm-wp-q-a-one-round-staged-epilogue-for-wide-v2
     auto slot = [&](int c, int r) -> D* {
         const int e = c * TileM + r;
         return e < LoElems ? lo + e : hi + (e - LoElems);
@@ -104,6 +106,33 @@ inline void staged_c_store(const sycl::nd_item<3>& item, D* lo, D* hi, D* Cb, in
         const int cw = TileN - c0 < CW ? TileN - c0 : CW;
         put(c0, cw, slot);
         item.barrier(sycl::access::fence_space::local_space);
+        if constexpr (Batch > 2 && Threads % TileM == 0) {
+            // A thread keeps one row and every Step-th column; Batch columns per round trip. nc:
+            // the chunk's columns inside C, none on a row outside it.
+            constexpr int Step = Threads / TileM;
+            const int r = tid % TileM;
+            const int lim = n - n0 - c0 < cw ? n - n0 - c0 : cw;
+            const int nc = m0 + r < m ? lim : 0;
+            const std::ptrdiff_t step = static_cast<std::ptrdiff_t>(Step) * ldc;
+#pragma unroll 1
+            for (int cb = tid / TileM; cb < nc; cb += Batch * Step) {
+                D* p = Cb + (m0 + r) + static_cast<std::ptrdiff_t>(n0 + c0 + cb) * ldc;
+                D prior[Batch];
+BATCHLAS_UNROLL_FULL
+                for (int b = 0; b < Batch; ++b) prior[b] = D{};
+                if (!beta_zero) {
+BATCHLAS_UNROLL_FULL
+                    for (int b = 0; b < Batch; ++b)
+                        if (cb + b * Step < nc) prior[b] = p[b * step];
+                }
+BATCHLAS_UNROLL_FULL
+                for (int b = 0; b < Batch; ++b)
+                    if (cb + b * Step < nc)
+                        p[b * step] = lin_epi(alpha, beta_zero ? D{} : beta, *slot(cb + b * Step, r), prior[b]);
+            }
+            if (pass + 1 < Passes) item.barrier(sycl::access::fence_space::local_space);
+            continue;
+        }
         const int count = TileM * cw;
         auto at = [&](int e, bool& ok) {
             const int row = m0 + e % TileM, col = n0 + c0 + e / TileM;
@@ -484,6 +513,15 @@ BATCHLAS_UNROLL_FULL
 // slab is predicated is per work-group: only an edge group or the k tail pays for bounds.
 // evidence: docs/perf/gemm.md#gemm-wide-v2-one-double-buffered-64x64-kernel-for-every-form
 
+// .reqntid: without it ptxas ignores LAUNCH_BOUNDS' .minnctapersm on this functor (that
+// max_work_group_size emits no .maxntid here). The launch is (1, 1, 256) exactly.
+// evidence: docs/perf/gemm.md#gemm-wp-q-the-launch-bound-was-ignored
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+#define BATCHLAS_WIDE_V2_REQD_WG [[sycl::reqd_work_group_size(1, 1, 256)]]
+#else
+#define BATCHLAS_WIDE_V2_REQD_WG
+#endif
+
 template <typename T>
 inline constexpr bool kWide64V2 = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>> ||
                                   std::is_same_v<T, std::complex<double>>;
@@ -626,6 +664,8 @@ struct GemmWide64Body {
     static constexpr bool CA = batchlas::sycl_device::dev_is_complex_v<D> && OpA == Transpose::ConjTrans;
     static constexpr bool CB = batchlas::sycl_device::dev_is_complex_v<D> && OpB == Transpose::ConjTrans;
     static constexpr int kMinGroupsPerCu = CF == 4 ? 1 : (CF == 1 ? 3 : 2);
+    // Prior loads per thread in flight in the staged epilogue: its whole chunk (4 TileK columns).
+    static constexpr int EpiBatch = 4 * TileK * TileM / Threads;
     static_assert(kWide64V2<T> && TileM == TileN, "one staging map serves A and B");
     static_assert(TileK == 16 || TileK == 8, "first_k and swz map these two slab depths");
     static_assert(GPR * TileK == CF * OpThreads, "CF granules per staging lane per operand");
@@ -669,6 +709,7 @@ struct GemmWide64Body {
 
     // always_inline: left out of line (complex<float>), the body spilled behind a call.
     BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_WIDE_V2_REQD_WG
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;
         const int bid = static_cast<int>(item.get_group(0));
@@ -763,7 +804,7 @@ BATCHLAS_UNROLL_FULL
         const bool c_vec = a_in && b_in && ldc % VecN == 0 && reinterpret_cast<std::uintptr_t>(Cb) % 16u == 0;
         if (!c_vec) {
             if (slabs % 2 == 1) item.barrier(sycl::access::fence_space::local_space);
-            wide_scalar::staged_c_store<TileM, TileN, Threads, 2 * TileK * TileM, 2 * TileK * TileN>(
+            wide_scalar::staged_c_store<TileM, TileN, Threads, 2 * TileK * TileM, 2 * TileK * TileN, EpiBatch>(
                 item, reinterpret_cast<D*>(sa), reinterpret_cast<D*>(sb), Cb, ldc, m0, n0, m, n, tid, alpha, beta,
                 beta_zero, [&](int c0, int cw, auto slot) {
 BATCHLAS_UNROLL_FULL
