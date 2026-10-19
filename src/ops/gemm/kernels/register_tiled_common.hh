@@ -70,6 +70,15 @@ struct RegisterTilePolicy {
     static constexpr int TileBStride = TileK + 1;
     static constexpr int StageASize = TileAStride * TileK;
     static constexpr int StageBSize = TileBStride * TileN;
+    // B slot of (k row, n col). With ThreadTileCols 4 and an odd stride, local_col and
+    // local_col + 8 read the same bank at every t (64-wide tiles: 2-way; 32x128: 4-way), and
+    // no stride pad can fix that (4 * stride * 8 == 0 mod 32). XOR-ing the row with the col's
+    // 32-column group stays inside the row's aligned 4-block, so it needs no extra memory.
+    // evidence: docs/perf/gemm.md#gemm-wp-g-transpose-aware-scalar-staging
+    static constexpr int b_slot(int col, int row) {
+        if constexpr (TileN <= 32) return col * TileBStride + row;  // one group: the compiler cannot see q == 0
+        else return col * TileBStride + (row ^ ((col >> 5) & 3));
+    }
 };
 
 template <typename T>
@@ -128,6 +137,7 @@ Event launch_register_tiled(Queue& ctx,
     static_assert(TileN * TileK >= Policy::ThreadsPerGroup, "TileB footprint must cover all threads");
     static_assert(TileM % VecA == 0 && TileK % VecA == 0, "VecA must divide TileM and TileK");
     static_assert(TileN % VecB == 0 && TileK % VecB == 0, "VecB must divide TileN and TileK");
+    static_assert(TileK % 4 == 0 && 32 % ThreadTileCols == 0, "b_slot's swizzle needs TileK % 4 == 0 and one group per thread");
     static_assert(UnrollK >= 1, "UnrollK must be positive");
     static_assert(Stages >= 1, "Stages must be positive");
     static_assert(Stages <= 2, "Register-tiled GEMM only supports one-stage and two-stage pipelines");
@@ -196,6 +206,32 @@ Event launch_register_tiled(Queue& ctx,
                     T* tile_a_stage = &tile_a[stage * Policy::StageASize];
                     T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
 
+                    // Scalar staging (no packet: odd ld or base). The lane-fastest index is the
+                    // operand's contiguous one, k for a transposed A and n for a transposed B,
+                    // so a warp reads consecutive addresses; the shared layout is unchanged.
+                    auto stage_a_scalar = [&]() {
+                        for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
+                            const int a_row = OpA == Transpose::NoTrans ? index % TileM : index / TileK;
+                            const int a_col = OpA == Transpose::NoTrans ? index / TileM : index % TileK;
+                            const int logical_a_row = group_row * TileM + a_row;
+                            const int logical_a_col = kk0 + a_col;
+                            tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
+                                ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, logical_a_row, logical_a_col)
+                                : T(0);
+                        }
+                    };
+                    auto stage_b_scalar = [&]() {
+                        for (int index = linear_tid; index < TileN * TileK; index += Policy::ThreadsPerGroup) {
+                            const int b_row = OpB == Transpose::NoTrans ? index % TileK : index / TileN;
+                            const int b_col = OpB == Transpose::NoTrans ? index / TileK : index % TileN;
+                            const int logical_b_row = kk0 + b_row;
+                            const int logical_b_col = group_col * TileN + b_col;
+                            tile_b_stage[Policy::b_slot(b_col, b_row)] = (logical_b_row < k && logical_b_col < n)
+                                ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, logical_b_col)
+                                : T(0);
+                        }
+                    };
+
                     if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
                                   && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
                         constexpr int APacketsPerCol = TileM / VecA;
@@ -231,7 +267,7 @@ Event launch_register_tiled(Queue& ctx,
                                 const int base = batch_b + logical_b_col * ldb + logical_b_row;
                                 const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
                                 for (int lane = 0; lane < VecB; ++lane) {
-                                    tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = packet_values[lane];
+                                    tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = packet_values[lane];
                                 }
                             }
                         });
@@ -290,15 +326,7 @@ Event launch_register_tiled(Queue& ctx,
                                 }
                             }
                         } else {
-                            for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
-                                const int a_row = index % TileM;
-                                const int a_col = index / TileM;
-                                const int logical_a_row = group_row * TileM + a_row;
-                                const int logical_a_col = kk0 + a_col;
-                                tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
-                                    ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, logical_a_row, logical_a_col)
-                                    : T(0);
-                            }
+                            stage_a_scalar();
                         }
 
                         if (packet_b) {
@@ -315,12 +343,12 @@ Event launch_register_tiled(Queue& ctx,
                                         const int base = batch_b + logical_b_col * ldb + logical_b_row;
                                         const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
                                         for (int lane = 0; lane < VecB; ++lane) {
-                                            tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = packet_values[lane];
+                                            tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = packet_values[lane];
                                         }
                                     } else {
                                         for (int lane = 0; lane < VecB; ++lane) {
                                             const int row = logical_b_row + lane;
-                                            tile_b_stage[b_col * Policy::TileBStride + b_row + lane] = (row < k && logical_b_col < n)
+                                            tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = (row < k && logical_b_col < n)
                                                 ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, row, logical_b_col)
                                                 : T(0);
                                         }
@@ -339,12 +367,12 @@ Event launch_register_tiled(Queue& ctx,
                                         const int base = batch_b + logical_b_row * ldb + logical_b_col;
                                         const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
                                         for (int lane = 0; lane < VecB; ++lane) {
-                                            tile_b_stage[(b_col + lane) * Policy::TileBStride + b_row] = packet_values[lane];
+                                            tile_b_stage[Policy::b_slot(b_col + lane, b_row)] = packet_values[lane];
                                         }
                                     } else {
                                         for (int lane = 0; lane < VecB; ++lane) {
                                             const int col = logical_b_col + lane;
-                                            tile_b_stage[(b_col + lane) * Policy::TileBStride + b_row] = (logical_b_row < k && col < n)
+                                            tile_b_stage[Policy::b_slot(b_col + lane, b_row)] = (logical_b_row < k && col < n)
                                                 ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, col)
                                                 : T(0);
                                         }
@@ -352,36 +380,11 @@ Event launch_register_tiled(Queue& ctx,
                                 }
                             }
                         } else {
-                            for (int index = linear_tid; index < TileN * TileK; index += Policy::ThreadsPerGroup) {
-                                const int b_row = index % TileK;
-                                const int b_col = index / TileK;
-                                const int logical_b_row = kk0 + b_row;
-                                const int logical_b_col = group_col * TileN + b_col;
-                                tile_b_stage[b_col * Policy::TileBStride + b_row] = (logical_b_row < k && logical_b_col < n)
-                                    ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, logical_b_col)
-                                    : T(0);
-                            }
+                            stage_b_scalar();
                         }
                     } else {
-                        for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
-                            const int a_row = index % TileM;
-                            const int a_col = index / TileM;
-                            const int logical_a_row = group_row * TileM + a_row;
-                            const int logical_a_col = kk0 + a_col;
-                            tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
-                                ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, logical_a_row, logical_a_col)
-                                : T(0);
-                        }
-
-                        for (int index = linear_tid; index < TileN * TileK; index += Policy::ThreadsPerGroup) {
-                            const int b_row = index % TileK;
-                            const int b_col = index / TileK;
-                            const int logical_b_row = kk0 + b_row;
-                            const int logical_b_col = group_col * TileN + b_col;
-                            tile_b_stage[b_col * Policy::TileBStride + b_row] = (logical_b_row < k && logical_b_col < n)
-                                ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, logical_b_col)
-                                : T(0);
-                        }
+                        stage_a_scalar();
+                        stage_b_scalar();
                     }
                 };
 
@@ -396,7 +399,7 @@ Event launch_register_tiled(Queue& ctx,
                                     a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
                                 }
                                 for (int j = 0; j < ThreadTileCols; ++j) {
-                                    b_frag[j] = tile_b_stage[(local_col * ThreadTileCols + j) * Policy::TileBStride + t];
+                                    b_frag[j] = tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)];
                                 }
                                 for (int i = 0; i < ThreadTileRows; ++i) {
                                     for (int j = 0; j < ThreadTileCols; ++j) {
@@ -415,7 +418,7 @@ Event launch_register_tiled(Queue& ctx,
                                     a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
                                 }
                                 for (int j = 0; j < ThreadTileCols; ++j) {
-                                    b_frag[j] = tile_b_stage[(local_col * ThreadTileCols + j) * Policy::TileBStride + t];
+                                    b_frag[j] = tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)];
                                 }
                                 for (int i = 0; i < ThreadTileRows; ++i) {
                                     for (int j = 0; j < ThreadTileCols; ++j) {

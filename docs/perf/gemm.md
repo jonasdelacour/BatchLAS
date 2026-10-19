@@ -713,6 +713,37 @@ predicates beside A's four spilled the predicated NT leg, 20 B).
 (48 registers, accumulators in local memory) in all four forms. A 128×64 variant of this body needs new loader
 code (128 threads), so it was left out.
 
+## GEMM: WP-G transpose-aware scalar staging
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B (float TN
+strided 128x32x1024 b2048 against `reg:m=128:n=32`, `reg:m=32:n=128`, `wide:m=64:n=64:k=16` and the vendor; float TT
+strided 256³ b128) is pending.
+
+`register_tiled_common.hh`, the generic 4×4 register tiles (every `reg_configs` row except 128×128). Two changes:
+
+- **Scalar staging lane map.** With an odd `ld` or base the packet loaders are skipped and every operand is
+  staged one element per lane. The lane-fastest index used to be m for A and k for B whatever the form, so a
+  transposed operand had a lane stride of `ld` (one sector per lane). Now the fastest index is the operand's
+  contiguous one: k for Aᵀ, n for Bᵀ, as `register_wide_transposed.hh` does. The shared layout is unchanged, so the
+  compute loop and epilogue are untouched. Costs moved to shared stores: Aᵀ at TileK 16 is 2-way (TileK 32: none);
+  Bᵀ is conflict-free (odd stride).
+- **B fragment swizzle, not a stride pad.** The fragment read `sb[(4c + j) * s + t]` puts lanes with local
+  column c and c + 8 on one bank for any stride s, because 4·s·8 ≡ 0 (mod 32): 2-way on the 64-column tiles
+  (16 local columns per warp), 4-way on 32×128 (32). Padding the stride cannot remove it and would change
+  `slm_bytes` (a `choice.hh` edit, which stales the lattice). `b_slot(col, row)` XORs the k row with the column's
+  32-column group (`(col >> 5) & 3`). That stays inside the row's aligned 4-block, so it needs no memory, and
+  every bank is distinct at every t for TileN ≤ 128. One extra LOP per fragment row; the reads were scalar
+  already (the odd stride rules out vector loads), so no vectorised read is lost. The 32-column tiles (`TileN <= 32`)
+  skip the XOR at compile time (ptxas could not see `q == 0`: 32x32x8 went 40 to 55 registers with it).
+
+**Registers** (`scripts/register_probe.sh`, ptxas only, against the parent): every `GemmRegisterTiledKernel`
+instantiation within -8..+3 registers of the parent (e.g. 64x64x16 NN 48 to 51, 32x128x16 TN 56 to 59), except
+the aligned 128x64x32 8×4 legs, 64 to 72 (u2) and 68 to 72 (u4): 256 threads, still 3 blocks/SM by registers
+against 2 by their 49,920 B of local memory, so not binding. Zero spill library-wide; the 128x64x32 rows keep the
+128-byte stack frame they already had.
+
+Test: `GemmCandidates.RegScalarStagingEveryFormAtSaturatingBatch`.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
