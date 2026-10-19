@@ -1109,6 +1109,55 @@ Deliberate breaks, unrun:
 **Pending:** the A/B. cfloat CN packed 32³ b2048, arms `small`, `wide:m=16:n=16:k=16`, `vendor`; float TT
 strided 64³ b128 against the parent commit.
 
+## GEMM: WP-I, an unpredicated interior loop on the 128x128 predicated leg
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale, registers and build cost
+only.
+
+Target: float NN strided, k ≥ 48, at 256-384 (384³ b128 at 30.8 against cuBLAS's 37.7 TFLOP/s in the
+2026-10-18 loss map). An odd `ld` sends every group of such a call down the predicated leg, which bounds
+every element of every slab. Now a work-group whose 128×128 tile lies inside C (`m0 + 128 <= m`,
+`n0 + 128 <= n`, uniform over the group) runs a second copy of the mainloop. That copy has no row or column
+predicates, and only the k-tail slab is bounded. Loads stay scalar, with the same lane maps. Edge groups
+run the old loop unchanged, and the aligned leg is untouched: its register counts match the parent in all
+eight instances.
+
+Three source details are load-bearing at the 128-register cap (`scripts/register_probe.sh`, ptxas only):
+
+| variant | result |
+|---|---|
+| per-slab branch inside the one loop, per operand (`kfull && m0 + 128 <= m`) | NT direct 8 B, NN staged 20 B, NT staged 16 B spill |
+| the same, one branch for both operands | NN 4 B, NT 20-24 B |
+| the same, interior flag hoisted out of the loop | NT direct 20 B, NN staged 4 B |
+| two loop copies, `Body::operator()` inlined by heuristic | the two copies push `operator()` out of line: 32 B spill behind the call, 160-200 B stack frame in the entry |
+| two copies, `always_inline` on `Body::operator()` | zero spill, but the aligned leg's registers move (124-128, against the parent's 127-128) |
+| two copies, the predicated leg launched through `Gemm128x128Inlined` (call-site `[[clang::always_inline]]`) | zero spill except 4 B in the never-launched `_with_offset` twin of staged NT |
+| interior copy's k tail as a `kfull ||` term, or unswitched by hand | 8-48 B |
+| **shipped**: the wrapper, the test written edge-first (`m0 + 128 > m` or the n term) | zero spill on all 816 entry functions, no stack frame; predicated 127-128 registers, aligned identical to the parent |
+
+ptxas is chaotic at this cap: a logically equivalent rewrite moves spill between instances, so any edit
+here needs a fresh probe. Build cost: the probe's `libbatchlas_sycl` link, one run each, 88.6 s (parent)
+and 88.8 s.
+
+Test: `GemmCandidates.Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch` covers 5 forms × 4 legs
+at batch 1024, each item bit-identical to its representative:
+
+- 384×384×72 strided: all nine groups interior, nine full slabs, the direct epilogue.
+- 384×384×37: the interior copy's k tail, the staged epilogue.
+- 300×200×45 at ld = m + 1, and 300×200×72 strided: interior, m-edge, n-edge and corner groups in one
+  launch.
+
+Deliberate breaks, unrun:
+
+- A wrong element index in the interior copy should turn the 384 legs red in that form.
+- Treating every interior slab as full should turn red the k = 37 and k = 45 legs, and leave the k = 72
+  legs green.
+- An interior test that admits an edge group is invisible to every numeric test. It only over-reads rows
+  and columns past m and n, which feed accumulators the epilogue discards. Such a bug faults only when
+  the over-read leaves the allocation.
+
+**Pending:** the A/B (pass ≤ 1.05× vendor) on float NN strided 384³ b128 and 256×256×64 b128.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a

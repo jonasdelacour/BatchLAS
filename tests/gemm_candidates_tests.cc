@@ -1126,6 +1126,44 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
     }
 }
 
+// WP-I, the predicated leg's interior loop copy (odd ld, so every leg below is predicated). 384 x 384:
+// all nine groups interior, k = 72 (nine full slabs, direct epilogue) and k = 37 (the interior copy's
+// k tail, staged epilogue). 300 x 200: interior, m-edge, n-edge and corner groups in one launch, k = 45
+// at ld = m + 1 and k = 72 strided. Batch 1024, each item bit-identical to its representative. A wrong
+// element in the interior copy turns the 384 legs red; a k-tail bound dropped from it, the k = 37 and
+// k = 45 legs. An interior test that admits an edge group only over-reads (rows and columns past m and
+// n feed only discarded accumulators), so no numeric test sees it.
+// evidence: docs/perf/gemm.md#gemm-wp-i-an-unpredicated-interior-loop-on-the-128x128-predicated-leg
+TYPED_TEST(GemmCandidates, Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const C c{og::Reg{128, 128, 8, 1}};
+        const RegRow* row = reg_row(std::get<og::Reg>(c));
+        ASSERT_NE(row, nullptr);
+        if (!reg_fits(*row)) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        struct Leg { int m, n, k; Layout layout; };
+        const Leg legs[] = {{384, 384, 72, Layout::Strided}, {384, 384, 37, Layout::Strided},
+                            {300, 200, 45, Layout::Gap1}, {300, 200, 72, Layout::Strided}};
+        int ran = 0;
+        for (auto [ta, tb] : forms)
+            for (const Leg& leg : legs) {
+                Spec s{ta, tb, leg.m, leg.n, leg.k, 1024, leg.layout};
+                s.period = 7;
+                s.seed = 9200u + leg.m + leg.k;
+                ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s));
+                if (::testing::Test::HasFatalFailure()) return;
+                ++ran;
+            }
+        EXPECT_EQ(ran, 20);
+    }
+}
+
 // §8.3 on the 128x128 aligned leg in every real form: padded views (ld and stride multiples of 4,
 // neither natural), so a loader or epilogue that derives ld or stride from m, n or k reads the
 // poison in the gap. Both epilogues (k = 24 staged, k = 72 direct) at batch 1024, then again with

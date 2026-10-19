@@ -199,12 +199,29 @@ BATCHLAS_UNROLL_FULL
         // B^T bumps gb one slab per call (gload runs once per slab, in order): an int k0 * ldb
         // overflows on a large item, and a 64-bit product spilled the staged NT leg.
         Vec4<T> ra, rb;
-        auto gload = [&](int k0) __attribute__((always_inline)) {
+        auto gload = [&](int k0, auto edge) __attribute__((always_inline)) {
             if constexpr (AlignedFastPath) {
                 if constexpr (AK) ra = load4_l2_line(ga + k0);
                 else ra = vec4_ref(ga + static_cast<std::ptrdiff_t>(k0) * lda);
                 if constexpr (BK) rb = load4_l2_line(gb + k0);
                 else rb = vec4_ref(gb);
+            } else if constexpr (!decltype(edge)::value) {
+                // An interior group: rows and columns are in range, so only the k tail is bounded.
+                const bool kfull = k0 + TileK <= k;
+BATCHLAS_UNROLL_FULL
+                for (int i = 0; i < 4; ++i) {
+                    if (kfull) {
+                        if constexpr (AK) ra[i] = load1_l2_line(ga + k0 + i);
+                        else ra[i] = ga[static_cast<std::ptrdiff_t>(k0) * lda + i];
+                        if constexpr (BK) rb[i] = load1_l2_line(gb + k0 + i);
+                        else rb[i] = gb[i];
+                    } else {
+                        if constexpr (AK) ra[i] = k0 + a_k + i < k ? load1_l2_line(ga + k0 + i) : T(0);
+                        else ra[i] = k0 + a_k < k ? ga[static_cast<std::ptrdiff_t>(k0) * lda + i] : T(0);
+                        if constexpr (BK) rb[i] = k0 + b_k + i < k ? load1_l2_line(gb + k0 + i) : T(0);
+                        else rb[i] = k0 + b_k < k ? gb[i] : T(0);
+                    }
+                }
             } else {
                 // Zero outside the matrix, so the inner loop needs no bounds. Same lane maps as
                 // the aligned leg, so an odd ld stays coalesced. Register-cap choices (ptxas at 128):
@@ -275,23 +292,36 @@ BATCHLAS_UNROLL_FULL
         // barrier that ended iteration s-1. Unrolled by two so the buffer
         // index is a constant; a runtime one costs a spill at the 128 cap.
         const int slabs = (k + TileK - 1) / TileK;
-        gload(0);
-        sstore(0);
-        item.barrier(sycl::access::fence_space::local_space);
-        int s = 0;
-        for (; s + 1 < slabs; s += 2) {
-            gload((s + 1) * TileK);
-            compute(0);
-            sstore(1);
+        auto mainloop = [&](auto edge) __attribute__((always_inline)) {
+            gload(0, edge);
+            sstore(0);
             item.barrier(sycl::access::fence_space::local_space);
-            const bool more = s + 2 < slabs;
-            if (more) gload((s + 2) * TileK);
-            compute(1);
-            if (more) sstore(0);
-            item.barrier(sycl::access::fence_space::local_space);
-        }
-        if (s < slabs) {
-            compute(0);  // an odd slab count leaves the last slab in buffer 0
+            int s = 0;
+            for (; s + 1 < slabs; s += 2) {
+                gload((s + 1) * TileK, edge);
+                compute(0);
+                sstore(1);
+                item.barrier(sycl::access::fence_space::local_space);
+                const bool more = s + 2 < slabs;
+                if (more) gload((s + 2) * TileK, edge);
+                compute(1);
+                if (more) sstore(0);
+                item.barrier(sycl::access::fence_space::local_space);
+            }
+            if (s < slabs) {
+                compute(0);  // an odd slab count leaves the last slab in buffer 0
+            }
+        };
+        // The predicated leg's interior groups (uniform test) run a copy of the loop with no row
+        // or column predicates. At the 128 cap a per-slab branch spilled 4-24 B, and so did this
+        // test written interior-first (4 B); ptxas is chaotic here, so re-probe any edit.
+        // evidence: docs/perf/gemm.md#gemm-wp-i-an-unpredicated-interior-loop-on-the-128x128-predicated-leg
+        if constexpr (AlignedFastPath) {
+            mainloop(std::true_type{});
+        } else if (m0 + TileM > m || n0 + TileN > n) {
+            mainloop(std::true_type{});
+        } else {
+            mainloop(std::false_type{});
         }
 
         if constexpr (StagedEpilogue) {
@@ -404,6 +434,19 @@ BATCHLAS_UNROLL_FULL
     }
 };
 
+// The predicated leg's two loop copies push the body past the inliner's threshold, and out of
+// line it spilled behind the call. Forcing it on Body's own operator() changed the aligned leg's
+// code too, so only the predicated leg launches through this wrapper.
+template <typename Body>
+struct Gemm128x128Inlined {
+    Body body;
+
+    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
+        [[clang::always_inline]] body(item);
+    }
+};
+
 template <typename T, bool AlignedFastPath, bool StagedEpilogue, Transpose OpA, Transpose OpB>
 Event launch_register_128x128_k8_leg(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
@@ -429,8 +472,12 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
         sycl::local_accessor<T, 1> tile_b(sycl::range<1>(2 * Body::TileK * Body::BStride), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
                   A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b};
-        batchlas::impl::parallel_for<GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB>>(h,
-            sycl::nd_range<3>(global, local), body);
+        using Name = GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB>;
+        if constexpr (AlignedFastPath) {
+            batchlas::impl::parallel_for<Name>(h, sycl::nd_range<3>(global, local), body);
+        } else {
+            batchlas::impl::parallel_for<Name>(h, sycl::nd_range<3>(global, local), Gemm128x128Inlined<Body>{body});
+        }
     });
 
     return ctx.get_event();
