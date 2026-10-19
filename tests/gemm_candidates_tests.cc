@@ -137,8 +137,8 @@ const std::vector<RegRow>& reg_rows() {
     return rows;
 }
 // Forms are the complex instantiations (op(A) op(B) over N, T, C); a real scalar runs the N/C
-// one its T operands fold to.
-struct WideRow { int m, n, k; std::map<std::string, std::string> trace; };
+// one its T operands fold to. cf_only: compiled for complex<float> alone (wide v2's 128x64).
+struct WideRow { int m, n, k; std::map<std::string, std::string> trace; bool cf_only = false; };
 const std::vector<WideRow>& wide_rows() {
     static const std::vector<WideRow> rows{
         {64, 64, 16, {{"NN", "gemm_sycl_register_64x64_k16_wide"}, {"NN+aligned", "gemm_sycl_register_64x64_k16_wide_aligned"},
@@ -184,6 +184,16 @@ const std::vector<WideRow>& wide_rows() {
                      {"CN+aligned", "gemm_sycl_register_64x64_k8_wide_cn_aligned"},
                      {"CT+aligned", "gemm_sycl_register_64x64_k8_wide_ct_aligned"},
                      {"CC+aligned", "gemm_sycl_register_64x64_k8_wide_cc_aligned"}}},
+        {128, 64, 8, {
+                     {"NN", "gemm_sycl_register_128x64_k8_wide"}, {"NN+aligned", "gemm_sycl_register_128x64_k8_wide_aligned"},
+                     {"NT", "gemm_sycl_register_128x64_k8_wide_nt"}, {"NT+aligned", "gemm_sycl_register_128x64_k8_wide_nt_aligned"},
+                     {"NC", "gemm_sycl_register_128x64_k8_wide_nc"}, {"NC+aligned", "gemm_sycl_register_128x64_k8_wide_nc_aligned"},
+                     {"TN", "gemm_sycl_register_128x64_k8_wide_tn"}, {"TN+aligned", "gemm_sycl_register_128x64_k8_wide_tn_aligned"},
+                     {"TT", "gemm_sycl_register_128x64_k8_wide_tt"}, {"TT+aligned", "gemm_sycl_register_128x64_k8_wide_tt_aligned"},
+                     {"TC", "gemm_sycl_register_128x64_k8_wide_tc"}, {"TC+aligned", "gemm_sycl_register_128x64_k8_wide_tc_aligned"},
+                     {"CN", "gemm_sycl_register_128x64_k8_wide_cn"}, {"CN+aligned", "gemm_sycl_register_128x64_k8_wide_cn_aligned"},
+                     {"CT", "gemm_sycl_register_128x64_k8_wide_ct"}, {"CT+aligned", "gemm_sycl_register_128x64_k8_wide_ct_aligned"},
+                     {"CC", "gemm_sycl_register_128x64_k8_wide_cc"}, {"CC+aligned", "gemm_sycl_register_128x64_k8_wide_cc_aligned"}}, true},
     };
     return rows;
 }
@@ -217,13 +227,23 @@ const WideRow* wide_row(const og::Wide& w) {
         if (row.m == w.m && row.n == w.n && row.k == w.k) return &row;
     return nullptr;
 }
+template <typename T>
+bool wide_compiled(const WideRow& row) {
+    return !row.cf_only || std::is_same_v<T, std::complex<float>>;
+}
+// Wide v2 (GemmWide64Body, two buffers, the 16-byte leg in every form): 64x64 for every scalar
+// but double, and the complex<float>-only rows.
+template <typename T>
+bool wide_v2(const WideRow& row) {
+    return (row.m == 64 && row.n == 64 && !std::is_same_v<T, double>) || row.cf_only;
+}
 // The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
 // (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
 // complex<double> 64x64x16 is 64 KiB, over acpp's 48 KiB without the opt-in.
 // WP-K: every non-64x64 tile double-buffers too while two stages stay within 40 KiB.
 template <typename T>
 std::int64_t wide_slm(const WideRow& row) {
-    const bool v2 = row.m == 64 && row.n == 64 && !std::is_same_v<T, double>;
+    const bool v2 = wide_v2<T>(row);
     const std::int64_t one = std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
     const bool two = v2 || ((row.m != 64 || row.n != 64) && 2 * one <= 40960);
     return (two ? 2 : 1) * one;
@@ -241,7 +261,8 @@ bool wide_fits(const WideRow& row) {
 // (SplitKGridCeilingIsBatchTimesSlices covers the first; GridCeilingIsACanRunTerm skips split-k).
 const WideRow* splitk_row(const og::SplitK& sk) {
     if ((sk.m == 64 && sk.n == 64) || (sk.s != 2 && sk.s != 4 && sk.s != 8)) return nullptr;
-    return wide_row(og::Wide{sk.m, sk.n, sk.k});
+    const WideRow* row = wide_row(og::Wide{sk.m, sk.n, sk.k});
+    return row && !row->cf_only ? row : nullptr;
 }
 
 // small, spelled apart from choice.hh: complex<double> stops at 32 (its 64 bucket is 66.5 KB);
@@ -274,7 +295,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
-            return row && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
+            return row && wide_compiled<T>(*row) && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
         },
         [&](const og::SplitK& sk) {
             const WideRow* row = splitk_row(sk);
@@ -305,7 +326,7 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             // Wide v2 (64x64, every scalar but double) has the 16-byte leg in every form; of the
             // others only double's NN 64x64x16 kernel has an aligned leg (64x64x8 NN is transposed's).
             const bool aligned = !base8 && (aligned_layout || sizeof(T) == 16);
-            const bool v2 = w.m == 64 && w.n == 64 && !std::is_same_v<T, double>;
+            const bool v2 = wide_v2<T>(*row);
             const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             return row->trace.at(f);
@@ -753,6 +774,9 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16384);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
+    const og::WideCfg& w128 = og::wide_configs[8];
+    ASSERT_TRUE(w128.m == 128 && w128.n == 64 && w128.k == 8 && w128.scalars == og::kWideCF);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 24576);
     // WP-K's transposed tiles: two stages except complex<double> 128x32, 32x128, 64x32 and 32x64.
     const struct { int m, n; std::int64_t f, d, cf, cd; } trans[] = {
         {128, 32, 20480, 40960, 40960, 40960}, {32, 128, 20480, 40960, 40960, 40960},
@@ -952,7 +976,7 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
                 if (const auto* w = std::get_if<og::Wide>(&c);
-                    w && w->m == 64 && w->n == 64 && kWideV2<T> && oracle_native<T>(c, ta, tb, 160, 136, 48))
+                    w && wide_v2<T>(*wide_row(*w)) && oracle_native<T>(c, ta, tb, 160, 136, 48))
                 {
                     for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
                         Spec s{ta, tb, 160, 136, 48, 2, la};
@@ -1844,6 +1868,77 @@ TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
     }
 }
 
+// WP-O, wide v2's 128x64x8 tile (complex<float> only): A is staged as two 64-wide halves, the
+// second 64 down i (64 lda for a transposed A). All 9 forms; m straddling 64, 128 and 256, n
+// straddling 64 and 128, k straddling 8, 16 and 32; ld = m + 1 (element leg) or padded (16-byte
+// leg), NaN in every gap, beta != 0. Then 257 x 129 x 33 at ld = m + 1 and 256 x 128 x 48 padded
+// at batch 1024, 7 distinct problems, each item bit-identical to its representative; the leg
+// layouts at 288 x 136 x 48; beta = 0 with NaN in C. A dropped half offset in the store is wrong
+// in every form; one dropped from the global address only for a transposed A, or a half bound
+// that ignores the half, only where an A half straddles m.
+// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x64-complex-float-tile-on-wide-v2
+TYPED_TEST(GemmCandidates, Wide128x64EveryFormAtSaturatingBatchAndTileEdges) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, std::complex<float>>) {
+        GTEST_SKIP() << "wide:m=128:n=64:k=8 is compiled for complex<float> only";
+    } else {
+        const C c{og::Wide{128, 64, 8}};
+        ASSERT_TRUE(wide_fits<T>(*wide_row(std::get<og::Wide>(c))));
+        const std::pair<int, int> mn[] = {{63, 65}, {100, 64}, {128, 63}, {129, 129}, {255, 127}, {257, 64}};
+        const int ks[] = {7, 8, 9, 16, 17, 33};
+        struct Big { int m, n, k; Layout layout; };
+        const Big bigs[] = {{257, 129, 33, Layout::Gap1}, {256, 128, 48, Layout::Padded}};
+        int ran = 0, saturated = 0, leg_ran = 0, nan_checked = 0;
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                for (auto [m, n] : mn)
+                    for (int k : ks) {
+                        Spec s{ta, tb, m, n, k, 3, (m + k) % 2 ? Layout::Gap1 : Layout::Padded};
+                        s.nan_poison = true;
+                        s.seed = 9200u + 3u * m + 5u * n + 7u * k;
+                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        auto p = make_problem<T>(s);
+                        this->run_pinned(c, p);
+                        expect_gemm(*this->ctx, p, name(c, s));
+                        if (::testing::Test::HasFatalFailure()) return;
+                        ++ran;
+                    }
+                for (const Big& b : bigs) {
+                    Spec s{ta, tb, b.m, b.n, b.k, 1024, b.layout};
+                    s.period = 7;
+                    s.nan_poison = true;
+                    s.seed = 9100u + 3u * unsigned(ta) + unsigned(tb) + unsigned(b.k);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++saturated;
+                }
+                for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
+                    Spec s{ta, tb, 288, 136, 48, 4, la};
+                    if (lb != la) s.layout_b = lb;
+                    s.seed = 9000u + 13u * unsigned(la) + unsigned(lb);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s) + (vec ? " (16-byte leg)" : " (element leg)"));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++leg_ran;
+                }
+                Spec s{ta, tb, 129, 65, 9, 3, Layout::Gap1};
+                s.beta_zero = s.nan_c = true;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++nan_checked;
+            }
+        EXPECT_EQ(ran, 9 * 6 * 6);
+        EXPECT_EQ(saturated, 9 * 2);
+        EXPECT_EQ(leg_ran, 9 * int(wide_v2_leg_layouts<T>().size()));
+        EXPECT_EQ(nan_checked, 9);
+    }
+}
+
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers
 // hold every item, so a kernel that ignored the check would stay in bounds.
 TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
@@ -2489,6 +2584,7 @@ void expect_candidate_set() {
             want.insert("reg:m=" + std::to_string(r.m) + ":n=" + std::to_string(r.n) + ":k=" + std::to_string(r.k) +
                         ":u=" + std::to_string(r.u));
     for (const auto& w : wide_rows()) {
+        if (!wide_compiled<T>(w)) continue;
         want.insert("wide:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k));
         for (int sl : {2, 4, 8})
             if (splitk_row(og::SplitK{w.m, w.n, w.k, sl}))

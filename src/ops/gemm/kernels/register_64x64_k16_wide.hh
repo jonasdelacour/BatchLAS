@@ -612,12 +612,12 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
-// The registers into shared row kk at granule (i / VecN) ^ swz(kk). Along i, a register is
-// one granule. Along k, complex<float> pairs its two columns into one granule per row;
+// The registers into shared row kk (RowE elements wide) at granule (i / VecN) ^ swz(kk). Along i, a
+// register is one granule. Along k, complex<float> pairs its two columns into one granule per row;
 // float stores four scalars, one per row; complex<double> stores its CF columns of row kb.
-template <bool KC, int CF, int KStep, int TileK>
+template <bool KC, int CF, int KStep, int TileK, int RowE>
 inline void sstore(float* s, const Vec4<float> (&r)[CF], int kb, int ib) {
-    constexpr int VecN = 4 / CF, RowF = 64 * CF;
+    constexpr int VecN = 4 / CF, RowF = RowE * CF;
     if constexpr (!KC) {
 BATCHLAS_UNROLL_FULL
         for (int c = 0; c < CF; ++c) {
@@ -649,26 +649,37 @@ BATCHLAS_UNROLL_FULL
 // complex<float> (its prefetch registers do not fit three groups' 85-register cap), one for
 // complex<double> (64 accumulator registers; FP64 is compute-bound at 8 warps per SM).
 // TileK = 8 halves the slab; each lane still stages CF granules, so warps 0-3 stage A and 4-7 B.
-template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_>
+// 128x64 (complex<float> only, WP-O): a 128-wide operand is two 64-wide halves, each staged with
+// the 64x64 lane map, KStep and swizzle, the second 64 down i; the thread tile is 8x4.
+// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x64-complex-float-tile-on-wide-v2
+template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64>
 struct GemmWide64Body {
     using D = typename wide_scalar::DevMap<T>::type;
-    static constexpr int TileM = 64, TileN = 64, TileK = TileK_, TT = 4, Threads = 256;
+    static constexpr int TileM = TileM_, TileN = TileN_, TileK = TileK_, Threads = 256;
+    static constexpr int TTM = TileM / 16, TTN = TileN / 16;    // thread tile over 16 x 16 lanes
     static constexpr int CF = static_cast<int>(sizeof(D) / sizeof(float));
     static constexpr int VecN = 4 / CF;
-    static constexpr int NB = TT / VecN;                         // fragment granules per operand
-    static constexpr int MSep = TileM / NB, NSep = TileN / NB;   // band separation
-    static constexpr int RowF = TileM * CF, BufF = TileK * RowF;  // floats
-    static constexpr int GPR = TileM / VecN;                     // granules per row
+    static constexpr int NBM = TTM / VecN, NBN = TTN / VecN;     // fragment granules per operand
+    static constexpr int MSep = TileM / NBM, NSep = TileN / NBN; // band separation
+    static constexpr int HA = TileM / 64, HB = TileN / 64;       // 64-wide staging halves
+    static constexpr int RowA = TileM * CF, RowB = TileN * CF;   // floats
+    static constexpr int BufA = TileK * RowA, BufB = TileK * RowB;
+    static constexpr int GPR = 64 / VecN;                        // granules per row of one half
     static constexpr bool Split = TileK == 8;
     static constexpr int OpThreads = Split ? Threads / 2 : Threads;  // staging lanes per operand
     static constexpr int KStep = OpThreads / GPR;
+    // Prefetch sets: A's halves then B's; under Split a lane holds only its own operand's.
+    static constexpr int NR = Split ? (HA > HB ? HA : HB) : HA + HB, RB0 = Split ? 0 : HA;
     static constexpr bool KA = OpA != Transpose::NoTrans, KB = OpB == Transpose::NoTrans;
     static constexpr bool CA = batchlas::sycl_device::dev_is_complex_v<D> && OpA == Transpose::ConjTrans;
     static constexpr bool CB = batchlas::sycl_device::dev_is_complex_v<D> && OpB == Transpose::ConjTrans;
-    static constexpr int kMinGroupsPerCu = CF == 4 ? 1 : (CF == 1 ? 3 : 2);
-    // Prior loads per thread in flight in the staged epilogue: its whole chunk (4 TileK columns).
-    static constexpr int EpiBatch = 4 * TileK * TileM / Threads;
-    static_assert(kWide64V2<T> && TileM == TileN, "one staging map serves A and B");
+    static constexpr int kMinGroupsPerCu = (CF == 4 || TileM * TileN > 4096) ? 1 : (CF == 1 ? 3 : 2);
+    // Prior loads per thread in flight in the staged epilogue: its whole chunk.
+    static constexpr int EpiBatch = 2 * TileK * (TileM + TileN) / Threads;
+    static_assert(kWide64V2<T> && ((TileM == 64 && TileN == 64) || (CF == 2 && TileM % 64 == 0 && TileN % 64 == 0)),
+                  "64x64 for every v2 scalar; larger tiles are whole 64-wide halves, complex<float> only");
+    static_assert(TTM % VecN == 0 && TTN % VecN == 0 && EpiBatch * Threads == 2 * TileK * (TileM + TileN),
+                  "whole fragment granules and a whole-chunk epilogue batch");
     static_assert(TileK == 16 || TileK == 8, "first_k and swz map these two slab depths");
     static_assert(GPR * TileK == CF * OpThreads, "CF granules per staging lane per operand");
 
@@ -734,48 +745,66 @@ struct GemmWide64Body {
         const float* pa = a_ptr + (static_cast<std::ptrdiff_t>(bid) * stride_a + origin(m0 + a_ib, a_kb, lda, KA)) * CF;
         const float* pb = b_ptr + (static_cast<std::ptrdiff_t>(bid) * stride_b + origin(n0 + b_ib, b_kb, ldb, KB)) * CF;
         const bool a_in = m0 + TileM <= m, b_in = n0 + TileN <= n;
+        const std::ptrdiff_t a_half = (KA ? static_cast<std::ptrdiff_t>(64) * lda : 64) * CF;
+        const std::ptrdiff_t b_half = (KB ? static_cast<std::ptrdiff_t>(64) * ldb : 64) * CF;
 
-        D accum[TT][TT];
+        D accum[TTM][TTN];
 BATCHLAS_UNROLL_FULL
-        for (int i = 0; i < TT; ++i) {
+        for (int i = 0; i < TTM; ++i) {
 BATCHLAS_UNROLL_FULL
-            for (int j = 0; j < TT; ++j) accum[i][j] = D{};
+            for (int j = 0; j < TTN; ++j) accum[i][j] = D{};
         }
 
-        // Split: one register set, holding A on an A lane and B on a B lane.
-        Vec4<float> ra[CF], rb[CF];
-        auto& rb_ = Split ? ra : rb;
+        Vec4<float> r[NR][CF];
         auto load = [&](int k0) __attribute__((always_inline)) {
             const bool kin = k0 + TileK <= k;
-            if (stage_a) fetch<KA>(ra, pa, lda, k0, a_kb, a_ib, k, m - m0, a_in && kin);
-            if (!Split || !stage_a) fetch<KB>(rb_, pb, ldb, k0, b_kb, b_ib, k, n - n0, b_in && kin);
+            if (stage_a) {
+BATCHLAS_UNROLL_FULL
+                for (int h = 0; h < HA; ++h)
+                    fetch<KA>(r[h], pa + h * a_half, lda, k0, a_kb, a_ib, k, m - m0 - 64 * h, a_in && kin);
+            }
+            if (!Split || !stage_a) {
+BATCHLAS_UNROLL_FULL
+                for (int h = 0; h < HB; ++h)
+                    fetch<KB>(r[RB0 + h], pb + h * b_half, ldb, k0, b_kb, b_ib, k, n - n0 - 64 * h, b_in && kin);
+            }
         };
         auto store = [&](int buf) __attribute__((always_inline)) {
-            if (stage_a) wide_v2::sstore<KA, CF, KStep, TileK>(sa + buf * BufF, ra, a_kb, a_ib);
-            if (!Split || !stage_a) wide_v2::sstore<KB, CF, KStep, TileK>(sb + buf * BufF, rb_, b_kb, b_ib);
+            if (stage_a) {
+BATCHLAS_UNROLL_FULL
+                for (int h = 0; h < HA; ++h)
+                    wide_v2::sstore<KA, CF, KStep, TileK, TileM>(sa + buf * BufA, r[h], a_kb, a_ib + 64 * h);
+            }
+            if (!Split || !stage_a) {
+BATCHLAS_UNROLL_FULL
+                for (int h = 0; h < HB; ++h)
+                    wide_v2::sstore<KB, CF, KStep, TileK, TileN>(sb + buf * BufB, r[RB0 + h], b_kb, b_ib + 64 * h);
+            }
         };
         auto compute = [&](int buf) __attribute__((always_inline)) {
-            const float* xa = sa + buf * BufF;
-            const float* xb = sb + buf * BufF;
+            const float* xa = sa + buf * BufA;
+            const float* xb = sb + buf * BufB;
 BATCHLAS_UNROLL_FULL
             for (int kk = 0; kk < TileK; ++kk) {
-                D af[TT], bf[TT];
+                D af[TTM], bf[TTN];
 BATCHLAS_UNROLL_FULL
-                for (int band = 0; band < NB; ++band) {
+                for (int band = 0; band < NBM; ++band) {
                     const Vec4<float> ta =
-                        ld16(xa + kk * RowF + (((band * (GPR / NB) + ty) ^ swz<CF, TileK>(kk)) << 2));
-                    const Vec4<float> tb =
-                        ld16(xb + kk * RowF + (((band * (GPR / NB) + tx) ^ swz<CF, TileK>(kk)) << 2));
+                        ld16(xa + kk * RowA + (((band * (MSep / VecN) + ty) ^ swz<CF, TileK>(kk)) << 2));
 BATCHLAS_UNROLL_FULL
-                    for (int w = 0; w < VecN; ++w) {
-                        af[band * VecN + w] = elem<D>(ta, w);
-                        bf[band * VecN + w] = elem<D>(tb, w);
-                    }
+                    for (int w = 0; w < VecN; ++w) af[band * VecN + w] = elem<D>(ta, w);
                 }
 BATCHLAS_UNROLL_FULL
-                for (int i = 0; i < TT; ++i) {
+                for (int band = 0; band < NBN; ++band) {
+                    const Vec4<float> tb =
+                        ld16(xb + kk * RowB + (((band * (NSep / VecN) + tx) ^ swz<CF, TileK>(kk)) << 2));
 BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < TT; ++j) fma_signed<CA, CB>(accum[i][j], af[i], bf[j]);
+                    for (int w = 0; w < VecN; ++w) bf[band * VecN + w] = elem<D>(tb, w);
+                }
+BATCHLAS_UNROLL_FULL
+                for (int i = 0; i < TTM; ++i) {
+BATCHLAS_UNROLL_FULL
+                    for (int j = 0; j < TTN; ++j) fma_signed<CA, CB>(accum[i][j], af[i], bf[j]);
                 }
             }
         };
@@ -810,9 +839,9 @@ BATCHLAS_UNROLL_FULL
                 item, reinterpret_cast<D*>(sa), reinterpret_cast<D*>(sb), Cb, ldc, m0, n0, m, n, tid, alpha, beta,
                 beta_zero, [&](int c0, int cw, auto slot) {
 BATCHLAS_UNROLL_FULL
-                    for (int bm = 0; bm < NB; ++bm) {
+                    for (int bm = 0; bm < NBM; ++bm) {
 BATCHLAS_UNROLL_FULL
-                        for (int j = 0; j < TT; ++j) {
+                        for (int j = 0; j < TTN; ++j) {
                             const int c = (j / VecN) * NSep + tx * VecN + j % VecN - c0;
                             if (c < 0 || c >= cw) continue;
                             wide_scalar::Vec16<D> v;
@@ -825,10 +854,10 @@ BATCHLAS_UNROLL_FULL
             return;
         }
 BATCHLAS_UNROLL_FULL
-        for (int bm = 0; bm < NB; ++bm) {
+        for (int bm = 0; bm < NBM; ++bm) {
             const int gm = m0 + bm * MSep + ty * VecN;
 BATCHLAS_UNROLL_FULL
-            for (int j = 0; j < TT; ++j) {
+            for (int j = 0; j < TTN; ++j) {
                 const int gn = n0 + (j / VecN) * NSep + tx * VecN + j % VecN;
                 D* p = &Cb[gm + static_cast<std::ptrdiff_t>(gn) * ldc];
                 wide_scalar::Vec16<D> out;
@@ -857,12 +886,18 @@ inline bool wide64_v2_vec_loads(const MatrixView<T, MatrixFormat::Dense>& A,
     return aligned(A.data_ptr(), A.ld(), A.stride()) && aligned(B.data_ptr(), B.ld(), B.stride());
 }
 
-template <typename T, Transpose OpA, Transpose OpB, int TileK, bool VecLoads>
+template <typename T, bool VecLoads, int OA, int OB, int TileK, int TileM, int TileN>
+class GemmWideV2TileKernel;
+
+template <typename T, Transpose OpA, Transpose OpB, int TileK, bool VecLoads, int TileM = 64, int TileN = 64>
 Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                            const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                            T alpha, T beta, const char* trace) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
-    using Body = GemmWide64Body<T, OpA, OpB, VecLoads, TileK>;
+    using Body = GemmWide64Body<T, OpA, OpB, VecLoads, TileK, TileM, TileN>;
+    constexpr int oa = static_cast<int>(OpA), ob = static_cast<int>(OpB);
+    using Name = std::conditional_t<TileM == 64 && TileN == 64, GemmRegister64x64K16WideKernel<T, VecLoads, oa, ob, TileK>,
+                                    GemmWideV2TileKernel<T, VecLoads, oa, ob, TileK, TileM, TileN>>;
     using D = typename Body::D;
     const int m = static_cast<int>(Body::KA ? A.cols() : A.rows());
     const int k = static_cast<int>(Body::KA ? A.rows() : A.cols());
@@ -871,9 +906,8 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()), static_cast<size_t>((m + Body::TileM - 1) / Body::TileM),
                                 static_cast<size_t>((n + Body::TileN - 1) / Body::TileN) * Body::Threads);
     ctx->submit([&](sycl::handler& h) {
-        constexpr size_t granules = 2 * Body::BufF / 4;
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(granules), h);
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(granules), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(2 * Body::BufA / 4), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(2 * Body::BufB / 4), h);
         D alpha_d, beta_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
@@ -881,21 +915,19 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
                   reinterpret_cast<D*>(C.data_ptr()), m, n, k, static_cast<int>(A.ld()), static_cast<int>(B.ld()),
                   static_cast<int>(C.ld()), A.stride(), B.stride(), C.stride(), static_cast<int>(A.batch_size()),
                   alpha_d, beta_d, tile_a, tile_b};
-        batchlas::impl::parallel_for<
-            GemmRegister64x64K16WideKernel<T, VecLoads, static_cast<int>(OpA), static_cast<int>(OpB), TileK>>(
-            h, sycl::nd_range<3>(global, local), body);
+        batchlas::impl::parallel_for<Name>(h, sycl::nd_range<3>(global, local), body);
     });
     return ctx.get_event();
 }
 
 // trace names the element-load leg, trace_vec the 16-byte one.
-template <typename T, Transpose OpA, Transpose OpB, int TileK>
+template <typename T, Transpose OpA, Transpose OpB, int TileK, int TileM = 64, int TileN = 64>
 Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                        T alpha, T beta, const char* trace, const char* trace_vec) {
     if (wide64_v2_vec_loads<T>(A, B))
-        return launch_wide64_v2_leg<T, OpA, OpB, TileK, true>(ctx, A, B, C, alpha, beta, trace_vec);
-    return launch_wide64_v2_leg<T, OpA, OpB, TileK, false>(ctx, A, B, C, alpha, beta, trace);
+        return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN>(ctx, A, B, C, alpha, beta, trace_vec);
+    return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN>(ctx, A, B, C, alpha, beta, trace);
 }
 
 }  // namespace batchlas::sycl_gemm

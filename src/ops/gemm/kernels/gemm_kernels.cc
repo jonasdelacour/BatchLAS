@@ -144,6 +144,15 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
     case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
     case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
+    case KernelVariant::Tiled128x64RegisterK8Wide: return "gemm_sycl_register_128x64_k8_wide";
+    case KernelVariant::Tiled128x64RegisterK8WideNT: return "gemm_sycl_register_128x64_k8_wide_nt";
+    case KernelVariant::Tiled128x64RegisterK8WideNC: return "gemm_sycl_register_128x64_k8_wide_nc";
+    case KernelVariant::Tiled128x64RegisterK8WideTN: return "gemm_sycl_register_128x64_k8_wide_tn";
+    case KernelVariant::Tiled128x64RegisterK8WideTT: return "gemm_sycl_register_128x64_k8_wide_tt";
+    case KernelVariant::Tiled128x64RegisterK8WideTC: return "gemm_sycl_register_128x64_k8_wide_tc";
+    case KernelVariant::Tiled128x64RegisterK8WideCN: return "gemm_sycl_register_128x64_k8_wide_cn";
+    case KernelVariant::Tiled128x64RegisterK8WideCT: return "gemm_sycl_register_128x64_k8_wide_ct";
+    case KernelVariant::Tiled128x64RegisterK8WideCC: return "gemm_sycl_register_128x64_k8_wide_cc";
     }
     return "gemm_sycl_unknown";
 }
@@ -187,6 +196,15 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
+    case KernelVariant::Tiled128x64RegisterK8Wide: return "gemm_sycl_register_128x64_k8_wide_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideNT: return "gemm_sycl_register_128x64_k8_wide_nt_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideNC: return "gemm_sycl_register_128x64_k8_wide_nc_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideTN: return "gemm_sycl_register_128x64_k8_wide_tn_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideTT: return "gemm_sycl_register_128x64_k8_wide_tt_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideTC: return "gemm_sycl_register_128x64_k8_wide_tc_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideCN: return "gemm_sycl_register_128x64_k8_wide_cn_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideCT: return "gemm_sycl_register_128x64_k8_wide_ct_aligned";
+    case KernelVariant::Tiled128x64RegisterK8WideCC: return "gemm_sycl_register_128x64_k8_wide_cc_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -370,7 +388,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
 constexpr KernelVariant wide_variant(std::size_t i, int form) {
     using K = KernelVariant;
     constexpr K x = K::Direct;
-    constexpr K table[8][9] = {
+    constexpr K table[9][9] = {
         {K::Tiled64x64RegisterK16Wide, K::Tiled64x64RegisterK16WideNT, K::Tiled64x64RegisterK16WideNC,
          K::Tiled64x64RegisterK16WideTN, K::Tiled64x64RegisterK16WideTT, K::Tiled64x64RegisterK16WideTC,
          K::Tiled64x64RegisterK16WideCN, K::Tiled64x64RegisterK16WideCT, K::Tiled64x64RegisterK16WideCC},
@@ -389,6 +407,9 @@ constexpr KernelVariant wide_variant(std::size_t i, int form) {
         {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
          K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
          K::Tiled64x64RegisterK8WideCN, K::Tiled64x64RegisterK8WideCT, K::Tiled64x64RegisterK8WideCC},
+        {K::Tiled128x64RegisterK8Wide, K::Tiled128x64RegisterK8WideNT, K::Tiled128x64RegisterK8WideNC,
+         K::Tiled128x64RegisterK8WideTN, K::Tiled128x64RegisterK8WideTT, K::Tiled128x64RegisterK8WideTC,
+         K::Tiled128x64RegisterK8WideCN, K::Tiled128x64RegisterK8WideCT, K::Tiled128x64RegisterK8WideCC},
     };
     static_assert(std::size(table) == og::wide_configs.size(), "one trace row per wide_configs row");
     return table[i][form];
@@ -403,15 +424,16 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = static_cast<int>(OA == Transpose::Trans) + 2 * static_cast<int>(OA == Transpose::ConjTrans);
     constexpr int fb = static_cast<int>(OB == Transpose::Trans) + 2 * static_cast<int>(OB == Transpose::ConjTrans);
-    static_assert(c.has(fa, fb), "wide_configs does not list this form for this row");
-    if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
+    static_assert(c.has(fa, fb) && c.compiles<T>(), "wide_configs does not list this form and scalar for this row");
+    if constexpr (og::wide_v2_row<T>(c)) {
         constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
-        static_assert((c.k == 16 || c.k == 8) && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x{16,8} 4x4 tile");
-        static_assert(og::wide_slm_bytes<T>(c) ==
-                          std::int64_t(2 * 2) * GemmWide64Body<T, OA, OB, true, c.k>::BufF * std::int64_t(sizeof(float)),
+        using Body = GemmWide64Body<T, OA, OB, true, c.k, c.m, c.n>;
+        static_assert((c.k == 16 || c.k == 8) && c.ttm == Body::TTM && c.ttn == Body::TTN,
+                      "wide v2 is a k = 16 or 8 slab over a 16 x 16 lane grid");
+        static_assert(og::wide_slm_bytes<T>(c) == std::int64_t(2) * (Body::BufA + Body::BufB) * std::int64_t(sizeof(float)),
                       "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
-        return launch_wide64_v2<T, OA, OB, c.k>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
-                                                aligned_trace_name(v));
+        return launch_wide64_v2<T, OA, OB, c.k, c.m, c.n>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
+                                                          aligned_trace_name(v));
     } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64 && c.k == 16) {
         // The double NN 64x64x16 tile is its own kernel; its leg is derived from the layout.
         // Double 64x64x8 runs launch_wide_transposed in every form, NN included.
@@ -434,7 +456,8 @@ void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T,
                       T alpha, T beta, Transpose transA, Transpose transB, WideSplit split = {}) {
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = F / 3, fb = F % 3;
-    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1)) && (!Split || og::splitk_host(c))) {
+    if constexpr (c.has(fa, fb) && c.compiles<T>() && (og::is_complex_v<T> || (fa != 1 && fb != 1)) &&
+                  (!Split || og::splitk_host(c))) {
         constexpr Transpose OA = kWideOps[fa], OB = kWideOps[fb];
         if (out || !wide_trans_matches<T>(transA, OA) || !wide_trans_matches<T>(transB, OB)) return;
         if constexpr (Split)
