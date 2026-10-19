@@ -127,6 +127,14 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn_aligned";
     case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt_aligned";
     case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -338,7 +346,11 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     constexpr int fa = static_cast<int>(OA == Transpose::Trans) + 2 * static_cast<int>(OA == Transpose::ConjTrans);
     constexpr int fb = static_cast<int>(OB == Transpose::Trans) + 2 * static_cast<int>(OB == Transpose::ConjTrans);
     static_assert(c.has(fa, fb), "wide_configs does not list this form for this row");
-    if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64) {
+    if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
+        constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
+        static_assert(c.k == 16 && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x16 4x4 tile");
+        return launch_wide64_v2<T, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name(v), aligned_trace_name(v));
+    } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64) {
         // The NN 64x64 tile is its own kernel; its leg is derived from the layout.
         if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
             return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);

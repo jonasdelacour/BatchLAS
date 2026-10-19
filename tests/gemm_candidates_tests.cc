@@ -136,7 +136,15 @@ const std::vector<WideRow>& wide_rows() {
                       {"NT", "gemm_sycl_register_64x64_k16_wide_nt"}, {"NC", "gemm_sycl_register_64x64_k16_wide_nc"},
                       {"TN", "gemm_sycl_register_64x64_k16_wide_tn"}, {"TT", "gemm_sycl_register_64x64_k16_wide_tt"},
                       {"TC", "gemm_sycl_register_64x64_k16_wide_tc"}, {"CN", "gemm_sycl_register_64x64_k16_wide_cn"},
-                      {"CT", "gemm_sycl_register_64x64_k16_wide_ct"}, {"CC", "gemm_sycl_register_64x64_k16_wide_cc"}}},
+                      {"CT", "gemm_sycl_register_64x64_k16_wide_ct"}, {"CC", "gemm_sycl_register_64x64_k16_wide_cc"},
+                      {"NT+aligned", "gemm_sycl_register_64x64_k16_wide_nt_aligned"},
+                      {"NC+aligned", "gemm_sycl_register_64x64_k16_wide_nc_aligned"},
+                      {"TN+aligned", "gemm_sycl_register_64x64_k16_wide_tn_aligned"},
+                      {"TT+aligned", "gemm_sycl_register_64x64_k16_wide_tt_aligned"},
+                      {"TC+aligned", "gemm_sycl_register_64x64_k16_wide_tc_aligned"},
+                      {"CN+aligned", "gemm_sycl_register_64x64_k16_wide_cn_aligned"},
+                      {"CT+aligned", "gemm_sycl_register_64x64_k16_wide_ct_aligned"},
+                      {"CC+aligned", "gemm_sycl_register_64x64_k16_wide_cc_aligned"}}},
         {128, 32, 16, {{"NC", "gemm_sycl_register_128x32_k16_wide_nc"}, {"NT", "gemm_sycl_register_128x32_k16_wide_nt"},
                        {"TN", "gemm_sycl_register_128x32_k16_wide_tn"}, {"CN", "gemm_sycl_register_128x32_k16_wide_cn"}}},
         {32, 128, 16, {{"CN", "gemm_sycl_register_32x128_k16_wide_cn"}, {"TN", "gemm_sycl_register_32x128_k16_wide_tn"},
@@ -226,8 +234,10 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             const WideRow* row = wide_row(w);
             std::string f = wide_form<T>(ta, tb);
             // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
+            // Wide v2 (64x64, float and complex<float>) has the 16-byte leg in every form.
             const bool aligned = aligned_layout || sizeof(T) == 16;
-            if (f == "NN" && aligned && row->trace.count("NN+aligned")) f = "NN+aligned";
+            const bool v2 = w.m == 64 && w.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+            if ((f == "NN" || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             return row->trace.at(f);
         },
         [](og::Vendor) { return std::string(); },
@@ -742,7 +752,7 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 
 // A pinned choice launches its own instantiation: the kernel-trace name for every native choice
 // on every instantiated form, and the leg of every two-leg config (the NN leg of reg 128x32x32,
-// 128x64x32 u4/u2 and wide 64x64; every form of reg 128x128x8) derived from the layout: aligned
+// 128x64x32 u4/u2 and wide 64x64; every form of reg 128x128x8 and of wide v2) derived from the layout: aligned
 // on a packed tile multiple, predicated on a strided view, so a fast-leg predicate stuck at false
 // goes red here. 128x128x8 adds a padded view (aligned) and, per transposed form, a packed shape
 // whose stored dims divide the tiles while the effective m or n does not (predicated). A swapped
@@ -1107,6 +1117,53 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
                     ++ran;
                 }
     EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
+}
+
+// WP-D, wide v2 (64x64x16 for float and complex<float>) in all 9 forms at batch 1024, 7 distinct
+// problems, each item bit-identical to its representative. Ragged 100 x 70 x 37 at ld = m + 1
+// (element loads, edge groups predicated, a k tail, 3 slabs: the odd-count barrier before the
+// staged epilogue); ragged 200 x 136 x 40 padded (the 16-byte leg: interior groups unpredicated,
+// ld and stride not derivable from the shape); packed 128 x 128 x 64 (every group interior, 4
+// slabs, the band store); 130 x 70 x 64 at ld = m + 1 (an even slab count into the staged
+// epilogue). Then each form with beta = 0 and NaN in C. A conjugation sign dropped on A or on B
+// is wrong exactly in the forms that conjugate that operand; a swizzle the store and the read
+// disagree on, or a wrong k-contiguous lane map, is wrong in every form staging that operand
+// layout; a missing barrier between the two buffers differs across items.
+// evidence: docs/perf/gemm.md#gemm-wide-v2-one-double-buffered-64x64-kernel-for-every-form
+TYPED_TEST(GemmCandidates, WideV2EveryFormAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, std::complex<float>>) {
+        GTEST_SKIP() << "wide v2 serves float and complex<float>";
+    } else {
+        const C c{og::Wide{64, 64, 16}};
+        struct Shape { int m, n, k; Layout layout; };
+        const Shape shapes[] = {{100, 70, 37, Layout::Gap1}, {200, 136, 40, Layout::Padded},
+                                {128, 128, 64, Layout::Packed}, {130, 70, 64, Layout::Gap1}};
+        int ran = 0, nan_checked = 0;
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                for (const Shape& sh : shapes) {
+                    Spec s{ta, tb, sh.m, sh.n, sh.k, 1024, sh.layout};
+                    s.period = 7;
+                    s.seed = 9900u + sh.m + 5u * sh.k;
+                    ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+                Spec s{ta, tb, 100, 70, 37, 3, Layout::Gap1};
+                s.beta_zero = s.nan_c = true;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++nan_checked;
+            }
+        EXPECT_EQ(ran, 9 * 4);
+        EXPECT_EQ(nan_checked, 9);
+    }
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers

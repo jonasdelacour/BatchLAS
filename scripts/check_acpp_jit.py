@@ -51,6 +51,7 @@ RESIDENT = {
     "gemm 128x128": r"sycl_gemm::Gemm128x128Body<",
     "gemm register tiled": r"sycl_gemm::launch_register_tiled<",
     "gemm 64x64 k16 wide": r"sycl_gemm::launch_register_64x64_k16_wide<",
+    "gemm 64x64 wide v2": r"sycl_gemm::GemmWide64Body<",
     "gemm wide transposed": r"sycl_gemm::launch_wide_transposed<",
     "gemm small batched": r"sycl_gemm_small::launch_small_batched<",
     "getrf tiny": r"sycl_getrf::\(anonymous namespace\)::GetrfTinyBody<",

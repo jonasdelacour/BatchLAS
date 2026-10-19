@@ -860,6 +860,93 @@ Deliberate breaks, unrun:
 - Dropping the `n0 + TileN <= n` term of the wide band-store test should turn only the padded wide cases red, by
   writing outside C.
 
+## GEMM: wide v2, one double-buffered 64x64 kernel for every form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale, build cost and registers
+only; the A/B is pending.
+
+`wide:m=64:n=64:k=16` for float and complex<float> now runs `GemmWide64Body` (`register_64x64_k16_wide.hh`), one
+functor templated over (op(A), op(B)) ∈ {N, T, C}² and the global-load leg. It replaces both the NN kernel and
+`launch_wide_transposed` at 64×64 for those two scalars. double and complex<double> keep the old kernels:
+complex<double> is already at 124-136 registers without prefetch, and the plan's link budget was +25%. The spelling
+is unchanged; only its timing moves, so the retune absorbs it. What changed, against the root causes in the
+2026-10-18 loss map (cfloat CN/NC m,n > 64 at 1.19x, NN at 1.13x):
+
+- **Staging is a pure copy.** Conjugation is folded into compile-time FMA signs (`wide_v2::fma_signed`, still 4
+  FMAs, bit-identical to conjugating at staging), so a C operand moves in 16-byte granules like an N one.
+- **One shared layout, `s[kk][i]` in 16-byte granules, for both operands in every form.**
+  - An operand contiguous along i (A, Bᵀ) is one granule per load and store.
+  - An operand contiguous along k (Aᵀ, B, including NN's B) loads 16 bytes down k.
+    - complex<float> loads two columns (a 2×2 block) and swaps them into one granule per row.
+    - float stores four scalars, one per row.
+  - The granule index is XORed with `swz(kk) = ((kk / VecN) & 3) << 1`, the same on store and fragment read.
+    The lane maps (`GemmWide64Body::first_k`, `first_i`) put 4 row groups × 2 adjacent granules in each
+    bank-conflict set: an 8-lane phase of a 16-byte store, or a warp of 4-byte ones. By that construction the
+    transposing store is conflict-free; the old transposed store was 16-way, and NN's B store 4-way.
+  - Four swizzle values, not eight, so the fragment read needs four offsets. The eight-value form
+    (`(kk >> 1) & 7`) left complex<float> TN and CN 24 B of spill at the 128 cap.
+- **Two buffers, one barrier per slab, the next slab prefetched into `ext_vector` registers**: the 128×128
+  kernel's schedule, unrolled by two so the buffer index is constant. An odd slab count ends with a read of buffer
+  0 and no barrier after it, so the staged epilogue adds one.
+- **The leg.** The global-load leg (16-byte moves vs element loads) is per launch, from A's and B's bases, ld and
+  batch stride (`wide64_v2_vec_loads`); the parity of k, m and n does not enter it. Predication is per work-group
+  and per slab: an operand is predicated only in an edge group (in its own extent) or the k tail. So one ragged
+  edge no longer sends every interior group down the predicated path.
+- **Epilogue**: the WP-B rule unchanged, the band store per group and otherwise `staged_c_store`. Both A buffers
+  are the stage's lo half, so a chunk is the whole 64-column tile (one pass).
+- **Launch bound** on the functor's `operator()`: 3 groups per CU for float, 2 for complex<float>.
+  - The bound is ignored on a lambda.
+  - `operator()` is `always_inline`. Out of line, complex<float>'s body spilled 64-104 B behind the call, while the
+    entry function reported zero, so only the non-inlined function line of the probe showed it.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill on all 724 entry functions of
+`libbatchlas_sycl`.
+
+- float: 79-80 registers, 3 groups per SM.
+- complex<float>: 126-128 registers at the 128 cap, 2 groups per SM (16 warps; the old NN kernel ran 80 registers
+  at 3).
+- A 3-group bound for complex<float> caps it at 80 and spills 76-240 B in all 18 instances, so 2 is the bound.
+- Whether 16 warps with prefetch beat 24 without is the open question the A/B answers.
+
+**Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree, two runs each:
+parent 63.0-63.1 s, v2 74.6-74.9 s (+18%). That is under the plan's 25% ceiling at which v2 would have been
+restricted further.
+
+Tests: `GemmCandidates.WideV2EveryFormAtSaturatingBatch` runs all 9 forms at batch 1024 (7 distinct problems,
+each item bit-identical to its representative) on four shapes:
+
+- 100×70×37 at ld = m + 1: element loads, edge groups, a k tail, 3 slabs.
+- 200×136×40 padded: the 16-byte leg with interior and edge groups.
+- 128×128×64 packed: all interior, 4 slabs, the band store.
+- 130×70×64 at ld = m + 1: an even slab count into the staged epilogue.
+
+Then β = 0 with NaN in C per form. `PinnedChoiceLaunchesItsOwnKernel` expects a `_aligned` trace name in every form
+on packed data (`aligned_trace_name`).
+
+Deliberate breaks, unrun:
+
+- Dropping the A conjugation sign should turn red only CN, CT and CC (complex<float>); the B sign only NC, TC
+  and CC.
+- Dropping the swizzle on the read side only should turn every v2 form red for both scalars, and nothing else.
+- Swapping the k-contiguous lane map's row group and column bits should turn red every form except NT and NC
+  (float: except NC), the forms with no k-contiguous operand.
+- `<=` for `<` in the k-tail predicate should turn red the three ragged-k shapes, and leave 128×128×64 and
+  130×70×64 green.
+- Dropping the per-slab barrier should show as bit-identity failures across items.
+
+**Pending:** the plan's A/B (pass: every cell ≤ 1.05x vendor, and NN packed 512³ not slower than 2.78 ms):
+
+- cfloat CN strided 1024³ b128;
+- NC strided 256×128×96 b128, also against `wide:m=128:n=32:k=16`;
+- CN packed 256×128×96 b128;
+- NN strided 362×90×96 b128;
+- TN packed 768³ b128.
+
+Then a coarse re-race. Not done:
+
+- the C prefetch before the last slab (the plan's P2.5);
+- an 8-byte vector load for complex<float> on the element leg (it needs an 8-byte-aligned base, a third leg).
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
