@@ -20,7 +20,7 @@ namespace batchlas::ops::gemm {
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
 struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
-/// gemm_reg, float only: m x n x k tile, k unroll u (128x128: u1 two stages, u4 the copy_async pipeline);
+/// gemm_reg, float only: m x n x k tile, k unroll u (128x128: u1 two stages, u4 the predicated copy_async pipeline);
 /// must name a reg_configs entry instantiating the call's form, and max_wg must cover its threads().
 struct Reg {
     int m = 0, n = 0, k = 0, u = 1;
@@ -83,7 +83,7 @@ inline constexpr std::array<RegCfg, 11> reg_configs{{
     {128, 64, 32, 4, 8, 4, 2, {true, false, false, false}, true},
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
     {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
-    {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // the same, 4 copy_async stages (aligned leg)
+    {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // the same; predicated leg: 4 zero-filled copy_async stages
 }};
 
 /// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.

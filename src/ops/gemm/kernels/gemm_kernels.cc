@@ -187,10 +187,6 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
-    case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4_aligned";
-    case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt_aligned";
-    case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn_aligned";
-    case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -344,16 +340,16 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
         static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
-        using Staged = Gemm128x128Body<float, true, true, OA, OB, c.stages>;
+        using Staged = Gemm128x128Body<float, false, true, OA, OB, c.stages>;
         static_assert(Staged::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
         static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * (Staged::TileAElems + Staged::TileBElems),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
         // The leg is derived: the unpredicated path whenever the layout allows it. Every depth's
-        // predicated leg is the two-stage body (the copy_async pipeline is aligned-only).
+        // aligned leg is the two-stage body (a 16-byte copy_async aligned leg lost to it, WP-N2).
         if (can_use_128x128_fast_path<float>(A, B, C, OA, OB))
-            return launch_register_128x128_k8<float, true, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
-                                                                              aligned_trace_name);
-        return launch_register_128x128_k8<float, false, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+            return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+        return launch_register_128x128_k8<float, false, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
+                                                                           kernel_trace_name);
     } else {
         static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;

@@ -1398,53 +1398,77 @@ Deliberate breaks, unrun:
 cells now run an unmeasured kernel. Before merge: a saturation A/B (batch ≥ 128, beta = 1, strided ld) against
 the parent, or a retune of the cdouble wide rows.
 
-## GEMM: WP-N, a four-stage cp.async 128x128 aligned leg
+## GEMM: WP-N2, the u4 stack frame and zero-filled predicated copies
 
-*Unmeasured* (2026-10-19; built and probed for sm_120, no GPU run).
+Measured 2026-10-19, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune` A/B (beta = 1, every arm
+verified), 8 reps × 2 passes in alternating order; ratios are the mean of both passes against cuBLAS.
 
-Target: float NN at m, n ≥ 256 and k 65-256 on `reg` 128x128 (sm_120 median 1.16× vendor, max 1.81×). The
-k = 8 slab gives 8-32 barriers per tile there, and the register prefetch hides one slab of latency.
+`reg:m=128:n=128:k=8:u=4` (WP-N) shipped a 16-byte `cp.async` aligned leg that ran 23-33× slower than u1 (NN packed
+1024³ b128: 377 ms against 16.6). Shipped now:
 
-| | `reg:m=128:n=128:k=8:u=1` | `reg:m=128:n=128:k=8:u=4` |
+| leg | u1 | u4 |
 |---|---|---|
-| aligned leg | 2 local slabs, register prefetch | 4 local slabs filled by `cp.async`, 3 in flight |
-| predicated leg | two-stage body | the same two-stage body (same instantiation) |
-| local memory (`RegCfg::slm_bytes`) | 25,088 B | 33,280 B (two groups per SM: 65 KB) |
-| trace names, aligned | `gemm_sycl_register_128x128_k8[_nt\|_tn\|_tt]_aligned` | `..._k8_s4[_nt\|_tn\|_tt]_aligned` |
+| aligned | register double buffer | the same instantiation (`..._k8[_nt\|_tn\|_tt]_aligned`) |
+| predicated | register double buffer, scalar loads | 4 local slabs filled by zero-filled 4-byte `cp.async`, 3 in flight (`..._k8_s4[_nt\|_tn\|_tt]`) |
+| staged epilogue (k ≤ 64) | every form | NT, TN, TT; NN stays direct |
 
-On the 128x128 row `u` names the stage count (1 = the register double buffer); the field list is unchanged.
-`copy_async` (`register_128x128.hh`) is `cp.async.cg.shared.global.L2::128B` (16 B) for the packet operand
-(A, B^T) and `cp.async.ca ... 4` per element for a k-contiguous one (B, A^T), whose `[k][m|n]` tile transposes
-the copy. Inline PTX under `__SYCL_DEVICE_ONLY__ && __NVPTX__ && __SYCL_CUDA_ARCH__ >= 800`; other targets
-(AdaptiveCpp, Metal, older NVIDIA) copy synchronously through the same pipeline. Step s: `wait_group 2`,
-barrier, refill buffer (s + 3) mod 4, commit (empty past the end), compute buffer s mod 4. Unrolled by 4 so
-the buffer index is a constant. `wait_group 0` before the staged epilogue reuses the A tile.
+**The 23-33× defect.** ncu: 99% of L1 sectors were local memory, IPC 0.17. The aligned body ran out of line on a
+stack copy of the functor (probe: 520-680 B stack frame, 0 spill; WP-N's "no stack frame" was wrong), and each
+`asm volatile(... : "memory")` made LLVM reload every member through `this` after every copy. Launching through an
+always-inline wrapper removed it (stack 0); the aligned u4 then ran at 1.10× u1's time (NN 1024³).
 
-Probe (`scripts/register_probe.sh`, sm_120, `libbatchlas_sycl`): all 8 u4 entries 128 registers, 0 spill,
-no stack frame; the gate `ceil(8/4)·32·128 = 8192 ≤ 16384` holds at two groups per SM. The same probe shows
-the two-stage body at 125-139 registers on sm_120 (identical before WP-N), over the two-group cap of 128 in
-aligned NN direct 139, NN staged 135, TN staged 130, TT staged 139 and predicated NT staged 133, TN staged
-129: those run one group per SM.
+**The aligned cp.async leg is deleted** (negative result): it never beat the register prefetch.
 
-Risk: the k-contiguous operand issues four 4-byte copies per slab where u1 issues one 16-byte load (more
-L1 wavefronts; NN's B is that operand).
+| cell (packed, aligned leg) | u1 | u4 aligned cp.async | vendor ms |
+|---|---|---|---|
+| NN 1024³ b128 | 1.043× | 1.145× | 6.76 |
+| NT 1024³ b128 | 1.002× | 0.999× | 6.88 |
+| NN 512×512×128 b2048 | 1.032× | 1.017× | 5.67 |
+| TT 512³ b128 | 1.052× | 1.117× | 1.02 |
 
-Test: `GemmCandidates.Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch`, 5 forms (CC folds to TT)
-× slab counts 1, 2, 3, 4, 5, 8, 9, 17 at batch 1024 (7 problems, items bit-identical), packed and padded,
-128 × 256 and 256 × 128; NaN C at beta = 0; a ragged and an odd-ld view on the predicated body.
+NN and TT lose on the k-contiguous operand (four 4-byte copies per lane per slab where u1 issues one 16-byte load).
+NT ties, and NN 512×512×128 is under the 5% noise floor.
 
-Deliberate breaks, unrun:
+**Predicated pipeline.** Each lane copies one element per copy, zero-filled through `src-size` 0 when its row,
+column or k index is out of range, so any ld and any base alignment work and the k tail needs no branch. A packet
+operand (A, B^T) takes consecutive m (n) per lane, 32 apart per copy, so each copy is one 128-byte warp access at
+an odd ld. A k-contiguous one (B, A^T) keeps the transposing map. Step s: `wait_group 2`, barrier, refill buffer
+(s + 3) mod 4, commit, compute. Register-cap details (`scripts/register_probe.sh`, sm_120; the probe only relinks,
+so rebuild `batchlas_sycl` first):
 
-- `copy_async_wait<Stages - 2>` → `<Stages - 1>`: slab s is read before it lands; red on the u4 aligned cases
-  of that test (every k), green for u1.
-- refill `(b + Stages - 1) % Stages` → `(b + 1) % Stages`: overwrites a buffer still to be read; red from
-  3 slabs (k ≥ 24), k = 8 and 16 green.
-- drop the B^T `gb +=` in `issue`: NT and TT red from 2 slabs; NN and TN green.
-- `(b_k + i)` → `b_k` in the 4-byte copies: NN and TN red; NT and TT green.
+- The launch bound alone does not cap registers: staged predicated NN, TN and TT ran 155-159 (one group per SM),
+  measured 2.2-2.4× vendor. The pipeline's wrapper adds `sycl::reqd_work_group_size(1, 1, 256)` (`.reqntid`), and
+  ptxas then holds 128.
+- At 128, staged NN and NT spilled 72 and 52 B while each copy computed `ptr + k0 * ld`. With every operand pointer
+  bumped one slab per issue, NT fits and NN spills 12 B, so the NN instance takes the direct epilogue (derived in
+  `launch_register_128x128_k8`, never a field).
+- Shipped: all 7 u4 instances (predicated only; NN has no staged one) 117-127 registers, 0 spill, 0 stack.
+  u1 is unchanged (125-139). The only spilling gemm entries are the 50 complex<double> wide-transposed ones.
 
-A/B keys: `ta=N,tb=N,layout=strided,m=256,n=512,k=128,batch=2048` and
-`ta=N,tb=N,layout=packed,m=1512,n=1024,k=78,batch=128` (both odd or ragged: the predicated body), and a
-packed multiple, `m=n=1024,k=128,batch=128`, which the u4 aligned leg serves.
+| cell (layout=strided: ld = m + 1, odd) | u1 | wide 64×64 | **u4** | vendor ms |
+|---|---|---|---|---|
+| NN 256×512×128 b2048 | 1.425× | 1.457× | **1.316×** | 2.96 |
+| NT 1218×128×96 b128 | 1.350× | 1.389× | **1.298×** | 0.194 |
+| NN 256×256×64 b1024 | 1.094× | 1.106× | **1.071×** | 0.675 |
+| TT 512×512×64 b128 (two runs) | 1.557×, 1.519× | 1.535×, 1.507× | 1.529×, 1.494× | 0.229, 0.237 |
+| NN 1448×128×32 b128 (two runs) | 1.663×, 1.660× | **1.507×, 1.483×** | 1.591×, 1.568× | 0.133 |
+| NN 384×384×48 b128 | 1.276× | **1.136×** | 1.437× | 0.129 |
+
+u4 wins 2-8% where k ≥ 64; at k = 32-48 NN (the direct epilogue) loses to u1 or wide. Both remain table choices
+(layout is a key), so a retune decides. ncu on NN 256×512×128 (u4): 979 GB/s, 67% DRAM; the top stalls are
+`beta * C` waiting on the predicated leg's scattered C loads (direct epilogue), not the mainloop.
+
+Test: `GemmCandidates.Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch` (5 forms, odd-base or odd-ld
+views, slab counts 1-17 with k tails 5, 37, 69 under NaN poison, 300×200 edge groups, NaN C at beta = 0) and the
+WP-I test run for u4 as well as u1. Deliberate breaks, run on sm_120 (first red case; both tests stop there):
+
+| break | first red | green before it |
+|---|---|---|
+| `copy_async_wait<Stages - 1>` | NN k = 5 (one slab, read before it lands) | WP-I u4 NN k = 72, 37 (the race hides) |
+| refill buffer `(b + 1) % Stages` | NN 256×128×32 (4 slabs) | NN k = 5, 8, 16, 24 (≤ 3 slabs never refill) |
+| drop the B^T pointer bump | NT 256×128×16 (2 slabs) | every NN leg, NT k = 5, 8 |
+| B's k bound dropped (`lim` = 4) | NN k = 37, 5 (NaN) | NN k = 72 |
+| A's row bound dropped (`lim` = 128) | none: rows past m feed only discarded accumulators | all |
 
 ## GEMM: the register-tiled launcher table
 

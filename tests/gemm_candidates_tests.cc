@@ -126,12 +126,12 @@ const std::vector<RegRow>& reg_rows() {
           {"TN", "gemm_sycl_register_128x128_k8_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
           {"TT", "gemm_sycl_register_128x128_k8_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
          25088},
-        // The copy_async pipeline is the aligned leg only; the predicated leg is u1's two-stage body.
+        // The copy_async pipeline is the predicated leg only; the aligned leg is u1's two-stage body.
         {128, 128, 8, 4, {"NN", "NT", "TN", "TT"},
-         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_s4_aligned"},
-          {"NT", "gemm_sycl_register_128x128_k8_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_s4_nt_aligned"},
-          {"TN", "gemm_sycl_register_128x128_k8_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_s4_tn_aligned"},
-          {"TT", "gemm_sycl_register_128x128_k8_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_s4_tt_aligned"}},
+         {{"NN", "gemm_sycl_register_128x128_k8_s4"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"},
+          {"NT", "gemm_sycl_register_128x128_k8_s4_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_nt_aligned"},
+          {"TN", "gemm_sycl_register_128x128_k8_s4_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
+          {"TT", "gemm_sycl_register_128x128_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
          33280},
     };
     return rows;
@@ -1234,30 +1234,35 @@ TYPED_TEST(GemmCandidates, Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturating
     if constexpr (!std::is_same_v<T, float>) {
         GTEST_SKIP() << "reg is float only";
     } else {
-        const C c{og::Reg{128, 128, 8, 1}};
-        const RegRow* row = reg_row(std::get<og::Reg>(c));
-        ASSERT_NE(row, nullptr);
-        if (!reg_fits(*row)) GTEST_SKIP() << "128x128 is above this device's local memory budget";
         const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
         struct Leg { int m, n, k; Layout layout; bool nan; };
         const Leg legs[] = {{256, 256, 72, Layout::Strided, false}, {256, 256, 37, Layout::Strided, true},
                             {256, 256, 5, Layout::Strided, true}, {300, 200, 45, Layout::Gap1, true},
                             {300, 200, 72, Layout::Strided, false}};
-        int ran = 0;
-        for (auto [ta, tb] : forms)
-            for (const Leg& leg : legs) {
-                Spec s{ta, tb, leg.m, leg.n, leg.k, 1024, leg.layout};
-                s.period = 7;
-                s.nan_poison = leg.nan;
-                s.seed = 9200u + leg.m + leg.k;
-                ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
-                auto p = make_problem<T>(s);
-                this->run_pinned(c, p);
-                expect_gemm(*this->ctx, p, name(c, s));
-                if (::testing::Test::HasFatalFailure()) return;
-                ++ran;
-            }
-        EXPECT_EQ(ran, 25);
+        int ran = 0, rows = 0;
+        // u = 4 is WP-N2's zero-filled copy_async pipeline: the same legs, one more prologue depth.
+        for (int u : {1, 4}) {
+            const C c{og::Reg{128, 128, 8, u}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            for (auto [ta, tb] : forms)
+                for (const Leg& leg : legs) {
+                    Spec s{ta, tb, leg.m, leg.n, leg.k, 1024, leg.layout};
+                    s.period = 7;
+                    s.nan_poison = leg.nan;
+                    s.seed = 9200u + leg.m + leg.k;
+                    ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+        }
+        if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        EXPECT_EQ(ran, 25 * rows);
     }
 }
 
@@ -1302,14 +1307,15 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
     }
 }
 
-// WP-N, the four-stage copy_async pipeline of reg 128x128x8 u4 (aligned leg) in every real form, batch
-// 1024 repeating 7 problems, each item bit-identical to its representative. Slab counts 1, 2, 3, 4, 5,
-// 8, 9 and 17 straddle the prologue depth (3 slabs), the unroll by 4 and the staged/direct epilogue edge
-// (k = 64 / 72); 128 x 256 and 256 x 128 cover two n and two m tiles, packed and padded (ld and stride
-// multiples of 4, neither natural). Then beta = 0 with NaN in C, and two views the pin serves on the
-// two-stage predicated body (ragged and odd ld). A wait on the wrong group or a refill of a buffer still
-// to be read differs across items or is wrong from 2 or 4 slabs on; a lost B^T bump, NT and TT only.
-// evidence: docs/perf/gemm.md#gemm-wp-n-a-four-stage-cpasync-128x128-aligned-leg
+// WP-N2, the four-stage zero-filled copy_async pipeline of reg 128x128x8 u4 (predicated leg) in every
+// real form, batch 1024 repeating 7 problems, each item bit-identical to its representative. Every view
+// is predicated (odd bases or odd ld). Slab counts 1, 2, 3, 4, 5, 8, 9 and 17 straddle the prologue
+// depth (3 slabs), the unroll by 4 and the staged/direct epilogue edge (k = 64 / 69); k = 5, 37 and 69
+// end in a partial slab and poison with NaN (a dropped k bound times the other operand's zero is a
+// silent -0 with finite poison); 300 x 200 adds m-edge, n-edge and corner groups. Then beta = 0 with
+// NaN in C. A wait on the wrong group or a refill of a buffer still to be read differs across items or
+// is wrong from 2 or 4 slabs on; a lost pointer bump, from 2 slabs in its operand's forms.
+// evidence: docs/perf/gemm.md#gemm-wp-n2-the-u4-stack-frame-and-zero-filled-predicated-copies
 TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch) {
     using T = typename TestFixture::T;
     if constexpr (!std::is_same_v<T, float>) {
@@ -1320,23 +1326,25 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
         ASSERT_NE(row, nullptr);
         if (!reg_fits(*row)) GTEST_SKIP() << "128x128 u4 is above this device's local memory budget";
         const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
-        struct Leg { int m, n, k; Layout layout; };
-        const Leg legs[] = {{128, 256, 8, Layout::Packed},  {256, 128, 16, Layout::Padded},
-                            {128, 256, 24, Layout::Padded}, {256, 128, 32, Layout::Packed},
-                            {128, 256, 40, Layout::Packed}, {256, 128, 64, Layout::Padded},
-                            {128, 256, 72, Layout::Padded}, {128, 128, 136, Layout::Packed}};
-        const Leg nan_legs[] = {{128, 256, 24, Layout::Padded}, {256, 128, 72, Layout::Packed}};
-        const Leg predicated[] = {{200, 150, 37, Layout::Strided}, {256, 256, 72, Layout::OddLd}};
+        struct Leg { int m, n, k; Layout layout; bool nan; };
+        const Leg legs[] = {{256, 256, 5, Layout::Strided, true},   {128, 256, 8, Layout::Strided, false},
+                            {256, 128, 16, Layout::OddLd, false},   {128, 256, 24, Layout::Gap1, false},
+                            {256, 128, 32, Layout::Strided, false}, {300, 200, 37, Layout::Gap1, true},
+                            {128, 256, 40, Layout::OddLd, false},   {256, 128, 64, Layout::Strided, false},
+                            {128, 256, 69, Layout::Gap1, true},     {300, 200, 72, Layout::Strided, false},
+                            {128, 128, 136, Layout::OddLd, false}};
+        const Leg nan_legs[] = {{128, 256, 24, Layout::Gap1, false}, {256, 128, 72, Layout::Strided, false}};
         int ran = 0;
-        auto check = [&](const Leg& leg, Transpose ta, Transpose tb, bool nan) {
-            Spec s{ta, tb, leg.m, leg.n, leg.k, nan ? 3 : 1024, leg.layout};
-            s.period = nan ? 0 : 7;
-            s.beta_zero = s.nan_c = nan;
-            s.seed = 9700u + leg.k;
+        auto check = [&](const Leg& leg, Transpose ta, Transpose tb, bool nan_c) {
+            Spec s{ta, tb, leg.m, leg.n, leg.k, nan_c ? 3 : 1024, leg.layout};
+            s.period = nan_c ? 0 : 7;
+            s.beta_zero = s.nan_c = nan_c;
+            s.nan_poison = leg.nan;
+            s.seed = 9700u + leg.m + leg.k;
             ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
             auto p = make_problem<T>(s);
             this->run_pinned(c, p);
-            expect_gemm(*this->ctx, p, name(c, s) + (nan ? " (NaN C)" : ""));
+            expect_gemm(*this->ctx, p, name(c, s) + (nan_c ? " (NaN C)" : ""));
             ++ran;
         };
         for (auto [ta, tb] : forms) {
@@ -1348,12 +1356,8 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
                 check(leg, ta, tb, true);
                 if (::testing::Test::HasFatalFailure()) return;
             }
-            for (const Leg& leg : predicated) {
-                check(leg, ta, tb, false);
-                if (::testing::Test::HasFatalFailure()) return;
-            }
         }
-        EXPECT_EQ(ran, 60);
+        EXPECT_EQ(ran, 65);
     }
 }
 
