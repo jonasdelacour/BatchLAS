@@ -197,13 +197,15 @@ BATCHLAS_UNROLL_FULL
         const T* gb = BK ? Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb
                          : Bb + (n0 + b_n) + static_cast<std::ptrdiff_t>(b_k) * ldb;
 
+        // B^T bumps gb one slab per call (gload runs once per slab, in order): an int k0 * ldb
+        // overflows on a large item, and a 64-bit product spilled the staged NT leg.
         Vec4<T> ra, rb;
         auto gload = [&](int k0) __attribute__((always_inline)) {
             if constexpr (AlignedFastPath) {
                 if constexpr (AK) ra = load4_l2_line(ga + k0);
                 else ra = vec4_ref(ga + static_cast<std::ptrdiff_t>(k0) * lda);
                 if constexpr (BK) rb = load4_l2_line(gb + k0);
-                else rb = vec4_ref(gb + k0 * ldb);  // int within an item: a 64-bit product spills NT
+                else rb = vec4_ref(gb);
             } else {
                 // Zero outside the matrix, so the inner loop needs no bounds. Same lane maps as
                 // the aligned leg, so an odd ld stays coalesced. B^T's bound is one live int, not
@@ -219,9 +221,10 @@ BATCHLAS_UNROLL_FULL
                     if constexpr (BK)
                         rb[i] = (k0 + b_k + i < k && n0 + b_n < n) ? load1_l2_line(gb + k0 + i) : T(0);
                     else
-                        rb[i] = i < lim_b ? gb[k0 * ldb + i] : T(0);
+                        rb[i] = i < lim_b ? gb[i] : T(0);
                 }
             }
+            if constexpr (!BK) gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
         };
         auto sstore = [&](int buf) __attribute__((always_inline)) {
             if constexpr (AK) {

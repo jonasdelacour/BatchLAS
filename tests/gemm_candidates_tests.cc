@@ -236,7 +236,7 @@ struct Region {
     int rows = 0, cols = 0, ld = 0, stride = 0;
 };
 
-enum class Layout { Packed, Strided };
+enum class Layout { Packed, Strided, Padded };
 
 struct Spec {
     Transpose ta = kN, tb = kN;
@@ -249,7 +249,8 @@ struct Spec {
 };
 
 // A, B and C live in one buffer of a large finite poison. Packed: contiguous operands with
-// 16-byte bases (layout=packed). Strided: ld = rows + 3, an odd batch stride, odd bases. The
+// 16-byte bases (layout=packed). Strided: ld = rows + 3, an odd batch stride, odd bases. Padded:
+// 16-byte bases, ld and stride multiples of 4 but neither natural (an aligned-leg view). The
 // panel form carves A, B and C from one parent at its ld and stride, B aliasing A.
 template <typename T>
 struct Problem {
@@ -318,6 +319,8 @@ Problem<T> make_problem(const Spec& s) {
     const int br = s.tb == kN ? s.k : s.n, bc = s.tb == kN ? s.n : s.k;
     auto region = [&](std::size_t off, int rows, int cols) {
         if (s.layout == Layout::Packed) return Region{up4(off), rows, cols, rows, rows * cols};
+        const int pad = int(up4(std::size_t(rows))) + 4;
+        if (s.layout == Layout::Padded) return Region{up4(off), rows, cols, pad, pad * cols + 4};
         return Region{off | 1, rows, cols, rows + 3, (rows + 3) * cols + 5};
     };
     auto end = [&](const Region& g) { return g.off + std::size_t(g.stride) * s.batch + 9; };
@@ -393,11 +396,19 @@ void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
 }
 
 std::string label(const Spec& s) {
-    return std::string(tw(s.ta)) + tw(s.tb) + (s.layout == Layout::Packed ? " packed" : " strided") +
+    const char* lay = s.layout == Layout::Packed ? " packed" : s.layout == Layout::Padded ? " padded" : " strided";
+    return std::string(tw(s.ta)) + tw(s.tb) + lay +
            " m=" + std::to_string(s.m) + " n=" + std::to_string(s.n) + " k=" + std::to_string(s.k) +
            " batch=" + std::to_string(s.batch) + (s.beta_zero ? " beta=0" : "");
 }
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
+
+// Packed, every stored dim a multiple of 128 x 128 x 8, but the effective m (op(A) transposed) or
+// n (op(B) transposed) is 72: a leg predicate reading A.rows() / B.cols() as m / n takes the
+// aligned leg here and reads past A and writes past C.
+Spec ragged_effective(Transpose ta, Transpose tb) {
+    return Spec{ta, tb, ta == kN ? 128 : 72, tb == kN ? 128 : 72, 128, 3, Layout::Packed};
+}
 
 // The outermost gemm trace line for whatever `run` calls, and the choice it names.
 template <class F>
@@ -712,11 +723,13 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 }
 
 // A pinned choice launches its own instantiation: the kernel-trace name for every native choice
-// on every instantiated form, and the NN leg of every two-leg config (reg 128x32x32, 128x64x32
-// u4/u2, 128x128x8, wide 64x64) derived from the layout: aligned on a packed tile multiple,
-// predicated on a strided view, so a fast-leg predicate stuck at false goes red here. A swapped launch arm shows here even
-// where both kernels give the same bits. threadsafe: the child re-executes the binary with
-// BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
+// on every instantiated form, and the leg of every two-leg config (the NN leg of reg 128x32x32,
+// 128x64x32 u4/u2 and wide 64x64; every form of reg 128x128x8) derived from the layout: aligned
+// on a packed tile multiple, predicated on a strided view, so a fast-leg predicate stuck at false
+// goes red here. 128x128x8 adds a padded view (aligned) and, per transposed form, a packed shape
+// whose stored dims divide the tiles while the effective m or n does not (predicated). A swapped
+// launch arm shows here even where both kernels give the same bits. threadsafe: the child
+// re-executes the binary with BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     using T = typename TestFixture::T;
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
@@ -732,6 +745,11 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     if (!oracle_native<T>(c, ta, tb, s.m, s.n, s.k)) continue;
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
+                const auto* r = std::get_if<og::Reg>(&c);
+                if (!r || r->m != 128 || r->n != 128 || !oracle_native<T>(c, ta, tb, 128, 128, 64)) continue;
+                cases.push_back({c, Spec{ta, tb, 128, 128, 64, 2, Layout::Padded}, expected_kernel<T>(c, ta, tb, true)});
+                if (ta != kN || tb != kN)
+                    cases.push_back({c, ragged_effective(ta, tb), expected_kernel<T>(c, ta, tb, false)});
             }
     }
     ASSERT_FALSE(cases.empty());
@@ -863,6 +881,47 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
                 ++ran;
             }
         EXPECT_EQ(ran, 15);
+    }
+}
+
+// §8.3 on the 128x128 aligned leg in every real form: padded views (ld and stride multiples of 4,
+// neither natural), so a loader or epilogue that derives ld or stride from m, n or k reads the
+// poison in the gap. Both epilogues (k = 24 staged, k = 72 direct) at batch 1024, then again with
+// beta = 0 and NaN in C. Then the ragged-effective packed shapes (PinnedChoiceLaunchesItsOwnKernel
+// pins their leg): an aligned leg there writes outside C.
+TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const C c{og::Reg{128, 128, 8, 1}};
+        const RegRow* row = reg_row(std::get<og::Reg>(c));
+        ASSERT_NE(row, nullptr);
+        if (!reg_fits(*row)) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        int ran = 0;
+        auto check = [&](Spec s) {
+            ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+            auto p = make_problem<T>(s);
+            this->run_pinned(c, p);
+            expect_gemm(*this->ctx, p, name(c, s) + (s.nan_c ? " (NaN C)" : ""));
+            ++ran;
+        };
+        for (auto [ta, tb] : forms) {
+            for (int k : {24, 72})
+                for (bool nan : {false, true}) {
+                    Spec s{ta, tb, 128, 256, k, nan ? 3 : 1024, Layout::Padded};
+                    s.period = nan ? 0 : 7;
+                    s.beta_zero = s.nan_c = nan;
+                    s.seed = 9300u + k;
+                    check(s);
+                    if (::testing::Test::HasFatalFailure()) return;
+                }
+            if (ta == kN && tb == kN) continue;
+            check(ragged_effective(ta, tb));
+            if (::testing::Test::HasFatalFailure()) return;
+        }
+        EXPECT_EQ(ran, 24);
     }
 }
 

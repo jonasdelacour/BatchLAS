@@ -699,9 +699,10 @@ reads the effective m, n, k (the alignment terms are the same: every packet star
 along its contiguous direction). Trace names gain `_nt`, `_tn`, `_tt`, each with an `_aligned` twin.
 
 **Registers** (`scripts/register_probe.sh`, ptxas only): all twelve legs (4 forms × predicated, aligned, aligned
-staged) at 123-128 registers, zero spill, library-wide zero spill. Two source details are load-bearing at the
-128 cap, both on the B^T loader only (NN's code is untouched): its in-item offset `k0 * ldb` is an `int` (the
-64-bit product spilled the staged NT leg, 20 B), and its predicated bound is one live `int` (four hoisted row
+staged) at 126-128 registers, zero spill, library-wide zero spill. Two source details are load-bearing at the
+128 cap, both on the B^T loader only (NN's code is untouched): its pointer advances by `TileK * ldb` (64-bit)
+once per slab instead of indexing `k0 * ldb` (an `int` product overflows past \f$2^{31}\f$ elements in one item;
+a 64-bit product spilled the staged NT leg, 20 B), and its predicated bound is one live `int` (four hoisted row
 predicates beside A's four spilled the predicated NT leg, 20 B).
 
 **Build cost**, `libbatchlas_sycl` link alone, GPU-only tree, two runs each: NN only 46.5-46.7 s, all four forms

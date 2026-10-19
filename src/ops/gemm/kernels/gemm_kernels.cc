@@ -251,7 +251,7 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
                             : K::Tiled32x128RegisterK16TT;
     case 7: return K::Tiled128x64RegisterK32Large;
     case 8: return K::Tiled128x64RegisterK32LargeU2;
-    case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN
+    case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
                    : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
     default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
@@ -267,6 +267,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     if constexpr (c.m == 128 && c.n == 128) {
         static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
         using Staged = Gemm128x128Body<float, true, true, OA, OB>;
+        static_assert(Staged::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
         static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
                                            (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
