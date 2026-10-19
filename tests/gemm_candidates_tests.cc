@@ -124,15 +124,26 @@ const std::vector<RegRow>& reg_rows() {
     };
     return rows;
 }
-struct WideRow { int m, n, k; std::map<std::string, std::string> trace; };  // forms NN, CN, NC
+// Forms are the complex instantiations (op(A) op(B) over N, T, C); a real scalar runs the N/C
+// one its T operands fold to.
+struct WideRow { int m, n, k; std::map<std::string, std::string> trace; };
 const std::vector<WideRow>& wide_rows() {
     static const std::vector<WideRow> rows{
         {64, 64, 16, {{"NN", "gemm_sycl_register_64x64_k16_wide"}, {"NN+aligned", "gemm_sycl_register_64x64_k16_wide_aligned"},
-                      {"CN", "gemm_sycl_register_64x64_k16_wide_cn"}, {"NC", "gemm_sycl_register_64x64_k16_wide_nc"}}},
-        {128, 32, 16, {{"NC", "gemm_sycl_register_128x32_k16_wide_nc"}}},
-        {32, 128, 16, {{"CN", "gemm_sycl_register_32x128_k16_wide_cn"}}},
-        {32, 32, 16, {{"NN", "gemm_sycl_register_32x32_k16_wide"}}},
-        {16, 16, 16, {{"NN", "gemm_sycl_register_16x16_k16_wide"}}},
+                      {"NT", "gemm_sycl_register_64x64_k16_wide_nt"}, {"NC", "gemm_sycl_register_64x64_k16_wide_nc"},
+                      {"TN", "gemm_sycl_register_64x64_k16_wide_tn"}, {"TT", "gemm_sycl_register_64x64_k16_wide_tt"},
+                      {"TC", "gemm_sycl_register_64x64_k16_wide_tc"}, {"CN", "gemm_sycl_register_64x64_k16_wide_cn"},
+                      {"CT", "gemm_sycl_register_64x64_k16_wide_ct"}, {"CC", "gemm_sycl_register_64x64_k16_wide_cc"}}},
+        {128, 32, 16, {{"NC", "gemm_sycl_register_128x32_k16_wide_nc"}, {"NT", "gemm_sycl_register_128x32_k16_wide_nt"},
+                       {"TN", "gemm_sycl_register_128x32_k16_wide_tn"}, {"CN", "gemm_sycl_register_128x32_k16_wide_cn"}}},
+        {32, 128, 16, {{"CN", "gemm_sycl_register_32x128_k16_wide_cn"}, {"TN", "gemm_sycl_register_32x128_k16_wide_tn"},
+                       {"NT", "gemm_sycl_register_32x128_k16_wide_nt"}, {"NC", "gemm_sycl_register_32x128_k16_wide_nc"}}},
+        {32, 32, 16, {{"NN", "gemm_sycl_register_32x32_k16_wide"}, {"NT", "gemm_sycl_register_32x32_k16_wide_nt"},
+                      {"NC", "gemm_sycl_register_32x32_k16_wide_nc"}, {"TN", "gemm_sycl_register_32x32_k16_wide_tn"},
+                      {"CN", "gemm_sycl_register_32x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x32_k16_wide_ct"}}},
+        {16, 16, 16, {{"NN", "gemm_sycl_register_16x16_k16_wide"}, {"NT", "gemm_sycl_register_16x16_k16_wide_nt"},
+                      {"NC", "gemm_sycl_register_16x16_k16_wide_nc"}, {"TN", "gemm_sycl_register_16x16_k16_wide_tn"},
+                      {"CN", "gemm_sycl_register_16x16_k16_wide_cn"}, {"CT", "gemm_sycl_register_16x16_k16_wide_ct"}}},
     };
     return rows;
 }
@@ -141,15 +152,12 @@ const std::vector<WideRow>& wide_rows() {
 std::string reg_form(Transpose ta, Transpose tb) {
     return std::string(ta == kN ? "N" : "T") + (tb == kN ? "N" : "T");
 }
-// A wide tile's form: its instantiations are NN, ConjTrans-A and ConjTrans-B; a real Trans is a
-// ConjTrans, a complex Trans is neither. "" names no instantiation.
+// A wide tile's form: the exact (op(A), op(B)) for a complex scalar; a real one folds T to C
+// (conj is the identity, and only the C builds are compiled for it).
 template <typename T>
 std::string wide_form(Transpose ta, Transpose tb) {
-    auto conj_like = [](Transpose t) { return t == kC || (!kCx<T> && t == kT); };
-    if (ta == kN && tb == kN) return "NN";
-    if (conj_like(ta) && tb == kN) return "CN";
-    if (ta == kN && conj_like(tb)) return "NC";
-    return "";
+    auto w = [](Transpose t) { return t == kN ? "N" : (kCx<T> && t == kT) ? "T" : "C"; };
+    return std::string(w(ta)) + w(tb);
 }
 
 const RegRow* reg_row(const og::Reg& r) {
@@ -317,18 +325,19 @@ Problem<T> make_problem(const Spec& s) {
     return p;
 }
 
-// potrf's trailing update in one parent: A22 -= L21 L21^H, so B is A's own region (read twice)
-// and C sits below-right of it; all three carry the parent's ld and stride.
+// A panel update in one parent, all three operands at the parent's ld and stride: potrf's
+// A22 -= L21 L21^H (ta = N; B is A's own region, read twice), or geqrf's V^H A22 shape (ta
+// transposed, A = U12 above A22; tb = N reads U12 again, a transposed tb reads L21).
 template <typename T>
 Problem<T> make_panel(Spec s, int parent) {
-    s.tb = kCx<T> ? kC : kT;
-    s.ta = kN;
     s.layout = Layout::Strided;
     Problem<T> p;
     p.s = s;
     const int ld = parent + 5, stride = ld * parent + 9, r0 = 3;
-    p.a = {std::size_t(r0 + s.k), s.m, s.k, ld, stride};                     // L21: rows r0+k.., cols 0..k
-    p.b = p.a;                                                                // B = L21 read as ConjTrans
+    const Region l21{std::size_t(r0 + s.k), s.m, s.k, ld, stride};            // rows r0+k.., cols 0..k
+    const Region u12{std::size_t(s.k) * ld + r0, s.k, s.m, ld, stride};       // rows r0..r0+k, cols k..
+    p.a = s.ta == kN ? l21 : u12;
+    p.b = s.tb == kN ? u12 : l21;
     p.c = {std::size_t(s.k) * ld + r0 + s.k, s.m, s.n, ld, stride};          // A22
     EXPECT_EQ(s.m, s.n) << "a panel update is square";
     init(p, std::size_t(stride) * s.batch);
@@ -588,6 +597,26 @@ TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
     EXPECT_GT(refused, 0);
 }
 
+// The number of (reg or wide config, form) pairs the oracle rows list no instantiation for,
+// counted from the rows alone (no shape, no device budget), so a loop that skips cases is red.
+template <typename T>
+int missing_instantiations() {
+    int missing = 0;
+    for (const C& c : og::candidates<T>())
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                if (const auto* r = std::get_if<og::Reg>(&c)) {
+                    const RegRow* row = reg_row(*r);
+                    missing += !std::is_same_v<T, float> || !row ||
+                               std::find(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) == row->forms.end();
+                } else if (const auto* w = std::get_if<og::Wide>(&c)) {
+                    const WideRow* row = wide_row(*w);
+                    missing += !row || row->trace.count(wide_form<T>(ta, tb)) == 0;
+                }
+            }
+    return missing;
+}
+
 // The guard for the 18 register tiles that used to compute NN on a transposed call: every
 // (config, form) the oracle has no instantiation for throws from the pin as a can_run refusal
 // (not from the launcher), and C is left bit for bit.
@@ -616,7 +645,7 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
                 ++checked;
             }
     }
-    if constexpr (std::is_same_v<T, float>) EXPECT_GE(checked, 18 * 4) << "every NN-only reg tile on every transposed form";
+    EXPECT_GE(checked, missing_instantiations<T>()) << "every (config, form) the oracle rows do not list";
     EXPECT_GT(checked, 0);
 }
 
@@ -722,22 +751,25 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
         EXPECT_EQ(got[i], cases[i].kernel) << name(cases[i].c, cases[i].s);
 }
 
-// Sub-views carrying the parent's ld and stride, as potrf's trailing update issues them
-// (A22 -= L21 L21^H, B the same memory as A), on every candidate that runs the form. The
-// whole parent outside A22 stays bit for bit.
+// Sub-views carrying the parent's ld and stride, as potrf's trailing update (A22 -= L21 L21^H, B
+// the same memory as A) and geqrf's V^H A22 issue them, plus CT, on every candidate that runs the
+// form. The whole parent outside A22 stays bit for bit.
 TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
     using T = typename TestFixture::T;
     int ran = 0;
+    const std::pair<Transpose, Transpose> forms[] = {{kN, kCx<T> ? kC : kT}, {kT, kN}, {kC, kT}};
     for (const C& c : og::candidates<T>())
-        for (auto [mn, k] : {std::pair{96, 32}, std::pair{61, 16}, std::pair{128, 64}}) {
-            Spec s{kN, kN, mn, mn, k, 3, Layout::Strided};
-            s.seed = 300u + mn;
-            auto p = make_panel<T>(s, mn + k + 8);
-            if (!TestFixture::expect_runs(c, p.s) || TestFixture::vendor_word_falls_back(c)) continue;
-            this->run_pinned(c, p);
-            expect_gemm(*this->ctx, p, name(c, p.s) + " (parent-ld panel)");
-            ++ran;
-        }
+        for (auto [ta, tb] : forms)
+            for (auto [mn, k] : {std::pair{96, 32}, std::pair{61, 16}, std::pair{128, 64}}) {
+                Spec s{ta, tb, mn, mn, k, 3, Layout::Strided};
+                s.seed = 300u + mn;
+                auto p = make_panel<T>(s, mn + k + 8);
+                if (!TestFixture::expect_runs(c, p.s) || TestFixture::vendor_word_falls_back(c)) continue;
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, p.s) + " (parent-ld panel)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++ran;
+            }
     EXPECT_GT(ran, 0);
 }
 
@@ -747,10 +779,11 @@ TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
 TYPED_TEST(GemmCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
     int nan_checked = 0;
+    const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kC, kN}, {kT, kN}, {kC, kT}};
     for (const C& c : og::candidates<T>()) {
-        for (Transpose ta : {kN, kC})
+        for (auto [ta, tb] : forms)
             for (auto [m, n, k] : {std::tuple{128, 128, 64}, std::tuple{45, 51, 38}, std::tuple{1, 1, 1}}) {
-                Spec s{ta, kN, m, n, k, 3, Layout::Strided};
+                Spec s{ta, tb, m, n, k, 3, Layout::Strided};
                 s.beta_zero = true;
                 s.nan_c = true;
                 if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_word_falls_back(c)) continue;
@@ -773,7 +806,7 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         if (std::holds_alternative<og::Direct>(c)) continue;
         const bool small = std::holds_alternative<og::Small>(c);
         for (Transpose ta : {kN, kT})
-            for (Transpose tb : {kN, kC}) {
+            for (Transpose tb : kForms) {
                 Spec s{ta, tb, small ? 45 : 72, small ? 40 : 40, small ? 29 : 37, kBatch, Layout::Strided};
                 s.period = 7;
                 s.seed = 777u;
@@ -1008,13 +1041,13 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
 TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
-    const Spec tn{kT, kN, 40, 30, 20, 2, Layout::Strided};
+    const Spec tt{kT, kT, 40, 30, 20, 2, Layout::Strided};  // a form wide 32x32 does not instantiate
     const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=32:n=32:k=16");
     {
-        auto p = make_problem<T>(tn);
+        auto p = make_problem<T>(tt);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
     }
-    auto p = make_problem<T>(tn);
+    auto p = make_problem<T>(tt);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("gemm", C{og::Tiled{}});
                   this->run(p);
@@ -1024,10 +1057,10 @@ TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     const Pin outer("gemm", C{og::Direct{}});
     {
         const Pin inner("gemm", C{og::Tiled{}});
-        auto r = make_problem<T>(tn);
+        auto r = make_problem<T>(tt);
         EXPECT_EQ(traced_choice([&] { this->run(r); }), "tiled");
     }
-    auto r = make_problem<T>(tn);
+    auto r = make_problem<T>(tt);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "direct") << "the inner pin did not restore the outer";
     expect_gemm(*this->ctx, r, "outer direct");
 }

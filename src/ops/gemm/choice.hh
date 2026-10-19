@@ -75,20 +75,38 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {128, 128, 8, 1, 8, 8, 2, {true, false, false, false}, true},  // its own kernel (register_128x128.hh)
 }};
 
-/// One compiled wide config. NN, CN (ConjTrans A) and NC (ConjTrans B) instantiations; a real
-/// Trans is served by a ConjTrans one (conj is the identity), a complex Trans is not.
+/// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.
+constexpr unsigned wide_bit(int a, int b) { return 1u << (3 * a + b); }
+inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kWideNC = wide_bit(0, 2);
+inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
+inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
+inline constexpr unsigned kWideAll = 0x1FF;
+
+/// One compiled wide config and the forms a complex scalar instantiates. A real scalar compiles
+/// only the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
 struct WideCfg {
     int m, n, k, ttm, ttn;
-    bool nn, cn, nc;
+    unsigned forms;
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
+    constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
 };
 inline constexpr std::array<WideCfg, 5> wide_configs{{
-    {64, 64, 16, 4, 4, true, true, true},
-    {128, 32, 16, 4, 4, false, false, true},  // the potrf trailing update, W = 32
-    {32, 128, 16, 4, 4, false, true, false},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, true, false, false},
-    {16, 16, 16, 2, 2, true, false, false},
+    {64, 64, 16, 4, 4, kWideAll},
+    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
+    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
+    {32, 32, 16, 4, 4, kWideAll & ~(kWideTT | kWideTC | kWideCC)},
+    {16, 16, 16, 2, 2, kWideAll & ~(kWideTT | kWideTC | kWideCC)},
 }};
+
+template <class T>
+inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
+
+/// Does config c serve (op(A), op(B)) for scalar T? A real T folds to C (the build it compiles).
+template <class T>
+constexpr bool wide_serves(const WideCfg& c, int a, int b) {
+    if constexpr (is_complex_v<T>) return c.has(a, b);
+    else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
+}
 
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.
 inline constexpr int kSmallMaxDim = 64;
@@ -107,9 +125,6 @@ inline constexpr int kDirectWg = 64;
 inline constexpr int kTiledWg = 256;
 /// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
 inline constexpr std::int64_t kMaxGridBatch = 65535;
-
-template <class T>
-inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
 
 /// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
 template <class T>
@@ -168,8 +183,9 @@ inline constexpr std::array<int, 2> grid_skinny_k{256, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};
 inline constexpr int grid_packed_panel_min = 128;
 inline constexpr std::array<std::string_view, 4> grid_real_forms{"NN", "NT", "TN", "TT"};
-inline constexpr std::array<std::string_view, 3> grid_real_panel_forms{"NN", "NT", "TN"};
-inline constexpr std::array<std::string_view, 6> grid_complex_forms{"NN", "NT", "TN", "NC", "CN", "CT"};
+inline constexpr std::array<std::string_view, 4> grid_real_panel_forms{"NN", "NT", "TN", "TT"};
+inline constexpr std::array<std::string_view, 9> grid_complex_forms{"NN", "NT", "TN", "NC", "CN",
+                                                                     "CT", "TC", "CC", "TT"};
 inline constexpr std::array<std::string_view, 5> grid_complex_panel_forms{"NN", "NT", "NC", "TN", "CN"};
 
 }  // namespace batchlas::ops::gemm

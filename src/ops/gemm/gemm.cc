@@ -75,9 +75,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta,
 // Does a wide config instantiate this form? A real Trans is served by a ConjTrans instantiation.
 template <class T>
 bool wide_form(const WideCfg& c, Transpose ta, Transpose tb) {
-    auto conj_like = [](Transpose t) { return t == Transpose::ConjTrans || (!is_complex_v<T> && t == Transpose::Trans); };
-    const bool na = ta == Transpose::NoTrans, nb = tb == Transpose::NoTrans;
-    return (c.nn && na && nb) || (c.cn && conj_like(ta) && nb) || (c.nc && na && conj_like(tb));
+    auto op = [](Transpose t) { return t == Transpose::NoTrans ? 0 : t == Transpose::Trans ? 1 : 2; };
+    return wide_serves<T>(c, op(ta), op(tb));
 }
 
 inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {

@@ -1399,16 +1399,33 @@ TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     }
 }
 
-// The small wide tiles are NN-only, so can_run refuses every transposed form and
-// the pin throws (it used to fall back to Tiled16 silently).
-TYPED_TEST(GemmTest, SmallWideTilesRefuseTransposedRequest) {
+// The small wide tiles instantiate one transposed operand (NT, NC, TN, CN) and CT, but not
+// TT, TC or CC: can_run refuses those for every scalar (a real TT folds to CC) and the pin
+// throws (it used to fall back to Tiled16 silently).
+TYPED_TEST(GemmTest, SmallWideTilesRefuseBothTransposedRequest) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    const Transpose pairs[][2] = {{Transpose::ConjTrans, Transpose::NoTrans},
-                                  {Transpose::NoTrans, Transpose::Trans},
-                                  {Transpose::Trans, Transpose::ConjTrans}};
+    const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    const Transpose pairs[][2] = {{T, Cj}, {T, T}, {Cj, Cj}};
     for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
         for (const auto& p : pairs) ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
+}
+
+// The small wide tiles on their transposed forms: ragged in every dimension, k past two staged
+// blocks, a sub-view of a wider parent, beta != 0. A real CT is a TT (CC build, not here).
+TYPED_TEST(GemmTest, SmallWideTilesRunTheirTransposedForms) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    const Transpose N = Transpose::NoTrans, T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}};
+    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
+        for (const auto& p : pairs) {
+            SCOPED_TRACE(std::string(kname) + " ta=" + std::to_string(int(p[0])) + " tb=" + std::to_string(int(p[1])));
+            if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
+                ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
+            else
+                RunForcedWideTransposedCheck<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1], ScalarType(-1), 300);
+        }
 }
 
 // The register launchers hard-wire OpA/OpB, so running one on a form it was not
@@ -1635,31 +1652,41 @@ TYPED_TEST(GemmTest, WideTransposedCN32x128GeqrfPanelShape) {
 // single config able to serve potrf_blocked.cc's kTrailingTransB<T>, which is
 // ConjTrans for complex and Trans for real. For a COMPLEX scalar the same
 // substitution conjugates an operand that must not be conjugated and returns a
-// plausible wrong matrix, so the pin must be refused (it used to fall back).
-// Removing the guard leaves real passing and turns complex red.
+// plausible wrong matrix, so a complex Trans runs its own Trans build: the
+// complex data here has nonzero imaginary parts, so serving it from the
+// ConjTrans build turns complex red and leaves real passing. A form the config
+// does not list (TT on the panel tiles; a real TT folds to CC) is refused.
 // ---------------------------------------------------------------------------
-TYPED_TEST(GemmTest, WideTransposedRealTransWideningAndComplexRefusal) {
+TYPED_TEST(GemmTest, WideTransposedTransBServedByItsOwnBuild) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value)
-        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::NoTrans,
-                                     Transpose::Trans);
-    else
-        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
-                                                          Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+    RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
+                                             Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::Trans,
+                                 Transpose::Trans);
 }
 
-// The mirror of the above on the A leg: a Trans request against a ConjTrans
-// instantiation of the CN tile.
-TYPED_TEST(GemmTest, WideTransposedRealTransWideningOnALeg) {
+// The mirror of the above on the A leg, on the CN tile.
+TYPED_TEST(GemmTest, WideTransposedTransAServedByItsOwnBuild) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value)
-        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::Trans,
-                                     Transpose::NoTrans);
-    else
-        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
-                                                          Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+    RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
+                                             Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::ConjTrans,
+                                 Transpose::ConjTrans);
+}
+
+// Both operands transposed on the 64x64 tile, which lists all nine forms: complex TT, TC, CT
+// and CC are four builds; a real one runs the CC build for every pair. Ragged, parent ld.
+TYPED_TEST(GemmTest, WideTransposedBothOperands64) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    for (const auto& p : {std::pair{T, T}, std::pair{T, Cj}, std::pair{Cj, T}, std::pair{Cj, Cj}}) {
+        SCOPED_TRACE("ta=" + std::to_string(int(p.first)) + " tb=" + std::to_string(int(p.second)));
+        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90, p.first,
+                                                 p.second, ScalarType(-1));
+    }
 }
 
 // A NoTrans request against a config with only transposing instantiations is

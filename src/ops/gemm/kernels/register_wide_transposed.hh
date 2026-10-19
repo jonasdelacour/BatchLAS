@@ -74,8 +74,9 @@ BATCHLAS_UNROLL_FULL
 // A <ConjTrans, NoTrans> launcher handed a Trans operand silently drops the
 // conjugation and returns a plausible wrong matrix, so call sites gate on the
 // exact form -- with ONE licensed widening: for a real scalar conj is the
-// identity, so ConjTrans and Trans instantiate each other. That widening is
-// what lets one variant serve potrf_blocked.cc's kTrailingTransB<T>.
+// identity, so ConjTrans and Trans instantiate each other. A real scalar
+// compiles only the ConjTrans builds (choice.hh wide_serves); a complex one
+// compiles Trans and ConjTrans apart and must match exactly.
 template <typename T>
 inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
     if (requested == instantiated) {

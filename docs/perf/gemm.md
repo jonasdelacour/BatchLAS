@@ -31,7 +31,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
 | `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:115-120`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
-| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (a real `Trans` uses a `ConjTrans` instance; a complex `Trans` is refused), `max_wg >= cfg->threads()` (`:116-120`) |
+| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
 The common native term (`gemm.cc:97-101`):
@@ -58,10 +58,14 @@ Forms are folded after the real-scalar C→T fold:
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
 | `reg:m=128:n=64:k=32:u=4`, `reg:m=128:n=64:k=32:u=2` | NN |
-| `wide:m=64:n=64:k=16` | NN, CN, NC |
-| `wide:m=128:n=32:k=16` | NC |
-| `wide:m=32:n=128:k=16` | CN |
-| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | NN (see [blackwell.md](blackwell.md)) |
+| `wide:m=64:n=64:k=16` | all nine complex forms; real NN, NT, TN, TT |
+| `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
+| `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
+| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
+
+The wide forms are the complex instantiations; a real scalar compiles only their N/C builds, so a real form is
+served when its C-folded form is listed. See [GEMM: wide instantiations in every transpose
+form](#gemm-wide-instantiations-in-every-transpose-form).
 
 Removed with no alias: the pin-only `Tiled128x32RegisterK32{S1U1,S2U2,S2U2TT8x4,S2U2TT4x8}`, the experimental
 `Tiled128x32RegisterK32{Persistent,SplitK4,S1U4}` and `Tiled128x64RegisterK32LargeTT4x8{,U2}`, and the
@@ -638,6 +642,41 @@ TRSM added division (Smith's algorithm, not \f$1/(c+di) = (c-di)/(c^2+d^2)\f$, w
 POTRF uses real-component helpers (`dev_real`, `dev_div_real`, ...) because a Cholesky diagonal is real. The
 division/reciprocal asymmetry is deliberate: reference `?trsm` divides and reference `?potf2` multiplies by a
 reciprocal, and unifying them would move one off its LAPACK rounding.
+
+## GEMM: wide instantiations in every transpose form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19, `cuInit` 999 on the RTX 4090 box). Nothing here
+is a timing; the A/B and the regenerated sm_89 table are pending.
+
+Before this change `WideCfg` carried only `nn, cn, nc`, so every complex NT, TN, CT, TC, CC and TT call fell to
+`tiled` (one output per work-item, Annex-G complex multiply), about 8 TFLOP/s against cuBLAS's 45-51 on the
+2026-10-18 coarse run: cfloat NT/TN/CT was 55.8% of the summed log-loss against the vendor. The kernel in
+`register_wide_transposed.hh` already takes `OpA` and `OpB` apart (`TransA`, `ConjA`, `TransB`, `ConjB`), so the
+change is new instantiations only:
+
+* `WideCfg::forms` is a 3×3 bit mask over (op(A), op(B)) ∈ {N, T, C}² (`wide_bit(a, b) = 1 << (3a + b)`).
+  `wide_serves<T>` is the one rule: a complex form must be listed exactly; a real scalar folds T to C and compiles
+  only the N/C builds (conj is the identity), so a real TT runs the CC build of the 64×64 tile.
+* Masks: 64×64 all nine; the panel tiles 128×32 and 32×128 their issued form, its mirror and the matching `Trans`
+  forms (NC, NT, TN, CN); 32×32 and 16×16 every form but TT, TC and CC.
+* Rows are only appended (`wide_variant` reads a table indexed by row and form, `static_assert`ed to one row per
+  `wide_configs` row), and a form a row does not list is a `static_assert` in `launch_wide_cfg`, so can_run, the
+  launcher and the trace name cannot drift apart.
+* The grid gains complex TC, CC, TT squares and real TT panels, so a table can rank the new forms.
+
+**Build cost**, `libbatchlas_sycl` device link, GPU-only tree (`BATCHLAS_CPU_TARGET=none`, sm_89), link alone (the
+`.so` removed and relinked, objects current), two runs each: before 36.4-36.9 s; all nine forms on 32×32 and 16×16
+too, 49.9-50.2 s (+37%); TT, TC and CC kept off the two small tiles, 47.0 s (+28%). The plan's ceiling was +30%.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only, no GPU needed): zero spill on all 604 entries of
+`libbatchlas_sycl`, and every `GemmWideTransposedKernel` passes the sm_89 four-partition gate. The new forms sit
+where the old CN/NC instances do: cfloat 64-72, cdouble 124-136 (32×32 CT the highest), real CC 53 (float) and 68
+(double) on 64×64.
+
+**Pending:** the per-cell A/B (cfloat TN 768³, NT 512³, CT 512³ strided, NT 256²×64; float TT 512³ against
+`reg:m=64:n=64:k=16:u=1`) and a coarse re-race. The 16-way
+shared-store bank conflict of a transposed A operand (the CN tile today) applies to every new T/C A form; that is
+WP-D's work, not this change's.
 
 ## GEMM: the register-tiled launcher table
 

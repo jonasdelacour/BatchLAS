@@ -488,12 +488,21 @@ TEST(TunedTables, GemmTranscribedTablesHoldExactlyTheChoiceGrid) {
                 want.insert(std::string(1, f[0]) + " " + f[1] + " " + layout + " " + std::to_string(m) + " " +
                             std::to_string(n) + " " + std::to_string(k) + " " + std::to_string(b));
         };
+        // Grid forms added after the transcription; the regenerated table holds them.
+        // evidence: docs/perf/gemm.md#gemm-wide-instantiations-in-every-transpose-form
+        const std::vector<std::string_view> later = cplx ? std::vector<std::string_view>{"TC", "CC", "TT"}
+                                                         : std::vector<std::string_view>{};
+        const std::vector<std::string_view> later_panel = cplx ? later : std::vector<std::string_view>{"TT"};
+        auto in = [](const std::vector<std::string_view>& v, std::string_view f) {
+            return std::find(v.begin(), v.end(), f) != v.end();
+        };
         for (std::string_view f : forms) {
+            if (in(later, f)) continue;
             for (int s : gemm::grid_square) {
                 add(f, "strided", s, s, s);
                 add(f, "packed", s, s, s);
             }
-            if (std::find(panel.begin(), panel.end(), f) == panel.end()) continue;
+            if (!in(panel, f) || in(later_panel, f)) continue;
             for (int m : gemm::grid_panel_mn)
                 for (int n : gemm::grid_panel_mn)
                     for (int k : gemm::grid_panel_k) {
