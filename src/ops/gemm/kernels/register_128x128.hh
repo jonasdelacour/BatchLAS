@@ -564,8 +564,9 @@ struct Gemm128x128Inlined {
 
 // The copy_async pipeline's wrapper also declares its work-group size: ptxas sees .reqntid and
 // holds the two-group cap (128 registers); the launch bound alone left staged predicated NN, TN
-// and TT at 155-159 (one group per SM).
-#if !BATCHLAS_SYCL_IMPL_ACPP
+// and TT at 155-159 (one group per SM). NVPTX device code only, like BATCHLAS_LAUNCH_BOUNDS (none
+// under acpp: speed only). Local, not in kernel_attrs.hh: that header is in every op's tuning hash.
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
 #define BATCHLAS_GEMM_REQD_WG(n) [[sycl::reqd_work_group_size(1, 1, n)]]
 #else
 #define BATCHLAS_GEMM_REQD_WG(n)

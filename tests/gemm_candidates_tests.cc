@@ -1309,7 +1309,8 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
 
 // WP-N2, the four-stage zero-filled copy_async pipeline of reg 128x128x8 u4 (predicated leg) in every
 // real form, batch 1024 repeating 7 problems, each item bit-identical to its representative. Every view
-// is predicated (odd bases or odd ld). Slab counts 1, 2, 3, 4, 5, 8, 9 and 17 straddle the prologue
+// is predicated: odd bases or odd ld, and one 16-byte-aligned view whose ragged m, n alone refuse the
+// aligned leg (an aligned-base shortcut in the pipeline is caught there). Slab counts 1, 2, 3, 4, 5, 8, 9 and 17 straddle the prologue
 // depth (3 slabs), the unroll by 4 and the staged/direct epilogue edge (k = 64 / 69); k = 5, 37 and 69
 // end in a partial slab and poison with NaN (a dropped k bound times the other operand's zero is a
 // silent -0 with finite poison); 300 x 200 adds m-edge, n-edge and corner groups. Then beta = 0 with
@@ -1332,7 +1333,7 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
                             {256, 128, 32, Layout::Strided, false}, {300, 200, 37, Layout::Gap1, true},
                             {128, 256, 40, Layout::OddLd, false},   {256, 128, 64, Layout::Strided, false},
                             {128, 256, 69, Layout::Gap1, true},     {300, 200, 72, Layout::Strided, false},
-                            {128, 128, 136, Layout::OddLd, false}};
+                            {128, 128, 136, Layout::OddLd, false},  {300, 200, 40, Layout::Padded, false}};
         const Leg nan_legs[] = {{128, 256, 24, Layout::Gap1, false}, {256, 128, 72, Layout::Strided, false}};
         int ran = 0;
         auto check = [&](const Leg& leg, Transpose ta, Transpose tb, bool nan_c) {
@@ -1357,7 +1358,7 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
                 if (::testing::Test::HasFatalFailure()) return;
             }
         }
-        EXPECT_EQ(ran, 65);
+        EXPECT_EQ(ran, 70);
     }
 }
 

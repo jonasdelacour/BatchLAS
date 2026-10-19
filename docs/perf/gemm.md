@@ -1438,12 +1438,16 @@ so rebuild `batchlas_sycl` first):
 
 - The launch bound alone does not cap registers: staged predicated NN, TN and TT ran 155-159 (one group per SM),
   measured 2.2-2.4× vendor. The pipeline's wrapper adds `sycl::reqd_work_group_size(1, 1, 256)` (`.reqntid`), and
-  ptxas then holds 128.
+  ptxas then holds 128. Like `BATCHLAS_LAUNCH_BOUNDS` it is NVPTX device code only (the spir64 CPU AOT never sees
+  it), but defined in `register_128x128.hh`, not `src/sycl/kernel_attrs.hh`: that header is in every op's tuning
+  hash, so moving it there staled all 19 tables (measured: gemm, potrf, posv, trsm pins all moved). AdaptiveCpp
+  drops both attributes, so an acpp CUDA build presumably runs this leg at one group per SM (speed only; not
+  probed).
 - At 128, staged NN and NT spilled 72 and 52 B while each copy computed `ptr + k0 * ld`. With every operand pointer
   bumped one slab per issue, NT fits and NN spills 12 B, so the NN instance takes the direct epilogue (derived in
   `launch_register_128x128_k8`, never a field).
 - Shipped: all 7 u4 instances (predicated only; NN has no staged one) 117-127 registers, 0 spill, 0 stack.
-  u1 is unchanged (125-139). The only spilling gemm entries are the 50 complex<double> wide-transposed ones.
+  u1 is unchanged (125-139). Rebased on the spill-free complex<double> wide-transposed tiles: total gemm spilling 0.
 
 | cell (layout=strided: ld = m + 1, odd) | u1 | wide 64×64 | **u4** | vendor ms |
 |---|---|---|---|---|
@@ -1454,8 +1458,11 @@ so rebuild `batchlas_sycl` first):
 | NN 1448×128×32 b128 (two runs) | 1.663×, 1.660× | **1.507×, 1.483×** | 1.591×, 1.568× | 0.133 |
 | NN 384×384×48 b128 | 1.276× | **1.136×** | 1.437× | 0.129 |
 
-u4 wins 2-8% where k ≥ 64; at k = 32-48 NN (the direct epilogue) loses to u1 or wide. Both remain table choices
-(layout is a key), so a retune decides. ncu on NN 256×512×128 (u4): 979 GB/s, 67% DRAM; the top stalls are
+u4 wins 8% and 4% on two cells (NN 256×512×128, NT 1218×128×96, the latter borderline at 16 samples); the rest tie
+(under the 5% floor) or lose to u1 or wide (k = 32-48 NN, direct epilogue). **u4 is unranked:** no row of
+`tuned/gemm.*.txt` names `reg:m=128:n=128:k=8:u=4`, so Auto never runs it until the float `layout=strided` rows are
+retuned. On an aligned view u4 is an alias of u1's kernel: a packed cell times the same code twice, and a u4 row
+there would report `u=4` for u1's kernel. ncu on NN 256×512×128 (u4): 979 GB/s, 67% DRAM; the top stalls are
 `beta * C` waiting on the predicated leg's scattered C loads (direct epilogue), not the mainloop.
 
 Test: `GemmCandidates.Reg128x128CopyAsyncPipelineEverySlabCountAtSaturatingBatch` (5 forms, odd-base or odd-ld
@@ -1469,6 +1476,13 @@ WP-I test run for u4 as well as u1. Deliberate breaks, run on sm_120 (first red 
 | drop the B^T pointer bump | NT 256×128×16 (2 slabs) | every NN leg, NT k = 5, 8 |
 | B's k bound dropped (`lim` = 4) | NN k = 37, 5 (NaN) | NN k = 72 |
 | A's row bound dropped (`lim` = 128) | none: rows past m feed only discarded accumulators | all |
+| drop the A pointer bump (packet operand, NN/NT) | NN 256×128×16 (2 slabs); WP-I test NN 256² k = 72 | NN k = 5, 8 |
+| A's k bound dropped (packet operand, `lim = m - (m0 + a_m)`) | NN k = 5 (NaN); WP-I test NN k = 37 (NaN) | WP-I NN k = 72 |
+
+A 16-byte-aligned ragged view (Padded 300×200×40) is in the test too, so an aligned-base shortcut in the pipeline
+is caught. **Accepted assumption:** a zero-filled copy (`src-size` 0) still names its computed address, which can
+lie past the allocation (rows ≥ m, up to ~127·ld; a slab bumped past k). PTX reads no bytes at `src-size` 0
+(CUTLASS relies on the same); the tests use one poison-padded buffer, so an unmapped address is never hit.
 
 ## GEMM: the register-tiled launcher table
 
