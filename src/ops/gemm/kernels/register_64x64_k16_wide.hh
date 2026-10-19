@@ -94,8 +94,10 @@ inline void staged_c_store(const sycl::nd_item<3>& item, D* lo, D* hi, D* Cb, in
     constexpr int CW = (LoElems + HiElems) / TileM;
     constexpr int Passes = (TileN + CW - 1) / CW;
     // Batch: prior loads in flight per thread. The accumulators are in the stage by now, so a
-    // caller with registers to spare (wide v2) takes a whole chunk in one round trip.
+    // caller with registers to spare (wide v2) takes a whole chunk in one round trip, and only
+    // that Batch switches to the row map below; any other Batch keeps the element map.
     // evidence: docs/perf/gemm.md#gemm-wp-q-a-one-round-staged-epilogue-for-wide-v2
+    constexpr bool kWholeChunk = Batch > 2 && Threads % TileM == 0 && Batch * (Threads / TileM) == CW;
     auto slot = [&](int c, int r) -> D* {
         const int e = c * TileM + r;
         return e < LoElems ? lo + e : hi + (e - LoElems);
@@ -106,7 +108,7 @@ inline void staged_c_store(const sycl::nd_item<3>& item, D* lo, D* hi, D* Cb, in
         const int cw = TileN - c0 < CW ? TileN - c0 : CW;
         put(c0, cw, slot);
         item.barrier(sycl::access::fence_space::local_space);
-        if constexpr (Batch > 2 && Threads % TileM == 0) {
+        if constexpr (kWholeChunk) {
             // A thread keeps one row and every Step-th column; Batch columns per round trip. nc:
             // the chunk's columns inside C, none on a row outside it.
             constexpr int Step = Threads / TileM;
@@ -840,6 +842,7 @@ BATCHLAS_UNROLL_FULL
         }
     }
 };
+#undef BATCHLAS_WIDE_V2_REQD_WG
 
 // The leg predicate: may every A and B load be one 16-byte move? Bases 16-byte aligned, ld and
 // batch stride whole granules. Never a routing term; C's band store is decided per group.

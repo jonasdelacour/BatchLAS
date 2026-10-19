@@ -1499,7 +1499,7 @@ at 86%.
 | piece | rule |
 |---|---|
 | batch | `staged_c_store<…, Batch>`; wide v2 passes `EpiBatch = 4·TileK·64/256` (16 at k = 16, 8 at k = 8): one round trip per chunk. The default 2 keeps the old loop for `launch_wide_transposed` and the NN kernel |
-| addressing | `Batch > 2`: a thread keeps one row (`tid % 64`) and every 4th column, so a load is `p + b·4·ldc`. `nc` (columns inside C, 0 on a row outside m) is the only guard. Priors load only when beta ≠ 0 (a NaN C at beta = 0 is never read) |
+| addressing | only a whole-chunk Batch (`Batch > 2` and `Batch·Threads/64 = CW`; any other Batch keeps the element map): a thread keeps one row (`tid % 64`) and every 4th column, so a load is `p + b·4·ldc`. `nc` (columns inside C, 0 on a row outside m) is the only guard. Priors load only when beta ≠ 0 (a NaN C at beta = 0 is never read) |
 | launch bound | `[[sycl::reqd_work_group_size(1, 1, 256)]]` on `GemmWide64Body::operator()`. Without it the bound was ignored ([below](#gemm-wp-q-the-launch-bound-was-ignored)) |
 
 | cell (b128 unless noted) | arm | parent / vendor | new / vendor | new / parent |
@@ -1522,15 +1522,16 @@ at 86%.
 | 16-byte leg: float TN packed 2048×1024×32 | k16 | 1.03 | 1.03 | 1.00 |
 | 16-byte leg: float TT packed 1024×1024×32 | k8 | 0.97 | 0.97 | 0.99 |
 | 16-byte leg: float NN packed 512³ b2048 | k16 | 1.40 | 1.39 | 1.00 |
-| 16-byte leg: cfloat NC packed 512×512×64 | k8 | 0.96 | 0.98 | 1.02 |
+| 16-byte leg: cfloat NC packed 512×512×64 (16 reps) | k8 | 0.96 | 0.97 | 1.013 |
 | 16-byte leg: cfloat NN packed 1024³ | k16 | 1.15 | 1.15 | 1.00 |
 
 Both passes of every cell agree within 3%. The win is the small-k cells, where C traffic (2mn) dwarfs A and B
 ((m+n)k). Large k (float TN packed k = 362, cfloat 1024³) is unchanged: the gap there is the mainloop.
 
 The complex<float> 16-byte leg lost 0.6-1.3% in every rerun: NC packed 512×512×64 k8 1.013 (16 reps),
-NN packed 1024³ k16 1.006, CT packed 512³ k8 1.006. The likely cause is the now-applied launch bound,
-which moves its register allocation (k8: 124-128 → 96). Not resolved.
+NN packed 1024³ k16 1.006, CT packed 512³ k8 1.006. Timed apart, half of it is the now-applied launch
+bound, which moves its register allocation (k8: 124-135 → 96), and half the epilogue
+([split](#gemm-wp-q-epilogue-and-bound-timed-apart)). Not resolved.
 
 Tests: the existing wide v2 suites (`WideV2EveryFormAtSaturatingBatch`, `WideK8SlabStraddles…`,
 `WideV2TileAndSlabEdgesUnderNaNPoison`, `CoalescedCEpilogueEveryTileAtSaturatingBatch`) already run the
@@ -1539,6 +1540,11 @@ Deliberate breaks, run on the GPU (filter: those four plus `PinnedCandidatesEver
 
 - store guard `< nc` → `< cw` (writes past n and m): the binary aborts in the first float
   `PinnedCandidatesEveryFormShapeAndLayout`.
+- row term only, `nc = lim` (rows past m written into the ld gap; review follow-up, full binaries): no
+  abort. `gemm_candidates_tests` red 33 (the wide v2 and C-epilogue suites, `BetaZeroDoesNotReadC`,
+  `ParentLdPanelUpdate`, `GridCeilingIsACanRunTerm`, `SaturatingBatchIsBitIdentical…`, `PinnedRun…`, and
+  complex `AutoReadsEveryKeyField`: every case with a ragged m on the staged group), `gemm_tests` red 21 (the
+  forced wide ragged and sub-view cases), float, complex<float> and complex<double> alike.
 - priors read at beta = 0: red exactly `WideV2EveryForm`, `WideK8Slab` and `CoalescedCEpilogue` for float,
   complex<float> and complex<double> (their NaN-C cases); 9 tests.
 - column step `4·ldc` → `4·(ldc | 1)`: red in the 16 tests with an even-ld staged group (float,
@@ -1560,8 +1566,35 @@ count to 24 (the 128x128 functor, untouched here). Registers (`scripts/register_
 
 Without the bound the new epilogue pushed complex<float> k8 NT/NC/TT to 130-135 registers (one group per
 SM). With it: zero spill on every gemm entry except the 50 known complex<double> `GemmWideTransposedKernel`
-ones. float at 4 groups per SM (`kMinGroupsPerCu = 4`, 64 registers, no spill) measured 0.99-1.03 of 3 groups
+ones (0 after the rebase onto the WP-K spill fix). float at 4 groups per SM (`kMinGroupsPerCu = 4`, 64 registers, no spill) measured 0.99-1.03 of 3 groups
 on 8 cells, so the bound stays 3.
+
+The other users of `BATCHLAS_LAUNCH_BOUNDS` (128x128 gemm, getrf/gesv/posv tiny) still ignore it:
+[known-defects #20](../design/known-defects.md#defect-20-batchlas_launch_bounds-emits-no-maxntid-so-ptxas-ignores-the-bound).
+sm_89: nothing was probed or timed there. Every wide v2 row in the sm_89 tables was raced with no bound in
+effect, so treat them as a hypothesis until the retune. The gemm kernel hash moved, so the sm_120 and sm_89
+gemm tables record a stale hash until then.
+
+### GEMM: WP-Q, epilogue and bound timed apart
+
+Review follow-up, same machine and protocol (8 reps, 16 for the 16-byte cell, two passes in alternated
+order). Three builds: the parent; the new epilogue with the bound still ignored (`reqd_work_group_size`
+removed); WP-Q. new / old per step:
+
+| cell (b128) | arm | epilogue alone | bound alone |
+|---|---|---|---|
+| float TN strided 2048×1024×32 | k16 | 0.753 | 1.013 |
+| float NN strided 1218×128×8 | k8 | 0.848 | 0.944 |
+| float TT packed 362×512×8 | k8 | 0.801 | 0.948 |
+| cfloat NN strided 256×512×32 | k16 | 0.799 | 1.013 |
+| cfloat NC strided 64×1448×8 | k8 | 0.695 | 1.022 |
+| 16-byte leg: cfloat NC packed 512×512×64 | k8 | 1.006 | 1.006 |
+
+The epilogue is the win. The bound alone helps float k8 (56-69 → 79-80 registers, 5-6%) and costs
+complex<float> 1-2%. complex<float> at one group per SM (`kMinGroupsPerCu = 1`, k16 138-150 / k8 126-140
+registers) was tried instead: new / 2-group bound 1.16 on CN strided 1448×64×16, 1.03 on NN strided
+256×512×32, 0.97 on NC packed 512×512×64 k8 and on NN packed 1024³ (12 reps; 4 at 1024³). Mixed, so 2 groups
+stays.
 
 ### GEMM: WP-Q, element-leg loads (negative)
 

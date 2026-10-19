@@ -33,6 +33,7 @@ closed and kept only for numbering.
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
 | 19 | `src/ops/potrf/potrf.cc` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
+| 20 | `src/sycl/kernel_attrs.hh` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers and the 128x128 gemm |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -373,6 +374,23 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `potrf_cta_max_n_for_slm(budget)`. With the vendor family absent nothing else is runnable. On CUDA
   the 97,280 B budget puts the ceiling higher, and a vendor build still has the `vendor` family.
 - **Fix needs:** an Upper arm for `lpanel` or `blocked` (or a transpose into the Lower path).
+- **Status:** open.
+
+## Defect 20: `BATCHLAS_LAUNCH_BOUNDS` emits no `.maxntid`, so ptxas ignores the bound
+
+- **Symptom:** the device link prints `.minnctapersm is ignored when neither .maxntid nor .reqntid
+  is specified` for every functor that uses the macro without a fixed launch size. Counted with
+  `scripts/register_probe.sh` on sm_120 (2026-10-19): 149 in `batchlas_extensions_cta` (the only
+  users there are `getrf_tiny.cc:89`, `gesv_tiny.cc:99` and `posv_tiny.cc:94`) and 24 in
+  `batchlas_sycl` (`register_128x128.hh:199,545`). Right answers; register counts are uncapped.
+- **Cause:** `intel::max_work_group_size(1, 1, N)` in the macro (`src/sycl/kernel_attrs.hh`) lowers
+  to no `.maxntid` on NVPTX with this DPC++, and `.minnctapersm` alone is dropped.
+- **Workaround:** a functor with a fixed launch adds `[[sycl::reqd_work_group_size(1, 1, N)]]`
+  (`.reqntid`), as wide v2 does
+  ([gemm.md](../perf/gemm.md#gemm-wp-q-the-launch-bound-was-ignored)).
+- **Fix needs:** the macro fixed, or `reqd_work_group_size` on each remaining functor, then an A/B
+  and register probe per kernel: an applied bound moves registers and routing windows, and the
+  tiny-solver tables were tuned with no bound in effect. Re-pins the potrf/posv/trsm kernel hashes.
 - **Status:** open.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
