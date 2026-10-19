@@ -75,9 +75,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta,
 // Does a wide config instantiate this form? A real Trans is served by a ConjTrans instantiation.
 template <class T>
 bool wide_form(const WideCfg& c, Transpose ta, Transpose tb) {
-    auto conj_like = [](Transpose t) { return t == Transpose::ConjTrans || (!is_complex_v<T> && t == Transpose::Trans); };
-    const bool na = ta == Transpose::NoTrans, nb = tb == Transpose::NoTrans;
-    return (c.nn && na && nb) || (c.cn && conj_like(ta) && nb) || (c.nc && na && conj_like(tb));
+    auto op = [](Transpose t) { return t == Transpose::NoTrans ? 0 : t == Transpose::Trans ? 1 : 2; };
+    return wide_serves<T>(c, op(ta), op(tb));
 }
 
 inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
@@ -118,7 +117,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads();
+            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+                   d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
         [&](Vendor) { return d.has_vendor; },
     }, c);
@@ -130,10 +130,7 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Direct) { return sycl_gemm::gemm_direct<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](Tiled) { return sycl_gemm::gemm_tiled<T>(q, A, Bm, C, alpha, beta, ta, tb); },
-        [&](Small) -> Event {
-            if constexpr (!is_complex_v<T>) return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb);
-            else throw batchlas::unsupported("gemm: small has no complex instantiation");
-        },
+        [&](Small) { return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](const Reg& r) -> Event {
             if constexpr (std::is_same_v<T, float>)
                 return sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, C, alpha, beta, ta, tb);

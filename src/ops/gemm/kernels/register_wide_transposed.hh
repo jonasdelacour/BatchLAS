@@ -44,6 +44,7 @@ using batchlas::sycl_device::dev_conj;
 using batchlas::sycl_device::dev_is_zero;
 using batchlas::sycl_device::fma_acc;
 using wide_scalar::lin_epi;
+using wide_scalar::staged_c_store;
 using wide_scalar::Vec16;
 using wide_scalar::vec_ref;
 
@@ -74,8 +75,9 @@ BATCHLAS_UNROLL_FULL
 // A <ConjTrans, NoTrans> launcher handed a Trans operand silently drops the
 // conjugation and returns a plausible wrong matrix, so call sites gate on the
 // exact form -- with ONE licensed widening: for a real scalar conj is the
-// identity, so ConjTrans and Trans instantiate each other. That widening is
-// what lets one variant serve potrf_blocked.cc's kTrailingTransB<T>.
+// identity, so ConjTrans and Trans instantiate each other. A real scalar
+// compiles only the ConjTrans builds (choice.hh wide_serves); a complex one
+// compiles Trans and ConjTrans apart and must match exactly.
 template <typename T>
 inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
     if (requested == instantiated) {
@@ -301,12 +303,62 @@ BATCHLAS_UNROLL_FULL
                     item.barrier(sycl::access::fence_space::local_space);
                 }
 
-                // Predicated scalar epilogue only: these tiles MATCH a
-                // panel width, so the n edge is partial by construction at the
-                // shapes the drivers issue and the 64x64 NN kernel's banded
-                // 16-byte store would never fire. O(TileM * TileN) per group
-                // against O(TileM * TileN * k) multiplies.
+                // Per group: the 16-byte band store when this tile is inside
+                // C with 16-byte columns and a band is one granule; otherwise
+                // staged through sa/sb (lanes WbM rows apart would store one
+                // element each), except at VecN == 1, where that scalar store
+                // is the band store. Same rule as the 64x64 NN kernel.
                 const bool beta_zero = dev_is_zero(beta_d);
+                if constexpr (VecN > 1) {
+                    if constexpr (WbM == VecN) {
+                        const bool c_vec = m0 + TileM <= m && n0 + TileN <= n &&
+                            ldc % VecN == 0 && reinterpret_cast<std::uintptr_t>(Cb) % 16u == 0;
+                        if (c_vec) {
+BATCHLAS_UNROLL_FULL
+                            for (int bm = 0; bm < NBM; ++bm) {
+                                const int row = m0 + bm * MSep + ty * WbM;
+BATCHLAS_UNROLL_FULL
+                                for (int j = 0; j < TTN; ++j) {
+                                    const int col = n0 + (j / WbN) * NSep + tx * WbN + j % WbN;
+                                    D* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
+                                    Vec16<D> out;
+                                    Vec16<D> prior{};
+                                    if (!beta_zero) prior = vec_ref(const_cast<const D*>(p));
+BATCHLAS_UNROLL_FULL
+                                    for (int w = 0; w < VecN; ++w) {
+                                        out.v[w] = lin_epi(alpha_d, beta_zero ? D{} : beta_d,
+                                                           accum[bm * WbM + w][j], prior.v[w]);
+                                    }
+                                    vec_ref(p) = out;
+                                }
+                            }
+                            return;
+                        }
+                    }
+                    staged_c_store<TileM, TileN, Threads, TileK * AStride, TileK * BStride>(
+                        item, sa, sb, Cb, ldc, m0, n0, m, n, tid, alpha_d, beta_d, beta_zero,
+                        [&](int c0, int cw, auto slot) {
+BATCHLAS_UNROLL_FULL
+                            for (int bm = 0; bm < NBM; ++bm) {
+BATCHLAS_UNROLL_FULL
+                                for (int j = 0; j < TTN; ++j) {
+                                    const int c = (j / WbN) * NSep + tx * WbN + j % WbN - c0;
+                                    if (c < 0 || c >= cw) continue;
+                                    D* s = slot(c, bm * MSep + ty * WbM);
+                                    if constexpr (WbM == VecN) {
+                                        Vec16<D> v;
+BATCHLAS_UNROLL_FULL
+                                        for (int w = 0; w < WbM; ++w) v.v[w] = accum[bm * WbM + w][j];
+                                        vec_ref(s) = v;
+                                    } else {
+BATCHLAS_UNROLL_FULL
+                                        for (int w = 0; w < WbM; ++w) s[w] = accum[bm * WbM + w][j];
+                                    }
+                                }
+                            }
+                        });
+                    return;
+                }
 BATCHLAS_UNROLL_FULL
                 for (int bm = 0; bm < NBM; ++bm) {
 BATCHLAS_UNROLL_FULL

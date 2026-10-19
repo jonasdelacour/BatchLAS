@@ -29,9 +29,9 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 |---|---|---|---|
 | `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:115-120`) |
+| `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
-| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (a real `Trans` uses a `ConjTrans` instance; a complex `Trans` is refused), `max_wg >= cfg->threads()` (`:116-120`) |
+| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
 The common native term (`gemm.cc:97-101`):
@@ -44,24 +44,29 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 ```
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:109`) is native only through
-`small`. Candidate counts: float 19, double 9 (no `reg`), complex 8 (no `small`, no `reg`).
+batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
+`small`. Candidate counts: float 22, double 12 (no `reg`), complex 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
 | choice | forms instantiated |
 |---|---|
 | `direct`, `tiled`, `small` | any |
-| `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1`, `reg:m=128:n=128:k=8:u=1` | NN |
-| `reg:m=64:n=64:k=16:u=1` | NN NT TN TT |
+| `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1` | NN |
+| `reg:m=64:n=64:k=16:u=1`, `reg:m=128:n=128:k=8:u=1` | NN NT TN TT |
 | `reg:m=128:n=32:k=16:u=1`, `reg:m=128:n=32:k=32:u=1` | NN NT TN TT |
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
 | `reg:m=128:n=64:k=32:u=4`, `reg:m=128:n=64:k=32:u=2` | NN |
-| `wide:m=64:n=64:k=16` | NN, CN, NC |
-| `wide:m=128:n=32:k=16` | NC |
-| `wide:m=32:n=128:k=16` | CN |
-| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | NN (see [blackwell.md](blackwell.md)) |
+| `wide:m=64:n=64:k=16`, `wide:m=64:n=64:k=8` | all nine complex forms; real NN, NT, TN, TT (see [the k=8 slab](#gemm-wp-f-a-k8-slab-for-the-64x64-wide-tile)) |
+| `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
+| `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
+| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
+| `wide:m=64:n=32:k=16`, `wide:m=32:n=64:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [the skinny tiles](#gemm-skinny-64x32-and-32x64-wide-tiles)) |
+
+The wide forms are the complex instantiations; a real scalar compiles only their N/C builds, so a real form is
+served when its C-folded form is listed. See [GEMM: wide instantiations in every transpose
+form](#gemm-wide-instantiations-in-every-transpose-form).
 
 Removed with no alias: the pin-only `Tiled128x32RegisterK32{S1U1,S2U2,S2U2TT8x4,S2U2TT4x8}`, the experimental
 `Tiled128x32RegisterK32{Persistent,SplitK4,S1U4}` and `Tiled128x64RegisterK32LargeTT4x8{,U2}`, and the
@@ -639,6 +644,528 @@ POTRF uses real-component helpers (`dev_real`, `dev_div_real`, ...) because a Ch
 division/reciprocal asymmetry is deliberate: reference `?trsm` divides and reference `?potf2` multiplies by a
 reciprocal, and unifying them would move one off its LAPACK rounding.
 
+## GEMM: wide instantiations in every transpose form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19, `cuInit` 999 on the RTX 4090 box). Nothing here
+is a timing; the A/B and the regenerated sm_89 table are pending.
+
+Before this change `WideCfg` carried only `nn, cn, nc`, so every complex NT, TN, CT, TC, CC and TT call fell to
+`tiled` (one output per work-item, Annex-G complex multiply), about 8 TFLOP/s against cuBLAS's 45-51 on the
+2026-10-18 coarse run: cfloat NT/TN/CT was 55.8% of the summed log-loss against the vendor. The kernel in
+`register_wide_transposed.hh` already takes `OpA` and `OpB` apart (`TransA`, `ConjA`, `TransB`, `ConjB`), so the
+change is new instantiations only:
+
+* `WideCfg::forms` is a 3×3 bit mask over (op(A), op(B)) ∈ {N, T, C}² (`wide_bit(a, b) = 1 << (3a + b)`).
+  `wide_serves<T>` is the one rule: a complex form must be listed exactly; a real scalar folds T to C and compiles
+  only the N/C builds (conj is the identity), so a real TT runs the CC build of the 64×64 tile.
+* Masks: 64×64 all nine; the panel tiles 128×32 and 32×128 their issued form, its mirror and the matching `Trans`
+  forms (NC, NT, TN, CN); 32×32 and 16×16 every form but TT, TC and CC.
+* Rows are only appended (`wide_variant` reads a table indexed by row and form, `static_assert`ed to one row per
+  `wide_configs` row), and a form a row does not list is a `static_assert` in `launch_wide_cfg`, so can_run, the
+  launcher and the trace name cannot drift apart.
+* The grid gains complex TC, CC, TT squares and real TT panels, so a table can rank the new forms.
+
+**Build cost**, `libbatchlas_sycl` device link, GPU-only tree (`BATCHLAS_CPU_TARGET=none`, sm_89), link alone (the
+`.so` removed and relinked, objects current), two runs each: before 36.4-36.9 s; all nine forms on 32×32 and 16×16
+too, 49.9-50.2 s (+37%); TT, TC and CC kept off the two small tiles, 47.0 s (+28%). The plan's ceiling was +30%.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only, no GPU needed): zero spill on all 604 entries of
+`libbatchlas_sycl`, and every `GemmWideTransposedKernel` passes the sm_89 four-partition gate. The new forms sit
+where the old CN/NC instances do: cfloat 64-72, cdouble 124-136 (32×32 CT the highest), real CC 53 (float) and 68
+(double) on 64×64.
+
+**Pending:** the per-cell A/B (cfloat TN 768³, NT 512³, CT 512³ strided, NT 256²×64; float TT 512³ against
+`reg:m=64:n=64:k=16:u=1`) and a coarse re-race. The 16-way
+shared-store bank conflict of a transposed A operand (the CN tile today) applies to every new T/C A form; that is
+WP-D's work, not this change's.
+
+## GEMM: skinny 64x32 and 32x64 wide tiles
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). No timing below; the A/B and the re-race are
+pending.
+
+Before this change only `wide:m=64:n=64:k=16` served complex CN and NC at a skinny output (min(m, n) ≤ 64),
+with half or more of its 256 lanes computing padding: cfloat CN strided 256×32×128 b128 lost 2.19x to the vendor
+and NC 32×256×256 b128 2.31x on the 2026-10-18 coarse run. NN 64×32×256 b128 launches 128 work-groups of 256
+lanes, half of them padding; the 64×32 tile launches the same 128 with none idle (only sliced K, below, raises
+the count). Two rows are appended to `wide_configs`, `{64, 32, 16, 4, 4}` and `{32, 64, 16, 4, 4}` (128 lanes, a
+4×4 thread tile), as configs of the existing `launch_wide_transposed` kernel; no kernel code changed. They take
+the small-tile mask (`kWideSmallTileForms`: every form but TT, TC and CC), the rule WP-A settled on for build
+cost.
+
+* Spellings `wide:m=64:n=32:k=16` and `wide:m=32:n=64:k=16`; candidates float 21, double 11, complex 10. Both are
+  appended after `wide:m=16:n=16:k=16`, so no existing tie-break moves.
+* **Build cost**, measured as above (link alone, two runs each): 53.8-54.4 s before, 62.6 s after (+16%).
+* **Registers** (`scripts/register_probe.sh`): zero spill on all 702 entries of `libbatchlas_sycl`; every new
+  instance passes the four-partition gate at 128 lanes. float 48, double 71-76, cfloat 72, cdouble 124-136.
+* **Not done: sliced K** inside a work-group (a 64×32 output on 256 lanes as two k-slices reduced through shared
+  memory). It needs a new field or family and is worth building only if the A/B shows the 128-lane tiles still
+  short of the vendor at the skinny shapes; bracket it by work-group count, not batch.
+
+**Pending:** the A/B (pass ≤ 1.10x vendor) on cfloat NC strided 32×256×256 b128, CN strided 256×32×128 b128, CN
+packed 32³ b2048 and NN 64×32×256 b128.
+
+## GEMM: the 128x128 kernel in every real transpose form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). No timing below; the A/B and the re-race are
+pending.
+
+Before this change `reg:m=128:n=128:k=8:u=1` instantiated NN only, so float NT, TN and TT fell to the 4×4 register
+tiles or `wide`, 19-27 TFLOP/s at 1024³ b128 against NN's 57. `Gemm128x128Body` now takes `OpA, OpB`. The shared
+layout (`sa` [k][m], `sb` [k][n]), the lane swizzle, the compute loop and both epilogues are unchanged; only the
+loaders differ, and both already existed:
+
+| operand | contiguous in | loader |
+|---|---|---|
+| A (N), B^T | m or n | a warp reads 128 contiguous elements of one k row, one 16-byte shared store |
+| B (N), A^T | k | two lanes per column read 4 k, four transposing scalar stores (2-way bank conflict), `L2::128B` |
+
+So NT uses two m/n loaders, TN two k loaders, TT a k loader for A and an m/n loader for B. The predicated leg
+uses the same lane maps with per-element zero fill, so an odd `ld` stays coalesced. `can_use_128x128_fast_path`
+reads the effective m, n, k (the alignment terms are the same: every packet starts at a multiple of 4 elements
+along its contiguous direction). Trace names gain `_nt`, `_tn`, `_tt`, each with an `_aligned` twin.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): all twelve legs (4 forms × predicated, aligned, aligned
+staged) at 126-128 registers, zero spill, library-wide zero spill. Two source details are load-bearing at the
+128 cap, both on the B^T loader only (NN's code is untouched): its pointer advances by `TileK * ldb` (64-bit)
+once per slab instead of indexing `k0 * ldb` (an `int` product overflows past \f$2^{31}\f$ elements in one item;
+a 64-bit product spilled the staged NT leg, 20 B), and its predicated bound is one live `int` (four hoisted row
+predicates beside A's four spilled the predicated NT leg, 20 B).
+
+**Build cost**, `libbatchlas_sycl` link alone, GPU-only tree, two runs each: NN only 46.5-46.7 s, all four forms
+50.9-51.3 s (+9%).
+
+**Rejected: the plan's optional `reg:m=128:n=64:k=8:u=1` row.** As a config row it lands on the generic
+`register_tiled_common.hh` kernel, not this body; at an 8×8 thread tile ptxas gives it a 288-byte stack frame
+(48 registers, accumulators in local memory) in all four forms. A 128×64 variant of this body needs new loader
+code (128 threads), so it was left out.
+
+## GEMM: WP-G transpose-aware scalar staging
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B (float TN
+strided 128x32x1024 b2048 against `reg:m=128:n=32`, `reg:m=32:n=128`, `wide:m=64:n=64:k=16` and the vendor; float TT
+strided 256³ b128) is pending.
+
+`register_tiled_common.hh`, the generic register tiles: 2×2 (32x32x8), 4×4, and 8×4 (both 128x64x32 rows), every
+`reg_configs` row except 128×128. Two changes:
+
+- **Scalar staging lane map.** With an odd `ld` or base the packet loaders are skipped and every operand is
+  staged one element per lane. The lane-fastest index used to be m for A and k for B whatever the form, so a
+  transposed operand had a lane stride of `ld` (one sector per lane). Now the fastest index is the operand's
+  contiguous one: k for Aᵀ, n for Bᵀ, as `register_wide_transposed.hh` does. The shared layout is unchanged, so the
+  compute loop and epilogue are untouched. Costs moved to shared stores: Aᵀ at TileK 16 is 2-way (TileK 32: none);
+  Bᵀ is conflict-free (odd stride).
+- **B fragment swizzle, not a stride pad.** The fragment read `sb[(4c + j) * s + t]` puts lanes with local
+  column c and c + 8 on one bank for any stride s, because 4·s·8 ≡ 0 (mod 32): 2-way on the 64-column tiles
+  (16 local columns per warp), 4-way on 32×128 (32). Padding the stride cannot remove it and would change
+  `slm_bytes` (a `choice.hh` edit, which stales the lattice). `b_slot(col, row)` XORs the k row with the column's
+  32-column group (`(col >> 5) & 3`). That stays inside the row's aligned 4-block, so it needs no memory, and
+  every bank is distinct at every t for TileN ≤ 128. One extra LOP per fragment row; the reads were scalar
+  already (the odd stride rules out vector loads), so no vectorised read is lost. The 32-column tiles (`TileN <= 32`)
+  skip the XOR at compile time (ptxas could not see `q == 0`: 32x32x8 went 40 to 55 registers with it).
+
+**Registers** (`scripts/register_probe.sh`, ptxas only, against the parent): every `GemmRegisterTiledKernel`
+instantiation within -8..+3 registers of the parent (e.g. 64x64x16 NN 48 to 51, 32x128x16 TN 56 to 59), except
+the aligned 128x64x32 8×4 legs, 64 to 72 (u2) and 68 to 72 (u4): 256 threads, still 3 blocks/SM by registers
+against 2 by their 49,920 B of local memory, so not binding. Zero spill library-wide; the 128x64x32 rows keep the
+128-byte stack frame they already had.
+
+Test: `GemmCandidates.RegScalarStagingEveryFormAtSaturatingBatch` (strided: the scalar helpers; padded: the packet
+stores; packed 128x128x64 NN: the aligned leg of 128x32x32 and both 128x64x32 rows; each at batch 1024, plus a
+β = 0, NaN-C pass). A deliberate break of the transposed-B scalar split should turn NT and TT red on 64x64x16,
+128x32x16, 128x32x32 and 128x64x16, and TT on 32x128x16.
+
+## GEMM: WP-B coalesced C epilogue on the predicated legs
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B (float NT/TN/NN
+strided 256x256x16 b128, TN strided 256x512x8 b128, NN packed 256x256x16 b128 as the regression guard, cfloat NN
+packed 128x256x8 and CN strided 1024x32x8 b128) and the C read-modify-write rate check are pending.
+
+At small k a cell is one read-modify-write pass over C, and the predicated and transposed tiles stored C one
+element per lane with lanes 16 bytes (four rows) apart, or `ldc` apart in the generic register tiles. Only the
+aligned NN legs stored whole 16-byte bands, because the C alignment test was tied to A's and B's. Four kernels
+change, and only their epilogues:
+
+- **The band store is a per-group decision about C alone** in the wide kernels: the tile lies inside C, `ldc`
+  is a multiple of the 16-byte granule, and C's item base is 16-byte aligned. The test is uniform over the
+  work-group, so a predicated leg takes the band store on its interior groups. It is an epilogue choice inside the
+  kernel, never a routing term or a `can_run` term.
+- **Every other group stages C through the mainloop's local memory**, then stores it with lane = consecutive row,
+  predicated on row and column. One warp store is then one contiguous run of a column at any `ldc`.
+  - 128x128: the staged epilogue now runs on the predicated leg too (k ≤ `kStagedEpilogueMaxK`, both legs). Its
+    stage layout and the barrier before it (the odd-slab tail reads `sa`) are unchanged. The predicated leg
+    stores scalars at rows `lane + 32 i`, one load-then-store per element. The aligned leg's code is untouched,
+    and so is the direct epilogue at k > 64.
+  - 64x64 NN wide and `register_wide_transposed.hh`: `wide_scalar::staged_c_store`. `sa` then `sb` form one
+    column-major stage of stride TileM, so a chunk is (TileK·(TileM+TileN))/TileM columns: 2 chunks for
+    64x64, 128x32 and 32x128, 1 for 32x32 and 16x16. A 16-byte scalar (complex<double>) skips staging, because
+    its one-element store is already the band store.
+  - Generic `reg` (`register_tiled_common.hh`), both legs: the same chunked stage inline (a reg header cannot
+    include a wide one, or the family hashes would miss the dependency). The column stride is TileM + 1:
+    lanes run along n there, and an even stride would put the TC-strided writes on one bank. No band store.
+- **Barriers.** Every mainloop already ends on a barrier after its last read of the stage buffers (the 128x128
+  odd-slab tail is the exception, and it already had one), so no barrier is added before the first chunk. Each
+  chunk adds one barrier between the stage writes and the read-back. Every chunk but the last adds one more
+  between the read-back and the next chunk's writes. Prior C is read two elements per thread ahead of their
+  stores, and never at β = 0.
+- **Budgets.** No local memory is added and `slm_bytes` is unchanged.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill across all 315 entry functions of
+`libbatchlas_sycl`. The 128x128 legs are at 126-128 registers, the new predicated staged legs at 128. Getting
+there took four register-cap concessions, each found by a probe:
+
+- A per-group 16-byte branch in 128x128 (interior groups, or the direct epilogue at k > 64) spilled 20-36 B,
+  so 128x128 has no band store off the aligned leg.
+- Prefetching all 16 prior values before the pass barrier also spilled.
+- NN's predicated A loader now bounds its four rows with one live int, as B^T already did. With its four
+  hoisted predicates, the staged NN leg spilled 28-40 B even with no read-back at all. NT keeps the four,
+  because two ints spilled NT 48 B.
+- In the wide and generic kernels, the chunk loop is not unrolled and the read-back batch is 2. A batch of 4
+  with every chunk unrolled cost +8 to +24 registers.
+
+Against the WP-G probe, the ones that cost occupancy (256 threads):
+
+| kernel | registers | blocks/SM (registers) |
+|---|---|---|
+| wide double 128x32, 32x128 | 60-64 → 71-76 | 4 → 3 |
+| wide double 64x64 NC | 64 → 72 | 4 → 3 |
+| wide double 32x32 (64 threads) | 60 → 76 | 16 → 12 |
+| wide double 64x64 NN predicated | 72 → 78 | 3 → 3 |
+| wide float 64x64 NC | 45 → 55 | 5 → 4 |
+| reg 64x64x16 NT, reg 64x64x8 NN | 48 → 55 | 5 → 4 |
+| reg 128x64x16 TN | 48 → 56 | 5 → 4 |
+
+cfloat wide is unchanged at 72. Every other float wide or reg instantiation keeps its block count or gains one.
+The baseline is the WP-G probe log, taken before WP-G's two commits. Its kernel code is assumed to match the parent
+of this change; that was not re-checked.
+
+**Build cost**, `libbatchlas_sycl` link alone, GPU-only tree, two runs each: parent 50.5-50.7 s, WP-B 54.2-54.4 s
+(+7%). The four predicated staged 128x128 legs are the new instantiations.
+
+Tests:
+
+- `GemmCandidates.CoalescedCEpilogueEveryTileAtSaturatingBatch` covers every reg and wide candidate on 256x256x16
+  strided at batch 1024 (complex<double> skips it), then 200x136x8 at ld = m + 1 and padded, then β = 0 with NaN
+  in C.
+- `Reg128x128EveryFormEveryLegAtSaturatingBatch` gains a strided 200x150x72 leg. Its strided 200x150x37 leg now
+  runs the predicated staged epilogue, so the new leg keeps the predicated direct one covered.
+
+Deliberate breaks, unrun:
+
+- Dropping the barrier after the stage writes should turn the staged groups red: every reg row, and every wide
+  row except complex<double>. In 128x128 (the barrier after the pass's stage writes) it should turn the strided
+  and ld = m + 1 cases red, while the packed aligned legs stay green.
+- Dropping the barrier between chunks should turn red only the multi-chunk tiles (wide 64x64, 128x32 and 32x128;
+  reg 32x32x8, 64x64x8, 64x64x16, 128x64x16 and 32x128x16), as a bit-identity failure.
+- Dropping the `n0 + TileN <= n` term of the wide band-store test should turn only the padded wide cases red, by
+  writing outside C.
+
+## GEMM: wide v2, one double-buffered 64x64 kernel for every form
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale, build cost and registers
+only; the A/B is pending.
+
+`wide:m=64:n=64:k=16` for float and complex<float> now runs `GemmWide64Body` (`register_64x64_k16_wide.hh`), one
+functor templated over (op(A), op(B)) ∈ {N, T, C}² and the global-load leg. It replaces both the NN kernel and
+`launch_wide_transposed` at 64×64 for those two scalars. double and complex<double> keep the old kernels:
+complex<double> is already at 124-136 registers without prefetch, and the plan's link budget was +25%. The spelling
+is unchanged; only its timing moves, so the retune absorbs it. What changed, against the root causes in the
+2026-10-18 loss map (cfloat CN/NC m,n > 64 at 1.19x, NN at 1.13x):
+
+- **Staging is a pure copy.** Conjugation is folded into compile-time FMA signs (`wide_v2::fma_signed`, still 4
+  FMAs, bit-identical to conjugating at staging), so a C operand moves in 16-byte granules like an N one.
+- **One shared layout, `s[kk][i]` in 16-byte granules, for both operands in every form.**
+  - An operand contiguous along i (A, Bᵀ) is one granule per load and store.
+  - An operand contiguous along k (Aᵀ, B, including NN's B) loads 16 bytes down k.
+    - complex<float> loads two columns (a 2×2 block) and swaps them into one granule per row.
+    - float stores four scalars, one per row.
+  - The granule index is XORed with `swz(kk) = ((kk / VecN) & 3) << 1`, the same on store and fragment read.
+    The lane maps (`GemmWide64Body::first_k`, `first_i`) put 4 row groups × 2 adjacent granules in each
+    bank-conflict set: an 8-lane phase of a 16-byte store, or a warp of 4-byte ones. By that construction the
+    transposing store is conflict-free; the old transposed store was 16-way, and NN's B store 4-way.
+  - Four swizzle values, not eight, so the fragment read needs four offsets. The eight-value form
+    (`(kk >> 1) & 7`) left complex<float> TN and CN 24 B of spill at the 128 cap.
+- **Two buffers, one barrier per slab, the next slab prefetched into `ext_vector` registers**: the 128×128
+  kernel's schedule, unrolled by two so the buffer index is constant. An odd slab count ends with a read of buffer
+  0 and no barrier after it, so the staged epilogue adds one.
+- **The leg.** The global-load leg (16-byte moves vs element loads) is per launch, from A's and B's bases, ld and
+  batch stride (`wide64_v2_vec_loads`); the parity of k, m and n does not enter it. Predication is per work-group
+  and per slab: an operand is predicated only in an edge group (in its own extent) or the k tail. So one ragged
+  edge no longer sends every interior group down the predicated path.
+- **Epilogue**: the WP-B rule unchanged, the band store per group and otherwise `staged_c_store`. Both A buffers
+  are the stage's lo half, so a chunk is the whole 64-column tile (one pass).
+- **Launch bound** on the functor's `operator()`: 3 groups per CU for float, 2 for complex<float>.
+  - The bound is ignored on a lambda.
+  - `operator()` is `always_inline`. Out of line, complex<float>'s body spilled 64-104 B behind the call, while the
+    entry function reported zero, so only the non-inlined function line of the probe showed it.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill on all 724 entry functions of
+`libbatchlas_sycl`.
+
+- float: 79-80 registers, 3 groups per SM.
+- complex<float>: 126-128 registers at the 128 cap, 2 groups per SM (16 warps; the old NN kernel ran 80 registers
+  at 3).
+- A 3-group bound for complex<float> caps it at 80 and spills 76-240 B in all 18 instances, so 2 is the bound.
+- Whether 16 warps with prefetch beat 24 without is the open question the A/B answers.
+
+**Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree, two runs each:
+parent 63.0-63.1 s, v2 74.6-74.9 s (+18%). That is under the plan's 25% ceiling at which v2 would have been
+restricted further.
+
+Tests: `GemmCandidates.WideV2EveryFormAtSaturatingBatch` runs all 9 forms at batch 1024 (7 distinct problems,
+each item bit-identical to its representative) on four shapes:
+
+- 100×70×37 at ld = m + 1: element loads, edge groups, a k tail, 3 slabs.
+- 200×136×40 padded: the 16-byte leg with interior and edge groups.
+- 128×128×64 packed: all interior, 4 slabs, the band store.
+- 130×70×64 at ld = m + 1: an even slab count into the staged epilogue.
+
+Then β = 0 with NaN in C per form, and every leg layout (`wide_v2_leg_layouts`) at 160×136×48 batch 4: four
+interior groups over three full slabs, the only place the 16-byte load runs. The layouts take each refusing term
+alone on A and on B (odd ld, item stride = 1 mod 4, odd base), plus Ld2 (ld = 2 mod 4), which complex<float>
+takes on the 16-byte leg (odd columns 16- but not 32-byte aligned) and float refuses. `PinnedChoiceLaunchesItsOwnKernel`
+expects a `_aligned` trace name in every form on packed data, and the same leg layouts at 160×136×48 (ragged
+in m and n) with the leg each must take, so a tile-multiple term copied into the leg predicate goes red.
+
+**Local memory.** complex<float> v2 asks for 32 KiB (two buffers per operand), over an Apple GPU's 32 KiB limit
+once the runtime's 8 B per item is added. can_run's wide arm checks `wide_slm_bytes<T>` (choice.hh, static_asserted
+against the kernel) against `slm_budget_for(threads)`, so Metal refuses it there instead of failing at launch.
+
+Deliberate breaks, unrun:
+
+- Dropping the A conjugation sign should turn red only CN, CT and CC (complex<float>); the B sign only NC, TC
+  and CC.
+- Dropping the swizzle on the read side only should turn every v2 form red for both scalars, and nothing else.
+- A k-contiguous lane map that puts two lanes on one granule (complex<float>: drop the `(tid >> 1) & 4` term of
+  `first_k`, so rows 8-15 are never staged) should turn red every complex<float> form except NT and NC, the forms
+  with no k-contiguous operand. Swapping two lane-map bits is not such a break: `first_k`/`first_i` feed both the
+  global address and the shared store, so a bijective remap stays right and changes only bank conflicts, which no
+  test observes (the conflict-free claim waits for an `l1tex` bank-conflict count once CUDA is back).
+- Dropping a term of `wide64_v2_vec_loads` (A's or B's base, ld or batch stride, or the whole B conjunct) should
+  turn red the matching `wide_v2_leg_layouts` rows in the trace test, and fault or go wrong in the numeric one.
+- `<=` for `<` in the k-tail predicate should turn red the three ragged-k shapes, and leave 128×128×64 and
+  130×70×64 green.
+- Dropping the per-slab barrier should show as bit-identity failures across items.
+
+**Pending:** the plan's A/B (pass: every cell ≤ 1.05x vendor, and NN packed 512³ not slower than 2.78 ms):
+
+- cfloat CN strided 1024³ b128;
+- NC strided 256×128×96 b128, also against `wide:m=128:n=32:k=16`;
+- CN packed 256×128×96 b128;
+- NN strided 362×90×96 b128;
+- TN packed 768³ b128.
+
+Then a coarse re-race. Not done:
+
+- the C prefetch before the last slab (the plan's P2.5);
+- an 8-byte vector load for complex<float> on the element leg (it needs an 8-byte-aligned base, a third leg).
+
+## GEMM: WP-F, a k8 slab for the 64x64 wide tile
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale only; the A/B is pending.
+
+Every wide tile had a 16-deep slab, so at k ≤ 8 half of each slab was zero-filled and its FMAs wasted. The
+2026-10-18 loss map left 1778 cfloat cells at k ≤ 16 after WP-B (635 losing, gmL 1.21). One row is appended to
+`wide_configs`, `{64, 64, 8, 4, 4, kWideAll}`, spelled `wide:m=64:n=64:k=8`. It comes after every existing row, so
+no tie-break moves. Candidates: float 22, double 12, complex 11 (12 since WP-H).
+
+- **float and complex<float>: wide v2 at `TileK = 8`.** `GemmWide64Body` takes the slab depth as a template
+  parameter; the kernel class gains a defaulted fifth argument, so the `device_calls_tests` pattern still matches.
+- **Each lane still stages CF 16-byte granules**, so at k = 8 one operand's slab needs only 128 lanes. Warps 0-3
+  stage A and warps 4-7 stage B. The branch is warp-uniform, a lane holds one prefetch set instead of two, and
+  `KStep` (the rows one staging pass covers along i) is `128 / GPR`.
+- **The k-contiguous lane map at k = 8** has 4 row groups (complex<float>) or 2 (float) in the low tid bits and
+  the column above them.
+  - For complex<float>, an 8-lane phase is still 4 row groups × 2 column pairs, so `swz` is unchanged.
+  - For float, a warp holds 2 row groups × 4 granules, so the swizzle flips granule bit 2 (`(kk / 4 & 1) << 2`)
+    to keep the transposing scalar store on 32 distinct banks.
+  - Correctness does not depend on the swizzle: store and fragment read apply the same bijection.
+- **Epilogue unchanged.** The stage (both A buffers + both B buffers) is now 32 columns, so `staged_c_store`
+  takes two passes instead of one.
+- **double and complex<double> run `launch_wide_transposed` with `K = 8` in every form, NN included.** The NN
+  64x64x16 kernel keeps `K = 16`, so the NN aligned-leg trace name exists only at k = 16.
+- **Local memory** halves: float 8 KiB, complex<float> 16 KiB, double 8 KiB, complex<double> 16 KiB
+  (`wide_slm_bytes`, static_asserted against the kernel).
+
+The launch bound stays 3 groups per CU for float and 2 for complex<float>.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill on all 802 entry functions of
+`libbatchlas_sycl`. Every new instance passes the four-partition gate at 256 lanes:
+
+| instance | k = 8 | k = 16 |
+|---|---|---|
+| float v2 | 78-80 | 79-80 |
+| complex<float> v2 | 121-126 | 126-128 |
+| double transposed | 66-70 | (NN kernel and transposed) |
+| complex<double> transposed | 128-132 | (NN kernel and transposed) |
+
+complex<float> at k = 8 stays above the 85-register cap of 3 groups, so its bound stays 2.
+
+**Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree: 87.0 s and 87.8 s.
+WP-D recorded 74.6-74.9 s by the same method, so the link grows about 17%. The two figures were not taken
+back to back.
+
+Tests: `GemmCandidates.WideK8SlabStraddlesTheSlabDepthAtSaturatingBatch` runs 64x64x8 and 64x64x16 in all 9 forms:
+
+- k = 8, 9, 16 and 17 on 100×70 at ld = m + 1 (batch 1024, 7 distinct problems, bit-identical items);
+- the same k on 200×136 padded (the 16-byte leg, interior and edge groups);
+- packed 128×128×24 (three full k8 slabs, the band store);
+- β = 0 with NaN in C.
+
+The oracle row, the literal local-memory bytes and the spelling are added. The epilogue sweep, the trace test (every
+leg layout) and every pinned-candidate test pick the row up from `candidates<T>()`.
+
+Deliberate breaks, unrun:
+
+- Every lane staging A (`stage_a = true`) leaves B unstaged. That turns every float and complex<float> form red at
+  64x64x8 and nothing at 64x64x16.
+- The k = 16 k-contiguous map at k = 8 puts lanes outside the slab. That turns red every v2 form except NT and NC.
+- The k = 16 `KStep` for complex<float> writes row kb + 8 past the slab, into the other buffer. That turns red every
+  complex<float> form except TN and CN.
+- A float swizzle that store and read disagree on turns every float form red at k = 8.
+- `<=` in the k-tail predicate turns red the k = 9 and 17 shapes.
+- Routing the k8 row to the k16 kernel gives the same bits, so only `PinnedChoiceLaunchesItsOwnKernel`'s
+  `_k8_` trace names turn red.
+
+**Pending:** the A/B (pass ≤ 1.05x vendor). cfloat NN packed 128×256×8 b128, arms `wide:m=64:n=64:k=8`,
+`wide:m=64:n=64:k=16`, `vendor`; cfloat CN strided 512×64×8 b128. Large-m,n k ≤ 16 cells are DRAM-bound at parity
+on both sides and are not the target.
+
+## GEMM: complex small and the staged transposed-A row
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19, WP-H). Design rationale only; the A/B is pending.
+
+`small` now compiles for complex<float> and complex<double>, and `candidates<complex>()` lists it third, as the
+real lists do (complex 12). The tables do not rank it yet, so Auto reaches it only where nothing ranked can run:
+a vendor-free complex call past the grid-z ceiling.
+
+- **Arithmetic is the POD `Cx`** (`device_scalar.hh`). Operands and α, β are re-typed at the launcher.
+  - The inner product is `fma_acc`, 4 FMAs and no `__mulsc3`.
+  - The epilogue is `dev_mul(α, acc)`, then `fma_acc(out, β, C)`, which is skipped at β = 0.
+  - The real path keeps its expression.
+- **Conjugation happens at staging.** `ConjTrans` B is conjugated as it enters local memory, and `ConjTrans` A
+  as it enters the transposed-A stage below. For a real scalar, `ca` and `cb` are constant false.
+- **Ceiling.** complex<double> stops at 32 (`small_max_dim`, mirrored by `kSmallMaxDimFor`).
+  - Its 64 bucket would need 64 × 65 × 16 B = 66.5 KB of local memory.
+  - It would also hold 64 row elements plus 32 accumulators, 384 registers.
+  - At 32 the bucket is 2 slots × 32 × 33 × 16 B = 33.8 KB, with a 32-entry row and 16 accumulators.
+  - complex<float> 64 is 33.3 KB with the same register count as double 64.
+- **Local memory is a `can_run` term** (`small_slm_bytes` against `slm_budget_for`), static_asserted in
+  `gemm_kernels.cc` against the kernel's element counts. It refuses, for example, complex<float> and double at
+  64 on the M5 Max's selector budget.
+- **Transposed A goes through local memory.** A transposed A is stored k × m, so a lane's row of op(A) is a
+  stored column, `lda` away from its neighbours' rows: every load was a separate sector.
+  - The slot's `sB` region first takes A in storage order, so the loads are coalesced. The order is
+    `sB[r + l·(NB+1)]`, which is conflict-free for 4-, 8- and 16-byte scalars, because NB + 1 is odd.
+  - After a barrier, each lane reads its row.
+  - A second barrier keeps the row in place until every lane of the slot has read it, and only then is op(B)
+    staged over it.
+  - The two barriers cost no extra local memory and run only on a transposed A. `ta` is uniform per launch.
+  - This also changes the real T forms (the float TT/TN target).
+- **complex<float> 64 writes its inner product as four sequential 16-l loops.**
+  - As one 64-l loop it is past LLVM's pragma unroll threshold. The unroll was declined and a[] went to a
+    512 B stack frame: 96 registers, and the stack-frame column was the only sign.
+  - A lambda per chunk fixed that but put 160-184 B of stack on other buckets, double 64 and float 64
+    included. The chunks are therefore a file-local macro.
+  - Every other bucket keeps its single loop.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill and zero stack on every small kernel. The
+four-partition gate at 128 lanes allows up to 512 registers.
+
+| NB | float | double | complex<float> | complex<double> |
+|---|---|---|---|---|
+| 8 | 39 | 40 | 40 | 64 |
+| 16 | 40 | 64 | 56 | 122 |
+| 32 | 64 | 125 | 127 | 226 |
+| 64 | 128 | 253 | 255 | (refused) |
+
+**Build cost:** the `libbatchlas_sycl` link replayed by the probe took 87.7 s. WP-F recorded 87.0-87.8 s, so the
+16 new kernels are not visible in the link time. The two figures were not taken back to back.
+
+Tests:
+
+- `GemmCandidates.SmallEveryBucketEveryFormAtSaturatingBatch` covers NB 8/16/32/64 (ragged, k = NB on the
+  first) in all 9 forms:
+  - strided and aligned-odd-ld layouts;
+  - batch 1024 repeating 7 problems, items bit-identical;
+  - complex α and β ≠ 0;
+  - β = 0 with NaN in C;
+  - complex<double> above 32 refused, leaving C untouched.
+- `GemmCanRun.SmallCeilingAndLocalMemoryPerScalar` checks the literal bytes and a budget one byte short on each
+  side.
+- The oracle (`small_runs`) admits complex, so every pinned-candidate test picks the family up.
+- `gemm_tests` `SmallBatched*` run complex with ConjTrans.
+
+Deliberate breaks, unrun:
+
+- Dropping the A conj turns red only the CN/CT/CC forms of complex.
+- Dropping the B conj turns red only NC/TC/CC.
+- Swapping the stage index (`sB[l + r·(NB+1)]`) turns red every T/C-A form of every scalar.
+- Removing the second barrier is a race between the row read and the op(B) stage. It shows on T/C-A forms
+  as item differences at batch 1024.
+- `α.re · acc` in the epilogue turns every complex case red. It is not caught by β = 0 alone, because α is
+  complex in every case.
+
+**Pending:** the A/B. cfloat CN packed 32³ b2048, arms `small`, `wide:m=16:n=16:k=16`, `vendor`; float TT
+strided 64³ b128 against the parent commit.
+
+## GEMM: WP-I, an unpredicated interior loop on the 128x128 predicated leg
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19). Design rationale, registers and build cost
+only.
+
+Target: float NN strided, k ≥ 48, at 256-384 (384³ b128 at 30.8 against cuBLAS's 37.7 TFLOP/s in the
+2026-10-18 loss map). An odd `ld` sends every group of such a call down the predicated leg, which bounds
+every element of every slab. Now a work-group whose 128×128 tile lies inside C (`m0 + 128 <= m`,
+`n0 + 128 <= n`, uniform over the group) runs a second copy of the mainloop. That copy has no row or column
+predicates, and only the k-tail slab is bounded. Loads stay scalar, with the same lane maps. Edge groups
+run the old loop unchanged, and the aligned leg is untouched: its register counts match the parent in all
+eight instances.
+
+Three source details are load-bearing at the 128-register cap (`scripts/register_probe.sh`, ptxas only):
+
+| variant | result |
+|---|---|
+| per-slab branch inside the one loop, per operand (`kfull && m0 + 128 <= m`) | NT direct 8 B, NN staged 20 B, NT staged 16 B spill |
+| the same, one branch for both operands | NN 4 B, NT 20-24 B |
+| the same, interior flag hoisted out of the loop | NT direct 20 B, NN staged 4 B |
+| two loop copies, `Body::operator()` inlined by heuristic | the two copies push `operator()` out of line: 32 B spill behind the call, 160-200 B stack frame in the entry |
+| two copies, `always_inline` on `Body::operator()` | zero spill, but the aligned leg's registers move (124-128, against the parent's 127-128) |
+| two copies, the predicated leg launched through `Gemm128x128Inlined` (call-site `[[clang::always_inline]]`) | zero spill except 4 B in the never-launched `_with_offset` twin of staged NT |
+| interior copy's k tail as a `kfull ||` term, or unswitched by hand | 8-48 B |
+| **shipped**: the wrapper, the test written edge-first (`m0 + 128 > m` or the n term) | zero spill on all 816 entry functions, no stack frame; predicated 127-128 registers, aligned identical to the parent |
+
+ptxas is chaotic at this cap: a logically equivalent rewrite moves spill between instances, so any edit
+here needs a fresh probe. Build cost: the probe's `libbatchlas_sycl` link, one run each, 88.6 s (parent)
+and 88.8 s.
+
+Test: `GemmCandidates.Reg128x128PredicatedInteriorAndEdgeGroupsAtSaturatingBatch` covers 5 forms × 5 legs
+at batch 1024, each item bit-identical to its representative. Every leg has odd operand bases, which is
+what keeps it on the predicated leg (several of the lds are multiples of 4):
+
+- 256×256×72 strided: all four groups interior, nine full slabs, the direct epilogue. 256 has the
+  `m0 + 128 == m` boundary on the interior path; 384 added only a middle group at 2.25× the host work.
+- 256×256×37: the interior copy's k tail after full slabs, the staged epilogue.
+- 256×256×5: one partial slab, so the prologue's load is the only one bounded and the loop body never runs.
+- 300×200×45 at ld = m + 1, and 300×200×72 strided: interior, m-edge, n-edge and corner groups in one
+  launch.
+
+The k-tail legs (37, 5, 45) fill every gap with NaN instead of the finite poison. With a finite poison,
+dropping only one operand's k bound multiplies the poison by the other operand's correctly zeroed value,
+a bit-exact -0, and the result stays green; NaN × 0 is NaN.
+
+Deliberate breaks, unrun:
+
+- A wrong element index in the interior copy should turn the 256 legs red in that form.
+- Treating every interior slab as full, or dropping either operand's k bound alone, should turn red the
+  k = 37, 5 and 45 legs, and leave the k = 72 legs green. A break confined to the prologue (`kfull`
+  forced true at `k0 == 0`) should turn red only k = 5.
+- An interior test that admits an edge group is invisible to every numeric test. It only over-reads rows
+  and columns past m and n, which feed accumulators the epilogue discards. Such a bug faults only when
+  the over-read leaves the allocation.
+
+**Pending:** the A/B (pass ≤ 1.05× vendor) on float NN strided 384³ b128 and 256×256×64 b128.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
@@ -652,8 +1179,8 @@ here `TR` and `TC` default independently to 4, so every row states both.
 `src/ops/gemm/kernels/small_batched.hh` (`small`). Float NN at max(m,n,k) ≤ 48 previously ran `Direct`, whose adjacent
 lanes read B and write C `ld` apart. The kernel gives a 128-lane group 128 / (2·NB) matrices, with NB in {8, 16,
 32, 64} from max(m,n,k). op(B) is staged in local memory (odd `ld`, so either transpose is coalesced), each lane
-holds one row of op(A) and NB/2 columns of C, and β = 0 skips the C read. Real scalars only: `std::complex` is the
-Annex-G trap, so `small` is not a complex candidate.
+holds one row of op(A) and NB/2 columns of C, and β = 0 skips the C read. Complex was added later on the POD
+scalar (see [the complex small section](#gemm-complex-small-and-the-staged-transposed-a-row)).
 
 Batch 32768 unless noted, `BM_GEMM` square NN, β = 0, ms:
 
@@ -677,7 +1204,8 @@ is shared-load bound; 40..48 still lose to cuBLAS, which is why NN 33..56 has it
 At k ≤ 64 the 128×128 kernel is store-bound (512²×32 b4096 writes 4.3 GB of C). The direct epilogue stores four
 128-byte column pieces per warp instruction, and DRAM reaches 87.6% of peak against 89.6% for two 256-byte pieces,
 a 2–3% loss at k ≤ 32. The staged epilogue routes C through local memory (4 passes of 32 columns × 128 rows) so each
-warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64`, aligned leg only.
+warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64`. This was the aligned
+leg only until WP-B extended it (see the section on the coalesced C epilogue above).
 
 | k (512², β=0) | direct | staged |
 |---|---|---|

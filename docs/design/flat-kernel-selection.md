@@ -383,19 +383,19 @@ unless a line says otherwise.
 
 ### gemm
 
-- **Families:** `direct`, `tiled`, `small` (real only), `reg:m=..:n=..:k=..:u=..` (float only, 10
-  configurations), `wide:m=..:n=..:k=..` (5 configurations, every scalar), `vendor`.
-  Candidates: float 19, double 9, complex 8.
+- **Families:** `direct`, `tiled`, `small` (every scalar), `reg:m=..:n=..:k=..:u=..` (float only, 10
+  configurations), `wide:m=..:n=..:k=..` (8 configurations, every scalar), `vendor`.
+  Candidates: float 22, double 12, complex 12.
 - **Keys:** `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to T for
   real scalars. `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, otherwise
   `strided`.
 - **Last resort:** `direct`, then `vendor`.
 - **Forms:** `can_run` lists the instantiated (configuration, ta, tb) forms. A real Trans uses a wide
-  ConjTrans instantiation, and a complex Trans has none.
+  ConjTrans instantiation; a complex form must be instantiated exactly.
 
   | Choice | Forms |
   |---|---|
-  | `direct`, `tiled`, `small` | any (`small` is real and max(m, n, k) ≤ 64) |
+  | `direct`, `tiled`, `small` | any (`small` needs max(m, n, k) ≤ 64, ≤ 32 for `complex<double>`) |
   | `reg` 32·32·8, 64·64·8, 128·64·32 (u=4 and u=2), 128·128·8 | NN |
   | `reg` 64·64·16, 128·32·16, 128·32·32 | NN, NT, TN, TT |
   | `reg` 128·64·16 | NT, TN, TT |

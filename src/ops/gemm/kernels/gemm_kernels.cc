@@ -31,6 +31,21 @@ namespace og = ::batchlas::ops::gemm;
 static_assert(og::kSmallMaxDim == sycl_gemm_small::kSmallMaxDim && og::kSmallWg == sycl_gemm_small::kSmallWg &&
                   og::kSmallTiledMaxDim == sycl_gemm_small::kSmallTiledMaxDim,
               "choice.hh's small limits must match small_batched.hh");
+template <typename T>
+constexpr bool small_slm_matches() {
+    namespace gs = sycl_gemm_small;
+    constexpr std::int64_t s = sizeof(T);
+    return og::small_max_dim<T>() == gs::kSmallMaxDimFor<T> &&
+           og::small_slm_bytes<T>(false, 8) == s * gs::kSmallBatchedSlmElems<8> &&
+           og::small_slm_bytes<T>(false, 16) == s * gs::kSmallBatchedSlmElems<16> &&
+           og::small_slm_bytes<T>(true, 32) == s * gs::kSmallBatchedSlmElems<32> &&
+           og::small_slm_bytes<T>(false, 64) == s * gs::kSmallBatchedSlmElems<64> &&
+           (!std::is_same_v<T, float> || (og::small_slm_bytes<T>(true, 48) == s * gs::kSmallTiledSlmElems<48> &&
+                                          og::small_slm_bytes<T>(true, 56) == s * gs::kSmallTiledSlmElems<56>));
+}
+static_assert(small_slm_matches<float>() && small_slm_matches<double>() && small_slm_matches<std::complex<float>>() &&
+                  small_slm_matches<std::complex<double>>(),
+              "choice.hh's small_max_dim and small_slm_bytes must match small_batched.hh");
 
 template <typename T>
 class GemmDirectKernel;
@@ -65,6 +80,9 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large";
     case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2";
     case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8";
+    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt";
+    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn";
+    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt";
     case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide";
     case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn";
     case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc";
@@ -75,6 +93,49 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled32x128RegisterK16TT: return "gemm_sycl_register_32x128_k16_tt";
     case KernelVariant::Tiled32x32RegisterK16Wide: return "gemm_sycl_register_32x32_k16_wide";
     case KernelVariant::Tiled16x16RegisterK16Wide: return "gemm_sycl_register_16x16_k16_wide";
+    case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt";
+    case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn";
+    case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt";
+    case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc";
+    case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct";
+    case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc";
+    case KernelVariant::Tiled128x32RegisterK16WideNT: return "gemm_sycl_register_128x32_k16_wide_nt";
+    case KernelVariant::Tiled128x32RegisterK16WideTN: return "gemm_sycl_register_128x32_k16_wide_tn";
+    case KernelVariant::Tiled128x32RegisterK16WideCN: return "gemm_sycl_register_128x32_k16_wide_cn";
+    case KernelVariant::Tiled32x128RegisterK16WideNT: return "gemm_sycl_register_32x128_k16_wide_nt";
+    case KernelVariant::Tiled32x128RegisterK16WideTN: return "gemm_sycl_register_32x128_k16_wide_tn";
+    case KernelVariant::Tiled32x128RegisterK16WideNC: return "gemm_sycl_register_32x128_k16_wide_nc";
+    case KernelVariant::Tiled32x32RegisterK16WideNT: return "gemm_sycl_register_32x32_k16_wide_nt";
+    case KernelVariant::Tiled32x32RegisterK16WideNC: return "gemm_sycl_register_32x32_k16_wide_nc";
+    case KernelVariant::Tiled32x32RegisterK16WideTN: return "gemm_sycl_register_32x32_k16_wide_tn";
+    case KernelVariant::Tiled32x32RegisterK16WideCN: return "gemm_sycl_register_32x32_k16_wide_cn";
+    case KernelVariant::Tiled32x32RegisterK16WideCT: return "gemm_sycl_register_32x32_k16_wide_ct";
+    case KernelVariant::Tiled16x16RegisterK16WideNT: return "gemm_sycl_register_16x16_k16_wide_nt";
+    case KernelVariant::Tiled16x16RegisterK16WideNC: return "gemm_sycl_register_16x16_k16_wide_nc";
+    case KernelVariant::Tiled16x16RegisterK16WideTN: return "gemm_sycl_register_16x16_k16_wide_tn";
+    case KernelVariant::Tiled16x16RegisterK16WideCN: return "gemm_sycl_register_16x16_k16_wide_cn";
+    case KernelVariant::Tiled16x16RegisterK16WideCT: return "gemm_sycl_register_16x16_k16_wide_ct";
+    case KernelVariant::Tiled64x32RegisterK16Wide: return "gemm_sycl_register_64x32_k16_wide";
+    case KernelVariant::Tiled64x32RegisterK16WideNT: return "gemm_sycl_register_64x32_k16_wide_nt";
+    case KernelVariant::Tiled64x32RegisterK16WideNC: return "gemm_sycl_register_64x32_k16_wide_nc";
+    case KernelVariant::Tiled64x32RegisterK16WideTN: return "gemm_sycl_register_64x32_k16_wide_tn";
+    case KernelVariant::Tiled64x32RegisterK16WideCN: return "gemm_sycl_register_64x32_k16_wide_cn";
+    case KernelVariant::Tiled64x32RegisterK16WideCT: return "gemm_sycl_register_64x32_k16_wide_ct";
+    case KernelVariant::Tiled32x64RegisterK16Wide: return "gemm_sycl_register_32x64_k16_wide";
+    case KernelVariant::Tiled32x64RegisterK16WideNT: return "gemm_sycl_register_32x64_k16_wide_nt";
+    case KernelVariant::Tiled32x64RegisterK16WideNC: return "gemm_sycl_register_32x64_k16_wide_nc";
+    case KernelVariant::Tiled32x64RegisterK16WideTN: return "gemm_sycl_register_32x64_k16_wide_tn";
+    case KernelVariant::Tiled32x64RegisterK16WideCN: return "gemm_sycl_register_32x64_k16_wide_cn";
+    case KernelVariant::Tiled32x64RegisterK16WideCT: return "gemm_sycl_register_32x64_k16_wide_ct";
+    case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide";
+    case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt";
+    case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc";
+    case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn";
+    case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt";
+    case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc";
+    case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn";
+    case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct";
+    case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
     }
     return "gemm_sycl_unknown";
 }
@@ -86,7 +147,27 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
     case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
     case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
+    case KernelVariant::Tiled128x128RegisterK8NT: return "gemm_sycl_register_128x128_k8_nt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8TN: return "gemm_sycl_register_128x128_k8_tn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8TT: return "gemm_sycl_register_128x128_k8_tt_aligned";
     case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideNT: return "gemm_sycl_register_64x64_k16_wide_nt_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTN: return "gemm_sycl_register_64x64_k16_wide_tn_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTT: return "gemm_sycl_register_64x64_k16_wide_tt_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideTC: return "gemm_sycl_register_64x64_k16_wide_tc_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCT: return "gemm_sycl_register_64x64_k16_wide_ct_aligned";
+    case KernelVariant::Tiled64x64RegisterK16WideCC: return "gemm_sycl_register_64x64_k16_wide_cc_aligned";
+    case KernelVariant::Tiled64x64RegisterK8Wide: return "gemm_sycl_register_64x64_k8_wide_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideNT: return "gemm_sycl_register_64x64_k8_wide_nt_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideNC: return "gemm_sycl_register_64x64_k8_wide_nc_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideTN: return "gemm_sycl_register_64x64_k8_wide_tn_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideTT: return "gemm_sycl_register_64x64_k8_wide_tt_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideTC: return "gemm_sycl_register_64x64_k8_wide_tc_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
+    case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -223,7 +304,9 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
                             : K::Tiled32x128RegisterK16TT;
     case 7: return K::Tiled128x64RegisterK32Large;
     case 8: return K::Tiled128x64RegisterK32LargeU2;
-    default: return K::Tiled128x128RegisterK8;
+    case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
+                   : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
+    default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
 
@@ -235,16 +318,18 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OA = (F == kTN || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
-        static_assert(F == kNN && c.threads() == 256, "the 128x128 kernel is NN only, 256 threads");
-        using Staged = Gemm128x128Body<float, true, true>;
+        static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
+        using Staged = Gemm128x128Body<float, true, true, OA, OB>;
+        static_assert(Staged::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
         static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
                                            (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
         // The leg is derived: the unpredicated path whenever the layout allows it.
-        if (can_use_128x128_fast_path<float>(A, B, C))
-            return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
-        return launch_register_128x128_k8<float, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        if (can_use_128x128_fast_path<float>(A, B, C, OA, OB))
+            return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+        return launch_register_128x128_k8<float, false, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
+        static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
         constexpr RegTile P{c.m, c.n, c.k, c.tr, c.tc, 4, 4, c.u, c.stages, OA, OB, aligned_leg};
         using Pol = RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>;
@@ -258,39 +343,93 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
 
 // ---- wide (every scalar) ---------------------------------------------------------------
 
-constexpr KernelVariant wide_variant(std::size_t i, char form) {
+// The trace identity of wide_configs[i] at form 3 op(A) + op(B), op over N, T, C. Direct marks
+// a form the row does not instantiate; launch_wide_cfg static_asserts it is never read.
+constexpr KernelVariant wide_variant(std::size_t i, int form) {
     using K = KernelVariant;
-    switch (i) {
-    case 0: return form == 'N' ? K::Tiled64x64RegisterK16Wide : form == 'A' ? K::Tiled64x64RegisterK16WideCN
-                                                                            : K::Tiled64x64RegisterK16WideNC;
-    case 1: return K::Tiled128x32RegisterK16WideNC;
-    case 2: return K::Tiled32x128RegisterK16WideCN;
-    case 3: return K::Tiled32x32RegisterK16Wide;
-    default: return K::Tiled16x16RegisterK16Wide;
-    }
+    constexpr K x = K::Direct;
+    constexpr K table[8][9] = {
+        {K::Tiled64x64RegisterK16Wide, K::Tiled64x64RegisterK16WideNT, K::Tiled64x64RegisterK16WideNC,
+         K::Tiled64x64RegisterK16WideTN, K::Tiled64x64RegisterK16WideTT, K::Tiled64x64RegisterK16WideTC,
+         K::Tiled64x64RegisterK16WideCN, K::Tiled64x64RegisterK16WideCT, K::Tiled64x64RegisterK16WideCC},
+        {x, K::Tiled128x32RegisterK16WideNT, K::Tiled128x32RegisterK16WideNC, K::Tiled128x32RegisterK16WideTN, x, x,
+         K::Tiled128x32RegisterK16WideCN, x, x},
+        {x, K::Tiled32x128RegisterK16WideNT, K::Tiled32x128RegisterK16WideNC, K::Tiled32x128RegisterK16WideTN, x, x,
+         K::Tiled32x128RegisterK16WideCN, x, x},
+        {K::Tiled32x32RegisterK16Wide, K::Tiled32x32RegisterK16WideNT, K::Tiled32x32RegisterK16WideNC,
+         K::Tiled32x32RegisterK16WideTN, x, x, K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, x},
+        {K::Tiled16x16RegisterK16Wide, K::Tiled16x16RegisterK16WideNT, K::Tiled16x16RegisterK16WideNC,
+         K::Tiled16x16RegisterK16WideTN, x, x, K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, x},
+        {K::Tiled64x32RegisterK16Wide, K::Tiled64x32RegisterK16WideNT, K::Tiled64x32RegisterK16WideNC,
+         K::Tiled64x32RegisterK16WideTN, x, x, K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, x},
+        {K::Tiled32x64RegisterK16Wide, K::Tiled32x64RegisterK16WideNT, K::Tiled32x64RegisterK16WideNC,
+         K::Tiled32x64RegisterK16WideTN, x, x, K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, x},
+        {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
+         K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
+         K::Tiled64x64RegisterK8WideCN, K::Tiled64x64RegisterK8WideCT, K::Tiled64x64RegisterK8WideCC},
+    };
+    static_assert(std::size(table) == og::wide_configs.size(), "one trace row per wide_configs row");
+    return table[i][form];
 }
 
-// form: 'N' = NN, 'A' = ConjTrans A (CN), 'B' = ConjTrans B (NC).
-template <typename T, int I, char Fm>
+constexpr Transpose kWideOps[3] = {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans};
+
+template <typename T, int I, Transpose OA, Transpose OB>
 Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                       T alpha, T beta) {
     constexpr og::WideCfg c = og::wide_configs[I];
-    if constexpr (Fm == 'N' && c.m == 64 && c.n == 64) {
-        // The NN 64x64 tile is its own kernel; its leg is derived from the layout.
+    constexpr int fa = static_cast<int>(OA == Transpose::Trans) + 2 * static_cast<int>(OA == Transpose::ConjTrans);
+    constexpr int fb = static_cast<int>(OB == Transpose::Trans) + 2 * static_cast<int>(OB == Transpose::ConjTrans);
+    static_assert(c.has(fa, fb), "wide_configs does not list this form for this row");
+    if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
+        constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
+        static_assert((c.k == 16 || c.k == 8) && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x{16,8} 4x4 tile");
+        static_assert(og::wide_slm_bytes<T>(c) ==
+                          std::int64_t(2 * 2) * GemmWide64Body<T, OA, OB, true, c.k>::BufF * std::int64_t(sizeof(float)),
+                      "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
+        return launch_wide64_v2<T, OA, OB, c.k>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
+                                                aligned_trace_name(v));
+    } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64 && c.k == 16) {
+        // The NN 64x64x16 tile is its own kernel; its leg is derived from the layout. Double and
+        // complex<double> 64x64x8 run launch_wide_transposed in every form, NN included.
         if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
             return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_64x64_k16_wide<T, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
-        constexpr Transpose OA = Fm == 'A' ? Transpose::ConjTrans : Transpose::NoTrans;
-        constexpr Transpose OB = Fm == 'B' ? Transpose::ConjTrans : Transpose::NoTrans;
         return launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(wide_variant(I, Fm)));
+            ctx, A, B, C, alpha, beta, kernel_trace_name(wide_variant(I, 3 * fa + fb)));
+    }
+}
+
+// Form F = 3 op(A) + op(B) of wide_configs[I], launched when it serves the call. A real scalar
+// compiles only the N/C forms, and its C build serves a real T (og::wide_serves).
+// evidence: docs/perf/gemm.md#gemm-wide-instantiations-in-every-transpose-form
+template <typename T, int I, int F>
+void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
+                      T alpha, T beta, Transpose transA, Transpose transB) {
+    constexpr og::WideCfg c = og::wide_configs[I];
+    constexpr int fa = F / 3, fb = F % 3;
+    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1))) {
+        constexpr Transpose OA = kWideOps[fa], OB = kWideOps[fb];
+        if (!out && wide_trans_matches<T>(transA, OA) && wide_trans_matches<T>(transB, OB))
+            out = launch_wide_cfg<T, I, OA, OB>(ctx, A, B, C, alpha, beta);
     }
 }
 
 [[noreturn]] void refuse(const std::string& what) {
     throw batchlas::unsupported("gemm: " + what + " (the choice's can_run should have refused it)");
+}
+
+// can_run's slm_budget_for(wg) term, so a pin it refuses throws here rather than at submit.
+// Only a request above 48 KiB less the reserve can miss a non-Metal budget, so those skip the query.
+void refuse_over_budget(Queue& ctx, const char* who, std::int64_t bytes, int wg) {
+    if (!BATCHLAS_HAS_SYCL_BACKEND && bytes <= std::int64_t(resident::device_slm_budget(48 * 1024))) return;
+    const auto budget = resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), wg));
+    if (bytes > static_cast<std::int64_t>(budget))
+        refuse(std::string(who) + " needs " + std::to_string(bytes) + " B of local memory; the device budgets " +
+               std::to_string(budget));
 }
 
 } // namespace
@@ -313,7 +452,11 @@ Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     static_cast<void>(k_b);
-    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDim) refuse("small serves max(m, n, k) <= 64");
+    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDimFor<T>)
+        refuse("small serves max(m, n, k) <= " + std::to_string(sycl_gemm_small::kSmallMaxDimFor<T>));
+    const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
+    const int mx = static_cast<int>(std::max({m, n, k}));
+    refuse_over_budget(ctx, "small", og::small_slm_bytes<T>(nn, mx), og::small_wg<T>(nn, mx));
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
     return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
 }
@@ -355,19 +498,15 @@ template <typename T>
 Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
                 T beta, Transpose transA, Transpose transB) {
-    const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
-    const bool cn = wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans;
-    const bool nc = transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans);
     std::optional<Event> out;
     static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
         constexpr og::WideCfg c = og::wide_configs[I];
         if (out || c.m != tm || c.n != tn || c.k != tk) return;
-        if constexpr (c.nn)
-            if (nn) out = launch_wide_cfg<T, I, 'N'>(ctx, A, B, C, alpha, beta);
-        if constexpr (c.cn)
-            if (cn) out = launch_wide_cfg<T, I, 'A'>(ctx, A, B, C, alpha, beta);
-        if constexpr (c.nc)
-            if (nc) out = launch_wide_cfg<T, I, 'B'>(ctx, A, B, C, alpha, beta);
+        refuse_over_budget(ctx, "wide", og::wide_slm_bytes<T>(c), c.threads());
+        static_for<9>([&](auto F) {
+            launch_wide_form<T, decltype(I)::value, decltype(F)::value>(out, ctx, A, B, C, alpha, beta, transA,
+                                                                        transB);
+        });
     });
     if (!out)
         refuse("wide:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" + std::to_string(tk) +
@@ -399,5 +538,13 @@ template Event gemm_small<double>(Queue&, const MatrixView<double, MatrixFormat:
                                   const MatrixView<double, MatrixFormat::Dense>&,
                                   const MatrixView<double, MatrixFormat::Dense>&, double, double, Transpose,
                                   Transpose);
+template Event gemm_small<std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               std::complex<float>, std::complex<float>, Transpose, Transpose);
+template Event gemm_small<std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                std::complex<double>, std::complex<double>, Transpose, Transpose);
 
 } // namespace batchlas::sycl_gemm

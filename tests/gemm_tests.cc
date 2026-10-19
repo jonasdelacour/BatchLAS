@@ -346,34 +346,49 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     A.set_active_dims(ar.to_span(), ac.to_span());
     B.set_active_dims(br.to_span(), bc.to_span());
     C.set_active_dims(cr.to_span(), cc.to_span());
-    const ScalarType alpha = ScalarType(Real(1.5)), beta = ScalarType(Real(-0.5));
-    for (const char* word : {"tiled", "direct", "wide:m=64:n=64:k=16"}) {
-        SCOPED_TRACE(word);
+    // Complex alpha and beta with nonzero imaginary parts, so a dropped imaginary term is red.
+    ScalarType alpha = ScalarType(Real(1.5)), beta = ScalarType(Real(-0.5));
+    if constexpr (batchlas::is_std_complex_v<ScalarType>)
+        alpha = ScalarType(Real(1.5), Real(-0.75)), beta = ScalarType(Real(-0.5), Real(0.25));
+    const auto reset = [&] {
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < mn; ++j)
                 for (int i = 0; i < mm; ++i) C(i, j, b) = C0(i, j, b);
+    };
+    const auto item_matches = [&](int b) {
+        return GemmMatchesDefinition<ScalarType>(*(this->ctx), ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans,
+                                                 ActiveItem(B, b, br[b], bc[b]), Transpose::NoTrans,
+                                                 ActiveItem(C0, b, cr[b], cc[b]), ActiveItem(C, b, cr[b], cc[b]),
+                                                 alpha, beta, ac[b]);
+    };
+    // item 1 is 64 x 64 x 32: small runs it below a 16-byte scalar (complex<double> stops at 32)
+    std::vector<const char*> words{"tiled", "direct", "wide:m=64:n=64:k=16"};
+    if constexpr (sizeof(ScalarType) < 16) words.push_back("small");
+    for (const char* word : words) {
+        SCOPED_TRACE(word);
+        reset();
         {
             const GemmPin pin(word);
             (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
                        Transpose::NoTrans, ComputePrecision::Default);
             this->ctx->wait();
         }
-        for (int b = 0; b < batch; ++b)
-            ASSERT_TRUE(GemmMatchesDefinition<ScalarType>(*(this->ctx), ActiveItem(A, b, ar[b], ac[b]), Transpose::NoTrans, ActiveItem(B, b, br[b], bc[b]),
-                                                          Transpose::NoTrans, ActiveItem(C0, b, cr[b], cc[b]), ActiveItem(C, b, cr[b], cc[b]),
-                                                          alpha, beta, ac[b]))
-                << "item " << b;
+        for (int b = 0; b < batch; ++b) ASSERT_TRUE(item_matches(b)) << "item " << b;
     }
-    if constexpr (!test_utils::is_complex<ScalarType>::value) {
-        const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 would not
-        (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                   ComputePrecision::Default);
-        this->ctx->wait();
-    } else {
-        const GemmPin pin("small");
-        EXPECT_THROW(((void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
-                                 Transpose::NoTrans, ComputePrecision::Default)),
-                     std::invalid_argument);
+    if constexpr (sizeof(ScalarType) >= 16) {
+        // The loop launches items in order with no rollback (gemm_heterogeneous.hh): item 0 is
+        // written by small before item 1 refuses, and the refused item stays untouched.
+        reset();
+        {
+            const GemmPin pin("small");
+            EXPECT_THROW(((void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans,
+                                     Transpose::NoTrans, ComputePrecision::Default)),
+                         std::invalid_argument);
+            this->ctx->wait();
+        }
+        EXPECT_TRUE(item_matches(0)) << "item 0, launched before item 1 refused";
+        for (int j = 0; j < cc[1]; ++j)
+            for (int i = 0; i < cr[1]; ++i) ASSERT_EQ(C(i, j, 1), C0(i, j, 1)) << "refused item 1 at " << i << "," << j;
     }
 }
 
@@ -1376,17 +1391,23 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
-// The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
+// The small wide tiles (32x32, 16x16, 64x32 and 32x64 macro tiles), shared by the tests below.
+const char* const kSmallWideTiles[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16", "wide:m=64:n=32:k=16",
+                                       "wide:m=32:n=64:k=16"};
+// 29 x 21 is one partial work-group on 64x32 and 32x64; 70 x 67 gives every tile full groups
+// (the coalesced store) beside partial ones in both m and n, so the tests below run both.
+const int kSmallWideShapes[][3] = {{29, 21, 70}, {70, 67, 40}};
+
+// The small wide tiles on NN. Ragged
 // in every dimension, k from 1 to past two staged blocks, both betas, sub-views
 // of a wider parent (inherited ld, offset base).
 // ARMED BREAK: pass beta = T(0) to the 16x16 tile only. OBSERVED on this branch:
 // red only on GemmTest/{4..7} (CUDA), only the 16x16x16wide beta=-1 cases.
 TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     using ScalarType = typename TestFixture::ScalarType;
-    const char* kernels[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"};
     const int shapes[][3] = {{32, 32, 1}, {32, 32, 70}, {29, 31, 257}, {16, 16, 33},
                              {13, 7, 100}, {32, 17, 8}, {40, 70, 65}, {5, 3, 16}};
-    for (const char* kname : kernels) {
+    for (const char* kname : kSmallWideTiles) {
         for (const auto& s : shapes) {
             for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
                 SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " n=" +
@@ -1399,16 +1420,36 @@ TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     }
 }
 
-// The small wide tiles are NN-only, so can_run refuses every transposed form and
-// the pin throws (it used to fall back to Tiled16 silently).
-TYPED_TEST(GemmTest, SmallWideTilesRefuseTransposedRequest) {
+// The small wide tiles instantiate one transposed operand (NT, NC, TN, CN) and CT, but not
+// TT, TC or CC: can_run refuses those for every scalar (a real TT folds to CC) and the pin
+// throws (it used to fall back to Tiled16 silently).
+TYPED_TEST(GemmTest, SmallWideTilesRefuseBothTransposedRequest) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    const Transpose pairs[][2] = {{Transpose::ConjTrans, Transpose::NoTrans},
-                                  {Transpose::NoTrans, Transpose::Trans},
-                                  {Transpose::Trans, Transpose::ConjTrans}};
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
+    const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    const Transpose pairs[][2] = {{T, Cj}, {T, T}, {Cj, Cj}};
+    for (const char* kname : kSmallWideTiles)
         for (const auto& p : pairs) ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
+}
+
+// The small wide tiles on their transposed forms: ragged in every dimension, k past two staged
+// blocks, a sub-view of a wider parent, beta != 0. A real CT is a TT (CC build, not here).
+TYPED_TEST(GemmTest, SmallWideTilesRunTheirTransposedForms) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    const Transpose N = Transpose::NoTrans, T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}};
+    for (const char* kname : kSmallWideTiles)
+        for (const auto& s : kSmallWideShapes)
+            for (const auto& p : pairs) {
+                SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " ta=" + std::to_string(int(p[0])) +
+                             " tb=" + std::to_string(int(p[1])));
+                if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
+                    ExpectPinRefused<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1]);
+                else
+                    RunForcedWideTransposedCheck<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1],
+                                                             ScalarType(-1), 300);
+            }
 }
 
 // The register launchers hard-wire OpA/OpB, so running one on a form it was not
@@ -1429,7 +1470,7 @@ TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
     } else {
         RunForcedWideTransposedCheck<ScalarType>(*this->ctx, "reg:m=64:n=64:k=16:u=1", m, n, k, Cj, N, ScalarType(-1),
                                                           128, 3, 2);
-        for (const char* nn_only : {"reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=128:n=128:k=8:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2"}) {
+        for (const char* nn_only : {"reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2"}) {
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, N, T);
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, Cj, N);
             ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, T, Cj);
@@ -1446,9 +1487,10 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
     using Real = typename batchlas::base_type<ScalarType>::type;
-    constexpr int parent = 300, off = 3, batch = 3, m = 29, n = 21, k = 70;
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
-        SCOPED_TRACE(kname);
+    constexpr int parent = 300, off = 3, batch = 3;
+    for (const char* kname : kSmallWideTiles) for (const auto& s : kSmallWideShapes) {
+        const int m = s[0], n = s[1], k = s[2];
+        SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(m));
         auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch);
         auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch);
         auto PC = Matrix<ScalarType>::Random(parent, parent, false, batch);
@@ -1478,67 +1520,77 @@ TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
 TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    constexpr int m = 31, n = 29, k = 300, batch = 2048;
-    auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
-    auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
-    auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
-    Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
-    auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
-    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
-        Matrix<ScalarType> C(m, n, batch);
-        auto a = A.data(), b = B.data(), c = C.data();
-        for (int item = 0; item < batch; ++item) {
-            for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
-            for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
-            for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
-        }
-        {
-            const GemmPin force_kernel(kname);
-            (void)gemm(*(this->ctx), A, B, C,
-                 {.alpha = ScalarType(2), .beta = ScalarType(-1)});
-        }
-        this->ctx->wait();
-        c = C.data();
-        int mismatched = 0;
-        for (int item = 1; item < batch; ++item) {
-            for (int i = 0; i < m * n; ++i) {
-                if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
-                    ++mismatched;
+    constexpr int batch = 2048;
+    // k = 40 on the multi-tile shape keeps three staged blocks at under half the memory of k = 300.
+    const int shapes[][3] = {{31, 29, 300}, {70, 67, 40}};
+    for (const auto& s : shapes) {
+        const int m = s[0], n = s[1], k = s[2];
+        auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
+        auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
+        auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
+        Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
+        auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
+        for (const char* kname : kSmallWideTiles) {
+            Matrix<ScalarType> C(m, n, batch);
+            auto a = A.data(), b = B.data(), c = C.data();
+            for (int item = 0; item < batch; ++item) {
+                for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
+                for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
+                for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
+            }
+            {
+                const GemmPin force_kernel(kname);
+                (void)gemm(*(this->ctx), A, B, C,
+                     {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+            }
+            this->ctx->wait();
+            c = C.data();
+            int mismatched = 0;
+            for (int item = 1; item < batch; ++item) {
+                for (int i = 0; i < m * n; ++i) {
+                    if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
+                        ++mismatched;
+                    }
                 }
             }
+            EXPECT_EQ(mismatched, 0) << kname << " m=" << m;
         }
-        EXPECT_EQ(mismatched, 0) << kname;
     }
 }
 
-// The small batched kernel (max(m, n, k) <= 64, real scalars; a complex or a 65 pin
-// throws -- it used to fall back to Direct). Ragged edges in every bucket, both transposes of each
-// operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
-// work-group holds a partial set of matrices.
+// The small batched kernel (max(m, n, k) <= 64, complex<double> 32; a pin past it throws -- it
+// used to fall back to Direct). Ragged edges in every bucket, every op of each operand (ConjTrans
+// for complex, with complex alpha and beta), beta = 0 (the C read is skipped) and beta != 0, and
+// batch 67 so the last work-group holds a partial set of matrices.
 // ARMED BREAK (R9): drop `c < n` from small_batched.hh's epilogue guard.
 // EXPECTED: RED on every n that is not a whole bucket.
 TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
     using ScalarType = typename TestFixture::ScalarType;
-    const Transpose ops[] = {Transpose::NoTrans, Transpose::Trans};
+    using Real = typename batchlas::base_type<ScalarType>::type;
+    constexpr bool kCx = test_utils::is_complex<ScalarType>::value;
+    constexpr int kMax = sizeof(ScalarType) == 16 ? 32 : 64;
+    const std::vector<Transpose> ops = kCx ? std::vector<Transpose>{Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}
+                                           : std::vector<Transpose>{Transpose::NoTrans, Transpose::Trans};
     const int shapes[][3] = {{1, 1, 1}, {5, 3, 7}, {8, 8, 8}, {13, 9, 16},
                              {16, 16, 16}, {17, 32, 5}, {31, 29, 23}, {32, 32, 32},
                              {33, 40, 64}, {48, 50, 61}, {64, 64, 64}, {64, 7, 3}};
+    auto make = [](double re, double im) {
+        if constexpr (kCx) return ScalarType(Real(re), Real(im));
+        else return ScalarType(Real(re));
+    };
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value) {
-        ExpectPinRefused<ScalarType>(*this->ctx, "small", 13, 9, 16, Transpose::NoTrans, Transpose::NoTrans);
-        return;
-    }
-    ExpectPinRefused<ScalarType>(*this->ctx, "small", 65, 8, 8, Transpose::NoTrans, Transpose::NoTrans);
-    ExpectPinRefused<ScalarType>(*this->ctx, "small", 8, 8, 65, Transpose::Trans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", kMax + 1, 8, 8, Transpose::NoTrans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", 8, 8, kMax + 1, Transpose::Trans, Transpose::NoTrans);
     for (Transpose ta : ops) {
         for (Transpose tb : ops) {
             for (const auto& s : shapes) {
-                for (ScalarType beta : {ScalarType(0), ScalarType(-1.5)}) {
+                if (std::max({s[0], s[1], s[2]}) > kMax) continue;
+                for (ScalarType beta : {ScalarType(0), make(-1.5, 0.75)}) {
                     SCOPED_TRACE(::testing::Message() << "m=" << s[0] << " n=" << s[1]
                                                       << " k=" << s[2]);
                     RunForcedSyclGemmKernelCheck<ScalarType, TestFixture::BackendType>(
                         *(this->ctx), "small", s[0], s[1], s[2], 67, ta, tb,
-                        ScalarType(0.5), beta);
+                        make(0.5, -0.25), beta);
                 }
             }
         }
@@ -1572,14 +1624,17 @@ TYPED_TEST(GemmTest, SmallTiledMatchesVendor) {
 // compared, so a store past the view's rows or columns is caught.
 TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
     using ScalarType = typename TestFixture::ScalarType;
-    if constexpr (test_utils::is_complex<ScalarType>::value) GTEST_SKIP() << "small is real-only (refusal above)";
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 29, 31, 17, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/64, /*row_offset=*/3, /*batch_size=*/5);
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 12, 7, 32, Transpose::Trans, Transpose::Trans,
         ScalarType(0), /*parent=*/64, /*row_offset=*/2, /*batch_size=*/5);
-    // The tiled leg (NN, max 33..56), both instantiations.
+    RunForcedWideTransposedCheck<ScalarType>(
+        *(this->ctx), "small", 27, 19, 30, Transpose::ConjTrans, Transpose::ConjTrans,
+        ScalarType(1), /*parent=*/64, /*row_offset=*/1, /*batch_size=*/5);
+    if constexpr (sizeof(ScalarType) == 16) return;  // above its ceiling of 32
+    // The tiled leg (NN, max 33..56) for float, both instantiations; NB = 64 otherwise.
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 45, 51, 38, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/96, /*row_offset=*/3, /*batch_size=*/5);
@@ -1635,31 +1690,41 @@ TYPED_TEST(GemmTest, WideTransposedCN32x128GeqrfPanelShape) {
 // single config able to serve potrf_blocked.cc's kTrailingTransB<T>, which is
 // ConjTrans for complex and Trans for real. For a COMPLEX scalar the same
 // substitution conjugates an operand that must not be conjugated and returns a
-// plausible wrong matrix, so the pin must be refused (it used to fall back).
-// Removing the guard leaves real passing and turns complex red.
+// plausible wrong matrix, so a complex Trans runs its own Trans build: the
+// complex data here has nonzero imaginary parts, so serving it from the
+// ConjTrans build turns complex red and leaves real passing. A form the config
+// does not list (TT on the panel tiles; a real TT folds to CC) is refused.
 // ---------------------------------------------------------------------------
-TYPED_TEST(GemmTest, WideTransposedRealTransWideningAndComplexRefusal) {
+TYPED_TEST(GemmTest, WideTransposedTransBServedByItsOwnBuild) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value)
-        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::NoTrans,
-                                     Transpose::Trans);
-    else
-        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
-                                                          Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+    RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
+                                             Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::Trans,
+                                 Transpose::Trans);
 }
 
-// The mirror of the above on the A leg: a Trans request against a ConjTrans
-// instantiation of the CN tile.
-TYPED_TEST(GemmTest, WideTransposedRealTransWideningOnALeg) {
+// The mirror of the above on the A leg, on the CN tile.
+TYPED_TEST(GemmTest, WideTransposedTransAServedByItsOwnBuild) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value)
-        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::Trans,
-                                     Transpose::NoTrans);
-    else
-        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
-                                                          Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+    RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
+                                             Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::ConjTrans,
+                                 Transpose::ConjTrans);
+}
+
+// Both operands transposed on the 64x64 tile, which lists all nine forms: complex TT, TC, CT
+// and CC are four builds; a real one runs the CC build for every pair. Ragged, parent ld.
+TYPED_TEST(GemmTest, WideTransposedBothOperands64) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
+    for (const auto& p : {std::pair{T, T}, std::pair{T, Cj}, std::pair{Cj, T}, std::pair{Cj, Cj}}) {
+        SCOPED_TRACE("ta=" + std::to_string(int(p.first)) + " tb=" + std::to_string(int(p.second)));
+        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90, p.first,
+                                                 p.second, ScalarType(-1));
+    }
 }
 
 // A NoTrans request against a config with only transposing instantiations is

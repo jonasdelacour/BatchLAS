@@ -19,7 +19,7 @@ namespace batchlas::ops::gemm {
 // instantiation, the aligned vs predicated leg, the small bucket, TR/TC/stages (tables below).
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
-struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; real, see small_fits
+struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
 /// gemm_reg, float only: m x n x k macro tile with k unroll u; must name a reg_configs entry that
 /// instantiates the call's transpose form, and max_wg must cover its threads().
 struct Reg {
@@ -49,8 +49,8 @@ struct Forms {
     bool nn = false, nt = false, tn = false, tt = false;
 };
 
-/// One compiled register config: tr/tc thread tile, stages, the forms instantiated, and whether
-/// NN takes the unpredicated leg when the layout allows (derived per call, never a gate).
+/// One compiled register config: tr/tc thread tile, stages, forms, and whether NN (every form at
+/// 128x128) takes the unpredicated leg when the layout allows (derived per call, never a gate).
 struct RegCfg {
     int m, n, k, u, tr, tc, stages;
     Forms forms;
@@ -72,23 +72,53 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {32, 128, 16, 1, 4, 4, 1, {true, false, true, true}, false},
     {128, 64, 32, 4, 8, 4, 2, {true, false, false, false}, true},
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
-    {128, 128, 8, 1, 8, 8, 2, {true, false, false, false}, true},  // its own kernel (register_128x128.hh)
+    {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
 }};
 
-/// One compiled wide config. NN, CN (ConjTrans A) and NC (ConjTrans B) instantiations; a real
-/// Trans is served by a ConjTrans one (conj is the identity), a complex Trans is not.
+/// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.
+constexpr unsigned wide_bit(int a, int b) { return 1u << (3 * a + b); }
+inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kWideNC = wide_bit(0, 2);
+inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
+inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
+inline constexpr unsigned kWideAll = 0x1FF;
+inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC | kWideCC);
+
+/// One compiled wide config and the forms a complex scalar instantiates. A real scalar compiles
+/// only the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
 struct WideCfg {
     int m, n, k, ttm, ttn;
-    bool nn, cn, nc;
+    unsigned forms;
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
+    constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
 };
-inline constexpr std::array<WideCfg, 5> wide_configs{{
-    {64, 64, 16, 4, 4, true, true, true},
-    {128, 32, 16, 4, 4, false, false, true},  // the potrf trailing update, W = 32
-    {32, 128, 16, 4, 4, false, true, false},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, true, false, false},
-    {16, 16, 16, 2, 2, true, false, false},
+inline constexpr std::array<WideCfg, 8> wide_configs{{
+    {64, 64, 16, 4, 4, kWideAll},
+    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
+    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
+    {32, 32, 16, 4, 4, kWideSmallTileForms},
+    {16, 16, 16, 2, 2, kWideSmallTileForms},
+    {64, 32, 16, 4, 4, kWideSmallTileForms},
+    {32, 64, 16, 4, 4, kWideSmallTileForms},
+    {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
 }};
+
+template <class T>
+inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
+
+/// Does config c serve (op(A), op(B)) for scalar T? A real T folds to C (the build it compiles).
+template <class T>
+constexpr bool wide_serves(const WideCfg& c, int a, int b) {
+    if constexpr (is_complex_v<T>) return c.has(a, b);
+    else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
+}
+
+/// Local memory a wide config asks for: one k x (m + n) tile, double-buffered by wide v2 (64x64,
+/// float and complex<float>); gemm_kernels.cc static_asserts it against the kernels.
+template <class T>
+constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
+    const bool v2 = c.m == 64 && c.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    return std::int64_t(v2 ? 2 : 1) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
+}
 
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.
 inline constexpr int kSmallMaxDim = 64;
@@ -108,29 +138,42 @@ inline constexpr int kTiledWg = 256;
 /// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
 inline constexpr std::int64_t kMaxGridBatch = 65535;
 
-template <class T>
-inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
-
 /// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
 template <class T>
 constexpr bool small_needs_sg32(bool nn, int max_dim) {
     return !(std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim);
 }
+/// small's ceiling for T: 32 for a 16-byte scalar (small_batched.hh's kSmallMaxDimFor says why).
+template <class T>
+constexpr int small_max_dim() { return sizeof(T) >= 16 ? 32 : kSmallMaxDim; }
+/// Local memory small asks for: 128 / (2 NB) slots of NB x (NB + 1), NB the bucket of max_dim, or
+/// the float NN tiled leg's 2 NB (NB + 4) (gemm_kernels.cc static_asserts both).
+template <class T>
+constexpr std::int64_t small_slm_bytes(bool nn, int max_dim) {
+    if (std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim) {
+        const std::int64_t nb = max_dim <= 48 ? 48 : 56;
+        return 2 * nb * (nb + 4) * std::int64_t(sizeof(T));
+    }
+    const std::int64_t nb = max_dim <= 8 ? 8 : max_dim <= 16 ? 16 : max_dim <= 32 ? 32 : 64;
+    return (kSmallWg / (2 * nb)) * nb * (nb + 1) * std::int64_t(sizeof(T));
+}
 /// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
 template <class T>
 bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
-    if (is_complex_v<T> || max_dim < 1 || max_dim > kSmallMaxDim) return false;
+    if (max_dim < 1 || max_dim > small_max_dim<T>()) return false;
     const int mx = static_cast<int>(max_dim);
-    return d.max_wg >= small_wg<T>(nn, mx) && (d.has_sg32 || !small_needs_sg32<T>(nn, mx));
+    const int wg = small_wg<T>(nn, mx);
+    return d.max_wg >= wg && (d.has_sg32 || !small_needs_sg32<T>(nn, mx)) &&
+           d.slm_budget_for(wg) >= small_slm_bytes<T>(nn, mx);
 }
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>
 constexpr auto candidates() {
-    constexpr std::array<Wide, 5> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
-                                        Wide{16, 16, 16}};
+    constexpr std::array<Wide, 8> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
+                                        Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}, Wide{64, 64, 8}};
     if constexpr (std::is_same_v<T, float>) {
-        std::array<GemmChoice, 19> out{};
+        std::array<GemmChoice, 22> out{};
         std::size_t i = 0;
         out[i++] = Direct{};
         out[i++] = Tiled{};
@@ -139,12 +182,9 @@ constexpr auto candidates() {
         for (const Wide& w : wides) out[i++] = w;
         out[i++] = Vendor{};
         return out;
-    } else if constexpr (std::is_same_v<T, double>) {
-        return std::array<GemmChoice, 9>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2], wides[3],
-                                         wides[4], Vendor{}};
     } else {
-        return std::array<GemmChoice, 8>{Direct{}, Tiled{}, wides[0], wides[1], wides[2], wides[3], wides[4],
-                                         Vendor{}};
+        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
+                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
     }
 }
 
@@ -168,8 +208,9 @@ inline constexpr std::array<int, 2> grid_skinny_k{256, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};
 inline constexpr int grid_packed_panel_min = 128;
 inline constexpr std::array<std::string_view, 4> grid_real_forms{"NN", "NT", "TN", "TT"};
-inline constexpr std::array<std::string_view, 3> grid_real_panel_forms{"NN", "NT", "TN"};
-inline constexpr std::array<std::string_view, 6> grid_complex_forms{"NN", "NT", "TN", "NC", "CN", "CT"};
+inline constexpr std::array<std::string_view, 4> grid_real_panel_forms{"NN", "NT", "TN", "TT"};
+inline constexpr std::array<std::string_view, 9> grid_complex_forms{"NN", "NT", "TN", "NC", "CN",
+                                                                     "CT", "TC", "CC", "TT"};
 inline constexpr std::array<std::string_view, 5> grid_complex_panel_forms{"NN", "NT", "NC", "TN", "CN"};
 
 }  // namespace batchlas::ops::gemm

@@ -43,6 +43,22 @@ enum class KernelVariant {
     Tiled32x128RegisterK16TT,
     Tiled32x32RegisterK16Wide,
     Tiled16x16RegisterK16Wide,
+    Tiled64x64RegisterK16WideNT, Tiled64x64RegisterK16WideTN, Tiled64x64RegisterK16WideTT,
+    Tiled64x64RegisterK16WideTC, Tiled64x64RegisterK16WideCT, Tiled64x64RegisterK16WideCC,
+    Tiled128x32RegisterK16WideNT, Tiled128x32RegisterK16WideTN, Tiled128x32RegisterK16WideCN,
+    Tiled32x128RegisterK16WideNT, Tiled32x128RegisterK16WideTN, Tiled32x128RegisterK16WideNC,
+    Tiled32x32RegisterK16WideNT, Tiled32x32RegisterK16WideNC, Tiled32x32RegisterK16WideTN, Tiled32x32RegisterK16WideCN,
+    Tiled32x32RegisterK16WideCT,
+    Tiled16x16RegisterK16WideNT, Tiled16x16RegisterK16WideNC, Tiled16x16RegisterK16WideTN, Tiled16x16RegisterK16WideCN,
+    Tiled16x16RegisterK16WideCT,
+    Tiled64x32RegisterK16Wide, Tiled64x32RegisterK16WideNT, Tiled64x32RegisterK16WideNC, Tiled64x32RegisterK16WideTN,
+    Tiled64x32RegisterK16WideCN, Tiled64x32RegisterK16WideCT,
+    Tiled32x64RegisterK16Wide, Tiled32x64RegisterK16WideNT, Tiled32x64RegisterK16WideNC, Tiled32x64RegisterK16WideTN,
+    Tiled32x64RegisterK16WideCN, Tiled32x64RegisterK16WideCT,
+    Tiled128x128RegisterK8NT, Tiled128x128RegisterK8TN, Tiled128x128RegisterK8TT,
+    Tiled64x64RegisterK8Wide, Tiled64x64RegisterK8WideNT, Tiled64x64RegisterK8WideNC, Tiled64x64RegisterK8WideTN,
+    Tiled64x64RegisterK8WideTT, Tiled64x64RegisterK8WideTC, Tiled64x64RegisterK8WideCN, Tiled64x64RegisterK8WideCT,
+    Tiled64x64RegisterK8WideCC,
 };
 
 // One launcher per gemm family (src/ops/gemm/choice.hh). Each serves exactly what its family's
@@ -60,7 +76,7 @@ BATCHLAS_INTERNAL_API Event gemm_tiled(Queue& ctx, const MatrixView<T, MatrixFor
                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                        Transpose transA, Transpose transB);
 
-// Real scalars, max(m, n, k) <= 64.
+// Every scalar; max(m, n, k) <= 64, or 32 for complex<double> (ops::gemm::small_max_dim).
 template <typename T>
 BATCHLAS_INTERNAL_API Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                                        const MatrixView<T, MatrixFormat::Dense>& B,
