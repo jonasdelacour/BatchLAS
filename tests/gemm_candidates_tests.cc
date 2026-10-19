@@ -227,6 +227,12 @@ bool wide_fits(const WideRow& row) {
     return wide_slm<T>(row) <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
 }
 
+// split-k's host: a wide row other than 64x64 (launch_wide_transposed in every form), s 2, 4 or 8.
+const WideRow* splitk_row(const og::SplitK& sk) {
+    if ((sk.m == 64 && sk.n == 64) || (sk.s != 2 && sk.s != 4 && sk.s != 8)) return nullptr;
+    return wide_row(og::Wide{sk.m, sk.n, sk.k});
+}
+
 // small, spelled apart from choice.hh: complex<double> stops at 32 (its 64 bucket is 66.5 KB);
 // 128 / (2 NB) slots of NB x (NB + 1) for NB the bucket of max(m, n, k), or the float NN tiled
 // leg's (33..56) 2 NB (NB + 4) on (NB/4)^2 lanes, within the device's local memory budget.
@@ -259,6 +265,10 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
             const WideRow* row = wide_row(w);
             return row && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
         },
+        [&](const og::SplitK& sk) {
+            const WideRow* row = splitk_row(sk);
+            return row && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
+        },
         [](og::Vendor) { return false; },
     }, c);
 }
@@ -289,6 +299,7 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
             return row->trace.at(f);
         },
+        [&](const og::SplitK& sk) { return splitk_row(sk)->trace.at(wide_form<T>(ta, tb)) + "_splitk"; },
         [](og::Vendor) { return std::string(); },
     }, c);
 }
@@ -661,6 +672,10 @@ protected:
                     (void)sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, Cm, p.alpha, p.beta, ta, tb);
                     return true;
                 },
+                [&](const og::SplitK& sk) {
+                    (void)sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, Cm, p.alpha, p.beta, ta, tb);
+                    return true;
+                },
                 [&](og::Vendor) {
                     if (why) *why = "the vendor has no SYCL launcher";
                     return false;
@@ -804,7 +819,9 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
     static constexpr Backend B = TestFixture::B;
     int checked = 0;
     for (const C& c : og::candidates<T>()) {
-        if (!std::holds_alternative<og::Reg>(c) && !std::holds_alternative<og::Wide>(c)) continue;
+        if (!std::holds_alternative<og::Reg>(c) && !std::holds_alternative<og::Wide>(c) &&
+            !std::holds_alternative<og::SplitK>(c))
+            continue;
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 Spec s{ta, tb, 96, 80, 48, 2, Layout::Packed};
@@ -1365,6 +1382,85 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
     EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
 }
 
+// WP-L, split-k on every host tile, s and form. k = 300 slices unevenly (kc = 160, 80, 48: the last
+// slice is partial, and at s = 8 the eighth is empty and must store zeros; 16-byte scalars k = 136,
+// kc = 80, 48, 32, empty slices at s = 4 and 8); k = 40 leaves slices
+// past k at s = 4 and 8; k = 1 only slice 0. m and n one past the host tile (edge groups in both),
+// at batch 1024 repeating 7 problems on ld = m + 1 with complex alpha and beta != 0: a slice that
+// reads past its k range double-counts valid data, a lost slice drops a k range, a reduction that
+// applies beta per slice or reads another item's partials is wrong, and items differ if the slice
+// index is derived from anything but the group. Padded views at k = 40, then beta = 0 with NaN in
+// C (the reduction must not read C) and a second identical call bit for bit (fixed summation order).
+// evidence: docs/perf/gemm.md#gemm-wp-l-global-split-k-over-the-transposed-wide-tiles
+TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdges) {
+    using T = typename TestFixture::T;
+    int ran = 0, nan_checked = 0, repeated = 0;
+    const int deep = sizeof(T) == 16 ? 136 : 300;
+    for (const C& c : og::candidates<T>()) {
+        const auto* sk = std::get_if<og::SplitK>(&c);
+        if (!sk) continue;
+        struct Shape { int m, n, k; Layout layout; int batch; };
+        const Shape shapes[] = {{sk->m + 1, sk->n + 1, deep, Layout::Gap1, 1024},
+                                {sk->m, sk->n, 40, Layout::Padded, 3},
+                                {sk->m + 1, sk->n - 1, 1, Layout::Strided, 3}};
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms) {
+                if (!TestFixture::expect_runs(c, Spec{ta, tb, sk->m, sk->n, 40})) continue;
+                for (const Shape& sh : shapes) {
+                    Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
+                    s.period = sh.batch > 3 ? 7 : 0;
+                    s.seed = 9500u + sh.m + 3u * sh.n + 11u * sh.k;
+                    auto p = make_problem<T>(s);
+                    this->run_pinned(c, p);
+                    expect_gemm(*this->ctx, p, name(c, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                }
+                Spec s{ta, tb, sk->m + 1, sk->n + 1, deep, 3, Layout::Gap1};
+                s.beta_zero = s.nan_c = true;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++nan_checked;
+                auto again = make_problem<T>(s);
+                this->run_pinned(c, again);
+                for (std::size_t e = 0; e < p.mem.size(); ++e)
+                    ASSERT_TRUE(same_bits(p.mem[e], again.mem[e])) << name(c, s) << ": a repeated call differs at " << e;
+                ++repeated;
+            }
+    }
+    // 6 hosts x 3 slice counts over the (ta, tb) pairs: 128x32 and 32x128 serve four, the four
+    // small tiles six (complex) or five (real: T folds to C, so no TT, TC, CT, CC)
+    const int forms = kCx<T> ? 3 * (2 * 4 + 4 * 6) : 3 * (2 * 4 + 4 * 5);
+    EXPECT_EQ(ran, 3 * forms);
+    EXPECT_EQ(nan_checked, forms);
+    EXPECT_EQ(repeated, forms);
+}
+
+// split-k puts batch * s groups in grid z: a pin is a launch at batch * s <= 65535 and a refusal
+// one item past it (where the device caps the grid), with C left bit for bit.
+TYPED_TEST(GemmCandidates, SplitKGridCeilingIsBatchTimesSlices) {
+    using T = typename TestFixture::T;
+    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
+    const int ceiling = int(test_utils::kCudaGridYZ);
+    if (dev.max_groups_yz > ceiling) GTEST_SKIP() << dev.key << " has no grid z cap";
+    for (int sl : {2, 8}) {
+        const C c{og::SplitK{16, 16, 16, sl}};
+        const Spec at{kN, kN, 2, 2, 20, ceiling / sl, Layout::Packed};
+        Spec past = at;
+        past.batch += 1;
+        auto p = make_problem<T>(at);
+        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
+        expect_gemm(*this->ctx, p, name(c, at));
+        auto q = make_problem<T>(past);
+        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
+        for (std::size_t e = 0; e < q.mem.size(); ++e)
+            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
+    }
+}
+
+
 // WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
 // on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
 // 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
@@ -1678,7 +1774,10 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     const Spec at{kN, kN, 2, 2, 2, ceiling, Layout::Packed};
     const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
     for (const C& c : og::candidates<T>()) {
-        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::Small>(c)) continue;
+        // split-k's ceiling is batch * s (SplitKGridCeilingIsBatchTimesSlices)
+        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::Small>(c) ||
+            std::holds_alternative<og::SplitK>(c))
+            continue;
         if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
         auto p = make_problem<T>(at);
         ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
@@ -2275,8 +2374,13 @@ void expect_candidate_set() {
         for (const auto& r : reg_rows())
             want.insert("reg:m=" + std::to_string(r.m) + ":n=" + std::to_string(r.n) + ":k=" + std::to_string(r.k) +
                         ":u=" + std::to_string(r.u));
-    for (const auto& w : wide_rows())
+    for (const auto& w : wide_rows()) {
         want.insert("wide:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k));
+        for (int sl : {2, 4, 8})
+            if (splitk_row(og::SplitK{w.m, w.n, w.k, sl}))
+                want.insert("splitk:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k) +
+                            ":s=" + std::to_string(sl));
+    }
     EXPECT_EQ(got, want) << select::dtype_name<T>();
 }
 TEST(GemmCandidateSet, EqualsTheOracleRows) {

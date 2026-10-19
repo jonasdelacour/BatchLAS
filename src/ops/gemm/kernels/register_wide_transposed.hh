@@ -34,8 +34,15 @@ struct WideTile {
     int Stages = 1;                         // shared-memory stages: og::wide_stages
 };
 
-template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec>
+template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec, bool Split>
 class GemmWideTransposedKernel;
+
+// Split-k: group z of batch * splits computes item z / splits over k in [slice kc, slice kc + kc)
+// and stores item z of C (the partials, alpha = 1, beta = 0; gemm_splitk reduces them).
+struct WideSplit {
+    int splits = 1;
+    int kc = 0;
+};
 
 namespace wide_transposed {
 
@@ -160,14 +167,15 @@ inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
 // The next slab is fetched into registers before the current one's FMAs, except on the 64x64
 // tiles (double and complex<double>), whose registers sit at the two-group cap already.
 // evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
-template <typename T, WideTile P, bool VecLoads>
+template <typename T, WideTile P, bool VecLoads, bool Split>
 Event launch_wide_transposed_leg(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
                                  const MatrixView<T, MatrixFormat::Dense>& C,
                                  T alpha,
                                  T beta,
-                                 const char* trace) {
+                                 const char* trace,
+                                 WideSplit split) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
 
     using namespace wide_transposed;
@@ -237,7 +245,9 @@ Event launch_wide_transposed_leg(Queue& ctx,
     const int gn_tiles = (n + TileN - 1) / TileN;
 
     const sycl::range<3> local(1, LocalCols, LocalRows);
-    const sycl::range<3> global(static_cast<size_t>(A.batch_size()),
+    const int splits = Split ? split.splits : 1;
+    const int kc = split.kc;
+    const sycl::range<3> global(static_cast<size_t>(A.batch_size()) * static_cast<size_t>(splits),
                                 static_cast<size_t>(gn_tiles) * LocalCols,
                                 static_cast<size_t>(gm_tiles) * LocalRows);
 
@@ -265,9 +275,17 @@ Event launch_wide_transposed_leg(Queue& ctx,
 
         batchlas::impl::parallel_for<GemmWideTransposedKernel<T, TileM, TileN, TileK, TTM, TTN,
                                                 static_cast<int>(P.OpA),
-                                                static_cast<int>(P.OpB), Stages, VecLoads>>(h,
+                                                static_cast<int>(P.OpB), Stages, VecLoads, Split>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-                const int bid = static_cast<int>(item.get_group(0));
+                const int z = static_cast<int>(item.get_group(0));
+                int bid = z;
+                int k_lo = 0;
+                int k_hi = k;
+                if constexpr (Split) {
+                    bid = z / splits;
+                    k_lo = (z - bid * splits) * kc;
+                    k_hi = sycl::min(k, k_lo + kc);
+                }
                 if (bid >= batch) {
                     return;
                 }
@@ -285,7 +303,7 @@ Event launch_wide_transposed_leg(Queue& ctx,
 
                 const D* Ab = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
                 const D* Bb = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
-                D* Cb = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
+                D* Cb = c_ptr + static_cast<std::ptrdiff_t>(z) * stride_c;
 
                 D* sa = reinterpret_cast<D*>(
                     tile_a.template get_multi_ptr<sycl::access::decorated::no>().get());
@@ -304,14 +322,14 @@ BATCHLAS_UNROLL_FULL
                 alignas(16) D ra[NGA * VecN];
                 alignas(16) D rb[NGB * VecN];
                 auto load = [&](int k0) __attribute__((always_inline)) {
-                    const bool kin = k0 + TileK <= k;
+                    const bool kin = k0 + TileK <= k_hi;
 BATCHLAS_UNROLL_FULL
                     for (int r = 0; r < NGA; ++r) {
                         const int g = tid + r * Threads;
                         if (CountA % Threads != 0 && g >= CountA) continue;
                         int i, kk;
                         granule<KCA, TileM, TileK, VecN>(g, i, kk);
-                        gload<KCA, VecLoads>(&ra[r * VecN], Ab, lda, m0 + i, k0 + kk, m, k, a_in && kin);
+                        gload<KCA, VecLoads>(&ra[r * VecN], Ab, lda, m0 + i, k0 + kk, m, k_hi, a_in && kin);
                     }
 BATCHLAS_UNROLL_FULL
                     for (int r = 0; r < NGB; ++r) {
@@ -319,7 +337,7 @@ BATCHLAS_UNROLL_FULL
                         if (CountB % Threads != 0 && g >= CountB) continue;
                         int i, kk;
                         granule<KCB, TileN, TileK, VecN>(g, i, kk);
-                        gload<KCB, VecLoads>(&rb[r * VecN], Bb, ldb, n0 + i, k0 + kk, n, k, b_in && kin);
+                        gload<KCB, VecLoads>(&rb[r * VecN], Bb, ldb, n0 + i, k0 + kk, n, k_hi, b_in && kin);
                     }
                 };
                 auto store = [&](int stage) __attribute__((always_inline)) {
@@ -369,20 +387,20 @@ BATCHLAS_UNROLL_FULL
                     }
                 };
 
-                const int slabs = (k + TileK - 1) / TileK;
-                load(0);
+                const int slabs = (k_hi - k_lo + TileK - 1) / TileK;
+                load(k_lo);
                 store(0);
                 item.barrier(sycl::access::fence_space::local_space);
                 for (int s = 0; s < slabs; ++s) {
                     const int cur = Stages == 2 ? (s & 1) : 0;
                     const bool more = s + 1 < slabs;
                     if constexpr (Prefetch) {
-                        if (more) load((s + 1) * TileK);
+                        if (more) load(k_lo + (s + 1) * TileK);
                     }
                     compute(cur);
                     if (more) {
                         if constexpr (Stages == 1) item.barrier(sycl::access::fence_space::local_space);
-                        if constexpr (!Prefetch) load((s + 1) * TileK);
+                        if constexpr (!Prefetch) load(k_lo + (s + 1) * TileK);
                         store(Stages == 2 ? cur ^ 1 : 0);
                         item.barrier(sycl::access::fence_space::local_space);
                     }
@@ -477,12 +495,13 @@ BATCHLAS_UNROLL_FULL
 
 // The leg (16-byte or element global loads) is wide v2's predicate, per launch; whether a slab
 // is predicated is per work-group. One trace name for both legs.
-template <typename T, WideTile P>
+template <typename T, WideTile P, bool Split = false>
 Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha, T beta, const char* trace) {
-    if (wide64_v2_vec_loads<T>(A, B)) return launch_wide_transposed_leg<T, P, true>(ctx, A, B, C, alpha, beta, trace);
-    return launch_wide_transposed_leg<T, P, false>(ctx, A, B, C, alpha, beta, trace);
+                             T alpha, T beta, const char* trace, WideSplit split = {}) {
+    if (wide64_v2_vec_loads<T>(A, B))
+        return launch_wide_transposed_leg<T, P, true, Split>(ctx, A, B, C, alpha, beta, trace, split);
+    return launch_wide_transposed_leg<T, P, false, Split>(ctx, A, B, C, alpha, beta, trace, split);
 }
 
 }  // namespace batchlas::sycl_gemm

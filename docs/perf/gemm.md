@@ -32,6 +32,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
+| `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ `max_groups_yz`, a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
 The common native term (`gemm.cc:97-101`):
@@ -1211,6 +1212,72 @@ Deliberate breaks, unrun:
 **Pending:** registers from the probe (the table below), and the A/B on
 `ta=C,tb=N,layout=strided,m=1024,n=32,k=1024,batch=128` (cdouble) and
 `ta=N,tb=T,layout=strided,m=32,n=1024,k=256,batch=2048` (float, 1.73× before).
+
+## GEMM: WP-L, global split-k over the transposed wide tiles
+
+*unmeasured* (2026-10-19; no GPU time). Design, registers and tests only.
+
+Target: few tiles with a large k (tiles × batch below about 2 × SMs, k ≥ 256), where the work-group count is
+the batch and each group walks k serially. Pre-188 sm_120 cells: float NT 32×64×1024 b128 3.36×, cfloat NC
+32×64×1024 3.51×, cdouble CN 1024×32×1024 b128 1.77-2.4×.
+
+- **Family** `splitk:m=..:n=..:k=..:s=..`, every scalar. Hosts: the `wide_configs` rows other than 64×64
+  (`splitk_host`: 128×32, 32×128, 32×32, 16×16, 64×32, 32×64, all at k = 16), so every host runs
+  `launch_wide_transposed` in each form it instantiates. s ∈ {2, 4, 8}. 18 candidates per scalar: float 40,
+  double, cfloat and cdouble 30.
+- **Slices.** `launch_wide_transposed<T, P, Split = true>` launches batch × s groups in grid z. Group z computes
+  item z / s over k ∈ [slice · kc, min(k, slice · kc + kc)), kc = ⌈k / s⌉ rounded up to TileK, and stores item z of
+  the partials at α = 1, β = 0. A slice past k stores zeros. `Split = false` compiles the old kernel unchanged.
+- **Partials** `[batch][s][ldw × n]`, ldw = m rounded up to 4 (`splitk_ld`), so interior tiles take the 16-byte band
+  store. Leased from the Queue's arena for the call and sized with `BumpAllocator::measuring()`; no public
+  `gemm_buffer_size`. Bytes: s · ldw · n · batch · sizeof(T) (cdouble 32×64, s = 8, b128: 33.6 MB).
+- **Reduction** (`splitk_reduce`, trace `gemm_splitk_reduce`): one work-item per element, m fastest, sums slices
+  0..s-1 in that order (deterministic, no atomics), then C = α Σ + β C; β = 0 never reads C. An out-of-order
+  Queue waits for the slices first.
+- **`can_run`** (correctness only): the native terms, s ∈ kSplitKSlices, batch × s ≤ `max_groups_yz`, a host row
+  that instantiates the form, the host's work-group and local-memory terms, ldw × n ≤ INT_MAX. No k or tile-count
+  term: the table decides the window.
+- **Tuning grid** (`choice.hh`, tuner only, not in the sm_89 transcription): Gram squares m = n ∈ {16, 32, 64} ×
+  k ∈ {1024, 2048, 4096}, and 32 × {64..2048} both ways at k = 2048; panel forms, strided, every grid batch.
+
+**Registers** (`scripts/register_probe.sh`, sm_120 GPU-only tree, ptxas only): zero spill on all 544 entry
+functions of `libbatchlas_sycl`; every split body passes the four-partition gate at its host's work-group.
+
+| split body | registers | against the unsplit instance |
+|---|---|---|
+| float | 39-61 | -9 to +5 |
+| double | 38-72 | 0 to +4 |
+| complex<float> | 40-80 | -8 to +8 |
+| complex<double> | 42-118 | -18 to +2 |
+| `GemmSplitKReduceKernel` | 30 (single precision), 32 (double precision) | |
+
+Tests:
+
+- `GemmCandidates.SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdges`: every host, s and served form. Shapes
+  (m + 1) × (n + 1) × 300 (136 for 16-byte scalars) at ld = m + 1, batch 1024 repeating 7 problems; m × n × 40
+  padded; (m + 1) × (n - 1) × 1. Then β = 0 with NaN in C, and a second identical call compared bit for bit.
+- `GemmCandidates.SplitKGridCeilingIsBatchTimesSlices`: s = 2 and 8 at batch ⌊65535 / s⌋ (a launch) and one past
+  (a refusal, C untouched).
+- Every generic per-candidate test (pins, `CanRunEqualsLaunch`, the launcher bit for bit, the kernel trace name
+  `<host trace>_splitk`, NaN C, the saturating batch, missing instantiations, the candidate set) picks the family
+  up from `candidates<T>()`.
+
+Deliberate breaks, unrun:
+
+- Drop the last slice (global dim 0 = batch × (s − 1)): the reduction reads stale arena bytes; red in the split-k
+  tests and the generic splitk cases only.
+- `k_hi = k` (each slice runs to the end of k): later slices double-count; red at every k > kc (300, 136, 40 at
+  s ≥ 2 where k > kc), green at k = 1.
+- β applied per slice in the reduction (`acc = lin_epi(1, beta, acc, prior)` inside the loop): red only in β ≠ 0
+  cases; the NaN-C β = 0 cases stay green.
+- `bid = z % batch` instead of `z / s`: items mix; red in the batch-1024 bit-identity checks.
+- Dropping `batch * s` from `can_run`: `SplitKGridCeilingIsBatchTimesSlices` turns red (the launch fails past
+  the grid).
+
+**Pending:** the A/B (pass ≤ 1.05× vendor). float `ta=N,tb=T,layout=strided,m=32,n=64,k=1024,batch=128` and cfloat
+`ta=N,tb=C,…`, arms `splitk:m=32:n=64:k=16:s=4`, `splitk:m=32:n=64:k=16:s=8`, `wide:m=32:n=64:k=16`, `vendor`;
+cdouble `ta=C,tb=N,layout=strided,m=1024,n=32,k=1024,batch=128`, arms `splitk:m=128:n=32:k=16:s={2,4,8}`,
+`wide:m=128:n=32:k=16`, `vendor`.
 
 ## GEMM: WP-J, complex double on wide v2
 

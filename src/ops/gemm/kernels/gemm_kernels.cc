@@ -16,8 +16,12 @@
 #include <src/linalg-impl.hh>
 #include <src/ops/gemm/choice.hh>
 #include <src/queue.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <algorithm>
+#include <array>
+#include <climits>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <sycl/sycl.hpp>
@@ -138,6 +142,17 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
     }
     return "gemm_sycl_unknown";
+}
+
+// A split-k body's name: its host instantiation's, suffixed (static storage for the trace scope).
+const char* splitk_trace_name(KernelVariant variant) {
+    constexpr int kCount = static_cast<int>(KernelVariant::Tiled64x64RegisterK8WideCC) + 1;
+    static const std::array<std::string, kCount> names = [] {
+        std::array<std::string, kCount> out;
+        for (int i = 0; i < kCount; ++i) out[i] = std::string(kernel_trace_name(KernelVariant(i))) + "_splitk";
+        return out;
+    }();
+    return names[static_cast<int>(variant)].c_str();
 }
 
 // The unpredicated leg's name where both legs used to share one, so a fast-leg predicate stuck
@@ -405,17 +420,67 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
 // Form F = 3 op(A) + op(B) of wide_configs[I], launched when it serves the call. A real scalar
 // compiles only the N/C forms, and its C build serves a real T (og::wide_serves).
 // evidence: docs/perf/gemm.md#gemm-wide-instantiations-in-every-transpose-form
-template <typename T, int I, int F>
+// Split: the split-k body of a host row (always launch_wide_transposed), C the partials.
+template <typename T, int I, int F, bool Split = false>
 void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha, T beta, Transpose transA, Transpose transB) {
+                      T alpha, T beta, Transpose transA, Transpose transB, WideSplit split = {}) {
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = F / 3, fb = F % 3;
-    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1))) {
+    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1)) && (!Split || og::splitk_host(c))) {
         constexpr Transpose OA = kWideOps[fa], OB = kWideOps[fb];
-        if (!out && wide_trans_matches<T>(transA, OA) && wide_trans_matches<T>(transB, OB))
+        if (out || !wide_trans_matches<T>(transA, OA) || !wide_trans_matches<T>(transB, OB)) return;
+        if constexpr (Split)
+            out = launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}, true>(
+                ctx, A, B, C, alpha, beta, splitk_trace_name(wide_variant(I, F)), split);
+        else
             out = launch_wide_cfg<T, I, OA, OB>(ctx, A, B, C, alpha, beta);
     }
+}
+
+template <typename T>
+class GemmSplitKReduceKernel;
+
+// C = alpha (W[z s] + ... + W[z s + s - 1]) + beta C per item z, the slices summed in that fixed
+// order (deterministic, no atomics); beta = 0 never reads C. One work-item per element, m fastest.
+template <typename T>
+Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int splits,
+                    const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta) {
+    using D = typename sycl_device::DevMap<T>::type;
+    constexpr int kWg = 256;
+    const int m = C.rows(), mn = C.rows() * C.cols();
+    const sycl::range<2> global(static_cast<size_t>(C.batch_size()), static_cast<size_t>((mn + kWg - 1) / kWg) * kWg);
+    ctx->submit([&](sycl::handler& h) {
+        const D* w_ptr = reinterpret_cast<const D*>(W.data_ptr());
+        D* c_ptr = reinterpret_cast<D*>(C.data_ptr());
+        const int ldw = W.ld(), ldc = C.ld();
+        const std::ptrdiff_t stride_w = W.stride(), stride_c = C.stride();
+        D alpha_d, beta_d;
+        std::memcpy(&alpha_d, &alpha, sizeof(D));
+        std::memcpy(&beta_d, &beta, sizeof(D));
+        batchlas::impl::parallel_for<GemmSplitKReduceKernel<T>>(
+            h, sycl::nd_range<2>(global, sycl::range<2>(1, kWg)), [=](sycl::nd_item<2> item) {
+                const int e = static_cast<int>(item.get_global_id(1));
+                if (e >= mn) return;
+                const auto b = static_cast<std::ptrdiff_t>(item.get_group(0));
+                const int j = e / m, i = e - j * m;
+                const D* p = w_ptr + b * splits * stride_w + i + static_cast<std::ptrdiff_t>(j) * ldw;
+                D acc = p[0];
+                for (int q = 1; q < splits; ++q) {
+                    const D v = p[q * stride_w];
+                    if constexpr (sycl_device::dev_is_complex_v<D>) {
+                        acc.re += v.re;
+                        acc.im += v.im;
+                    } else {
+                        acc += v;
+                    }
+                }
+                D* dst = c_ptr + b * stride_c + i + static_cast<std::ptrdiff_t>(j) * ldc;
+                const bool beta_zero = sycl_device::dev_is_zero(beta_d);
+                *dst = wide_scalar::lin_epi(alpha_d, beta_zero ? D{} : beta_d, acc, beta_zero ? D{} : *dst);
+            });
+    });
+    return ctx.get_event();
 }
 
 [[noreturn]] void refuse(const std::string& what) {
@@ -514,6 +579,45 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
     return std::move(*out);
 }
 
+template <typename T>
+Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
+                  T beta, Transpose transA, Transpose transB) {
+    const std::string spelling = "splitk:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" +
+                                 std::to_string(tk) + ":s=" + std::to_string(splits);
+    if (std::find(og::kSplitKSlices.begin(), og::kSplitKSlices.end(), splits) == og::kSplitKSlices.end())
+        refuse(spelling + " names no compiled slice count");
+    const auto [m, k] = get_effective_dims(A, transA);
+    const auto [k_b, n] = get_effective_dims(B, transB);
+    static_cast<void>(k_b);
+    const std::int64_t ldw = og::splitk_ld(m);
+    if (ldw * n > INT_MAX) refuse(spelling + ": one item's partials pass int indexing");
+    const int batch = A.batch_size();
+    const int kc = ((k + splits - 1) / splits + tk - 1) / tk * tk;
+    const std::size_t elems = static_cast<std::size_t>(ldw * n) * static_cast<std::size_t>(splits) * batch;
+    auto sizer = BumpAllocator::measuring();
+    sizer.allocate<T>(ctx, elems);
+    auto lease = ctx.workspace(sizer.required_bytes());
+    BumpAllocator pool(lease.span());
+    const auto partials = pool.allocate<T>(ctx, elems);
+    const MatrixView<T, MatrixFormat::Dense> W(partials.data(), m, n, int(ldw), int(ldw * n), batch * splits);
+    std::optional<Event> out;
+    static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
+        constexpr og::WideCfg c = og::wide_configs[I];
+        if (out || !og::splitk_host(c) || c.m != tm || c.n != tn || c.k != tk) return;
+        refuse_over_budget(ctx, "splitk", og::wide_slm_bytes<T>(c), c.threads());
+        static_for<9>([&](auto F) {
+            launch_wide_form<T, decltype(I)::value, decltype(F)::value, true>(out, ctx, A, B, W, T(1), T(0), transA,
+                                                                              transB, WideSplit{splits, kc});
+        });
+    });
+    if (!out) refuse(spelling + " has no instantiation for this transpose form");
+    // An out-of-order queue would let the reduction overtake the slices.
+    if (!ctx.in_order()) out->wait();
+    BATCHLAS_KERNEL_TRACE_SCOPE("gemm_splitk_reduce");
+    return splitk_reduce<T>(ctx, W, splits, C, alpha, beta);
+}
+
 #define GEMM_LAUNCHERS(T)                                                                                       \
     template Event gemm_direct<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                           \
                                   const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
@@ -523,7 +627,10 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
                                  T, T, Transpose, Transpose);                                                   \
     template Event gemm_wide<T>(Queue&, int, int, int, const MatrixView<T, MatrixFormat::Dense>&,             \
                                 const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
-                                T, T, Transpose, Transpose);
+                                T, T, Transpose, Transpose);                                                    \
+    template Event gemm_splitk<T>(Queue&, int, int, int, int, const MatrixView<T, MatrixFormat::Dense>&,       \
+                                  const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                  T, T, Transpose, Transpose);
 
 GEMM_LAUNCHERS(float)
 GEMM_LAUNCHERS(double)

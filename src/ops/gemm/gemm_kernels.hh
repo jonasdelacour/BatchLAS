@@ -97,4 +97,13 @@ BATCHLAS_INTERNAL_API Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const 
                                       const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                       Transpose transA, Transpose transB);
 
+// (tm, tn, tk) must be a split-k host row (ops::gemm::splitk_host) instantiated for the form and
+// splits one of ops::gemm::kSplitKSlices; the partials are leased from ctx's workspace arena.
+template <typename T>
+BATCHLAS_INTERNAL_API Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits,
+                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                        const MatrixView<T, MatrixFormat::Dense>& B,
+                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+                                        Transpose transA, Transpose transB);
+
 } // namespace batchlas::sycl_gemm

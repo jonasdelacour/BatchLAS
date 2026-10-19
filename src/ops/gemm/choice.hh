@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief gemm: direct, tiled, small, reg, wide, vendor. evidence: docs/perf/gemm.md @ingroup api_selection_ops
+/// @brief gemm: direct, tiled, small, reg, wide, splitk, vendor. evidence: docs/perf/gemm.md @ingroup api_selection_ops
 // Sycl-free on purpose: tests and the tuner include it to name the choices the library runs.
 
 #include <src/select/select.hh>
@@ -40,9 +40,18 @@ struct Wide {
     static Wide from(std::array<int, 3> v) { return {v[0], v[1], v[2]}; }
     bool operator==(const Wide&) const = default;
 };
+/// gemm_splitk, every scalar: wide host tile m x n x k (splitk_host) over s k-slices, then one reduction.
+struct SplitK {
+    int m = 0, n = 0, k = 0, s = 0;
+    static constexpr std::string_view name = "splitk";
+    static constexpr std::array<std::string_view, 4> fields{"m", "n", "k", "s"};
+    std::array<int, 4> values() const { return {m, n, k, s}; }
+    static SplitK from(std::array<int, 4> v) { return {v[0], v[1], v[2], v[3]}; }
+    bool operator==(const SplitK&) const = default;
+};
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemm_vendor; needs the level-3 library
 
-using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, Vendor>;  ///< natives: GPU or vendor-free host, Default precision
+using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, SplitK, Vendor>;  ///< natives: GPU or vendor-free host, Default precision
 
 /// Transpose forms an instantiation exists for, after the real-scalar C->T fold.
 struct Forms {
@@ -101,6 +110,12 @@ inline constexpr std::array<WideCfg, 8> wide_configs{{
     {32, 64, 16, 4, 4, kWideSmallTileForms},
     {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
 }};
+
+/// split-k hosts: every wide row launch_wide_transposed runs in all its forms (not 64x64).
+constexpr bool splitk_host(const WideCfg& c) { return !(c.m == 64 && c.n == 64); }
+inline constexpr std::array<int, 3> kSplitKSlices{2, 4, 8};
+/// The partials' column stride: m rounded to 4, so a slice's columns are whole 16-byte granules.
+constexpr std::int64_t splitk_ld(std::int64_t m) { return (m + 3) / 4 * 4; }
 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
@@ -178,20 +193,25 @@ template <class T>
 constexpr auto candidates() {
     constexpr std::array<Wide, 8> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
                                         Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}, Wide{64, 64, 8}};
-    if constexpr (std::is_same_v<T, float>) {
-        std::array<GemmChoice, 22> out{};
-        std::size_t i = 0;
-        out[i++] = Direct{};
-        out[i++] = Tiled{};
-        out[i++] = Small{};
+    constexpr std::size_t hosts = [] {
+        std::size_t h = 0;
+        for (const WideCfg& c : wide_configs) h += splitk_host(c);
+        return h;
+    }();
+    constexpr std::size_t regs = std::is_same_v<T, float> ? reg_configs.size() : 0;
+    std::array<GemmChoice, 4 + regs + wides.size() + hosts * kSplitKSlices.size()> out{};
+    std::size_t i = 0;
+    out[i++] = Direct{};
+    out[i++] = Tiled{};
+    out[i++] = Small{};
+    if constexpr (regs > 0)
         for (const RegCfg& r : reg_configs) out[i++] = Reg{r.m, r.n, r.k, r.u};
-        for (const Wide& w : wides) out[i++] = w;
-        out[i++] = Vendor{};
-        return out;
-    } else {
-        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
-                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
-    }
+    for (const Wide& w : wides) out[i++] = w;
+    for (const WideCfg& c : wide_configs)
+        if (splitk_host(c))
+            for (int s : kSplitKSlices) out[i++] = SplitK{c.m, c.n, c.k, s};
+    out[i++] = Vendor{};
+    return out;
 }
 
 /// Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
@@ -212,6 +232,10 @@ inline constexpr std::array<int, 6> grid_panel_k{8, 16, 32, 64, 96, 128};
 inline constexpr std::array<int, 6> grid_skinny_mn{64, 128, 256, 512, 1024, 2048};
 inline constexpr std::array<int, 2> grid_skinny_k{256, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};
+/// Large k (not transcribed for sm_89): Gram m = n squares, and 32 x skinny both ways; panel forms, strided.
+inline constexpr std::array<int, 3> grid_gram_mn{16, 32, 64};
+inline constexpr std::array<int, 3> grid_gram_k{1024, 2048, 4096};
+inline constexpr std::array<int, 1> grid_large_skinny_k{2048};
 inline constexpr int grid_packed_panel_min = 128;
 inline constexpr std::array<std::string_view, 4> grid_real_forms{"NN", "NT", "TN", "TT"};
 inline constexpr std::array<std::string_view, 4> grid_real_panel_forms{"NN", "NT", "TN", "TT"};
