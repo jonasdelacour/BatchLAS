@@ -326,8 +326,8 @@ Problem<T> make_problem(const Spec& s) {
 }
 
 // A panel update in one parent, all three operands at the parent's ld and stride: potrf's
-// A22 -= L21 L21^H (ta = N; B is A's own region, read twice), or geqrf's V^H A22 shape (ta
-// transposed, A = U12 above A22; tb = N reads U12 again, a transposed tb reads L21).
+// A22 -= L21 L21^H (ta = N; B is A's own region, read twice), or a transposed-A shape such as
+// geqrf's V^H A22 (A = U12 above A22; tb = N reads U12 again, a transposed tb reads L21).
 template <typename T>
 Problem<T> make_panel(Spec s, int parent) {
     s.layout = Layout::Strided;
@@ -597,24 +597,24 @@ TYPED_TEST(GemmCandidates, PinnedCandidatesEveryFormShapeAndLayout) {
     EXPECT_GT(refused, 0);
 }
 
-// The number of (reg or wide config, form) pairs the oracle rows list no instantiation for,
+// The (reg, wide) counts of (config, form) pairs the oracle rows list no instantiation for,
 // counted from the rows alone (no shape, no device budget), so a loop that skips cases is red.
 template <typename T>
-int missing_instantiations() {
-    int missing = 0;
+std::pair<int, int> missing_instantiations() {
+    int reg = 0, wide = 0;
     for (const C& c : og::candidates<T>())
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 if (const auto* r = std::get_if<og::Reg>(&c)) {
                     const RegRow* row = reg_row(*r);
-                    missing += !std::is_same_v<T, float> || !row ||
+                    reg += !std::is_same_v<T, float> || !row ||
                                std::find(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) == row->forms.end();
                 } else if (const auto* w = std::get_if<og::Wide>(&c)) {
                     const WideRow* row = wide_row(*w);
-                    missing += !row || row->trace.count(wide_form<T>(ta, tb)) == 0;
+                    wide += !row || row->trace.count(wide_form<T>(ta, tb)) == 0;
                 }
             }
-    return missing;
+    return {reg, wide};
 }
 
 // The guard for the 18 register tiles that used to compute NN on a transposed call: every
@@ -645,7 +645,11 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
                 ++checked;
             }
     }
-    EXPECT_GE(checked, missing_instantiations<T>()) << "every (config, form) the oracle rows do not list";
+    const auto [reg_missing, wide_missing] = missing_instantiations<T>();
+    EXPECT_GE(checked, reg_missing + wide_missing) << "every (config, form) the oracle rows do not list";
+    // Pinned apart from the rows: complex 0+5+5+3+3, real (T folds to C) 0+5+5+4+4.
+    EXPECT_EQ(wide_missing, kCx<T> ? 16 : 18) << "a wide oracle row changed its forms";
+    if constexpr (std::is_same_v<T, float>) EXPECT_GE(reg_missing, 18 * 4) << "every NN-only reg tile on every transposed form";
     EXPECT_GT(checked, 0);
 }
 
@@ -752,12 +756,14 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
 }
 
 // Sub-views carrying the parent's ld and stride, as potrf's trailing update (A22 -= L21 L21^H, B
-// the same memory as A) and geqrf's V^H A22 issue them, plus CT, on every candidate that runs the
-// form. The whole parent outside A22 stays bit for bit.
+// the same memory as A) and geqrf's V^H A22 (CN) issue them, plus CT (and TN for complex), on
+// every candidate that runs the form. The whole parent outside A22 stays bit for bit.
 TYPED_TEST(GemmCandidates, ParentLdPanelUpdate) {
     using T = typename TestFixture::T;
     int ran = 0;
-    const std::pair<Transpose, Transpose> forms[] = {{kN, kCx<T> ? kC : kT}, {kT, kN}, {kC, kT}};
+    // Complex adds TN beside geqrf's CN; for a real scalar the two are one form.
+    std::vector<std::pair<Transpose, Transpose>> forms{{kN, kCx<T> ? kC : kT}, {kCx<T> ? kC : kT, kN}, {kC, kT}};
+    if constexpr (kCx<T>) forms.emplace_back(kT, kN);
     for (const C& c : og::candidates<T>())
         for (auto [ta, tb] : forms)
             for (auto [mn, k] : {std::pair{96, 32}, std::pair{61, 16}, std::pair{128, 64}}) {
@@ -805,7 +811,7 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
     for (const C& c : og::candidates<T>()) {
         if (std::holds_alternative<og::Direct>(c)) continue;
         const bool small = std::holds_alternative<og::Small>(c);
-        for (Transpose ta : {kN, kT})
+        for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 Spec s{ta, tb, small ? 45 : 72, small ? 40 : 40, small ? 29 : 37, kBatch, Layout::Strided};
                 s.period = 7;
