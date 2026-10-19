@@ -19,7 +19,7 @@ namespace batchlas::ops::gemm {
 // instantiation, the aligned vs predicated leg, the small bucket, TR/TC/stages (tables below).
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
-struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; real, see small_fits
+struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
 /// gemm_reg, float only: m x n x k macro tile with k unroll u; must name a reg_configs entry that
 /// instantiates the call's transpose form, and max_wg must cover its threads().
 struct Reg {
@@ -143,12 +143,28 @@ template <class T>
 constexpr bool small_needs_sg32(bool nn, int max_dim) {
     return !(std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim);
 }
+/// small's ceiling for T: 32 for a 16-byte scalar (small_batched.hh's kSmallMaxDimFor says why).
+template <class T>
+constexpr int small_max_dim() { return sizeof(T) >= 16 ? 32 : kSmallMaxDim; }
+/// Local memory small asks for: 128 / (2 NB) slots of NB x (NB + 1), NB the bucket of max_dim, or
+/// the float NN tiled leg's 2 NB (NB + 4) (gemm_kernels.cc static_asserts both).
+template <class T>
+constexpr std::int64_t small_slm_bytes(bool nn, int max_dim) {
+    if (std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim) {
+        const std::int64_t nb = max_dim <= 48 ? 48 : 56;
+        return 2 * nb * (nb + 4) * std::int64_t(sizeof(T));
+    }
+    const std::int64_t nb = max_dim <= 8 ? 8 : max_dim <= 16 ? 16 : max_dim <= 32 ? 32 : 64;
+    return (kSmallWg / (2 * nb)) * nb * (nb + 1) * std::int64_t(sizeof(T));
+}
 /// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
 template <class T>
 bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
-    if (is_complex_v<T> || max_dim < 1 || max_dim > kSmallMaxDim) return false;
+    if (max_dim < 1 || max_dim > small_max_dim<T>()) return false;
     const int mx = static_cast<int>(max_dim);
-    return d.max_wg >= small_wg<T>(nn, mx) && (d.has_sg32 || !small_needs_sg32<T>(nn, mx));
+    const int wg = small_wg<T>(nn, mx);
+    return d.max_wg >= wg && (d.has_sg32 || !small_needs_sg32<T>(nn, mx)) &&
+           d.slm_budget_for(wg) >= small_slm_bytes<T>(nn, mx);
 }
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
@@ -166,11 +182,8 @@ constexpr auto candidates() {
         for (const Wide& w : wides) out[i++] = w;
         out[i++] = Vendor{};
         return out;
-    } else if constexpr (std::is_same_v<T, double>) {
-        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
-                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
     } else {
-        return std::array<GemmChoice, 11>{Direct{}, Tiled{}, wides[0], wides[1], wides[2],
+        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
                                           wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
     }
 }

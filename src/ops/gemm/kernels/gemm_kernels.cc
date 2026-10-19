@@ -31,6 +31,21 @@ namespace og = ::batchlas::ops::gemm;
 static_assert(og::kSmallMaxDim == sycl_gemm_small::kSmallMaxDim && og::kSmallWg == sycl_gemm_small::kSmallWg &&
                   og::kSmallTiledMaxDim == sycl_gemm_small::kSmallTiledMaxDim,
               "choice.hh's small limits must match small_batched.hh");
+template <typename T>
+constexpr bool small_slm_matches() {
+    namespace gs = sycl_gemm_small;
+    constexpr std::int64_t s = sizeof(T);
+    return og::small_max_dim<T>() == gs::kSmallMaxDimFor<T> &&
+           og::small_slm_bytes<T>(false, 8) == s * gs::kSmallBatchedSlmElems<8> &&
+           og::small_slm_bytes<T>(false, 16) == s * gs::kSmallBatchedSlmElems<16> &&
+           og::small_slm_bytes<T>(true, 32) == s * gs::kSmallBatchedSlmElems<32> &&
+           og::small_slm_bytes<T>(false, 64) == s * gs::kSmallBatchedSlmElems<64> &&
+           (!std::is_same_v<T, float> || (og::small_slm_bytes<T>(true, 48) == s * gs::kSmallTiledSlmElems<48> &&
+                                          og::small_slm_bytes<T>(true, 56) == s * gs::kSmallTiledSlmElems<56>));
+}
+static_assert(small_slm_matches<float>() && small_slm_matches<double>() && small_slm_matches<std::complex<float>>() &&
+                  small_slm_matches<std::complex<double>>(),
+              "choice.hh's small_max_dim and small_slm_bytes must match small_batched.hh");
 
 template <typename T>
 class GemmDirectKernel;
@@ -427,7 +442,8 @@ Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     static_cast<void>(k_b);
-    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDim) refuse("small serves max(m, n, k) <= 64");
+    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDimFor<T>)
+        refuse("small serves max(m, n, k) <= " + std::to_string(sycl_gemm_small::kSmallMaxDimFor<T>));
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
     return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
 }
@@ -508,5 +524,13 @@ template Event gemm_small<double>(Queue&, const MatrixView<double, MatrixFormat:
                                   const MatrixView<double, MatrixFormat::Dense>&,
                                   const MatrixView<double, MatrixFormat::Dense>&, double, double, Transpose,
                                   Transpose);
+template Event gemm_small<std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
+                                               std::complex<float>, std::complex<float>, Transpose, Transpose);
+template Event gemm_small<std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
+                                                std::complex<double>, std::complex<double>, Transpose, Transpose);
 
 } // namespace batchlas::sycl_gemm

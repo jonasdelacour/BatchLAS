@@ -1,9 +1,11 @@
 #pragma once
 
-// Batched GEMM for orders <= 32: several matrices per work-group, op(B) staged in local
+// Batched GEMM for orders <= 64: several matrices per work-group, op(B) staged in local
 // memory, each lane holding one row of op(A) in registers and a column strip of C.
 // Lanes run DOWN the rows, so the A loads and the C stores are coalesced; Direct runs
 // them across columns, ld apart. evidence: docs/perf/gemm.md#the-small-batched-kernel
+// Complex runs on the POD Cx (fma_acc, dev_mul): std::complex's operator* is Annex G.
+// evidence: docs/perf/gemm.md#gemm-complex-small-and-the-staged-transposed-a-row
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -13,7 +15,10 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
+#include <stdexcept>
 #include <type_traits>
+#include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
 
@@ -27,9 +32,18 @@ inline constexpr int kSmallWg = 128;
 // The largest order the kernel serves; max(m, n, k) picks the bucket.
 inline constexpr int kSmallMaxDim = 64;
 
+// A 16-byte scalar stops at 32: its 64 bucket stages 64 x 65 x 16 B = 66.5 KB and holds a
+// 64-entry row plus 32 accumulators, 384 registers. choice.hh's small_max_dim mirrors it.
+template <typename T>
+inline constexpr int kSmallMaxDimFor = sizeof(T) >= 16 ? 32 : kSmallMaxDim;
+
 inline int small_bucket(int max_dim) {
     return max_dim <= 8 ? 8 : max_dim <= 16 ? 16 : max_dim <= 32 ? 32 : 64;
 }
+
+// Elements of local memory the batched kernel stages per work-group (choice.hh's small_slm_bytes).
+template <int NB>
+inline constexpr std::int64_t kSmallBatchedSlmElems = std::int64_t(kSmallWg / (2 * NB)) * NB * (NB + 1);
 
 template <typename T, int NB>
 Event launch_small_batched(Queue& ctx,
@@ -38,43 +52,80 @@ Event launch_small_batched(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& C,
                            T alpha, T beta, Transpose transA, Transpose transB,
                            int m, int n, int k) {
-    static_assert(!std::is_class_v<T>, "real scalars only: std::complex's operator* is Annex G");
+    using D = typename sycl_device::DevMap<T>::type;
+    constexpr bool kCx = sycl_device::dev_is_complex_v<D>;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    static_assert(NB <= kSmallMaxDimFor<T>, "no bucket above the scalar's ceiling");
     constexpr int kTpm = 2 * NB;          // lanes per matrix: NB rows x 2 column halves
     constexpr int kCpt = NB / 2;          // columns of C per lane
     constexpr int kG = kSmallWg / kTpm;   // matrices per work-group
     constexpr int kLdb = NB + 1;          // odd: a transposed stage spreads over the banks
+    constexpr int kLc = kCx && NB == 64 ? 16 : NB;  // l per unrolled loop of the inner product
+    static_assert(kLc == NB || kLc * 4 == NB, "one loop, or the four the inner product writes out");
     static_assert(kG >= 1 && kG * kTpm == kSmallWg, "the work-group must hold whole matrices");
+    static_assert(std::int64_t(kG) * NB * kLdb == kSmallBatchedSlmElems<NB>, "choice.hh's bytes");
 
     const int batch = static_cast<int>(A.batch_size());
     const int num_wg = (batch + kG - 1) / kG;
 
-    const T* a_ptr = A.data_ptr();
-    const T* b_ptr = B.data_ptr();
-    T* c_ptr = C.data_ptr();
+    const D* a_ptr = reinterpret_cast<const D*>(A.data_ptr());
+    const D* b_ptr = reinterpret_cast<const D*>(B.data_ptr());
+    D* c_ptr = reinterpret_cast<D*>(C.data_ptr());
     const std::ptrdiff_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
     const std::ptrdiff_t sa = A.stride(), sb = B.stride(), sc = C.stride();
     const bool ta = (transA != Transpose::NoTrans);
     const bool tb = (transB != Transpose::NoTrans);
+    const bool ca = kCx && transA == Transpose::ConjTrans;
+    const bool cb = kCx && transB == Transpose::ConjTrans;
     const bool beta_zero = (beta == T(0));
+    D alpha_d, beta_d;
+    __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
+    __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<T, 1> slm(sycl::range<1>(static_cast<std::size_t>(kG) * NB * kLdb), h);
+        sycl::local_accessor<D, 1> slm(sycl::range<1>(static_cast<std::size_t>(kG) * NB * kLdb), h);
         batchlas::impl::parallel_for<GemmSmallBatchedKernel<T, NB>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                using sycl_device::dev_conj;
                 const int t = static_cast<int>(it.get_local_id(0));
                 const int slot = t / kTpm;
                 const int tt = t % kTpm;
                 const int mat = static_cast<int>(it.get_group(0)) * kG + slot;
-                // Clamped, never returned: every lane must reach the barrier below.
+                // Clamped, never returned: every lane must reach the barriers below.
                 const bool live = mat < batch;
                 const std::ptrdiff_t bi = live ? mat : 0;
                 const int r = tt % NB;
                 const int c0 = (tt / NB) * kCpt;
-                T* const sB = &slm[0] + static_cast<std::ptrdiff_t>(slot) * NB * kLdb;
-                const T* const Ab = a_ptr + bi * sa;
-                const T* const Bb = b_ptr + bi * sb;
+                D* const sB = &slm[0] + static_cast<std::ptrdiff_t>(slot) * NB * kLdb;
+                const D* const Ab = a_ptr + bi * sa;
+                const D* const Bb = b_ptr + bi * sb;
+
+                // Row r of op(A), unrolled so the array stays in registers. A transposed A is
+                // stored k x m, so a lane's row is a stored column, lda from its neighbours':
+                // it goes through sB in storage order (coalesced) as sB[r + l * kLdb], and the
+                // second barrier keeps it there until every lane of the slot has read its row.
+                D a[NB];
+                if (ta) {
+                    for (int e = tt; e < NB * NB; e += kTpm) {
+                        const int l = e % NB, rr = e / NB;
+                        D v{};
+                        if (live && l < k && rr < m) v = Ab[l + rr * lda];
+                        sB[rr + l * kLdb] = ca ? dev_conj(v) : v;
+                    }
+                    it.barrier(sycl::access::fence_space::local_space);
+BATCHLAS_UNROLL_FULL
+                    for (int l = 0; l < NB; ++l) a[l] = sB[r + l * kLdb];
+                    it.barrier(sycl::access::fence_space::local_space);
+                } else {
+BATCHLAS_UNROLL_FULL
+                    for (int l = 0; l < NB; ++l) {
+                        D v{};
+                        if (live && r < m && l < k) v = Ab[r + l * lda];
+                        a[l] = v;
+                    }
+                }
 
                 // op(B) into sB[l + c * kLdb], walked in STORAGE order so the global
                 // read is coalesced either way; zero outside k x n.
@@ -82,39 +133,47 @@ Event launch_small_batched(Queue& ctx,
                     const int s0 = e % NB, s1 = e / NB;
                     const int l = tb ? s1 : s0;
                     const int c = tb ? s0 : s1;
-                    T v = T(0);
+                    D v{};
                     if (live && l < k && c < n) v = Bb[s0 + s1 * ldb];
-                    sB[l + c * kLdb] = v;
-                }
-
-                // Row r of op(A), unrolled so the array stays in registers.
-                T a[NB];
-BATCHLAS_UNROLL_FULL
-                for (int l = 0; l < NB; ++l) {
-                    T v = T(0);
-                    if (live && r < m && l < k) v = ta ? Ab[l + r * lda] : Ab[r + l * lda];
-                    a[l] = v;
+                    sB[l + c * kLdb] = cb ? dev_conj(v) : v;
                 }
                 it.barrier(sycl::access::fence_space::local_space);
 
-                T acc[kCpt];
+                D acc[kCpt];
 BATCHLAS_UNROLL_FULL
-                for (int j = 0; j < kCpt; ++j) acc[j] = T(0);
-BATCHLAS_UNROLL_FULL
-                for (int l = 0; l < NB; ++l) {
-                    if (l >= k) continue;   // uniform; `continue` keeps the unroll, so a[] stays put
-BATCHLAS_UNROLL_FULL
-                    for (int j = 0; j < kCpt; ++j) acc[j] += a[l] * sB[l + (c0 + j) * kLdb];
+                for (int j = 0; j < kCpt; ++j) acc[j] = D{};
+                // Sequential (not nested) loops of kLc l each: one complex loop over all 64 l is
+                // past LLVM's pragma unroll threshold, so a[] went to the stack (512 B). A macro: a
+                // lambda per chunk put 160-184 B of stack on every bucket, real ones included.
+#define BATCHLAS_SMALL_DOT(L0)                                                                  \
+    BATCHLAS_UNROLL_FULL                                                                        \
+    for (int l = (L0); l < (L0) + kLc; ++l) {                                                   \
+        if (l >= k) continue; /* uniform; `continue` keeps the unroll, so a[] stays put */       \
+        BATCHLAS_UNROLL_FULL                                                                    \
+        for (int j = 0; j < kCpt; ++j) sycl_device::fma_acc(acc[j], a[l], sB[l + (c0 + j) * kLdb]); \
+    }
+                BATCHLAS_SMALL_DOT(0)
+                if constexpr (NB / kLc > 1) {
+                    BATCHLAS_SMALL_DOT(kLc)
+                    BATCHLAS_SMALL_DOT(2 * kLc)
+                    BATCHLAS_SMALL_DOT(3 * kLc)
                 }
+#undef BATCHLAS_SMALL_DOT
 
                 if (live && r < m) {
-                    T* const Cb = c_ptr + bi * sc;
+                    D* const Cb = c_ptr + bi * sc;
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < kCpt; ++j) {
                         const int c = c0 + j;
                         if (c < n) {
-                            T* const dst = Cb + r + c * ldc;
-                            *dst = beta_zero ? alpha * acc[j] : alpha * acc[j] + beta * *dst;
+                            D* const dst = Cb + r + c * ldc;
+                            if constexpr (kCx) {
+                                D out = sycl_device::dev_mul(alpha_d, acc[j]);
+                                if (!beta_zero) sycl_device::fma_acc(out, beta_d, *dst);
+                                *dst = out;
+                            } else {
+                                *dst = beta_zero ? alpha_d * acc[j] : alpha_d * acc[j] + beta_d * *dst;
+                            }
                         }
                     }
                 }
@@ -133,6 +192,8 @@ class GemmSmallTiledKernel;
 // overlaps the staging; at beta == 0 that prefetch is compiled out, because
 // its registers cost more than it saves. evidence: docs/perf/gemm.md#the-small-tiled-kernel
 inline constexpr int kSmallTiledMaxDim = 56;
+template <int NB>
+inline constexpr std::int64_t kSmallTiledSlmElems = std::int64_t(2) * NB * (NB + 4);
 
 template <typename T, int NB, bool PrefetchC>
 Event launch_small_tiled(Queue& ctx,
@@ -145,6 +206,7 @@ Event launch_small_tiled(Queue& ctx,
     constexpr int kWg = kTr * kTr;
     constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned
     static_assert(NB % 4 == 0, "4x4 lane tiles");
+    static_assert(2 * NB * kLd == kSmallTiledSlmElems<NB>, "choice.hh's bytes");
 
     const int batch = static_cast<int>(A.batch_size());
     const T* a_ptr = A.data_ptr();
@@ -270,7 +332,9 @@ Event small_batched(Queue& ctx,
     case 32:
         return launch_small_batched<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
     default:
-        return launch_small_batched<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+        if constexpr (kSmallMaxDimFor<T> >= 64)
+            return launch_small_batched<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+        else throw std::logic_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
     }
 }
 

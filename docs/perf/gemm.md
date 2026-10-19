@@ -29,7 +29,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 |---|---|---|---|
 | `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | float, double | real, `max(m,n,k) <= 64`, `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg (`:105-108`, `src/ops/gemm/choice.hh:141-152`) |
+| `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
 | `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
@@ -45,7 +45,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 22, double 12 (no `reg`), complex 11 (no `small`, no `reg`).
+`small`. Candidate counts: float 22, double 12 (no `reg`), complex 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -967,7 +967,7 @@ Then a coarse re-race. Not done:
 Every wide tile had a 16-deep slab, so at k ≤ 8 half of each slab was zero-filled and its FMAs wasted. The
 2026-10-18 loss map left 1778 cfloat cells at k ≤ 16 after WP-B (635 losing, gmL 1.21). One row is appended to
 `wide_configs`, `{64, 64, 8, 4, 4, kWideAll}`, spelled `wide:m=64:n=64:k=8`. It comes after every existing row, so
-no tie-break moves. Candidates: float 22, double 12, complex 11.
+no tie-break moves. Candidates: float 22, double 12, complex 11 (12 since WP-H).
 
 - **float and complex<float>: wide v2 at `TileK = 8`.** `GemmWide64Body` takes the slab depth as a template
   parameter; the kernel class gains a defaulted fifth argument, so the `device_calls_tests` pattern still matches.
@@ -1031,6 +1031,84 @@ Deliberate breaks, unrun:
 `wide:m=64:n=64:k=16`, `vendor`; cfloat CN strided 512×64×8 b128. Large-m,n k ≤ 16 cells are DRAM-bound at parity
 on both sides and are not the target.
 
+## GEMM: complex small and the staged transposed-A row
+
+**Unmeasured: CUDA was down at implementation time** (2026-10-19, WP-H). Design rationale only; the A/B is pending.
+
+`small` now compiles for complex<float> and complex<double>, and `candidates<complex>()` lists it third, as the
+real lists do (complex 12). The tables do not rank it yet, so Auto reaches it only where nothing ranked can run:
+a vendor-free complex call past the grid-z ceiling.
+
+- **Arithmetic is the POD `Cx`** (`device_scalar.hh`). Operands and α, β are re-typed at the launcher.
+  - The inner product is `fma_acc`, 4 FMAs and no `__mulsc3`.
+  - The epilogue is `dev_mul(α, acc)`, then `fma_acc(out, β, C)`, which is skipped at β = 0.
+  - The real path keeps its expression.
+- **Conjugation happens at staging.** `ConjTrans` B is conjugated as it enters local memory, and `ConjTrans` A
+  as it enters the transposed-A stage below. For a real scalar, `ca` and `cb` are constant false.
+- **Ceiling.** complex<double> stops at 32 (`small_max_dim`, mirrored by `kSmallMaxDimFor`).
+  - Its 64 bucket would need 64 × 65 × 16 B = 66.5 KB of local memory.
+  - It would also hold 64 row elements plus 32 accumulators, 384 registers.
+  - At 32 the bucket is 2 slots × 32 × 33 × 16 B = 33.8 KB, with a 32-entry row and 16 accumulators.
+  - complex<float> 64 is 33.3 KB with the same register count as double 64.
+- **Local memory is a `can_run` term** (`small_slm_bytes` against `slm_budget_for`), static_asserted in
+  `gemm_kernels.cc` against the kernel's element counts. It refuses, for example, complex<float> and double at
+  64 on the M5 Max's selector budget.
+- **Transposed A goes through local memory.** A transposed A is stored k × m, so a lane's row of op(A) is a
+  stored column, `lda` away from its neighbours' rows: every load was a separate sector.
+  - The slot's `sB` region first takes A in storage order, so the loads are coalesced. The order is
+    `sB[r + l·(NB+1)]`, which is conflict-free for 4-, 8- and 16-byte scalars, because NB + 1 is odd.
+  - After a barrier, each lane reads its row.
+  - A second barrier keeps the row in place until every lane of the slot has read it, and only then is op(B)
+    staged over it.
+  - The two barriers cost no extra local memory and run only on a transposed A. `ta` is uniform per launch.
+  - This also changes the real T forms (the float TT/TN target).
+- **complex<float> 64 writes its inner product as four sequential 16-l loops.**
+  - As one 64-l loop it is past LLVM's pragma unroll threshold. The unroll was declined and a[] went to a
+    512 B stack frame: 96 registers, and the stack-frame column was the only sign.
+  - A lambda per chunk fixed that but put 160-184 B of stack on other buckets, double 64 and float 64
+    included. The chunks are therefore a file-local macro.
+  - Every other bucket keeps its single loop.
+
+**Registers** (`scripts/register_probe.sh`, ptxas only): zero spill and zero stack on every small kernel. The
+four-partition gate at 128 lanes allows up to 512 registers.
+
+| NB | float | double | complex<float> | complex<double> |
+|---|---|---|---|---|
+| 8 | 39 | 40 | 40 | 64 |
+| 16 | 40 | 64 | 56 | 122 |
+| 32 | 64 | 125 | 127 | 226 |
+| 64 | 128 | 253 | 255 | (refused) |
+
+**Build cost:** the `libbatchlas_sycl` link replayed by the probe took 87.7 s. WP-F recorded 87.0-87.8 s, so the
+16 new kernels are not visible in the link time. The two figures were not taken back to back.
+
+Tests:
+
+- `GemmCandidates.SmallEveryBucketEveryFormAtSaturatingBatch` covers NB 8/16/32/64 (ragged, k = NB on the
+  first) in all 9 forms:
+  - strided and aligned-odd-ld layouts;
+  - batch 1024 repeating 7 problems, items bit-identical;
+  - complex α and β ≠ 0;
+  - β = 0 with NaN in C;
+  - complex<double> above 32 refused, leaving C untouched.
+- `GemmCanRun.SmallCeilingAndLocalMemoryPerScalar` checks the literal bytes and a budget one byte short on each
+  side.
+- The oracle (`small_runs`) admits complex, so every pinned-candidate test picks the family up.
+- `gemm_tests` `SmallBatched*` run complex with ConjTrans.
+
+Deliberate breaks, unrun:
+
+- Dropping the A conj turns red only the CN/CT/CC forms of complex.
+- Dropping the B conj turns red only NC/TC/CC.
+- Swapping the stage index (`sB[l + r·(NB+1)]`) turns red every T/C-A form of every scalar.
+- Removing the second barrier is a race between the row read and the op(B) stage. It shows on T/C-A forms
+  as item differences at batch 1024.
+- `α.re · acc` in the epilogue turns every complex case red. It is not caught by β = 0 alone, because α is
+  complex in every case.
+
+**Pending:** the A/B. cfloat CN packed 32³ b2048, arms `small`, `wide:m=16:n=16:k=16`, `vendor`; float TT
+strided 64³ b128 against the parent commit.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a
@@ -1044,8 +1122,8 @@ here `TR` and `TC` default independently to 4, so every row states both.
 `src/ops/gemm/kernels/small_batched.hh` (`small`). Float NN at max(m,n,k) ≤ 48 previously ran `Direct`, whose adjacent
 lanes read B and write C `ld` apart. The kernel gives a 128-lane group 128 / (2·NB) matrices, with NB in {8, 16,
 32, 64} from max(m,n,k). op(B) is staged in local memory (odd `ld`, so either transpose is coalesced), each lane
-holds one row of op(A) and NB/2 columns of C, and β = 0 skips the C read. Real scalars only: `std::complex` is the
-Annex-G trap, so `small` is not a complex candidate.
+holds one row of op(A) and NB/2 columns of C, and β = 0 skips the C read. Complex was added later on the POD
+scalar (see [the complex small section](#gemm-complex-small-and-the-staged-transposed-a-row)).
 
 Batch 32768 unless noted, `BM_GEMM` square NN, β = 0, ms:
 

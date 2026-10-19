@@ -364,8 +364,8 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
                                                           alpha, beta, ac[b]))
                 << "item " << b;
     }
-    if constexpr (!test_utils::is_complex<ScalarType>::value) {
-        const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 would not
+    if constexpr (sizeof(ScalarType) < 16) {
+        const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 (complex<double>: 33) would not
         (void)gemm(*(this->ctx), A, B, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
                    ComputePrecision::Default);
         this->ctx->wait();
@@ -1543,34 +1543,39 @@ TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
     }
 }
 
-// The small batched kernel (max(m, n, k) <= 64, real scalars; a complex or a 65 pin
-// throws -- it used to fall back to Direct). Ragged edges in every bucket, both transposes of each
-// operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
-// work-group holds a partial set of matrices.
+// The small batched kernel (max(m, n, k) <= 64, complex<double> 32; a pin past it throws -- it
+// used to fall back to Direct). Ragged edges in every bucket, every op of each operand (ConjTrans
+// for complex, with complex alpha and beta), beta = 0 (the C read is skipped) and beta != 0, and
+// batch 67 so the last work-group holds a partial set of matrices.
 // ARMED BREAK (R9): drop `c < n` from small_batched.hh's epilogue guard.
 // EXPECTED: RED on every n that is not a whole bucket.
 TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
     using ScalarType = typename TestFixture::ScalarType;
-    const Transpose ops[] = {Transpose::NoTrans, Transpose::Trans};
+    using Real = typename batchlas::base_type<ScalarType>::type;
+    constexpr bool kCx = test_utils::is_complex<ScalarType>::value;
+    constexpr int kMax = sizeof(ScalarType) == 16 ? 32 : 64;
+    const std::vector<Transpose> ops = kCx ? std::vector<Transpose>{Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}
+                                           : std::vector<Transpose>{Transpose::NoTrans, Transpose::Trans};
     const int shapes[][3] = {{1, 1, 1}, {5, 3, 7}, {8, 8, 8}, {13, 9, 16},
                              {16, 16, 16}, {17, 32, 5}, {31, 29, 23}, {32, 32, 32},
                              {33, 40, 64}, {48, 50, 61}, {64, 64, 64}, {64, 7, 3}};
+    auto make = [](double re, double im) {
+        if constexpr (kCx) return ScalarType(Real(re), Real(im));
+        else return ScalarType(Real(re));
+    };
     SKIP_UNLESS_NATIVE(*this->ctx);
-    if constexpr (test_utils::is_complex<ScalarType>::value) {
-        ExpectPinRefused<ScalarType>(*this->ctx, "small", 13, 9, 16, Transpose::NoTrans, Transpose::NoTrans);
-        return;
-    }
-    ExpectPinRefused<ScalarType>(*this->ctx, "small", 65, 8, 8, Transpose::NoTrans, Transpose::NoTrans);
-    ExpectPinRefused<ScalarType>(*this->ctx, "small", 8, 8, 65, Transpose::Trans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", kMax + 1, 8, 8, Transpose::NoTrans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", 8, 8, kMax + 1, Transpose::Trans, Transpose::NoTrans);
     for (Transpose ta : ops) {
         for (Transpose tb : ops) {
             for (const auto& s : shapes) {
-                for (ScalarType beta : {ScalarType(0), ScalarType(-1.5)}) {
+                if (std::max({s[0], s[1], s[2]}) > kMax) continue;
+                for (ScalarType beta : {ScalarType(0), make(-1.5, 0.75)}) {
                     SCOPED_TRACE(::testing::Message() << "m=" << s[0] << " n=" << s[1]
                                                       << " k=" << s[2]);
                     RunForcedSyclGemmKernelCheck<ScalarType, TestFixture::BackendType>(
                         *(this->ctx), "small", s[0], s[1], s[2], 67, ta, tb,
-                        ScalarType(0.5), beta);
+                        make(0.5, -0.25), beta);
                 }
             }
         }
@@ -1604,14 +1609,17 @@ TYPED_TEST(GemmTest, SmallTiledMatchesVendor) {
 // compared, so a store past the view's rows or columns is caught.
 TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
     using ScalarType = typename TestFixture::ScalarType;
-    if constexpr (test_utils::is_complex<ScalarType>::value) GTEST_SKIP() << "small is real-only (refusal above)";
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 29, 31, 17, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/64, /*row_offset=*/3, /*batch_size=*/5);
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 12, 7, 32, Transpose::Trans, Transpose::Trans,
         ScalarType(0), /*parent=*/64, /*row_offset=*/2, /*batch_size=*/5);
-    // The tiled leg (NN, max 33..56), both instantiations.
+    RunForcedWideTransposedCheck<ScalarType>(
+        *(this->ctx), "small", 27, 19, 30, Transpose::ConjTrans, Transpose::ConjTrans,
+        ScalarType(1), /*parent=*/64, /*row_offset=*/1, /*batch_size=*/5);
+    if constexpr (sizeof(ScalarType) == 16) return;  // above its ceiling of 32
+    // The tiled leg (NN, max 33..56) for float, both instantiations; NB = 64 otherwise.
     RunForcedWideTransposedCheck<ScalarType>(
         *(this->ctx), "small", 45, 51, 38, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/96, /*row_offset=*/3, /*batch_size=*/5);

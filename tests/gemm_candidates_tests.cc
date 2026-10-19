@@ -223,6 +223,20 @@ bool wide_fits(const WideRow& row) {
     return wide_slm<T>(row) <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
 }
 
+// small, spelled apart from choice.hh: complex<double> stops at 32 (its 64 bucket is 66.5 KB);
+// 128 / (2 NB) slots of NB x (NB + 1) for NB the bucket of max(m, n, k), or the float NN tiled
+// leg's (33..56) 2 NB (NB + 4) on (NB/4)^2 lanes, within the device's local memory budget.
+template <typename T>
+bool small_runs(Transpose ta, Transpose tb, int m, int n, int k) {
+    const int mx = std::max({m, n, k});
+    if (mx > (sizeof(T) == 16 ? 32 : 64)) return false;
+    const bool tiled = std::is_same_v<T, float> && ta == kN && tb == kN && mx > 32 && mx <= 56;
+    const int nb = tiled ? (mx <= 48 ? 48 : 56) : mx <= 8 ? 8 : mx <= 16 ? 16 : mx <= 32 ? 32 : 64;
+    const int wg = tiled ? (nb / 4) * (nb / 4) : 128;
+    const std::int64_t bytes = std::int64_t(tiled ? 2 * nb * (nb + 4) : (128 / (2 * nb)) * nb * (nb + 1)) * sizeof(T);
+    return bytes <= g_slm_budget + g_slm_per_item * std::max(0, g_max_wg - wg);
+}
+
 // Does this native choice have an instantiation for (ta, tb) at this shape, on a GPU?
 template <typename T>
 bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) {
@@ -230,7 +244,7 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
     return std::visit(overloaded{
         [](og::Direct) { return true; },
         [](og::Tiled) { return true; },
-        [&](og::Small) { return !kCx<T> && std::max({m, n, k}) <= 64; },
+        [&](og::Small) { return small_runs<T>(ta, tb, m, n, k); },
         [&](const og::Reg& r) {
             const RegRow* row = reg_row(r);
             const std::string f = reg_form(ta, tb);
@@ -605,15 +619,7 @@ protected:
             const bool launched = std::visit(overloaded{
                 [&](og::Direct) { (void)sycl_gemm::gemm_direct<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
                 [&](og::Tiled) { (void)sycl_gemm::gemm_tiled<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
-                [&](og::Small) {
-                    if constexpr (kCx<T>) {
-                        if (why) *why = "small has no complex instantiation";
-                        return false;
-                    } else {
-                        (void)sycl_gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb);
-                        return true;
-                    }
-                },
+                [&](og::Small) { (void)sycl_gemm::gemm_small<T>(q, A, Bm, Cm, p.alpha, p.beta, ta, tb); return true; },
                 [&](const og::Reg& r) {
                     if constexpr (!std::is_same_v<T, float>) {
                         if (why) *why = "reg is float only";
@@ -972,6 +978,54 @@ TYPED_TEST(GemmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 if (::testing::Test::HasFatalFailure()) return;
             }
     }
+}
+
+// small's batched kernel in every bucket (NB 8, 16, 32, 64; ragged, k = NB on the first) and all
+// nine forms, at batch 1024 repeating 7 problems: complex alpha and beta != 0 with nonzero imaginary
+// parts, on odd ld, stride and base (strided) and 16-byte bases with odd ld (aligned-odd-ld). Each
+// again at batch 3 with beta = 0 and NaN in C. A transposed A goes through local memory before op(B)
+// does, so a dropped conj (C forms only), a swapped stage index (T and C forms of A), a missing
+// barrier between the two stages (a race across items) or a real-only epilogue each go red here.
+// complex<double> above 32 is refused by the pin and leaves C bit for bit.
+TYPED_TEST(GemmCandidates, SmallEveryBucketEveryFormAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    const int shapes[][3] = {{7, 5, 8}, {13, 16, 11}, {29, 31, 23}, {61, 45, 53}};
+    int ran = 0, refused = 0, nan_checked = 0;
+    for (const auto& sh : shapes)
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms)
+                for (Layout lay : {Layout::Strided, Layout::OddLd}) {
+                    Spec s{ta, tb, sh[0], sh[1], sh[2], 1024, lay};
+                    s.period = 7;
+                    s.seed = 5100u + 3u * sh[0] + static_cast<unsigned>(lay);
+                    auto p = make_problem<T>(s);
+                    const C small{og::Small{}};
+                    if (!TestFixture::expect_runs(small, s)) {
+                        EXPECT_FALSE(this->pin_accepted(small, p)) << name(small, s) << " was accepted";
+                        for (std::size_t e = 0; e < p.mem.size(); ++e)
+                            ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << name(small, s) << ": refused but wrote " << e;
+                        ++refused;
+                        continue;
+                    }
+                    this->run_pinned(small, p);
+                    expect_gemm(*this->ctx, p, name(small, s));
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++ran;
+                    Spec z = s;
+                    z.batch = 3;
+                    z.period = 0;
+                    z.beta_zero = z.nan_c = true;
+                    auto q = make_problem<T>(z);
+                    this->run_pinned(small, q);
+                    expect_gemm(*this->ctx, q, name(small, z) + " (NaN C)");
+                    if (::testing::Test::HasFatalFailure()) return;
+                    ++nan_checked;
+                }
+    // 4 buckets x 9 forms x 2 layouts; complex<double> runs the three up to 32 (a 44 KiB budget
+    // holds every bucket of every scalar but its 64).
+    EXPECT_EQ(ran + refused, 72);
+    EXPECT_GE(ran, sizeof(T) == 16 || g_slm_budget < 33280 ? 54 : 72);
+    EXPECT_EQ(nan_checked, ran);
 }
 
 // The generic register tiles (2x2, 4x4 and 8x4: every reg row but 128x128) in every form they
@@ -1364,8 +1418,9 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
 
 // can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535 on
 // CUDA), so a pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto
-// serve the larger batch (real: the transcribed rows' trailing small; complex: the vendor, if
-// any). Metal has no group-count cap there: one past CUDA's ceiling is a launch too.
+// serve the larger batch (real: the transcribed rows' trailing small; complex: the vendor, or
+// vendor-free small, the first runnable candidate). Metal has no group-count cap there: one past
+// CUDA's ceiling is a launch too.
 TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
@@ -1389,7 +1444,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
         for (std::size_t e = 0; e < q.mem.size(); ++e)
             ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
     }
-    if constexpr (!kCx<T>) {
+    {
         auto p = make_problem<T>(past);
         ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
         expect_gemm(*this->ctx, p, "small past the grid ceiling");
@@ -1397,13 +1452,10 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     if (!capped) return;  // Auto past it is then whatever the table ranks first
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
-    if constexpr (kCx<T> && !TestFixture::kVendor) {
-        EXPECT_THROW(this->run(p), batchlas::NoRouteError) << "complex has no 1-D native launch";
-    } else {
-        const std::string got = traced_choice([&] { this->run(p); });
-        EXPECT_EQ(got, kCx<T> ? "vendor" : "small") << label(past) << ": small ranks above the vendor here";
-        expect_gemm(*this->ctx, p, "auto past the grid ceiling");
-    }
+    const std::string got = traced_choice([&] { this->run(p); });
+    EXPECT_EQ(got, kCx<T> && TestFixture::kVendor ? "vendor" : "small")
+        << label(past) << ": real rows rank small above the vendor; vendor-free complex reaches it last";
+    expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 
 // An empty batch is a no-op under Auto and every pin, vendor-free too (the old native range
@@ -1463,7 +1515,7 @@ TYPED_TEST(GemmCandidates, UnknownAndDeletedPinsThrow) {
         "128x32x32_s2_u2", "128x32x32_s1_u1", "128x32x32_persistent", "128x32x32_splitk4",
         "128x32x32_s2_u2_tt8x4", "128x32x32_s2_u2_tt4x8", "reg128x64k32largett4x8", "reg128x64k32largett4x8u2",
         std::is_same_v<T, float> ? "reg:m=64:n=64:k=8:u=2" : "reg:m=32:n=32:k=8:u=1",
-        kCx<T> ? "small" : "wide:m=16:n=16:k=8",
+        "wide:m=16:n=16:k=8",
         "tiled16", "tile16", "smallbatched", "reg32", "reg64", "64x64", "reg64k16tt", "128x128x8",
         "128x32x32_s2_u1", "128x32x32_s2_u1_aligned", "reg128x64k32large", "64x64x16wide", "32x32x16wide",
         "register_tiled", "native:register_tiled", "native:auto", "sycl", "custom", "vendor:auto", "auto:auto",
@@ -1505,7 +1557,7 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
         {"wide:m=64:n=64:k=8", tt, "wide:m=64:n=64:k=8"},
         {"native", nn, native_best}, {"Native", nn, native_best}, {"vendor", nn, vendor_pick},
         {"auto", nn, auto_pick}};
-    if constexpr (!kCx<T>) want.push_back({"small", nn, "small"});
+    want.push_back({"small", sizeof(T) == 16 ? Spec{kN, kN, 32, 24, 16, 4, Layout::Packed} : nn, "small"});
     if constexpr (std::is_same_v<T, float>) {
         const std::vector<Want> reg{
             {"reg:m=32:n=32:k=8:u=1", nn, "reg:m=32:n=32:k=8:u=1"}, {"reg:64:64:8:1", nn, "reg:m=64:n=64:k=8:u=1"},
@@ -1904,6 +1956,7 @@ TEST(GemmCanRun, SmallNeedsSubGroup32OutsideTheFloatTiledLeg) {
     sg.is_gpu = true;
     sg.max_wg = 1024;
     sg.has_sg32 = true;
+    sg.slm_budget = 45056;  // CUDA's 48 KiB less the 4 KiB reserve
     select::Device nosg = sg;
     nosg.has_sg32 = false;
     struct Probe { bool is_float, nn; int mx; bool without_sg32; };
@@ -1920,7 +1973,47 @@ TEST(GemmCanRun, SmallNeedsSubGroup32OutsideTheFloatTiledLeg) {
         EXPECT_EQ(without, p.without_sg32) << what;
     }
     EXPECT_FALSE(og::small_fits<float>(sg, true, 65));
-    EXPECT_FALSE(og::small_fits<std::complex<float>>(sg, true, 8));
+    EXPECT_FALSE(og::small_fits<std::complex<float>>(sg, true, 65));
+    EXPECT_FALSE(og::small_fits<std::complex<float>>(nosg, true, 40)) << "complex has no tiled leg";
+}
+
+// small's ceiling and local memory term (R3), literal per scalar: complex<double> stops at 32, every
+// other scalar at 64, and a budget one byte short of a bucket's bytes refuses exactly that bucket.
+TEST(GemmCanRun, SmallCeilingAndLocalMemoryPerScalar) {
+    select::Device d = select::device_from_key("sm_89");
+    d.is_gpu = true;
+    d.max_wg = 1024;
+    d.has_sg32 = true;
+    d.slm_budget = 45056;
+    EXPECT_TRUE(og::small_fits<std::complex<double>>(d, false, 32));
+    EXPECT_FALSE(og::small_fits<std::complex<double>>(d, false, 33));
+    EXPECT_FALSE(og::small_fits<std::complex<double>>(d, true, 64));
+    for (bool nn : {false, true}) {
+        EXPECT_TRUE(og::small_fits<std::complex<float>>(d, nn, 64));
+        EXPECT_TRUE(og::small_fits<double>(d, nn, 64));
+        EXPECT_TRUE(og::small_fits<float>(d, nn, 64));
+    }
+    // 128 / (2 NB) slots of NB x (NB + 1) elements; the float NN tiled leg 2 NB (NB + 4).
+    EXPECT_EQ(og::small_slm_bytes<float>(false, 8), 2304);
+    EXPECT_EQ(og::small_slm_bytes<std::complex<float>>(false, 16), 8704);
+    EXPECT_EQ(og::small_slm_bytes<std::complex<double>>(true, 32), 33792);
+    EXPECT_EQ(og::small_slm_bytes<std::complex<float>>(true, 64), 33280);
+    EXPECT_EQ(og::small_slm_bytes<double>(false, 33), 33280);
+    EXPECT_EQ(og::small_slm_bytes<float>(true, 56), 26880);
+    EXPECT_EQ(og::small_slm_bytes<float>(false, 56), 16640);
+    struct Edge { const char* what; std::int64_t bytes; bool (*fits)(const select::Device&); };
+    const Edge edges[] = {
+        {"cfloat NT 64", 33280, [](const select::Device& v) { return og::small_fits<std::complex<float>>(v, false, 64); }},
+        {"cdouble NN 32", 33792, [](const select::Device& v) { return og::small_fits<std::complex<double>>(v, true, 32); }},
+        {"double NN 40", 33280, [](const select::Device& v) { return og::small_fits<double>(v, true, 40); }},
+        {"float NN 56 (tiled)", 26880, [](const select::Device& v) { return og::small_fits<float>(v, true, 56); }}};
+    for (const Edge& e : edges) {
+        select::Device at = d, short_by_one = d;
+        at.slm_budget = e.bytes;
+        short_by_one.slm_budget = e.bytes - 1;
+        EXPECT_TRUE(e.fits(at)) << e.what;
+        EXPECT_FALSE(e.fits(short_by_one)) << e.what;
+    }
 }
 
 // candidates<T>() holds exactly the oracle's configs: a dropped entry would otherwise just
@@ -1929,7 +2022,7 @@ template <typename T>
 void expect_candidate_set() {
     std::set<std::string> got, want{"direct", "tiled", "vendor"};
     for (const C& c : og::candidates<T>()) EXPECT_TRUE(got.insert(select::to_string(c)).second) << select::to_string(c);
-    if constexpr (!kCx<T>) want.insert("small");
+    want.insert("small");
     if constexpr (std::is_same_v<T, float>)
         for (const auto& r : reg_rows())
             want.insert("reg:m=" + std::to_string(r.m) + ":n=" + std::to_string(r.n) + ":k=" + std::to_string(r.k) +

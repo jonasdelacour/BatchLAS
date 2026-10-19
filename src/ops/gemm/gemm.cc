@@ -130,10 +130,7 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Direct) { return sycl_gemm::gemm_direct<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](Tiled) { return sycl_gemm::gemm_tiled<T>(q, A, Bm, C, alpha, beta, ta, tb); },
-        [&](Small) -> Event {
-            if constexpr (!is_complex_v<T>) return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb);
-            else throw batchlas::unsupported("gemm: small has no complex instantiation");
-        },
+        [&](Small) { return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](const Reg& r) -> Event {
             if constexpr (std::is_same_v<T, float>)
                 return sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, C, alpha, beta, ta, tb);
