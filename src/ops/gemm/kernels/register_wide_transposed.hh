@@ -189,7 +189,8 @@ Event launch_wide_transposed_leg(Queue& ctx,
     constexpr int TTM = P.TTM;
     constexpr int TTN = P.TTN;
     constexpr int Stages = P.Stages;
-    constexpr bool Prefetch = !(TileM == 64 && TileN == 64);
+    // complex<double> prefetch spilled every tile (255 registers, ~4.4 KB, sm_120 probe).
+    constexpr bool Prefetch = !(TileM == 64 && TileN == 64) && sizeof(D) < 16;
     constexpr bool TransA = P.OpA != Transpose::NoTrans;
     constexpr bool TransB = P.OpB != Transpose::NoTrans;
     constexpr bool ConjA = P.OpA == Transpose::ConjTrans;
@@ -358,6 +359,30 @@ BATCHLAS_UNROLL_FULL
                         sstore<KCB, ConjB, TileN, TileK>(sb + stage * BufB, &rb[r * VecN], i, kk);
                     }
                 };
+                // Without prefetch each granule goes straight to its stage.
+                auto stage_direct = [&](int k0, int stage) __attribute__((always_inline)) {
+                    const bool kin = k0 + TileK <= k_hi;
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGA; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountA % Threads != 0 && g >= CountA) continue;
+                        int i, kk;
+                        granule<KCA, TileM, TileK, VecN>(g, i, kk);
+                        alignas(16) D t[VecN];
+                        gload<KCA, VecLoads>(t, Ab, lda, m0 + i, k0 + kk, m, k_hi, a_in && kin);
+                        sstore<KCA, ConjA, TileM, TileK>(sa + stage * BufA, t, i, kk);
+                    }
+BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < NGB; ++r) {
+                        const int g = tid + r * Threads;
+                        if (CountB % Threads != 0 && g >= CountB) continue;
+                        int i, kk;
+                        granule<KCB, TileN, TileK, VecN>(g, i, kk);
+                        alignas(16) D t[VecN];
+                        gload<KCB, VecLoads>(t, Bb, ldb, n0 + i, k0 + kk, n, k_hi, b_in && kin);
+                        sstore<KCB, ConjB, TileN, TileK>(sb + stage * BufB, t, i, kk);
+                    }
+                };
                 // Out-of-range staging wrote a zero rather than being skipped,
                 // so the accumulation needs no bounds test.
                 auto compute = [&](int stage) __attribute__((always_inline)) {
@@ -388,8 +413,12 @@ BATCHLAS_UNROLL_FULL
                 };
 
                 const int slabs = (k_hi - k_lo + TileK - 1) / TileK;
-                load(k_lo);
-                store(0);
+                if constexpr (Prefetch) {
+                    load(k_lo);
+                    store(0);
+                } else {
+                    stage_direct(k_lo, 0);
+                }
                 item.barrier(sycl::access::fence_space::local_space);
                 for (int s = 0; s < slabs; ++s) {
                     const int cur = Stages == 2 ? (s & 1) : 0;
@@ -400,8 +429,8 @@ BATCHLAS_UNROLL_FULL
                     compute(cur);
                     if (more) {
                         if constexpr (Stages == 1) item.barrier(sycl::access::fence_space::local_space);
-                        if constexpr (!Prefetch) load(k_lo + (s + 1) * TileK);
-                        store(Stages == 2 ? cur ^ 1 : 0);
+                        if constexpr (Prefetch) store(Stages == 2 ? cur ^ 1 : 0);
+                        else stage_direct(k_lo + (s + 1) * TileK, Stages == 2 ? cur ^ 1 : 0);
                         item.barrier(sycl::access::fence_space::local_space);
                     }
                 }

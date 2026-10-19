@@ -1180,7 +1180,7 @@ barrier, compute, barrier with element loads, so at low tile counts no other gro
 |---|---|
 | stages | `og::wide_stages<T>`: 2 when 2·k·(m+n)·sizeof(T) ≤ 40 KiB, else 1. 1 for cdouble 128x32, 32x128, 64x32 and 32x64 (80 and 48 KiB double-buffered). 64x64 double stays at 1 (cdouble 64x64 is wide v2 since WP-J). `wide_slm_bytes` reads the same function |
 | barriers | two stages: one per slab, slab s+1 stored into the stage slab s−1 was read from. One stage: two per slab, as before |
-| prefetch | the next slab's granules go into registers before the current FMAs: (m+n)·k / threads elements per thread (128x32: 10, 64x32: 12, 32x32: 16, 16x16: 8). Off on 64x64 double |
+| prefetch | the next slab's granules go into registers before the current FMAs: (m+n)·k / threads elements per thread (128x32: 10, 64x32: 12, 32x32: 16, 16x16: 8). Off on 64x64 double and on every complex<double> tile (prefetch spilled all 85 cdouble instantiations, 255 registers, sm_120 probe) |
 | granules | 16 bytes along the contiguous dimension: k for A^T and B, i for A and B^T. Along k a warp takes 32/KG columns of KG granules, i fastest across lanes |
 | swizzle | the k-contiguous store XORs its granule column by (kk/VecN)·(32/TileK) mod granules-per-row, the fragment read applies the same XOR. Conflict-free except float 16x16 (2-way) |
 | leg | `wide64_v2_vec_loads` per launch (bases 16-byte aligned, ld and stride whole granules). A group's slab is predicated (element loads, zero fill) when the group is an edge or the slab is the k tail |
