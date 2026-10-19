@@ -236,7 +236,7 @@ struct Region {
     int rows = 0, cols = 0, ld = 0, stride = 0;
 };
 
-enum class Layout { Packed, Strided, Padded, Gap1 };
+enum class Layout { Packed, Strided, Padded, Gap1, OddLd, ItemSkew };
 
 struct Spec {
     Transpose ta = kN, tb = kN;
@@ -251,7 +251,9 @@ struct Spec {
 // A, B and C live in one buffer of a large finite poison. Packed: contiguous operands with
 // 16-byte bases (layout=packed). Strided: ld = rows + 3, an odd batch stride, odd bases. Gap1: the
 // tuner's strided cell, ld = rows + 1, odd stride and bases (one poison element per column). Padded:
-// 16-byte bases, ld and stride multiples of 4 but neither natural (an aligned-leg view). The
+// 16-byte bases, ld and stride multiples of 4 but neither natural (an aligned-leg view). OddLd:
+// every item's base 16-byte aligned, ld odd. ItemSkew: Padded's ld, stride = 1 (mod 4), so item i
+// starts i (mod 4) elements past a 16-byte boundary. The
 // panel form carves A, B and C from one parent at its ld and stride, B aliasing A.
 template <typename T>
 struct Problem {
@@ -322,6 +324,9 @@ Problem<T> make_problem(const Spec& s) {
         if (s.layout == Layout::Packed) return Region{up4(off), rows, cols, rows, rows * cols};
         const int pad = int(up4(std::size_t(rows))) + 4;
         if (s.layout == Layout::Padded) return Region{up4(off), rows, cols, pad, pad * cols + 4};
+        if (s.layout == Layout::OddLd)
+            return Region{up4(off), rows, cols, pad + 1, int(up4(std::size_t(pad + 1) * cols))};
+        if (s.layout == Layout::ItemSkew) return Region{up4(off), rows, cols, pad, pad * cols + 1};
         if (s.layout == Layout::Gap1) return Region{off | 1, rows, cols, rows + 1, (rows + 1) * cols + 3};
         return Region{off | 1, rows, cols, rows + 3, (rows + 3) * cols + 5};
     };
@@ -401,6 +406,8 @@ std::string label(const Spec& s) {
     const char* lay = s.layout == Layout::Packed ? " packed"
         : s.layout == Layout::Padded               ? " padded"
         : s.layout == Layout::Gap1                 ? " ld+1"
+        : s.layout == Layout::OddLd                ? " aligned-odd-ld"
+        : s.layout == Layout::ItemSkew             ? " item-skewed"
                                                    : " strided";
     return std::string(tw(s.ta)) + tw(s.tb) + lay +
            " m=" + std::to_string(s.m) + " n=" + std::to_string(s.n) + " k=" + std::to_string(s.k) +
@@ -994,12 +1001,15 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
 
 // WP-B, the C epilogue of every reg and wide tile at a saturating batch, 7 distinct problems, beta != 0
 // (C is read). 256 x 256 x 16 strided: every group interior, odd ldc, so the staged store (wide at
-// 16-byte scalars stores direct, already coalesced). 200 x 136 x 8 ragged on two layouts: ld = m + 1
+// 16-byte scalars stores direct, already coalesced). 200 x 136 x 8 ragged on four layouts: ld = m + 1
 // (the tuner's strided cell; the poison element under each column is read or written by an
-// off-by-one predicate or an ldc derived from m), and padded (16-byte columns: interior groups take
-// the band store, edge groups the staged one). Then 200 x 136 x 8 at ld = m + 1 with beta = 0 and
-// NaN in C. A missing barrier around the stage, or a stage index the write and read-back disagree
-// on, differs across items or is wrong; a band store on an edge group writes outside C.
+// off-by-one predicate or an ldc derived from m); padded (16-byte columns: interior groups take
+// the band store, edge groups the staged one); 16-byte bases at an odd ld (only the ldc term of the
+// band-store test refuses it); and item-skewed (ldc a multiple of 4, every item's base at another
+// offset, so only the per-item base term refuses; period 8 keeps an item and its representative on
+// one path). Then beta = 0 and NaN in C on the staged and band layouts. A missing barrier around
+// the stage, or a stage index the write and read-back disagree on, differs across items or is
+// wrong; a band store on an edge group writes outside C, and one at a misaligned base faults.
 // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
 TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
     using T = typename TestFixture::T;
@@ -1009,17 +1019,27 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
     if (!kWide16) shapes.push_back({256, 256, 16, Layout::Strided, 1024, false});
     shapes.push_back({200, 136, 8, Layout::Gap1, kWide16 ? 64 : 1024, true});
     shapes.push_back({200, 136, 8, Layout::Padded, kWide16 ? 64 : 128, true});
+    shapes.push_back({200, 136, 8, Layout::OddLd, kWide16 ? 64 : 128, true});
+    shapes.push_back({200, 136, 8, Layout::ItemSkew, kWide16 ? 64 : 1024, true});
     const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kC, kN}, {kN, kC}, {kC, kC}};
-    int reg = 0, wide = 0, nan_checked = 0;
+    int reg = 0, reg_expected = 0, wide = 0, nan_checked = 0;
     for (const C& c : og::candidates<T>()) {
         const bool is_reg = std::holds_alternative<og::Reg>(c);
         if (!is_reg && !std::holds_alternative<og::Wide>(c)) continue;
+        const RegRow* row = is_reg ? reg_row(std::get<og::Reg>(c)) : nullptr;
+        if (is_reg && std::is_same_v<T, float>) {
+            ASSERT_NE(row, nullptr) << select::to_string(c);
+            // Only a row over 48 KiB may be refused, and only on a device capped there.
+            if (!reg_fits(*row)) EXPECT_TRUE(row->slm >= 49920 && g_slm_budget < 49920) << select::to_string(c);
+        }
         for (const Shape& sh : shapes)
             for (auto [ta, tb] : forms) {
                 if (!sh.all_forms && tb != kN) continue;
                 Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, sh.layout};
-                s.period = 7;
+                s.period = sh.layout == Layout::ItemSkew ? 8 : 7;
                 s.seed = 9700u + sh.m + static_cast<unsigned>(sh.layout);
+                if (row && std::is_same_v<T, float> && reg_fits(*row))
+                    reg_expected += std::count(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) > 0;
                 if (!TestFixture::expect_runs(c, s)) continue;
                 auto p = make_problem<T>(s);
                 this->run_pinned(c, p);
@@ -1027,22 +1047,26 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
                 if (::testing::Test::HasFatalFailure()) return;
                 ++(is_reg ? reg : wide);
             }
-        for (auto [ta, tb] : forms) {
-            Spec s{ta, tb, 200, 136, 8, 3, Layout::Gap1};
-            s.beta_zero = s.nan_c = true;
-            if (!TestFixture::expect_runs(c, s)) continue;
-            auto p = make_problem<T>(s);
-            this->run_pinned(c, p);
-            expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
-            if (::testing::Test::HasFatalFailure()) return;
-            ++nan_checked;
-        }
+        for (Layout lay : {Layout::Gap1, Layout::Padded, Layout::ItemSkew})
+            for (auto [ta, tb] : forms) {
+                Spec s{ta, tb, 200, 136, 8, 3, lay};
+                s.beta_zero = s.nan_c = true;
+                if (!TestFixture::expect_runs(c, s)) continue;
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                if (::testing::Test::HasFatalFailure()) return;
+                ++nan_checked;
+            }
     }
-    // Float: reg 15 + 2 x 26 (fewer only where a row is over the local memory budget), wide 8 + 2 x 14;
-    // double and complex<float> wide 8 + 2 x 14; complex<double> wide 2 x 14.
-    if constexpr (std::is_same_v<T, float>) EXPECT_GE(reg, 50);
-    EXPECT_GE(wide, kWide16 ? 28 : 36);
-    EXPECT_GE(nan_checked, 14);
+    // Float: reg 15 + 4 x 26 (a 48 KiB cap drops only u4 and u2, NN only: 2 x 5),
+    // wide 8 + 4 x 14; double and complex<float> wide 8 + 4 x 14; complex<double> wide 4 x 14.
+    if constexpr (std::is_same_v<T, float>) {
+        EXPECT_EQ(reg, reg_expected);
+        EXPECT_GE(reg, g_slm_budget < 49920 ? 109 : 119);
+    }
+    EXPECT_GE(wide, kWide16 ? 56 : 64);
+    EXPECT_GE(nan_checked, 3 * 14);
 }
 
 // validate() refuses mismatched views before choose(), under Auto and every pin; the buffers
