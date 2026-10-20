@@ -10,6 +10,7 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
+#include <src/ops/gemm/kernels/register_tiled_common.hh>
 
 #include <src/linalg-impl.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -757,30 +758,28 @@ BATCHLAS_UNROLL_FULL
         }
 
         Vec4<float> r[NR][CF];
+        // The halves unroll by static_for, not a 1-trip loop: LICM on that loop hoisted the edge
+        // tests and spilled float 64x64x16 NC on sm_89.
         auto load = [&](int k0) __attribute__((always_inline)) {
             const bool kin = k0 + TileK <= k;
-            if (stage_a) {
-BATCHLAS_UNROLL_FULL
-                for (int h = 0; h < HA; ++h)
+            if (stage_a)
+                static_for<HA>([&](auto h) {
                     fetch<KA>(r[h], pa + h * a_half, lda, k0, a_kb, a_ib, k, m - m0 - 64 * h, a_in && kin);
-            }
-            if (!Split || !stage_a) {
-BATCHLAS_UNROLL_FULL
-                for (int h = 0; h < HB; ++h)
+                });
+            if (!Split || !stage_a)
+                static_for<HB>([&](auto h) {
                     fetch<KB>(r[RB0 + h], pb + h * b_half, ldb, k0, b_kb, b_ib, k, n - n0 - 64 * h, b_in && kin);
-            }
+                });
         };
         auto store = [&](int buf) __attribute__((always_inline)) {
-            if (stage_a) {
-BATCHLAS_UNROLL_FULL
-                for (int h = 0; h < HA; ++h)
+            if (stage_a)
+                static_for<HA>([&](auto h) {
                     wide_v2::sstore<KA, CF, KStep, TileK, TileM>(sa + buf * BufA, r[h], a_kb, a_ib + 64 * h);
-            }
-            if (!Split || !stage_a) {
-BATCHLAS_UNROLL_FULL
-                for (int h = 0; h < HB; ++h)
+                });
+            if (!Split || !stage_a)
+                static_for<HB>([&](auto h) {
                     wide_v2::sstore<KB, CF, KStep, TileK, TileN>(sb + buf * BufB, r[RB0 + h], b_kb, b_ib + 64 * h);
-            }
+                });
         };
         auto compute = [&](int buf) __attribute__((always_inline)) {
             const float* xa = sa + buf * BufA;
