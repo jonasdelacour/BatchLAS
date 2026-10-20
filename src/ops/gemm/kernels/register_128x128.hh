@@ -475,8 +475,9 @@ BATCHLAS_UNROLL_FULL
             int tid2 = static_cast<int>(item.get_local_id(2));
 #if BATCHLAS_GEMM_CP_ASYNC
             // Read after the pipeline's volatile copies, so no epilogue address is hoisted into the
-            // mainloop (u4 staged NN spilled 20 B at the 128 cap with it hoisted).
-            if constexpr (Stages > 2) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
+            // mainloop (u4 staged NN spilled 20 B at the 128 cap with it hoisted; u1 aligned staged TT
+            // 32 B on sm_120).
+            if constexpr (Stages > 2 || AlignedFastPath) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
 #endif
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
 BATCHLAS_UNROLL_FULL
