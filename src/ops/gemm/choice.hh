@@ -114,6 +114,12 @@ inline constexpr std::array<WideCfg, 8> wide_configs{{
     {32, 64, 16, 4, 4, kWideNoTTTCCC, kWideRealAll},
     {64, 64, 8, 4, 4, kWideAll, kWideRealAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
 }};
+// wide_compiles would silently ignore a T bit in `real`; real NN never outgrows complex NN.
+static_assert([] {
+    for (const WideCfg& c : wide_configs)
+        if ((c.real & ~kWideRealAll) != 0 || ((c.real & kWideNN) && !(c.forms & kWideNN))) return false;
+    return true;
+}(), "WideCfg::real lists only N/C forms, and real NN only where complex NN is listed");
 
 /// split-k hosts: every wide row launch_wide_transposed runs in all its forms (not 64x64).
 constexpr bool splitk_host(const WideCfg& c) { return !(c.m == 64 && c.n == 64); }

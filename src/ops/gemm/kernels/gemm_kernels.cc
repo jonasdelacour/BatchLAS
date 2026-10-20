@@ -154,13 +154,14 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
     case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
     case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
+    case KernelVariant::Count: break;
     }
     return "gemm_sycl_unknown";
 }
 
 // A split-k body's name: its host instantiation's, suffixed (static storage for the trace scope).
 const char* splitk_trace_name(KernelVariant variant) {
-    constexpr int kCount = static_cast<int>(KernelVariant::Tiled32x128RegisterK16WideCC) + 1;
+    constexpr int kCount = static_cast<int>(KernelVariant::Count);
     static const std::array<std::string, kCount> names = [] {
         std::array<std::string, kCount> out;
         for (int i = 0; i < kCount; ++i) out[i] = std::string(kernel_trace_name(KernelVariant(i))) + "_splitk";

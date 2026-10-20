@@ -63,7 +63,8 @@ enum class KernelVariant {
     Tiled32x32RegisterK16WideTT, Tiled32x32RegisterK16WideTC, Tiled32x32RegisterK16WideCC,
     Tiled16x16RegisterK16WideTT, Tiled16x16RegisterK16WideTC, Tiled16x16RegisterK16WideCC,
     Tiled64x32RegisterK16WideCC, Tiled32x64RegisterK16WideCC,
-    Tiled128x32RegisterK16WideCC, Tiled32x128RegisterK16WideCC,  // the last: splitk_trace_name's count
+    Tiled128x32RegisterK16WideCC, Tiled32x128RegisterK16WideCC,
+    Count,  // not a kernel: splitk_trace_name's table size, so append entries above it
 };
 
 // One launcher per gemm family (src/ops/gemm/choice.hh). Each serves exactly what its family's

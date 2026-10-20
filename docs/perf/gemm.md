@@ -67,7 +67,7 @@ Forms are folded after the real-scalar C→T fold:
 
 `WideCfg::forms` lists the complex instantiations and `WideCfg::real` the N/C builds a real scalar compiles;
 a real form is served when its C-folded form is in `real` (`wide_compiles`, `wide_serves`). Split-k hosts
-inherit their row's forms. Real TT on the four non-64×64 tiles and complex TT, TC, CC on 32×32 and 16×16:
+inherit their row's forms. Real TT on the six non-64×64 tiles and complex TT, TC, CC on 32×32 and 16×16:
 [WP-T](#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles). See [GEMM: wide instantiations in every transpose
 form](#gemm-wide-instantiations-in-every-transpose-form).
 
@@ -662,7 +662,8 @@ change is new instantiations only:
   `wide_serves<T>` is the one rule: a complex form must be listed exactly; a real scalar folds T to C and compiles
   only the N/C builds (conj is the identity), so a real TT runs the CC build of the 64×64 tile.
 * Masks: 64×64 all nine; the panel tiles 128×32 and 32×128 their issued form, its mirror and the matching `Trans`
-  forms (NC, NT, TN, CN); 32×32 and 16×16 every form but TT, TC and CC.
+  forms (NC, NT, TN, CN); 32×32 and 16×16 every form but TT, TC and CC
+  ([WP-T](#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles) later added them).
 * Rows are only appended (`wide_variant` reads a table indexed by row and form, `static_assert`ed to one row per
   `wide_configs` row), and a form a row does not list is a `static_assert` in `launch_wide_cfg`, so can_run, the
   launcher and the trace name cannot drift apart.
@@ -1648,16 +1649,31 @@ float TT strided skinny 1.38-1.45×). No kernel code changed: `launch_wide_trans
 | float TT strided 2048×32×2048 b128 | wide 64x64x16 | 1.27 | wide 64x32, splitk 128x32 s2 | 1.00 | 0.79 |
 | float TT strided 128×32×96 b32768 | wide 64x64x16 | 1.18 | wide 64x32 | 1.00 | 0.85 |
 | bracket: double TT packed 256²×8 b128 | wide 64x64x8 | 0.53 | wide 64x32 | 0.89 | 1.68 |
+| cfloat CC packed 32³ b128 | wide 64x64x16 | 1.01 | wide 16x16 | 0.84 | 0.83 |
+| cfloat TT strided 48³ b128 | wide 64x64x16 | 0.76 | wide 16x16 | 0.73 | 0.96 |
+| cfloat CC strided 96³ b2048 | wide 64x64x16 | 0.91 | wide 32x32 | 0.81 | 0.88 |
+| cfloat TC packed 48³ b32768 | wide 64x64x16 | 0.96 | wide 16x16 | 0.96 | 1.00 |
+| saturating: cdouble TT packed 32³ b32768 | small | 0.90 | wide 32x32 | 0.84 | 0.94 |
+| cdouble CC strided 160³ b2048 | wide 64x64x16 | 1.28 | wide 32x32 | 0.92 | 0.72 |
+| bracket: cdouble CC strided 256³ b2048 | wide 64x64x8 | 0.88 | wide 32x32 | 0.89 | 1.02 |
+| bracket: cfloat TT strided 256³ b2048 | wide 64x64x16 | 1.17 | wide 32x32 | 1.44 | 1.23 |
+| bracket: float TT strided 256³ b2048 | wide 64x64x16 | 1.43 | wide 64x32 | 1.71 | 1.20 |
 
 Passes agree within 3% except the cdouble 96³ cells (up to 12% between passes; every pass of the new arm is
 below the vendor and the parent). The bracket keeps 64×64×8 at a large output. float 32×91×1024 without split-k:
-wide 32x128 0.92.
+wide 32x128 0.92. The cfloat, saturating and bracket rows below the first bracket are the review re-run
+(same box and protocol; passes differ up to 7% on the cdouble 32³ b32768 and 160³ cells, never reordering
+the winner against the parent): the cdouble 32³ b128 ratios against `tiled` hold at batch 128 only; at
+batch 32768 the parent is `small` and the gain is 6%. cdouble 512³ TT b128: all four tiles within 1% (0.877-0.886).
+Each type has one losing cell; the windows between are left to the retune.
 
 **Link** (`scripts/register_probe.sh`, the `libbatchlas_sycl` device link alone, box shared at load 5-6):
 parent 81.9 s (767 entries); every form on the four small tiles plus CC on the panel tiles, all scalars,
-104.5 s (927, +28%); shipped 91.9-93.6 s (863, +12-14%). cfloat had no losing cell a small tile could serve
-(its TT/TC/CC losses are at 256³ and up), and the complex grid has no TT/TC/CC panels, so complex 64×32,
-32×64, 128×32 and 32×128 stay without them.
+104.5 s (927, +28%); shipped 91.9-93.6 s (863, +12-14%). The complex grid has no TT/TC/CC panels, so complex
+64×32, 32×64, 128×32 and 32×128 stay without them. cfloat keeps its 32×32 / 16×16 TT, TC, CC (about 24 of the
+96 new entries): its coarse-grid losses are at 256³ and up, but the cfloat rows above win 4-17% over the parent
+below that. The figure is the nvptx64 device link alone: the full-target CPU AOT of the new instances and the
+vendor-free tree are not measured here (pre-push gate). Review rebuild (no instance change): 94.3 s at load 8, 863 entries, zero spill.
 
 **Registers:** zero spill on all 863 entries. New instances (both operands transposed): float 38-85, double
 68-163, cfloat 16×16 64-80 and 32×32 168, cdouble 16×16 72-86 and 32×32 136-190; the 32×32 and 16×16 tiles

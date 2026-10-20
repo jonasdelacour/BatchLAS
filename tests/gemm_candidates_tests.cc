@@ -2092,13 +2092,16 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
 TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
-    const Spec tt{kN, kN, 40, 30, 20, 2, Layout::Strided};  // a form wide 128x32 does not instantiate
+    static_assert(og::wide_configs[1].m == 128 && og::wide_configs[1].n == 32 &&
+                      !og::wide_compiles<T>(og::wide_configs[1], 0, 0),
+                  "the env pin below must name a wide tile with no NN build");
+    const Spec unserved{kN, kN, 40, 30, 20, 2, Layout::Strided};
     const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=128:n=32:k=16");
     {
-        auto p = make_problem<T>(tt);
+        auto p = make_problem<T>(unserved);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
     }
-    auto p = make_problem<T>(tt);
+    auto p = make_problem<T>(unserved);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("gemm", C{og::Tiled{}});
                   this->run(p);
@@ -2108,10 +2111,10 @@ TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     const Pin outer("gemm", C{og::Direct{}});
     {
         const Pin inner("gemm", C{og::Tiled{}});
-        auto r = make_problem<T>(tt);
+        auto r = make_problem<T>(unserved);
         EXPECT_EQ(traced_choice([&] { this->run(r); }), "tiled");
     }
-    auto r = make_problem<T>(tt);
+    auto r = make_problem<T>(unserved);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "direct") << "the inner pin did not restore the outer";
     expect_gemm(*this->ctx, r, "outer direct");
 }
