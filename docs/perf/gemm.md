@@ -1923,7 +1923,7 @@ parent at 73-81%. Two causes, in order of size:
 | epilogue (float, complex<float>, both legs) | `staged_c_store` in one pass and one round trip, as wide v2's (WP-Q): the stage space holds the whole tile, each thread one row and TileN / (Threads / TileM) columns (16; 4 on 16x16), every prior load in flight. Double precision keeps two per trip |
 | cp.async leg (complex<float> only) | 2 stages, no register prefetch, one barrier per slab (wide v2's 128x128 ring at Stages = 2). Along i on the 16-byte leg one 16-byte copy per granule (`src-size` cut at the i edge); every other copy one 8-byte element, consecutive lanes on consecutive global addresses (along i, or along k when the operand is k-contiguous). Zero fill by `src-size` 0, so no predicated diamond. Conjugation at the fragment read. Swizzle and fragment reads unchanged |
 | gate (launcher, never a key) | DPC++, `cuda_compute_capability() >= 120`, both bases 8-byte aligned, ld ≤ INT_MAX / 128 (int offsets), the 2-stage local memory (can_run's term). `BATCHLAS_GEMM_WIDE_STAGES=2` forces the register prefetch, `=3` admits sm_80+ |
-| traces | `<trace>_async`, and `<host>_splitk_async` for the split-k bodies, which take the same leg |
+| traces | `<trace>_async` (element copies) or `<trace>_async_vec` (16-byte granules along i), and `<host>_splitk_async[_vec]` for the split-k bodies, which take the same leg |
 
 **Variants** (one build, the leg chosen at run time; ratio to the vendor):
 
@@ -1980,8 +1980,10 @@ register prefetch forced, so new / `=2` is the copy leg alone; float has no copy
 | | splitk 32x64 s4 | 0.722 | 0.710 | 0.709 |
 
 Passes agree within 2% except the 48³ and 32×64×1024 cells (the vendor arm moves 4-8% between processes; the
-32×64×1024 native arm is 2% faster in absolute time, 0.0454 vs 0.0464 ms). Every target cell gains 6-19% over the
-parent; no control loses more than 1% except the noisy 48³ first run (0.816 → 0.853, not reproduced at 12 reps).
+32×64×1024 native arm is 2% faster in absolute time, 0.0454 vs 0.0464 ms). Every target cell gains 5.6-19% over the
+parent (float NT strided 2048×32×128 the least, 1.104 → 1.045); no control loses beyond vendor drift (float NT
+strided 32×64×1024, 1.101 → 1.115, is 2% faster in absolute time) except the noisy 48³ first run (0.816 → 0.853,
+not reproduced at 12 reps).
 The copy leg alone (new against `=2`) is worth 0-8% on the strided cells and costs up to 2.5% on two packed
 compute-heavy controls (CN packed 32×128×256, TN packed 64³), still level with the parent there. The vendor now
 leads only on float strided (1.05-1.13×; float NN/TT on 64x32 still issue element loads) and cfloat NC 256×32×32
@@ -2006,8 +2008,9 @@ bodies: 56-72 (16x16), 88-168 (the others); complex<double> unchanged (up to 186
 **Tests.** `WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch` runs everything under the derived leg and
 under `=2`, and adds per form beta = 0 with NaN in C (m + 1 × 2n − 1 × 33, ld = m + 1) and, for complex, a 4-byte
 base (2m + 1 × n + 3 × 37). `SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdges` runs complex<float> under
-both legs. `PinnedChoiceLaunchesItsOwnKernel` checks the `_async` and `_splitk_async` traces and adds per tile and
-split host the `=2` views (padded, ld = m + 1) and a 4-byte base. Deliberate breaks, run on sm_120 through a
+both legs. `PinnedChoiceLaunchesItsOwnKernel` checks the `_async[_vec]` and `_splitk_async[_vec]` traces and adds per
+tile and split host the `=2` and `=3` views (padded, ld = m + 1) and a 4-byte base. Both pipeline suites
+also run under `=3` on sm_80+ (the copy leg's only test below sm_120; on sm_120 it repeats the derived leg). Deliberate breaks, run on sm_120 through a
 temporary run-time switch (first red per test; the suites stop at the first fatal failure):
 
 | break | red | green |

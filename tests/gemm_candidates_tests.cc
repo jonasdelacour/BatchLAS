@@ -1561,8 +1561,8 @@ TYPED_TEST(GemmCandidates, BetaZeroKeepsNegativeZeroOnEveryNativeChoice) {
         if (std::holds_alternative<og::Vendor>(c)) continue;
         const bool small = std::holds_alternative<og::Small>(c);
         const Spec shapes[] = {{kN, kN, small ? 48 : 128, small ? 40 : 128, small ? 33 : 64, 3, Layout::Packed},
-                               {kN, kN, small ? 47 : 129, small ? 39 : 72, 33, 3, Layout::Gap1},
-                               {kN, kN, small ? 44 : 130, small ? 36 : 68, 48, 3, Layout::Padded}};
+                               {kN, kN, small ? 31 : 129, small ? 29 : 72, small ? 17 : 33, 3, Layout::Gap1},
+                               {kN, kN, small ? 28 : 130, small ? 24 : 68, small ? 16 : 48, 3, Layout::Padded}};
         int ran = 0;
         for (Transpose ta : kForms)
             for (Transpose tb : kForms)
