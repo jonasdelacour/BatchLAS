@@ -95,8 +95,7 @@ inline constexpr unsigned kWideAll = 0x1FF;
 inline constexpr unsigned kWideRealAll = kWideNN | kWideNC | kWideCN | kWideCC;
 inline constexpr unsigned kWideNoTTTCCC = kWideAll & ~(kWideTT | kWideTC | kWideCC);
 
-/// One compiled wide config: the forms a complex scalar instantiates, and the N/C forms a real one
-/// does (conj is the identity, so a real C build serves a real T: wide_serves).
+/// One compiled wide config: complex forms, and the N/C forms a real scalar compiles (wide_serves).
 struct WideCfg {
     int m, n, k, ttm, ttn;
     unsigned forms, real;
@@ -104,8 +103,7 @@ struct WideCfg {
     template <bool Complex>
     constexpr bool has(int a, int b) const { return ((Complex ? forms : real) & wide_bit(a, b)) != 0; }
 };
-// Complex TT, TC, CC only where they were measured to win (32x32, 16x16); real CC (its TT) on every
-// tile. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
+// Real CC (its TT) everywhere. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
 inline constexpr std::array<WideCfg, 8> wide_configs{{
     {64, 64, 16, 4, 4, kWideAll, kWideRealAll},
     {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN, kWideNC | kWideCN | kWideCC},  // potrf update, W = 32

@@ -60,13 +60,15 @@ Forms are folded after the real-scalar C→T fold:
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
 | `reg:m=128:n=64:k=32:u=4`, `reg:m=128:n=64:k=32:u=2` | NN |
 | `wide:m=64:n=64:k=16`, `wide:m=64:n=64:k=8` | all nine complex forms; real NN, NT, TN, TT (see [the k=8 slab](#gemm-wp-f-a-k8-slab-for-the-64x64-wide-tile)) |
-| `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
-| `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
-| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
-| `wide:m=64:n=32:k=16`, `wide:m=32:n=64:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [the skinny tiles](#gemm-skinny-64x32-and-32x64-wide-tiles)) |
+| `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN, TT |
+| `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN, TT |
+| `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | all nine complex forms; real NN, NT, TN, TT (see [blackwell.md](blackwell.md)) |
+| `wide:m=64:n=32:k=16`, `wide:m=32:n=64:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN, TT (see [the skinny tiles](#gemm-skinny-64x32-and-32x64-wide-tiles)) |
 
-The wide forms are the complex instantiations; a real scalar compiles only their N/C builds, so a real form is
-served when its C-folded form is listed. See [GEMM: wide instantiations in every transpose
+`WideCfg::forms` lists the complex instantiations and `WideCfg::real` the N/C builds a real scalar compiles;
+a real form is served when its C-folded form is in `real` (`wide_compiles`, `wide_serves`). Split-k hosts
+inherit their row's forms. Real TT on the four non-64×64 tiles and complex TT, TC, CC on 32×32 and 16×16:
+[WP-T](#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles). See [GEMM: wide instantiations in every transpose
 form](#gemm-wide-instantiations-in-every-transpose-form).
 
 Removed with no alias: the pin-only `Tiled128x32RegisterK32{S1U1,S2U2,S2U2TT8x4,S2U2TT4x8}`, the experimental
@@ -691,8 +693,8 @@ and NC 32×256×256 b128 2.31x on the 2026-10-18 coarse run. NN 64×32×256 b128
 lanes, half of them padding; the 64×32 tile launches the same 128 with none idle (only sliced K, below, raises
 the count). Two rows are appended to `wide_configs`, `{64, 32, 16, 4, 4}` and `{32, 64, 16, 4, 4}` (128 lanes, a
 4×4 thread tile), as configs of the existing `launch_wide_transposed` kernel; no kernel code changed. They take
-the small-tile mask (`kWideSmallTileForms`: every form but TT, TC and CC), the rule WP-A settled on for build
-cost.
+the small-tile mask (every form but TT, TC and CC), the rule WP-A settled on for build cost
+([WP-T](#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles) later added real TT).
 
 * Spellings `wide:m=64:n=32:k=16` and `wide:m=32:n=64:k=16`; candidates float 21, double 11, complex 10. Both are
   appended after `wide:m=16:n=16:k=16`, so no existing tie-break moves.
@@ -1608,6 +1610,71 @@ sectors (969M vs 218M) and 3.4× the requests. Three rewrites of the element leg
 | `cp.async` 4 B (float) / 8 B (complex<float>, 8-byte base), coalesced lane map, swizzle `kk & 7` | complex<float> 110 → 185 registers (8 swizzle offsets in the fragment read): NN strided 256×512×32 1.26× slower |
 | `cp.async` with the parent lane map and swizzle | float 1.02-1.04× slower, complex<float> 0.98-1.01 |
 | register staging, float i-contiguous operand read 32 consecutive floats per load (scalar shared stores) | 1.02-1.04× slower at the 85-register cap. At a 64 cap it spilled and ran 1.14-1.28× slower |
+
+## GEMM: WP-T, TT, TC and CC on the small transposed tiles
+
+Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune
+--mode time` (beta = 1, every arm verified), 10 reps, two passes in alternated arm order per cell. Parent: the
+WP-N2/WP-Q tree.
+
+Before: the four small tiles took every form but TT, TC and CC, and 128×32 / 32×128 four forms, to save link
+time. A real TT (C build CC) and a complex TT, TC or CC therefore fell to `tiled` or `wide:m=64:n=64` (coarse
+run it1: double TT strided at batch 32768 1.11-1.23× vendor, cdouble TT/TC/CC 32³ b128 1.65×, 96³ b2048 1.54×,
+float TT strided skinny 1.38-1.45×). No kernel code changed: `launch_wide_transposed` already takes any
+`OpA, OpB`.
+
+| piece | rule |
+|---|---|
+| `WideCfg::real` | new mask: the N/C forms a real scalar compiles. `forms` stays the complex set. `wide_compiles<T>` reads one or the other; `launch_wide_form`, `launch_wide_cfg`'s `static_assert` and `wide_serves` all go through it |
+| real | CC (its TT, TC, CT) on 128×32, 32×128, 32×32, 16×16, 64×32, 32×64 |
+| complex | TT, TC, CC on 32×32 and 16×16 only |
+| split-k | hosts inherit the row's forms, so `splitk` gains the same forms |
+
+| cell | parent arm | parent / vendor | new arm | new / vendor | new / parent |
+|---|---|---|---|---|---|
+| double TT strided 128×32×32 b32768 | tiled | 1.19 | wide 128x32 | 0.94 | 0.79 |
+| double TT strided 64×32×128 b32768 | tiled | 1.07 | wide 64x32 | 0.89 | 0.83 |
+| double TT strided 54×32×64 b32768 | tiled | 1.17 | wide 64x32 | 0.95 | 0.81 |
+| double TT strided 38×64×64 b32768 | tiled | 0.83 | wide 16x16 | 0.75 | 0.90 |
+| cdouble CC packed 32³ b128 | tiled | 1.70 | wide 16x16 | 0.76 | 0.45 |
+| cdouble TT packed 32³ b128 | tiled | 1.69 | wide 16x16 | 0.75 | 0.44 |
+| cdouble TC packed 32³ b128 | tiled | 1.69 | wide 16x16 | 0.76 | 0.45 |
+| cdouble CC packed 48³ b128 | wide 64x64x16 | 1.14 | wide 16x16 | 0.60 | 0.52 |
+| cdouble CC strided 96³ b2048 | wide 64x64x8 | 1.55 | wide 32x32 | 0.94 | 0.61 |
+| cdouble TT strided 96³ b2048 | wide 64x64x8 | 1.55 | wide 32x32 | 0.96 | 0.62 |
+| cdouble TC packed 96³ b2048 | wide 64x64x8 | 1.55 | wide 32x32 | 0.93 | 0.60 |
+| float TT strided 32×256×1024 b2048 | wide 64x64x16 | 1.42 | wide 32x128 | 1.00 | 0.70 |
+| float TT strided 32×91×1024 b128 | wide 64x64x16 | 1.45 | splitk 32x128 s4 | 0.74 | 0.51 |
+| float TT strided 2048×32×2048 b128 | wide 64x64x16 | 1.27 | wide 64x32, splitk 128x32 s2 | 1.00 | 0.79 |
+| float TT strided 128×32×96 b32768 | wide 64x64x16 | 1.18 | wide 64x32 | 1.00 | 0.85 |
+| bracket: double TT packed 256²×8 b128 | wide 64x64x8 | 0.53 | wide 64x32 | 0.89 | 1.68 |
+
+Passes agree within 3% except the cdouble 96³ cells (up to 12% between passes; every pass of the new arm is
+below the vendor and the parent). The bracket keeps 64×64×8 at a large output. float 32×91×1024 without split-k:
+wide 32x128 0.92.
+
+**Link** (`scripts/register_probe.sh`, the `libbatchlas_sycl` device link alone, box shared at load 5-6):
+parent 81.9 s (767 entries); every form on the four small tiles plus CC on the panel tiles, all scalars,
+104.5 s (927, +28%); shipped 91.9-93.6 s (863, +12-14%). cfloat had no losing cell a small tile could serve
+(its TT/TC/CC losses are at 256³ and up), and the complex grid has no TT/TC/CC panels, so complex 64×32,
+32×64, 128×32 and 32×128 stay without them.
+
+**Registers:** zero spill on all 863 entries. New instances (both operands transposed): float 38-85, double
+68-163, cfloat 16×16 64-80 and 32×32 168, cdouble 16×16 72-86 and 32×32 136-190; the 32×32 and 16×16 tiles
+are 64 lanes, two warps, so the four-partition gate (`ceil(2/4)·32·190 = 6080 ≤ 16384`) holds.
+
+**Tests:** the oracle rows in `tests/gemm_candidates_tests.cc` gain the forms (`WideRow::real_only` for the CC a
+real scalar alone compiles), so the existing every-form suites run them: saturating batch 1024 bit-identical,
+ld = m + 1, NaN gaps and NaN C at beta = 0, complex alpha, beta ≠ 0, split-k slice edges, tile edges ±1.
+`gemm_tests` `SmallWideTilesRunTheirTransposedForms` runs all eight transposed pairs and checks the 12 complex
+refusals; the panel-tile own-build tests run a real TT. Deliberate breaks, run on the GPU:
+
+- complex TT on wide 32×32 / 16×16 launched as TC: red exactly `PinnedCandidatesEveryFormShapeAndLayout` and
+  `WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch` for complex<float> and complex<double>.
+- real CC dropped from 64×32 (oracle unchanged): red 6 tests each for float and double (pinned every-form,
+  pinned bit-for-bit, `CanRunEqualsLaunch`, skinny, split-k, pipeline), all on 64×32 TT, TC, CT, CC.
+
+The sm_120 and sm_89 tables do not rank the new forms until the retune; the gemm kernel hash moved.
 
 ## GEMM: the register-tiled launcher table
 
