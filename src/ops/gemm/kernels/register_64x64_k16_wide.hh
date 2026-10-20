@@ -730,7 +730,8 @@ struct GemmWide64Body {
     using D = typename wide_scalar::DevMap<T>::type;
     static constexpr int TileM = TileM_, TileN = TileN_, TileK = TileK_, Threads = 256;
     // Stages > 2: that many local slabs filled by cp.async, Stages - 1 in flight, no register prefetch.
-    static constexpr int Stages = Stages_;
+    static constexpr int Stages = Stages_ % 10;
+    static constexpr bool Spread = Stages_ >= 10;  // WP-V experiment
     static constexpr bool kPipe = Stages > 2;
     static constexpr int TTM = TileM / 16, TTN = TileN / 16;    // thread tile over 16 x 16 lanes
     static constexpr int CF = static_cast<int>(sizeof(D) / sizeof(float));
@@ -898,10 +899,19 @@ BATCHLAS_UNROLL_FULL
             asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sa_l) : "l"(sa));
             asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sb_l) : "l"(sb));
 #endif
-            const float* ga = pa;
-            const float* gb = pb;
+            const int hh = tid / OpThreads;  // warp-uniform
+            const float* ga = Spread ? pa + hh * a_half : pa;
+            const float* gb = Spread ? pb + hh * b_half : pb;
+            const int a_lim = m - m0 - 64 * hh, b_lim = n - n0 - 64 * hh;
             auto issue = [&](int k0, int buf) __attribute__((always_inline)) {
-                if (stage_a) {
+                if constexpr (Spread) {
+                    wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA), ga,
+                                                                     lda, k0, a_kb, a_ib, a_ib + 64 * hh, k, a_lim);
+                    wide_v2::acopy<VecLoads, KB, KStep, TileK, TileN>(sb + buf * BufB, sb_l + 4u * (buf * BufB), gb,
+                                                                     ldb, k0, b_kb, b_ib, b_ib + 64 * hh, k, b_lim);
+                    ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
+                    gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
+                } else if (stage_a) {
                     static_for<HA>([&](auto h) {
                         wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA),
                                                                          ga + h * a_half, lda, k0, a_kb, a_ib,
@@ -1031,8 +1041,8 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()), static_cast<size_t>((m + Body::TileM - 1) / Body::TileM),
                                 static_cast<size_t>((n + Body::TileN - 1) / Body::TileN) * Body::Threads);
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(Stages * Body::BufA / 4), h);
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(Stages * Body::BufB / 4), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(Body::Stages * Body::BufA / 4), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(Body::Stages * Body::BufB / 4), h);
         D alpha_d, beta_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
@@ -1051,14 +1061,19 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                        T alpha, T beta, const char* trace, const char* trace_vec) {
     if constexpr (TileM == 128 && TileN == 128) {
-        constexpr int S = 4;  // WP-V experiment
-        const char* e = std::getenv("BATCHLAS_WIDE_PIPE");
-        const bool pipe = !(e && e[0] == '0') && ctx.device().cuda_compute_capability() >= 80;
-        if (pipe) {
+        const char* e = std::getenv("BATCHLAS_WIDE_PIPE");  // WP-V experiment
+        const int v = e ? e[0] - '0' : 1;
+        auto go = [&](auto S) {
             if (wide64_v2_vec_loads<T>(A, B))
-                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, S>(ctx, A, B, C, alpha, beta,
-                                                                                      trace_vec);
-            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, S>(ctx, A, B, C, alpha, beta, trace);
+                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, S()>(ctx, A, B, C, alpha, beta,
+                                                                                        trace_vec);
+            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, S()>(ctx, A, B, C, alpha, beta,
+                                                                                     trace);
+        };
+        if (v > 0 && ctx.device().cuda_compute_capability() >= 80) {
+            if (v == 2) return go(std::integral_constant<int, 14>{});
+            if (v == 3) return go(std::integral_constant<int, 13>{});
+            return go(std::integral_constant<int, 4>{});
         }
     }
     if (wide64_v2_vec_loads<T>(A, B))
