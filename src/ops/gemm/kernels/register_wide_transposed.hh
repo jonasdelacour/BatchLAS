@@ -11,12 +11,14 @@
 #include <src/linalg-impl.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
+#include <src/ops/gemm/kernels/copy_async.hh>
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
+#include <cstdlib>
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
@@ -34,7 +36,8 @@ struct WideTile {
     int Stages = 1;                         // shared-memory stages: og::wide_stages
 };
 
-template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec, bool Split>
+template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int Stages, bool Vec, bool Split,
+          int Async>
 class GemmWideTransposedKernel;
 
 // Split-k: group z of batch * splits computes item z / splits over k in [slice kc, slice kc + kc)
@@ -156,6 +159,50 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
+// One operand's slab straight into stage s (shared window address s_l), no registers and no conj
+// (the fragment read applies it). Out-of-range elements are zero-filled with src-size 0 from the
+// operand base. Along i (!KC) the 16-byte leg copies granules, src-size cut at the i edge; every
+// other copy is one element, consecutive lanes on consecutive global addresses (along i, or along
+// k when KC: the transposing scatter cannot be one 16-byte copy). Elements must sit at a multiple
+// of their size (the launcher checks complex<float> bases; alignof is 4).
+// evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
+template <bool KC, bool Vec, int TI, int TileK, int Threads, typename D>
+inline void acopy(D* s, std::uint32_t s_l, const D* base, int ld, int i0, int k0, int i_lim, int k_lim, int tid) {
+    constexpr int VecN = Vec16<D>::N;
+    constexpr int ES = static_cast<int>(sizeof(D));
+    if constexpr (Vec && !KC) {
+        constexpr int Count = TI * TileK / VecN;
+BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < (Count + Threads - 1) / Threads; ++r) {
+            const int g = tid + r * Threads;
+            if (Count % Threads != 0 && g >= Count) continue;
+            const int i = (g % (TI / VecN)) * VecN, kk = g / (TI / VecN);
+            const int left = i_lim - i0 - i;
+            const bool ok = k0 + kk < k_lim && left > 0;
+            const D* src = ok ? base + (i0 + i) + static_cast<std::ptrdiff_t>(k0 + kk) * ld : base;
+            const int o = soff<false, TI, TileK, VecN>(kk, i);
+            copy_async_zfill<16>(s + o, s_l + static_cast<std::uint32_t>(ES * o), src,
+                                 ok ? static_cast<std::uint32_t>(ES * (left < VecN ? left : VecN)) : 0u);
+        }
+    } else {
+        constexpr int Count = TI * TileK;
+        static_assert(Count % Threads == 0, "whole elements per lane");
+BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < Count / Threads; ++r) {
+            const int e = tid + r * Threads;
+            const int i = KC ? e / TileK : e % TI, kk = KC ? e % TileK : e / TI;
+            const int gi = i0 + i, gk = k0 + kk;
+            const bool ok = gi < i_lim && gk < k_lim;
+            const D* src = ok ? base + (KC ? static_cast<std::ptrdiff_t>(gi) * ld + gk
+                                           : gi + static_cast<std::ptrdiff_t>(gk) * ld)
+                              : base;
+            const int o = soff<KC, TI, TileK, VecN>(kk, i);
+            copy_async_zfill<ES>(s + o, s_l + static_cast<std::uint32_t>(ES * o), src,
+                                 ok ? static_cast<std::uint32_t>(ES) : 0u);
+        }
+    }
+}
+
 }  // namespace wide_transposed
 
 // Does an instantiation's hard-wired transpose form serve the requested one?
@@ -184,7 +231,8 @@ inline bool wide_trans_matches(Transpose requested, Transpose instantiated) {
 // The next slab is fetched into registers before the current one's FMAs, except on the 64x64
 // tiles (double and complex<double>), whose registers sit at the two-group cap already.
 // evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
-template <typename T, WideTile P, bool VecLoads, bool Split>
+// Async > 0: that many cp.async stages instead (one barrier per slab, Async - 1 slabs in flight).
+template <typename T, WideTile P, bool VecLoads, bool Split, int Async = 0>
 Event launch_wide_transposed_leg(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,
@@ -205,9 +253,9 @@ Event launch_wide_transposed_leg(Queue& ctx,
     constexpr int TileK = P.K;
     constexpr int TTM = P.TTM;
     constexpr int TTN = P.TTN;
-    constexpr int Stages = P.Stages;
+    constexpr int Stages = Async > 0 ? Async : P.Stages;
     // complex<double> prefetch spilled every tile (255 registers, ~4.4 KB, sm_120 probe).
-    constexpr bool Prefetch = !(TileM == 64 && TileN == 64) && sizeof(D) < 16;
+    constexpr bool Prefetch = Async == 0 && !(TileM == 64 && TileN == 64) && sizeof(D) < 16;
     constexpr bool TransA = P.OpA != Transpose::NoTrans;
     constexpr bool TransB = P.OpB != Transpose::NoTrans;
     constexpr bool ConjA = P.OpA == Transpose::ConjTrans;
@@ -243,10 +291,19 @@ Event launch_wide_transposed_leg(Queue& ctx,
     static_assert(TTM % WbM == 0 && TTN % WbN == 0,
                   "thread tile must split into whole bands");
     static_assert(Threads >= 32 && Threads <= 1024 && Threads % 32 == 0, "work-group size out of range");
-    static_assert(Stages == 1 || Stages == 2, "one or two shared stages");
+    static_assert(Async > 0 ? Stages >= 2 && Stages <= 4 : Stages == 1 || Stages == 2, "shared stages");
     static_assert(TileK % VecN == 0 && TileK <= 32 && 32 % (TileK / VecN) == 0,
                   "a warp covers whole k runs of the k-contiguous operand");
     static_assert(CountA % 32 == 0 && CountB % 32 == 0, "a slab is whole warps of granules");
+    // Single precision: the staged C epilogue in one pass and one round trip (each thread one row,
+    // every prior load of its columns in flight), as wide v2's. Double precision keeps two per trip.
+    // evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
+    constexpr bool OneRound = !std::is_same_v<D, double> && sizeof(D) <= 8 && Threads % TileM == 0 &&
+        Stages * (BufA + BufB) >= TileM * TileN;
+    constexpr int EpiLo = !OneRound ? Stages * BufA : Stages * BufA < TileM * TileN ? Stages * BufA : TileM * TileN;
+    constexpr int EpiHi = OneRound ? TileM * TileN - EpiLo : Stages * BufB;
+    constexpr int EpiBatch = OneRound ? TileN / (Threads / TileM) : 2;
+    static_assert(EpiHi <= Stages * BufB && (!OneRound || EpiBatch > 2), "the one-round epilogue fits the stages");
     static_assert(WbM != VecN || (AStride % VecN == 0 && MSep % VecN == 0),
                   "vectorised A fragment needs an aligned band base");
     static_assert(WbN != VecN || (BStride % VecN == 0 && NSep % VecN == 0),
@@ -293,7 +350,7 @@ Event launch_wide_transposed_leg(Queue& ctx,
 
         batchlas::impl::parallel_for<GemmWideTransposedKernel<T, TileM, TileN, TileK, TTM, TTN,
                                                 static_cast<int>(P.OpA),
-                                                static_cast<int>(P.OpB), Stages, VecLoads, Split>>(h,
+                                                static_cast<int>(P.OpB), Stages, VecLoads, Split, Async>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int z = static_cast<int>(item.get_group(0));
                 int bid = z;
@@ -419,6 +476,14 @@ BATCHLAS_UNROLL_FULL
                             load_fragment<WbN, VecN>(
                                 &bf[band * WbN], xb + soff<KCB, TileN, TileK, VecN>(kk, band * NSep + tx * WbN));
                         }
+                        if constexpr (Async > 0 && ConjA) {
+BATCHLAS_UNROLL_FULL
+                            for (int i = 0; i < TTM; ++i) af[i] = dev_conj(af[i]);
+                        }
+                        if constexpr (Async > 0 && ConjB) {
+BATCHLAS_UNROLL_FULL
+                            for (int j = 0; j < TTN; ++j) bf[j] = dev_conj(bf[j]);
+                        }
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < TTM; ++i) {
 BATCHLAS_UNROLL_FULL
@@ -430,6 +495,40 @@ BATCHLAS_UNROLL_FULL
                 };
 
                 const int slabs = (k_hi - k_lo + TileK - 1) / TileK;
+                if constexpr (Async > 0) {
+                    // As wide v2's 128x128 pipeline: step s waits for slab s (own copies, then the
+                    // barrier for everyone's), refills the stage slab s - 1 was read from, computes.
+                    // One commit per step, empty past the end, keeps the wait count at Stages - 2.
+                    std::uint32_t sa_l = 0, sb_l = 0;
+#if BATCHLAS_GEMM_CP_ASYNC
+                    asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sa_l) : "l"(sa));
+                    asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sb_l) : "l"(sb));
+#endif
+                    constexpr std::uint32_t ES = sizeof(D);
+                    auto issue = [&](int k0, int buf) __attribute__((always_inline)) {
+                        acopy<KCA, VecLoads, TileM, TileK, Threads>(sa + buf * BufA, sa_l + ES * (buf * BufA), Ab, lda,
+                                                                    m0, k0, m, k_hi, tid);
+                        acopy<KCB, VecLoads, TileN, TileK, Threads>(sb + buf * BufB, sb_l + ES * (buf * BufB), Bb, ldb,
+                                                                    n0, k0, n, k_hi, tid);
+                    };
+BATCHLAS_UNROLL_FULL
+                    for (int j = 0; j < Stages - 1; ++j) {
+                        if (j < slabs) issue(k_lo + j * TileK, j);
+                        copy_async_commit();
+                    }
+                    int buf = 0;
+#pragma unroll 1
+                    for (int s = 0; s < slabs; ++s) {
+                        copy_async_wait<Stages - 2>();
+                        item.barrier(sycl::access::fence_space::local_space);
+                        const int nb = buf == 0 ? Stages - 1 : buf - 1;
+                        if (s + Stages - 1 < slabs) issue(k_lo + (s + Stages - 1) * TileK, nb);
+                        copy_async_commit();
+                        compute(buf);
+                        buf = buf + 1 == Stages ? 0 : buf + 1;
+                    }
+                    copy_async_wait<0>();
+                } else {
                 if constexpr (Prefetch) {
                     load(k_lo);
                     store(0);
@@ -450,6 +549,7 @@ BATCHLAS_UNROLL_FULL
                         else stage_direct(k_lo + (s + 1) * TileK, Stages == 2 ? cur ^ 1 : 0);
                         item.barrier(sycl::access::fence_space::local_space);
                     }
+                }
                 }
 
                 // Per group: the 16-byte band store when this tile is inside
@@ -485,7 +585,7 @@ BATCHLAS_UNROLL_FULL
                         }
                     }
                     item.barrier(sycl::access::fence_space::local_space);  // the last compute's reads
-                    staged_c_store<TileM, TileN, Threads, Stages * BufA, Stages * BufB>(
+                    staged_c_store<TileM, TileN, Threads, EpiLo, EpiHi, EpiBatch>(
                         item, sa, sb, Cb, ldc, m0, n0, m, n, tid, alpha_d, beta_d, beta_zero,
                         [&](int c0, int cw, auto slot) {
 BATCHLAS_UNROLL_FULL
@@ -545,6 +645,25 @@ template <typename T, WideTile P, bool Split = false>
 Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                              T alpha, T beta, const char* trace, WideSplit split = {}) {
+    if constexpr (!Split && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>)) {
+        const char* dev = std::getenv("BATCHLAS_WIDEX_DEV");  // WP-X experiment only
+        const int s = dev ? std::atoi(dev) : 0;
+        constexpr int Threads = (P.M / P.TTM) * (P.N / P.TTN);
+        auto at8 = [](const T* p) { return reinterpret_cast<std::uintptr_t>(p) % sizeof(T) == 0; };
+        const bool ok = s >= 2 && !BATCHLAS_SYCL_IMPL_ACPP && ctx.device().cuda_compute_capability() >= 80 &&
+            at8(A.data_ptr()) && at8(B.data_ptr()) &&
+            resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Threads)) >=
+                static_cast<std::size_t>(s) * P.K * (P.M + P.N) * sizeof(T);
+        if (ok) {
+            const bool v = wide64_v2_vec_loads<T>(A, B);
+            if (s == 2) return v ? launch_wide_transposed_leg<T, P, true, Split, 2>(ctx, A, B, C, alpha, beta, trace, split)
+                                 : launch_wide_transposed_leg<T, P, false, Split, 2>(ctx, A, B, C, alpha, beta, trace, split);
+            if (s == 3) return v ? launch_wide_transposed_leg<T, P, true, Split, 3>(ctx, A, B, C, alpha, beta, trace, split)
+                                 : launch_wide_transposed_leg<T, P, false, Split, 3>(ctx, A, B, C, alpha, beta, trace, split);
+            return v ? launch_wide_transposed_leg<T, P, true, Split, 4>(ctx, A, B, C, alpha, beta, trace, split)
+                     : launch_wide_transposed_leg<T, P, false, Split, 4>(ctx, A, B, C, alpha, beta, trace, split);
+        }
+    }
     if (wide64_v2_vec_loads<T>(A, B))
         return launch_wide_transposed_leg<T, P, true, Split>(ctx, A, B, C, alpha, beta, trace, split);
     return launch_wide_transposed_leg<T, P, false, Split>(ctx, A, B, C, alpha, beta, trace, split);
