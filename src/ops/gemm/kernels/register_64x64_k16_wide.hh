@@ -14,6 +14,7 @@
 
 #include <src/linalg-impl.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/sycl/local_mem.hh>
 
 #include <batchlas/backend_config.h>
 
@@ -21,7 +22,7 @@
 
 #include <complex>
 #include <cstdint>
-#include <cstdlib>
+#include <cstddef>
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
@@ -648,7 +649,7 @@ BATCHLAS_UNROLL_FULL
 // The pipelined 128x128 tile's copies (WP-V): Bytes (8 or 16) global -> local, skipping the
 // registers; the first src_bytes are read, the rest zero-filled (0: nothing is read). cp.async on
 // sm_80+ (dst_l is dst's shared-window address), a plain copy elsewhere; the barrier after the wait
-// orders either. evidence: docs/perf/gemm.md#gemm-wp-v-cp-async-stages-for-the-128x128-complex-float-tile
+// orders either. evidence: docs/perf/gemm.md#gemm-wp-v-three-copy-async-stages-for-the-128x128-complex-float-tile
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__) && defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
 #define BATCHLAS_WIDE_CP_ASYNC 1
 #else
@@ -730,8 +731,7 @@ struct GemmWide64Body {
     using D = typename wide_scalar::DevMap<T>::type;
     static constexpr int TileM = TileM_, TileN = TileN_, TileK = TileK_, Threads = 256;
     // Stages > 2: that many local slabs filled by cp.async, Stages - 1 in flight, no register prefetch.
-    static constexpr int Stages = Stages_ % 10;
-    static constexpr bool Spread = Stages_ >= 10;  // WP-V experiment
+    static constexpr int Stages = Stages_;
     static constexpr bool kPipe = Stages > 2;
     static constexpr int TTM = TileM / 16, TTN = TileN / 16;    // thread tile over 16 x 16 lanes
     static constexpr int CF = static_cast<int>(sizeof(D) / sizeof(float));
@@ -893,39 +893,25 @@ BATCHLAS_UNROLL_FULL
             // As the 128x128 u4 pipeline: step s waits for slab s (own copies, then the barrier for
             // everyone's), refills the buffer slab s - 1 was read from and computes. One commit per
             // step, empty past the end, keeps the wait count at Stages - 2. Each operand pointer
-            // bumps one slab per issue; the buffer index is runtime (an unrolled ring is 4x the code).
+            // bumps one slab per issue; the buffer index is runtime (an unrolled ring is Stages x the code).
             std::uint32_t sa_l = 0, sb_l = 0;
 #if BATCHLAS_WIDE_CP_ASYNC
             asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sa_l) : "l"(sa));
             asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sb_l) : "l"(sb));
 #endif
+            // Every lane copies one 64-wide half of both operands (lanes 0-127 the first), so all
+            // eight warps share the copies; split by operand, four warps issued them all (slower).
             const int hh = tid / OpThreads;  // warp-uniform
-            const float* ga = Spread ? pa + hh * a_half : pa;
-            const float* gb = Spread ? pb + hh * b_half : pb;
+            const float* ga = pa + hh * a_half;
+            const float* gb = pb + hh * b_half;
             const int a_lim = m - m0 - 64 * hh, b_lim = n - n0 - 64 * hh;
             auto issue = [&](int k0, int buf) __attribute__((always_inline)) {
-                if constexpr (Spread) {
-                    wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA), ga,
-                                                                     lda, k0, a_kb, a_ib, a_ib + 64 * hh, k, a_lim);
-                    wide_v2::acopy<VecLoads, KB, KStep, TileK, TileN>(sb + buf * BufB, sb_l + 4u * (buf * BufB), gb,
-                                                                     ldb, k0, b_kb, b_ib, b_ib + 64 * hh, k, b_lim);
-                    ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
-                    gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
-                } else if (stage_a) {
-                    static_for<HA>([&](auto h) {
-                        wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA),
-                                                                         ga + h * a_half, lda, k0, a_kb, a_ib,
-                                                                         a_ib + 64 * h, k, m - m0 - 64 * h);
-                    });
-                    ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
-                } else {
-                    static_for<HB>([&](auto h) {
-                        wide_v2::acopy<VecLoads, KB, KStep, TileK, TileN>(sb + buf * BufB, sb_l + 4u * (buf * BufB),
-                                                                         gb + h * b_half, ldb, k0, b_kb, b_ib,
-                                                                         b_ib + 64 * h, k, n - n0 - 64 * h);
-                    });
-                    gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
-                }
+                wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA), ga, lda,
+                                                                 k0, a_kb, a_ib, a_ib + 64 * hh, k, a_lim);
+                wide_v2::acopy<VecLoads, KB, KStep, TileK, TileN>(sb + buf * BufB, sb_l + 4u * (buf * BufB), gb, ldb,
+                                                                 k0, b_kb, b_ib, b_ib + 64 * hh, k, b_lim);
+                ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
+                gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
             };
 BATCHLAS_UNROLL_FULL
             for (int j = 0; j < Stages - 1; ++j) {
@@ -1061,19 +1047,16 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                        T alpha, T beta, const char* trace, const char* trace_vec) {
     if constexpr (TileM == 128 && TileN == 128) {
-        const char* e = std::getenv("BATCHLAS_WIDE_PIPE");  // WP-V experiment
-        const int v = e ? e[0] - '0' : 1;
-        auto go = [&](auto S) {
+        // The leg (WP-V): three cp.async stages where DPC++ emits cp.async (sm_80+) and the device
+        // launches their 48 KiB; else the register prefetch (32 KiB, can_run's term).
+        using Pipe = GemmWide64Body<T, OpA, OpB, true, TileK, TileM, TileN, 3>;
+        constexpr std::size_t pipe_bytes = Pipe::Stages * (Pipe::BufA + Pipe::BufB) * sizeof(float);
+        if (!BATCHLAS_SYCL_IMPL_ACPP && ctx.device().cuda_compute_capability() >= 80 &&
+            resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Pipe::Threads)) >= pipe_bytes) {
             if (wide64_v2_vec_loads<T>(A, B))
-                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, S()>(ctx, A, B, C, alpha, beta,
-                                                                                        trace_vec);
-            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, S()>(ctx, A, B, C, alpha, beta,
-                                                                                     trace);
-        };
-        if (v > 0 && ctx.device().cuda_compute_capability() >= 80) {
-            if (v == 2) return go(std::integral_constant<int, 14>{});
-            if (v == 3) return go(std::integral_constant<int, 13>{});
-            return go(std::integral_constant<int, 4>{});
+                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, 3>(ctx, A, B, C, alpha, beta,
+                                                                                      trace_vec);
+            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, 3>(ctx, A, B, C, alpha, beta, trace);
         }
     }
     if (wide64_v2_vec_loads<T>(A, B))
