@@ -2092,8 +2092,8 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
 TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
-    const Spec tt{kT, kT, 40, 30, 20, 2, Layout::Strided};  // a form wide 32x32 does not instantiate
-    const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=32:n=32:k=16");
+    const Spec tt{kN, kN, 40, 30, 20, 2, Layout::Strided};  // a form wide 128x32 does not instantiate
+    const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=128:n=32:k=16");
     {
         auto p = make_problem<T>(tt);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
