@@ -144,13 +144,27 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
     case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
     case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
+    case KernelVariant::Tiled32x32RegisterK16WideTT: return "gemm_sycl_register_32x32_k16_wide_tt";
+    case KernelVariant::Tiled32x32RegisterK16WideTC: return "gemm_sycl_register_32x32_k16_wide_tc";
+    case KernelVariant::Tiled32x32RegisterK16WideCC: return "gemm_sycl_register_32x32_k16_wide_cc";
+    case KernelVariant::Tiled16x16RegisterK16WideTT: return "gemm_sycl_register_16x16_k16_wide_tt";
+    case KernelVariant::Tiled16x16RegisterK16WideTC: return "gemm_sycl_register_16x16_k16_wide_tc";
+    case KernelVariant::Tiled16x16RegisterK16WideCC: return "gemm_sycl_register_16x16_k16_wide_cc";
+    case KernelVariant::Tiled64x32RegisterK16WideTT: return "gemm_sycl_register_64x32_k16_wide_tt";
+    case KernelVariant::Tiled64x32RegisterK16WideTC: return "gemm_sycl_register_64x32_k16_wide_tc";
+    case KernelVariant::Tiled64x32RegisterK16WideCC: return "gemm_sycl_register_64x32_k16_wide_cc";
+    case KernelVariant::Tiled32x64RegisterK16WideTT: return "gemm_sycl_register_32x64_k16_wide_tt";
+    case KernelVariant::Tiled32x64RegisterK16WideTC: return "gemm_sycl_register_32x64_k16_wide_tc";
+    case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
+    case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
+    case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
     }
     return "gemm_sycl_unknown";
 }
 
 // A split-k body's name: its host instantiation's, suffixed (static storage for the trace scope).
 const char* splitk_trace_name(KernelVariant variant) {
-    constexpr int kCount = static_cast<int>(KernelVariant::Tiled64x64RegisterK8WideCC) + 1;
+    constexpr int kCount = static_cast<int>(KernelVariant::Tiled32x128RegisterK16WideCC) + 1;
     static const std::array<std::string, kCount> names = [] {
         std::array<std::string, kCount> out;
         for (int i = 0; i < kCount; ++i) out[i] = std::string(kernel_trace_name(KernelVariant(i))) + "_splitk";
@@ -375,17 +389,21 @@ constexpr KernelVariant wide_variant(std::size_t i, int form) {
          K::Tiled64x64RegisterK16WideTN, K::Tiled64x64RegisterK16WideTT, K::Tiled64x64RegisterK16WideTC,
          K::Tiled64x64RegisterK16WideCN, K::Tiled64x64RegisterK16WideCT, K::Tiled64x64RegisterK16WideCC},
         {x, K::Tiled128x32RegisterK16WideNT, K::Tiled128x32RegisterK16WideNC, K::Tiled128x32RegisterK16WideTN, x, x,
-         K::Tiled128x32RegisterK16WideCN, x, x},
+         K::Tiled128x32RegisterK16WideCN, x, K::Tiled128x32RegisterK16WideCC},
         {x, K::Tiled32x128RegisterK16WideNT, K::Tiled32x128RegisterK16WideNC, K::Tiled32x128RegisterK16WideTN, x, x,
-         K::Tiled32x128RegisterK16WideCN, x, x},
+         K::Tiled32x128RegisterK16WideCN, x, K::Tiled32x128RegisterK16WideCC},
         {K::Tiled32x32RegisterK16Wide, K::Tiled32x32RegisterK16WideNT, K::Tiled32x32RegisterK16WideNC,
-         K::Tiled32x32RegisterK16WideTN, x, x, K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, x},
+         K::Tiled32x32RegisterK16WideTN, K::Tiled32x32RegisterK16WideTT, K::Tiled32x32RegisterK16WideTC,
+         K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, K::Tiled32x32RegisterK16WideCC},
         {K::Tiled16x16RegisterK16Wide, K::Tiled16x16RegisterK16WideNT, K::Tiled16x16RegisterK16WideNC,
-         K::Tiled16x16RegisterK16WideTN, x, x, K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, x},
+         K::Tiled16x16RegisterK16WideTN, K::Tiled16x16RegisterK16WideTT, K::Tiled16x16RegisterK16WideTC,
+         K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, K::Tiled16x16RegisterK16WideCC},
         {K::Tiled64x32RegisterK16Wide, K::Tiled64x32RegisterK16WideNT, K::Tiled64x32RegisterK16WideNC,
-         K::Tiled64x32RegisterK16WideTN, x, x, K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, x},
+         K::Tiled64x32RegisterK16WideTN, K::Tiled64x32RegisterK16WideTT, K::Tiled64x32RegisterK16WideTC,
+         K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, K::Tiled64x32RegisterK16WideCC},
         {K::Tiled32x64RegisterK16Wide, K::Tiled32x64RegisterK16WideNT, K::Tiled32x64RegisterK16WideNC,
-         K::Tiled32x64RegisterK16WideTN, x, x, K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, x},
+         K::Tiled32x64RegisterK16WideTN, K::Tiled32x64RegisterK16WideTT, K::Tiled32x64RegisterK16WideTC,
+         K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, K::Tiled32x64RegisterK16WideCC},
         {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
          K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
          K::Tiled64x64RegisterK8WideCN, K::Tiled64x64RegisterK8WideCT, K::Tiled64x64RegisterK8WideCC},

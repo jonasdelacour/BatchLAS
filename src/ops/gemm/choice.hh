@@ -92,7 +92,6 @@ inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kW
 inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
 inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
 inline constexpr unsigned kWideAll = 0x1FF;
-inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC | kWideCC);
 
 /// One compiled wide config and the forms a complex scalar instantiates. A real scalar compiles
 /// only the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
@@ -104,12 +103,14 @@ struct WideCfg {
 };
 inline constexpr std::array<WideCfg, 8> wide_configs{{
     {64, 64, 16, 4, 4, kWideAll},
-    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
-    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, kWideSmallTileForms},
-    {16, 16, 16, 2, 2, kWideSmallTileForms},
-    {64, 32, 16, 4, 4, kWideSmallTileForms},
-    {32, 64, 16, 4, 4, kWideSmallTileForms},
+    // 128x32 / 32x128: the potrf trailing update (W = 32), the geqrf panel V^H A22 (nb = 32); CC is
+    // the real TT build. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
+    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN | kWideCC},
+    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC | kWideCC},
+    {32, 32, 16, 4, 4, kWideAll},
+    {16, 16, 16, 2, 2, kWideAll},
+    {64, 32, 16, 4, 4, kWideAll},
+    {32, 64, 16, 4, 4, kWideAll},
     {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
 }};
 
