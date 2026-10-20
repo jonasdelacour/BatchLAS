@@ -1944,6 +1944,11 @@ It is faster anyway: 362×1024×96 b128 1.235 → 1.048, 1024×1024×128 b128 1.
 beta = 0 on the predicated staged store is `alpha * acc` alone (the aligned leg already was): `alpha * acc + 0 * 0`
 turned a -0.0 into +0.0 (alpha = -1, A = 0). Registers unchanged (same counts per instance, zero spill).
 
+sm_89 (found at the WP-O/WP-T/WP-F merge): the k-fastest copies' `32 · ld` stride, hoisted out of the mainloop
+and held in a register, spilled 16 B (12 B loads) in staged u4 NN, TN and TT at 128 registers; NT, which copies
+neither operand k-fastest, sat at 125 with none. `issue` now rebuilds `32 · ld` per call behind an empty
+`asm volatile`: sm_89 u4 125-127 registers, zero spill on both arches. Not re-timed.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a

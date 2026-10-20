@@ -377,12 +377,19 @@ BATCHLAS_UNROLL_FULL
             // count at Stages - 2. Element copies, in range iff the row (column) and the k index are; each
             // operand pointer bumps one slab per issue (a k0 * ld product spilled staged NN and NT at the
             // 128 cap). Unrolled by Stages: the buffer is a constant.
-            [[maybe_unused]] const std::ptrdiff_t lda32 = static_cast<std::ptrdiff_t>(32) * lda;
-            [[maybe_unused]] const std::ptrdiff_t ldb32 = static_cast<std::ptrdiff_t>(32) * ldb;
+            // 32 ld, rebuilt per issue: hoisted and held across the mainloop it spilled 16 B in staged u4
+            // NN, TN and TT on sm_89 at the 128 cap.
+            auto ld32 = [](int ld) __attribute__((always_inline)) {
+#if BATCHLAS_GEMM_CP_ASYNC
+                asm volatile("" : "+r"(ld));
+#endif
+                return static_cast<std::ptrdiff_t>(32) * ld;
+            };
             auto issue = [&](int k0, auto buf) __attribute__((always_inline)) {
                 constexpr int oa = decltype(buf)::value * TileK * AStride, ob = decltype(buf)::value * TileK * BStride;
                 if constexpr (AK) {
                     const int lim = k0 + a_k < k ? m - (m0 + a_m) : 0;
+                    const std::ptrdiff_t lda32 = ld32(lda);
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = oa + a_k * AStride + a_m + 32 * i;
@@ -400,6 +407,7 @@ BATCHLAS_UNROLL_FULL
                 }
                 if constexpr (BK) {
                     const int lim = k0 + b_k < k ? n - (n0 + b_n) : 0;
+                    const std::ptrdiff_t ldb32 = ld32(ldb);
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = ob + b_k * BStride + b_n + 32 * i;
