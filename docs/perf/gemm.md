@@ -1,11 +1,30 @@
 # GEMM {#perf_gemm}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda
+> **Status:** current · RTX 4090 (sm_89) and RTX PRO 6000 Blackwell Max-Q (sm_120), CUDA 13.2, /opt/dpcpp-cuda
 
 gemm selects through flat kernel selection (@ref design_flat_selection). This page lists the choices, the
 `tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The sm_89 table is
 transcribed from the old router (`424a45bc`) and is untimed, so these windows are what Auto runs on sm_89. The
-sm_120 table is deep-measured (`tuned/README.md`).
+sm_120 table is coarse-measured on the kernels of the 2026-10 campaign below (float, double, complex<float>;
+complex<double> keeps transcribed rows, FP64 being deferred on 1:64 parts).
+
+## GEMM: the sm_120 cuBLAS gap campaign (2026-10)
+
+Native gemm against cuBLAS on sm_120 over the coarse grid, every cell where both were timed. *Losing*: native
+> 1.05× vendor; *excess*: summed native − vendor ms over losing cells; *geomean*: native / vendor over all
+timed cells (< 1 is faster than cuBLAS). Each row is a full coarse pass of the kernels at that point.
+
+| stage | float losing / excess / geomean | complex<float> | complex<double> |
+|---|---|---|---|
+| before PR 188 (deep table) | 2685 / 554 ms / 1.074 | 3270 / 1467 ms / 1.061 | 1652 / 6386 ms / 1.000 |
+| PR 188 | 1424 / 235 ms / 1.006 | 2312 / 337 ms / 0.970 | — |
+| + WP-J, K, L, N2, Q | 688 / 111 ms / 0.960 | 623 / 209 ms / 0.924 | 44 / 40 ms / 0.794 |
+| + WP-O, T, F | 208 / 27 ms / 0.869 | 615 / 66 ms / 0.914 | 3 / 3 ms / 0.777 |
+| + WP-V, U (shipped table) | 210 / 24 ms / 0.861 | 209 / 11 ms / 0.862 | deferred |
+
+double: 1 losing cell (1.05×) in the shipped table. What is left (median loss 1.08×): float TT/TN/NN strided
+mid shapes on `reg:m=128:n=128:k=8:u=4` and strided skinny shapes on the wide tiles; complex<float> NT/NC
+strided skinny and mid shapes. Every work package has its own section below.
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
