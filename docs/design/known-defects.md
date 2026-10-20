@@ -391,8 +391,8 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Fix needs:** the macro fixed, or `reqd_work_group_size` on each remaining functor, then an A/B
   and register probe per kernel: an applied bound moves registers and routing windows, and the
   tiny-solver tables were tuned with no bound in effect. Re-pins the potrf/posv/trsm kernel hashes.
-- **Status:** open for the tiny solvers. The 128x128 gemm functors (u1 and u4) declare
-  `reqd_work_group_size` since WP-U: 0 ignored bounds in `batchlas_sycl`, u1 capped at 128 registers
+- **Status:** open for the tiny solvers. The 128x128 gemm functors declare
+  `reqd_work_group_size`, u1 since WP-U (u4 since WP-N2): 0 ignored bounds in `batchlas_sycl`, u1 capped at 128 registers
   ([gemm.md](../perf/gemm.md#gemm-wp-u-the-u1-128x128-launch-bound-enforced)).
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column

@@ -1955,10 +1955,14 @@ neither operand k-fastest, sat at 125 with none. `issue` now rebuilds `32 · ld`
 like the u4 pipeline wrapper already did, so ptxas sees `.reqntid` and holds the two-group cap (known defect #20;
 `minnctapersm is ignored` count in `libbatchlas_sycl`: 0). The aligned staged epilogue re-reads `%tid.x` behind
 `asm volatile` as the u4 one does: without it u1 aligned staged TT spilled 32 B at the cap on sm_120.
+Float only: the `reg` family has no complex<float> or double instance (all 16 `GemmRegister128x128Kernel` entries
+in the probe are float; the complex<float> 128x128 at the cap is wide v2's WP-O tile, a different kernel).
 
 **Registers** (`scripts/register_probe.sh`, `libbatchlas_sycl`, zero spill on every entry on sm_120 and sm_89):
 u1 sm_120 parent → new, aligned direct NN 139 → 128, aligned staged NN 135 → 128, TN 130 → 128, TT 139 → 128,
-predicated staged NT 133 → 128; every other u1 instance was already at 126-128. sm_89 u1 127-128. u4 unchanged.
+predicated staged NT 133 → 128; the other u1 instances were 126-128 and are now 118-128 (aligned staged NT
+128 → 118, aligned direct TN 126 → 128, predicated staged TT 126 → 127). u4 unchanged. sm_89 u1 127-128: untimed,
+and unrouted (no `tuned/gemm.sm_89.txt` row ranks u1 128x128 first; only pins and vendor-free builds reach it).
 
 **Timing** (RTX PRO 6000 Blackwell Max-Q, sm_120, float, pinned `reg:m=128:n=128:k=8:u=1`, parent and new builds
 side by side, 8 reps × 2 passes in swapped order per build, three runs; new/parent is the range over the runs,
@@ -1983,9 +1987,27 @@ side by side, 8 reps × 2 passes in swapped order per build, three runs; new/par
 | TT packed 512×362×8 (128) | 1.000-1.063 | 0.864 → 0.899 |
 
 Mid k (64-256) gains 4-15%; NN at k ≥ 1024 loses 2-3%, where the 139-register aligned direct NN mainloop ran
-better at one group per SM. Vendor wins every k ≥ 1024 row in either build, so a vendor table never routes them to
-u1; a vendor-free build pays it. TT 512×362×8 runs the predicated staged TT instance, whose registers did not move
+better at one group per SM. TT 512×362×8 runs the predicated staged TT instance, whose registers did not move
 (126 → 127): two 40-rep passes gave 1.000 and 1.063, noise at 63 µs. Shipped. Tables not re-raced.
+
+**The k edge** (NN packed 512×512, batch 128, the size whose largest-k table row, k = 512, ranks u1 first; same
+harness, 12 reps × 2 swapped passes, three runs, new / parent):
+
+| k | 256 | 384 | 512 | 768 | 1024 |
+|---|---|---|---|---|---|
+| new / parent | 0.884-0.931 | 0.943-0.978 | 0.963-0.996 | 1.006-1.018 | 1.020-1.035 |
+
+The win turns into a loss between k = 512 and 768. Auto (`BATCHLAS_SELECT_TRACE=1`) sends 512×512×{512, 768, 1024}
+batch 128 to u1: no larger-k row exists at that size, so k = 768 and 1024 borrow the k = 512 row, and there u1
+trails vendor in both builds (new 1.01-1.06× vendor). Auto sends NN packed 1024³ and 1024×1024×768 (128), 2048³ (16),
+strided 512×512×1024 (256) and packed 512×512×78 (128) to vendor, so the other losses above reach only pins and
+vendor-free builds. Parent build for every run: `libbatchlas_sycl.so` md5 `1a5b2f30…`, source `2c59144c`.
+
+**Retune follow-up.** `register_128x128.hh` is in the kernel hash of gemm, geqrf, getrf, gesv, ormqr, orgqr,
+gesvd, symm, trmm and syev (`tools/tune/*_spec.cc`); all ten tables are hash-stale, and the non-gemm ones time u1
+128x128 gemm sub-calls with the parent kernel. Three rows the stale gemm table sends to vendor now favour u1: TN
+packed 2048×1024×64 (128) 0.967× vendor, NT strided 362×1024×96 (128) 0.989×, TN packed 1024×128×64 (2048) 0.982×.
+A re-race should also add a k > 512 row at 512×512 batch 128.
 
 ## GEMM: the register-tiled launcher table
 

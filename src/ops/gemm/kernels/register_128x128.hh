@@ -155,8 +155,8 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
         aligned(C.data_ptr(), C.ld(), C.stride());
 }
 
-// Every launch path (Body, Gemm128x128Inlined, Gemm128x128Pipelined) also declares its work-group
-// size: ptxas sees .reqntid and holds the two-group cap (128 registers); the launch bound alone is
+// Each kernel functor (Body, launched directly on aligned u1; Gemm128x128Inlined, predicated u1;
+// Gemm128x128Pipelined, u4) also declares its work-group size: ptxas sees .reqntid and holds the two-group cap (128 registers); the launch bound alone is
 // dropped (known defect #20) and left u1 at up to 139 and staged u4 at 155-159 (one group per SM).
 // NVPTX device code only, like BATCHLAS_LAUNCH_BOUNDS (none under acpp: speed only). Local, not in
 // kernel_attrs.hh: that header is in every op's tuning hash.
@@ -474,9 +474,9 @@ BATCHLAS_UNROLL_FULL
             T* sc = sa;
             int tid2 = static_cast<int>(item.get_local_id(2));
 #if BATCHLAS_GEMM_CP_ASYNC
-            // Read after the pipeline's volatile copies, so no epilogue address is hoisted into the
-            // mainloop (u4 staged NN spilled 20 B at the 128 cap with it hoisted; u1 aligned staged TT
-            // 32 B on sm_120).
+            // Opaque re-read keeps every epilogue address out of the mainloop (no hoist) on u4 and on
+            // u1 aligned (u4 staged NN spilled 20 B at the 128 cap with it hoisted; u1 aligned staged
+            // TT 32 B on sm_120).
             if constexpr (Stages > 2 || AlignedFastPath) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
 #endif
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
