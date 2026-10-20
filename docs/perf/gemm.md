@@ -1623,12 +1623,17 @@ cell agree within 3%, except TN packed 512×256×64 (0.3 ms, up to 9% on every a
 - Each operand is staged as two 64-wide halves. Each half uses the 64x64 lane map, `KStep` and swizzle, the second
   one 64 elements down i (64 ld for a k-contiguous operand). `sstore` takes the row width as a parameter.
 - Epilogue: band store, or `staged_c_store` with `EpiBatch = 2·TileK·(TileM + TileN)/256` = 16 (four passes).
-- Launch bound: one group per CU (`TileM·TileN > 4096`). 254-255 registers, zero spill, no stack frame
-  (`scripts/register_probe.sh`).
+- Launch bound: one group per CU (`TileM·TileN > 4096`). Zero spill, no stack frame (`scripts/register_probe.sh`):
+  254-255 registers on sm_120, 248-255 on sm_89 (a `-DBATCHLAS_NVIDIA_ARCH=sm_89` tree, probed only).
+- The halves unroll through `static_for`. A one-trip `for` loop per half let LICM hoist the edge tests out of
+  the k loop and spilled 4 B in float `wide:m=64:n=64:k=16` NC (both legs) on sm_89 at its 80-register cap,
+  while sm_120 stayed clean. With `static_for`, that kernel's PTX has the parent's opcode counts (1680
+  instructions) and both probes print `total spilling 0`.
 
-`WideCfg` gains a scalar set (`scalars`, default all). `wide_serves`, `candidates<T>()` and `launch_wide_form`
-read it, so the row exists for complex<float> only (13 candidates; complex<double> stays at 12). `splitk_host`
-excludes it. `wide_v2_row<T>` names every row that runs `GemmWide64Body`. It is a new candidate: no table row
+`WideCfg` gains a scalar set (`scalars`, default all) and a `v2` flag. `wide_serves`, `candidates<T>()` and
+`launch_wide_form` read the scalar set, so the row exists for complex<float> only (13 candidates; complex<double>
+stays at 12). `splitk_host` excludes v2 rows. `wide_v2_row<T>` is 64x64 (every scalar but double) or a `v2`
+row for a scalar it compiles. A larger tile at k = 16 is a `static_assert`: it would need 64 KiB. It is a new candidate: no table row
 ranks it yet, so Auto is unchanged until the retune.
 
 **Why 128x128 and not the planned 128x64.** ncu on the parent (`wide:m=64:n=64:k=16`) at cfloat NN packed 1024³
@@ -1650,39 +1655,50 @@ stall: `dispatch_stall` 0.44 vs 0.31 per issue and `long_scoreboard` 0.09 vs 0.0
 
 **128x64 (negative), measured and dropped.** 8×4 complex, one group per CU (180 registers). Against
 `wide:m=64:n=64:k=16` it was 0.95-0.99 on the large cells (NN, NT, CN, NC, CC). It was slower on TN strided 768³
-(1.037) and on the skinny cells. In the 15 cells timed beside 128x128 it ranked first in none: 128x128 or 64x64 beat it in each, so its
+(1.037) and on the skinny cells. In the 15 cells timed beside 128x128 (two passes each) it ranked first among the native arms in none: 128x128 or 64x64 beat it in each, so its
 18 kernels are not built. With 2 groups per CU (128-register cap) it spilled 256-3016 B. Moving the next slab's
 loads after the FMAs (no prefetch) made it 4.3-4.5 KB.
 
+Re-measured after the review fixes (`static_for` halves change the 128x128 code; sm_120 registers stay 254-255),
+same protocol, 2026-10-20. Rows marked * are from the first run and were not re-timed.
+
 | cell (cfloat) | 128x128 / vendor | 64x64x16 / vendor | 64x64x8 / vendor | 128x128 / 64x64x16 |
 |---|---|---|---|---|
-| NN packed 1024³ b128 | 1.052 | 1.133 | 1.184 | 0.93 |
-| CN packed 1024³ b128 | 0.932 | 0.998 | 1.075 | 0.93 |
-| NN strided 1024³ b128 | 1.084 | 1.190 | 1.286 | 0.91 |
-| NT packed 512³ b2048 | 1.034 | 1.147 | 1.180 | 0.90 |
-| TN strided 768³ b128 | 1.075 | 1.176 | 1.330 | 0.91 |
-| NN packed 512×512×128 b2048 | 1.041 | 1.112 | 1.145 | 0.94 |
-| NC strided 256×1024×64 b2048 | 0.951 | 1.026 | 1.073 | 0.93 |
-| CC packed 1024³ b128 | 0.968 | 1.065 | 1.119 | 0.91 |
-| NN packed 256³ b128 | 0.894 | 0.957 | 0.989 | 0.93 |
-| CN strided 384³ b128 | 0.983 | 1.013 | 1.145 | 0.97 |
-| NN strided 128³ b2048 | 0.929 | 0.994 | 1.064 | 0.93 |
-| NN packed 128×512×64 b2048 | 1.063 | 1.074 | 1.099 | 0.99 |
-| NT packed 192³ b2048 | 1.290 | 0.952 | 0.982 | 1.35 |
-| TN packed 512×256×64 b128 | 1.090 | 0.894 | 0.952 | 1.22 |
-| NN packed 64×2048×32 b128 | 1.499 | 1.012 | 1.001 | 1.48 |
+| NN packed 1024³ b128 | 1.039 | 1.137 | 1.193 | 0.91 |
+| CN packed 1024³ b128 | 0.926 | 1.002 | 1.078 | 0.92 |
+| NN strided 1024³ b128 | 1.079 | 1.196 | 1.284 | 0.90 |
+| NT packed 512³ b2048 | 1.020 | 1.140 | 1.182 | 0.90 |
+| TN strided 768³ b128 | 1.066 | 1.171 | 1.341 | 0.91 |
+| NN packed 512×512×128 b2048 | 1.030 | 1.105 | 1.142 | 0.93 |
+| NC strided 256×1024×64 b2048 | 0.944 | 1.024 | 1.069 | 0.92 |
+| CC packed 1024³ b128 | 0.963 | 1.046 | 1.118 | 0.92 |
+| NN packed 256³ b128 | 0.892 | 0.947 | 0.995 | 0.94 |
+| CN strided 384³ b128 | 0.975 | 1.017 | 1.156 | 0.96 |
+| NN strided 128³ b2048 * | 0.929 | 0.994 | 1.064 | 0.93 |
+| NN packed 128×512×64 b2048 | 1.057 | 1.070 | 1.102 | 0.99 |
+| NT packed 192³ b2048 * | 1.290 | 0.952 | 0.982 | 1.35 |
+| TN packed 512×256×64 b128 * | 1.090 | 0.894 | 0.952 | 1.22 |
+| NN packed 64×2048×32 b128 | 1.489 | 1.013 | 1.001 | 1.47 |
+
+Against the parent, the 0.90-0.94 cells clear 5% in both passes and both runs. CN strided 384³ (0.96-0.97) and
+NN 128×512×64 (0.99) are under 5% at 4-8 reps × 2 passes: screens, not wins (§10). Against cuBLAS, 128x128 is
+ahead only on CN and CC packed 1024³, NC strided, NN 256³, CN strided 384³ and NN strided 128³; NN, NT and TN at
+the large cells stay 2-8% behind.
 
 The parent stays best where 128-wide tiles waste work (m = 64), cover the batch in too few groups, or lose the 64x64
 tile's 16 warps (192³, k = 64). Those windows are the retune's to draw.
 
 **Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree, two runs each: parent
-79.1-79.3 s, with 128x64 alone 81.8 s, with 128x64 and 128x128 94.1-95.1 s. 128x128 accounts for nearly all of the
-+19%. That is under the 25% ceiling, so all 9 forms stay.
+79.1-79.3 s, with 128x64 alone 81.8 s, with 128x64 and 128x128 94.1-95.1 s, with 128x128 alone (the shipped
+tree, a later session on the same box) 86.2-87.2 s, +9-10%. That is under the 25% ceiling, so all 9 forms stay.
 
 Tests: `GemmCandidates.Wide128x128EveryFormAtSaturatingBatchAndTileEdges` runs all 9 forms with NaN in every gap and
-beta ≠ 0:
+beta ≠ 0, each form to its own first failure (so a break's red set is per form). It skips where 32 KiB is over the
+device's local memory budget (the M5 Max):
 
-- m, n ∈ {63..65, 100, 127..129, 191, 255, 257}, k ∈ {7, 8, 9, 16, 17, 33}, at ld = m + 1 and padded;
+- (m, n) ∈ {(63, 65), (64, 300), (100, 128), (127, 257), (128, 100), (129, 129), (255, 191), (257, 64)}: m
+  straddles 64, 128 and 256, n straddles 64, 128 and 256 (n = 300 runs a third group at n0 = 256);
+  k ∈ {7, 8, 9, 16, 17, 33}, at ld = m + 1 and padded;
 - 257×136×33 at ld = m + 1 and 256×256×24 padded, at batch 1024 (7 distinct problems, bit-identical items);
 - every `wide_v2_leg_layouts` row at 288×136×48;
 - beta = 0 with NaN in C.
@@ -1690,15 +1706,17 @@ beta ≠ 0:
 The oracle row (`cf_only`), the literal 32 KiB and the trace names are added, and `PinnedChoiceLaunchesItsOwnKernel`
 runs the leg layouts on the new row.
 
-Deliberate breaks, run on the GPU (filter: the new test, `PinnedCandidatesEveryFormShapeAndLayout`,
-`PinnedRunIsTheLauncherBitForBit`, `CanRunEqualsLaunch`). Each red set is complex<float> and
-`wide:m=128:n=128:k=8` only:
+Deliberate breaks, run on the GPU. The per-form red sets come from the new test alone. In
+`PinnedCandidatesEveryFormShapeAndLayout`, `PinnedRunIsTheLauncherBitForBit` and `CanRunEqualsLaunch` each break was
+red for complex<float> and `wide:m=128:n=128:k=8` only, but those tests stop at their first failure.
 
-- B's second half stored over its first (`b_ib + 64·h` → `b_ib`): red in every form, including NN, NC, TN and CN.
-- A's half offset not scaled by lda when A is k-contiguous: red only in TN, TC, CN and CC (and the new test from its
-  first transposed-A form).
+- B's second half stored over its first (`b_ib + 64·h` → `b_ib`): red in all 9 forms.
+- A's global half offset not scaled by lda (`a_half` = 64): red in the 6 forms where A is k-contiguous (TN, TT, TC,
+  CN, CT, CC), green in NN, NT and NC.
+- B's global half offset not scaled by ldb (`b_half` = 64): red in the 3 forms where B is k-contiguous (NN, TN, CN),
+  green in the other 6.
 - The 64x64 band stride `GPR/NB` in the B fragment read (equal to `NSep/VecN` at 64x64 for every scalar): red in
-  every form.
+  all 9 forms.
 - Green, recorded: a half's i bound without the `- 64·h`. It only stops reads past m or n, whose products land in
   rows and columns that are never stored, so no value test can see it. The 64x64 i bound has the same property.
 
