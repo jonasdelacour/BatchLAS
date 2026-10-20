@@ -1637,6 +1637,8 @@ sectors (969M vs 218M) and 3.4× the requests. Three rewrites of the element leg
 | `cp.async` with the parent lane map and swizzle | float 1.02-1.04× slower, complex<float> 0.98-1.01 |
 | register staging, float i-contiguous operand read 32 consecutive floats per load (scalar shared stores) | 1.02-1.04× slower at the 85-register cap. At a 64 cap it spilled and ran 1.14-1.28× slower |
 
+WP-Y's k-contiguous lane map is the fix that held ([WP-Y](#gemm-wp-y-coalesced-element-leg-lane-maps)).
+
 ## GEMM: WP-O, a 128x128 complex float tile on wide v2
 
 Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
@@ -2160,6 +2162,108 @@ gesvd, symm, trmm and syev (`tools/tune/*_spec.cc`); all ten tables are hash-sta
 128x128 gemm sub-calls with the parent kernel. Three rows the stale gemm table sends to vendor now favour u1: TN
 packed 2048×1024×64 (128) 0.967× vendor, NT strided 362×1024×96 (128) 0.989×, TN packed 1024×128×64 (2048) 0.982×.
 A re-race should also add a k > 512 row at 512×512 batch 128.
+
+## GEMM: WP-Y, coalesced element-leg lane maps
+
+Measured 2026-10-21 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
+time` (beta = 1, every arm verified), 12 reps. Each cell ran four times, new / parent / parent / new, each run two
+passes in alternated arm order. Parent: `7dc92ec3` (a `git archive` tree, so it shares no source with the new one).
+
+Target: wide v2's element leg (odd ld, `k % 4 ≠ 0` packed, unaligned base) at large k, where WP-Q measured
+4.4× the 16-byte leg's global sectors ([negative](#gemm-wp-q-element-leg-loads-negative)).
+
+**ncu first** (parent, one launch, `--clock-control none`):
+
+| cell (b128 unless noted) | arm | ms | load sectors (M) | L1/TEX % | top stall |
+|---|---|---|---|---|---|
+| float TN packed 1024×1024×362 | k16, element leg | 3.79 | 969 (4.4×) | 86 | MIO throttle |
+| float TN packed 1024×1024×360 | k16, 16-byte leg | 3.12 | 218 | 88 | MIO throttle |
+| float TN strided 724×64×128 b2048 | k16 | 1.37 | 259 | 60 | MIO throttle |
+| cfloat TN strided 512×512×64 | k8 | 0.614 | 102 | 59 | long scoreboard |
+| cfloat NT strided 512×256×64 | k16 | 0.233 | 44 (5.2× ideal) | 67 | long scoreboard; DRAM 68% |
+
+The k-contiguous operand (Aᵀ, B) is the loss. Its old map gave a lane one 16-byte granule along k (4 k of one
+column, 4 scalar loads): each load instruction touched 8 columns × 2-3 sectors, and the next three instructions
+touched the same sectors again.
+
+**Shipped** (`register_64x64_k16_wide.hh`; no spelling, row or key moved; the leg stays derived in the launcher):
+
+| piece | rule |
+|---|---|
+| lane map | element leg, float and complex<float>, k-contiguous operand only: lane `st` takes row `st % TileK` of columns `st / TileK + j · OpThreads / TileK` (`wide_v2::eload`). TileK lanes walk one column run, so an instruction is 2 columns × 64 B (k16) or 4 × 32 B (float k8) |
+| shared row | that operand's row padded by 4 floats and unswizzled. At k = 16, rows 8-15 also flip the element's slot inside its granule (`ekx`; the fragment read un-flips by a compile-time index), so the 16 × 2 transposing store hits 32 banks |
+| complex<float> | one 8-byte load per element where the lane's base is 8-byte aligned (`eload`, and the old map's `gload`), else two 4-byte loads |
+| column step | rebuilt per call behind an empty `asm volatile`: hoisted, its multiples spilled 8 B at the 80 and 128 caps (float and complex<float> k16, TN and CN) |
+| local memory | `wide_slm_bytes` bounds both legs: + 2 × 16 B per k row for float and complex<float> v2 rows (float 64×64×16 17,408 B, complex<float> 33,792 B; 128×128 33,280 B) |
+
+The i-contiguous operand keeps the granule map (16-byte shared stores). complex<double> and the 128×128 three-stage
+cp.async leg are unchanged.
+
+| cell (b128 unless noted) | arm | parent / vendor | new / vendor | new / parent |
+|---|---|---|---|---|
+| float TN packed 1024×1024×362 (two rounds) | k16 | 1.489, 1.479 | 1.377, 1.383 | 0.926, 0.931 |
+| float TT strided 1024×1024×362 (two rounds) | k16 | 1.571, 1.568 | 1.533, 1.531 | 1.025, 0.978 |
+| float TN strided 362×64×96 b2048 | k16 | 1.143 | 1.081 | 0.945 |
+| float TN strided 724×64×128 b2048 | k16 | 1.106 | 1.054 | 0.951 |
+| float NN strided 2048×64×96 b2048 | k16 | 1.185 | 1.158 | 0.977 |
+| float TT strided 1024×45×128 b2048 | k16 | 1.073 | 1.061 | 0.988 |
+| float TN strided 1024×1024×256 | k8 | 1.533 | 1.515 | 0.984 |
+| cfloat TN strided 1024×256×78 | k16 / k8 | 1.144 / 1.260 | 1.116 / 1.199 | 0.975 / 0.952 |
+| cfloat TN strided 512×512×64 | k8 | 1.083 | 1.025 | 0.949 |
+| cfloat CN strided 512×512×256 | k16 / k8 | 1.099 / 1.240 | 1.073 / 1.175 | 0.975 / 0.945 |
+| cfloat NN strided 1024×1024×64 | k16 / k8 | 1.172 / 1.240 | 1.177 / 1.228 | 1.003 / 0.989 |
+| cfloat CC strided 256×256×96 b2048 | k16 | 0.972 | 0.963 | 0.990 |
+| no k-contiguous operand: cfloat NT strided 512×256×64 | k16 | 1.018 | 1.019 | 1.002 |
+| no k-contiguous operand: cfloat NC strided 128×1024×64 | k16 | 1.022 | 1.018 | 0.994 |
+| no k-contiguous operand: float NT strided 2048×32×23 b2048 | k8 | 1.112 | 1.111 | 0.999 |
+| 16-byte leg: float NN packed 512³ b2048 | k16 | 1.394 | 1.395 | 1.000 |
+| 16-byte leg: cfloat NN packed 1024³ | k16 | 1.151 | 1.151 | 1.000 |
+
+Every new / parent is the mean of the four runs; the per-run spread is under 2% except float TT strided
+1024×1024×362, whose first round had one new run at 4.36 ms against 4.01-4.19 for the other seven (the second
+round: 0.978). Forms with both operands k-contiguous (TN, CN) gain 2.5-7%, forms with one (NN, TT) 0-2.5%.
+
+**ncu after** (same protocol): float TN packed 362 3.49 ms (parent 3.79, 16-byte leg 3.12), load sectors 279M (969M),
+L1/TEX 85%, top stall short scoreboard; float TN strided 724×64×128 1.29 ms (1.37), sectors 85M (259M), DRAM 79%
+(74%); cfloat TN strided 512×512×64 k8 0.551 ms (0.614), sectors 64M (102M), DRAM 63% (56%). The fixed-clock ncu
+gain (7.5% at 362) is larger than the timed one: under repeated launches this Max-Q part is power-limited
+(`nvidia-smi dmon`: 1350-2325 MHz at 226-274 W).
+
+**Negative** (each timed against the same parent, 6-10 reps):
+
+| variant | result |
+|---|---|
+| WP-F's map, 8 lanes per 32-byte segment, at k = 16 (two instructions per 64-byte column run), with the i-contiguous operand i-fastest | 351M sectors at 362; 1-3.5% on the k16 cells |
+| TileK lanes per column, the i-contiguous operand i-fastest too (64 lanes per row, scalar shared stores) | float TN packed 362 0.962, cfloat TN 512²×64 k8 0.953, but float NT strided 2048×32×23 k8 1.169: 4× the shared store instructions on the i-contiguous operand, so it went back to the granule map |
+| funnel loads: two aligned 16-byte loads per granule and a runtime select (old map) | requests 49M → 26M, sectors 507M, L1 86%; same time as the parent |
+| 8-byte complex<float> loads on the i-contiguous operand | NT, NC within ±0.5% (kept: it is the same branch as the k-contiguous load) |
+
+The 128×128 complex<float> three-stage leg (`acopy`) is unchanged: cfloat NN strided 1024×1024×64 is DRAM-bound
+there (2.09 ms at DRAM 68%, L1 32%; vendor 2.00 ms at 70%), and the padded row would take its three stages past
+48 KiB.
+
+**Registers** (`scripts/register_probe.sh`): `total spilling 0` on sm_120 and on a `-DBATCHLAS_NVIDIA_ARCH=sm_89`
+tree. Element-leg instances on sm_120: float 79-80; complex<float> k16 128 (122 for NT, NC), k8 96-103; the
+128×128 register path 254-255.
+
+Tests: `GemmCandidates.WideV2ElementLegKContiguousMapAtSaturatingBatch` (float and complex<float>, 64×64×8 and
+64×64×16, all 9 forms at ld = m + 1 with NaN in every gap and beta ≠ 0: 200×136×48, k = 15, 16, 17, 33 on 130×70,
+200×136×48 at batch 1024 with 7 distinct problems, each item bit-identical to its representative; complex<float>
+again at a 4-byte base). Deliberate breaks, run (filter: the wide v2 suites, `WideK8*`, `Wide128x128*`):
+
+| break | red | green |
+|---|---|---|
+| fragment read without the k = 16 flip | float and complex<float> wide v2 suites, every first failure 64×64×16 with a k-contiguous operand (NN first); every 64×64×8 form passed first | 128×128 (k = 8), complex<double> |
+| 8-byte load halves swapped (`eload`) | complex<float> only: 64×64 (k16, k8) and 128×128 under `WIDE_STAGES=2` in the 7 forms with a k-contiguous operand | float; 128×128 NT, NC; the cp.async stages |
+| 8-byte load halves swapped (`gload`) | complex<float> only: every form at some layout, including the 16-byte leg's predicated edge slabs | float |
+| `eload` drops its k bound | the k-tail cases (k = 7, 9, 15, 37) of float and complex<float>, and 128×128 at a 4-byte base and under `WIDE_STAGES=2` | full-slab cases |
+| column step one element long | float and complex<float>; 128×128 in the 7 forms with a k-contiguous operand | 128×128 NT, NC |
+
+The padding and the flip are bank-conflict layout only: a store and read that agree on them are right without them,
+so no value test sees a dropped pad.
+
+Not done: the same map on the 128×128 cp.async leg's k-contiguous operand (needs 48+ KiB or an 8-value swizzle,
+which cost WP-Q 75 registers); a retune (the sm_120 table ranks these arms by the parent's timings).
 
 ## GEMM: the register-tiled launcher table
 

@@ -272,7 +272,9 @@ std::int64_t wide_slm(const WideRow& row) {
     const bool v2 = wide_v2<T>(row);
     const std::int64_t one = std::int64_t(row.k) * (row.m + row.n) * std::int64_t(sizeof(T));
     const bool two = v2 || ((row.m != 64 || row.n != 64) && 2 * one <= 40960);
-    return (two ? 2 : 1) * one;
+    // WP-Y: the float and complex<float> element leg pads both operands' rows by 16 B at most.
+    const std::int64_t pad = v2 && sizeof(T) <= 8 ? std::int64_t(row.k) * 2 * 16 : 0;
+    return (two ? 2 : 1) * (one + pad);
 }
 template <typename T>
 bool wide_fits(const WideRow& row) {
@@ -796,19 +798,19 @@ TEST(GemmRegSlm, SlmBytesMatchWhatTheDriverWasAskedFor) {
 TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     const og::WideCfg& w64 = og::wide_configs[0];
     ASSERT_TRUE(w64.m == 64 && w64.n == 64 && w64.k == 16);
-    EXPECT_EQ(og::wide_slm_bytes<float>(w64), 16384);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64), 32768);
+    EXPECT_EQ(og::wide_slm_bytes<float>(w64), 17408);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64), 33792);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64), 16384);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64), 65536);
     const og::WideCfg& w64k8 = og::wide_configs[7];
     ASSERT_TRUE(w64k8.m == 64 && w64k8.n == 64 && w64k8.k == 8);
-    EXPECT_EQ(og::wide_slm_bytes<float>(w64k8), 8192);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16384);
+    EXPECT_EQ(og::wide_slm_bytes<float>(w64k8), 8704);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w64k8), 16896);
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
     const og::WideCfg& w128 = og::wide_configs[8];
     ASSERT_TRUE(w128.m == 128 && w128.n == 128 && w128.k == 8 && w128.scalars == og::kWideCF && w128.v2);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 32768);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 33280);
     static_assert(og::wide_v2_row<std::complex<float>>(og::wide_configs[8]) && !og::wide_v2_row<float>(og::wide_configs[8]) &&
                       !og::splitk_host(og::wide_configs[8]),
                   "the 128x128 row is wide v2 for complex<float> alone and hosts no split-k");
@@ -2002,6 +2004,52 @@ TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
         }
         EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
         EXPECT_EQ(ran, tiles * 9 * 3);
+    }
+}
+
+// WP-Y, the float and complex<float> element leg's k-contiguous lane map (TileK lanes per column,
+// rows 8-15 flipped in their granule at k = 16) and complex<float>'s 8-byte element loads. Both
+// 64x64 slabs, all 9 forms, NaN in every gap, beta != 0: 200 x 136 x 48 at ld = m + 1 (six
+// interior groups over full slabs, the unpredicated map), k = 15, 16, 17 and 33 on 130 x 70 at
+// ld = m + 1 (the predicated tail), then 200 x 136 x 48 at batch 1024, 7 distinct problems, each
+// item bit-identical to its representative. complex<float> runs each case again at a 4-byte base
+// (run_pinned_base8: the 4-byte element loads). A fragment read without the flip is wrong in every
+// k = 16 form with a k-contiguous operand; swapped halves of an 8-byte load only off the 4-byte base.
+// evidence: docs/perf/gemm.md#gemm-wp-y-coalesced-element-leg-lane-maps
+TYPED_TEST(GemmCandidates, WideV2ElementLegKContiguousMapAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, std::complex<float>>) {
+        GTEST_SKIP() << "the k-contiguous element map is float and complex<float> only";
+    } else {
+        struct Shape { int m, n, k, batch; };
+        const Shape shapes[] = {{200, 136, 48, 4}, {130, 70, 15, 3}, {130, 70, 16, 3},
+                                {130, 70, 17, 3},  {130, 70, 33, 3}, {200, 136, 48, 1024}};
+        const int bases = std::is_same_v<T, float> ? 1 : 2;
+        int ran = 0, tiles = 0;
+        for (const C c : {C{og::Wide{64, 64, 8}}, C{og::Wide{64, 64, 16}}}) {
+            if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) continue;
+            ++tiles;
+            for (Transpose ta : kForms)
+                for (Transpose tb : kForms)
+                    for (const Shape& sh : shapes)
+                        for (int b4 = 0; b4 < bases; ++b4) {
+                            Spec s{ta, tb, sh.m, sh.n, sh.k, sh.batch, Layout::Gap1};
+                            s.nan_poison = true;
+                            if (sh.batch > 8) s.period = 7;
+                            s.seed = 8900u + sh.m + 3u * sh.k + unsigned(sh.batch);
+                            ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                            auto p = make_problem<T>(s);
+                            if constexpr (std::is_same_v<T, float>) this->run_pinned(c, p);
+                            else if (b4) this->run_pinned_base8(c, p);
+                            else this->run_pinned(c, p);
+                            if (::testing::Test::HasFatalFailure()) return;
+                            expect_gemm(*this->ctx, p, name(c, s) + (b4 ? " (4-byte base)" : ""));
+                            if (::testing::Test::HasFatalFailure()) return;
+                            ++ran;
+                        }
+        }
+        EXPECT_GE(tiles, 1) << "64x64x8 asks for half of 64x64x16's local memory";
+        EXPECT_EQ(ran, tiles * 9 * 6 * bases);
     }
 }
 
