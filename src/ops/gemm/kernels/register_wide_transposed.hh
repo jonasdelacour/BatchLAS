@@ -17,8 +17,10 @@
 
 #include <sycl/sycl.hpp>
 
+#include <algorithm>
+#include <climits>
 #include <cstddef>
-#include <cstdlib>
+#include <cstdint>
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
@@ -167,7 +169,9 @@ BATCHLAS_UNROLL_FULL
 // of their size (the launcher checks complex<float> bases; alignof is 4).
 // evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
 template <bool KC, bool Vec, int TI, int TileK, int Threads, typename D>
-inline void acopy(D* s, std::uint32_t s_l, const D* base, int ld, int i0, int k0, int i_lim, int k_lim, int tid) {
+// slab: the operand's element (i0, k0), inside it since i0 < i_lim and k0 < k_lim; i_rem and k_rem
+// the extents left from there. Offsets are int: the launcher holds 128 ld to INT_MAX.
+inline void acopy(D* s, std::uint32_t s_l, const D* slab, int ld, int i_rem, int k_rem, int tid) {
     constexpr int VecN = Vec16<D>::N;
     constexpr int ES = static_cast<int>(sizeof(D));
     if constexpr (Vec && !KC) {
@@ -177,9 +181,9 @@ BATCHLAS_UNROLL_FULL
             const int g = tid + r * Threads;
             if (Count % Threads != 0 && g >= Count) continue;
             const int i = (g % (TI / VecN)) * VecN, kk = g / (TI / VecN);
-            const int left = i_lim - i0 - i;
-            const bool ok = k0 + kk < k_lim && left > 0;
-            const D* src = ok ? base + (i0 + i) + static_cast<std::ptrdiff_t>(k0 + kk) * ld : base;
+            const int left = i_rem - i;
+            const bool ok = kk < k_rem && left > 0;
+            const D* src = slab + (ok ? i + kk * ld : 0);
             const int o = soff<false, TI, TileK, VecN>(kk, i);
             copy_async_zfill<16>(s + o, s_l + static_cast<std::uint32_t>(ES * o), src,
                                  ok ? static_cast<std::uint32_t>(ES * (left < VecN ? left : VecN)) : 0u);
@@ -191,11 +195,8 @@ BATCHLAS_UNROLL_FULL
         for (int r = 0; r < Count / Threads; ++r) {
             const int e = tid + r * Threads;
             const int i = KC ? e / TileK : e % TI, kk = KC ? e % TileK : e / TI;
-            const int gi = i0 + i, gk = k0 + kk;
-            const bool ok = gi < i_lim && gk < k_lim;
-            const D* src = ok ? base + (KC ? static_cast<std::ptrdiff_t>(gi) * ld + gk
-                                           : gi + static_cast<std::ptrdiff_t>(gk) * ld)
-                              : base;
+            const bool ok = i < i_rem && kk < k_rem;
+            const D* src = slab + (!ok ? 0 : KC ? i * ld + kk : i + kk * ld);
             const int o = soff<KC, TI, TileK, VecN>(kk, i);
             copy_async_zfill<ES>(s + o, s_l + static_cast<std::uint32_t>(ES * o), src,
                                  ok ? static_cast<std::uint32_t>(ES) : 0u);
@@ -506,10 +507,14 @@ BATCHLAS_UNROLL_FULL
 #endif
                     constexpr std::uint32_t ES = sizeof(D);
                     auto issue = [&](int k0, int buf) __attribute__((always_inline)) {
-                        acopy<KCA, VecLoads, TileM, TileK, Threads>(sa + buf * BufA, sa_l + ES * (buf * BufA), Ab, lda,
-                                                                    m0, k0, m, k_hi, tid);
-                        acopy<KCB, VecLoads, TileN, TileK, Threads>(sb + buf * BufB, sb_l + ES * (buf * BufB), Bb, ldb,
-                                                                    n0, k0, n, k_hi, tid);
+                        const D* pa = Ab + (KCA ? static_cast<std::ptrdiff_t>(m0) * lda + k0
+                                                : m0 + static_cast<std::ptrdiff_t>(k0) * lda);
+                        const D* pb = Bb + (KCB ? static_cast<std::ptrdiff_t>(n0) * ldb + k0
+                                                : n0 + static_cast<std::ptrdiff_t>(k0) * ldb);
+                        acopy<KCA, VecLoads, TileM, TileK, Threads>(sa + buf * BufA, sa_l + ES * (buf * BufA), pa, lda,
+                                                                    m - m0, k_hi - k0, tid);
+                        acopy<KCB, VecLoads, TileN, TileK, Threads>(sb + buf * BufB, sb_l + ES * (buf * BufB), pb, ldb,
+                                                                    n - n0, k_hi - k0, tid);
                     };
 BATCHLAS_UNROLL_FULL
                     for (int j = 0; j < Stages - 1; ++j) {
@@ -640,28 +645,30 @@ BATCHLAS_UNROLL_FULL
 }
 
 // The leg (16-byte or element global loads) is wide v2's predicate, per launch; whether a slab
-// is predicated is per work-group. One trace name for both legs.
+// is predicated is per work-group. complex<float> adds the cp.async leg (trace_async) where DPC++
+// emits cp.async, at sm_120+ (the only architecture timed; BATCHLAS_GEMM_WIDE_STAGES=3 admits sm_80+,
+// =2 forces the register prefetch) and both bases are 8-byte aligned (alignof is 4). Two stages:
+// three and four lost occupancy; float's 4-byte copies cost 16-45 registers and ran slower.
+// evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
 template <typename T, WideTile P, bool Split = false>
 Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                             T alpha, T beta, const char* trace, WideSplit split = {}) {
-    if constexpr (!Split && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>)) {
-        const char* dev = std::getenv("BATCHLAS_WIDEX_DEV");  // WP-X experiment only
-        const int s = dev ? std::atoi(dev) : 0;
+                             T alpha, T beta, const char* trace, WideSplit split = {},
+                             const char* trace_async = nullptr) {
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        constexpr int Async = 2;
         constexpr int Threads = (P.M / P.TTM) * (P.N / P.TTN);
-        auto at8 = [](const T* p) { return reinterpret_cast<std::uintptr_t>(p) % sizeof(T) == 0; };
-        const bool ok = s >= 2 && !BATCHLAS_SYCL_IMPL_ACPP && ctx.device().cuda_compute_capability() >= 80 &&
-            at8(A.data_ptr()) && at8(B.data_ptr()) &&
-            resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Threads)) >=
-                static_cast<std::size_t>(s) * P.K * (P.M + P.N) * sizeof(T);
-        if (ok) {
-            const bool v = wide64_v2_vec_loads<T>(A, B);
-            if (s == 2) return v ? launch_wide_transposed_leg<T, P, true, Split, 2>(ctx, A, B, C, alpha, beta, trace, split)
-                                 : launch_wide_transposed_leg<T, P, false, Split, 2>(ctx, A, B, C, alpha, beta, trace, split);
-            if (s == 3) return v ? launch_wide_transposed_leg<T, P, true, Split, 3>(ctx, A, B, C, alpha, beta, trace, split)
-                                 : launch_wide_transposed_leg<T, P, false, Split, 3>(ctx, A, B, C, alpha, beta, trace, split);
-            return v ? launch_wide_transposed_leg<T, P, true, Split, 4>(ctx, A, B, C, alpha, beta, trace, split)
-                     : launch_wide_transposed_leg<T, P, false, Split, 4>(ctx, A, B, C, alpha, beta, trace, split);
+        constexpr std::size_t bytes = std::size_t(Async) * P.K * (P.M + P.N) * sizeof(T);
+        const int forced = batchlas::settings().geometry.gemm_wide_stages;
+        auto whole = [](const T* p) { return reinterpret_cast<std::uintptr_t>(p) % sizeof(T) == 0; };
+        if (!BATCHLAS_SYCL_IMPL_ACPP && forced != 2 &&
+            ctx.device().cuda_compute_capability() >= (forced == 3 ? 80 : 120) && whole(A.data_ptr()) &&
+            whole(B.data_ptr()) && std::max(A.ld(), B.ld()) <= INT_MAX / 128 &&
+            resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Threads)) >= bytes) {
+            const char* t = trace_async ? trace_async : trace;
+            if (wide64_v2_vec_loads<T>(A, B))
+                return launch_wide_transposed_leg<T, P, true, Split, Async>(ctx, A, B, C, alpha, beta, t, split);
+            return launch_wide_transposed_leg<T, P, false, Split, Async>(ctx, A, B, C, alpha, beta, t, split);
         }
     }
     if (wide64_v2_vec_loads<T>(A, B))
