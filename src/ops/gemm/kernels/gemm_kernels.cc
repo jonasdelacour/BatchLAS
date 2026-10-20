@@ -150,11 +150,7 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled16x16RegisterK16WideTT: return "gemm_sycl_register_16x16_k16_wide_tt";
     case KernelVariant::Tiled16x16RegisterK16WideTC: return "gemm_sycl_register_16x16_k16_wide_tc";
     case KernelVariant::Tiled16x16RegisterK16WideCC: return "gemm_sycl_register_16x16_k16_wide_cc";
-    case KernelVariant::Tiled64x32RegisterK16WideTT: return "gemm_sycl_register_64x32_k16_wide_tt";
-    case KernelVariant::Tiled64x32RegisterK16WideTC: return "gemm_sycl_register_64x32_k16_wide_tc";
     case KernelVariant::Tiled64x32RegisterK16WideCC: return "gemm_sycl_register_64x32_k16_wide_cc";
-    case KernelVariant::Tiled32x64RegisterK16WideTT: return "gemm_sycl_register_32x64_k16_wide_tt";
-    case KernelVariant::Tiled32x64RegisterK16WideTC: return "gemm_sycl_register_32x64_k16_wide_tc";
     case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
     case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
     case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
@@ -399,10 +395,10 @@ constexpr KernelVariant wide_variant(std::size_t i, int form) {
          K::Tiled16x16RegisterK16WideTN, K::Tiled16x16RegisterK16WideTT, K::Tiled16x16RegisterK16WideTC,
          K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, K::Tiled16x16RegisterK16WideCC},
         {K::Tiled64x32RegisterK16Wide, K::Tiled64x32RegisterK16WideNT, K::Tiled64x32RegisterK16WideNC,
-         K::Tiled64x32RegisterK16WideTN, K::Tiled64x32RegisterK16WideTT, K::Tiled64x32RegisterK16WideTC,
+         K::Tiled64x32RegisterK16WideTN, x, x,
          K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, K::Tiled64x32RegisterK16WideCC},
         {K::Tiled32x64RegisterK16Wide, K::Tiled32x64RegisterK16WideNT, K::Tiled32x64RegisterK16WideNC,
-         K::Tiled32x64RegisterK16WideTN, K::Tiled32x64RegisterK16WideTT, K::Tiled32x64RegisterK16WideTC,
+         K::Tiled32x64RegisterK16WideTN, x, x,
          K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, K::Tiled32x64RegisterK16WideCC},
         {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
          K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
@@ -421,7 +417,7 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = static_cast<int>(OA == Transpose::Trans) + 2 * static_cast<int>(OA == Transpose::ConjTrans);
     constexpr int fb = static_cast<int>(OB == Transpose::Trans) + 2 * static_cast<int>(OB == Transpose::ConjTrans);
-    static_assert(c.has(fa, fb), "wide_configs does not list this form for this row");
+    static_assert(og::wide_compiles<T>(c, fa, fb), "wide_configs does not list this form for this row");
     if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
         constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
         static_assert((c.k == 16 || c.k == 8) && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x{16,8} 4x4 tile");
@@ -452,7 +448,7 @@ void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T,
                       T alpha, T beta, Transpose transA, Transpose transB, WideSplit split = {}) {
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = F / 3, fb = F % 3;
-    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1)) && (!Split || og::splitk_host(c))) {
+    if constexpr (og::wide_compiles<T>(c, fa, fb) && (!Split || og::splitk_host(c))) {
         constexpr Transpose OA = kWideOps[fa], OB = kWideOps[fb];
         if (out || !wide_trans_matches<T>(transA, OA) || !wide_trans_matches<T>(transB, OB)) return;
         if constexpr (Split)
