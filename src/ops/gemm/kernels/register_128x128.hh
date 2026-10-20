@@ -462,6 +462,21 @@ BATCHLAS_UNROLL_FULL
                         vec4_ref(&sc[slot * StageStride + band * BandM + mb]) = v;
                     }
                 }
+                // Predicated leg: the pass's 16 priors are loaded after the stage write (its
+                // accumulators are dead) and before the barrier, all in flight at once (inline, each load waited before its store).
+                [[maybe_unused]] T prior[4][4];
+                if constexpr (!AlignedFastPath) {
+                    const bool bz = beta == T(0);
+                    const int rows_left = m - m0 - (tid2 & 31);
+BATCHLAS_UNROLL_FULL
+                    for (int q = 0; q < 4; ++q) {
+                        const int col = n0 + ((tid2 >> 5) * 4 + q) * 4 + p;
+                        const T* src = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
+BATCHLAS_UNROLL_FULL
+                        for (int i = 0; i < 4; ++i)
+                            prior[q][i] = !bz && col < n && 32 * i < rows_left ? src[32 * i] : T(0);
+                    }
+                }
                 item.barrier(sycl::access::fence_space::local_space);
 BATCHLAS_UNROLL_FULL
                 for (int q = 0; q < 4; ++q) {
@@ -488,16 +503,10 @@ BATCHLAS_UNROLL_FULL
                         const int rows_left = m - m0 - (tid2 & 31);
                         T* dst = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
                         const T* src = &sc[slot * StageStride + (tid2 & 31)];
-                        if (beta == T(0)) {
 BATCHLAS_UNROLL_FULL
-                            for (int i = 0; i < 4; ++i)
-                                if (32 * i < rows_left) dst[32 * i] = alpha * src[32 * i];
-                        } else {
-BATCHLAS_UNROLL_FULL
-                            for (int i = 0; i < 4; ++i)
-                                if (32 * i < rows_left)
-                                    dst[32 * i] = LinearEpilogue<T>::apply(alpha, beta, src[32 * i], dst[32 * i]);
-                        }
+                        for (int i = 0; i < 4; ++i)
+                            if (32 * i < rows_left)
+                                dst[32 * i] = LinearEpilogue<T>::apply(alpha, beta, src[32 * i], prior[q][i]);
                     }
                 }
                 item.barrier(sycl::access::fence_space::local_space);
@@ -639,11 +648,11 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    constexpr bool kStaged = Stages == 2 || OpA != Transpose::NoTrans || OpB != Transpose::NoTrans;
+    constexpr bool kStaged = true;
     if constexpr (!kStaged) {
         return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                    kernel_trace_name);
-    } else if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
+    } else if (!AlignedFastPath || get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
         return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                   kernel_trace_name);
     }
