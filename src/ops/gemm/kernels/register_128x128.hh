@@ -124,6 +124,17 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
         aligned(C.data_ptr(), C.ld(), C.stride());
 }
 
+// Each kernel functor (Body, launched directly on aligned u1; Gemm128x128Inlined, predicated u1;
+// Gemm128x128Pipelined, u4) also declares its work-group size: ptxas sees .reqntid and holds the two-group cap (128 registers); the launch bound alone is
+// dropped (known defect #20) and left u1 at up to 139 and staged u4 at 155-159 (one group per SM).
+// NVPTX device code only, like BATCHLAS_LAUNCH_BOUNDS (none under acpp: speed only). Local, not in
+// kernel_attrs.hh: that header is in every op's tuning hash.
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+#define BATCHLAS_GEMM_REQD_WG(n) [[sycl::reqd_work_group_size(1, 1, n)]]
+#else
+#define BATCHLAS_GEMM_REQD_WG(n)
+#endif
+
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled.
 // StagedEpilogue routes C through local memory so each warp stores whole
 // 128-row columns, on either leg; see launch_register_128x128_k8.
@@ -172,6 +183,7 @@ struct Gemm128x128Body {
     sycl::local_accessor<T, 1> tile_a, tile_b;
 
     BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_GEMM_REQD_WG(Threads)
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
         if (bid >= batch) {
@@ -431,9 +443,10 @@ BATCHLAS_UNROLL_FULL
             T* sc = sa;
             int tid2 = static_cast<int>(item.get_local_id(2));
 #if BATCHLAS_GEMM_CP_ASYNC
-            // Read after the pipeline's volatile copies, so no epilogue address is hoisted into the
-            // mainloop (u4 staged NN spilled 20 B at the 128 cap with it hoisted).
-            if constexpr (Stages > 2) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
+            // Opaque re-read keeps every epilogue address out of the mainloop (no hoist) on u4 and on
+            // u1 aligned (u4 staged NN spilled 20 B at the 128 cap with it hoisted; u1 aligned staged
+            // TT 32 B on sm_120).
+            if constexpr (Stages > 2 || AlignedFastPath) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
 #endif
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
 BATCHLAS_UNROLL_FULL
@@ -559,20 +572,12 @@ struct Gemm128x128Inlined {
     Body body;
 
     BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);
     }
 };
 
-// The copy_async pipeline's wrapper also declares its work-group size: ptxas sees .reqntid and
-// holds the two-group cap (128 registers); the launch bound alone left staged predicated NN, TN
-// and TT at 155-159 (one group per SM). NVPTX device code only, like BATCHLAS_LAUNCH_BOUNDS (none
-// under acpp: speed only). Local, not in kernel_attrs.hh: that header is in every op's tuning hash.
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#define BATCHLAS_GEMM_REQD_WG(n) [[sycl::reqd_work_group_size(1, 1, n)]]
-#else
-#define BATCHLAS_GEMM_REQD_WG(n)
-#endif
 template <typename Body>
 struct Gemm128x128Pipelined {
     Body body;
