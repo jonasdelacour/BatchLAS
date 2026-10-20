@@ -1554,7 +1554,7 @@ TYPED_TEST(GemmCandidates, RegLargeTilesEveryFormSlabCountAndLegAtSaturatingBatc
                             {257, 129, 9, Layout::OddLd, true},      {255, 127, 16, Layout::Padded, false},
                             {300, 200, 24, Layout::Strided, false},  {256, 256, 32, Layout::Gap1, false},
                             {300, 200, 37, Layout::Gap1, true},      {300, 200, 40, Layout::Packed, false},
-                            {257, 255, 40, Layout::ItemSkew, false}, {264, 136, 48, Layout::Padded, true},
+                            {257, 255, 40, Layout::ItemSkew, false}, {264, 136, 45, Layout::Padded, true},
                             {256, 128, 64, Layout::OddLd, false},    {128, 256, 69, Layout::Gap1, true},
                             {257, 129, 136, Layout::Strided, false}};
         const Leg nan_legs[] = {{257, 129, 9, Layout::OddLd, false}, {255, 127, 16, Layout::Padded, false},
