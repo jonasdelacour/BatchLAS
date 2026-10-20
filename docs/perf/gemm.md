@@ -1949,6 +1949,44 @@ and held in a register, spilled 16 B (12 B loads) in staged u4 NN, TN and TT at 
 neither operand k-fastest, sat at 125 with none. `issue` now rebuilds `32 · ld` per call behind an empty
 `asm volatile`: sm_89 u4 125-127 registers, zero spill on both arches. Not re-timed.
 
+## GEMM: WP-U, the u1 128x128 launch bound enforced
+
+`Gemm128x128Body` and `Gemm128x128Inlined` (u1, every leg) now carry `[[sycl::reqd_work_group_size(1, 1, 256)]]`
+like the u4 pipeline wrapper already did, so ptxas sees `.reqntid` and holds the two-group cap (known defect #20;
+`minnctapersm is ignored` count in `libbatchlas_sycl`: 0). The aligned staged epilogue re-reads `%tid.x` behind
+`asm volatile` as the u4 one does: without it u1 aligned staged TT spilled 32 B at the cap on sm_120.
+
+**Registers** (`scripts/register_probe.sh`, `libbatchlas_sycl`, zero spill on every entry on sm_120 and sm_89):
+u1 sm_120 parent → new, aligned direct NN 139 → 128, aligned staged NN 135 → 128, TN 130 → 128, TT 139 → 128,
+predicated staged NT 133 → 128; every other u1 instance was already at 126-128. sm_89 u1 127-128. u4 unchanged.
+
+**Timing** (RTX PRO 6000 Blackwell Max-Q, sm_120, float, pinned `reg:m=128:n=128:k=8:u=1`, parent and new builds
+side by side, 8 reps × 2 passes in swapped order per build, three runs; new/parent is the range over the runs,
+×vendor is the third run):
+
+| cell (batch) | new / parent | parent → new ×vendor |
+|---|---|---|
+| NN packed 1024×2048×64 (128) | 0.853-0.874 | 0.862 → 0.756 |
+| TT packed 512×256×64 (2048) | 0.902-0.909 | 0.873 → 0.787 |
+| TN packed 2048×1024×64 (128) | 0.913 | 1.058 → 0.967 |
+| NT strided 362×1024×96 (128) | 0.914-0.921 | 1.091 → 0.989 |
+| NN packed 1024×2048×96 (128) | 0.928-0.931 | 0.781 → 0.725 |
+| TN packed 1024×128×64 (2048) | 0.936-0.939 | 1.040 → 0.982 |
+| NN packed 512×256×128 (2048) | 0.942-0.949 | 1.073 → 1.013 |
+| NN packed 512×512×256 (128) | 0.934-0.948 | 0.910 → 0.866 |
+| NT packed 2048×181×128 (128) | 0.961-0.965 | 1.184 → 1.125 |
+| NT packed 1024³, TT packed 512³, NN packed 512³ (2048), NN strided 256×512×78 (2048), TN strided 2048×1024×96, NN packed 215×2048×96, TT packed 1024×2048×128 | 0.993-1.011 | within 1% |
+| NN packed 512×512×78 (128) | 1.018-1.024 | 0.861 → 0.876 |
+| NN strided 512×512×1024 (256) | 1.019-1.024 | 1.292 → 1.325 |
+| NN packed 1024³ (128) | 1.025-1.030 | 1.059 → 1.087 |
+| NN packed 2048³ (16) | 1.026-1.030 | 1.066 → 1.100 |
+| TT packed 512×362×8 (128) | 1.000-1.063 | 0.864 → 0.899 |
+
+Mid k (64-256) gains 4-15%; NN at k ≥ 1024 loses 2-3%, where the 139-register aligned direct NN mainloop ran
+better at one group per SM. Vendor wins every k ≥ 1024 row in either build, so a vendor table never routes them to
+u1; a vendor-free build pays it. TT 512×362×8 runs the predicated staged TT instance, whose registers did not move
+(126 → 127): two 40-rep passes gave 1.000 and 1.063, noise at 63 µs. Shipped. Tables not re-raced.
+
 ## GEMM: the register-tiled launcher table
 
 `src/ops/gemm/kernels/register_launchers.hh`. `RegTile` holds the template parameters of `launch_register_tiled<>` as a

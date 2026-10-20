@@ -33,7 +33,7 @@ closed and kept only for numbering.
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
 | 19 | `src/ops/potrf/potrf.cc` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
-| 20 | `src/sycl/kernel_attrs.hh` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers and the 128x128 gemm |
+| 20 | `src/sycl/kernel_attrs.hh` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -391,7 +391,9 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Fix needs:** the macro fixed, or `reqd_work_group_size` on each remaining functor, then an A/B
   and register probe per kernel: an applied bound moves registers and routing windows, and the
   tiny-solver tables were tuned with no bound in effect. Re-pins the potrf/posv/trsm kernel hashes.
-- **Status:** open.
+- **Status:** open for the tiny solvers. The 128x128 gemm functors (u1 and u4) declare
+  `reqd_work_group_size` since WP-U: 0 ignored bounds in `batchlas_sycl`, u1 capped at 128 registers
+  ([gemm.md](../perf/gemm.md#gemm-wp-u-the-u1-128x128-launch-bound-enforced)).
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
