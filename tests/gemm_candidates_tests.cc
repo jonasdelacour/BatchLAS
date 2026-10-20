@@ -137,8 +137,14 @@ const std::vector<RegRow>& reg_rows() {
     return rows;
 }
 // Forms are the complex instantiations (op(A) op(B) over N, T, C); a real scalar runs the N/C
-// one its T operands fold to. cf_only: compiled for complex<float> alone (wide v2's 128x128).
-struct WideRow { int m, n, k; std::map<std::string, std::string> trace; bool cf_only = false; };
+// one its T operands fold to. real_only: forms only a real scalar compiles (its TT's CC build).
+// cf_only: compiled for complex<float> alone (wide v2's 128x128).
+struct WideRow {
+    int m, n, k;
+    std::map<std::string, std::string> trace;
+    std::set<std::string> real_only{};
+    bool cf_only = false;
+};
 const std::vector<WideRow>& wide_rows() {
     static const std::vector<WideRow> rows{
         {64, 64, 16, {{"NN", "gemm_sycl_register_64x64_k16_wide"}, {"NN+aligned", "gemm_sycl_register_64x64_k16_wide_aligned"},
@@ -155,21 +161,33 @@ const std::vector<WideRow>& wide_rows() {
                       {"CT+aligned", "gemm_sycl_register_64x64_k16_wide_ct_aligned"},
                       {"CC+aligned", "gemm_sycl_register_64x64_k16_wide_cc_aligned"}}},
         {128, 32, 16, {{"NC", "gemm_sycl_register_128x32_k16_wide_nc"}, {"NT", "gemm_sycl_register_128x32_k16_wide_nt"},
-                       {"TN", "gemm_sycl_register_128x32_k16_wide_tn"}, {"CN", "gemm_sycl_register_128x32_k16_wide_cn"}}},
+                       {"TN", "gemm_sycl_register_128x32_k16_wide_tn"}, {"CN", "gemm_sycl_register_128x32_k16_wide_cn"},
+                       {"CC", "gemm_sycl_register_128x32_k16_wide_cc"}},
+                      {"CC"}},
         {32, 128, 16, {{"CN", "gemm_sycl_register_32x128_k16_wide_cn"}, {"TN", "gemm_sycl_register_32x128_k16_wide_tn"},
-                       {"NT", "gemm_sycl_register_32x128_k16_wide_nt"}, {"NC", "gemm_sycl_register_32x128_k16_wide_nc"}}},
+                       {"NT", "gemm_sycl_register_32x128_k16_wide_nt"}, {"NC", "gemm_sycl_register_32x128_k16_wide_nc"},
+                       {"CC", "gemm_sycl_register_32x128_k16_wide_cc"}},
+                      {"CC"}},
         {32, 32, 16, {{"NN", "gemm_sycl_register_32x32_k16_wide"}, {"NT", "gemm_sycl_register_32x32_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_32x32_k16_wide_nc"}, {"TN", "gemm_sycl_register_32x32_k16_wide_tn"},
-                      {"CN", "gemm_sycl_register_32x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x32_k16_wide_ct"}}},
+                      {"CN", "gemm_sycl_register_32x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x32_k16_wide_ct"},
+                      {"TT", "gemm_sycl_register_32x32_k16_wide_tt"}, {"TC", "gemm_sycl_register_32x32_k16_wide_tc"},
+                      {"CC", "gemm_sycl_register_32x32_k16_wide_cc"}}},
         {16, 16, 16, {{"NN", "gemm_sycl_register_16x16_k16_wide"}, {"NT", "gemm_sycl_register_16x16_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_16x16_k16_wide_nc"}, {"TN", "gemm_sycl_register_16x16_k16_wide_tn"},
-                      {"CN", "gemm_sycl_register_16x16_k16_wide_cn"}, {"CT", "gemm_sycl_register_16x16_k16_wide_ct"}}},
+                      {"CN", "gemm_sycl_register_16x16_k16_wide_cn"}, {"CT", "gemm_sycl_register_16x16_k16_wide_ct"},
+                      {"TT", "gemm_sycl_register_16x16_k16_wide_tt"}, {"TC", "gemm_sycl_register_16x16_k16_wide_tc"},
+                      {"CC", "gemm_sycl_register_16x16_k16_wide_cc"}}},
         {64, 32, 16, {{"NN", "gemm_sycl_register_64x32_k16_wide"}, {"NT", "gemm_sycl_register_64x32_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_64x32_k16_wide_nc"}, {"TN", "gemm_sycl_register_64x32_k16_wide_tn"},
-                      {"CN", "gemm_sycl_register_64x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_64x32_k16_wide_ct"}}},
+                      {"CN", "gemm_sycl_register_64x32_k16_wide_cn"}, {"CT", "gemm_sycl_register_64x32_k16_wide_ct"},
+                      {"CC", "gemm_sycl_register_64x32_k16_wide_cc"}},
+                     {"CC"}},
         {32, 64, 16, {{"NN", "gemm_sycl_register_32x64_k16_wide"}, {"NT", "gemm_sycl_register_32x64_k16_wide_nt"},
                       {"NC", "gemm_sycl_register_32x64_k16_wide_nc"}, {"TN", "gemm_sycl_register_32x64_k16_wide_tn"},
-                      {"CN", "gemm_sycl_register_32x64_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x64_k16_wide_ct"}}},
+                      {"CN", "gemm_sycl_register_32x64_k16_wide_cn"}, {"CT", "gemm_sycl_register_32x64_k16_wide_ct"},
+                      {"CC", "gemm_sycl_register_32x64_k16_wide_cc"}},
+                     {"CC"}},
         {64, 64, 8, {{"NN", "gemm_sycl_register_64x64_k8_wide"}, {"NT", "gemm_sycl_register_64x64_k8_wide_nt"},
                      {"NC", "gemm_sycl_register_64x64_k8_wide_nc"}, {"TN", "gemm_sycl_register_64x64_k8_wide_tn"},
                      {"TT", "gemm_sycl_register_64x64_k8_wide_tt"}, {"TC", "gemm_sycl_register_64x64_k8_wide_tc"},
@@ -193,7 +211,7 @@ const std::vector<WideRow>& wide_rows() {
                       {"TC", "gemm_sycl_register_128x128_k8_wide_tc"}, {"TC+aligned", "gemm_sycl_register_128x128_k8_wide_tc_aligned"},
                       {"CN", "gemm_sycl_register_128x128_k8_wide_cn"}, {"CN+aligned", "gemm_sycl_register_128x128_k8_wide_cn_aligned"},
                       {"CT", "gemm_sycl_register_128x128_k8_wide_ct"}, {"CT+aligned", "gemm_sycl_register_128x128_k8_wide_ct_aligned"},
-                      {"CC", "gemm_sycl_register_128x128_k8_wide_cc"}, {"CC+aligned", "gemm_sycl_register_128x128_k8_wide_cc_aligned"}}, true},
+                      {"CC", "gemm_sycl_register_128x128_k8_wide_cc"}, {"CC+aligned", "gemm_sycl_register_128x128_k8_wide_cc_aligned"}}, {}, true},
     };
     return rows;
 }
@@ -236,6 +254,11 @@ bool wide_compiled(const WideRow& row) {
 template <typename T>
 bool wide_v2(const WideRow& row) {
     return (row.m == 64 && row.n == 64 && !std::is_same_v<T, double>) || (row.cf_only && wide_compiled<T>(row));
+}
+// Does the row instantiate wide form f for scalar T?
+template <typename T>
+bool wide_row_serves(const WideRow& row, const std::string& f) {
+    return wide_compiled<T>(row) && row.trace.count(f) > 0 && (!kCx<T> || row.real_only.count(f) == 0);
 }
 // The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
 // (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
@@ -295,11 +318,11 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
         },
         [&](const og::Wide& w) {
             const WideRow* row = wide_row(w);
-            return row && wide_compiled<T>(*row) && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
+            return row && wide_fits<T>(*row) && wide_row_serves<T>(*row, wide_form<T>(ta, tb));
         },
         [&](const og::SplitK& sk) {
             const WideRow* row = splitk_row(sk);
-            return row && wide_fits<T>(*row) && row->trace.count(wide_form<T>(ta, tb)) > 0;
+            return row && wide_fits<T>(*row) && wide_row_serves<T>(*row, wide_form<T>(ta, tb));
         },
         [](og::Vendor) { return false; },
     }, c);
@@ -786,7 +809,7 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
         {64, 32, 12288, 24576, 24576, 24576},  {32, 64, 12288, 24576, 24576, 24576},
         {32, 32, 8192, 16384, 16384, 32768},   {16, 16, 4096, 8192, 8192, 16384}};
     for (const auto& t : trans) {
-        const og::WideCfg c{t.m, t.n, 16, 4, 4, og::kWideAll};
+        const og::WideCfg c{t.m, t.n, 16, 4, 4, og::kWideAll, og::kWideRealAll};
         EXPECT_EQ(og::wide_slm_bytes<float>(c), t.f) << t.m << "x" << t.n;
         EXPECT_EQ(og::wide_slm_bytes<double>(c), t.d) << t.m << "x" << t.n;
         EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(c), t.cf) << t.m << "x" << t.n;
@@ -859,7 +882,7 @@ std::pair<int, int> missing_instantiations() {
                                std::find(row->forms.begin(), row->forms.end(), reg_form(ta, tb)) == row->forms.end();
                 } else if (const auto* w = std::get_if<og::Wide>(&c)) {
                     const WideRow* row = wide_row(*w);
-                    wide += !row || row->trace.count(wide_form<T>(ta, tb)) == 0;
+                    wide += !row || !wide_row_serves<T>(*row, wide_form<T>(ta, tb));
                 }
             }
     return {reg, wide};
@@ -897,8 +920,9 @@ TYPED_TEST(GemmCandidates, TransposedPinOnAMissingInstantiationThrows) {
     }
     const auto [reg_missing, wide_missing] = missing_instantiations<T>();
     EXPECT_GE(checked, reg_missing + wide_missing) << "every (config, form) the oracle rows do not list";
-    // Pinned apart from the rows: complex 0+5+5+3+3+3+3, real (T folds to C) 0+5+5+4+4+4+4.
-    EXPECT_EQ(wide_missing, kCx<T> ? 22 : 26) << "a wide oracle row changed its forms";
+    // Pinned apart from the rows: complex 0+5+5+0+0+3+3 (128x32 and 32x128 miss NN, TT, TC, CT, CC;
+    // 64x32 and 32x64 TT, TC, CC), real (T folds to C) 0+1+1 (NN): every other row serves all nine.
+    EXPECT_EQ(wide_missing, kCx<T> ? 16 : 2) << "a wide oracle row changed its forms";
     // Float: four NN-only tiles x 8 transposed (ta, tb), 128x64x16's NN, 32x128x16's NT and NC.
     if constexpr (std::is_same_v<T, float>) EXPECT_EQ(reg_missing, 4 * 8 + 1 + 2) << "a reg oracle row changed its forms";
     EXPECT_GT(checked, 0);
@@ -1464,7 +1488,7 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
 }
 
 // WP-E, the skinny wide tiles 64x32 and 32x64 (128 lanes) in every form they instantiate (complex
-// six, real five: CT folds to the uncompiled CC). The NN 64x32x256 b128 target and its mirror at
+// six; real all nine, WP-T's CC serving TT, TC, CT). The NN 64x32x256 b128 target and its mirror at
 // batch 1024 strided (staged epilogue) and 128 padded (band store), 7 distinct problems; then m and
 // n straddling the 32 and 64 tile edges both ways, ragged k on the +1 side, on both layouts. A
 // band separation or tile count derived from the other extent is wrong only on a non-square tile;
@@ -1494,7 +1518,7 @@ TYPED_TEST(GemmCandidates, SkinnyWideTilesEveryFormAtSaturatingBatchAndTileEdges
                     if (::testing::Test::HasFatalFailure()) return;
                     ++ran;
                 }
-    EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 5));
+    EXPECT_EQ(ran, 2 * int(shapes.size()) * (kCx<T> ? 6 : 9));
 }
 
 // WP-L, split-k on every host tile, s and form. k = 300 slices unevenly (kc = 160, 80, 48: the last
@@ -1548,9 +1572,9 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
                 ++repeated;
             }
     }
-    // 6 hosts x 3 slice counts over the (ta, tb) pairs: 128x32 and 32x128 serve four, the four
-    // small tiles six (complex) or five (real: T folds to C, so no TT, TC, CT, CC)
-    const int forms = kCx<T> ? 3 * (2 * 4 + 4 * 6) : 3 * (2 * 4 + 4 * 5);
+    // 6 hosts x 3 slice counts over the (ta, tb) pairs. Complex: 128x32 and 32x128 four, 32x32 and
+    // 16x16 nine, 64x32 and 32x64 six. Real (T folds to C, CC serving TT, TC, CT): 8, 8, then 9 each.
+    const int forms = kCx<T> ? 3 * (2 * 4 + 2 * 9 + 2 * 6) : 3 * (2 * 8 + 4 * 9);
     EXPECT_EQ(ran, 3 * forms);
     EXPECT_EQ(nan_checked, forms);
     EXPECT_EQ(repeated, forms);
@@ -1632,7 +1656,8 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
                                         {w.m + 1, w.n + 1, 37, Layout::Gap1, 3, true},
                                         {w.m + 1, w.n + 1, 37, Layout::Padded, 3, true}};
         const bool skinny = w.m == 128 || w.n == 128;
-        expected += int(shapes.size()) * (skinny ? 4 : (kCx<T> ? 6 : 5));
+        const bool skinny_wp_e = (w.m == 64) != (w.n == 64);
+        expected += int(shapes.size()) * (!kCx<T> ? (skinny ? 8 : 9) : skinny ? 4 : skinny_wp_e ? 6 : 9);
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 Spec probe{ta, tb, 2 * w.m, 2 * w.n, 48, 3, Layout::Padded};
@@ -2190,13 +2215,16 @@ TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
 TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
-    const Spec tt{kT, kT, 40, 30, 20, 2, Layout::Strided};  // a form wide 32x32 does not instantiate
-    const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=32:n=32:k=16");
+    static_assert(og::wide_configs[1].m == 128 && og::wide_configs[1].n == 32 &&
+                      !og::wide_compiles<T>(og::wide_configs[1], 0, 0),
+                  "the env pin below must name a wide tile with no NN build");
+    const Spec unserved{kN, kN, 40, 30, 20, 2, Layout::Strided};
+    const ScopedEnvVar env("BATCHLAS_GEMM_ROUTE", "wide:m=128:n=32:k=16");
     {
-        auto p = make_problem<T>(tt);
+        auto p = make_problem<T>(unserved);
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
     }
-    auto p = make_problem<T>(tt);
+    auto p = make_problem<T>(unserved);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("gemm", C{og::Tiled{}});
                   this->run(p);
@@ -2206,10 +2234,10 @@ TYPED_TEST(GemmCandidates, ScopedPinBeatsTheEnvironment) {
     const Pin outer("gemm", C{og::Direct{}});
     {
         const Pin inner("gemm", C{og::Tiled{}});
-        auto r = make_problem<T>(tt);
+        auto r = make_problem<T>(unserved);
         EXPECT_EQ(traced_choice([&] { this->run(r); }), "tiled");
     }
-    auto r = make_problem<T>(tt);
+    auto r = make_problem<T>(unserved);
     EXPECT_EQ(traced_choice([&] { this->run(r); }), "direct") << "the inner pin did not restore the outer";
     expect_gemm(*this->ctx, r, "outer direct");
 }

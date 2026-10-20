@@ -92,7 +92,8 @@ inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kW
 inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
 inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
 inline constexpr unsigned kWideAll = 0x1FF;
-inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC | kWideCC);
+inline constexpr unsigned kWideRealAll = kWideNN | kWideNC | kWideCN | kWideCC;
+inline constexpr unsigned kWideNoTTTCCC = kWideAll & ~(kWideTT | kWideTC | kWideCC);
 
 /// The scalars a wide config compiles for, as a bit set over float, double, complex<float>, complex<double>.
 inline constexpr unsigned kWideF = 1, kWideD = 2, kWideCF = 4, kWideCD = 8, kWideAllScalars = 0xF;
@@ -105,30 +106,37 @@ constexpr unsigned wide_scalar_bit() {
          : std::is_same_v<T, std::complex<float>> ? kWideCF : kWideCD;
 }
 
-/// One compiled wide config, the forms a complex scalar instantiates, the scalars it compiles for
-/// and whether a tile other than 64x64 runs wide v2 (GemmWide64Body). A real scalar compiles only
-/// the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
+/// One compiled wide config: complex forms, the N/C forms a real scalar compiles (wide_serves),
+/// the scalars it compiles for and whether a tile other than 64x64 runs wide v2 (GemmWide64Body).
 struct WideCfg {
     int m, n, k, ttm, ttn;
-    unsigned forms;
+    unsigned forms, real;
     unsigned scalars = kWideAllScalars;
     bool v2 = false;
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
-    constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
+    template <bool Complex>
+    constexpr bool has(int a, int b) const { return ((Complex ? forms : real) & wide_bit(a, b)) != 0; }
     template <class T>
     constexpr bool compiles() const { return (scalars & wide_scalar_bit<T>()) != 0; }
 };
+// Real CC (its TT) everywhere. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
 inline constexpr std::array<WideCfg, 9> wide_configs{{
-    {64, 64, 16, 4, 4, kWideAll},
-    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
-    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, kWideSmallTileForms},
-    {16, 16, 16, 2, 2, kWideSmallTileForms},
-    {64, 32, 16, 4, 4, kWideSmallTileForms},
-    {32, 64, 16, 4, 4, kWideSmallTileForms},
-    {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
-    {128, 128, 8, 8, 8, kWideAll, kWideCF, true},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
+    {64, 64, 16, 4, 4, kWideAll, kWideRealAll},
+    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN, kWideNC | kWideCN | kWideCC},  // potrf update, W = 32
+    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC, kWideNC | kWideCN | kWideCC},  // geqrf V^H A22, nb = 32
+    {32, 32, 16, 4, 4, kWideAll, kWideRealAll},
+    {16, 16, 16, 2, 2, kWideAll, kWideRealAll},
+    {64, 32, 16, 4, 4, kWideNoTTTCCC, kWideRealAll},
+    {32, 64, 16, 4, 4, kWideNoTTTCCC, kWideRealAll},
+    {64, 64, 8, 4, 4, kWideAll, kWideRealAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
+    {128, 128, 8, 8, 8, kWideAll, 0, kWideCF, true},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
 }};
+// wide_compiles would silently ignore a T bit in `real`; real NN never outgrows complex NN.
+static_assert([] {
+    for (const WideCfg& c : wide_configs)
+        if ((c.real & ~kWideRealAll) != 0 || ((c.real & kWideNN) && !(c.forms & kWideNN))) return false;
+    return true;
+}(), "WideCfg::real lists only N/C forms, and real NN only where complex NN is listed");
 
 /// Does this row run wide v2 (GemmWide64Body) for T? 64x64 for every scalar but double, and every
 /// v2 row for the scalars it compiles.
@@ -153,12 +161,16 @@ constexpr std::int64_t splitk_item_bytes(std::int64_t m, std::int64_t n, int s) 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
 
+/// Does config c compile (op(A), op(B)) for scalar T? A real T compiles no T form.
+template <class T>
+constexpr bool wide_compiles(const WideCfg& c, int a, int b) {
+    return c.compiles<T>() && (is_complex_v<T> || (a != 1 && b != 1)) && c.has<is_complex_v<T>>(a, b);
+}
 /// Does config c serve (op(A), op(B)) for scalar T? A real T folds to C (the build it compiles).
 template <class T>
 constexpr bool wide_serves(const WideCfg& c, int a, int b) {
-    if (!c.compiles<T>()) return false;
-    if constexpr (is_complex_v<T>) return c.has(a, b);
-    else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
+    if constexpr (is_complex_v<T>) return wide_compiles<T>(c, a, b);
+    else return wide_compiles<T>(c, a == 0 ? 0 : 2, b == 0 ? 0 : 2);
 }
 
 /// Shared stages of a wide config's k x (m + n) tile: two for wide v2 (wide_v2_row) and for a
