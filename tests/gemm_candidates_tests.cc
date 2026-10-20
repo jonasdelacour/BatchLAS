@@ -136,6 +136,19 @@ const std::vector<RegRow>& reg_rows() {
           {"TN", "gemm_sycl_register_128x128_k8_s4_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
           {"TT", "gemm_sycl_register_128x128_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
          33792},
+        // WP-W: one copy_async kernel; +aligned is its 16-byte packet leg (TN has no packet operand).
+        {256, 128, 8, 4, {"NN", "NT", "TN", "TT"},
+         {{"NN", "gemm_sycl_register_256x128_k8_s4"}, {"NN+aligned", "gemm_sycl_register_256x128_k8_s4_aligned"},
+          {"NT", "gemm_sycl_register_256x128_k8_s4_nt"}, {"NT+aligned", "gemm_sycl_register_256x128_k8_s4_nt_aligned"},
+          {"TN", "gemm_sycl_register_256x128_k8_s4_tn"},
+          {"TT", "gemm_sycl_register_256x128_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_256x128_k8_s4_tt_aligned"}},
+         50176},
+        {128, 256, 8, 4, {"NN", "NT", "TN", "TT"},
+         {{"NN", "gemm_sycl_register_128x256_k8_s4"}, {"NN+aligned", "gemm_sycl_register_128x256_k8_s4_aligned"},
+          {"NT", "gemm_sycl_register_128x256_k8_s4_nt"}, {"NT+aligned", "gemm_sycl_register_128x256_k8_s4_nt_aligned"},
+          {"TN", "gemm_sycl_register_128x256_k8_s4_tn"},
+          {"TT", "gemm_sycl_register_128x256_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_128x256_k8_s4_tt_aligned"}},
+         50176},
     };
     return rows;
 }
@@ -1519,6 +1532,160 @@ TYPED_TEST(GemmCandidates, Reg128x128BetaZeroKeepsNegativeZero) {
         }
         if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
         EXPECT_EQ(ran, 12 * rows);
+    }
+}
+
+// WP-W, the 256x128 and 128x256 copy_async tiles in every form. m, n straddle the tiles (255/257,
+// 127/129, 300 x 200: interior, edge and corner groups) and k the slab and stage counts: 1 slab (k = 5,
+// 8), 2 (9, 16), 3 = the prologue alone (24), 4, 5, 6, 8, 9 and 17 slabs, so the zero-filled slabs
+// past k land in each buffer. Element leg: Strided, Gap1 (ld = m + 1), OddLd, ItemSkew (whole-granule
+// ld, skewed items); 16-byte packet leg: Padded and Packed, a granule clipped at m = 255 and n = 127.
+// k tails under NaN poison (a dropped k bound reads NaN). Batch 1024 repeating 7 problems at
+// beta != 0, each item bit-identical to its representative; then beta = 0 with NaN in C.
+// evidence: docs/perf/gemm.md#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages
+TYPED_TEST(GemmCandidates, RegLargeTilesEveryFormSlabCountAndLegAtSaturatingBatch) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        struct Leg { int m, n, k; Layout layout; bool nan; };
+        const Leg legs[] = {{256, 128, 5, Layout::Strided, true},    {128, 256, 8, Layout::Gap1, false},
+                            {257, 129, 9, Layout::OddLd, true},      {255, 127, 16, Layout::Padded, false},
+                            {300, 200, 24, Layout::Strided, false},  {256, 256, 32, Layout::Gap1, false},
+                            {300, 200, 37, Layout::Gap1, true},      {300, 200, 40, Layout::Packed, false},
+                            {257, 255, 40, Layout::ItemSkew, false}, {264, 136, 48, Layout::Padded, true},
+                            {256, 128, 64, Layout::OddLd, false},    {128, 256, 69, Layout::Gap1, true},
+                            {257, 129, 136, Layout::Strided, false}};
+        const Leg nan_legs[] = {{257, 129, 9, Layout::OddLd, false}, {255, 127, 16, Layout::Padded, false},
+                                {300, 200, 37, Layout::Gap1, false}};
+        int ran = 0, rows = 0;
+        for (auto [tm, tn] : {std::pair{256, 128}, std::pair{128, 256}}) {
+            const C c{og::Reg{tm, tn, 8, 4}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            auto check = [&](const Leg& leg, Transpose ta, Transpose tb, bool nan_c) {
+                Spec s{ta, tb, leg.m, leg.n, leg.k, nan_c ? 3 : 1024, leg.layout};
+                s.period = nan_c ? 0 : 7;
+                s.beta_zero = s.nan_c = nan_c;
+                s.nan_poison = leg.nan;
+                s.seed = 9800u + leg.m + leg.k + tm;
+                ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                auto p = make_problem<T>(s);
+                this->run_pinned(c, p);
+                expect_gemm(*this->ctx, p, name(c, s) + (nan_c ? " (NaN C)" : ""));
+                ++ran;
+            };
+            for (auto [ta, tb] : forms) {
+                for (const Leg& leg : legs) {
+                    check(leg, ta, tb, false);
+                    if (::testing::Test::HasFatalFailure()) return;
+                }
+                for (const Leg& leg : nan_legs) {
+                    check(leg, ta, tb, true);
+                    if (::testing::Test::HasFatalFailure()) return;
+                }
+            }
+        }
+        if (rows == 0) GTEST_SKIP() << "the large tiles are above this device's local memory budget";
+        EXPECT_EQ(ran, 80 * rows);
+    }
+}
+
+// WP-W: beta = 0 stores alpha * acc (A = 0, alpha = -1: every element -0.0) on both legs of both
+// large tiles, and the leg is derived from the packet operands alone (A in NN/NT, B^T in NT/TT): a
+// misaligned k-contiguous operand keeps the 16-byte leg, a misaligned packet operand refuses it.
+TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        // The leg each (A, B) layout pair takes, by kernel trace (first: a threadsafe death test re-runs
+        // the test body up to the EXPECT_EXIT in its child).
+        struct Case { C c; Spec s; std::string kernel; };
+        std::vector<Case> cases;
+        if (!reg_fits(*reg_row(og::Reg{256, 128, 8, 4})) && !reg_fits(*reg_row(og::Reg{128, 256, 8, 4})))
+            GTEST_SKIP() << "the large tiles are above this device's local memory budget";
+        const std::pair<Layout, Layout> pairs[] = {{Layout::Padded, Layout::Padded}, {Layout::Padded, Layout::OddLd},
+                                                   {Layout::OddLd, Layout::Padded},  {Layout::Padded, Layout::ItemSkew},
+                                                   {Layout::ItemSkew, Layout::Padded}, {Layout::Gap1, Layout::Gap1}};
+        auto vec_ok = [](Layout l) { return l == Layout::Padded; };
+        for (auto [tm, tn] : {std::pair{256, 128}, std::pair{128, 256}}) {
+            const C c{og::Reg{tm, tn, 8, 4}};
+            if (!reg_fits(*reg_row(std::get<og::Reg>(c)))) continue;
+            for (Transpose ta : {kN, kT})
+                for (Transpose tb : {kN, kT})
+                    for (auto [la, lb] : pairs) {
+                        Spec s{ta, tb, 160, 136, 48, 2, la};
+                        s.layout_b = lb;
+                        const bool pa = ta == kN, pb = tb != kN;
+                        const bool vec = (pa || pb) && (!pa || vec_ok(la)) && (!pb || vec_ok(lb));
+                        const std::string f = reg_form(ta, tb);
+                        cases.push_back({c, s, reg_row(std::get<og::Reg>(c))->trace.at(vec ? f + "+aligned" : f)});
+                    }
+        }
+        const std::string path = ::testing::TempDir() + "gemm_ktrace_large.json";
+        std::filesystem::remove(path);
+        const ScopedEnvVar on("BATCHLAS_KERNEL_TRACE", "1");
+        const ScopedEnvVar where("BATCHLAS_KERNEL_TRACE_PATH", path.c_str());
+        auto child = [&] {
+            for (const auto& k : cases) {
+                auto p = make_problem<T>(k.s);
+                this->run_pinned(k.c, p);
+            }
+            std::exit(0);
+        };
+        ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+        EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+        std::vector<std::string> got;
+        std::ifstream in(path);
+        for (std::string line; std::getline(in, line);) {
+            const auto at = line.find("\"name\":\"gemm_sycl_");
+            if (at == std::string::npos) continue;
+            const auto b = at + 8;
+            got.push_back(line.substr(b, line.find('"', b) - b));
+        }
+        std::filesystem::remove(path);
+        ASSERT_EQ(got.size(), cases.size()) << "one native kernel per pinned call";
+        for (std::size_t i = 0; i < cases.size(); ++i) EXPECT_EQ(got[i], cases[i].kernel) << name(cases[i].c, cases[i].s);
+        // And the values: every pair's result is right (the 16-byte leg on a misaligned operand faults).
+        for (const auto& k : cases) {
+            auto p = make_problem<T>(k.s);
+            this->run_pinned(k.c, p);
+            expect_gemm(*this->ctx, p, name(k.c, k.s));
+            if (::testing::Test::HasFatalFailure()) return;
+        }
+        int ran = 0, rows = 0;
+        for (auto [tm, tn] : {std::pair{256, 128}, std::pair{128, 256}}) {
+            const C c{og::Reg{tm, tn, 8, 4}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            for (auto [ta, tb] : {std::pair{kN, kN}, std::pair{kN, kT}, std::pair{kT, kN}, std::pair{kT, kT}})
+                for (Layout lay : {Layout::Gap1, Layout::Padded}) {
+                    Spec s{ta, tb, 300, 200, 32, 3, lay};
+                    s.beta_zero = s.nan_c = true;
+                    auto p = make_problem<T>(s);
+                    for (int it = 0; it < s.batch; ++it)
+                        for (int j = 0; j < p.a.cols; ++j)
+                            for (int i = 0; i < p.a.rows; ++i) p.mem[Problem<T>::at(p.a, it, i, j)] = T(0);
+                    p.alpha = T(-1);
+                    this->run_pinned(c, p);
+                    int bad = 0;
+                    for (int it = 0; it < s.batch; ++it)
+                        for (int j = 0; j < s.n; ++j)
+                            for (int i = 0; i < s.m; ++i) {
+                                const T v = p.mem[Problem<T>::at(p.c, it, i, j)];
+                                bad += !(v == T(0) && std::signbit(v));
+                            }
+                    EXPECT_EQ(bad, 0) << name(c, s);
+                    ++ran;
+                }
+        }
+        EXPECT_EQ(ran, 8 * rows);
     }
 }
 

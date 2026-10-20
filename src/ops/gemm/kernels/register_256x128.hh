@@ -290,9 +290,8 @@ Event launch_register_k8_s4_large(Queue& ctx, const MatrixView<float, MatrixForm
     auto aligned = [](const float* p, int ld, std::ptrdiff_t stride) {
         return (reinterpret_cast<std::uintptr_t>(p) % 16) == 0 && ld % 4 == 0 && stride % 4 == 0;
     };
-    const char* e = std::getenv("BATCHLAS_W_NOVEC");  // WP-W EXPLORATION ONLY (remove before shipping)
     if constexpr (pa || pb) {
-        if (!(e && *e == '1') && (!pa || aligned(A.data_ptr(), A.ld(), A.stride())) &&
+        if ((!pa || aligned(A.data_ptr(), A.ld(), A.stride())) &&
             (!pb || aligned(B.data_ptr(), B.ld(), B.stride())))
             return launch_register_k8_s4_large_leg<TM, TN, OpA, OpB, true>(ctx, A, B, C, alpha, beta,
                                                                            aligned_trace_name);

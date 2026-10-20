@@ -221,6 +221,7 @@ public:
             // family: reg
             "src/ops/gemm/kernels/load_policies.hh",
             "src/ops/gemm/kernels/register_128x128.hh",
+            "src/ops/gemm/kernels/register_256x128.hh",
             "src/ops/gemm/kernels/copy_async.hh",
             "src/ops/gemm/kernels/vec4.hh",
             // family: wide

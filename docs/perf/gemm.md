@@ -24,7 +24,9 @@ timed cells (< 1 is faster than cuBLAS). Each row is a full coarse pass of the k
 
 double: 1 losing cell (1.05×) in the shipped table. What is left (median loss 1.08×): float TT/TN/NN strided
 mid shapes on `reg:m=128:n=128:k=8:u=4` and strided skinny shapes on the wide tiles; complex<float> NT/NC
-strided skinny and mid shapes. Every work package has its own section below.
+strided skinny and mid shapes. [WP-W](#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages) adds
+256×128 and 128×256 float tiles that take the float mid shapes to 0.95-1.04× vendor (pinned; not yet in the
+table). Every work package has its own section below.
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
@@ -65,7 +67,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 23, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
+`small`. Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -74,6 +76,7 @@ Forms are folded after the real-scalar C→T fold:
 | `direct`, `tiled`, `small` | any |
 | `reg:m=32:n=32:k=8:u=1`, `reg:m=64:n=64:k=8:u=1` | NN |
 | `reg:m=64:n=64:k=16:u=1`, `reg:m=128:n=128:k=8:u=1`, `reg:m=128:n=128:k=8:u=4` | NN NT TN TT |
+| `reg:m=256:n=128:k=8:u=4`, `reg:m=128:n=256:k=8:u=4` | NN NT TN TT (see [WP-W](#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages)) |
 | `reg:m=128:n=32:k=16:u=1`, `reg:m=128:n=32:k=32:u=1` | NN NT TN TT |
 | `reg:m=128:n=64:k=16:u=1` | NT TN TT |
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
