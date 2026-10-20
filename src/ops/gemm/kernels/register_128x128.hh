@@ -474,7 +474,9 @@ BATCHLAS_UNROLL_FULL
                     }
                 }
                 // Predicated leg: the pass's 16 priors are loaded after the stage write (its
-                // accumulators are dead) and before the barrier, all in flight at once (inline, each load waited before its store).
+                // accumulators are dead) and before the barrier, all in flight at once. Read inline, each
+                // load waited before its store: 0.84x u4's time at 256x512x78 strided.
+                // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
                 [[maybe_unused]] T prior[4][4];
                 if constexpr (!AlignedFastPath) {
                     const bool bz = beta == T(0);
@@ -643,13 +645,12 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
     return ctx.get_event();
 }
 
-// Short k is store-bound, and there the direct epilogue's four 128-byte
-// column pieces per store run DRAM measurably slower than whole columns; at
-// long k the staging round trip costs more than it saves. An epilogue choice on
-// either leg, never a routing term. Stages > 2 is the copy_async pipeline; its predicated NN
-// instance stays direct (staged spilled 12 B at the 128 cap, and uncapped ran 159 registers).
+// The aligned leg: short k is store-bound, and there the direct epilogue's four 128-byte column
+// pieces per store run DRAM measurably slower than whole columns; at long k the staging round trip
+// costs more than it saves. The predicated leg stages at every k: its direct epilogue's scalar
+// stores touched 3.7x the sectors of a staged one. An epilogue choice, never a routing term.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
-// evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
+// evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
 template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans, int Stages = 2>
 Event launch_register_128x128_k8(Queue& ctx,
@@ -659,16 +660,16 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    constexpr bool kStaged = true;
-    if constexpr (!kStaged) {
-        return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+    if constexpr (!AlignedFastPath) {
+        return launch_register_128x128_k8_leg<T, false, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                kernel_trace_name);
+    } else {
+        if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK)
+            return launch_register_128x128_k8_leg<T, true, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                    kernel_trace_name);
-    } else if (!AlignedFastPath || get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
-        return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                                  kernel_trace_name);
+        return launch_register_128x128_k8_leg<T, true, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                kernel_trace_name);
     }
-    return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                               kernel_trace_name);
 }
 
 } // namespace batchlas::sycl_gemm
