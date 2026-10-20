@@ -21,6 +21,7 @@
 
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <type_traits>
 
 namespace batchlas::sycl_gemm {
@@ -644,6 +645,76 @@ BATCHLAS_UNROLL_FULL
     }
 }
 
+// The pipelined 128x128 tile's copies (WP-V): Bytes (8 or 16) global -> local, skipping the
+// registers; the first src_bytes are read, the rest zero-filled (0: nothing is read). cp.async on
+// sm_80+ (dst_l is dst's shared-window address), a plain copy elsewhere; the barrier after the wait
+// orders either. evidence: docs/perf/gemm.md#gemm-wp-v-cp-async-stages-for-the-128x128-complex-float-tile
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__) && defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
+#define BATCHLAS_WIDE_CP_ASYNC 1
+#else
+#define BATCHLAS_WIDE_CP_ASYNC 0
+#endif
+template <int Bytes>
+inline void cp_async(float* dst, [[maybe_unused]] std::uint32_t dst_l, const float* src, std::uint32_t src_bytes) {
+#if BATCHLAS_WIDE_CP_ASYNC
+    if constexpr (Bytes == 16)
+        asm volatile("cp.async.cg.shared.global.L2::128B [%0], [%1], 16, %2;" ::"r"(dst_l), "l"(src), "r"(src_bytes)
+                     : "memory");
+    else
+        asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], 8, %2;" ::"r"(dst_l), "l"(src), "r"(src_bytes)
+                     : "memory");
+#else
+BATCHLAS_UNROLL_FULL
+    for (int e = 0; e < Bytes / 4; ++e) dst[e] = 4u * e < src_bytes ? src[e] : 0.0f;
+#endif
+}
+inline void cp_async_commit() {
+#if BATCHLAS_WIDE_CP_ASYNC
+    asm volatile("cp.async.commit_group;" ::: "memory");
+#endif
+}
+template <int N>
+inline void cp_async_wait() {
+#if BATCHLAS_WIDE_CP_ASYNC
+    asm volatile("cp.async.wait_group %0;" ::"n"(N) : "memory");
+#endif
+}
+
+// One operand's slab of a complex<float> lane (CF = 2) straight into the sstore layout; p is the
+// lane's first element of this slab. Along i a granule is two consecutive elements: one 16-byte
+// copy on the 16-byte leg, src-size cut to the elements inside i_lim, else two 8-byte ones. Along
+// k the granule pairs two columns, so every element is its own 8-byte copy.
+template <bool VecLoads, bool KC, int KStep, int TileK, int RowE>
+inline void acopy(float* s, std::uint32_t s_l, const float* p, int ld, int k0, int kb, int ib, int ibs, int k,
+                  int i_lim) {
+    constexpr int CF = 2, RowF = RowE * CF;
+BATCHLAS_UNROLL_FULL
+    for (int c = 0; c < CF; ++c) {
+        if constexpr (!KC) {
+            const int kk = kb + c * KStep;
+            const int o = kk * RowF + (((ibs >> 1) ^ swz<CF, TileK>(kk)) << 2);
+            const float* src = p + static_cast<std::ptrdiff_t>(c) * KStep * ld * CF;
+            const bool kin = k0 + kk < k;
+            if constexpr (VecLoads) {
+                const int left = i_lim - ib;
+                cp_async<16>(s + o, s_l + 4u * o, src, !kin || left <= 0 ? 0u : left == 1 ? 8u : 16u);
+            } else {
+BATCHLAS_UNROLL_FULL
+                for (int q = 0; q < 2; ++q)
+                    cp_async<8>(s + o + 2 * q, s_l + 4u * (o + 2 * q), src + q * CF, kin && ib + q < i_lim ? 8u : 0u);
+            }
+        } else {
+BATCHLAS_UNROLL_FULL
+            for (int q = 0; q < 2; ++q) {
+                const int kk = kb + q;
+                const int o = kk * RowF + (((ibs >> 1) ^ swz<CF, TileK>(kk)) << 2) + 2 * c;
+                cp_async<8>(s + o, s_l + 4u * o, p + (static_cast<std::ptrdiff_t>(c) * ld + q) * CF,
+                            k0 + kk < k && ib + c < i_lim ? 8u : 0u);
+            }
+        }
+    }
+}
+
 }  // namespace wide_v2
 
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled. Two groups per CU for
@@ -653,10 +724,14 @@ BATCHLAS_UNROLL_FULL
 // 128x128 (complex<float> only, WP-O; one group per CU): each operand is two 64-wide halves,
 // staged with the 64x64 lane map, KStep and swizzle, the second 64 down i; the thread tile is 8x8.
 // evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
-template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64>
+template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64,
+          int Stages_ = 2>
 struct GemmWide64Body {
     using D = typename wide_scalar::DevMap<T>::type;
     static constexpr int TileM = TileM_, TileN = TileN_, TileK = TileK_, Threads = 256;
+    // Stages > 2: that many local slabs filled by cp.async, Stages - 1 in flight, no register prefetch.
+    static constexpr int Stages = Stages_;
+    static constexpr bool kPipe = Stages > 2;
     static constexpr int TTM = TileM / 16, TTN = TileN / 16;    // thread tile over 16 x 16 lanes
     static constexpr int CF = static_cast<int>(sizeof(D) / sizeof(float));
     static constexpr int VecN = 4 / CF;
@@ -684,6 +759,7 @@ struct GemmWide64Body {
     static_assert(TileK == 16 || TileK == 8, "first_k and swz map these two slab depths");
     static_assert(TileM * TileN == 4096 || TileK == 8, "a larger tile at k = 16 needs > 48 KiB and NR = 4");
     static_assert(GPR * TileK == CF * OpThreads, "CF granules per staging lane per operand");
+    static_assert(!kPipe || (CF == 2 && Split), "the cp.async slabs are complex<float> at TileK = 8 (wide_v2::acopy)");
 
     const float* a_ptr;
     const float* b_ptr;
@@ -812,29 +888,77 @@ BATCHLAS_UNROLL_FULL
         // One barrier per slab, as in the 128x128 kernel: slab s+1 is stored into the buffer
         // slab s-1 was read from, and every read of it finished before the barrier ending s-1.
         const int slabs = (k + TileK - 1) / TileK;
-        load(0);
-        store(0);
-        item.barrier(sycl::access::fence_space::local_space);
-        int s = 0;
-        for (; s + 1 < slabs; s += 2) {
-            load((s + 1) * TileK);
-            compute(0);
-            store(1);
+        if constexpr (kPipe) {
+            // As the 128x128 u4 pipeline: step s waits for slab s (own copies, then the barrier for
+            // everyone's), refills the buffer slab s - 1 was read from and computes. One commit per
+            // step, empty past the end, keeps the wait count at Stages - 2. Each operand pointer
+            // bumps one slab per issue; the buffer index is runtime (an unrolled ring is 4x the code).
+            std::uint32_t sa_l = 0, sb_l = 0;
+#if BATCHLAS_WIDE_CP_ASYNC
+            asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sa_l) : "l"(sa));
+            asm("{ .reg .u64 t; cvta.to.shared.u64 t, %1; cvt.u32.u64 %0, t; }" : "=r"(sb_l) : "l"(sb));
+#endif
+            const float* ga = pa;
+            const float* gb = pb;
+            auto issue = [&](int k0, int buf) __attribute__((always_inline)) {
+                if (stage_a) {
+                    static_for<HA>([&](auto h) {
+                        wide_v2::acopy<VecLoads, KA, KStep, TileK, TileM>(sa + buf * BufA, sa_l + 4u * (buf * BufA),
+                                                                         ga + h * a_half, lda, k0, a_kb, a_ib,
+                                                                         a_ib + 64 * h, k, m - m0 - 64 * h);
+                    });
+                    ga += (KA ? TileK : static_cast<std::ptrdiff_t>(TileK) * lda) * CF;
+                } else {
+                    static_for<HB>([&](auto h) {
+                        wide_v2::acopy<VecLoads, KB, KStep, TileK, TileN>(sb + buf * BufB, sb_l + 4u * (buf * BufB),
+                                                                         gb + h * b_half, ldb, k0, b_kb, b_ib,
+                                                                         b_ib + 64 * h, k, n - n0 - 64 * h);
+                    });
+                    gb += (KB ? TileK : static_cast<std::ptrdiff_t>(TileK) * ldb) * CF;
+                }
+            };
+BATCHLAS_UNROLL_FULL
+            for (int j = 0; j < Stages - 1; ++j) {
+                if (j < slabs) issue(j * TileK, j);
+                wide_v2::cp_async_commit();
+            }
+            int buf = 0;
+#pragma unroll 1
+            for (int s = 0; s < slabs; ++s) {
+                wide_v2::cp_async_wait<Stages - 2>();
+                item.barrier(sycl::access::fence_space::local_space);
+                const int nb = buf == 0 ? Stages - 1 : buf - 1;
+                if (s + Stages - 1 < slabs) issue((s + Stages - 1) * TileK, nb);
+                wide_v2::cp_async_commit();
+                compute(buf);
+                buf = buf + 1 == Stages ? 0 : buf + 1;
+            }
+            wide_v2::cp_async_wait<0>();
+        } else {
+            load(0);
+            store(0);
             item.barrier(sycl::access::fence_space::local_space);
-            const bool more = s + 2 < slabs;
-            if (more) load((s + 2) * TileK);
-            compute(1);
-            if (more) store(0);
-            item.barrier(sycl::access::fence_space::local_space);
+            int s = 0;
+            for (; s + 1 < slabs; s += 2) {
+                load((s + 1) * TileK);
+                compute(0);
+                store(1);
+                item.barrier(sycl::access::fence_space::local_space);
+                const bool more = s + 2 < slabs;
+                if (more) load((s + 2) * TileK);
+                compute(1);
+                if (more) store(0);
+                item.barrier(sycl::access::fence_space::local_space);
+            }
+            if (s < slabs) compute(0);  // an odd slab count ends in buffer 0, with no barrier after
         }
-        if (s < slabs) compute(0);  // an odd slab count ends in buffer 0, with no barrier after
 
         // The NN kernel's epilogue: the 16-byte band store for a group inside C with 16-byte
         // columns, the WP-B staged store (lo = both A buffers, hi = both B; two passes at TileK = 8) for any other.
         const bool beta_zero = wide_scalar::dev_is_zero(beta);
         const bool c_vec = a_in && b_in && ldc % VecN == 0 && reinterpret_cast<std::uintptr_t>(Cb) % 16u == 0;
         if (!c_vec) {
-            if (slabs % 2 == 1) item.barrier(sycl::access::fence_space::local_space);
+            if (kPipe || slabs % 2 == 1) item.barrier(sycl::access::fence_space::local_space);
             wide_scalar::staged_c_store<TileM, TileN, Threads, 2 * TileK * TileM, 2 * TileK * TileN, EpiBatch>(
                 item, reinterpret_cast<D*>(sa), reinterpret_cast<D*>(sb), Cb, ldc, m0, n0, m, n, tid, alpha, beta,
                 beta_zero, [&](int c0, int cw, auto slot) {
@@ -886,18 +1010,19 @@ inline bool wide64_v2_vec_loads(const MatrixView<T, MatrixFormat::Dense>& A,
     return aligned(A.data_ptr(), A.ld(), A.stride()) && aligned(B.data_ptr(), B.ld(), B.stride());
 }
 
-template <typename T, bool VecLoads, int OA, int OB, int TileK, int TileM, int TileN>
+template <typename T, bool VecLoads, int OA, int OB, int TileK, int TileM, int TileN, int Stages>
 class GemmWideV2TileKernel;
 
-template <typename T, Transpose OpA, Transpose OpB, int TileK, bool VecLoads, int TileM = 64, int TileN = 64>
+template <typename T, Transpose OpA, Transpose OpB, int TileK, bool VecLoads, int TileM = 64, int TileN = 64,
+          int Stages = 2>
 Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                            const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                            T alpha, T beta, const char* trace) {
     BATCHLAS_KERNEL_TRACE_SCOPE(trace);
-    using Body = GemmWide64Body<T, OpA, OpB, VecLoads, TileK, TileM, TileN>;
+    using Body = GemmWide64Body<T, OpA, OpB, VecLoads, TileK, TileM, TileN, Stages>;
     constexpr int oa = static_cast<int>(OpA), ob = static_cast<int>(OpB);
     using Name = std::conditional_t<TileM == 64 && TileN == 64, GemmRegister64x64K16WideKernel<T, VecLoads, oa, ob, TileK>,
-                                    GemmWideV2TileKernel<T, VecLoads, oa, ob, TileK, TileM, TileN>>;
+                                    GemmWideV2TileKernel<T, VecLoads, oa, ob, TileK, TileM, TileN, Stages>>;
     using D = typename Body::D;
     const int m = static_cast<int>(Body::KA ? A.cols() : A.rows());
     const int k = static_cast<int>(Body::KA ? A.rows() : A.cols());
@@ -906,8 +1031,8 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
     const sycl::range<3> global(static_cast<size_t>(A.batch_size()), static_cast<size_t>((m + Body::TileM - 1) / Body::TileM),
                                 static_cast<size_t>((n + Body::TileN - 1) / Body::TileN) * Body::Threads);
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(2 * Body::BufA / 4), h);
-        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(2 * Body::BufB / 4), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a(sycl::range<1>(Stages * Body::BufA / 4), h);
+        sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_b(sycl::range<1>(Stages * Body::BufB / 4), h);
         D alpha_d, beta_d;
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
@@ -925,6 +1050,17 @@ template <typename T, Transpose OpA, Transpose OpB, int TileK, int TileM = 64, i
 Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                        T alpha, T beta, const char* trace, const char* trace_vec) {
+    if constexpr (TileM == 128 && TileN == 128) {
+        constexpr int S = 4;  // WP-V experiment
+        const char* e = std::getenv("BATCHLAS_WIDE_PIPE");
+        const bool pipe = !(e && e[0] == '0') && ctx.device().cuda_compute_capability() >= 80;
+        if (pipe) {
+            if (wide64_v2_vec_loads<T>(A, B))
+                return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN, S>(ctx, A, B, C, alpha, beta,
+                                                                                      trace_vec);
+            return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN, S>(ctx, A, B, C, alpha, beta, trace);
+        }
+    }
     if (wide64_v2_vec_loads<T>(A, B))
         return launch_wide64_v2_leg<T, OpA, OpB, TileK, true, TileM, TileN>(ctx, A, B, C, alpha, beta, trace_vec);
     return launch_wide64_v2_leg<T, OpA, OpB, TileK, false, TileM, TileN>(ctx, A, B, C, alpha, beta, trace);
