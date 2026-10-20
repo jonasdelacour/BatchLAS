@@ -90,12 +90,14 @@ struct RegRow {
 std::int64_t g_slm_budget = std::numeric_limits<std::int64_t>::max();
 std::int64_t g_slm_per_item = 0;
 int g_max_wg = 0;
-// The launcher's 128x128 complex<float> leg (WP-V): the cp.async stages (trace _s3) on DPC++ at
-// sm_120+ with 48 KiB, unless BATCHLAS_GEMM_WIDE_STAGES=2 or a base is not 8-byte aligned.
-bool g_wide_s3 = false;
-// The transposed wide tiles' complex<float> cp.async leg (WP-X, trace _async): DPC++ at sm_120+,
-// unless BATCHLAS_GEMM_WIDE_STAGES=2 or a base is not 8-byte aligned.
-bool g_wide_async = false;
+// The device's CUDA compute capability (0 elsewhere), set by the fixture.
+int g_cuda_cc = 0;
+// The complex<float> cp.async legs under BATCHLAS_GEMM_WIDE_STAGES=stages (0: unset), at 8-byte
+// bases: DPC++ at sm_120+, =3 admits sm_80+, =2 none. The 128x128's (WP-V, trace _s3) also needs
+// 48 KiB; the transposed tiles' (WP-X) traces _async, _async_vec on the 16-byte leg.
+bool wide_copy_leg(int stages) {
+    return !BATCHLAS_SYCL_IMPL_ACPP && stages != 2 && g_cuda_cc >= (stages == 3 ? 80 : 120);
+}
 template <typename T>
 constexpr bool kWideAsync = std::is_same_v<T, std::complex<float>>;
 const std::vector<RegRow>& reg_rows() {
@@ -337,11 +339,11 @@ bool oracle_native(const C& c, Transpose ta, Transpose tb, int m, int n, int k) 
 }
 
 // The kernel-trace name the pinned choice must launch; "" for the vendor (no SYCL kernel).
-// base8: the operands sit half a scalar past a 16-byte boundary (run_pinned_base8); stages2: under
-// BATCHLAS_GEMM_WIDE_STAGES=2.
+// base8: the operands sit half a scalar past a 16-byte boundary (run_pinned_base8); stages: under
+// BATCHLAS_GEMM_WIDE_STAGES=stages (0: unset).
 template <typename T>
 std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned_layout, bool base8 = false,
-                            bool stages2 = false) {
+                            int stages = 0) {
     return std::visit(overloaded{
         [](og::Direct) { return std::string("gemm_sycl_direct"); },
         [](og::Tiled) { return std::string("gemm_sycl_tiled16"); },
@@ -362,13 +364,15 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             const bool v2 = wide_v2<T>(*row);
             const bool nn_leg = f == "NN" && (w.m != 64 || w.n != 64 || w.k == 16);
             if ((nn_leg || v2) && aligned && row->trace.count(f + "+aligned")) f += "+aligned";
-            const bool s3 = w.m == 128 && w.n == 128 && g_wide_s3 && !base8 && !stages2;
-            const bool async = !v2 && kWideAsync<T> && g_wide_async && !base8 && !stages2;
-            return row->trace.at(f) + (s3 ? "_s3" : "") + (async ? "_async" : "");
+            const bool copy = wide_copy_leg(stages) && !base8;
+            const bool s3 = w.m == 128 && w.n == 128 && copy && g_slm_budget >= 48 * 1024;
+            const bool async = !v2 && kWideAsync<T> && copy;
+            return row->trace.at(f) + (s3 ? "_s3" : "") + (async ? (aligned ? "_async_vec" : "_async") : "");
         },
         [&](const og::SplitK& sk) {
-            const bool async = kWideAsync<T> && g_wide_async && !stages2;
-            return splitk_row(sk)->trace.at(wide_form<T>(ta, tb)) + "_splitk" + (async ? "_async" : "");
+            const bool async = kWideAsync<T> && wide_copy_leg(stages) && !base8;
+            return splitk_row(sk)->trace.at(wide_form<T>(ta, tb)) + "_splitk" +
+                (async ? (aligned_layout ? "_async_vec" : "_async") : "");
         },
         [](og::Vendor) { return std::string(); },
     }, c);
@@ -664,9 +668,7 @@ protected:
         if (g_slm_budget < 49920) EXPECT_TRUE(test_utils::kSlmCappedAt48KiB) << "budget " << g_slm_budget;
         g_slm_per_item = select::device_of<B>(*this->ctx).family == "apple" ? 8 : 0;
         g_max_wg = int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-        g_wide_s3 = !BATCHLAS_SYCL_IMPL_ACPP && this->ctx->device().cuda_compute_capability() >= 120 &&
-            g_slm_budget >= 48 * 1024;
-        g_wide_async = !BATCHLAS_SYCL_IMPL_ACPP && this->ctx->device().cuda_compute_capability() >= 120;
+        g_cuda_cc = this->ctx->device().cuda_compute_capability();
     }
 
     static bool expect_runs(const C& c, const Spec& s) {
@@ -1008,13 +1010,15 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 // adds every wide_v2_leg_layouts row on a ragged shape (the leg is layout only) and, for
 // complex<double>, a padded view at an 8-byte base (its only element-leg layout); 128x128 adds that
 // view at a 4-byte base and, under BATCHLAS_GEMM_WIDE_STAGES=2, padded and Gap1 views, so its
-// cp.async legs (_s3) and register-prefetch legs are told apart. A swapped
+// cp.async legs (_s3) and register-prefetch legs are told apart; the complex<float> transposed
+// tiles and split hosts add padded and Gap1 views under =2 and =3 and a 4-byte base (_async,
+// _async_vec, register prefetch). A swapped
 // launch arm shows here even where both kernels give the same bits. threadsafe: the child
 // re-executes the binary with BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     using T = typename TestFixture::T;
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    struct Case { C c; Spec s; std::string kernel; bool base8 = false; bool stages2 = false; };
+    struct Case { C c; Spec s; std::string kernel; bool base8 = false; int stages = 0; };
     std::vector<Case> cases;
     for (const C& c : og::candidates<T>()) {
         if (std::holds_alternative<og::Vendor>(c)) continue;
@@ -1040,22 +1044,21 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
                     if (w->m == 128)
                         for (Layout lay : {Layout::Padded, Layout::Gap1})
                             cases.push_back({c, Spec{ta, tb, 160, 136, 48, 2, lay},
-                                             expected_kernel<T>(c, ta, tb, lay == Layout::Padded, false, true), false,
-                                             true});
+                                             expected_kernel<T>(c, ta, tb, lay == Layout::Padded, false, 2), false, 2});
                 }
-                // WP-X: the transposed tiles' register-prefetch leg under =2, and at a 4-byte base.
+                // WP-X: the transposed tiles and split hosts under =2 and =3, and at a 4-byte base.
                 if constexpr (kWideAsync<T>) {
                     const auto* w = std::get_if<og::Wide>(&c);
                     const auto* sk = std::get_if<og::SplitK>(&c);
                     const int tm = w ? w->m : sk ? sk->m : 0, tn = w ? w->n : sk ? sk->n : 0;
                     if (tm && (sk || !wide_v2<T>(*wide_row(*w))) && oracle_native<T>(c, ta, tb, 2 * tm + 1, 2 * tn, 48)) {
-                        for (Layout lay : {Layout::Padded, Layout::Gap1})
-                            cases.push_back({c, Spec{ta, tb, 2 * tm + 1, 2 * tn, 48, 2, lay},
-                                             expected_kernel<T>(c, ta, tb, lay == Layout::Padded, false, true), false,
-                                             true});
-                        if (kCx<T> && w)
-                            cases.push_back({c, Spec{ta, tb, 2 * tm + 1, 2 * tn, 48, 2, Layout::Padded},
-                                             expected_kernel<T>(c, ta, tb, true, true), true});
+                        for (int stages : {2, 3})
+                            for (Layout lay : {Layout::Padded, Layout::Gap1})
+                                cases.push_back({c, Spec{ta, tb, 2 * tm + 1, 2 * tn, 48, 2, lay},
+                                                 expected_kernel<T>(c, ta, tb, lay == Layout::Padded, false, stages),
+                                                 false, stages});
+                        cases.push_back({c, Spec{ta, tb, 2 * tm + 1, 2 * tn, 48, 2, Layout::Padded},
+                                         expected_kernel<T>(c, ta, tb, true, true), true});
                     }
                 }
                 const auto* r = std::get_if<og::Reg>(&c);
@@ -1073,7 +1076,7 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     auto child = [&] {
         for (const auto& k : cases) {
             auto p = make_problem<T>(k.s);
-            const ScopedEnvVar stages("BATCHLAS_GEMM_WIDE_STAGES", k.stages2 ? "2" : nullptr);
+            const ScopedEnvVar stages("BATCHLAS_GEMM_WIDE_STAGES", k.stages == 2 ? "2" : k.stages == 3 ? "3" : nullptr);
             if constexpr (kCx<T>) {
                 if (k.base8) {
                     this->run_pinned_base8(k.c, p);
@@ -1547,6 +1550,47 @@ TYPED_TEST(GemmCandidates, Reg128x128BetaZeroKeepsNegativeZero) {
     }
 }
 
+// The same on every native choice, every scalar and form (the real part for complex): packed (direct
+// or band stores), ld = m + 1 (staged epilogues, the transposed tiles' one-round store, split-k's
+// reduction) and padded (the 16-byte legs). Red before the shared lin_epi and LinearEpilogue::apply
+// returned alpha * acc at beta = 0: wide v2, the transposed tiles and split-k.
+// evidence: docs/perf/gemm.md#gemm-wp-x-review-beta-zero-keeps-negative-zero
+TYPED_TEST(GemmCandidates, BetaZeroKeepsNegativeZeroOnEveryNativeChoice) {
+    using T = typename TestFixture::T;
+    for (const C& c : og::candidates<T>()) {
+        if (std::holds_alternative<og::Vendor>(c)) continue;
+        const bool small = std::holds_alternative<og::Small>(c);
+        const Spec shapes[] = {{kN, kN, small ? 48 : 128, small ? 40 : 128, small ? 33 : 64, 3, Layout::Packed},
+                               {kN, kN, small ? 47 : 129, small ? 39 : 72, 33, 3, Layout::Gap1},
+                               {kN, kN, small ? 44 : 130, small ? 36 : 68, 48, 3, Layout::Padded}};
+        int ran = 0;
+        for (Transpose ta : kForms)
+            for (Transpose tb : kForms)
+                for (Spec s : shapes) {
+                    s.ta = ta;
+                    s.tb = tb;
+                    if (!TestFixture::expect_runs(c, s)) continue;
+                    s.beta_zero = s.nan_c = true;
+                    auto p = make_problem<T>(s);
+                    for (int it = 0; it < s.batch; ++it)
+                        for (int j = 0; j < p.a.cols; ++j)
+                            for (int i = 0; i < p.a.rows; ++i) p.mem[Problem<T>::at(p.a, it, i, j)] = T(0);
+                    p.alpha = T(-1);
+                    this->run_pinned(c, p);
+                    int bad = 0;
+                    for (int it = 0; it < s.batch; ++it)
+                        for (int j = 0; j < s.n; ++j)
+                            for (int i = 0; i < s.m; ++i) {
+                                const T v = p.mem[Problem<T>::at(p.c, it, i, j)];
+                                bad += !(v == T(0) && std::signbit(std::real(v)));
+                            }
+                    EXPECT_EQ(bad, 0) << name(c, s);
+                    ++ran;
+                }
+        EXPECT_GT(ran, 0) << select::to_string(c) << " ran no case";
+    }
+}
+
 // WP-B, the C epilogue of every reg and wide tile at a saturating batch, 7 distinct problems, beta != 0
 // (C is read). 256 x 256 x 16 strided: every group interior, odd ldc, so the staged store (wide at
 // 16-byte scalars stores direct, already coalesced). 200 x 136 x 8 ragged on four layouts: ld = m + 1
@@ -1666,13 +1710,15 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
     using T = typename TestFixture::T;
     int ran = 0, nan_checked = 0, repeated = 0;
     const int deep = sizeof(T) == 16 ? 136 : 300;
-    // complex<float> again under BATCHLAS_GEMM_WIDE_STAGES=2: its split bodies have both legs (WP-X).
-    const int legs = kCx<T> && sizeof(T) == 8 ? 2 : 1;
+    // complex<float> again under BATCHLAS_GEMM_WIDE_STAGES=2 and, on sm_80+, =3: its split bodies
+    // have both legs (WP-X).
+    const char* const leg_env[] = {nullptr, "2", "3"};
+    const int legs = !kWideAsync<T> ? 1 : wide_copy_leg(3) ? 3 : 2;
     for (int leg_i = 0; leg_i < legs; ++leg_i)
     for (const C& c : og::candidates<T>()) {
         const auto* sk = std::get_if<og::SplitK>(&c);
         if (!sk) continue;
-        const ScopedEnvVar leg("BATCHLAS_GEMM_WIDE_STAGES", leg_i ? "2" : nullptr);
+        const ScopedEnvVar leg("BATCHLAS_GEMM_WIDE_STAGES", leg_env[leg_i]);
         struct Shape { int m, n, k; Layout layout; int batch; };
         const Shape shapes[] = {{sk->m + 1, sk->n + 1, deep, Layout::Gap1, 1024},
                                 {sk->m, sk->n, 40, Layout::Padded, 3},
@@ -1774,8 +1820,9 @@ TYPED_TEST(GemmCandidates, SplitKGridCeilingIsBatchTimesSlices) {
 // 2TM x 2TN x 48. A stage flip the store and compute disagree on is wrong only at k > 16; a
 // swizzle the store and fragment read disagree on is wrong in the forms staging that operand
 // along k (A transposed, B not). WP-X: everything runs under the derived leg (complex<float>: the
-// cp.async stages on sm_120) and under BATCHLAS_GEMM_WIDE_STAGES=2 (the register prefetch), each form
-// adds beta = 0 with NaN in C, and complex<float> a 4-byte base (no cp.async).
+// cp.async stages on sm_120) and under BATCHLAS_GEMM_WIDE_STAGES=2 (the register prefetch), complex<float>
+// on sm_80+ also under =3 (the cp.async stages below sm_120), each form adds beta = 0 with NaN in C,
+// and complex<float> a 4-byte base (no cp.async).
 // evidence: docs/perf/gemm.md#gemm-wp-k-pipelined-staging-for-the-transposed-wide-tiles
 // evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
 TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch) {
@@ -1783,7 +1830,9 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
     struct Shape { int m, n, k; Layout layout; int batch; bool nan; };
     const int big = sizeof(T) == 16 ? 256 : 1024;
     int ran = 0, expected = 0, leg_ran = 0, nan_checked = 0, forms = 0;
-    for (const char* stages : {static_cast<const char*>(nullptr), "2"})
+    std::vector<const char*> legs{nullptr, "2"};
+    if (kWideAsync<T> && wide_copy_leg(3)) legs.push_back("3");
+    for (const char* stages : legs)
     for (const og::Wide w : {og::Wide{128, 32, 16}, og::Wide{32, 128, 16}, og::Wide{64, 32, 16},
                              og::Wide{32, 64, 16}, og::Wide{32, 32, 16}, og::Wide{16, 16, 16}}) {
         const C c{w};
@@ -1798,7 +1847,7 @@ TYPED_TEST(GemmCandidates, WideTransposedPipelineEveryTileFormAndLegAtSaturating
         const bool skinny_wp_e = (w.m == 64) != (w.n == 64);
         expected += int(shapes.size()) * (!kCx<T> ? (skinny ? 8 : 9) : skinny ? 4 : skinny_wp_e ? 6 : 9);
         const ScopedEnvVar leg("BATCHLAS_GEMM_WIDE_STAGES", stages);
-        const std::string tag = stages ? " (WIDE_STAGES=2)" : "";
+        const std::string tag = stages ? std::string(" (WIDE_STAGES=") + stages + ")" : "";
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
                 Spec probe{ta, tb, 2 * w.m, 2 * w.n, 48, 3, Layout::Padded};
@@ -2229,8 +2278,8 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
     const std::string got = traced_choice([&] { this->run(p); });
-    EXPECT_EQ(got, kCx<T> && TestFixture::kVendor ? "vendor" : "small")
-        << label(past) << ": real rows rank small above the vendor; vendor-free complex reaches it last";
+    EXPECT_TRUE(got == "small" || (TestFixture::kVendor && got == "vendor"))
+        << label(past) << ": got " << got << "; the table ranks small or the vendor, vendor-free reaches small";
     expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 

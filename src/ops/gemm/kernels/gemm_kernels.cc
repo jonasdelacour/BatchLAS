@@ -234,18 +234,18 @@ const char* stages3_trace_name(KernelVariant variant, bool vec) {
     return names[2 * static_cast<int>(variant) + (vec ? 1 : 0)].c_str();
 }
 
-// The transposed wide tiles' cp.async leg: suffixed _async, after _splitk for a split body.
-const char* async_trace_name(KernelVariant variant, bool split) {
+// The transposed wide tiles' cp.async leg: suffixed _async (element copies) or _async_vec (16-byte
+// granules along i), after _splitk for a split body.
+const char* async_trace_name(KernelVariant variant, bool split, bool vec) {
     constexpr int kCount = static_cast<int>(KernelVariant::Count);
-    static const std::array<std::string, 2 * kCount> names = [] {
-        std::array<std::string, 2 * kCount> out;
-        for (int i = 0; i < kCount; ++i) {
-            out[2 * i] = std::string(kernel_trace_name(KernelVariant(i))) + "_async";
-            out[2 * i + 1] = std::string(kernel_trace_name(KernelVariant(i))) + "_splitk_async";
-        }
+    static const std::array<std::string, 4 * kCount> names = [] {
+        std::array<std::string, 4 * kCount> out;
+        for (int i = 0; i < 4 * kCount; ++i)
+            out[i] = std::string(kernel_trace_name(KernelVariant(i / 4))) + (i % 4 >= 2 ? "_splitk" : "") +
+                "_async" + (i % 2 ? "_vec" : "");
         return out;
     }();
-    return names[2 * static_cast<int>(variant) + (split ? 1 : 0)].c_str();
+    return names[4 * static_cast<int>(variant) + (split ? 2 : 0) + (vec ? 1 : 0)].c_str();
 }
 
 template <typename T>
@@ -487,7 +487,8 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     } else {
         constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
         return launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB, og::wide_stages<T>(c)}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(v), {}, async_trace_name(v, false));
+            ctx, A, B, C, alpha, beta, kernel_trace_name(v), {}, async_trace_name(v, false, false),
+            async_trace_name(v, false, true));
     }
 }
 
@@ -507,7 +508,7 @@ void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T,
         if constexpr (Split)
             out = launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}, true>(
                 ctx, A, B, C, alpha, beta, splitk_trace_name(wide_variant(I, F)), split,
-                async_trace_name(wide_variant(I, F), true));
+                async_trace_name(wide_variant(I, F), true, false), async_trace_name(wide_variant(I, F), true, true));
         else
             out = launch_wide_cfg<T, I, OA, OB>(ctx, A, B, C, alpha, beta);
     }

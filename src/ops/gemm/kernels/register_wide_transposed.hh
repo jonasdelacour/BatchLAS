@@ -167,10 +167,10 @@ BATCHLAS_UNROLL_FULL
 // other copy is one element, consecutive lanes on consecutive global addresses (along i, or along
 // k when KC: the transposing scatter cannot be one 16-byte copy). Elements must sit at a multiple
 // of their size (the launcher checks complex<float> bases; alignof is 4).
+// slab: the operand's element (i0, k0), inside it since i0 < i_lim and k0 < k_lim; i_rem and k_rem
+// the extents left from there. Offsets are int: the launcher requires 128 * ld <= INT_MAX.
 // evidence: docs/perf/gemm.md#gemm-wp-x-copy-async-stages-for-the-transposed-wide-tiles
 template <bool KC, bool Vec, int TI, int TileK, int Threads, typename D>
-// slab: the operand's element (i0, k0), inside it since i0 < i_lim and k0 < k_lim; i_rem and k_rem
-// the extents left from there. Offsets are int: the launcher holds 128 ld to INT_MAX.
 inline void acopy(D* s, std::uint32_t s_l, const D* slab, int ld, int i_rem, int k_rem, int tid) {
     constexpr int VecN = Vec16<D>::N;
     constexpr int ES = static_cast<int>(sizeof(D));
@@ -305,6 +305,8 @@ Event launch_wide_transposed_leg(Queue& ctx,
     constexpr int EpiHi = OneRound ? TileM * TileN - EpiLo : Stages * BufB;
     constexpr int EpiBatch = OneRound ? TileN / (Threads / TileM) : 2;
     static_assert(EpiHi <= Stages * BufB && (!OneRound || EpiBatch > 2), "the one-round epilogue fits the stages");
+    static_assert(!OneRound || EpiBatch * (Threads / TileM) == TileN,
+                  "the one-round epilogue takes staged_c_store's row map (kWholeChunk), never the element map");
     static_assert(WbM != VecN || (AStride % VecN == 0 && MSep % VecN == 0),
                   "vectorised A fragment needs an aligned band base");
     static_assert(WbN != VecN || (BStride % VecN == 0 && NSep % VecN == 0),
@@ -645,7 +647,7 @@ BATCHLAS_UNROLL_FULL
 }
 
 // The leg (16-byte or element global loads) is wide v2's predicate, per launch; whether a slab
-// is predicated is per work-group. complex<float> adds the cp.async leg (trace_async) where DPC++
+// is predicated is per work-group. complex<float> adds the cp.async leg (trace_async; trace_async_vec on the 16-byte leg) where DPC++
 // emits cp.async, at sm_120+ (the only architecture timed; BATCHLAS_GEMM_WIDE_STAGES=3 admits sm_80+,
 // =2 forces the register prefetch) and both bases are 8-byte aligned (alignof is 4). Two stages:
 // three and four lost occupancy; float's 4-byte copies cost 16-45 registers and ran slower.
@@ -654,7 +656,7 @@ template <typename T, WideTile P, bool Split = false>
 Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
                              T alpha, T beta, const char* trace, WideSplit split = {},
-                             const char* trace_async = nullptr) {
+                             const char* trace_async = nullptr, const char* trace_async_vec = nullptr) {
     if constexpr (std::is_same_v<T, std::complex<float>>) {
         constexpr int Async = 2;
         constexpr int Threads = (P.M / P.TTM) * (P.N / P.TTN);
@@ -665,10 +667,11 @@ Event launch_wide_transposed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
             ctx.device().cuda_compute_capability() >= (forced == 3 ? 80 : 120) && whole(A.data_ptr()) &&
             whole(B.data_ptr()) && std::max(A.ld(), B.ld()) <= INT_MAX / 128 &&
             resident::device_slm_budget(impl::local_mem_bytes(ctx->get_device(), Threads)) >= bytes) {
-            const char* t = trace_async ? trace_async : trace;
             if (wide64_v2_vec_loads<T>(A, B))
-                return launch_wide_transposed_leg<T, P, true, Split, Async>(ctx, A, B, C, alpha, beta, t, split);
-            return launch_wide_transposed_leg<T, P, false, Split, Async>(ctx, A, B, C, alpha, beta, t, split);
+                return launch_wide_transposed_leg<T, P, true, Split, Async>(
+                    ctx, A, B, C, alpha, beta, trace_async_vec ? trace_async_vec : trace, split);
+            return launch_wide_transposed_leg<T, P, false, Split, Async>(ctx, A, B, C, alpha, beta,
+                                                                         trace_async ? trace_async : trace, split);
         }
     }
     if (wide64_v2_vec_loads<T>(A, B))

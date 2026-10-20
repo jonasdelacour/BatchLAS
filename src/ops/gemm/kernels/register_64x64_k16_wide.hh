@@ -37,17 +37,22 @@ using batchlas::sycl_device::DevMap;
 using batchlas::sycl_device::dev_is_zero;
 using batchlas::sycl_device::fma_acc;
 
+// beta = 0 is alpha * acc alone, as reference BLAS: alpha * acc + 0 * 0 turns -0 into +0. A select.
+// evidence: docs/perf/gemm.md#gemm-wp-x-review-beta-zero-keeps-negative-zero
 inline float lin_epi(float alpha, float beta, float acc, float prior) {
-    return alpha * acc + beta * prior;
+    return beta == 0.f ? alpha * acc : alpha * acc + beta * prior;
 }
 inline double lin_epi(double alpha, double beta, double acc, double prior) {
-    return alpha * acc + beta * prior;
+    return beta == 0.0 ? alpha * acc : alpha * acc + beta * prior;
 }
 template <typename R>
 inline Cx<R> lin_epi(Cx<R> alpha, Cx<R> beta, Cx<R> acc, Cx<R> prior) {
+    const bool bz = beta.re == R(0) && beta.im == R(0);
     Cx<R> o;
-    o.re = alpha.re * acc.re - alpha.im * acc.im + beta.re * prior.re - beta.im * prior.im;
-    o.im = alpha.re * acc.im + alpha.im * acc.re + beta.re * prior.im + beta.im * prior.re;
+    o.re = bz ? alpha.re * acc.re - alpha.im * acc.im
+              : alpha.re * acc.re - alpha.im * acc.im + beta.re * prior.re - beta.im * prior.im;
+    o.im = bz ? alpha.re * acc.im + alpha.im * acc.re
+              : alpha.re * acc.im + alpha.im * acc.re + beta.re * prior.im + beta.im * prior.re;
     return o;
 }
 
