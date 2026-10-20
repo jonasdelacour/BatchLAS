@@ -67,6 +67,7 @@ struct RegCfg {
     constexpr int threads() const { return (m / tr) * (n / tc); }
     /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
     constexpr std::int64_t slm_bytes() const {
+        if (m * n == 256 * 128) return std::int64_t(4) * stages * k * (m + n + 8);  // padded slabs (stride + 4)
         if (m == 128 && n == 128) {
             const int pad = stages > 2 ? 4 : 0;  // the copy_async pipeline's padded shared stride
             const int a = stages * k * (m + pad);
@@ -75,7 +76,7 @@ struct RegCfg {
         return std::int64_t(4) * stages * ((m + 1) * k + (k + 1) * n);
     }
 };
-inline constexpr std::array<RegCfg, 11> reg_configs{{
+inline constexpr std::array<RegCfg, 13> reg_configs{{
     {32, 32, 8, 1, 2, 2, 1, {true, false, false, false}, false},
     {64, 64, 8, 1, 4, 4, 1, {true, false, false, false}, false},
     {64, 64, 16, 1, 4, 4, 1, {true, true, true, true}, false},
@@ -87,6 +88,8 @@ inline constexpr std::array<RegCfg, 11> reg_configs{{
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
     {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
     {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // predicated: 4 copy_async stages; aligned: u1's kernel
+    {256, 128, 8, 4, 16, 8, 4, {true, true, true, true}, false},  // 4 copy_async stages, one leg (register_256x128.hh)
+    {128, 256, 8, 4, 8, 16, 4, {true, true, true, true}, false},
 }};
 
 /// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.

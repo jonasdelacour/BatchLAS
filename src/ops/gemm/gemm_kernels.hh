@@ -67,6 +67,8 @@ enum class KernelVariant {
     Tiled16x16RegisterK16WideTT, Tiled16x16RegisterK16WideTC, Tiled16x16RegisterK16WideCC,
     Tiled64x32RegisterK16WideCC, Tiled32x64RegisterK16WideCC,
     Tiled128x32RegisterK16WideCC, Tiled32x128RegisterK16WideCC,
+    Tiled256x128RegisterK8S4, Tiled256x128RegisterK8S4NT, Tiled256x128RegisterK8S4TN, Tiled256x128RegisterK8S4TT,
+    Tiled128x256RegisterK8S4, Tiled128x256RegisterK8S4NT, Tiled128x256RegisterK8S4TN, Tiled128x256RegisterK8S4TT,
     Count,  // not a kernel: splitk_trace_name's table size, so append entries above it
 };
 
