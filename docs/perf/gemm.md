@@ -31,7 +31,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
 | `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
 | `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
-| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
+| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all (`wide:m=128:n=128:k=8` complex<float> only) | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
 | `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
@@ -46,7 +46,7 @@ const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launc
 
 `device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
 batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 23, double 12 (no `reg`), complex 12 (no `reg`).
+`small`. Candidate counts: float 23, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -60,6 +60,7 @@ Forms are folded after the real-scalar C→T fold:
 | `reg:m=32:n=128:k=16:u=1` | NN TN TT |
 | `reg:m=128:n=64:k=32:u=4`, `reg:m=128:n=64:k=32:u=2` | NN |
 | `wide:m=64:n=64:k=16`, `wide:m=64:n=64:k=8` | all nine complex forms; real NN, NT, TN, TT (see [the k=8 slab](#gemm-wp-f-a-k8-slab-for-the-64x64-wide-tile)) |
+| `wide:m=128:n=128:k=8` | complex<float> only, all nine forms (see [WP-O](#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2)) |
 | `wide:m=128:n=32:k=16` | complex NC, NT, TN, CN; real NT, TN |
 | `wide:m=32:n=128:k=16` | complex CN, TN, NT, NC; real NT, TN |
 | `wide:m=32:n=32:k=16`, `wide:m=16:n=16:k=16` | complex NN, NT, NC, TN, CN, CT; real NN, NT, TN (see [blackwell.md](blackwell.md)) |
@@ -1608,6 +1609,101 @@ sectors (969M vs 218M) and 3.4× the requests. Three rewrites of the element leg
 | `cp.async` 4 B (float) / 8 B (complex<float>, 8-byte base), coalesced lane map, swizzle `kk & 7` | complex<float> 110 → 185 registers (8 swizzle offsets in the fragment read): NN strided 256×512×32 1.26× slower |
 | `cp.async` with the parent lane map and swizzle | float 1.02-1.04× slower, complex<float> 0.98-1.01 |
 | register staging, float i-contiguous operand read 32 consecutive floats per load (scalar shared stores) | 1.02-1.04× slower at the 85-register cap. At a 64 cap it spilled and ran 1.14-1.28× slower |
+
+## GEMM: WP-O, a 128x128 complex float tile on wide v2
+
+Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
+time` (beta = 1, every arm verified), 4-8 reps, two passes in alternated arm order per cell. Both passes of every
+cell agree within 3%, except TN packed 512×256×64 (0.3 ms, up to 9% on every arm).
+
+`wide:m=128:n=128:k=8` (complex<float> only, all 9 forms) runs `GemmWide64Body` at `TileM = TileN = 128`:
+
+- 256 lanes as 16 × 16, an 8 × 8 complex thread tile (128 accumulator registers).
+- k = 8 slab, split staging (warps 0-3 A, 4-7 B), two buffers: 32 KiB.
+- Each operand is staged as two 64-wide halves. Each half uses the 64x64 lane map, `KStep` and swizzle, the second
+  one 64 elements down i (64 ld for a k-contiguous operand). `sstore` takes the row width as a parameter.
+- Epilogue: band store, or `staged_c_store` with `EpiBatch = 2·TileK·(TileM + TileN)/256` = 16 (four passes).
+- Launch bound: one group per CU (`TileM·TileN > 4096`). 254-255 registers, zero spill, no stack frame
+  (`scripts/register_probe.sh`).
+
+`WideCfg` gains a scalar set (`scalars`, default all). `wide_serves`, `candidates<T>()` and `launch_wide_form`
+read it, so the row exists for complex<float> only (13 candidates; complex<double> stays at 12). `splitk_host`
+excludes it. `wide_v2_row<T>` names every row that runs `GemmWide64Body`. It is a new candidate: no table row
+ranks it yet, so Auto is unchanged until the retune.
+
+**Why 128x128 and not the planned 128x64.** ncu on the parent (`wide:m=64:n=64:k=16`) at cfloat NN packed 1024³
+b128 (durations at ncu's locked clock): every arm is issue-bound, not starved for intensity. DRAM is at 13-14%
+and L2 hits 84-91%. Issue slots are 73-78% busy and FFMA is 90-94% of the instructions. The gap is the
+non-FFMA instructions per FFMA (17.205G FFMA in every arm), and the thread tile sets the LDS share:
+
+| arm | thread tile | warps/SM | regs | instructions | LDS.128 | other non-FFMA | ms |
+|---|---|---|---|---|---|---|---|
+| 64x64x16 (parent) | 4×4 | 16 | 128 | 18.854G | 1.074G | 0.575G | 22.21 |
+| 128x64x8 | 8×4 | 8 | 180 | 19.084G | 0.805G | 1.074G | 21.51 |
+| 128x128x8 | 8×8 | 8 | 254 | 18.455G | 0.537G | 0.713G | 21.03 |
+| cuBLAS `cutlass_100_simt_cgemm_128x128_8x4_nn` | 8×8 | 8 | 220 | 18.263G | 0.537G (+0.05G LDS) | 0.47G | 20.00 |
+
+128x64 removed a quarter of the LDS but added 0.47G of address arithmetic (LEA, LOP3, SHF), where ptxas
+rematerializes the swizzled fragment bases. 128x128 matches cuBLAS's instruction count to 1%. What remains is
+stall: `dispatch_stall` 0.44 vs 0.31 per issue and `long_scoreboard` 0.09 vs 0.02. cuBLAS stages through
+`LDGSTS` with four stages; v2 uses one register prefetch.
+
+**128x64 (negative), measured and dropped.** 8×4 complex, one group per CU (180 registers). Against
+`wide:m=64:n=64:k=16` it was 0.95-0.99 on the large cells (NN, NT, CN, NC, CC). It was slower on TN strided 768³
+(1.037) and on the skinny cells. In the 15 cells timed beside 128x128 it ranked first in none: 128x128 or 64x64 beat it in each, so its
+18 kernels are not built. With 2 groups per CU (128-register cap) it spilled 256-3016 B. Moving the next slab's
+loads after the FMAs (no prefetch) made it 4.3-4.5 KB.
+
+| cell (cfloat) | 128x128 / vendor | 64x64x16 / vendor | 64x64x8 / vendor | 128x128 / 64x64x16 |
+|---|---|---|---|---|
+| NN packed 1024³ b128 | 1.052 | 1.133 | 1.184 | 0.93 |
+| CN packed 1024³ b128 | 0.932 | 0.998 | 1.075 | 0.93 |
+| NN strided 1024³ b128 | 1.084 | 1.190 | 1.286 | 0.91 |
+| NT packed 512³ b2048 | 1.034 | 1.147 | 1.180 | 0.90 |
+| TN strided 768³ b128 | 1.075 | 1.176 | 1.330 | 0.91 |
+| NN packed 512×512×128 b2048 | 1.041 | 1.112 | 1.145 | 0.94 |
+| NC strided 256×1024×64 b2048 | 0.951 | 1.026 | 1.073 | 0.93 |
+| CC packed 1024³ b128 | 0.968 | 1.065 | 1.119 | 0.91 |
+| NN packed 256³ b128 | 0.894 | 0.957 | 0.989 | 0.93 |
+| CN strided 384³ b128 | 0.983 | 1.013 | 1.145 | 0.97 |
+| NN strided 128³ b2048 | 0.929 | 0.994 | 1.064 | 0.93 |
+| NN packed 128×512×64 b2048 | 1.063 | 1.074 | 1.099 | 0.99 |
+| NT packed 192³ b2048 | 1.290 | 0.952 | 0.982 | 1.35 |
+| TN packed 512×256×64 b128 | 1.090 | 0.894 | 0.952 | 1.22 |
+| NN packed 64×2048×32 b128 | 1.499 | 1.012 | 1.001 | 1.48 |
+
+The parent stays best where 128-wide tiles waste work (m = 64), cover the batch in too few groups, or lose the 64x64
+tile's 16 warps (192³, k = 64). Those windows are the retune's to draw.
+
+**Build cost**, `libbatchlas_sycl` link alone (`.so` removed, objects current), GPU-only tree, two runs each: parent
+79.1-79.3 s, with 128x64 alone 81.8 s, with 128x64 and 128x128 94.1-95.1 s. 128x128 accounts for nearly all of the
++19%. That is under the 25% ceiling, so all 9 forms stay.
+
+Tests: `GemmCandidates.Wide128x128EveryFormAtSaturatingBatchAndTileEdges` runs all 9 forms with NaN in every gap and
+beta ≠ 0:
+
+- m, n ∈ {63..65, 100, 127..129, 191, 255, 257}, k ∈ {7, 8, 9, 16, 17, 33}, at ld = m + 1 and padded;
+- 257×136×33 at ld = m + 1 and 256×256×24 padded, at batch 1024 (7 distinct problems, bit-identical items);
+- every `wide_v2_leg_layouts` row at 288×136×48;
+- beta = 0 with NaN in C.
+
+The oracle row (`cf_only`), the literal 32 KiB and the trace names are added, and `PinnedChoiceLaunchesItsOwnKernel`
+runs the leg layouts on the new row.
+
+Deliberate breaks, run on the GPU (filter: the new test, `PinnedCandidatesEveryFormShapeAndLayout`,
+`PinnedRunIsTheLauncherBitForBit`, `CanRunEqualsLaunch`). Each red set is complex<float> and
+`wide:m=128:n=128:k=8` only:
+
+- B's second half stored over its first (`b_ib + 64·h` → `b_ib`): red in every form, including NN, NC, TN and CN.
+- A's half offset not scaled by lda when A is k-contiguous: red only in TN, TC, CN and CC (and the new test from its
+  first transposed-A form).
+- The 64x64 band stride `GPR/NB` in the B fragment read (equal to `NSep/VecN` at 64x64 for every scalar): red in
+  every form.
+- Green, recorded: a half's i bound without the `- 64·h`. It only stops reads past m or n, whose products land in
+  rows and columns that are never stored, so no value test can see it. The 64x64 i bound has the same property.
+
+Not done: `LDGSTS` multi-stage staging for the remaining stall gap. The 64x128 tile was not built: 128x128 makes it
+redundant on these cells.
 
 ## GEMM: the register-tiled launcher table
 

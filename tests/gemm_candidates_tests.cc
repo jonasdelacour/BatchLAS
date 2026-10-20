@@ -1874,8 +1874,9 @@ TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
 // (16-byte leg), NaN in every gap, beta != 0. Then 257 x 136 x 33 at ld = m + 1 and 256 x 256 x 24
 // padded at batch 1024, 7 distinct problems, each item bit-identical to its representative; the
 // leg layouts at 288 x 136 x 48; beta = 0 with NaN in C. A dropped half offset in the store is
-// wrong in every form; one dropped from the global address only where that operand is
-// k-contiguous, and a half bound that ignores the half only where a half straddles m or n.
+// wrong in every form, one dropped from A's global address only where A is k-contiguous, and the
+// 64x64 band stride copied into the fragment read in every form, all at 128x128 alone. A half's
+// i bound only stops reads past m or n, whose products land in discarded rows: no value test sees it.
 // evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
 TYPED_TEST(GemmCandidates, Wide128x128EveryFormAtSaturatingBatchAndTileEdges) {
     using T = typename TestFixture::T;
