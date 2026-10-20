@@ -2138,8 +2138,8 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
 
 // can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535 on
 // CUDA), so a pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto
-// serve the larger batch (real: the transcribed rows' trailing small; complex: the vendor, or
-// vendor-free small, the first runnable candidate). Metal has no group-count cap there: one past
+// serve the larger batch (whichever of small and the vendor the table ranks first; vendor-free:
+// small). Metal has no group-count cap there: one past
 // CUDA's ceiling is a launch too.
 TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     using T = typename TestFixture::T;
@@ -2176,8 +2176,10 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
     const std::string got = traced_choice([&] { this->run(p); });
-    EXPECT_EQ(got, kCx<T> && TestFixture::kVendor ? "vendor" : "small")
-        << label(past) << ": real rows rank small above the vendor; vendor-free complex reaches it last";
+    // Which of the two the table ranks first is a measurement (sm_120 complex rows rank small
+    // since the 2026-10 retune); the invariant is that Auto lands on a choice with no grid cap.
+    EXPECT_TRUE(got == "small" || (TestFixture::kVendor && got == "vendor"))
+        << label(past) << ": Auto past the grid ceiling chose " << got;
     expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 
