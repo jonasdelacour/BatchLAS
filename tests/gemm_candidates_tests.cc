@@ -132,7 +132,7 @@ const std::vector<RegRow>& reg_rows() {
           {"NT", "gemm_sycl_register_128x128_k8_s4_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_nt_aligned"},
           {"TN", "gemm_sycl_register_128x128_k8_s4_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
           {"TT", "gemm_sycl_register_128x128_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
-         33280},
+         33792},
     };
     return rows;
 }
@@ -1422,12 +1422,12 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
                 ++nan_checked;
             }
     }
-    // Float: reg 17 + 4 x 30 (a 48 KiB cap drops 128x64x32 u4 and u2, NN only: 2 x 5; under 33,280 B
+    // Float: reg 17 + 4 x 30 (a 48 KiB cap drops 128x64x32 u4 and u2, NN only: 2 x 5; under 33,792 B
     // 128x128 u4 too: 2 + 4 x 4),
     // wide 14 + 4 x 24; double and complex<float> wide 14 + 4 x 24; complex<double> wide 4 x 24.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
-        EXPECT_GE(reg, g_slm_budget < 33280 ? 109 : g_slm_budget < 49920 ? 127 : 137);
+        EXPECT_GE(reg, g_slm_budget < 33792 ? 109 : g_slm_budget < 49920 ? 127 : 137);
     }
     EXPECT_GE(wide, kWide16 ? 96 : 110);
     EXPECT_GE(nan_checked, 3 * 24);
