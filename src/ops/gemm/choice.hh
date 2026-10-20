@@ -67,8 +67,11 @@ struct RegCfg {
     constexpr int threads() const { return (m / tr) * (n / tc); }
     /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
     constexpr std::int64_t slm_bytes() const {
-        if (m == 128 && n == 128)
-            return std::int64_t(4) * ((32 * 132 > stages * k * m ? 32 * 132 : stages * k * m) + stages * k * n);
+        if (m == 128 && n == 128) {
+            const int pad = stages > 2 ? 4 : 0;  // the copy_async pipeline's padded shared stride
+            const int a = stages * k * (m + pad);
+            return std::int64_t(4) * ((32 * 132 > a ? 32 * 132 : a) + stages * k * (n + pad));
+        }
         return std::int64_t(4) * stages * ((m + 1) * k + (k + 1) * n);
     }
 };

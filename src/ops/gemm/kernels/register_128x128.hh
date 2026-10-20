@@ -167,7 +167,16 @@ struct Gemm128x128Body {
     static constexpr int TileM = 128, TileN = 128, TileK = 8;
     static constexpr int ThreadTile = 8, Band = 4, Threads = 256;
     static constexpr int BandM = 32, BandN = 16;  // second band's offset
-    static constexpr int AStride = TileM, BStride = TileN;
+    // Which operands are contiguous in k: A^T and B (the transposing loader), else down m or n.
+    static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
+    // The predicated pipeline copies one element per lane: a packet operand's lanes take
+    // consecutive m (n), 32 apart per copy, so each copy is one 128-byte warp access at any ld. A
+    // k-contiguous operand's lanes take k fastest (8 lanes = one 32-byte row segment, 4 rows per copy),
+    // and the shared stride is padded by 4 so those 8 lanes' transposed writes hit distinct banks
+    // (both operands, so the local memory is one size per config: RegCfg::slm_bytes).
+    // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
+    static constexpr bool kLaneMap = Stages > 2;
+    static constexpr int AStride = TileM + (kLaneMap ? 4 : 0), BStride = TileN + (kLaneMap ? 4 : 0);
     static constexpr int kMinGroupsPerCu = 2;
     static constexpr int StageStride = TileM + 4;  // staged C column stride
     static constexpr int kStages = Stages;
@@ -177,11 +186,6 @@ struct Gemm128x128Body {
     static constexpr int TileBElems = Stages * TileK * BStride;
     static_assert(Stages == 2 || (Stages == 4 && !AlignedFastPath && sizeof(T) == 4),
                   "the copy_async pipeline is the float predicated leg at four stages (trace names say s4)");
-    // Which operands are contiguous in k: A^T and B (the transposing loader), else down m or n.
-    static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
-    // The predicated pipeline copies one element per lane: a packet operand's lanes take
-    // consecutive m (n), 32 apart per copy, so each copy is one 128-byte warp access at any ld.
-    static constexpr bool kLaneMap = Stages > 2;
     static constexpr KernelVariant kVariant =
         Stages == 2 ? (!AK ? (BK ? KernelVariant::Tiled128x128RegisterK8 : KernelVariant::Tiled128x128RegisterK8NT)
                            : (BK ? KernelVariant::Tiled128x128RegisterK8TN : KernelVariant::Tiled128x128RegisterK8TT))
@@ -236,14 +240,15 @@ BATCHLAS_UNROLL_FULL
             }
         }
 
-        // One packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
+        // Stages == 2 (the Stages > 2 lane map is described at kLaneMap):
+        // one packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
         // a warp reads 128 contiguous elements of one k row and stores one vector each. Down k
         // (B, A^T): two lanes per column read 4 k each and transpose into shared (2-way bank
         // conflict); the L2::128B hint fetches the line the next three slabs read.
-        const int a_m = AK ? tid / 2 : (tid % 32) * (kLaneMap ? 1 : 4);
-        const int a_k = AK ? (tid % 2) * 4 : tid / 32;
-        const int b_n = BK ? tid / 2 : (tid % 32) * (kLaneMap ? 1 : 4);
-        const int b_k = BK ? (tid % 2) * 4 : tid / 32;
+        const int a_m = AK ? (kLaneMap ? tid / 8 : tid / 2) : (tid % 32) * (kLaneMap ? 1 : 4);
+        const int a_k = AK ? (kLaneMap ? tid % 8 : (tid % 2) * 4) : tid / 32;
+        const int b_n = BK ? (kLaneMap ? tid / 8 : tid / 2) : (tid % 32) * (kLaneMap ? 1 : 4);
+        const int b_k = BK ? (kLaneMap ? tid % 8 : (tid % 2) * 4) : tid / 32;
         const T* ga = AK ? Ab + a_k + static_cast<std::ptrdiff_t>(m0 + a_m) * lda
                          : Ab + (m0 + a_m) + static_cast<std::ptrdiff_t>(a_k) * lda;
         const T* gb = BK ? Bb + b_k + static_cast<std::ptrdiff_t>(n0 + b_n) * ldb
@@ -372,14 +377,16 @@ BATCHLAS_UNROLL_FULL
             // count at Stages - 2. Element copies, in range iff the row (column) and the k index are; each
             // operand pointer bumps one slab per issue (a k0 * ld product spilled staged NN and NT at the
             // 128 cap). Unrolled by Stages: the buffer is a constant.
+            [[maybe_unused]] const std::ptrdiff_t lda32 = static_cast<std::ptrdiff_t>(32) * lda;
+            [[maybe_unused]] const std::ptrdiff_t ldb32 = static_cast<std::ptrdiff_t>(32) * ldb;
             auto issue = [&](int k0, auto buf) __attribute__((always_inline)) {
                 constexpr int oa = decltype(buf)::value * TileK * AStride, ob = decltype(buf)::value * TileK * BStride;
                 if constexpr (AK) {
-                    const int lim = m0 + a_m < m ? k - k0 - a_k : 0;
+                    const int lim = k0 + a_k < k ? m - (m0 + a_m) : 0;
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
-                        const int o = oa + (a_k + i) * AStride + a_m;
-                        copy_async_zfill(sa + o, sa_l + 4u * o, ga + i, i < lim);
+                        const int o = oa + a_k * AStride + a_m + 32 * i;
+                        copy_async_zfill(sa + o, sa_l + 4u * o, ga + lda32 * i, 32 * i < lim);
                     }
                     ga += TileK;
                 } else {
@@ -392,11 +399,11 @@ BATCHLAS_UNROLL_FULL
                     ga += static_cast<std::ptrdiff_t>(TileK) * lda;
                 }
                 if constexpr (BK) {
-                    const int lim = n0 + b_n < n ? k - k0 - b_k : 0;
+                    const int lim = k0 + b_k < k ? n - (n0 + b_n) : 0;
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
-                        const int o = ob + (b_k + i) * BStride + b_n;
-                        copy_async_zfill(sb + o, sb_l + 4u * o, gb + i, i < lim);
+                        const int o = ob + b_k * BStride + b_n + 32 * i;
+                        copy_async_zfill(sb + o, sb_l + 4u * o, gb + ldb32 * i, 32 * i < lim);
                     }
                     gb += TileK;
                 } else {
@@ -445,7 +452,12 @@ BATCHLAS_UNROLL_FULL
             // stores on the aligned leg, predicated scalars at rows lane + 32 i
             // on the other (a per-group 16-byte branch there spilled at the cap).
             T* sc = sa;
-            const int tid2 = static_cast<int>(item.get_local_id(2));
+            int tid2 = static_cast<int>(item.get_local_id(2));
+#if BATCHLAS_GEMM_CP_ASYNC
+            // Read after the pipeline's volatile copies, so no epilogue address is hoisted into the
+            // mainloop (u4 staged NN spilled 20 B at the 128 cap with it hoisted).
+            if constexpr (Stages > 2) asm volatile("mov.u32 %0, %%tid.x;" : "=r"(tid2));
+#endif
             item.barrier(sycl::access::fence_space::local_space);  // the odd tail read sa
 BATCHLAS_UNROLL_FULL
             for (int p = 0; p < Band; ++p) {
@@ -460,6 +472,23 @@ BATCHLAS_UNROLL_FULL
                             v[i] = accum[band * Band + i][p + half * Band];
                         }
                         vec4_ref(&sc[slot * StageStride + band * BandM + mb]) = v;
+                    }
+                }
+                // Predicated leg: the pass's 16 priors are loaded after the stage write (its
+                // accumulators are dead) and before the barrier, all in flight at once. Read inline, each
+                // load waited before its store: 0.84x u4's time at 256x512x78 strided.
+                // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
+                [[maybe_unused]] T prior[4][4];
+                if constexpr (!AlignedFastPath) {
+                    const bool bz = beta == T(0);
+                    const int rows_left = m - m0 - (tid2 & 31);
+BATCHLAS_UNROLL_FULL
+                    for (int q = 0; q < 4; ++q) {
+                        const int col = n0 + ((tid2 >> 5) * 4 + q) * 4 + p;
+                        const T* src = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
+BATCHLAS_UNROLL_FULL
+                        for (int i = 0; i < 4; ++i)
+                            prior[q][i] = !bz && col < n && 32 * i < rows_left ? src[32 * i] : T(0);
                     }
                 }
                 item.barrier(sycl::access::fence_space::local_space);
@@ -488,16 +517,12 @@ BATCHLAS_UNROLL_FULL
                         const int rows_left = m - m0 - (tid2 & 31);
                         T* dst = &Cb[m0 + (tid2 & 31) + static_cast<std::ptrdiff_t>(col) * ldc];
                         const T* src = &sc[slot * StageStride + (tid2 & 31)];
-                        if (beta == T(0)) {
 BATCHLAS_UNROLL_FULL
-                            for (int i = 0; i < 4; ++i)
-                                if (32 * i < rows_left) dst[32 * i] = alpha * src[32 * i];
-                        } else {
-BATCHLAS_UNROLL_FULL
-                            for (int i = 0; i < 4; ++i)
-                                if (32 * i < rows_left)
-                                    dst[32 * i] = LinearEpilogue<T>::apply(alpha, beta, src[32 * i], dst[32 * i]);
-                        }
+                        for (int i = 0; i < 4; ++i)
+                            if (32 * i < rows_left)  // beta = 0 is alpha * acc alone: -0 + 0 would be +0
+                                dst[32 * i] = beta == T(0) ? alpha * src[32 * i]
+                                                           : LinearEpilogue<T>::apply(alpha, beta, src[32 * i],
+                                                                                      prior[q][i]);
                     }
                 }
                 item.barrier(sycl::access::fence_space::local_space);
@@ -623,13 +648,12 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
     return ctx.get_event();
 }
 
-// Short k is store-bound, and there the direct epilogue's four 128-byte
-// column pieces per store run DRAM measurably slower than whole columns; at
-// long k the staging round trip costs more than it saves. An epilogue choice on
-// either leg, never a routing term. Stages > 2 is the copy_async pipeline; its predicated NN
-// instance stays direct (staged spilled 12 B at the 128 cap, and uncapped ran 159 registers).
+// The aligned leg: short k is store-bound, and there the direct epilogue's four 128-byte column
+// pieces per store run DRAM measurably slower than whole columns; at long k the staging round trip
+// costs more than it saves. The predicated leg stages at every k: its direct epilogue's scalar
+// stores touched 3.7x the sectors of a staged one. An epilogue choice, never a routing term.
 // evidence: docs/perf/gemm.md#the-staged-epilogue
-// evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
+// evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
 template <typename T, bool AlignedFastPath = false, Transpose OpA = Transpose::NoTrans,
           Transpose OpB = Transpose::NoTrans, int Stages = 2>
 Event launch_register_128x128_k8(Queue& ctx,
@@ -639,16 +663,16 @@ Event launch_register_128x128_k8(Queue& ctx,
                                  T alpha,
                                  T beta,
                                  const char* (*kernel_trace_name)(KernelVariant)) {
-    constexpr bool kStaged = Stages == 2 || OpA != Transpose::NoTrans || OpB != Transpose::NoTrans;
-    if constexpr (!kStaged) {
-        return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+    if constexpr (!AlignedFastPath) {
+        return launch_register_128x128_k8_leg<T, false, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                kernel_trace_name);
+    } else {
+        if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK)
+            return launch_register_128x128_k8_leg<T, true, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
                                                                                    kernel_trace_name);
-    } else if (get_effective_dims(A, OpA).second <= kStagedEpilogueMaxK) {
-        return launch_register_128x128_k8_leg<T, AlignedFastPath, true, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                                  kernel_trace_name);
+        return launch_register_128x128_k8_leg<T, true, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
+                                                                                kernel_trace_name);
     }
-    return launch_register_128x128_k8_leg<T, AlignedFastPath, false, OpA, OpB, Stages>(ctx, A, B, C, alpha, beta,
-                                                                               kernel_trace_name);
 }
 
 } // namespace batchlas::sycl_gemm

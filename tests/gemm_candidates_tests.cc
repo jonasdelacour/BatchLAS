@@ -132,7 +132,7 @@ const std::vector<RegRow>& reg_rows() {
           {"NT", "gemm_sycl_register_128x128_k8_s4_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_nt_aligned"},
           {"TN", "gemm_sycl_register_128x128_k8_s4_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_tn_aligned"},
           {"TT", "gemm_sycl_register_128x128_k8_s4_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_tt_aligned"}},
-         33280},
+         33792},
     };
     return rows;
 }
@@ -1240,7 +1240,7 @@ TYPED_TEST(GemmCandidates, RegScalarStagingEveryFormAtSaturatingBatch) {
 // The 128x128 kernel in every real form (CC folds to TT) at batch 1024, 7 distinct problems: its
 // four legs (packed 128 x 256 x 24 aligned + staged over two n tiles, packed 128 x 128 x 72
 // aligned + direct epilogue over an odd slab count, strided 200 x 150 x 37 predicated + staged and
-// 200 x 150 x 72 predicated + direct over 2 x 2 ragged tiles), each item bit-identical to its
+// 200 x 150 x 72 predicated + staged at k > 64 (WP-F) over 2 x 2 ragged tiles), each item bit-identical to its
 // representative. A per-form loader that reads the
 // wrong lane map, or a missing barrier between slabs, differs across items or is wrong.
 TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
@@ -1274,7 +1274,7 @@ TYPED_TEST(GemmCandidates, Reg128x128EveryFormEveryLegAtSaturatingBatch) {
 }
 
 // WP-I, the predicated leg's interior loop copy (odd bases, so every leg below is predicated whatever
-// its ld). 256 x 256: all four groups interior, k = 72 (nine full slabs, direct epilogue), k = 37 (the
+// its ld). 256 x 256: all four groups interior, k = 72 (nine full slabs), k = 37 (the
 // k tail after full slabs) and k = 5 (one partial slab, the prologue alone). 300 x 200: interior,
 // m-edge, n-edge and corner groups in one launch, k = 45 at ld = m + 1 and k = 72 strided. Batch 1024,
 // each item bit-identical to its representative. The k-tail legs poison with NaN: a finite poison times
@@ -1365,7 +1365,7 @@ TYPED_TEST(GemmCandidates, Reg128x128AlignedLegReadsLdStrideAndEffectiveDims) {
 // real form, batch 1024 repeating 7 problems, each item bit-identical to its representative. Every view
 // is predicated: odd bases or odd ld, and one 16-byte-aligned view whose ragged m, n alone refuse the
 // aligned leg (an aligned-base shortcut in the pipeline is caught there). Slab counts 1, 2, 3, 4, 5, 8, 9 and 17 straddle the prologue
-// depth (3 slabs), the unroll by 4 and the staged/direct epilogue edge (k = 64 / 69); k = 5, 37 and 69
+// depth (3 slabs) and the unroll by 4; k = 5, 37 and 69
 // end in a partial slab and poison with NaN (a dropped k bound times the other operand's zero is a
 // silent -0 with finite poison); 300 x 200 adds m-edge, n-edge and corner groups. Then beta = 0 with
 // NaN in C. A wait on the wrong group or a refill of a buffer still to be read differs across items or
@@ -1413,6 +1413,95 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
             }
         }
         EXPECT_EQ(ran, 70);
+    }
+}
+
+// WP-F: the 128x128 predicated leg (u1 and u4) stages C at every k, with each pass's 16 priors loaded
+// in one batch, and u4's k-contiguous operand (B in NN and TN, A^T in TN and TT) copies k-fastest into a
+// padded stride. k = 64 / 65 straddle the old staged/direct edge; 300 x 200 holds interior, m-edge,
+// n-edge and corner groups (rows past m, columns past n); Gap1 and Strided views are predicated (odd ld
+// or odd bases); k = 65 and 137 end in a one-element slab under NaN poison. Batch 1024 repeating 7
+// problems with beta != 0, each item bit-identical to its representative, then beta = 0 with NaN in C.
+// Not covered by values: the u4 copy's m (n) row bound. Rows past m feed only C rows that are never
+// stored, so dropping it reads out of bounds without a wrong answer; only its k bound is checked here.
+// evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
+TYPED_TEST(GemmCandidates, Reg128x128PredicatedStagedEpilogueAtEveryK) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        const std::pair<Transpose, Transpose> forms[] = {{kN, kN}, {kN, kT}, {kT, kN}, {kT, kT}, {kC, kC}};
+        struct Leg { int m, n, k; Layout layout; bool nan; };
+        const Leg legs[] = {{300, 200, 64, Layout::Gap1, false}, {300, 200, 65, Layout::Strided, true},
+                            {256, 256, 96, Layout::OddLd, false}, {300, 200, 137, Layout::Gap1, true}};
+        int ran = 0, rows = 0;
+        for (int u : {1, 4}) {
+            const C c{og::Reg{128, 128, 8, u}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            for (auto [ta, tb] : forms)
+                for (const Leg& leg : legs)
+                    for (bool nan_c : {false, true}) {
+                        Spec s{ta, tb, leg.m, leg.n, leg.k, nan_c ? 3 : 1024, leg.layout};
+                        s.period = nan_c ? 0 : 7;
+                        s.beta_zero = s.nan_c = nan_c;
+                        s.nan_poison = leg.nan;
+                        s.seed = 9900u + leg.m + leg.k + u;
+                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        auto p = make_problem<T>(s);
+                        this->run_pinned(c, p);
+                        expect_gemm(*this->ctx, p, name(c, s) + " u" + std::to_string(u) + (nan_c ? " (NaN C)" : ""));
+                        if (::testing::Test::HasFatalFailure()) return;
+                        ++ran;
+                    }
+        }
+        if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        EXPECT_EQ(ran, 40 * rows);
+    }
+}
+
+// beta = 0 stores alpha * acc, as reference BLAS does: with A = 0 and alpha = -1 every element of C is
+// -0.0 on both 128x128 legs (Gap1 predicated, Padded aligned) and both epilogues (k = 32 staged on
+// both legs, k = 96 staged predicated and direct aligned). alpha * acc + 0 * 0 gives +0.0.
+TYPED_TEST(GemmCandidates, Reg128x128BetaZeroKeepsNegativeZero) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        int ran = 0, rows = 0;
+        for (int u : {1, 4}) {
+            const C c{og::Reg{128, 128, 8, u}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            for (auto [ta, tb] : {std::pair{kN, kN}, std::pair{kT, kN}, std::pair{kN, kT}})
+                for (Layout lay : {Layout::Gap1, Layout::Padded})
+                    for (int k : {32, 96}) {
+                        Spec s{ta, tb, 300, 200, k, 3, lay};
+                        s.beta_zero = s.nan_c = true;
+                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        auto p = make_problem<T>(s);
+                        for (int it = 0; it < s.batch; ++it)
+                            for (int j = 0; j < p.a.cols; ++j)
+                                for (int i = 0; i < p.a.rows; ++i) p.mem[Problem<T>::at(p.a, it, i, j)] = T(0);
+                        p.alpha = T(-1);
+                        this->run_pinned(c, p);
+                        int bad = 0;
+                        for (int it = 0; it < s.batch; ++it)
+                            for (int j = 0; j < s.n; ++j)
+                                for (int i = 0; i < s.m; ++i) {
+                                    const T v = p.mem[Problem<T>::at(p.c, it, i, j)];
+                                    bad += !(v == T(0) && std::signbit(v));
+                                }
+                        EXPECT_EQ(bad, 0) << name(c, s) << " u" << u;
+                        ++ran;
+                    }
+        }
+        if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        EXPECT_EQ(ran, 12 * rows);
     }
 }
 
@@ -1476,12 +1565,12 @@ TYPED_TEST(GemmCandidates, CoalescedCEpilogueEveryTileAtSaturatingBatch) {
                 ++nan_checked;
             }
     }
-    // Float: reg 17 + 4 x 30 (a 48 KiB cap drops 128x64x32 u4 and u2, NN only: 2 x 5; under 33,280 B
+    // Float: reg 17 + 4 x 30 (a 48 KiB cap drops 128x64x32 u4 and u2, NN only: 2 x 5; under 33,792 B
     // 128x128 u4 too: 2 + 4 x 4),
     // wide 14 + 4 x 24; double and complex<float> wide 14 + 4 x 24; complex<double> wide 4 x 24.
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_EQ(reg, reg_expected);
-        EXPECT_GE(reg, g_slm_budget < 33280 ? 109 : g_slm_budget < 49920 ? 127 : 137);
+        EXPECT_GE(reg, g_slm_budget < 33792 ? 109 : g_slm_budget < 49920 ? 127 : 137);
     }
     EXPECT_GE(wide, kWide16 ? 96 : 110);
     EXPECT_GE(nan_checked, 3 * 24);

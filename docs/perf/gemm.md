@@ -259,7 +259,8 @@ The 2026-09-27 rework had four levers, each measured alone:
    otherwise. Giving m lane bit 0 and n lane bit 1 cuts shared-load wavefronts 805M → 537M at 512³ b1024 (cuBLAS
    549M).
 3. **`L2::128B` hint on B.** `ld.global.L2::128B` takes 256³ b4096 from 0.80× to 1.00× and is neutral elsewhere.
-4. **Staged epilogue** for k ≤ 64, see [The staged epilogue](#the-staged-epilogue).
+4. **Staged epilogue** for k ≤ 64 on the aligned leg and at every k on the predicated leg (since WP-F), see
+   [The staged epilogue](#the-staged-epilogue).
 
 The launch bound `min_work_groups_per_cu(2)` (128-register cap) is a guard. 1 → 127 registers, same speed; 2 →
 128 registers (shipped); 3 → 80 registers plus 1.4 KB spill, 8.8× slower.
@@ -801,7 +802,8 @@ change, and only their epilogues:
   - 128x128: the staged epilogue now runs on the predicated leg too (k ≤ `kStagedEpilogueMaxK`, both legs). Its
     stage layout and the barrier before it (the odd-slab tail reads `sa`) are unchanged. The predicated leg
     stores scalars at rows `lane + 32 i`, one load-then-store per element. The aligned leg's code is untouched,
-    and so is the direct epilogue at k > 64.
+    and so is the direct epilogue at k > 64 (on the aligned leg only since WP-F, which stages the predicated leg
+    at every k).
   - 64x64 NN wide and `register_wide_transposed.hh`: `wide_scalar::staged_c_store`. `sa` then `sb` form one
     column-major stage of stride TileM, so a chunk is (TileK·(TileM+TileN))/TileM columns: 2 chunks for
     64x64, 128x32 and 32x128, 1 for 32x32 and 16x16. A 16-byte scalar (complex<double>) skips staging, because
@@ -822,7 +824,9 @@ there took four register-cap concessions, each found by a probe:
 
 - A per-group 16-byte branch in 128x128 (interior groups, or the direct epilogue at k > 64) spilled 20-36 B,
   so 128x128 has no band store off the aligned leg.
-- Prefetching all 16 prior values before the pass barrier also spilled.
+- Prefetching all 16 prior values before the pass barrier also spilled. WP-F later ships exactly that batch,
+  spill-free, on the predicated leg (loaded after the stage write, when the pass's accumulators are dead; see
+  [WP-F](#gemm-wp-f-float-mid-size-parity-on-sm_120)).
 - NN's predicated A loader now bounds its four rows with one live int, as B^T already did. With its four
   hoisted predicates, the staged NN leg spilled 28-40 B even with no read-back at all. NT keeps the four,
   because two ints spilled NT 48 B.
@@ -1805,6 +1809,140 @@ refusals; the panel-tile own-build tests run a real TT. Deliberate breaks, run o
   pinned bit-for-bit, `CanRunEqualsLaunch`, skinny, split-k, pipeline), all on 64×32 TT, TC, CT, CC.
 
 The sm_120 and sm_89 tables do not rank the new forms until the retune; the gemm kernel hash moved.
+## GEMM: WP-F, float mid-size parity on sm_120
+
+Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120, 188 SMs), one GPU, `batchlas_tune
+--mode time` (beta = 1, every arm verified), two passes per build in alternated order (parent, new, new reversed,
+parent reversed); 6 reps on the target cells, 4 on the screen. Ratios are against cuBLAS, both builds' vendor
+arms pooled. Parent: `f4d63663` (WP-N2 and WP-Q).
+
+Target: the coarse race left ~600 float cells at m, n ≥ 128 losing 1.08-1.38× (median 1.13), served by
+`wide:m=64:n=64:k=16` and `reg:m=128:n=128:k=8:u=1/u=4`, mostly `layout=strided` (odd ld) at k = 64-128.
+
+**ncu first** (`--set full`, one launch each, parent build):
+
+| cell (b128 unless noted) | arm | kernel | ms | DRAM % | IPC | regs, occ | global ld / st sectors (M) | top stall |
+|---|---|---|---|---|---|---|---|---|
+| NN strided 256×512×78 b2048 | vendor | `cutlass_80_simt_sgemm_256x128_8x4_nn_align1` | 1.819 | 92.3 | 1.63 | 210, 16.7% | 85 / 41 | barrier |
+| | u4 | `..._k8_s4` (direct epilogue) | 2.415 | 70.6 | 1.33 | 127, 33% | 300 / 151 | long scoreboard |
+| TN strided 2048×1024×96 | vendor | `..._256x128_8x4_tn_align1` | 2.093 | 70.0 | 1.65 | 212, 16.7% | 112 / 41 | MIO throttle |
+| | wide 64×64 | wide v2 element leg | 2.862 | 53.5 | 1.48 | 80, 49% | 544 / 41 | MIO throttle |
+| TT strided 1024×2048×96 | vendor | `..._128x256_8x4_tt_align1` | 1.834 | 82.9 | 2.07 | 212, 16.7% | 95 / 41 | |
+| | u4 | `..._k8_s4_tt` (direct, k > 64) | 2.596 | 58.5 | 1.47 | 127, 32% | 333 / 151 | long scoreboard |
+| NN packed 215×2048×96 | vendor | `..._128x64_8x5_nn_align1` (128 lanes) | 0.422 | 78.7 | 2.41 | 128, 25% | 28 / 8.7 | |
+| | wide 64×64 | wide v2 16-byte leg | 0.550 | 59.9 | 1.84 | 80, 48% | 104 / 8.7 | short scoreboard |
+| TN packed 512×256×78 b2048 | vendor | `..._128x256_8x4_tn_align1` | 1.827 | 93.6 | 1.67 | 210, 16.7% | 88 / 34 | |
+| | wide 64×64 | wide v2 (k % 16 ≠ 0) | 2.214 | 81.7 | 1.75 | 80, 49% | 445 / 34 | MIO throttle |
+| NN packed 512³ b2048 | vendor | `..._256x128_8x4_nn_align1` | 13.16 | 45.8 | 3.00 | 210, 16.7% | | selected |
+| | u1 | aligned leg | 14.39 | 41.5 | 2.45 | 139, 16.6% | | long scoreboard |
+
+cuBLAS runs CUTLASS SIMT kernels (`align1`: 4-byte `cp.async` at any ld, 4 or 5 stages, k = 8, one 256-lane
+group per SM). Both sides move the same DRAM bytes (e.g. 2.60 GB at 256×512×78); the cells are DRAM-bound and
+the loss is how much of the run DRAM is busy. Two defects of ours, neither the tile size:
+
+- **The predicated 128×128 leg's direct epilogue** (k > 64, and u4 NN at every k): scalar stores with lanes four
+  rows apart, 3.7× the store sectors and L2 write traffic of a whole-column store (151M against 41M).
+- **u4's k-contiguous operand** (B in NN and TN, Aᵀ in TN and TT): two lanes per column, four 4-byte copies
+  each, so a warp copy touched 16 rows' sectors for 128 useful bytes (343M load sectors against 112M, LSU/MIO
+  throttle).
+
+**Shipped** (`register_128x128.hh`; no new spelling, row or key, so the next race picks it up):
+
+| piece | rule |
+|---|---|
+| epilogue | the predicated leg (u1 and u4, every form) stages C at every k; the aligned leg keeps `kStagedEpilogueMaxK = 64`. The predicated direct instances are no longer compiled |
+| priors | per pass, the 16 C priors are loaded after the stage write (its accumulators are dead) and before the barrier, all in flight; none at beta = 0 |
+| u4 lane map | a k-contiguous operand takes k fastest: 8 lanes per 32-byte row segment, 4 rows per copy, 32 rows apart (`lda32`); out of range iff the k index or the row is |
+| u4 shared stride | 132 for both operands (4 pad), so the k-fastest transposed writes are conflict-free; local memory 33,792 B (`RegCfg::slm_bytes`) |
+| u4 staged NN | fits at 128 registers once `tid` is re-read after the copies (`mov %tid.x` in `asm volatile`); with the epilogue's addresses hoisted into the mainloop it spilled 20 B |
+
+Staging alone (priors read inline) fixed the sectors (41M) but not the time: 2.614 ms, DRAM 59%, long
+scoreboard on each prior. Batching the priors: 1.923 ms, DRAM 91.8% (vendor 1.819, 92.3%).
+
+| cell (b128 unless noted) | parent best | / vendor | new best | / vendor |
+|---|---|---|---|---|
+| NN strided 256×512×78 b2048 | u4 | 1.345 | u4 | 1.081 |
+| TN strided 2048×1024×96 | wide 64×64 / u4 | 1.361 | u4 | 1.067 |
+| TT strided 1024×2048×96 | u4 | 1.347 | u4 | 1.130 |
+| NT strided 362×1024×96 | u4 | 1.171 | u4 | 0.994 |
+| NN packed 215×2048×96 | u4 | 1.182 | u4 | 0.984 |
+| TN packed 512×256×78 b2048 | u4 / wide 64×64 | 1.266 | u4 | 1.054 |
+| control, NN packed 512³ b2048 (aligned, untouched) | u1 | 1.076 | u1 | 1.063 |
+| control, NT packed 1024³ (aligned, untouched) | u1 | 1.000 | u1 | 0.972 |
+
+Each step on its own (6 reps): the epilogue took NN strided 256×512×78 u4 from 1.342 to 1.122 and u1 from
+1.461 to 1.207; the lane map then took TN strided 2048×1024×96 from 1.179 to 1.067 and TN packed 512×256×78 from
+1.124 to 1.054 (NN 1.088 → 1.081, TT 1.136 → 1.130: one k-contiguous operand). The controls run unchanged code
+and move within the ~3% noise of this shared GPU.
+
+Screen, 28 losing cells drawn from the coarse race (m, n ≥ 128, k ≥ 32, at most 3 per form × layout × arm;
+`sample.txt` in the job dir): median best native / vendor 1.110 → 0.954, geomean new / parent 0.854; 5 cells
+still above 1.05: NN strided 1024×128×78 b2048 1.081, NT packed 2048×181×128 1.119 and NN strided 512×181×96
+1.105 (n = 181 leaves the second 128 tile 41% full), TT/TN strided k = 128 1.09, TN packed 1024×2048×64 1.057
+(aligned leg). In 25 of 28 the new best is u4, so the float strided and k % 8 ≠ 0 rows need the race.
+
+**ncu after** (new build): TT strided 1024×2048×96 u4 2.018 ms, DRAM 77% (vendor 1.834, 83%), load sectors 119M
+(vendor 95M), IPC 2.11; TN strided 2048×1024×96 u4 2.177 ms, DRAM 69.5% (vendor 2.093, 70.0%), load sectors 135M (342M before the lane map, vendor 112M), shared bank conflicts 38M (146M before; vendor 195M), IPC 1.76.
+
+**Negative:** u4's pipeline on aligned (packed) data too, instead of u1's register prefetch: NN 512³ b2048 1.146
+against u1's 1.070, NT 1024³ 1.121 against 1.028, TT 512³ 1.192 against 1.103; a win only on TN packed
+1024×2048×64 (1.023 against 1.056). Reverted: the aligned leg stays u1's kernel.
+
+**Registers** (`scripts/register_probe.sh`, sm_120): zero spill on every entry of `libbatchlas_sycl`; the 4 u4
+instances (all staged) 123, 127, 127, 128; u1 predicated staged 126-133. NT at 133 matches the parent's staged NT
+(k ≤ 64), but at k > 64 the parent ran direct at 128: one group per SM instead of two there (its wrapper has no
+`.reqntid`, known defect #20; measured below). Link of `libbatchlas_sycl`: 81 s, parent 81 s.
+
+Tests: `GemmCandidates.Reg128x128PredicatedStagedEpilogueAtEveryK` (u1 and u4, 5 forms, k = 64, 65, 96, 137 on
+300×200 and 256×256 at Gap1, Strided and OddLd, NaN poison on the one-element k tails, batch 1024 repeating 7
+problems at beta ≠ 0, then NaN C at beta = 0). The WP-I, WP-N2 and WP-B suites now run the staged path at k > 64.
+Deliberate breaks, run (filter: float `Reg128x128*` and `CoalescedCEpilogue*`):
+
+| break | red | green |
+|---|---|---|
+| store uses the neighbour pass's prior (`prior[q ^ 1]`) | every predicated beta ≠ 0 case, first at u1 NN 200×150×37 | the padded aligned legs |
+| priors read at beta = 0 | the three tests with NaN C on a predicated leg | the other three |
+| u4 k-fastest copy steps 31 rows (`lda32 - lda`) | four tests, first at u4 TN in each (NN, NT pass first) | the u1-only and aligned tests |
+| u4 Aᵀ copy drops its k bound | the three NaN-poison k-tail tests, first at u4 TN 256×256×37, ×5 and 300×200×65 | the other three |
+| beta = 0 stores `alpha * acc + 0 * 0` (review fix reverted) | `Reg128x128BetaZeroKeepsNegativeZero`, 11 u4 cases (+0.0 where reference BLAS gives -0.0) | u1 (its codegen kept -0.0 either way), every other test |
+
+The u4 copy's row bound is not covered by values: rows past m (n) feed only C rows that are never stored, so
+dropping it reads out of bounds with right answers.
+
+Every ratio above is a pinned arm. Auto still ranks arms by the parent's timings (`tuned/gemm.sm_120.txt`, whose
+gemm kernel hash is now stale) and keeps choosing `wide:m=64:n=64:k=16` or `vendor` on most of these cells until
+the float race is re-run and gated; none of these numbers is an Auto result yet.
+
+### WP-F review: long k and the u1 NT occupancy
+
+The predicated leg stages at every k, but the first measurements stopped at k = 137. Strided 512×512, batch 256,
+12 reps where a 6-rep pass was ambiguous; best of parent / new over vendor:
+
+| form, k | u4 parent → new | u1 parent → new |
+|---|---|---|
+| NN 256 | 1.053 → 0.926 | 1.160 → 1.028 |
+| NN 512 | 1.241 → 1.158 | 1.355 → 1.270 |
+| NN 1024 (12 reps) | 1.230 → 1.177 | 1.347 → 1.294 |
+| NN 2048 | 1.201 → 1.167 | 1.311 → 1.285 |
+| NT 256 | 1.019 → 0.952 | 1.033 → 0.954 |
+| NT 512 | 0.983 → 0.954 | 0.985 → 0.932 |
+| NT 1024 | 1.087 → 1.090 | 1.084 → 1.053 |
+| NT 2048 (12 reps) | 1.079 → 1.084 | 1.067 → 1.044 |
+| TN 256 | 1.284 → 1.089 | 1.597 → 1.473 |
+| TN 512 | 1.235 → 1.094 | 1.518 → 1.477 |
+| TN 1024 (12 reps) | 1.230 → 1.116 | 1.507 → 1.531 |
+| TN 2048 (12 reps) | 1.206 → 1.111 | 1.471 → 1.527 |
+
+No k ceiling for the predicated leg: staging wins or ties (u4 NT, within 0.5%) everywhere except u1 TN at
+k ≥ 1024 (1.6% and 3.8% slower, reproduced). There u1 is 1.5× vendor and 1.37× u4 in the same build, so no race
+ranks it; keeping a direct u1 TN instance for it would add a compiled kernel for a route nothing picks.
+
+u1 NT predicated at k > 64 went from the direct epilogue at 128 registers (two groups per SM) to the staged one at
+133 (one group per SM: 2 warps × 32 × 133 > 16,384 / 2 per sub-partition; no `.reqntid`, known defect #20).
+It is faster anyway: 362×1024×96 b128 1.235 → 1.048, 1024×1024×128 b128 1.114 → 0.976, and every NT row above.
+
+beta = 0 on the predicated staged store is `alpha * acc` alone (the aligned leg already was): `alpha * acc + 0 * 0`
+turned a -0.0 into +0.0 (alpha = -1, A = 0). Registers unchanged (same counts per instance, zero spill).
 
 ## GEMM: the register-tiled launcher table
 
@@ -1844,8 +1982,10 @@ is shared-load bound; 40..48 still lose to cuBLAS, which is why NN 33..56 has it
 At k ≤ 64 the 128×128 kernel is store-bound (512²×32 b4096 writes 4.3 GB of C). The direct epilogue stores four
 128-byte column pieces per warp instruction, and DRAM reaches 87.6% of peak against 89.6% for two 256-byte pieces,
 a 2–3% loss at k ≤ 32. The staged epilogue routes C through local memory (4 passes of 32 columns × 128 rows) so each
-warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64`. This was the aligned
-leg only until WP-B extended it (see the section on the coalesced C epilogue above).
+warp stores whole 128-row columns (512 B per `STG.128`). `kStagedEpilogueMaxK = 64` bounds the aligned leg. This
+was the aligned leg only until WP-B extended it (see the section on the coalesced C epilogue above); since WP-F
+the predicated leg stages at every k
+([WP-F](#gemm-wp-f-float-mid-size-parity-on-sm_120)).
 
 | k (512², β=0) | direct | staged |
 |---|---|---|
