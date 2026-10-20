@@ -232,10 +232,10 @@ bool wide_compiled(const WideRow& row) {
     return !row.cf_only || std::is_same_v<T, std::complex<float>>;
 }
 // Wide v2 (GemmWide64Body, two buffers, the 16-byte leg in every form): 64x64 for every scalar
-// but double, and the complex<float>-only rows.
+// but double, and the complex<float>-only rows for complex<float>.
 template <typename T>
 bool wide_v2(const WideRow& row) {
-    return (row.m == 64 && row.n == 64 && !std::is_same_v<T, double>) || row.cf_only;
+    return (row.m == 64 && row.n == 64 && !std::is_same_v<T, double>) || (row.cf_only && wide_compiled<T>(row));
 }
 // The bytes a wide launch gives its two local accessors: one k x (m + n) tile of T, which wide v2
 // (64x64, every scalar but double) double-buffers; complex<float> v2 is 32 KiB, a Metal limit, and
@@ -775,8 +775,11 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
     const og::WideCfg& w128 = og::wide_configs[8];
-    ASSERT_TRUE(w128.m == 128 && w128.n == 128 && w128.k == 8 && w128.scalars == og::kWideCF);
+    ASSERT_TRUE(w128.m == 128 && w128.n == 128 && w128.k == 8 && w128.scalars == og::kWideCF && w128.v2);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 32768);
+    static_assert(og::wide_v2_row<std::complex<float>>(og::wide_configs[8]) && !og::wide_v2_row<float>(og::wide_configs[8]) &&
+                      !og::splitk_host(og::wide_configs[8]),
+                  "the 128x128 row is wide v2 for complex<float> alone and hosts no split-k");
     // WP-K's transposed tiles: two stages except complex<double> 128x32, 32x128, 64x32 and 32x64.
     const struct { int m, n; std::int64_t f, d, cf, cd; } trans[] = {
         {128, 32, 20480, 40960, 40960, 40960}, {32, 128, 20480, 40960, 40960, 40960},
@@ -792,10 +795,13 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     for (const og::WideCfg& c : og::wide_configs) {
         const WideRow* row = wide_row(og::Wide{c.m, c.n, c.k});
         ASSERT_NE(row, nullptr) << c.m << "x" << c.n;
-        EXPECT_EQ(og::wide_slm_bytes<float>(c), wide_slm<float>(*row)) << c.m << "x" << c.n;
-        EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(c), wide_slm<std::complex<float>>(*row)) << c.m << "x" << c.n;
-        EXPECT_EQ(og::wide_slm_bytes<double>(c), wide_slm<double>(*row)) << c.m << "x" << c.n;
-        EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(c), wide_slm<std::complex<double>>(*row)) << c.m << "x" << c.n;
+        auto same = [&]<class U>(U) {
+            if (wide_compiled<U>(*row)) EXPECT_EQ(og::wide_slm_bytes<U>(c), wide_slm<U>(*row)) << c.m << "x" << c.n;
+        };
+        same(float{});
+        same(std::complex<float>{});
+        same(double{});
+        same(std::complex<double>{});
     }
     // The M5 Max's selector figures (docs/design/sycl-implementations.md#sycl-impl-metal-launch-limits:
     // 32 KiB less 8 B x 1024 lanes less the 4 KiB reserve, 8 B back per missing lane) refuse only
@@ -1869,14 +1875,16 @@ TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
 }
 
 // WP-O, wide v2's 128x128x8 tile (complex<float> only): each operand is staged as two 64-wide
-// halves, the second 64 down i (64 ld for a k-contiguous operand). All 9 forms; m and n
-// straddling 64, 128 and 256, k straddling 8, 16 and 32; ld = m + 1 (element leg) or padded
+// halves, the second 64 down i (64 ld for a k-contiguous operand). All 9 forms, each run to its
+// own first failure (a break's red set is per form); m and n straddling 64, 128 and 256 (n = 300
+// puts a third group on n0 = 256), k straddling 8, 16 and 32; ld = m + 1 (element leg) or padded
 // (16-byte leg), NaN in every gap, beta != 0. Then 257 x 136 x 33 at ld = m + 1 and 256 x 256 x 24
 // padded at batch 1024, 7 distinct problems, each item bit-identical to its representative; the
-// leg layouts at 288 x 136 x 48; beta = 0 with NaN in C. A dropped half offset in the store is
-// wrong in every form, one dropped from A's global address only where A is k-contiguous, and the
-// 64x64 band stride copied into the fragment read in every form, all at 128x128 alone. A half's
-// i bound only stops reads past m or n, whose products land in discarded rows: no value test sees it.
+// leg layouts at 288 x 136 x 48; beta = 0 with NaN in C. Breaks, all red at 128x128 alone: the B
+// half store offset dropped, in every form; A's global half offset not scaled by lda, in the 6
+// forms with A k-contiguous (T, C); B's not scaled by ldb, in the 3 with B k-contiguous (N); the
+// 64x64 band stride in the fragment read, in every form. A half's i bound only stops reads past
+// m or n, whose products land in discarded rows: no value test sees it.
 // evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
 TYPED_TEST(GemmCandidates, Wide128x128EveryFormAtSaturatingBatchAndTileEdges) {
     using T = typename TestFixture::T;
@@ -1884,56 +1892,69 @@ TYPED_TEST(GemmCandidates, Wide128x128EveryFormAtSaturatingBatchAndTileEdges) {
         GTEST_SKIP() << "wide:m=128:n=128:k=8 is compiled for complex<float> only";
     } else {
         const C c{og::Wide{128, 128, 8}};
-        ASSERT_TRUE(wide_fits<T>(*wide_row(std::get<og::Wide>(c))));
-        const std::pair<int, int> mn[] = {{63, 65}, {100, 128}, {128, 100}, {129, 129}, {255, 191}, {257, 64}};
+        if (!wide_fits<T>(*wide_row(std::get<og::Wide>(c)))) GTEST_SKIP() << "above this device's local memory budget";
+        const std::pair<int, int> mn[] = {{63, 65},   {64, 300},  {100, 128}, {127, 257},
+                                          {128, 100}, {129, 129}, {255, 191}, {257, 64}};
         const int ks[] = {7, 8, 9, 16, 17, 33};
         struct Big { int m, n, k; Layout layout; };
         const Big bigs[] = {{257, 136, 33, Layout::Gap1}, {256, 256, 24, Layout::Padded}};
-        int ran = 0, saturated = 0, leg_ran = 0, nan_checked = 0;
+        const ::testing::TestResult* res = ::testing::UnitTest::GetInstance()->current_test_info()->result();
+        auto red_since = [res](int from) {
+            for (int i = from; i < res->total_part_count(); ++i)
+                if (res->GetTestPartResult(i).fatally_failed()) return true;
+            return false;
+        };
+        int ran = 0, saturated = 0, leg_ran = 0, nan_checked = 0, red_forms = 0;
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
-                for (auto [m, n] : mn)
-                    for (int k : ks) {
-                        Spec s{ta, tb, m, n, k, 3, (m + k) % 2 ? Layout::Gap1 : Layout::Padded};
+                const int from = res->total_part_count();
+                auto one_form = [&] {
+                    for (auto [m, n] : mn)
+                        for (int k : ks) {
+                            Spec s{ta, tb, m, n, k, 3, (m + k) % 2 ? Layout::Gap1 : Layout::Padded};
+                            s.nan_poison = true;
+                            s.seed = 9200u + 3u * m + 5u * n + 7u * k;
+                            ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                            auto p = make_problem<T>(s);
+                            this->run_pinned(c, p);
+                            expect_gemm(*this->ctx, p, name(c, s));
+                            if (red_since(from)) return;
+                            ++ran;
+                        }
+                    for (const Big& b : bigs) {
+                        Spec s{ta, tb, b.m, b.n, b.k, 1024, b.layout};
+                        s.period = 7;
                         s.nan_poison = true;
-                        s.seed = 9200u + 3u * m + 5u * n + 7u * k;
-                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        s.seed = 9100u + 3u * unsigned(ta) + unsigned(tb) + unsigned(b.k);
                         auto p = make_problem<T>(s);
                         this->run_pinned(c, p);
                         expect_gemm(*this->ctx, p, name(c, s));
-                        if (::testing::Test::HasFatalFailure()) return;
-                        ++ran;
+                        if (red_since(from)) return;
+                        ++saturated;
                     }
-                for (const Big& b : bigs) {
-                    Spec s{ta, tb, b.m, b.n, b.k, 1024, b.layout};
-                    s.period = 7;
-                    s.nan_poison = true;
-                    s.seed = 9100u + 3u * unsigned(ta) + unsigned(tb) + unsigned(b.k);
+                    for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
+                        Spec s{ta, tb, 288, 136, 48, 4, la};
+                        if (lb != la) s.layout_b = lb;
+                        s.seed = 9000u + 13u * unsigned(la) + unsigned(lb);
+                        auto p = make_problem<T>(s);
+                        this->run_pinned(c, p);
+                        expect_gemm(*this->ctx, p, name(c, s) + (vec ? " (16-byte leg)" : " (element leg)"));
+                        if (red_since(from)) return;
+                        ++leg_ran;
+                    }
+                    Spec s{ta, tb, 129, 65, 9, 3, Layout::Gap1};
+                    s.beta_zero = s.nan_c = true;
                     auto p = make_problem<T>(s);
                     this->run_pinned(c, p);
-                    expect_gemm(*this->ctx, p, name(c, s));
-                    if (::testing::Test::HasFatalFailure()) return;
-                    ++saturated;
-                }
-                for (const auto& [la, lb, vec] : wide_v2_leg_layouts<T>()) {
-                    Spec s{ta, tb, 288, 136, 48, 4, la};
-                    if (lb != la) s.layout_b = lb;
-                    s.seed = 9000u + 13u * unsigned(la) + unsigned(lb);
-                    auto p = make_problem<T>(s);
-                    this->run_pinned(c, p);
-                    expect_gemm(*this->ctx, p, name(c, s) + (vec ? " (16-byte leg)" : " (element leg)"));
-                    if (::testing::Test::HasFatalFailure()) return;
-                    ++leg_ran;
-                }
-                Spec s{ta, tb, 129, 65, 9, 3, Layout::Gap1};
-                s.beta_zero = s.nan_c = true;
-                auto p = make_problem<T>(s);
-                this->run_pinned(c, p);
-                expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
-                if (::testing::Test::HasFatalFailure()) return;
-                ++nan_checked;
+                    expect_gemm(*this->ctx, p, name(c, s) + " (NaN C)");
+                    if (red_since(from)) return;
+                    ++nan_checked;
+                };
+                one_form();
+                red_forms += red_since(from);
             }
-        EXPECT_EQ(ran, 9 * 6 * 6);
+        if (red_forms) return;
+        EXPECT_EQ(ran, 9 * 8 * 6);
         EXPECT_EQ(saturated, 9 * 2);
         EXPECT_EQ(leg_ran, 9 * int(wide_v2_leg_layouts<T>().size()));
         EXPECT_EQ(nan_checked, 9);

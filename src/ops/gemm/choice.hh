@@ -98,17 +98,21 @@ inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC |
 inline constexpr unsigned kWideF = 1, kWideD = 2, kWideCF = 4, kWideCD = 8, kWideAllScalars = 0xF;
 template <class T>
 constexpr unsigned wide_scalar_bit() {
+    static_assert(std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::complex<float>> ||
+                      std::is_same_v<T, std::complex<double>>,
+                  "a wide config compiles only the four BLAS scalars");
     return std::is_same_v<T, float> ? kWideF : std::is_same_v<T, double> ? kWideD
          : std::is_same_v<T, std::complex<float>> ? kWideCF : kWideCD;
 }
 
-/// One compiled wide config, the forms a complex scalar instantiates and the scalars it compiles
-/// for. A real scalar compiles only the N/C forms: conj is the identity, so its C build serves a
-/// real T (wide_serves).
+/// One compiled wide config, the forms a complex scalar instantiates, the scalars it compiles for
+/// and whether a tile other than 64x64 runs wide v2 (GemmWide64Body). A real scalar compiles only
+/// the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
 struct WideCfg {
     int m, n, k, ttm, ttn;
     unsigned forms;
     unsigned scalars = kWideAllScalars;
+    bool v2 = false;
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
     constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
     template <class T>
@@ -123,18 +127,20 @@ inline constexpr std::array<WideCfg, 9> wide_configs{{
     {64, 32, 16, 4, 4, kWideSmallTileForms},
     {32, 64, 16, 4, 4, kWideSmallTileForms},
     {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
-    {128, 128, 8, 8, 8, kWideAll, kWideCF},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
+    {128, 128, 8, 8, 8, kWideAll, kWideCF, true},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
 }};
 
 /// Does this row run wide v2 (GemmWide64Body) for T? 64x64 for every scalar but double, and every
-/// complex<float>-only row.
+/// v2 row for the scalars it compiles.
 template <class T>
 constexpr bool wide_v2_row(const WideCfg& c) {
-    return (c.m == 64 && c.n == 64 && !std::is_same_v<T, double>) || c.scalars == kWideCF;
+    return (c.m == 64 && c.n == 64 && !std::is_same_v<T, double>) || (c.v2 && c.compiles<T>());
 }
 
 /// split-k hosts: every wide row launch_wide_transposed runs in all its forms (not 64x64, every scalar).
-constexpr bool splitk_host(const WideCfg& c) { return !(c.m == 64 && c.n == 64) && c.scalars == kWideAllScalars; }
+constexpr bool splitk_host(const WideCfg& c) {
+    return !(c.m == 64 && c.n == 64) && !c.v2 && c.scalars == kWideAllScalars;
+}
 inline constexpr std::array<int, 3> kSplitKSlices{2, 4, 8};
 /// The partials' column stride: m rounded to 4, so a slice's columns are whole 16-byte granules.
 constexpr std::int64_t splitk_ld(std::int64_t m) { return (m + 3) / 4 * 4; }

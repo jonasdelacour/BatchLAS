@@ -681,6 +681,7 @@ struct GemmWide64Body {
     static_assert(TTM % VecN == 0 && TTN % VecN == 0 && EpiBatch * Threads == 2 * TileK * (TileM + TileN),
                   "whole fragment granules and a whole-chunk epilogue batch");
     static_assert(TileK == 16 || TileK == 8, "first_k and swz map these two slab depths");
+    static_assert(TileM * TileN == 4096 || TileK == 8, "a larger tile at k = 16 needs > 48 KiB and NR = 4");
     static_assert(GPR * TileK == CF * OpThreads, "CF granules per staging lane per operand");
 
     const float* a_ptr;
