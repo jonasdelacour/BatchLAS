@@ -113,7 +113,7 @@ public:
         // orgqr blocked applies the public ormqr to an identity: ormqr's kernels and selection count, and
         // through ormqr blocked the public gemm and trmm too.
         // family: blocked "src/ops/ormqr/kernels/ormqr_blocked.cc" "include/batchlas/internal/ormqr_blocked.hh" "src/kernels/common/larft_wy.hh" "src/ops/ormqr/choice.hh" "src/ops/ormqr/ormqr.cc"
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
         // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
         // kernel-deps-end
