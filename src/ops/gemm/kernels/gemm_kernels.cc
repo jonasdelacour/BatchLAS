@@ -220,6 +220,20 @@ const char* aligned_trace_name(KernelVariant variant) {
     }
 }
 
+// Wide v2 128x128's cp.async legs: the register-prefetch leg's name, suffixed _s3 (static storage).
+const char* stages3_trace_name(KernelVariant variant, bool vec) {
+    constexpr int kCount = static_cast<int>(KernelVariant::Count);
+    static const std::array<std::string, 2 * kCount> names = [] {
+        std::array<std::string, 2 * kCount> out;
+        for (int i = 0; i < kCount; ++i) {
+            out[2 * i] = std::string(kernel_trace_name(KernelVariant(i))) + "_s3";
+            out[2 * i + 1] = std::string(aligned_trace_name(KernelVariant(i))) + "_s3";
+        }
+        return out;
+    }();
+    return names[2 * static_cast<int>(variant) + (vec ? 1 : 0)].c_str();
+}
+
 template <typename T>
 Event launch_direct(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -448,7 +462,8 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         static_assert(og::wide_slm_bytes<T>(c) == std::int64_t(2) * (Body::BufA + Body::BufB) * std::int64_t(sizeof(float)),
                       "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
         return launch_wide64_v2<T, OA, OB, c.k, c.m, c.n>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
-                                                          aligned_trace_name(v));
+                                                          aligned_trace_name(v), stages3_trace_name(v, false),
+                                                          stages3_trace_name(v, true));
     } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64 && c.k == 16) {
         // The double NN 64x64x16 tile is its own kernel; its leg is derived from the layout.
         // Double 64x64x8 runs launch_wide_transposed in every form, NN included.

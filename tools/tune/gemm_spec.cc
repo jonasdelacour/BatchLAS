@@ -221,9 +221,11 @@ public:
             // family: reg
             "src/ops/gemm/kernels/load_policies.hh",
             "src/ops/gemm/kernels/register_128x128.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/ops/gemm/kernels/vec4.hh",
             // family: wide
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/ops/gemm/kernels/vec4.hh",
             // family: reg
             "src/ops/gemm/kernels/register_launchers.hh",
@@ -234,6 +236,7 @@ public:
             // family: splitk
             "src/ops/gemm/kernels/register_wide_transposed.hh",
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/sycl/device_scalar.hh",
             // family: small
             "src/ops/gemm/kernels/small_batched.hh",

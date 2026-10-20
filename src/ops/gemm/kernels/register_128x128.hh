@@ -19,6 +19,7 @@
 // evidence: docs/perf/gemm.md#gemm-the-128x128-kernel-in-every-real-transpose-form
 
 #include <src/ops/gemm/kernels/accessors.hh>
+#include <src/ops/gemm/kernels/copy_async.hh>
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
 
@@ -94,38 +95,6 @@ inline T load1_l2_line(const T* p) {
     }
 #endif
     return *p;
-}
-
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__) && defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
-#define BATCHLAS_GEMM_CP_ASYNC 1
-#else
-#define BATCHLAS_GEMM_CP_ASYNC 0
-#endif
-
-// One global -> local element copy that skips the registers, zero-filled when !valid (src-size 0:
-// nothing is read, src may be out of bounds), at any ld or alignment: cp.async on sm_80+ (dst_local
-// is dst's shared-window address), a plain copy elsewhere, ordered the same way by the barrier
-// after the wait. evidence: docs/perf/gemm.md#gemm-wp-n2-the-u4-stack-frame-and-zero-filled-predicated-copies
-template <typename T>
-inline void copy_async_zfill(T* dst, [[maybe_unused]] std::uint32_t dst_local, const T* src, bool valid) {
-#if BATCHLAS_GEMM_CP_ASYNC
-    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], 4, %2;" ::"r"(dst_local), "l"(src),
-                 "r"(valid ? 4u : 0u) : "memory");
-#else
-    *dst = valid ? *src : T(0);
-#endif
-}
-inline void copy_async_commit() {
-#if BATCHLAS_GEMM_CP_ASYNC
-    asm volatile("cp.async.commit_group;" ::: "memory");
-#endif
-}
-// Wait until at most N of this thread's committed groups are in flight.
-template <int N>
-inline void copy_async_wait() {
-#if BATCHLAS_GEMM_CP_ASYNC
-    asm volatile("cp.async.wait_group %0;" ::"n"(N) : "memory");
-#endif
 }
 
 // Does this problem satisfy everything the unpredicated path assumes? A leg predicate only:
@@ -393,7 +362,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = oa + a_k * AStride + a_m + 32 * i;
-                        copy_async_zfill(sa + o, sa_l + 4u * o, ga + lda32 * i, 32 * i < lim);
+                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, ga + lda32 * i, 32 * i < lim ? 4u : 0u);
                     }
                     ga += TileK;
                 } else {
@@ -401,7 +370,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = oa + a_k * AStride + a_m + 32 * i;
-                        copy_async_zfill(sa + o, sa_l + 4u * o, ga + 32 * i, 32 * i < lim);
+                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, ga + 32 * i, 32 * i < lim ? 4u : 0u);
                     }
                     ga += static_cast<std::ptrdiff_t>(TileK) * lda;
                 }
@@ -411,7 +380,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = ob + b_k * BStride + b_n + 32 * i;
-                        copy_async_zfill(sb + o, sb_l + 4u * o, gb + ldb32 * i, 32 * i < lim);
+                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, gb + ldb32 * i, 32 * i < lim ? 4u : 0u);
                     }
                     gb += TileK;
                 } else {
@@ -419,7 +388,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = ob + b_k * BStride + b_n + 32 * i;
-                        copy_async_zfill(sb + o, sb_l + 4u * o, gb + 32 * i, 32 * i < lim);
+                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, gb + 32 * i, 32 * i < lim ? 4u : 0u);
                     }
                     gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
                 }

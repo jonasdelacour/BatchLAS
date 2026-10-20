@@ -1734,15 +1734,19 @@ was not built: 128x128 makes it redundant on these cells.
 ## GEMM: WP-V, three copy-async stages for the 128x128 complex float tile
 
 Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
-time` (beta = 1, every arm verified), 10-12 reps × 2 passes in alternated order (parent, new, new, parent).
-Ratios are each build's mean over both passes against its own cuBLAS arm.
+time` (beta = 1, every arm verified), 2 passes in alternated order (parent, new, new, parent): 10 reps for the
+variants table, 12 for the parent table. Ratios are each build's mean over both passes against its own cuBLAS arm.
+Nothing here was timed on another architecture.
 
 `wide:m=128:n=128:k=8` (complex<float>) gets a second leg, derived in `launch_wide64_v2`, never a field or key:
 
 | leg | when | staging | local | registers (sm_120 / sm_89) |
 |---|---|---|---|---|
-| cp.async | DPC++, `cuda_compute_capability() >= 80`, slm budget ≥ 48 KiB | 3 slabs, 2 in flight, no register prefetch | 48 KiB | 229-232 / ≤ 249 |
-| register prefetch (WP-O) | otherwise (acpp, pre-sm_80, Metal) | 2 slabs | 32 KiB | 254-255 / 248-255 |
+| cp.async (trace `…_s3`) | DPC++, `cuda_compute_capability() >= 120`, slm budget ≥ 48 KiB, A and B bases 8-byte aligned | 3 slabs, 2 in flight, no register prefetch | 48 KiB | 229-232 / ≤ 249 |
+| register prefetch (WP-O) | otherwise (acpp, below sm_120, Metal, a 4-byte base) | 2 slabs | 32 KiB | 254-255 / 248-255 |
+
+`BATCHLAS_GEMM_WIDE_STAGES=2` forces the register prefetch; `=3` admits the cp.async leg from sm_80 (the A/B
+switch for an unmeasured architecture, sm_89 included).
 
 - Copies (`wide_v2::acopy`): 16 bytes per granule along i on the 16-byte leg (`src-size` 8 or 0 at the i edge), two
   8-byte copies on the element leg, 8 bytes per element along k (a granule pairs two columns, which land in
@@ -1751,7 +1755,9 @@ Ratios are each build's mean over both passes against its own cuBLAS arm.
 - Step s: `wait_group 1`, barrier, refill the buffer slab s - 1 was read from, commit (empty past the end), compute.
 - Lanes 0-127 copy the first 64-wide half of A and of B, lanes 128-255 the second, so all eight warps issue copies.
 - can_run keeps the 32 KiB term: the cp.async leg only runs where the launcher sees 48 KiB, else the 32 KiB leg.
-- Both legs keep their trace names; `BATCHLAS_KERNEL_TRACE` cannot tell them apart.
+- The cp.async legs trace as the register-prefetch name plus `_s3`.
+- Every 8-byte copy needs an 8-byte-aligned element. `alignof(std::complex<float>)` is 4, so a view at a 4-byte
+  base is legal; the launcher sends it to the register prefetch.
 - `scripts/register_probe.sh`: 0 spill, 0 stack on both probes (sm_120 build and a `-DBATCHLAS_NVIDIA_ARCH=sm_89`
   tree, probe only).
 
@@ -1802,25 +1808,60 @@ parent/vendor):
 | control: NT packed 512³ b2048 | 1.015 | 0.999 | 0.984 |
 | control: NN packed 512×512×128 b2048 | 1.031 | 1.010 | 0.980 |
 
-Every cell gains 2-7%; none loses. In-binary variant runs agree within 1-2% per cell. cuBLAS still leads on short-k
+Every cell gains 1.6-7%; none loses. In-binary variant runs agree within 1-2% per cell. cuBLAS still leads on short-k
 NN/NT (k = 23-45: 1.06-1.07×), NN packed 2048×362×64 (1.06×), TN 1024×1024×32 (1.06×). The tables do not rank
 the row yet, so Auto changes only after the retune.
 
-Tests: `GemmCandidates.Wide128x128EveryFormAtSaturatingBatchAndTileEdges` (WP-O's) now runs the cp.async leg on
-sm_80+. Deliberate breaks, run on sm_120, one temporary build switching them at run time (first red per form):
+Tests: `GemmCandidates.Wide128x128EveryFormAtSaturatingBatchAndTileEdges` (WP-O's) runs the cp.async leg on
+sm_120. Deliberate breaks, run on sm_120, one temporary build switching them at run time (first red per form):
 
 | break | first red | green before it |
 |---|---|---|
-| `cp_async_wait<Stages - 1>` | all 9 forms, k = 7 (one slab); TT and CT at 64×300 | TT, CT at 63×65 k = 7 |
+| `copy_async_wait<Stages - 1>` | all 9 forms, k = 7 (one slab); TT and CT at 64×300 | TT, CT at 63×65 k = 7 |
 | refill buffer `(buf + 1) % Stages` | all 9 forms, k = 17 (3 slabs) | k = 7, 8, 9, 16 (≤ 2 slabs never refill) |
 | drop B's pointer bump | all 9 forms, k = 9 (2 slabs) | k = 7, 8 |
 | B's half offset dropped (`pb + 0`) | all 9 forms, 63×65 k = 7 | none |
 | B's k bound dropped (`k` → 2³⁰) | all 9 forms, k = 7 (NaN) | none |
 | A's i bound dropped (`a_lim` → 2³⁰) | none: rows past m feed only discarded accumulators (as WP-O) | all |
 
-Not covered on this box: the 32 KiB register-prefetch leg of this row (unchanged code) runs only below sm_80, in
-acpp or on Metal. The accepted `src-size` 0 assumption of WP-N2 holds here too (zero-filled copies may name an
-address past the allocation).
+The i-edge `src-size` (8 rather than 16) on the 16-byte leg is as untestable as A's i bound: it only stops reads
+past m. The accepted `src-size` 0 assumption of WP-N2 holds here too (zero-filled copies may name an address past
+the allocation).
+
+### WP-V review: the sm_120 gate, 8-byte bases and the _s3 traces
+
+Changes after review (same machine and protocol):
+
+- **Gate:** cc ≥ 120, the only architecture timed. sm_80-90 keep WP-O's leg unless `BATCHLAS_GEMM_WIDE_STAGES=3`.
+- **8-byte bases:** a cfloat view at a 4-byte base faulted on the cp.async leg (`CUDA_ERROR_MISALIGNED_ADDRESS`,
+  sticky). The launcher now checks both bases.
+- **Traces and knob:** the cp.async legs trace as `_s3`. `BATCHLAS_GEMM_WIDE_STAGES=2` is a test and A/B switch,
+  so the register-prefetch leg runs on sm_120 again.
+- **Shared header:** the cp.async helpers moved to `src/ops/gemm/kernels/copy_async.hh`, shared with the float
+  128x128 pipeline. Registers, stack and spill are identical in all 732 gemm entries on both probes (sm_120 and
+  sm_89).
+- **Not done:** caching the leg test per device. The other gemm launchers already call `local_mem_bytes` per
+  launch, and `cuda_compute_capability` is memoised.
+
+Tests: `Wide128x128EveryFormAtSaturatingBatchAndTileEdges` runs everything twice, once on the derived leg and once
+with `BATCHLAS_GEMM_WIDE_STAGES=2`. Each form adds 257×136×33 at a 4-byte base. `PinnedChoiceLaunchesItsOwnKernel`
+adds 128x128 at a 4-byte base and padded and Gap1 views under `=2`.
+
+Deliberate breaks, on sm_120, through a temporary run-time switch:
+
+| break | red |
+|---|---|
+| base check dropped | `CUDA_ERROR_MISALIGNED_ADDRESS` on the first 4-byte-base case, which aborts the process |
+| `=2` ignored | PinnedChoiceLaunchesItsOwnKernel: 18 cases (9 forms × the 2 `=2` views) |
+| the 16-byte cp.async leg traced without `_s3` | PinnedChoiceLaunchesItsOwnKernel: 45 cases (9 forms × 5 aligned-leg views) |
+
+A's k bound and A's pointer bump have no break of their own. They are the same `acopy` and `issue` code as B's,
+whose breaks are above.
+
+Re-measured, the old WP-V build against the fixed one (12 reps × 2 passes, vendor-normalised): NN strided 512³
+1.001, TN strided 1024×256×78 1.003, NC strided 256×512×78 1.003, NN packed 2048×362×64 1.003, NN packed 1024³
+1.001. In the same binary on NN strided 512³, `=2` gives 1.075× vendor and the default gives 1.005× (0.935, which
+matches the 0.934 above).
 
 ## GEMM: WP-T, TT, TC and CC on the small transposed tiles
 

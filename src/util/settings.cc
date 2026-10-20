@@ -159,6 +159,7 @@ void load_geometry(GeometrySettings& g) {
 
     set_if_present(g.sytrd_block_size, "BATCHLAS_SYTRD_BLOCK_SIZE", positive_or(0));
     set_if_present(g.trmm_tile_m, "BATCHLAS_TRMM_TILE_M", positive_or(0));
+    set_if_present(g.gemm_wide_stages, "BATCHLAS_GEMM_WIDE_STAGES", positive_or(0));
     set_if_present(g.trsm_outer_nb, "BATCHLAS_TRSM_OUTER_NB", positive_or(0));
 
     set_if_present(g.expand_max_bytes, "BATCHLAS_EXPAND_MAX_BYTES");            // strtoull, size_t
