@@ -24,7 +24,9 @@ timed cells (< 1 is faster than cuBLAS). Each row is a full coarse pass of the k
 
 double: 1 losing cell (1.05×) in the shipped table. What is left (median loss 1.08×): float TT/TN/NN strided
 mid shapes on `reg:m=128:n=128:k=8:u=4` and strided skinny shapes on the wide tiles; complex<float> NT/NC
-strided skinny and mid shapes. Every work package has its own section below.
+strided skinny and mid shapes. Every work package has its own section below. WP-X (after the shipped table) brings the
+complex<float> skinny cells on the transposed tiles to 0.94-1.01× vendor and float to 0.99-1.13×; the retune has
+not ranked it yet.
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
@@ -1881,6 +1883,152 @@ Re-measured, the old WP-V build against the fixed one (12 reps × 2 passes, vend
 1.001, TN strided 1024×256×78 1.003, NC strided 256×512×78 1.003, NN packed 2048×362×64 1.003, NN packed 1024³
 1.001. In the same binary on NN strided 512³, `=2` gives 1.075× vendor and the default gives 1.005× (0.935, which
 matches the 0.934 above).
+
+## GEMM: WP-X, copy-async stages for the transposed wide tiles
+
+Measured 2026-10-20/21 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
+time` (beta = 1, every arm verified), 10 reps × 2 passes in alternated order (parent, new, `=2`, then reversed).
+Ratios are each process's mean over both passes against its own cuBLAS arm. Nothing was timed on another
+architecture.
+
+Target: the strided skinny and panel cells `launch_wide_transposed` serves (128x32, 32x128, 64x32, 32x64, 32x32,
+16x16) that the shipped sm_120 table still loses at 1.08-1.25× (cfloat NC/NT, float NN/TN/TT).
+
+**What limits them** (ncu, durations at ncu's locked clock; sectors are L1 global-load sectors):
+
+| cell | arm | µs | DRAM % | load sectors | long_scoreboard / issue |
+|---|---|---|---|---|---|
+| cfloat NC strided 2048×32×32 b128 | `wide:m=128:n=32:k=16` (parent) | 123 | 72.7 | 15.4M | 5.62 |
+| | cuBLAS `cutlass_100_simt_cgemm_64x32_16x4_nh_align1` | 98 | 90.1 | 5.7M | 1.79 |
+| cfloat NT strided 2048×32×32 b128 | `wide:m=64:n=32:k=16` (parent) | 122 | 73.2 | 17.6M | 6.49 |
+| | cuBLAS `cutlass_100_simt_cgemm_64x32_16x4_nt_align1` | 102 | 87.0 | 5.7M | 1.74 |
+| cfloat NC strided 256×32×128 b2048 | `wide:m=128:n=32:k=16` (parent) | 631 | 81.1 | 95.9M | 2.91 |
+| | cuBLAS `cutlass_100_simt_cgemm_64x32_16x4_nh_align1` | 558 | 92.6 | 32.1M | 0.64 |
+| float NN strided 2048×32×64 b2048 | `wide:m=64:n=32:k=16` (parent) | 1682 | 73.9 | 247M | 15.99 |
+| | cuBLAS `cutlass_80_simt_sgemm_128x32_8x5_nn_align1` | 1364 | 91.6 | 77M | 1.90 |
+
+Every cell is DRAM-bound: cuBLAS (element-wise `cp.async`, 4-5 stages, 16% occupancy) sits at 87-93% of DRAM, the
+parent at 73-81%. Two causes, in order of size:
+
+- **The staged C epilogue.** At ld = m + 1 every group stores C through local memory, two prior loads per thread
+  per round trip: 8 serial round trips for a 64x32 complex<float> tile. At k = 32 the C traffic equals the A
+  traffic, so half the bytes moved at the latency of one load per lane.
+- **Element loads.** The element leg reads a 16-byte granule as VecN loads at a 16-byte lane stride, so each load
+  touches twice the sectors it uses (2.1-3.2× cuBLAS's sector count).
+
+**Design.**
+
+| piece | rule |
+|---|---|
+| epilogue (float, complex<float>, both legs) | `staged_c_store` in one pass and one round trip, as wide v2's (WP-Q): the stage space holds the whole tile, each thread one row and TileN / (Threads / TileM) columns (16; 4 on 16x16), every prior load in flight. Double precision keeps two per trip |
+| cp.async leg (complex<float> only) | 2 stages, no register prefetch, one barrier per slab (wide v2's 128x128 ring at Stages = 2). Along i on the 16-byte leg one 16-byte copy per granule (`src-size` cut at the i edge); every other copy one 8-byte element, consecutive lanes on consecutive global addresses (along i, or along k when the operand is k-contiguous). Zero fill by `src-size` 0, so no predicated diamond. Conjugation at the fragment read. Swizzle and fragment reads unchanged |
+| gate (launcher, never a key) | DPC++, `cuda_compute_capability() >= 120`, both bases 8-byte aligned, ld ≤ INT_MAX / 128 (int offsets), the 2-stage local memory (can_run's term). `BATCHLAS_GEMM_WIDE_STAGES=2` forces the register prefetch, `=3` admits sm_80+ |
+| traces | `<trace>_async`, and `<host>_splitk_async` for the split-k bodies, which take the same leg |
+
+**Variants** (one build, the leg chosen at run time; ratio to the vendor):
+
+| cell | parent | register prefetch + epilogue | cp.async 2 | 3 stages | 4 stages |
+|---|---|---|---|---|---|
+| cfloat NC strided 2048×32×32 b128, 128x32 | 1.162 | 0.979 | 0.942 | 1.017 | 1.035 |
+| cfloat NT strided 2048×32×32 b128, 64x32 | 1.129 | 0.980 | 0.981 | 1.036 | 1.026 |
+| cfloat NC strided 256×32×128 b2048, 64x32 | 1.087 | 1.051 | 1.004 | 1.029 | 1.034 |
+| cfloat NC strided 32×2048×128 b128, 32x128 | 1.037 | 0.988 | 0.924 | 0.965 | 0.976 |
+| cfloat NC packed 2048×32×64 b128, 128x32 | 0.952 | 0.959 | 0.941 | 1.055 | 1.101 |
+| float NT strided 2048×32×128 b2048, 128x32 | 1.107 | 1.040 | 1.068 | 1.074 | 1.068 |
+| float TN strided 2048×32×45 b2048, 128x32 | 1.196 | 1.047 | 1.067 | 1.064 | 1.070 |
+
+Three and four stages (60 and 80 KiB on 128x32 complex<float>, 36-48 KiB on 64x32) cut the groups per SM from two
+to one, or four to two, and lose 3-10%. Float's 4-byte copies raise the element-leg registers from 72-80 to 96
+(128x32, 64x32) and 125-128 (32x32 NN, TT), and the 256-lane tiles drop from three groups per SM to two; float
+keeps the register prefetch and takes only the epilogue.
+
+**A/B against the parent build** (ratio to the vendor, mean of both passes; `=2` is the new build with the
+register prefetch forced, so new / `=2` is the copy leg alone; float has no copy leg):
+
+| cell (b = batch) | arm | parent | new | `=2` |
+|---|---|---|---|---|
+| cfloat NC strided 2048×32×32 b128 | 128x32 | 1.174 | **0.958** | 0.983 |
+| cfloat NT strided 2048×32×32 b128 | 64x32 | 1.116 | **0.974** | 0.978 |
+| cfloat NC strided 2048×32×64 b128 | 64x32 | 1.156 | **0.989** | 1.069 |
+| cfloat NC strided 128×32×96 b2048 | 128x32 | 1.110 | **0.965** | 0.963 |
+| cfloat NC strided 256×32×32 b2048 | 128x32 | 1.170 | **1.010** | 0.998 |
+| cfloat NC strided 32×2048×128 b128 | 32x128 | 1.040 | **0.935** | 0.987 |
+| cfloat NC strided 45×32×128 b2048 | 32x32 | 1.076 | **1.005** | 1.045 |
+| cfloat NT strided 256×32×128 b2048 | 128x32 | 1.056 | **0.984** | 1.002 |
+| cfloat NC strided 64×32×128 b32768 | 64x32 | 1.065 | **0.994** | 1.009 |
+| cfloat NC strided 32×256×96 b2048 | 32x64 | 1.058 | **0.991** | 1.004 |
+| cfloat CN strided 1024×32×1024 b128 | 128x32 | 0.935 | 0.863 | 0.942 |
+| | splitk 128x32 s4 | 1.005 | 0.959 | 1.003 |
+| float NN strided 2048×32×64 b2048 | 64x32 | 1.188 | **1.101** | 1.103 |
+| float TT strided 362×32×32 b2048 | 64x32 | 1.290 | **1.126** | 1.122 |
+| float NT strided 2048×32×128 b2048 | 128x32 | 1.104 | **1.045** | 1.043 |
+| float TN strided 2048×32×45 b2048 | 128x32 | 1.202 | **1.051** | 1.052 |
+| float NN strided 1448×32×96 b2048 | 64x32 | 1.167 | **1.100** | 1.097 |
+| float NT strided 32×1024×256 b2048 | 32x128 | 1.062 | 0.990 | 0.990 |
+| control: cfloat NC packed 2048×32×64 b128 | 128x32 | 0.961 | 0.963 | 0.952 |
+| control: cfloat TN packed 512×32×512 b128 | 128x32 | 0.777 | 0.784 | 0.773 |
+| control: cfloat CC packed 32³ b128 | 16x16 | 0.874 | 0.813 | 0.836 |
+| control: cfloat NN packed 48³ b2048 (12 reps) | 16x16 | 0.834 | 0.802 | 0.802 |
+| control: cfloat NN packed 48³ b2048 | 32x32 | 1.368 | 1.053 | 1.306 |
+| control: cfloat NT packed 32³ b32768 | 16x16 | 0.945 | 0.929 | 0.943 |
+| control: cfloat NN strided 48³ b2048 | 16x16 | 1.012 | 0.954 | 1.004 |
+| control: cfloat TN packed 64³ b2048 | 32x32 | 1.042 | 1.034 | 1.020 |
+| control: cfloat NN packed 96³ b2048 | 32x32 | 0.739 | 0.721 | 0.733 |
+| control: cfloat CN packed 32×128×256 b2048 | 32x128 | 0.839 | 0.840 | 0.819 |
+| control: float TN packed 1024×32×512 b128 | 128x32 | 1.023 | 1.020 | 1.026 |
+| control: float NT strided 32×64×1024 b128 (20 reps) | 32x64 | 1.101 | 1.115 | — |
+| | splitk 32x64 s4 | 0.722 | 0.710 | 0.709 |
+
+Passes agree within 2% except the 48³ and 32×64×1024 cells (the vendor arm moves 4-8% between processes; the
+32×64×1024 native arm is 2% faster in absolute time, 0.0454 vs 0.0464 ms). Every target cell gains 6-19% over the
+parent; no control loses more than 1% except the noisy 48³ first run (0.816 → 0.853, not reproduced at 12 reps).
+The copy leg alone (new against `=2`) is worth 0-8% on the strided cells and costs up to 2.5% on two packed
+compute-heavy controls (CN packed 32×128×256, TN packed 64³), still level with the parent there. The vendor now
+leads only on float strided (1.05-1.13×; float NN/TT on 64x32 still issue element loads) and cfloat NC 256×32×32
+(1.01).
+
+**After** (ncu, same cells):
+
+| cell | arm | µs | DRAM % | load sectors | registers |
+|---|---|---|---|---|---|
+| cfloat NC strided 2048×32×32 b128 | new (copy leg) | 101.5 | 87.9 | 7.5M | 102 |
+| | `=2` (register prefetch + epilogue) | 103.3 | 86.5 | 15.4M | 128 |
+| cfloat NC strided 32×2048×128 b128 | new (copy leg) | 240.8 | 90.3 | 16.1M | 105 |
+| | `=2` | 261.5 | 85.7 | 48.0M | 128 |
+| | cuBLAS `cutlass_80_simt_cgemm_forwardCompat_32x64_16x4_nh_align1` | 269.7 | 83.6 | 16.1M | 96 |
+
+The copy leg's sector count equals cuBLAS's.
+
+**Registers** (`scripts/register_probe.sh`): zero spill on all 1132 entries of `libbatchlas_sycl` (sm_120) and all
+1044 of a `-DBATCHLAS_NVIDIA_ARCH=sm_89` probe tree; no gemm entry has a stack frame. complex<float> copy-leg
+bodies: 56-72 (16x16), 88-168 (the others); complex<double> unchanged (up to 186).
+
+**Tests.** `WideTransposedPipelineEveryTileFormAndLegAtSaturatingBatch` runs everything under the derived leg and
+under `=2`, and adds per form beta = 0 with NaN in C (m + 1 × 2n − 1 × 33, ld = m + 1) and, for complex, a 4-byte
+base (2m + 1 × n + 3 × 37). `SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdges` runs complex<float> under
+both legs. `PinnedChoiceLaunchesItsOwnKernel` checks the `_async` and `_splitk_async` traces and adds per tile and
+split host the `=2` views (padded, ld = m + 1) and a 4-byte base. Deliberate breaks, run on sm_120 through a
+temporary run-time switch (first red per test; the suites stop at the first fatal failure):
+
+| break | red | green |
+|---|---|---|
+| `copy_async_wait<Stages - 1>` | 128x32 NT at 256×64×48 b1024 (three slabs), split s2 at k = 300 | — |
+| refill the buffer being read (`nb = buf`) | 128x32 NT at k = 48 (pipeline), k = 64 (pinned), split k = 300 | — |
+| ConjA dropped at the fragment read | the first CN form of each suite (128x32 CN) | NT, NC, TN before it |
+| k bound dropped (`k_rem` → 2³⁰) | the k-tail cases: k = 37 packed, k = 17 NaN-poisoned, split k = 300 | k = 48, 64, 16 |
+| i bound dropped (`i_rem` → 2³⁰) | none: rows and columns past m, n feed discarded accumulators | all |
+| beta = 0 epilogue reads C | the new NaN-C case, float and complex<float> (128x32 NT) | every beta ≠ 0 case |
+| base check dropped | `CUDA_ERROR_MISALIGNED_ADDRESS` on the first 4-byte-base case (process abort) | — |
+| `=2` ignored | PinnedChoiceLaunchesItsOwnKernel: the 304 `=2` cases only | the 4-byte-base and derived-leg cases |
+
+Full suites on sm_120 (`BATCHLAS_TEST_BACKEND=CUDA`): `gemm_tests` 158 passed; `tune_tests` 221 passed, 1 skipped
+(an LFS pointer in a fresh worktree); `gemm_candidates_tests` 132 passed, 2 failed: `GridCeilingIsACanRunTerm`
+for complex<float> and complex<double>, which expects the vendor first at 2×2×2 b65536 while the shipped sm_120
+coarse table (7dc92ec3) ranks `small` first. No kernel code is involved.
+
+**Not done.** wide v2's 64x64 tile (the largest remaining complex<float> bucket, 89 coarse cells at 1.06-1.16×:
+NT/NC strided 64×2048×128, 512×256×64, NN strided 64×2048×64) has the same element-leg loads and was not
+touched. The tables do not rank the change until the retune; the gemm kernel hash moved.
 
 ## GEMM: WP-T, TT, TC and CC on the small transposed tiles
 

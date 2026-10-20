@@ -534,27 +534,27 @@ BATCHLAS_UNROLL_FULL
                     }
                     copy_async_wait<0>();
                 } else {
-                if constexpr (Prefetch) {
-                    load(k_lo);
-                    store(0);
-                } else {
-                    stage_direct(k_lo, 0);
-                }
-                item.barrier(sycl::access::fence_space::local_space);
-                for (int s = 0; s < slabs; ++s) {
-                    const int cur = Stages == 2 ? (s & 1) : 0;
-                    const bool more = s + 1 < slabs;
                     if constexpr (Prefetch) {
-                        if (more) load(k_lo + (s + 1) * TileK);
+                        load(k_lo);
+                        store(0);
+                    } else {
+                        stage_direct(k_lo, 0);
                     }
-                    compute(cur);
-                    if (more) {
-                        if constexpr (Stages == 1) item.barrier(sycl::access::fence_space::local_space);
-                        if constexpr (Prefetch) store(Stages == 2 ? cur ^ 1 : 0);
-                        else stage_direct(k_lo + (s + 1) * TileK, Stages == 2 ? cur ^ 1 : 0);
-                        item.barrier(sycl::access::fence_space::local_space);
+                    item.barrier(sycl::access::fence_space::local_space);
+                    for (int s = 0; s < slabs; ++s) {
+                        const int cur = Stages == 2 ? (s & 1) : 0;
+                        const bool more = s + 1 < slabs;
+                        if constexpr (Prefetch) {
+                            if (more) load(k_lo + (s + 1) * TileK);
+                        }
+                        compute(cur);
+                        if (more) {
+                            if constexpr (Stages == 1) item.barrier(sycl::access::fence_space::local_space);
+                            if constexpr (Prefetch) store(Stages == 2 ? cur ^ 1 : 0);
+                            else stage_direct(k_lo + (s + 1) * TileK, Stages == 2 ? cur ^ 1 : 0);
+                            item.barrier(sycl::access::fence_space::local_space);
+                        }
                     }
-                }
                 }
 
                 // Per group: the 16-byte band store when this tile is inside
