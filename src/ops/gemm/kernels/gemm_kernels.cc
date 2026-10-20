@@ -144,15 +144,15 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
     case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
     case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
-    case KernelVariant::Tiled128x64RegisterK8Wide: return "gemm_sycl_register_128x64_k8_wide";
-    case KernelVariant::Tiled128x64RegisterK8WideNT: return "gemm_sycl_register_128x64_k8_wide_nt";
-    case KernelVariant::Tiled128x64RegisterK8WideNC: return "gemm_sycl_register_128x64_k8_wide_nc";
-    case KernelVariant::Tiled128x64RegisterK8WideTN: return "gemm_sycl_register_128x64_k8_wide_tn";
-    case KernelVariant::Tiled128x64RegisterK8WideTT: return "gemm_sycl_register_128x64_k8_wide_tt";
-    case KernelVariant::Tiled128x64RegisterK8WideTC: return "gemm_sycl_register_128x64_k8_wide_tc";
-    case KernelVariant::Tiled128x64RegisterK8WideCN: return "gemm_sycl_register_128x64_k8_wide_cn";
-    case KernelVariant::Tiled128x64RegisterK8WideCT: return "gemm_sycl_register_128x64_k8_wide_ct";
-    case KernelVariant::Tiled128x64RegisterK8WideCC: return "gemm_sycl_register_128x64_k8_wide_cc";
+    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide";
+    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt";
+    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc";
+    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn";
+    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt";
+    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc";
+    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn";
+    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct";
+    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc";
     }
     return "gemm_sycl_unknown";
 }
@@ -196,15 +196,15 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
-    case KernelVariant::Tiled128x64RegisterK8Wide: return "gemm_sycl_register_128x64_k8_wide_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideNT: return "gemm_sycl_register_128x64_k8_wide_nt_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideNC: return "gemm_sycl_register_128x64_k8_wide_nc_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideTN: return "gemm_sycl_register_128x64_k8_wide_tn_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideTT: return "gemm_sycl_register_128x64_k8_wide_tt_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideTC: return "gemm_sycl_register_128x64_k8_wide_tc_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideCN: return "gemm_sycl_register_128x64_k8_wide_cn_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideCT: return "gemm_sycl_register_128x64_k8_wide_ct_aligned";
-    case KernelVariant::Tiled128x64RegisterK8WideCC: return "gemm_sycl_register_128x64_k8_wide_cc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -407,9 +407,9 @@ constexpr KernelVariant wide_variant(std::size_t i, int form) {
         {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
          K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
          K::Tiled64x64RegisterK8WideCN, K::Tiled64x64RegisterK8WideCT, K::Tiled64x64RegisterK8WideCC},
-        {K::Tiled128x64RegisterK8Wide, K::Tiled128x64RegisterK8WideNT, K::Tiled128x64RegisterK8WideNC,
-         K::Tiled128x64RegisterK8WideTN, K::Tiled128x64RegisterK8WideTT, K::Tiled128x64RegisterK8WideTC,
-         K::Tiled128x64RegisterK8WideCN, K::Tiled128x64RegisterK8WideCT, K::Tiled128x64RegisterK8WideCC},
+        {K::Tiled128x128RegisterK8Wide, K::Tiled128x128RegisterK8WideNT, K::Tiled128x128RegisterK8WideNC,
+         K::Tiled128x128RegisterK8WideTN, K::Tiled128x128RegisterK8WideTT, K::Tiled128x128RegisterK8WideTC,
+         K::Tiled128x128RegisterK8WideCN, K::Tiled128x128RegisterK8WideCT, K::Tiled128x128RegisterK8WideCC},
     };
     static_assert(std::size(table) == og::wide_configs.size(), "one trace row per wide_configs row");
     return table[i][form];

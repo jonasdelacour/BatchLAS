@@ -649,9 +649,9 @@ BATCHLAS_UNROLL_FULL
 // complex<float> (its prefetch registers do not fit three groups' 85-register cap), one for
 // complex<double> (64 accumulator registers; FP64 is compute-bound at 8 warps per SM).
 // TileK = 8 halves the slab; each lane still stages CF granules, so warps 0-3 stage A and 4-7 B.
-// 128x64 (complex<float> only, WP-O): a 128-wide operand is two 64-wide halves, each staged with
-// the 64x64 lane map, KStep and swizzle, the second 64 down i; the thread tile is 8x4.
-// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x64-complex-float-tile-on-wide-v2
+// 128x128 (complex<float> only, WP-O; one group per CU): each operand is two 64-wide halves,
+// staged with the 64x64 lane map, KStep and swizzle, the second 64 down i; the thread tile is 8x8.
+// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
 template <typename T, Transpose OpA, Transpose OpB, bool VecLoads, int TileK_, int TileM_ = 64, int TileN_ = 64>
 struct GemmWide64Body {
     using D = typename wide_scalar::DevMap<T>::type;

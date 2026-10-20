@@ -123,7 +123,7 @@ inline constexpr std::array<WideCfg, 9> wide_configs{{
     {64, 32, 16, 4, 4, kWideSmallTileForms},
     {32, 64, 16, 4, 4, kWideSmallTileForms},
     {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
-    {128, 64, 8, 8, 4, kWideAll, kWideCF},  // wide v2's 128x64 tile (WP-O)
+    {128, 128, 8, 8, 8, kWideAll, kWideCF},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
 }};
 
 /// Does this row run wide v2 (GemmWide64Body) for T? 64x64 for every scalar but double, and every

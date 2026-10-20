@@ -137,7 +137,7 @@ const std::vector<RegRow>& reg_rows() {
     return rows;
 }
 // Forms are the complex instantiations (op(A) op(B) over N, T, C); a real scalar runs the N/C
-// one its T operands fold to. cf_only: compiled for complex<float> alone (wide v2's 128x64).
+// one its T operands fold to. cf_only: compiled for complex<float> alone (wide v2's 128x128).
 struct WideRow { int m, n, k; std::map<std::string, std::string> trace; bool cf_only = false; };
 const std::vector<WideRow>& wide_rows() {
     static const std::vector<WideRow> rows{
@@ -184,16 +184,16 @@ const std::vector<WideRow>& wide_rows() {
                      {"CN+aligned", "gemm_sycl_register_64x64_k8_wide_cn_aligned"},
                      {"CT+aligned", "gemm_sycl_register_64x64_k8_wide_ct_aligned"},
                      {"CC+aligned", "gemm_sycl_register_64x64_k8_wide_cc_aligned"}}},
-        {128, 64, 8, {
-                     {"NN", "gemm_sycl_register_128x64_k8_wide"}, {"NN+aligned", "gemm_sycl_register_128x64_k8_wide_aligned"},
-                     {"NT", "gemm_sycl_register_128x64_k8_wide_nt"}, {"NT+aligned", "gemm_sycl_register_128x64_k8_wide_nt_aligned"},
-                     {"NC", "gemm_sycl_register_128x64_k8_wide_nc"}, {"NC+aligned", "gemm_sycl_register_128x64_k8_wide_nc_aligned"},
-                     {"TN", "gemm_sycl_register_128x64_k8_wide_tn"}, {"TN+aligned", "gemm_sycl_register_128x64_k8_wide_tn_aligned"},
-                     {"TT", "gemm_sycl_register_128x64_k8_wide_tt"}, {"TT+aligned", "gemm_sycl_register_128x64_k8_wide_tt_aligned"},
-                     {"TC", "gemm_sycl_register_128x64_k8_wide_tc"}, {"TC+aligned", "gemm_sycl_register_128x64_k8_wide_tc_aligned"},
-                     {"CN", "gemm_sycl_register_128x64_k8_wide_cn"}, {"CN+aligned", "gemm_sycl_register_128x64_k8_wide_cn_aligned"},
-                     {"CT", "gemm_sycl_register_128x64_k8_wide_ct"}, {"CT+aligned", "gemm_sycl_register_128x64_k8_wide_ct_aligned"},
-                     {"CC", "gemm_sycl_register_128x64_k8_wide_cc"}, {"CC+aligned", "gemm_sycl_register_128x64_k8_wide_cc_aligned"}}, true},
+        {128, 128, 8, {
+                      {"NN", "gemm_sycl_register_128x128_k8_wide"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_wide_aligned"},
+                      {"NT", "gemm_sycl_register_128x128_k8_wide_nt"}, {"NT+aligned", "gemm_sycl_register_128x128_k8_wide_nt_aligned"},
+                      {"NC", "gemm_sycl_register_128x128_k8_wide_nc"}, {"NC+aligned", "gemm_sycl_register_128x128_k8_wide_nc_aligned"},
+                      {"TN", "gemm_sycl_register_128x128_k8_wide_tn"}, {"TN+aligned", "gemm_sycl_register_128x128_k8_wide_tn_aligned"},
+                      {"TT", "gemm_sycl_register_128x128_k8_wide_tt"}, {"TT+aligned", "gemm_sycl_register_128x128_k8_wide_tt_aligned"},
+                      {"TC", "gemm_sycl_register_128x128_k8_wide_tc"}, {"TC+aligned", "gemm_sycl_register_128x128_k8_wide_tc_aligned"},
+                      {"CN", "gemm_sycl_register_128x128_k8_wide_cn"}, {"CN+aligned", "gemm_sycl_register_128x128_k8_wide_cn_aligned"},
+                      {"CT", "gemm_sycl_register_128x128_k8_wide_ct"}, {"CT+aligned", "gemm_sycl_register_128x128_k8_wide_ct_aligned"},
+                      {"CC", "gemm_sycl_register_128x128_k8_wide_cc"}, {"CC+aligned", "gemm_sycl_register_128x128_k8_wide_cc_aligned"}}, true},
     };
     return rows;
 }
@@ -775,8 +775,8 @@ TEST(GemmWideSlm, SlmBytesMatchWhatTheKernelsAllocate) {
     EXPECT_EQ(og::wide_slm_bytes<double>(w64k8), 8192);
     EXPECT_EQ(og::wide_slm_bytes<std::complex<double>>(w64k8), 32768);
     const og::WideCfg& w128 = og::wide_configs[8];
-    ASSERT_TRUE(w128.m == 128 && w128.n == 64 && w128.k == 8 && w128.scalars == og::kWideCF);
-    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 24576);
+    ASSERT_TRUE(w128.m == 128 && w128.n == 128 && w128.k == 8 && w128.scalars == og::kWideCF);
+    EXPECT_EQ(og::wide_slm_bytes<std::complex<float>>(w128), 32768);
     // WP-K's transposed tiles: two stages except complex<double> 128x32, 32x128, 64x32 and 32x64.
     const struct { int m, n; std::int64_t f, d, cf, cd; } trans[] = {
         {128, 32, 20480, 40960, 40960, 40960}, {32, 128, 20480, 40960, 40960, 40960},
@@ -1868,26 +1868,26 @@ TYPED_TEST(GemmCandidates, WideV2ComplexDoubleElementLegAtAnEightByteBase) {
     }
 }
 
-// WP-O, wide v2's 128x64x8 tile (complex<float> only): A is staged as two 64-wide halves, the
-// second 64 down i (64 lda for a transposed A). All 9 forms; m straddling 64, 128 and 256, n
-// straddling 64 and 128, k straddling 8, 16 and 32; ld = m + 1 (element leg) or padded (16-byte
-// leg), NaN in every gap, beta != 0. Then 257 x 129 x 33 at ld = m + 1 and 256 x 128 x 48 padded
-// at batch 1024, 7 distinct problems, each item bit-identical to its representative; the leg
-// layouts at 288 x 136 x 48; beta = 0 with NaN in C. A dropped half offset in the store is wrong
-// in every form; one dropped from the global address only for a transposed A, or a half bound
-// that ignores the half, only where an A half straddles m.
-// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x64-complex-float-tile-on-wide-v2
-TYPED_TEST(GemmCandidates, Wide128x64EveryFormAtSaturatingBatchAndTileEdges) {
+// WP-O, wide v2's 128x128x8 tile (complex<float> only): each operand is staged as two 64-wide
+// halves, the second 64 down i (64 ld for a k-contiguous operand). All 9 forms; m and n
+// straddling 64, 128 and 256, k straddling 8, 16 and 32; ld = m + 1 (element leg) or padded
+// (16-byte leg), NaN in every gap, beta != 0. Then 257 x 136 x 33 at ld = m + 1 and 256 x 256 x 24
+// padded at batch 1024, 7 distinct problems, each item bit-identical to its representative; the
+// leg layouts at 288 x 136 x 48; beta = 0 with NaN in C. A dropped half offset in the store is
+// wrong in every form; one dropped from the global address only where that operand is
+// k-contiguous, and a half bound that ignores the half only where a half straddles m or n.
+// evidence: docs/perf/gemm.md#gemm-wp-o-a-128x128-complex-float-tile-on-wide-v2
+TYPED_TEST(GemmCandidates, Wide128x128EveryFormAtSaturatingBatchAndTileEdges) {
     using T = typename TestFixture::T;
     if constexpr (!std::is_same_v<T, std::complex<float>>) {
-        GTEST_SKIP() << "wide:m=128:n=64:k=8 is compiled for complex<float> only";
+        GTEST_SKIP() << "wide:m=128:n=128:k=8 is compiled for complex<float> only";
     } else {
-        const C c{og::Wide{128, 64, 8}};
+        const C c{og::Wide{128, 128, 8}};
         ASSERT_TRUE(wide_fits<T>(*wide_row(std::get<og::Wide>(c))));
-        const std::pair<int, int> mn[] = {{63, 65}, {100, 64}, {128, 63}, {129, 129}, {255, 127}, {257, 64}};
+        const std::pair<int, int> mn[] = {{63, 65}, {100, 128}, {128, 100}, {129, 129}, {255, 191}, {257, 64}};
         const int ks[] = {7, 8, 9, 16, 17, 33};
         struct Big { int m, n, k; Layout layout; };
-        const Big bigs[] = {{257, 129, 33, Layout::Gap1}, {256, 128, 48, Layout::Padded}};
+        const Big bigs[] = {{257, 136, 33, Layout::Gap1}, {256, 256, 24, Layout::Padded}};
         int ran = 0, saturated = 0, leg_ran = 0, nan_checked = 0;
         for (Transpose ta : kForms)
             for (Transpose tb : kForms) {
