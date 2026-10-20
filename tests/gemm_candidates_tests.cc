@@ -1368,6 +1368,8 @@ TYPED_TEST(GemmCandidates, Reg128x128CopyAsyncPipelineEverySlabCountAtSaturating
 // n-edge and corner groups (rows past m, columns past n); Gap1 and Strided views are predicated (odd ld
 // or odd bases); k = 65 and 137 end in a one-element slab under NaN poison. Batch 1024 repeating 7
 // problems with beta != 0, each item bit-identical to its representative, then beta = 0 with NaN in C.
+// Not covered by values: the u4 copy's m (n) row bound. Rows past m feed only C rows that are never
+// stored, so dropping it reads out of bounds without a wrong answer; only its k bound is checked here.
 // evidence: docs/perf/gemm.md#gemm-wp-f-float-mid-size-parity-on-sm_120
 TYPED_TEST(GemmCandidates, Reg128x128PredicatedStagedEpilogueAtEveryK) {
     using T = typename TestFixture::T;
@@ -1403,6 +1405,49 @@ TYPED_TEST(GemmCandidates, Reg128x128PredicatedStagedEpilogueAtEveryK) {
         }
         if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
         EXPECT_EQ(ran, 40 * rows);
+    }
+}
+
+// beta = 0 stores alpha * acc, as reference BLAS does: with A = 0 and alpha = -1 every element of C is
+// -0.0 on both 128x128 legs (Gap1 predicated, Padded aligned) and both epilogues (k = 32 staged on
+// both legs, k = 96 staged predicated and direct aligned). alpha * acc + 0 * 0 gives +0.0.
+TYPED_TEST(GemmCandidates, Reg128x128BetaZeroKeepsNegativeZero) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "reg is float only";
+    } else {
+        int ran = 0, rows = 0;
+        for (int u : {1, 4}) {
+            const C c{og::Reg{128, 128, 8, u}};
+            const RegRow* row = reg_row(std::get<og::Reg>(c));
+            ASSERT_NE(row, nullptr);
+            if (!reg_fits(*row)) continue;
+            ++rows;
+            for (auto [ta, tb] : {std::pair{kN, kN}, std::pair{kT, kN}, std::pair{kN, kT}})
+                for (Layout lay : {Layout::Gap1, Layout::Padded})
+                    for (int k : {32, 96}) {
+                        Spec s{ta, tb, 300, 200, k, 3, lay};
+                        s.beta_zero = s.nan_c = true;
+                        ASSERT_TRUE(TestFixture::expect_runs(c, s)) << name(c, s);
+                        auto p = make_problem<T>(s);
+                        for (int it = 0; it < s.batch; ++it)
+                            for (int j = 0; j < p.a.cols; ++j)
+                                for (int i = 0; i < p.a.rows; ++i) p.mem[Problem<T>::at(p.a, it, i, j)] = T(0);
+                        p.alpha = T(-1);
+                        this->run_pinned(c, p);
+                        int bad = 0;
+                        for (int it = 0; it < s.batch; ++it)
+                            for (int j = 0; j < s.n; ++j)
+                                for (int i = 0; i < s.m; ++i) {
+                                    const T v = p.mem[Problem<T>::at(p.c, it, i, j)];
+                                    bad += !(v == T(0) && std::signbit(v));
+                                }
+                        EXPECT_EQ(bad, 0) << name(c, s) << " u" << u;
+                        ++ran;
+                    }
+        }
+        if (rows == 0) GTEST_SKIP() << "128x128 is above this device's local memory budget";
+        EXPECT_EQ(ran, 12 * rows);
     }
 }
 

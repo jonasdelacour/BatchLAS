@@ -240,7 +240,8 @@ BATCHLAS_UNROLL_FULL
             }
         }
 
-        // One packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
+        // Stages == 2 (the Stages > 2 lane map is described at kLaneMap):
+        // one packet of each operand per thread per slab, both coalesced. Down m or n (A, B^T):
         // a warp reads 128 contiguous elements of one k row and stores one vector each. Down k
         // (B, A^T): two lanes per column read 4 k each and transpose into shared (2-way bank
         // conflict); the L2::128B hint fetches the line the next three slabs read.
@@ -518,8 +519,10 @@ BATCHLAS_UNROLL_FULL
                         const T* src = &sc[slot * StageStride + (tid2 & 31)];
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < 4; ++i)
-                            if (32 * i < rows_left)
-                                dst[32 * i] = LinearEpilogue<T>::apply(alpha, beta, src[32 * i], prior[q][i]);
+                            if (32 * i < rows_left)  // beta = 0 is alpha * acc alone: -0 + 0 would be +0
+                                dst[32 * i] = beta == T(0) ? alpha * src[32 * i]
+                                                           : LinearEpilogue<T>::apply(alpha, beta, src[32 * i],
+                                                                                      prior[q][i]);
                     }
                 }
                 item.barrier(sycl::access::fence_space::local_space);
