@@ -26,8 +26,8 @@ llvm=${LLVM_ROOT:-/usr/lib/llvm-20}
 jobs=${JOBS:-$(nproc)}
 
 for f in "$llvm/bin/clang++" "$llvm/lib/cmake/llvm/LLVMConfig.cmake" \
-         "$llvm/include/clang/AST/ASTContext.h" "$llvm/lib/libomp.so"; do
-    [ -e "$f" ] || { echo "build_adaptivecpp: missing $f (clang-20 llvm-20-dev libclang-20-dev libomp-20-dev)" >&2; exit 1; }
+         "$llvm/include/clang/AST/ASTContext.h" "$llvm/lib/libomp.so" "$llvm/bin/ld.lld"; do
+    [ -e "$f" ] || { echo "build_adaptivecpp: missing $f (clang-20 lld-20 llvm-20-dev libclang-20-dev libomp-20-dev)" >&2; exit 1; }
 done
 
 rm -rf "$work"
@@ -46,6 +46,7 @@ cmake -S "$work/src" -B "$work/build" \
     -DCMAKE_CXX_COMPILER="$llvm/bin/clang++" \
     -DLLVM_DIR="$llvm/lib/cmake/llvm" \
     -DCLANG_EXECUTABLE_PATH="$llvm/bin/clang++" \
+    -DACPP_LLD_PATH="$llvm/bin/ld.lld" \
     -DACPP_COMPILER_FEATURE_PROFILE=full \
     -DWITH_CUDA_BACKEND=OFF -DWITH_ROCM_BACKEND=OFF \
     -DWITH_OPENCL_BACKEND=OFF -DWITH_LEVEL_ZERO_BACKEND=OFF
