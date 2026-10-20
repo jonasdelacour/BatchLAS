@@ -1728,8 +1728,100 @@ red for complex<float> and `wide:m=128:n=128:k=8` only, but those tests stop at 
 - Green, recorded: a half's i bound without the `- 64·h`. It only stops reads past m or n, whose products land in
   rows and columns that are never stored, so no value test can see it. The 64x64 i bound has the same property.
 
-Not done: `LDGSTS` multi-stage staging for the remaining stall gap. The 64x128 tile was not built: 128x128 makes it
-redundant on these cells.
+`LDGSTS` staging: [WP-V](#gemm-wp-v-three-copy-async-stages-for-the-128x128-complex-float-tile). The 64x128 tile
+was not built: 128x128 makes it redundant on these cells.
+
+## GEMM: WP-V, three copy-async stages for the 128x128 complex float tile
+
+Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
+time` (beta = 1, every arm verified), 10-12 reps × 2 passes in alternated order (parent, new, new, parent).
+Ratios are each build's mean over both passes against its own cuBLAS arm.
+
+`wide:m=128:n=128:k=8` (complex<float>) gets a second leg, derived in `launch_wide64_v2`, never a field or key:
+
+| leg | when | staging | local | registers (sm_120 / sm_89) |
+|---|---|---|---|---|
+| cp.async | DPC++, `cuda_compute_capability() >= 80`, slm budget ≥ 48 KiB | 3 slabs, 2 in flight, no register prefetch | 48 KiB | 229-232 / ≤ 249 |
+| register prefetch (WP-O) | otherwise (acpp, pre-sm_80, Metal) | 2 slabs | 32 KiB | 254-255 / 248-255 |
+
+- Copies (`wide_v2::acopy`): 16 bytes per granule along i on the 16-byte leg (`src-size` 8 or 0 at the i edge), two
+  8-byte copies on the element leg, 8 bytes per element along k (a granule pairs two columns, which land in
+  different rows). Out-of-range elements are zero-filled (`src-size` 0), so the k tail needs no branch. The
+  swizzle and fragment reads are unchanged.
+- Step s: `wait_group 1`, barrier, refill the buffer slab s - 1 was read from, commit (empty past the end), compute.
+- Lanes 0-127 copy the first 64-wide half of A and of B, lanes 128-255 the second, so all eight warps issue copies.
+- can_run keeps the 32 KiB term: the cp.async leg only runs where the launcher sees 48 KiB, else the 32 KiB leg.
+- Both legs keep their trace names; `BATCHLAS_KERNEL_TRACE` cannot tell them apart.
+- `scripts/register_probe.sh`: 0 spill, 0 stack on both probes (sm_120 build and a `-DBATCHLAS_NVIDIA_ARCH=sm_89`
+  tree, probe only).
+
+**Variants**, one build, each timed against the WP-O leg in the same binary (same protocol, vendor-normalised):
+
+| variant | cells | vs WP-O leg |
+|---|---|---|
+| 4 stages, split staging (warps 0-3 A, 4-7 B), 64 KiB | 21 | 0.940-1.003 (TN strided 1024×1024×32 1.003) |
+| 4 stages, every lane both operands, 64 KiB | 9 | 0.943-0.982 |
+| **3 stages, every lane both operands, 48 KiB** | 21 | **0.926-0.982**, best or within 1% of best in every cell |
+
+ncu, cfloat NN strided 512³ b128 (stalls per issue; durations at ncu's locked clock):
+
+| arm | ms | issue busy | dispatch | long_scoreboard | mio_throttle | lg_throttle |
+|---|---|---|---|---|---|---|
+| WP-O register prefetch | 3.00 | 67% | 0.48 | 0.11 | 0.04 | 0.04 |
+| 4 stages, split | 2.97 | 66% | 0.36 | 0.13 | 0.20 | 0.08 |
+| **3 stages, spread (shipped)** | 2.78 | 71% | 0.35 | 0.14 | 0.06 | 0.05 |
+| cuBLAS `cutlass_100_simt_cgemm_128x128_8x4` | 2.74 | 73% | 0.29 | 0.07 | 0.08 | — |
+
+Split staging put every copy on four warps (`mio_throttle` 0.20); spreading them removed it. The remaining gap to
+cuBLAS is `long_scoreboard` (0.14 vs 0.07).
+
+**Shipped leg against the parent build** (two builds, the same cells; vendor-normalised = new/vendor over
+parent/vendor):
+
+| cell (cfloat, b128 unless noted) | parent / vendor | new / vendor | vendor-normalised |
+|---|---|---|---|
+| NN strided 256×1024×23 | 1.099 | 1.060 | 0.965 |
+| TN strided 1024×256×78 | 1.086 | 1.037 | 0.955 |
+| NN strided 512³ | 1.075 | 1.004 | 0.934 |
+| TN strided 768³ | 1.069 | 0.994 | 0.930 |
+| NC strided 256×512×78 | 0.971 | 0.936 | 0.964 |
+| NN packed 2048×362×64 | 1.076 | 1.057 | 0.982 |
+| NN strided 512×512×23 | 1.117 | 1.071 | 0.959 |
+| NT strided 256×256×181 | 0.894 | 0.850 | 0.951 |
+| NC strided 128×1024×78 | 0.962 | 0.935 | 0.972 |
+| NC strided 76×2048×32 | 1.005 | 0.960 | 0.956 |
+| NT strided 128×128×45 b2048 | 1.079 | 1.057 | 0.979 |
+| TN packed 2048×128×111 | 1.085 | 1.035 | 0.954 |
+| NN strided 128×256×78 b2048 | 1.091 | 1.040 | 0.954 |
+| TN strided 1024×1024×32 | 1.087 | 1.061 | 0.976 |
+| NN strided 362×2048×128 | 1.084 | 1.026 | 0.946 |
+| control: NN packed 1024³ | 1.030 | 1.010 | 0.981 |
+| control: CN packed 1024³ | 0.962 | 0.933 | 0.969 |
+| control: CC packed 1024³ | 1.001 | 0.971 | 0.970 |
+| control: NN packed 256³ | 0.881 | 0.846 | 0.961 |
+| control: NT packed 512³ b2048 | 1.015 | 0.999 | 0.984 |
+| control: NN packed 512×512×128 b2048 | 1.031 | 1.010 | 0.980 |
+
+Every cell gains 2-7%; none loses. In-binary variant runs agree within 1-2% per cell. cuBLAS still leads on short-k
+NN/NT (k = 23-45: 1.06-1.07×), NN packed 2048×362×64 (1.06×), TN 1024×1024×32 (1.06×). The tables do not rank
+the row yet, so Auto changes only after the retune.
+
+Tests: `GemmCandidates.Wide128x128EveryFormAtSaturatingBatchAndTileEdges` (WP-O's) now runs the cp.async leg on
+sm_80+. Deliberate breaks, run on sm_120, one temporary build switching them at run time (first red per form):
+
+| break | first red | green before it |
+|---|---|---|
+| `cp_async_wait<Stages - 1>` | all 9 forms, k = 7 (one slab); TT and CT at 64×300 | TT, CT at 63×65 k = 7 |
+| refill buffer `(buf + 1) % Stages` | all 9 forms, k = 17 (3 slabs) | k = 7, 8, 9, 16 (≤ 2 slabs never refill) |
+| drop B's pointer bump | all 9 forms, k = 9 (2 slabs) | k = 7, 8 |
+| B's half offset dropped (`pb + 0`) | all 9 forms, 63×65 k = 7 | none |
+| B's k bound dropped (`k` → 2³⁰) | all 9 forms, k = 7 (NaN) | none |
+| A's i bound dropped (`a_lim` → 2³⁰) | none: rows past m feed only discarded accumulators (as WP-O) | all |
+
+Not covered on this box: the 32 KiB register-prefetch leg of this row (unchanged code) runs only below sm_80, in
+acpp or on Metal. The accepted `src-size` 0 assumption of WP-N2 holds here too (zero-filled copies may name an
+address past the allocation).
+
 ## GEMM: WP-T, TT, TC and CC on the small transposed tiles
 
 Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune
