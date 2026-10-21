@@ -1424,8 +1424,8 @@ TEST(PotrfBlocked, NbFollowsScopedEnv) {
 // A chunk forced to 7 over 23 items (7 + 7 + 9: the last part takes the remainder) at nb = 16,
 // W = 8 (n = 40: three blocks, the last short) with a padded ld and odd stride. Items 6, 7, 13
 // and 22 sit either side of a boundary and in the last part, each failing at its own column:
-// an info or matrix sub-range at the wrong offset moves only these. info both requested and not ("not requested" is the
-// chunk-sized pool fallback).
+// an info or matrix sub-range at the wrong offset moves only these. info both requested and not
+// ("not requested" is the part-sized pool fallback).
 TYPED_TEST(PotrfBlockedTest, BlockedChunksKeepInfoPerItem) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;

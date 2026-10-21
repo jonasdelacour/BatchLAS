@@ -333,7 +333,7 @@ inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
 
 // Hand-set, not bucketed by n and not written by the tuner from a profile; the generator copies
 // them verbatim. evidence: docs/perf/lu.md#lu-l2-batch-chunking
-inline constexpr int32_t BLOCKED_L2_CHUNK_PERCENT = 100;
+inline constexpr int32_t BLOCKED_L2_CHUNK_PERCENT = 75;
 inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_WAVES = 1;
 
 /// @brief Items per chunk for a multi-kernel blocked driver (getrf, potrf) over @p batch items.
