@@ -81,6 +81,8 @@ class Syr2kSpec final : public OpSpec {
 public:
     std::string op() const override { return "syr2k"; }
     std::vector<std::string> key_names() const override { return {R2::key_names.begin(), R2::key_names.end()}; }
+    // The vendor loop wins batch 1 only. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<int> ladder_extra_batches() const override { return {1, 2, 3}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
         return with_real_dtype("syr2k", dtype, []<class T>() { return spellings(R2::candidates<T>()); });
     }

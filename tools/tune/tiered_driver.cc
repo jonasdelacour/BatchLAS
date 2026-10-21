@@ -258,7 +258,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     std::vector<CellKey> grid = s.grid(dtype, o_.grid);
     for (auto& a : ax)
         if (a.first == "batch" && !o_.batch_classes.empty()) {
-            a.second = batch_strings(batch_ladder(o_.cus > 0 ? o_.cus : id_.cus, o_.batch_classes, s.ladder_extra_batches()));
+            a.second = batch_strings(batch_ladder(o_.cus > 0 ? o_.cus : id_.cus, s.ladder_classes(o_.batch_classes),
+                                                  s.ladder_extra_batches()));
             grid = rebatch(grid, a.second);
         }
     j->axes = axis_specs(s.key_names(), ax);

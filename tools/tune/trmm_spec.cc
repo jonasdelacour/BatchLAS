@@ -102,6 +102,7 @@ public:
         return (o * o + 3.0 * o * double(key_int(k, "q"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "order"; }
+    std::vector<int> ladder_extra_batches() const override { return {1}; }  // evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
     FrontierPlan frontier() const override { return {2, 8, 0.05}; }  // k = 8 passes the per-op gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin

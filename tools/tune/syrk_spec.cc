@@ -88,6 +88,8 @@ class SyrkSpec final : public OpSpec {
 public:
     std::string op() const override { return "syrk"; }
     std::vector<std::string> key_names() const override { return {K::key_names.begin(), K::key_names.end()}; }
+    // The vendor-loop crossovers sit at batch 1-8. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<int> ladder_extra_batches() const override { return {1, 2, 4, 8}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
         return with_real_dtype("syrk", dtype, []<class T>() { return spellings(K::candidates<T>()); });
     }

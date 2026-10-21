@@ -327,6 +327,13 @@ std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& class
     return {b.begin(), b.end()};
 }
 
+std::vector<double> without_latency_class(const std::vector<double>& classes) {
+    std::vector<double> out;
+    for (double c : classes)
+        if (c >= 1) out.push_back(c);
+    return out.empty() ? classes : out;
+}
+
 std::vector<std::string> batch_strings(const std::vector<std::int64_t>& batches) {
     std::vector<std::string> out;
     for (std::int64_t b : batches) out.push_back(std::to_string(b));

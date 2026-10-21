@@ -125,9 +125,10 @@ std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std
 // The CU-aligned batch ladder: max(1, round(c x cus)) per class c, plus `extra`, ascending and unique.
 // evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
 inline const std::vector<double>& default_batch_classes() {
-    static const std::vector<double> c{0.25, 1, 8, 64};
+    static const std::vector<double> c{0.25, 2, 16, 128};
     return c;
 }
+std::vector<double> without_latency_class(const std::vector<double>& classes);  // the classes >= 1 (one CU or more)
 std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& classes, const std::vector<int>& extra = {});
 std::vector<std::string> batch_strings(const std::vector<std::int64_t>& batches);
 

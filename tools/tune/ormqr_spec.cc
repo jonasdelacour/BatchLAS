@@ -18,6 +18,7 @@
 
 #include <src/ops/ormqr/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <algorithm>
 #include <stdexcept>
@@ -120,6 +121,9 @@ public:
         return (2.0 * m * k + 2.0 * m * q) * double(key_int(c, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "m"; }
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override {  // as gemm's
+        return without_latency_class(run);
+    }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

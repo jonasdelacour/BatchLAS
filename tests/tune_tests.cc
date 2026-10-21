@@ -5766,8 +5766,12 @@ TEST(TuneCalibrate, ReplayRefinesOnlyWhereTheDeviceDisagrees) {
 
 // The CU-aligned batch ladder. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
 TEST(TuneGrid, BatchLadderIsRoundedCuMultiplesPlusExtras) {
-    EXPECT_EQ(batch_ladder(188, default_batch_classes()), (std::vector<std::int64_t>{47, 188, 1504, 12032}));
-    EXPECT_EQ(batch_ladder(128, default_batch_classes()), (std::vector<std::int64_t>{32, 128, 1024, 8192}));
+    EXPECT_EQ(batch_ladder(188, default_batch_classes()), (std::vector<std::int64_t>{47, 376, 3008, 24064}));
+    EXPECT_EQ(batch_ladder(128, default_batch_classes()), (std::vector<std::int64_t>{32, 256, 2048, 16384}));
+    EXPECT_EQ(batch_ladder(188, without_latency_class(default_batch_classes())),
+              (std::vector<std::int64_t>{376, 3008, 24064}))
+        << "gemm and ormqr";
+    EXPECT_EQ(without_latency_class({0.25, 0.5}), (std::vector<double>{0.25, 0.5})) << "never an empty ladder";
     EXPECT_EQ(batch_ladder(190, {0.25}), (std::vector<std::int64_t>{48})) << "47.5 rounds up, not down";
     EXPECT_EQ(batch_ladder(2, {0.25, 1}), (std::vector<std::int64_t>{1, 2})) << "never below batch 1";
     EXPECT_EQ(batch_ladder(188, {1, 0.25}, {4, 1, 47}), (std::vector<std::int64_t>{1, 4, 47, 188})) << "sorted, unique";
@@ -5806,6 +5810,14 @@ public:
 };
 
 const FakeBatchSpec kFakeBatch;
+
+class FakeGemmLikeSpec final : public FakeBatchSpec {  // gemm's and ormqr's hook: no latency class
+public:
+    std::string op() const override { return "fakebatch2"; }
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override { return without_latency_class(run); }
+};
+
+const FakeGemmLikeSpec kFakeGemmLike;
 
 std::set<std::string> measured_batches(const std::vector<std::string>& keys) {
     std::set<std::string> b;
@@ -5847,6 +5859,17 @@ TEST(TuneTieredDriver, BatchLadderReplacesTheBatchAxisWithCuMultiples) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &off), 0);
     EXPECT_EQ(measured_batches(off.keys), (std::set<std::string>{"1", "3", "128"}));
     EXPECT_EQ(read_ledger(ledger_file(ledger3.str(), "fakebatch", "sm_fake"), "float").runs.at(0).grid, "n=1,16 batch=1,3,128");
+
+    TempDir ledger4;
+    o.ledger_root = ledger4.str();
+    if (!find_spec("fakebatch2")) register_spec(&kFakeGemmLike);
+    o.ops = {"fakebatch2"};
+    o.batch_classes = {0.25, 1, 8};
+    FakeMeasurer gemm_like;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &gemm_like), 0);
+    EXPECT_EQ(read_ledger(ledger_file(ledger4.str(), "fakebatch2", "sm_fake"), "float").runs.at(0).grid,
+              "n=1,16 batch=1,8,64")
+        << "the spec's ladder_classes drops the 0.25 class (2); the extra 1 stays";
 
     o.batch_classes = default_batch_classes();
     FakeMeasurer none;
