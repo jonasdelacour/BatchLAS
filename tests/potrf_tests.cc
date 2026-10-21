@@ -784,21 +784,22 @@ protected:
     // READS info to decide whether an earlier panel failed. info_len < 0 means a full
     // span; 0 the EMPTY span ("not requested"); anything else a SHORT span, likewise not.
     std::vector<int32_t> run_blocked(const MatrixView<T, MatrixFormat::Dense>& V,
-                                     Uplo uplo, int info_len = -1) {
+                                     Uplo uplo, int info_len = -1, Queue* queue = nullptr) {
+        Queue& q = queue ? *queue : *this->ctx;
         const int batch = static_cast<int>(V.batch_size());
         UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, V, uplo));
+            sycl_potrf::potrf_blocked_buffer_size<T>(q, V, uplo));
         const int len = (info_len < 0) ? batch : info_len;
         UnifiedVector<int32_t> info(static_cast<size_t>(std::max(len, 1)), int32_t(-12345));
         if (len > 0) {
             (void)sycl_potrf::potrf_blocked_dispatch<T>(
-                *this->ctx, V, uplo, ws.to_span(),
+                q, V, uplo, ws.to_span(),
                 Span<int32_t>(info.data(), static_cast<size_t>(len)), gemm_seam(), panel_solve());
         } else {
-            (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_blocked_dispatch<T>(q, V, uplo, ws.to_span(),
                                                   Span<int32_t>{}, gemm_seam(), panel_solve());
         }
-        this->ctx->wait();
+        q.wait();
         return std::vector<int32_t>(info.begin(), info.end());
     }
 };
@@ -1493,4 +1494,44 @@ TYPED_TEST(PotrfBlockedTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
     EXPECT_EQ(info[0], 0);
     EXPECT_EQ(wrong, 0) << "items differing from item 0; first at " << first;
     EXPECT_VERIFY(T, verify::Check::factorization, n, potrf_error<T>(*this->ctx, ref, buf.data(), ld, n, Uplo::Lower));
+}
+
+// info NOT requested: every part shares the pool's ws.info, so it must start each part zeroed and
+// after the previous part's last fixup. Item 3 fails in part 1's LAST block (col 35) and item 9
+// in part 2's first; items 10 and 16 sit at the same in-part index one part later and must still
+// factor. Run on an in-order and an out-of-order Queue (the race the inter-part wait closes).
+TYPED_TEST(PotrfBlockedTest, BlockedChunksRezeroSharedInfoPerPart) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const ScopedEnvVar nbv("BATCHLAS_POTRF_NB", "16");
+    const ScopedEnvVar wv("BATCHLAS_POTRF_W", "8");
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+    const int n = 40, batch = 23, ld = n + 5, stride = ld * n + 11;
+    ASSERT_EQ(this->blocking(n).nb, 16);
+    Queue ooo(*this->ctx, /*in_order=*/false);
+    ASSERT_FALSE(ooo.in_order());
+
+    const std::vector<int> bad = {3, 9};
+    const std::vector<int> col = {35, 2};
+    for (Queue* q : {static_cast<Queue*>(nullptr), &ooo}) {
+        for (int rep = 0; rep < (q ? 8 : 1); ++rep) {
+            UnifiedVector<T> buf(static_cast<size_t>(stride) * batch, MV<T>::make(R(-11), R(5)));
+            MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
+            std::vector<std::vector<T>> ref(batch);
+            for (int b = 0; b < batch; ++b) {
+                const auto it = std::find(bad.begin(), bad.end(), b);
+                ref[b] = it != bad.end() ? make_planted_ldl<T>(n, {col[size_t(it - bad.begin())]}, 91u + unsigned(b))
+                                         : make_spd<T>(n, 6160u + 17u * unsigned(b));
+                for (int j = 0; j < n; ++j)
+                    for (int i = j; i < n; ++i) buf[size_t(b) * stride + i + size_t(j) * ld] = ref[b][i + size_t(j) * n];
+            }
+            (void)this->run_blocked(V, Uplo::Lower, 0, q);
+            for (int b = 0; b < batch; ++b) {
+                if (std::find(bad.begin(), bad.end(), b) != bad.end()) continue;
+                EXPECT_VERIFY(T, verify::Check::factorization, n,
+                              potrf_error<T>(*this->ctx, ref[b], buf.data() + size_t(b) * stride, ld, n, Uplo::Lower))
+                    << "item " << b << (q ? " (out of order, rep " + std::to_string(rep) + ")" : " (in order)");
+            }
+        }
+    }
 }

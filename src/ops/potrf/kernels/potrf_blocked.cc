@@ -304,6 +304,10 @@ Event potrf_blocked_dispatch(Queue& ctx,
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
 
+        // Out of order, the previous part's last fixup may still write the shared ws.info (and
+        // read leaf_info): a late info[b] != 0 quenches this part's item b to identity.
+        if (b0 > 0 && !ctx.in_order()) ctx.wait();
+
         // Not optional: the merge reads info[b] for an earlier panel's failure; info_out is dirty.
         ctx->fill(info_ptr, int32_t(0), static_cast<std::size_t>(cb));
         if (!ctx.in_order()) ctx.wait();
