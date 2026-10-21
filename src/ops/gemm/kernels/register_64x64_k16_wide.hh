@@ -37,22 +37,24 @@ using batchlas::sycl_device::DevMap;
 using batchlas::sycl_device::dev_is_zero;
 using batchlas::sycl_device::fma_acc;
 
-// beta = 0 is alpha * acc alone, as reference BLAS: alpha * acc + 0 * 0 turns -0 into +0. A select.
+// beta = 0 is alpha * acc exactly (+ 0 * 0 would turn -0 into +0); callers pass prior = 0 there. Real:
+// beta = -0, a loop-invariant select (x + -0 is x). Complex: no such constant, a uniform branch.
 // evidence: docs/perf/gemm.md#gemm-wp-x-review-beta-zero-keeps-negative-zero
 inline float lin_epi(float alpha, float beta, float acc, float prior) {
-    return beta == 0.f ? alpha * acc : alpha * acc + beta * prior;
+    return alpha * acc + (beta == 0.f ? -0.f : beta) * prior;
 }
 inline double lin_epi(double alpha, double beta, double acc, double prior) {
-    return beta == 0.0 ? alpha * acc : alpha * acc + beta * prior;
+    return alpha * acc + (beta == 0.0 ? -0.0 : beta) * prior;
 }
 template <typename R>
 inline Cx<R> lin_epi(Cx<R> alpha, Cx<R> beta, Cx<R> acc, Cx<R> prior) {
-    const bool bz = beta.re == R(0) && beta.im == R(0);
     Cx<R> o;
-    o.re = bz ? alpha.re * acc.re - alpha.im * acc.im
-              : alpha.re * acc.re - alpha.im * acc.im + beta.re * prior.re - beta.im * prior.im;
-    o.im = bz ? alpha.re * acc.im + alpha.im * acc.re
-              : alpha.re * acc.im + alpha.im * acc.re + beta.re * prior.im + beta.im * prior.re;
+    o.re = alpha.re * acc.re - alpha.im * acc.im;
+    o.im = alpha.re * acc.im + alpha.im * acc.re;
+    if (beta.re != R(0) || beta.im != R(0)) {
+        o.re = o.re + beta.re * prior.re - beta.im * prior.im;
+        o.im = o.im + beta.re * prior.im + beta.im * prior.re;
+    }
     return o;
 }
 
