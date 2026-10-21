@@ -42,8 +42,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3): false means the kernel would throw or answer wrongly. The tile kernels
 // are portable SYCL wired only for CUDA, take one (n, k, ld, stride) per launch
 // (no heterogeneous batch) and put the batch, and triangular its tile count, in grid dimensions
-// capped at 65535: a batch past it runs as slices (launch), the tile count is a term. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
-// can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
+// capped at 65535: a batch past it runs as slices (launch), the tile count is a term. syrk is
+// real-only, so ConjTrans is Trans to both kernels (the table, not can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
 template <Backend B, class T>

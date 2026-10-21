@@ -78,7 +78,8 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
 
 /// `launch(queue, first, count)` over [0, @p batch) in slices of <= max_groups_yz / @p groups_per_item
 /// items (a batch in a capped grid dimension); several slices run in order on an in-order queue and the
-/// Event covers them all; an empty batch launches nothing. evidence: docs/perf/level3.md#level-3-the-65535-batch-slices
+/// Event covers them all; an empty batch launches nothing.
+/// evidence: docs/perf/level3.md#level-3-the-65535-batch-slices
 template <class F>
 Event over_batch_slices(Queue& q, std::int64_t batch, F&& launch, std::int64_t groups_per_item = 1) {
     if (batch <= 0) return q.get_event();

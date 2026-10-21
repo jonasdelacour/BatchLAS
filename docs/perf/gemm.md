@@ -46,7 +46,7 @@ Auto on sm_89:
 ### Choices (flat selection, P3.4)
 
 The vocabulary is `src/ops/gemm/choice.hh`, listed in tie-break order. `src/ops/gemm/gemm.cc` validates the
-views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
+views, calls `select::run` (`gemm.cc:209-217`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
 
 | spelling | launcher | scalars | `can_run` beyond the common term (`gemm.cc`) |
 |---|---|---|---|
@@ -58,7 +58,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
-The common native term (`gemm.cc:97-101`):
+The common native term (`gemm.cc:98-100`):
 
 ```cpp
 const bool device = d.is_gpu || !d.has_vendor;
@@ -113,7 +113,7 @@ Selection is the first runnable entry of the nearest row of `tuned/gemm.<device>
 `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, else `strided`. Every log key has
 weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU and `precision != Default`).
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
-build (`gemm.cc:156-164`), and each item chooses separately.
+build (`gemm.cc:189-197`), and each item chooses separately.
 
 The sm_89 table is transcribed. `tuned/gemm.sm_120.txt` comes from the `--tier deep` campaign
 (`tools/tune/gemm_spec.cc`): 32225 deep rows, plus 14733 `transcribed` rows where the lattice measured nothing near.

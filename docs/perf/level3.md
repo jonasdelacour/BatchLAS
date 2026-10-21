@@ -27,13 +27,13 @@ heterogeneous operands, since each vendor loop runs every item at the top-level 
 |---|---|---|---|---|
 | `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:52-56`) | float, double |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | float, double |
-| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:58-59`) | float, double |
-| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:62-63`) | float |
+| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:57-58`) | float, double |
+| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:61-62`) | float |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-54`); a real `ConjTrans` is folded to `Trans` | float |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
-| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:56-61`) | all four |
-| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:63-68`) | all four |
+| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:60-63`) | all four |
+| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:64-69`) | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
@@ -109,13 +109,13 @@ the effective window, not the predicates.
 Every level-3 native kernel, and gemm's `direct`, `tiled`, `reg`, `wide` and `splitk`, puts the batch in a grid
 dimension that CUDA caps at 65535 work-groups (`select::Device::max_groups_yz`; split-k puts batch × s there). Until
 2026-10-21 `can_run` refused a batch past it, so Auto fell to the vendor: for syrk that is the per-item `?syrk`
-loop. The batch is now no term. `select::over_batch_slices` (`src/select/select.hh:78-92`) runs a larger batch as
+loop. The batch is now no term. `select::over_batch_slices` (`src/select/select.hh:79-94`) runs a larger batch as
 slices of at most `max_groups_yz / groups_per_item` items, each a `MatrixView::batch_range` of every operand. Each
 slice goes through the whole launcher, so it re-derives its own leg (an odd item stride moves the base alignment).
 Slices are independent; on an out-of-order Queue they run on an in-order sibling, as every multi-launch wrapper does.
 Metal lifts `max_groups_yz` (`src/select/select.cc:294`), so there one slice serves every batch.
 
-Where it is applied: gemm's `launch` (`src/ops/gemm/gemm.cc:166-180`; `small` is 1-D and the vendor loops itself);
+Where it is applied: gemm's `launch` (`src/ops/gemm/gemm.cc:165-180`; `small` is 1-D and the vendor loops itself);
 syrk `gram` and `triangular`, syr2k and trmm `triangular` in each op's `launch`; `expand_triangular`,
 `expand_mirrored` (`src/kernels/common/triangular_expand.hh`) and `accumulate_hermitian` and herk's gram opt-in
 (`src/backends/cublas.cc`). symm and trmm `expand`, hemm's expansion and herk's and her2k's GEMM-plus-fold get it
