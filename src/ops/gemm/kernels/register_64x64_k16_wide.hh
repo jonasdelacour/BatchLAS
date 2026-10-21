@@ -558,6 +558,8 @@ constexpr int swz(int kk) {
     else return ((kk / (4 / CF)) & 3) << 1;
 }
 
+typedef float EF2 __attribute__((ext_vector_type(2), may_alias));
+
 inline Vec4<float> ld16(const float* p) {
     return *reinterpret_cast<const Vec4<float>*>(__builtin_assume_aligned(p, 16));
 }
@@ -616,8 +618,18 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
             for (int q = 0; q < VecN; ++q) {
                 const bool ok = !Pred || (k0 + kb + (KC ? q : c * KStep) < k && ib + (KC ? c : q) < i_lim);
+                const float* e0 = p + (base + q) * CF;
+                // complex<float>: one 8-byte load per element where the lane's base allows it.
+#if !BATCHLAS_DEVICE_NO_VECTOR_TYPES
+                if (CF == 2 && (reinterpret_cast<std::uintptr_t>(p) & 7u) == 0) {
+                    const EF2 t = ok ? *reinterpret_cast<const EF2*>(__builtin_assume_aligned(e0, 8)) : EF2{0.0f, 0.0f};
+                    r[c][q * CF] = t[0];
+                    r[c][q * CF + CF - 1] = t[1];
+                    continue;
+                }
+#endif
 BATCHLAS_UNROLL_FULL
-                for (int e = 0; e < CF; ++e) r[c][q * CF + e] = ok ? p[(base + q) * CF + e] : 0.0f;
+                for (int e = 0; e < CF; ++e) r[c][q * CF + e] = ok ? e0[e] : 0.0f;
             }
         }
     }
@@ -651,6 +663,70 @@ BATCHLAS_UNROLL_FULL
             const int kk = kb + q;
             s[kk * RowF + (((ib >> 2) ^ swz<CF, TileK>(kk)) << 2) + (ib & 3)] = r[0][q];
         }
+    }
+}
+
+// The element leg's k-contiguous operand (float, complex<float>): lane st takes row kb = st % TileK
+// of columns ib + edi(j), so TileK lanes walk one column run and a load instruction is a few whole
+// sectors (the 16-byte-granule map put 4 kk per lane and sent ~4x the sectors). Its shared row is
+// padded by 4 floats and unswizzled; at TileK = 16 rows 8-15 also flip the element's slot in its
+// granule (ekx), so the TileK x 2 transposing store hits 32 banks. complex<float> moves 8 bytes per
+// element where the lane's base is 8-byte aligned.
+// evidence: docs/perf/gemm.md#gemm-wp-y-coalesced-element-leg-lane-maps
+template <int OpThreads, int TileK>
+constexpr int edi(int j) {
+    return (OpThreads / TileK) * j;
+}
+template <int CF, int TileK>
+constexpr int ekx(int kk) {
+    return TileK == 16 && (kk & 8) ? 2 / CF : 0;
+}
+
+template <bool Pred, int CF, int OpThreads, int TileK>
+inline void eload(Vec4<float> (&r)[CF], const float* p, int ld, int k0, int kb, int ib, int k, int i_lim) {
+    const bool al8 = CF == 2 && (reinterpret_cast<std::uintptr_t>(p) & 7u) == 0;
+    // The column step is rebuilt per call: hoisted, its multiples spilled at the cap. 64-bit:
+    // 16 ld CF passes INT_MAX at ld ~ 67M (complex<float>).
+    std::ptrdiff_t step = static_cast<std::ptrdiff_t>(edi<OpThreads, TileK>(1)) * ld * CF;
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    asm volatile("" : "+l"(step));
+#endif
+    const float* q = p + k0 * CF;
+BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < 4; ++j, q += step) {
+        const bool ok = !Pred || (k0 + kb < k && ib + edi<OpThreads, TileK>(j) < i_lim);
+        float v[CF];
+#if !BATCHLAS_DEVICE_NO_VECTOR_TYPES
+        if (CF == 2 && al8) {
+            const EF2 t = ok ? *reinterpret_cast<const EF2*>(__builtin_assume_aligned(q, 8)) : EF2{0.0f, 0.0f};
+            v[0] = t[0];
+            v[CF - 1] = t[1];
+        } else
+#endif
+        {
+BATCHLAS_UNROLL_FULL
+            for (int e = 0; e < CF; ++e) v[e] = ok ? q[e] : 0.0f;
+        }
+BATCHLAS_UNROLL_FULL
+        for (int e = 0; e < CF; ++e) r[j * CF / 4][(j * CF) % 4 + e] = v[e];
+    }
+}
+
+template <int CF, int OpThreads, int TileK, int RowF>
+inline void estore(float* s, const Vec4<float> (&r)[CF], int kb, int ib) {
+    constexpr int VecN = 4 / CF;
+BATCHLAS_UNROLL_FULL
+    for (int j = 0; j < 4; ++j) {
+        const int i = ib + edi<OpThreads, TileK>(j);
+        float* d = s + kb * RowF + ((i / VecN) << 2) + ((i % VecN) ^ ekx<CF, TileK>(kb)) * CF;
+        const int q = (j * CF) % 4;
+#if BATCHLAS_DEVICE_NO_VECTOR_TYPES
+BATCHLAS_UNROLL_FULL
+        for (int e = 0; e < CF; ++e) d[e] = r[j * CF / 4][q + e];
+#else
+        if constexpr (CF == 1) *d = r[0][j];
+        else *reinterpret_cast<EF2*>(__builtin_assume_aligned(d, 8)) = EF2{r[j / 2][q], r[j / 2][q + 1]};
+#endif
     }
 }
 
@@ -715,7 +791,13 @@ struct GemmWide64Body {
     static constexpr int NBM = TTM / VecN, NBN = TTN / VecN;     // fragment granules per operand
     static constexpr int MSep = TileM / NBM, NSep = TileN / NBN; // band separation
     static constexpr int HA = TileM / 64, HB = TileN / 64;       // 64-wide staging halves
-    static constexpr int RowA = TileM * CF, RowB = TileN * CF;   // floats
+    static constexpr bool KA = OpA != Transpose::NoTrans, KB = OpB == Transpose::NoTrans;
+    // The element leg's coalesced lane maps (wide_v2::eload); PA/PB: a padded, unswizzled KC row.
+    static constexpr bool kElem = !VecLoads && CF <= 2 && !kPipe;
+    static constexpr bool PA = kElem && KA, PB = kElem && KB;
+    template <bool KC>
+    static constexpr bool kKF = kElem && KC;  // wide_v2::eload's k-fastest map
+    static constexpr int RowA = TileM * CF + (PA ? 4 : 0), RowB = TileN * CF + (PB ? 4 : 0);  // floats
     static constexpr int BufA = TileK * RowA, BufB = TileK * RowB;
     static constexpr int GPR = 64 / VecN;                        // granules per row of one half
     static constexpr bool Split = TileK == 8;
@@ -723,7 +805,6 @@ struct GemmWide64Body {
     static constexpr int KStep = OpThreads / GPR;
     // Prefetch sets: A's halves then B's; under Split a lane holds only its own operand's.
     static constexpr int NR = Split ? (HA > HB ? HA : HB) : HA + HB, RB0 = Split ? 0 : HA;
-    static constexpr bool KA = OpA != Transpose::NoTrans, KB = OpB == Transpose::NoTrans;
     static constexpr bool CA = batchlas::sycl_device::dev_is_complex_v<D> && OpA == Transpose::ConjTrans;
     static constexpr bool CB = batchlas::sycl_device::dev_is_complex_v<D> && OpB == Transpose::ConjTrans;
     static constexpr int kMinGroupsPerCu = (CF == 4 || TileM * TileN > 4096) ? 1 : (CF == 1 ? 3 : 2);
@@ -758,13 +839,15 @@ struct GemmWide64Body {
     static constexpr int KG = TileK / VecN;  // row groups along k
     template <bool KC>
     static int first_k(int tid) {
-        if constexpr (!KC) return tid / GPR;
+        if constexpr (kKF<KC>) return tid % TileK;
+        else if constexpr (!KC) return tid / GPR;
         else if constexpr (CF != 2 || TileK == 8) return (tid % KG) * VecN;
         else return ((tid & 3) | ((tid >> 1) & 4)) * VecN;
     }
     template <bool KC>
     static int first_i(int tid) {
-        if constexpr (!KC) return (tid % GPR) * VecN;
+        if constexpr (kKF<KC>) return tid / TileK;
+        else if constexpr (!KC) return (tid % GPR) * VecN;
         else if constexpr (CF != 2 || TileK == 8) return (tid / KG) * CF;
         else return (((tid >> 2) & 1) | ((tid >> 3) & ~1)) * CF;
     }
@@ -772,8 +855,24 @@ struct GemmWide64Body {
     template <bool KC>
     __attribute__((always_inline)) static void fetch(Vec4<float> (&r)[CF], const float* p, int ld, int k0, int kb,
                                                      int ib, int k, int lim, bool full) {
-        if (full) wide_v2::gload<false, VecLoads, KC, CF, KStep>(r, p, ld, k0, kb, ib, k, lim);
-        else wide_v2::gload<true, VecLoads, KC, CF, KStep>(r, p, ld, k0, kb, ib, k, lim);
+        if constexpr (kKF<KC>) {
+            if (full) wide_v2::eload<false, CF, OpThreads, TileK>(r, p, ld, k0, kb, ib, k, lim);
+            else wide_v2::eload<true, CF, OpThreads, TileK>(r, p, ld, k0, kb, ib, k, lim);
+        } else if (full) {
+            wide_v2::gload<false, VecLoads, KC, CF, KStep>(r, p, ld, k0, kb, ib, k, lim);
+        } else {
+            wide_v2::gload<true, VecLoads, KC, CF, KStep>(r, p, ld, k0, kb, ib, k, lim);
+        }
+    }
+    template <bool KC, int RowF, int RowE>
+    __attribute__((always_inline)) static void put(float* s, const Vec4<float> (&r)[CF], int kb, int ib) {
+        if constexpr (kKF<KC>) wide_v2::estore<CF, OpThreads, TileK, RowF>(s, r, kb, ib);
+        else wide_v2::sstore<KC, CF, KStep, TileK, RowE>(s, r, kb, ib);
+    }
+    // The fragment read's granule XOR: none on a padded row.
+    template <bool P>
+    static constexpr int sw(int kk) {
+        return P ? 0 : wide_v2::swz<CF, TileK>(kk);
     }
 
     // always_inline: left out of line (complex<float>), the body spilled behind a call.
@@ -827,13 +926,9 @@ BATCHLAS_UNROLL_FULL
         };
         auto store = [&](int buf) __attribute__((always_inline)) {
             if (stage_a)
-                static_for<HA>([&](auto h) {
-                    wide_v2::sstore<KA, CF, KStep, TileK, TileM>(sa + buf * BufA, r[h], a_kb, a_ib + 64 * h);
-                });
+                static_for<HA>([&](auto h) { put<KA, RowA, TileM>(sa + buf * BufA, r[h], a_kb, a_ib + 64 * h); });
             if (!Split || !stage_a)
-                static_for<HB>([&](auto h) {
-                    wide_v2::sstore<KB, CF, KStep, TileK, TileN>(sb + buf * BufB, r[RB0 + h], b_kb, b_ib + 64 * h);
-                });
+                static_for<HB>([&](auto h) { put<KB, RowB, TileN>(sb + buf * BufB, r[RB0 + h], b_kb, b_ib + 64 * h); });
         };
         auto compute = [&](int buf) __attribute__((always_inline)) {
             const float* xa = sa + buf * BufA;
@@ -844,16 +939,16 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                 for (int band = 0; band < NBM; ++band) {
                     const Vec4<float> ta =
-                        ld16(xa + kk * RowA + (((band * (MSep / VecN) + ty) ^ swz<CF, TileK>(kk)) << 2));
+                        ld16(xa + kk * RowA + (((band * (MSep / VecN) + ty) ^ sw<PA>(kk)) << 2));
 BATCHLAS_UNROLL_FULL
-                    for (int w = 0; w < VecN; ++w) af[band * VecN + w] = elem<D>(ta, w);
+                    for (int w = 0; w < VecN; ++w) af[band * VecN + w] = elem<D>(ta, w ^ (PA ? ekx<CF, TileK>(kk) : 0));
                 }
 BATCHLAS_UNROLL_FULL
                 for (int band = 0; band < NBN; ++band) {
                     const Vec4<float> tb =
-                        ld16(xb + kk * RowB + (((band * (NSep / VecN) + tx) ^ swz<CF, TileK>(kk)) << 2));
+                        ld16(xb + kk * RowB + (((band * (NSep / VecN) + tx) ^ sw<PB>(kk)) << 2));
 BATCHLAS_UNROLL_FULL
-                    for (int w = 0; w < VecN; ++w) bf[band * VecN + w] = elem<D>(tb, w);
+                    for (int w = 0; w < VecN; ++w) bf[band * VecN + w] = elem<D>(tb, w ^ (PB ? ekx<CF, TileK>(kk) : 0));
                 }
 BATCHLAS_UNROLL_FULL
                 for (int i = 0; i < TTM; ++i) {
@@ -1028,7 +1123,7 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         // The leg (WP-V): three cp.async stages where DPC++ emits cp.async, the device launches
         // their 48 KiB and both bases are 8-byte aligned; measured on sm_120 only, so sm_80-90 take
         // it only under BATCHLAS_GEMM_WIDE_STAGES=3 (=2 forces the register prefetch everywhere).
-        // Else the register prefetch (32 KiB, can_run's term).
+        // Else the register prefetch (two slabs, can_run's wide_slm_bytes term).
         // evidence: docs/perf/gemm.md#gemm-wp-v-three-copy-async-stages-for-the-128x128-complex-float-tile
         using Pipe = GemmWide64Body<T, OpA, OpB, true, TileK, TileM, TileN, 3>;
         constexpr std::size_t pipe_bytes = Pipe::Stages * (Pipe::BufA + Pipe::BufB) * sizeof(float);

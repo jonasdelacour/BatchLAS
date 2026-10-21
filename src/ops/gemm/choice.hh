@@ -191,10 +191,12 @@ constexpr int wide_stages(const WideCfg& c) {
     return 2 * c.k * (c.m + c.n) * std::int64_t(sizeof(T)) <= 40960 ? 2 : 1;
 }
 
-/// Local memory a wide config asks for; gemm_kernels.cc static_asserts it against the kernels.
+/// Local memory a wide config asks for, at most; gemm_kernels.cc static_asserts it against the
+/// kernels. Wide v2's float and complex<float> element leg pads a k-contiguous operand's rows by 16 B.
 template <class T>
 constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
-    return std::int64_t(wide_stages<T>(c)) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
+    const std::int64_t pad = wide_v2_row<T>(c) && sizeof(T) <= 8 ? 2 * 16 : 0;
+    return std::int64_t(wide_stages<T>(c)) * c.k * ((c.m + c.n) * std::int64_t(sizeof(T)) + pad);
 }
 
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.

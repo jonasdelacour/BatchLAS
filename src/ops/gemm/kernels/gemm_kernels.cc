@@ -501,8 +501,12 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         using Body = GemmWide64Body<T, OA, OB, true, c.k, c.m, c.n>;
         static_assert((c.k == 16 || c.k == 8) && c.ttm == Body::TTM && c.ttn == Body::TTN,
                       "wide v2 is a k = 16 or 8 slab over a 16 x 16 lane grid");
-        static_assert(og::wide_slm_bytes<T>(c) == std::int64_t(2) * (Body::BufA + Body::BufB) * std::int64_t(sizeof(float)),
-                      "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
+        using BodyE = GemmWide64Body<T, OA, OB, false, c.k, c.m, c.n>;
+        constexpr std::int64_t padded = std::int64_t(2) * c.k * (c.m + c.n + 8 / Body::CF) * Body::CF * 4;
+        constexpr std::int64_t vec = std::int64_t(2) * (Body::BufA + Body::BufB) * 4;
+        static_assert(og::wide_slm_bytes<T>(c) == (Body::CF == 4 ? vec : padded) &&
+                          og::wide_slm_bytes<T>(c) >= std::int64_t(2) * (BodyE::BufA + BodyE::BufB) * 4,
+                      "can_run's wide_slm_bytes must bound wide v2's two double-buffered tiles on both legs");
         return launch_wide64_v2<T, OA, OB, c.k, c.m, c.n>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
                                                           aligned_trace_name(v), stages3_trace_name(v, false),
                                                           stages3_trace_name(v, true));
