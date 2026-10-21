@@ -11,6 +11,7 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
 #include <batchlas/util/env.hh>
+#include <batchlas/tuning_params.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -1416,4 +1417,80 @@ TEST(PotrfBlocked, NbFollowsScopedEnv) {
     }
     EXPECT_EQ(sycl_potrf::potrf_blocked_debug_params<float>(q, n), before) << "the override leaked past its scope";
     EXPECT_EQ(potrf_buffer_size(q, A, Uplo::Lower), bytes_before);
+}
+
+// ---- L2 batch chunking (docs/perf/potrf.md#potrf-l2-batch-chunking) ----------------------
+
+// A chunk forced to 7 over 23 items (7 + 7 + 7 + 2) at nb = 16, W = 8 (n = 40: three blocks,
+// the last short) with a padded ld and odd stride. Items 6, 7, 13 and 22 sit either side of a
+// boundary and in the short tail, each failing at its own column: an info or matrix sub-range
+// at the wrong offset moves only these. info both requested and not ("not requested" is the
+// chunk-sized pool fallback).
+TYPED_TEST(PotrfBlockedTest, BlockedChunksKeepInfoPerItem) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const ScopedEnvVar nbv("BATCHLAS_POTRF_NB", "16");
+    const ScopedEnvVar wv("BATCHLAS_POTRF_W", "8");
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+    const int n = 40, batch = 23, ld = n + 7, stride = ld * n + 13;
+    ASSERT_EQ(this->blocking(n).nb, 16);
+    ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+
+    const std::vector<int> bad = {6, 7, 13, 22};
+    const std::vector<int> col = {0, 17, 5, n - 1};
+    for (bool pass_info : {true, false}) {
+        UnifiedVector<T> buf(static_cast<size_t>(stride) * batch, MV<T>::make(R(-11), R(5)));
+        MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
+        std::vector<std::vector<T>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            const auto it = std::find(bad.begin(), bad.end(), b);
+            ref[b] = (pass_info && it != bad.end())
+                         ? make_planted_ldl<T>(n, {col[size_t(it - bad.begin())]}, 77u + unsigned(b))
+                         : make_spd<T>(n, 5150u + 13u * unsigned(b));
+            for (int j = 0; j < n; ++j)
+                for (int i = j; i < n; ++i)
+                    buf[size_t(b) * stride + i + size_t(j) * ld] = ref[b][i + size_t(j) * n];
+        }
+        const auto info = this->run_blocked(V, Uplo::Lower, pass_info ? -1 : 0);
+        for (int b = 0; b < batch; ++b) {
+            const auto it = std::find(bad.begin(), bad.end(), b);
+            const bool failed = pass_info && it != bad.end();
+            if (pass_info) {
+                EXPECT_EQ(info[b], failed ? col[size_t(it - bad.begin())] + 1 : 0) << "item " << b << " (chunk " << b / 7 << ")";
+            }
+            if (failed) continue;
+            EXPECT_VERIFY(T, verify::Check::factorization, n,
+                          potrf_error<T>(*this->ctx, ref[b], buf.data() + size_t(b) * stride, ld, n, Uplo::Lower))
+                << "item " << b << (pass_info ? "" : " (info not requested)");
+        }
+    }
+}
+
+// SATURATING: 1024 copies of one matrix in four chunks of 256; every item's lower triangle
+// must be bit-identical to item 0's, so chunks that overlap or skip items show.
+TYPED_TEST(PotrfBlockedTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const ScopedEnvVar nbv("BATCHLAS_POTRF_NB", "16");
+    const ScopedEnvVar wv("BATCHLAS_POTRF_W", "8");
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
+    const int n = 40, batch = 1024, ld = n + 3, stride = ld * n + 5;
+    UnifiedVector<T> buf(static_cast<size_t>(stride) * batch, MV<T>::make(R(-11), R(5)));
+    MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
+    const auto ref = make_spd<T>(n, 31337u);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = j; i < n; ++i) buf[size_t(b) * stride + i + size_t(j) * ld] = ref[i + size_t(j) * n];
+    const auto info = this->run_blocked(V, Uplo::Lower);
+    int wrong = 0, first = -1;
+    for (int b = 1; b < batch; ++b) {
+        bool same = info[b] == info[0];
+        for (int j = 0; j < n && same; ++j)
+            same = std::memcmp(buf.data() + size_t(b) * stride + j + size_t(j) * ld, buf.data() + j + size_t(j) * ld,
+                               sizeof(T) * size_t(n - j)) == 0;
+        if (!same && wrong++ == 0) first = b;
+    }
+    EXPECT_EQ(info[0], 0);
+    EXPECT_EQ(wrong, 0) << "items differing from item 0; first at " << first;
+    EXPECT_VERIFY(T, verify::Check::factorization, n, potrf_error<T>(*this->ctx, ref, buf.data(), ld, n, Uplo::Lower));
 }
