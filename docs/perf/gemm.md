@@ -5,14 +5,15 @@
 gemm selects through flat kernel selection (@ref design_flat_selection). This page lists the choices, the
 `tuned/gemm.*` rows that Auto ranks first on sm_89, and the measurements behind each window. The sm_89 table is
 transcribed from the old router (`424a45bc`) and is untimed, so these windows are what Auto runs on sm_89. The
-sm_120 table is coarse-measured on the kernels of the 2026-10 campaign below (float, double, complex<float>;
-complex<double> keeps transcribed rows, FP64 being deferred on 1:64 parts).
+sm_120 table is deep-measured for float and complex<float> on the kernels of the 2026-10 campaign below;
+double and complex<double> keep transcribed rows (FP64 tuning is deferred on 1:64 parts, @ref dev_agent_guide).
 
 ## GEMM: the sm_120 cuBLAS gap campaign (2026-10)
 
 Native gemm against cuBLAS on sm_120 over the coarse grid, every cell where both were timed. *Losing*: native
 > 1.05× vendor; *excess*: summed native − vendor ms over losing cells; *geomean*: native / vendor over all
-timed cells (< 1 is faster than cuBLAS). Each row is a full coarse pass of the kernels at that point.
+timed cells (< 1 is faster than cuBLAS). Each row is a full pass of the kernels at that point: coarse, except
+the last, which is deep (2.2-2.7× the cells, refinement midpoints included), so compare its losing *share*.
 
 | stage | float losing / excess / geomean | complex<float> | complex<double> |
 |---|---|---|---|
@@ -20,14 +21,14 @@ timed cells (< 1 is faster than cuBLAS). Each row is a full coarse pass of the k
 | PR 188 | 1424 / 235 ms / 1.006 | 2312 / 337 ms / 0.970 | — |
 | + WP-J, K, L, N2, Q | 688 / 111 ms / 0.960 | 623 / 209 ms / 0.924 | 44 / 40 ms / 0.794 |
 | + WP-O, T, F | 208 / 27 ms / 0.869 | 615 / 66 ms / 0.914 | 3 / 3 ms / 0.777 |
-| + WP-V, U (shipped table) | 210 / 24 ms / 0.861 | 209 / 11 ms / 0.862 | deferred |
+| + WP-V, U | 210 / 24 ms / 0.861 | 209 / 11 ms / 0.862 | deferred |
+| + WP-W, X, Y (deep, shipped table) | 242 of 5909 (4.1%) / 15 ms / 0.837 | 354 of 11471 (3.1%) / 13 ms / 0.858 | deferred |
 
-double: 1 losing cell (1.05×) in the shipped table. What is left (median loss 1.08×): float TT/TN/NN strided
-mid shapes on `reg:m=128:n=128:k=8:u=4` and strided skinny shapes on the wide tiles; complex<float> NT/NC
-strided skinny and mid shapes. [WP-W](#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages) adds
-256×128 and 128×256 float tiles that take the float mid shapes to 0.95-1.04× vendor (pinned). WP-X brings the
-complex<float> skinny cells on the transposed tiles to 0.94-1.01× vendor and float to 0.99-1.13×. Both come
-after the shipped table; the retune has not ranked them yet. Every work package has its own section below.
+What is left in the shipped table (median loss 1.07-1.08×): float strided skinny shapes on the wide tiles
+(TT/NN/TN/NT, up to 1.22×) and complex<float> NT/NC strided mid shapes on the 128×128 and 64×64 wide tiles.
+Float mid shapes are closed by WP-W's 256×128 and 128×256 tiles (every remaining float mid bucket is under
+0.5 ms of excess); a 128×64 float tile for ragged n (181) was considered and not built, those cells now
+summing to under 1 ms. Every work package has its own section below.
 
 Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
