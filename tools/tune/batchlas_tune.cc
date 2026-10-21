@@ -101,7 +101,7 @@ struct Opts {
     std::string prior;     // --tier calibrate: --prior <device>
     int probe_stride = 0;  // --tier calibrate: --probe-stride
     int cus = 0;           // --cus: the batch ladder's compute units; 0 = the device's (--plan: its name)
-    std::string batch_ladder = "default";  // --batch-ladder default|off|c,c,...
+    std::string batch_ladder = "auto";  // --batch-ladder auto|default|off|c,c,...
     std::vector<std::string> dtypes{"float"};
     std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
@@ -1276,7 +1276,7 @@ int plan_cus(const Opts& o) {
 
 std::vector<double> ladder_classes(const Opts& o) {
     if (o.batch_ladder == "off" || o.grid.count("batch")) return {};
-    if (o.batch_ladder == "default") return default_batch_classes();
+    if (o.batch_ladder == "default" || o.batch_ladder == "auto") return default_batch_classes();
     std::vector<double> c;
     for (const std::string& v : split(o.batch_ladder, ',')) c.push_back(std::stod(v));
     return c;
@@ -1297,7 +1297,8 @@ void usage() {
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
         "         --util-ceiling 5 --allow-idle-foreign --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
-        "         --batch-ladder default|off|c,c,.. (batch = c x compute units; --batches turns it off) --cus N\n"
+        "         --batch-ladder auto|default|off|c,c,.. (batch = c x compute units; auto: not on an old-axis ledger;\n"
+        "         --batches turns it off) --cus N\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
 }
@@ -1377,6 +1378,7 @@ TieredOpts tiered_opts(const Opts& o) {
     t.probe_stride = o.probe_stride;
     t.cus = o.cus;
     t.batch_classes = ladder_classes(o);
+    t.ladder_auto = o.batch_ladder == "auto";
     t.guard = guard_backend_now;
     if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
