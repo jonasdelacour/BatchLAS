@@ -357,7 +357,8 @@ BATCHLAS_UNROLL_FULL
             // before that barrier) and computes. One commit per step, empty past the end, keeps the wait
             // count at Stages - 2. Element copies, in range iff the row (column) and the k index are; each
             // operand pointer bumps one slab per issue (a k0 * ld product spilled staged NN and NT at the
-            // 128 cap). Unrolled by Stages: the buffer is a constant.
+            // 128 cap). Unrolled by Stages: the buffer is a constant. A zero-size copy names the
+            // operand's batch base, not its own address (up to 127 m/n or 7 k indices past the operand).
             // 32 ld, rebuilt per issue: hoisted and held across the mainloop it spilled 16 B in staged u4
             // NN, TN and TT on sm_89 at the 128 cap.
             auto ld32 = [](int ld) __attribute__((always_inline)) {
@@ -374,7 +375,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = oa + a_k * AStride + a_m + 32 * i;
-                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, ga + lda32 * i, 32 * i < lim ? 4u : 0u);
+                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, 32 * i < lim ? ga + lda32 * i : a_ptr, 32 * i < lim ? 4u : 0u);
                     }
                     ga += TileK;
                 } else {
@@ -382,7 +383,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = oa + a_k * AStride + a_m + 32 * i;
-                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, ga + 32 * i, 32 * i < lim ? 4u : 0u);
+                        copy_async_zfill<4>(sa + o, sa_l + 4u * o, 32 * i < lim ? ga + 32 * i : a_ptr, 32 * i < lim ? 4u : 0u);
                     }
                     ga += static_cast<std::ptrdiff_t>(TileK) * lda;
                 }
@@ -392,7 +393,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = ob + b_k * BStride + b_n + 32 * i;
-                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, gb + ldb32 * i, 32 * i < lim ? 4u : 0u);
+                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, 32 * i < lim ? gb + ldb32 * i : b_ptr, 32 * i < lim ? 4u : 0u);
                     }
                     gb += TileK;
                 } else {
@@ -400,7 +401,7 @@ BATCHLAS_UNROLL_FULL
 BATCHLAS_UNROLL_FULL
                     for (int i = 0; i < 4; ++i) {
                         const int o = ob + b_k * BStride + b_n + 32 * i;
-                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, gb + 32 * i, 32 * i < lim ? 4u : 0u);
+                        copy_async_zfill<4>(sb + o, sb_l + 4u * o, 32 * i < lim ? gb + 32 * i : b_ptr, 32 * i < lim ? 4u : 0u);
                     }
                     gb += static_cast<std::ptrdiff_t>(TileK) * ldb;
                 }

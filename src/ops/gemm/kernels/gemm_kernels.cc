@@ -6,6 +6,7 @@
 
 #include <src/ops/gemm/kernels/accessors.hh>
 #include <src/ops/gemm/kernels/register_128x128.hh>
+#include <src/ops/gemm/kernels/register_256x128.hh>
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
 #include <src/ops/gemm/kernels/register_launchers.hh>
 #include <src/ops/gemm/kernels/register_wide_transposed.hh>
@@ -163,6 +164,14 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
     case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
     case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
+    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4";
+    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt";
+    case KernelVariant::Tiled256x128RegisterK8S4TN: return "gemm_sycl_register_256x128_k8_s4_tn";
+    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt";
+    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4";
+    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt";
+    case KernelVariant::Tiled128x256RegisterK8S4TN: return "gemm_sycl_register_128x256_k8_s4_tn";
+    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt";
     case KernelVariant::Count: break;
     }
     return "gemm_sycl_unknown";
@@ -216,6 +225,12 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn_aligned";
     case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct_aligned";
     case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt_aligned";
     default: return kernel_trace_name(variant);
     }
 }
@@ -370,6 +385,10 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
                    : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
     case 10: return f == kNN ? K::Tiled128x128RegisterK8S4 : f == kTN ? K::Tiled128x128RegisterK8S4TN
                     : f == kNT ? K::Tiled128x128RegisterK8S4NT : K::Tiled128x128RegisterK8S4TT;
+    case 11: return f == kNN ? K::Tiled256x128RegisterK8S4 : f == kTN ? K::Tiled256x128RegisterK8S4TN
+                    : f == kNT ? K::Tiled256x128RegisterK8S4NT : K::Tiled256x128RegisterK8S4TT;
+    case 12: return f == kNN ? K::Tiled128x256RegisterK8S4 : f == kTN ? K::Tiled128x256RegisterK8S4TN
+                    : f == kNT ? K::Tiled128x256RegisterK8S4NT : K::Tiled128x256RegisterK8S4TT;
     default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
@@ -393,6 +412,15 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
             return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_128x128_k8<float, false, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
                                                                            kernel_trace_name);
+    } else if constexpr ((c.m == 256 && c.n == 128) || (c.m == 128 && c.n == 256)) {
+        using Body = GemmK8S4LargeBody<c.tr, c.tc, OA, OB, false>;
+        static_assert(Body::TileM == c.m && Body::TileN == c.n && Body::Stages == c.stages && c.threads() == 256,
+                      "choice.hh's row must match the 256x128 / 128x256 kernel");
+        static_assert(Body::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * Body::Elems,
+                      "choice.hh's slm_bytes must match the kernel's local accessor");
+        return launch_register_k8_s4_large<c.tr, c.tc, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name,
+                                                               aligned_trace_name);
     } else {
         static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
