@@ -331,4 +331,33 @@ inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
                                        stedc_wg_multiplier_default_for_n(n));
 }
 
+// Hand-set, not bucketed by n and not written by the tuner from a profile; the generator copies
+// them verbatim. evidence: docs/perf/lu.md#lu-l2-batch-chunking
+inline constexpr int32_t BLOCKED_L2_CHUNK_PERCENT = 100;
+inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_WAVES = 8;
+
+/// @brief Items per chunk for a multi-kernel blocked driver (getrf, potrf) over @p batch items.
+///
+/// The chunk holds `BLOCKED_L2_CHUNK_PERCENT` % of @p l2_bytes of @p item_bytes items, rounded
+/// to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_WAVES` x @p compute_units;
+/// a batch above it is split into equal chunks of at most that size. `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
+/// overrides the percentage; `BATCHLAS_TUNE_L2_CHUNK_ITEMS` forces the chunk size as given.
+/// @return @p batch (one chunk) when the batch fits or the device reports no cache
+/// @ingroup api_config_lowlevel
+inline int64_t blocked_chunk_items(int64_t batch, int64_t item_bytes, int64_t l2_bytes,
+                                   int64_t compute_units) {
+    const int64_t forced = detail::tuning_env_override(settings().geometry.tune.l2_chunk_items, 0);  // BATCHLAS_TUNE_L2_CHUNK_ITEMS
+    if (forced > 0) return batch > forced ? forced : batch;
+    if (l2_bytes <= 0 || item_bytes <= 0) return batch;
+    const int64_t pct = detail::tuning_env_override(settings().geometry.tune.l2_chunk_percent,  // BATCHLAS_TUNE_L2_CHUNK_PERCENT
+                                                    BLOCKED_L2_CHUNK_PERCENT);
+    const int64_t cu = compute_units > 0 ? compute_units : 1;
+    int64_t chunk = (l2_bytes / 100 * pct / item_bytes + cu / 2) / cu * cu;
+    if (chunk < cu * BLOCKED_L2_CHUNK_MIN_WAVES) chunk = cu * BLOCKED_L2_CHUNK_MIN_WAVES;
+    if (batch <= chunk) return batch;
+    const int64_t chunks = (batch + chunk - 1) / chunk;
+    const int64_t even = ((batch + chunks - 1) / chunks + cu - 1) / cu * cu;
+    return even < chunk ? even : chunk;
+}
+
 } // namespace batchlas::tuning
