@@ -4,6 +4,7 @@
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <complex>
@@ -306,16 +307,18 @@ template <typename T>
                                          << " (" << slack.reason << "))";
 }
 
-// A vendor build's "no route": select::pick's std::runtime_error("<op>: no runnable kernel on ...").
+// A vendor build's "no route": select::pick's batchlas::unsupported("<op>: no runnable kernel on ...").
 // Any other exception fails, so a vendor that ran and then threw cannot pass for a refusal.
 template <typename F>
 ::testing::AssertionResult throws_no_runnable_kernel(F&& f) {
     try {
         std::forward<F>(f)();
-    } catch (const std::exception& e) {
+    } catch (const batchlas::unsupported& e) {
         if (std::string_view(e.what()).find("no runnable kernel") != std::string_view::npos)
             return ::testing::AssertionSuccess();
         return ::testing::AssertionFailure() << "threw, but not 'no runnable kernel': " << e.what();
+    } catch (const std::exception& e) {
+        return ::testing::AssertionFailure() << "threw, but not batchlas::unsupported: " << e.what();
     }
     return ::testing::AssertionFailure() << "did not throw";
 }

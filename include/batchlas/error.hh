@@ -11,9 +11,8 @@
 /// reason), `catch (const batchlas::exception&)` (anything BatchLAS diagnosed), and
 /// `catch (const std::exception&)` (that, plus `std::bad_alloc` and `sycl::exception`, which are
 /// deliberately not wrapped).
-/// @note Not yet covered: the kernel-selection layer throws plain `std::invalid_argument` for a
-///       bad `BATCHLAS_<OP>_ROUTE` pin and `std::runtime_error` when no kernel can run; neither
-///       matches `catch (const batchlas::exception&)`. batchlas::NoRouteError
+/// @note Kernel selection throws batchlas::invalid_argument for a bad `BATCHLAS_<OP>_ROUTE` pin
+///       and batchlas::unsupported when no kernel can run. batchlas::NoRouteError
 ///       (`<batchlas/no_route.hh>`, nothing compiled in can serve the call) is a batchlas::unsupported.
 /// @see @ref design_error_model
 /// @ingroup api_errors

@@ -11,6 +11,7 @@
 #include <src/select/vendor.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/queue-dispatch.hh>
+#include <batchlas/error.hh>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
@@ -279,18 +280,18 @@ struct Table {
     /// Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
     /// dropped from the right until some row matches, possibly all of them), then min
     /// sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
-    /// @throws std::invalid_argument if @p key lacks a table key.
+    /// @throws batchlas::internal_error (invalid_argument for an override table) if @p key lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
 /// Parses one single-dtype table: op and device from the header or file name, dtype from the header.
-/// @throws std::runtime_error `"<file>:<line>: <reason>"`.
+/// @throws batchlas::internal_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
 
 /// Parses one tuned table file, named op.device.txt with the exact key dtype first, into one
 /// Table per dtype without that key.
-/// @throws std::runtime_error as parse_table does.
+/// @throws batchlas::internal_error as parse_table does.
 BATCHLAS_API std::vector<Table> parse_tables(std::string_view text, std::string_view file);
 
 /// A `tuned/*.txt` file compiled into the library: its basename and text.
@@ -329,7 +330,7 @@ BATCHLAS_API bool trace_open(std::string_view op, const std::string& spelling, b
                              const coverage::Shape& shape, const NativeFacts& facts, const Key& fields);
 BATCHLAS_API void trace_close();
 
-// A bad spelling in a table is a build defect, so it fails loudly on first use.
+// A bad spelling in a built-in table is a build defect, so it fails loudly on first use.
 template <class Choice>
 void validate(const Table& t) {
     static std::mutex mu;
@@ -339,8 +340,10 @@ void validate(const Table& t) {
     for (const auto& row : t.rows)
         for (const auto& e : row.ranked) {
             std::string err;
-            if (!parse<Choice>(e.spelling, &err))
-                throw std::runtime_error(t.file + ":" + std::to_string(row.line) + ": " + err);
+            if (parse<Choice>(e.spelling, &err)) continue;
+            const std::string what = t.file + ":" + std::to_string(row.line) + ": " + err;
+            if (t.is_override) throw ::batchlas::invalid_argument("BATCHLAS_TUNED_DIR: " + what);
+            throw ::batchlas::internal_error(what);
         }
     done.insert(&t);
 }
@@ -392,7 +395,7 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
         return c;
     }
     if (native_only) return std::nullopt;
-    throw std::runtime_error(std::string(op) + ": no runnable kernel on " + d.key);
+    throw ::batchlas::unsupported(std::string(op) + ": no runnable kernel on " + d.key);
 }
 
 // §5.2 / R6. nullopt means "auto": the caller runs the normal walk. The class words
@@ -408,7 +411,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
     const std::string refused = where + " (strict): no " + text + " candidate can run this shape on " + d.key;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;
-        if (strict) throw std::invalid_argument(refused);
+        if (strict) throw ::batchlas::invalid_argument(refused);
         warn_pin_fallback(op, "native", d);
         return std::nullopt;
     }
@@ -418,18 +421,18 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
                 if (trace_enabled()) note_decision(op, to_string(k), "", "pinned");
                 return k;
             }
-        if (strict) throw std::invalid_argument(refused);
+        if (strict) throw ::batchlas::invalid_argument(refused);
         warn_pin_fallback(op, "vendor", d);  // a vendor-free build: `vendor` falls back to Auto
         return std::nullopt;
     }
     std::string err;
     const std::optional<Choice> c = parse<Choice>(text, &err);
-    if (!c) throw std::invalid_argument(where + " is not a valid choice: " + err);
+    if (!c) throw ::batchlas::invalid_argument(where + " is not a valid choice: " + err);
     if (!is_candidate(*c, candidates))
-        throw std::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " + std::string(op) + " " +
-                                    std::string(dtype) + " candidate");
+        throw ::batchlas::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " + std::string(op) +
+                                           " " + std::string(dtype) + " candidate");
     if (!can_run(*c))
-        throw std::invalid_argument(where + ": " + to_string(*c) + " cannot run this shape on " + d.key);
+        throw ::batchlas::invalid_argument(where + ": " + to_string(*c) + " cannot run this shape on " + d.key);
     if (trace_enabled()) note_decision(op, to_string(*c), "", "pinned");
     return c;
 }
@@ -439,7 +442,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 // ---- pins (§5.2) ------------------------------------------------------------------------
 
 /// Tag for a strict ScopedPin: a class word ("native", "vendor") that cannot serve the shape
-/// throws std::invalid_argument instead of falling back to auto.
+/// throws batchlas::invalid_argument instead of falling back to auto.
 struct StrictPin {};
 
 /// RAII pin for @p op: wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer
@@ -464,7 +467,7 @@ private:
 
 /// The only selection algorithm: the pin, else the first candidate passing @p can_run in the nearest
 /// row of each table in borrow order, else the first runnable candidate in @p rules' last-resort order.
-/// @throws std::invalid_argument for a bad pin (R6); std::runtime_error when nothing can run.
+/// @throws batchlas::invalid_argument for a bad pin (R6); batchlas::unsupported when nothing can run.
 template <class Choice, std::size_t N, class CanRun>
 Choice choose(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
               const std::array<Choice, N>& candidates, CanRun&& can_run, const Rules& rules = {}) {
@@ -549,7 +552,7 @@ Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<
     auto ok = [&](const Choice& c) { return can_run(c, d); };
     try {
         return choose(op.name(), dtype_name<T>(), d, key, candidates, ok, op.rules);
-    } catch (const std::runtime_error&) {
+    } catch (const ::batchlas::unsupported&) {
         if (op.vendor != Lib::none && !has_library<B>(op.vendor) &&
             std::none_of(candidates.begin(), candidates.end(), ok))
             no_vendor<B, T>(op);

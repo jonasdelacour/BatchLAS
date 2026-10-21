@@ -78,8 +78,7 @@ void translate(std::exception_ptr pointer) {
     } catch (const batchlas::error& error) {
         PyErr_SetString(batchlas_error, error.what());
     } catch (const std::invalid_argument& error) {
-        // Not only batchlas::invalid_argument: a bad BATCHLAS_<OP>_ROUTE pin throws
-        // the plain std one (src/select/select.hh).
+        // Not only batchlas::invalid_argument: a std one thrown outside BatchLAS maps here too.
         PyErr_SetString(invalid_argument_error, error.what());
     } catch (const std::out_of_range& error) {
         PyErr_SetString(out_of_range_error, error.what());
@@ -93,8 +92,8 @@ void init_exceptions(py::module_& module) {
                                    "Root of every BatchLAS exception (batchlas::exception).",
                                    bases_of({PyExc_Exception}));
     invalid_argument_error = new_exception(module, "InvalidArgumentError",
-                                           "batchlas::invalid_argument, or any std::invalid_argument "
-                                           "such as a bad route pin. A ValueError.",
+                                           "batchlas::invalid_argument (a bad route pin included), "
+                                           "or any other std::invalid_argument. A ValueError.",
                                            bases_of({base_exception, PyExc_ValueError}));
     out_of_range_error = new_exception(module, "OutOfRangeError", "batchlas::out_of_range. An IndexError.",
                                        bases_of({base_exception, PyExc_IndexError}));
