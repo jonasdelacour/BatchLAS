@@ -412,7 +412,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
             return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_128x128_k8<float, false, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
                                                                            kernel_trace_name);
-    } else if constexpr (c.m * c.n == 256 * 128) {
+    } else if constexpr ((c.m == 256 && c.n == 128) || (c.m == 128 && c.n == 256)) {
         using Body = GemmK8S4LargeBody<c.tr, c.tc, OA, OB, false>;
         static_assert(Body::TileM == c.m && Body::TileN == c.n && Body::Stages == c.stages && c.threads() == 256,
                       "choice.hh's row must match the 256x128 / 128x256 kernel");

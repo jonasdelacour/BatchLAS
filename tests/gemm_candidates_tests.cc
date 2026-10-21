@@ -688,14 +688,14 @@ protected:
         const Pin pin("gemm", c);
         run(p);
     }
-    // p's buffer moved one real in (its alignof), so every base is half a scalar past a 16-byte
-    // boundary and wide v2 takes its element leg (complex<float>: not the cp.async stages, whose
-    // 8-byte copies need 8-byte bases); copied back for expect_gemm.
+    // p's buffer moved one real in (its alignof), so every base is one real past a 16-byte boundary
+    // (complex: half a scalar) and wide v2 takes its element leg (complex<float>: not the cp.async
+    // stages, whose 8-byte copies need 8-byte bases); copied back for expect_gemm.
     void run_pinned_base8(const C& c, Problem<T>& p) {
-        static_assert(sizeof(T) == 2 * sizeof(RealOf<T>), "a complex scalar");
-        UnifiedVector<RealOf<T>> raw(2 * p.mem.size() + 1, RealOf<T>(0));
+        constexpr std::size_t reals = sizeof(T) / sizeof(RealOf<T>);
+        UnifiedVector<RealOf<T>> raw(reals * p.mem.size() + 1, RealOf<T>(0));
         T* base = reinterpret_cast<T*>(raw.data() + 1);
-        ASSERT_EQ(reinterpret_cast<std::uintptr_t>(base) % 16u, sizeof(T) / 2);
+        ASSERT_EQ(reinterpret_cast<std::uintptr_t>(base) % 16u, sizeof(RealOf<T>));
         std::memcpy(base, p.mem.data(), p.mem.size() * sizeof(T));
         UnifiedVector<T*> pa(p.s.batch, nullptr), pb(p.s.batch, nullptr), pc(p.s.batch, nullptr);
         auto view = [&](const Region& g, UnifiedVector<T*>& ptrs) {
@@ -1597,6 +1597,7 @@ TYPED_TEST(GemmCandidates, RegLargeTilesEveryFormSlabCountAndLegAtSaturatingBatc
 // WP-W: beta = 0 stores alpha * acc (A = 0, alpha = -1: every element -0.0) on both legs of both
 // large tiles, and the leg is derived from the packet operands alone (A in NN/NT, B^T in NT/TT): a
 // misaligned k-contiguous operand keeps the 16-byte leg, a misaligned packet operand refuses it.
+// Padded at base + 1 element (ld and stride whole granules) isolates the base term.
 TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
     using T = typename TestFixture::T;
     if constexpr (!std::is_same_v<T, float>) {
@@ -1604,7 +1605,7 @@ TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
     } else {
         // The leg each (A, B) layout pair takes, by kernel trace (first: a threadsafe death test re-runs
         // the test body up to the EXPECT_EXIT in its child).
-        struct Case { C c; Spec s; std::string kernel; };
+        struct Case { C c; Spec s; std::string kernel; bool base4 = false; };
         std::vector<Case> cases;
         if (!reg_fits(*reg_row(og::Reg{256, 128, 8, 4})) && !reg_fits(*reg_row(og::Reg{128, 256, 8, 4})))
             GTEST_SKIP() << "the large tiles are above this device's local memory budget";
@@ -1625,6 +1626,10 @@ TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
                         const std::string f = reg_form(ta, tb);
                         cases.push_back({c, s, reg_row(std::get<og::Reg>(c))->trace.at(vec ? f + "+aligned" : f)});
                     }
+            for (Transpose ta : {kN, kT})
+                for (Transpose tb : {kN, kT})
+                    cases.push_back({c, Spec{ta, tb, 160, 136, 48, 2, Layout::Padded},
+                                     reg_row(std::get<og::Reg>(c))->trace.at(reg_form(ta, tb)), true});
         }
         const std::string path = ::testing::TempDir() + "gemm_ktrace_large.json";
         std::filesystem::remove(path);
@@ -1633,7 +1638,8 @@ TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
         auto child = [&] {
             for (const auto& k : cases) {
                 auto p = make_problem<T>(k.s);
-                this->run_pinned(k.c, p);
+                if (k.base4) this->run_pinned_base8(k.c, p);
+                else this->run_pinned(k.c, p);
             }
             std::exit(0);
         };
@@ -1653,8 +1659,9 @@ TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
         // And the values: every pair's result is right (the 16-byte leg on a misaligned operand faults).
         for (const auto& k : cases) {
             auto p = make_problem<T>(k.s);
-            this->run_pinned(k.c, p);
-            expect_gemm(*this->ctx, p, name(k.c, k.s));
+            if (k.base4) this->run_pinned_base8(k.c, p);
+            else this->run_pinned(k.c, p);
+            expect_gemm(*this->ctx, p, name(k.c, k.s) + (k.base4 ? " (base + 1)" : ""));
             if (::testing::Test::HasFatalFailure()) return;
         }
         int ran = 0, rows = 0;

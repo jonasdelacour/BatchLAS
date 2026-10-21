@@ -60,6 +60,8 @@ struct Forms {
 
 /// One compiled register config: tr/tc thread tile, stages, forms, and whether NN (every form at
 /// 128x128) takes the unpredicated leg when the layout allows (derived per call, never a gate).
+/// aligned_leg names the generic launcher's leg only: the 256x128 / 128x256 kernels derive their
+/// own 16-byte leg (launch_register_k8_s4_large) and leave it false.
 struct RegCfg {
     int m, n, k, u, tr, tc, stages;
     Forms forms;
@@ -67,7 +69,8 @@ struct RegCfg {
     constexpr int threads() const { return (m / tr) * (n / tc); }
     /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
     constexpr std::int64_t slm_bytes() const {
-        if (m * n == 256 * 128) return std::int64_t(4) * stages * k * (m + n + 8);  // padded slabs (stride + 4)
+        if ((m == 256 && n == 128) || (m == 128 && n == 256))
+            return std::int64_t(4) * stages * k * (m + n + 8);  // padded slabs (stride + 4)
         if (m == 128 && n == 128) {
             const int pad = stages > 2 ? 4 : 0;  // the copy_async pipeline's padded shared stride
             const int a = stages * k * (m + pad);
@@ -88,7 +91,7 @@ inline constexpr std::array<RegCfg, 13> reg_configs{{
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
     {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
     {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // predicated: 4 copy_async stages; aligned: u1's kernel
-    {256, 128, 8, 4, 16, 8, 4, {true, true, true, true}, false},  // 4 copy_async stages, one leg (register_256x128.hh)
+    {256, 128, 8, 4, 16, 8, 4, {true, true, true, true}, false},  // 4 copy_async stages, own leg (register_256x128.hh)
     {128, 256, 8, 4, 8, 16, 4, {true, true, true, true}, false},
 }};
 
