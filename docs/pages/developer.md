@@ -1,5 +1,7 @@
 # Developer guide {#developer_index}
 
+> **Status:** current · section index
+
 Process, tooling and working rules for contributors. @ref dev_agent_guide is the terse rule set.
 
 | Page | What you find there |

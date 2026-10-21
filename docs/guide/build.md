@@ -1,6 +1,7 @@
 # Building, testing and benchmarking {#guide_build}
 
-> **Status:** current · moved from the project README on 2026-10-09.
+> **Status:** current · checked against `CMakePresets.json`, `cmake/` and `.github/workflows/ci.yml`
+> on 2026-10-21.
 
 Requirements, tested platforms, CMake presets and options, the test and benchmark builds, the
 Python package and the install traps. Calling the library and linking an installed package are in
@@ -11,7 +12,8 @@ BatchLAS").
 
 - CMake 3.17+ (`FindCUDAToolkit` is 3.17, ctest `RESOURCE_GROUPS` 3.16; 3.21+ for `cmake --preset`,
   `CMakePresets.json` is schema version 3).
-- A C++20 compiler with SYCL support: a DPC++/Clang-family compiler, clang 16 or newer.
+- A C++20 SYCL compiler: DPC++ (`intel/llvm`, or oneAPI `icpx`) or AdaptiveCpp 25.10 (`acpp`).
+  Configure stops on a compiler that is not Clang-family.
 - Optional: CUDA Toolkit (NVIDIA), ROCm (AMD), LAPACKE and CBLAS (netlib host backend), Python 3 +
   pybind11 + NumPy + SciPy (Python bindings).
 
@@ -36,7 +38,9 @@ vendor-free build.
 | --- | --- | --- | --- | --- | --- |
 | Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Library, tests and benchmarks built and run here daily |
 | Second GPU box | same toolchain (threadripper02) | 13.2 | NVIDIA RTX PRO 6000, `sm_120` | Linux | Built and tested; `sm_120` tuning tables measured here |
-| CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export and public headers only; nothing configured, compiled or run |
+| AdaptiveCpp + CUDA | AdaptiveCpp 25.10.0, LLVM 20, generic (SSCP) flow (`/opt/adaptivecpp-25.10.0-cuda13.2`) | 13.2 | NVIDIA RTX PRO 6000, `sm_120` | Linux | Library and tests built and run (`acpp-tests`); failure ledger `tests/known-failures-acpp.txt` |
+| CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export, public headers, comment density, evidence anchors, tuned tables, docs site |
+| CI — `acpp-compile` | AdaptiveCpp 25.10.0 built from source, LLVM 20 | off | none | `ubuntu-24.04` | Configures and compiles every target with `--acpp-targets=generic`; runs nothing |
 | CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
 | CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** (see the warning above). Not built by CI |
 | AMD / ROCm | — | — | — | — | Code paths exist; not built or run |
@@ -63,12 +67,16 @@ cmake --build --preset dev
 | `dev` | default `RelWithDebInfo` library |
 | `dev-tests` | library plus the full test suite |
 | `fast-dev` | library plus the smoke-test subset |
-| `benchmarks` | benchmarks and the table tuner (`tools/tune`) |
+| `benchmarks` | benchmarks (`batchlas_benchmarks`); the table tuner is configured too, built with `--target batchlas_tune` |
 | `cuda` | `dev-tests` with `BATCHLAS_ENABLE_CUDA=AUTO` (not `ON`: without a `[cuda:gpu]` it still configures, CPU-only) and `BATCHLAS_ALLOW_UNSAFE_ENV=OFF`; the pre-push gate |
-| `dev-gpu` / `dev-gpu-tests` | drop the `native_cpu` SYCL target (`BATCHLAS_CPU_TARGET=none`) |
+| `dev-gpu` / `dev-gpu-tests` | drop the CPU SYCL target (`BATCHLAS_CPU_TARGET=none`) |
 | `release` | `Release`, no tests or benchmarks, one shared library |
 | `acpp` / `acpp-tests` | `dev` / `dev-tests` built with the AdaptiveCpp 25.10 driver (`--acpp-targets=generic`) into `build-acpp` / `build-acpp-tests` ([SYCL implementations](../design/sycl-implementations.md)) |
 | `acpp-metal` / `acpp-metal-tests` | macOS only: Apple GPU through AdaptiveCpp Metal into `build-acpp-metal` / `build-acpp-metal-tests` ([macOS](#macos-apple-gpu-through-adaptivecpp-metal)); the test preset runs `ctest` serially |
+
+The `dev`, `dev-gpu`, `acpp` and `acpp-metal` build presets build `batchlas_components` (no tests),
+`release` builds `batchlas`. Every test preset runs `ctest` serially: `jobs` is 1, or unset for
+`fast-dev`.
 
 `BATCHLAS_ALLOW_UNSAFE_ENV` is `ON` in every preset that inherits `dev` (`dev`, `dev-tests`,
 `fast-dev`, `benchmarks`, `dev-gpu*`, `acpp*`), which exist to measure and debug, and `OFF` in `cuda`
@@ -92,39 +100,39 @@ cmake --build build -j8
 
 | option | meaning |
 | --- | --- |
-| `BATCHLAS_BUILD_TESTS` | build unit tests |
-| `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables and `batchlas_tune` |
-| `BATCHLAS_BUILD_PYTHON` | build the Python package |
+| `BATCHLAS_BUILD_TESTS` | build unit tests (default `ON` as the top-level project, `OFF` as a subproject) |
+| `BATCHLAS_BUILD_BENCHMARKS` | build benchmark executables, plus `batchlas_tune` when a GPU backend is configured (default `OFF`) |
+| `BATCHLAS_BUILD_PYTHON` | build the Python package (default `OFF`) |
+| `BATCHLAS_PYTHON_INSTALL_DIR` | where `cmake --install` puts the `batchlas` package (default `lib/pythonX.Y/site-packages`, relative to the prefix) |
 | `BATCHLAS_ENABLE_CUDA` | `AUTO` (default; enable cuBLAS/cuSOLVER when the SYCL runtime exposes a CUDA device), `ON` (require it; configure fails without an NVIDIA target, see "Device and toolkit detection") or `OFF`. Boolean spellings are accepted (`1`/`TRUE`/`YES` mean `ON`, `0`/`FALSE`/`NO` mean `OFF`); an existing cache entry keeps its value |
 | `BATCHLAS_ENABLE_VENDOR_BLAS` | the one switch over every vendor library (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS/rocSOLVER/rocSPARSE, netlib LAPACKE/CBLAS), re-read on every configure; `OFF` builds the vendor-free library ([vendor-free status](../design/vendor-free-status.md)). The three CUDA libraries are all-or-nothing: a toolkit missing one fails configure |
-| `BATCHLAS_MONOLITHIC_LIBRARY` | one `libbatchlas.so` instead of the per-component libraries (default `OFF`; the `release` preset turns it on) |
+| `BATCHLAS_MONOLITHIC_LIBRARY` | one `libbatchlas.so` instead of the component libraries (default `OFF`, `ON` on macOS; the `release` preset turns it on). Required on macOS: ld64 rejects the components' cyclic undefined symbols |
 | `BATCHLAS_ALLOW_UNSAFE_ENV` | honour the `BATCHLAS_*` overrides that disable a safety check (`batchlas::Settings::unsafe`; default `OFF`, see "Presets") |
-| `BATCHLAS_DISABLE_CUDA_FTZ` | no flush-to-zero in CUDA device code (default `ON`) |
+| `BATCHLAS_DISABLE_CUDA_FTZ` | pass `--ftz=false` to the CUDA image's runtime JIT options (default `ON`); the AOT `ptxas` step never sees it |
 | `BATCHLAS_KEEP_CUDA_INTERMEDIATES` | keep CUDA/SYCL device intermediates for PTX/SASS analysis (default `OFF`) |
 | `BATCHLAS_SANITIZER_FRIENDLY_DEBUG` | unwind-friendly debug flags for sanitizer runs (default `OFF`) |
 | `BATCHLAS_OPENBLAS_CORETYPE` | `OPENBLAS_CORETYPE` that ctest sets to avoid a broken OpenBLAS kernel; empty means none (set by the health check) |
 | `BATCHLAS_BUILD_DOCS` | add the `batchlas_docs` target (`scripts/build_docs.sh`) |
 | `BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS` | build the `device_blas_*` benchmarks (default `OFF`) |
 | `BATCHLAS_STRIP_RELWITHDEBINFO_G` | drop the toolchain's `-g` from `CMAKE_CXX_FLAGS_RELWITHDEBINFO` (default `ON`; BatchLAS adds `-gline-tables-only`; full DWARF in device images has failed CUDA JIT program builds) |
-| `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected |
+| `BATCHLAS_ENABLE_ROCM` | enable ROCm backend support even if no AMD GPU is detected (default `OFF`) |
 | `BATCHLAS_CPU_TARGET` | SYCL CPU target: `auto`, `native_cpu`, `spir64_x86_64`, `none` |
-| `BATCHLAS_TEST_TARGET_SET` | `all` or `smoke` |
-| `BATCHLAS_AMD_ARCH` | override ROCm target architecture |
+| `BATCHLAS_TEST_TARGET_SET` | `all` (default) or `smoke` |
+| `BATCHLAS_AMD_ARCH` | empty (default): the detected AMD GPU; `gfxNNN`: build that architecture instead |
 | `BATCHLAS_NVIDIA_ARCH` | empty (default): the detected NVIDIA GPUs; `sm_XX`: build that architecture instead (cross builds, no GPU needed). The old default `sm_50` is read as empty |
 | `BATCHLAS_USE_CCACHE` | cache compilations with ccache when on `PATH` or in `~/.local/bin` (default `ON`; your own `CMAKE_CXX_COMPILER_LAUNCHER` wins) |
 | `BATCHLAS_CCACHE_SHARE_ACROSS_TREES` | let sibling checkouts and worktrees share cache entries (default `ON`; turn off for source-level debugging) |
 | `BATCHLAS_CCACHE_MAXSIZE` | ccache size limit (default `20G`) |
 | `BATCHLAS_CCACHE_BASEDIR` | ccache base directory (default: deepest common parent of source and build directories, or `$HOME` if that is `/`) |
 | `BATCHLAS_TEST_GPUS` | GPUs written to `<build>/ctest_resources.json` for `scripts/ctest_gpus.sh`: `auto` (`nvidia-smi --list-gpus`), a count, or `0` to disable. Needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error |
-| `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` |
+| `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` (default `2`) |
 | `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link (default `4`, `1` disables) |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted; `ACPP` without an `acpp` compiler takes `acpp` from `PATH`, else `/opt/adaptivecpp/bin`, also replacing a cached compiler (`ccmake`); CMake then resets the cache and the value reads `AUTO` |
 | `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
 | `BATCHLAS_ENABLE_METAL` | AdaptiveCpp only: `AUTO` (default; dispatch an Apple GPU as `Backend::SYCL` when `acpp-info` lists a Metal device), `ON` (require it; configure fails without one) or `OFF` (needs the GPU hidden with `ACPP_VISIBILITY_MASK=omp`; configure fails while `acpp-info` lists it) |
 | `BATCHLAS_DEVICE_FP64` | `AUTO` (default), `ON` or `OFF`: instantiate double and complex<double> for `Backend::SYCL`. `AUTO` resolves to `OFF` when Metal is enabled, and `ON` with Metal is a configure error. CUDA, ROCm and the host always keep all four types |
 | `BATCHLAS_OPENBLAS_ROOT` | OpenBLAS prefix whose `libopenblas` provides LAPACKE and CBLAS. On macOS it is probed at `/opt/homebrew/opt/openblas` and `/usr/local/opt/openblas`; set it, the headers go on the library's include path. Empty on Linux by default, which keeps the system LAPACKE |
-| `BATCHLAS_MONOLITHIC_LIBRARY` | one shared library instead of the component libraries (the `release` shape). Required on macOS: ld64 rejects the components' cyclic undefined symbols |
-| `BATCHLAS_HIDDEN_VISIBILITY` | `-fvisibility=hidden` on the monolithic library (default `ON`; only with `BATCHLAS_MONOLITHIC_LIBRARY`). `OFF` lets the in-tree tests link against it, since they reach about 1,000 unexported internal symbols |
+| `BATCHLAS_HIDDEN_VISIBILITY` | `-fvisibility=hidden` on the monolithic library (only with `BATCHLAS_MONOLITHIC_LIBRARY`; default `ON`, `OFF` when `BATCHLAS_BUILD_TESTS` is on). `OFF` lets the in-tree tests link against it, since they reach about 1,000 unexported internal symbols |
 | `BATCHLAS_ACPP_SLM_OPTIN` | AdaptiveCpp + CUDA: a launch interposer that opts kernels into more than 48 KiB of local memory (default `OFF`; [SYCL implementations](../design/sycl-implementations.md#sycl-impl-slm-budget)) |
 
 ### Device and toolkit detection {#guide_build_detection}
@@ -268,7 +276,8 @@ The importable package lands in `build/python` and links against the in-tree
 `BatchLAS::batchlas`. It has NumPy dense-array support, SciPy sparse wrappers,
 `available_backends()`, `available_devices()`, `compiled_features()`, elementwise arithmetic
 (`add`, `subtract`, `multiply`, `divide`, `axpby`, `scale`), the value-returning `batchlas.linalg`
-submodule, exception classes mirroring the C++ hierarchy and route pins (`set_route`, `route`).
+submodule, exception classes mirroring the C++ hierarchy and route pins (`set_route`, the context
+manager `route`, and `route_pin` to read one back).
 `cmake --install` puts the package in `<prefix>/BATCHLAS_PYTHON_INSTALL_DIR/batchlas` (default
 `lib/pythonX.Y/site-packages`, relative to the prefix). Its tests run with
 `PYTHONPATH="$PWD/build/python" python3 -m pytest python/tests` (pytest; SciPy only for the sparse

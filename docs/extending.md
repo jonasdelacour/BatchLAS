@@ -1,11 +1,11 @@
 # Adding entry points to BatchLAS {#dev_extending}
 
-> **Status:** current (flat kernel selection). The route-era recipe is history on the
-> [vendor-independence page](design/vendor-independence.md#adding-an-op-in-the-route-era).
+> **Status:** current · flat kernel selection · checked against `src/` on 2026-10-21
 
 How to add a public entry point or a new op: where the declaration and definition go, how the op
 joins flat kernel selection (@ref design_flat_selection, code: @ref api_selection), and the overload
-traps to avoid. Calling conventions are in [cpp-api.md](cpp-api.md).
+traps to avoid. Calling conventions are in [cpp-api.md](cpp-api.md). The superseded RouteTable
+recipe is on the [vendor-independence page](design/vendor-independence.md#adding-an-op-in-the-route-era).
 
 An entry point takes its backend as an explicit template parameter:
 
