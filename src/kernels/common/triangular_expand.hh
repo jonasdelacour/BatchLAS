@@ -1,6 +1,7 @@
 #pragma once
 
 #include <src/expansion_budget.hh>
+#include <src/select/select.hh>
 #include <src/queue.hh>
 #include <src/math-helpers.hh>
 
@@ -62,11 +63,11 @@ inline ExpandGroupShape expand_group_shape(int n) {
 // Dense op of a triangular A: zeros opposite, ones on a unit diagonal. That
 // storage is never read, so it may hold anything.
 template <typename T>
-Event expand_triangular(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& out,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        Uplo uplo,
-                        Diag diag) {
+Event expand_triangular_slice(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& out,
+                              const MatrixView<T, MatrixFormat::Dense>& A,
+                              Uplo uplo,
+                              Diag diag) {
     const int n = A.rows();
     const int batch = A.batch_size();
     const bool lower = uplo == Uplo::Lower;
@@ -113,6 +114,15 @@ Event expand_triangular(Queue& ctx,
     return ctx.get_event();
 }
 
+// The batch sits in grid z: a batch past it runs as slices.
+template <typename T>
+Event expand_triangular(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& out,
+                        const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Diag diag) {
+    return select::over_batch_slices(ctx, A.batch_size(), [&](Queue& q, int first, int count) {
+        return expand_triangular_slice<T>(q, out.batch_range(first, count), A.batch_range(first, count), uplo, diag);
+    });
+}
+
 // Tile edge of the mirrored expansion below, and the number of columns a work
 // group covers per pass over it.
 constexpr int kMirrorTile = 32;
@@ -133,10 +143,10 @@ inline T mirror_of(T value) {
 // referenced triangle. One tile pair per work-group through local memory, so the
 // read and both writes coalesce. evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 template <typename T, bool Conjugate>
-Event expand_mirrored(Queue& ctx,
-                      const MatrixView<T, MatrixFormat::Dense>& out,
-                      const MatrixView<T, MatrixFormat::Dense>& A,
-                      Uplo uplo) {
+Event expand_mirrored_slice(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& out,
+                            const MatrixView<T, MatrixFormat::Dense>& A,
+                            Uplo uplo) {
     const int n = A.rows();
     const int batch = A.batch_size();
     const int tiles = ::batchlas::internal::ceil_div(n, kMirrorTile);
@@ -225,6 +235,16 @@ Event expand_mirrored(Queue& ctx,
     });
 
     return ctx.get_event();
+}
+
+// The batch sits in grid z: a batch past it runs as slices.
+template <typename T, bool Conjugate>
+Event expand_mirrored(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& out,
+                      const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    return select::over_batch_slices(ctx, A.batch_size(), [&](Queue& q, int first, int count) {
+        return expand_mirrored_slice<T, Conjugate>(q, out.batch_range(first, count), A.batch_range(first, count),
+                                                   uplo);
+    });
 }
 
 } // namespace batchlas::backend::detail

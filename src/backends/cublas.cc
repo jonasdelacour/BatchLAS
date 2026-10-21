@@ -285,7 +285,7 @@ namespace batchlas {
     // covering it return before touching C -- and the diagonal is real on exit,
     // because C = C^H says so whatever the caller left in its imaginary part.
     template <typename T, bool TwoSided>
-    Event accumulate_hermitian(Queue& ctx,
+    Event accumulate_hermitian_slice(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& C,
                                const MatrixView<T, MatrixFormat::Dense>& product,
                                float_t<T> beta,
@@ -341,6 +341,16 @@ namespace batchlas {
         return ctx.get_event();
     }
 
+    // The batch sits in grid z: a batch past it runs as slices.
+    template <typename T, bool TwoSided>
+    Event accumulate_hermitian(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& C,
+                               const MatrixView<T, MatrixFormat::Dense>& product, float_t<T> beta, Uplo uplo) {
+        return select::over_batch_slices(ctx, C.batch_size(), [&](Queue& q, int first, int count) {
+            return accumulate_hermitian_slice<T, TwoSided>(q, C.batch_range(first, count),
+                                                           product.batch_range(first, count), beta, uplo);
+        });
+    }
+
     // cuBLAS has no batched ?herk: the alternative to a per-item loop is one strided-batched
     // GEMM over the whole n x n product plus the fold above. Not table-selected: a fixed rule.
     template <Backend Back, ComplexScalar T>
@@ -368,9 +378,13 @@ namespace batchlas {
             const select::Device& d = select::device_of<Back>(ctx);
             if (d.is_gpu && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true) &&
-                batch >= 1 && batch <= ops::syrk::kMaxGridBatch && d.max_wg >= ops::syrk::gram_threads(n) &&
+                batch >= 1 && d.max_wg >= ops::syrk::gram_threads(n) &&
                 d.slm_budget >= ops::syrk::gram_slm_bytes<T>(n)) {
-                return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
+                return select::over_batch_slices(ctx, batch, [&](Queue& q, int first, int count) {
+                    return detail::syrk_gram_tiles<T, true>(q, A.batch_range(first, count),
+                                                            C.batch_range(first, count), T(alpha), T(beta), uplo,
+                                                            transA);
+                });
             }
         }
 

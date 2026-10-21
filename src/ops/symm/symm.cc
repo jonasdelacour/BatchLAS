@@ -39,7 +39,7 @@ select::Key key_of(const MV<T>& C) {
 // feeds rejects a heterogeneous B or C against the homogeneous scratch; every vendor loop
 // (cuBLAS, netlib) runs each item at the top-level (m, n). So no family takes a heterogeneous
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
-// BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget), and its batch sits in grid z.
+// BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget); its batch sits in grid z, sliced past it.
 template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
@@ -47,12 +47,12 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
     const std::int64_t k = A.rows(), batch = A.batch_size();
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && batch >= 1 && batch <= d.max_groups_yz;
+                        C.cols() >= 1 && batch >= 1;
     return std::visit(overloaded{
         [&](Expand) {
             return native && backend::detail::expansion_fits<T>(
                                  q, int(k), int(batch),
-                                 backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)), d.max_groups_yz);
+                                 backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);

@@ -214,8 +214,6 @@ constexpr int small_wg(bool nn, int max_dim) {
 }
 inline constexpr int kDirectWg = 64;
 inline constexpr int kTiledWg = 256;
-/// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
-inline constexpr std::int64_t kMaxGridBatch = 65535;
 
 /// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
 template <class T>

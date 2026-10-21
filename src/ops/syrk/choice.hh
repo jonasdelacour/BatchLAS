@@ -49,9 +49,8 @@ inline constexpr std::array<std::string_view, 3> grid_trans{"N", "T", "C"};  ///
 inline constexpr std::array<int, 6> grid_k{1, 7, 8, 64, 512, 4096};  ///< k axis of the grid
 inline constexpr std::array<int, 17> grid_batch{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 15, 16, 26, 27, 128, 1024, 32768};
 
-// Both tile kernels put the batch in a grid dimension, and triangular its T(T+1)/2 tiles
-// (T = ceil(n/128)) in another; each is capped at 65535 work-groups, past which the launch throws.
-inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< batch ceiling of both tile kernels
+// triangular puts its T(T+1)/2 tiles (T = ceil(n/128)) in a grid dimension capped at 65535
+// work-groups, past which the launch throws; the batch runs as slices past the cap (launch).
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular's tile-count ceiling
 inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
 inline constexpr std::int64_t triangular_groups(std::int64_t n, std::int64_t tile) {  // T(T+1)/2, T = ceil(n/tile)

@@ -1242,6 +1242,23 @@ namespace batchlas {
         /// @throws batchlas::out_of_range if @p batch_index is outside [0, batch_size())
         MatrixView<T, MType> batch_item(int batch_index) const;
 
+        /// @brief Items [@p first, @p first + @p count) as one view: the same extents, ld and stride,
+        ///        the matching range of any active extents, no pointer array.
+        /// @throws batchlas::out_of_range if @p count < 1 or the range leaves [0, batch_size())
+        template <MatrixFormat M = MType>
+            requires DenseMatrixFormat<M>
+        MatrixView<T, MType> batch_range(int first, int count) const {
+            if (first < 0 || count < 1 || static_cast<int64_t>(first) + count > batch_size_)
+                throw batchlas::out_of_range("batch_range [" + std::to_string(first) + ", " +
+                                             std::to_string(static_cast<int64_t>(first) + count) +
+                                             ") is outside [0, " + std::to_string(batch_size_) + ")");
+            MatrixView<T, MType> out(data_ptr() + static_cast<int64_t>(first) * stride_, rows_, cols_, ld_,
+                                     stride_, count);
+            if (!active_rows_.empty()) out.active_rows_ = active_rows_.subspan(first, count);
+            if (!active_cols_.empty()) out.active_cols_ = active_cols_.subspan(first, count);
+            return out;
+        }
+
         /// @brief A copy of this view with per-item active extents attached (not copied: the spans must outlive the view).
         /// @throws batchlas::invalid_argument under the same rules as Matrix::set_active_dims()
         template <MatrixFormat M = MType>

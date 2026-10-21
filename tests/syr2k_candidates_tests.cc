@@ -272,7 +272,7 @@ protected:
         if (std::holds_alternative<s2::Vendor>(c)) return kVendor;
         const long t = (s.n + 127) / 128;
         return kFloat && (B == Backend::CUDA || B == Backend::SYCL) && s.n >= 1 && s.k >= 1 &&
-               s.batch >= 1 && s.batch <= grid_yz && t * (t + 1) / 2 <= grid_yz;
+               s.batch >= 1 && t * (t + 1) / 2 <= grid_yz;
     }
     // `vendor` is a class word: with no vendor it falls back to Auto (with a warning), §5.3.
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<s2::Vendor>(c) && !kVendor; }
@@ -416,11 +416,12 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
     }
 }
 
-// The grid terms (R3, AGENTS §8.9): the batch is grid z, so a pin launches at 65535 and is
-// refused at 65536 (without the term that launch throws from the driver; the break is in
-// docs/design/flat-kernel-selection.md §12). Auto past it takes the vendor (no route vendor-free).
-// The tile list is grid y: a launch at n = 46208 (361 tiles a side, 65341 tiles), a refusal at
-// 46209 (65703 tiles). Metal has neither cap: the launches one past CUDA's ceilings run too.
+// The grid terms (R3, AGENTS §8.9). The batch is grid z, capped at 65535 on CUDA: syr2k's launch
+// runs a batch past it as slices, so the pin launches the tile kernel at 65535, 65536, 2 * 65535
+// and 2 * 65535 + 1 (one, two, two and three slices), every item bit-identical to item 0 at padded
+// lds and strides, beta != 0. The tile list is grid y, a term: a launch at n = 46208 (361 tiles a
+// side, 65341 tiles), a refusal at 46209 (65703 tiles). Metal has neither cap: the launches one
+// past CUDA's ceilings run too.
 TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
     using T = typename TestFixture::T;
     if constexpr (!TestFixture::kFloat) GTEST_SKIP() << "no native family for this dtype";
@@ -429,33 +430,18 @@ TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
         const select::Device& dev = select::device_of<TestFixture::B>(q);
         ASSERT_EQ(dev.max_groups_yz, TestFixture::grid_yz) << dev.key;
         const int ceiling = int(test_utils::kCudaGridYZ);
-        for (int batch : {ceiling, ceiling + 1}) {
-            UnifiedVector<T> a(std::size_t(batch) * 2, T(0.5)), c(std::size_t(batch) * 4, T(1));
-            const MVof<T> A(a.data(), 2, 1, 2, 2, batch), Cm(c.data(), 2, 2, 2, 4, batch);
-            const bool fits = batch <= TestFixture::grid_yz;
-            {
-                const Pin pin("syr2k", C{s2::Triangular{}});
-                if (fits) {
-                    (void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
-                    q.wait();
-                    EXPECT_EQ(c[0], T(0.5)) << "batch " << batch;
-                    EXPECT_EQ(c[std::size_t(batch) * 4 - 1], T(0.5)) << "batch " << batch;
-                    EXPECT_EQ(c[std::size_t(batch) * 4 - 2], T(1)) << "the upper element was written";
-                } else {
-                    EXPECT_THROW(((void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower,
-                                                                 Transpose::NoTrans)),
-                                 std::invalid_argument);
-                }
-            }
-            if (fits) continue;
-            EXPECT_EQ(c[0], T(1)) << "a refused pin wrote C";
-            const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
-            auto call = [&] {
-                (void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
-                q.wait();
-            };
-            if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor");
-            else EXPECT_THROW(call(), batchlas::NoRouteError);
+        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
+            const bool odd = batch % 2;
+            const Spec s{odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans, 5, 3, batch, 1,
+                         false, unsigned(batch)};
+            auto p = make_prob<T>(s);
+            const C tri{s2::Triangular{}};
+            const std::string got = [&] {
+                const Pin pin("syr2k", tri);
+                return traced_choice([&] { this->run(p); });
+            }();
+            EXPECT_EQ(got, "triangular") << name(tri, s);
+            expect_syr2k(q, p, name(tri, s));
         }
         const auto mem = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE);
         if (mem < (std::size_t(16) << 30)) GTEST_SKIP() << "the tile ceiling needs ~9 GB for C";

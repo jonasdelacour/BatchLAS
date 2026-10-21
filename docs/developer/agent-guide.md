@@ -415,7 +415,8 @@ Per-op choices:
 | trmm | `triangular` (Side::Left), `expand` (expansion + public gemm, either side), `vendor` (the `cublas?trmm` loop only; the old `vendor` pin meant expand+gemm, that is now `expand`) |
 
 Level-3 four (`docs/design/flat-kernel-selection.md` §12 "Level-3 four"): all `NoFields`, native
-families CUDA GPU only, homogeneous batch, batch <= 65535. Every level-3 vendor family refuses a
+families CUDA GPU only, homogeneous batch; a batch past the 65535 grid runs as slices
+(`select::over_batch_slices`), never a `can_run` term. Every level-3 vendor family refuses a
 heterogeneous batch on every backend (the loops run each item at the top-level extents), so a
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.

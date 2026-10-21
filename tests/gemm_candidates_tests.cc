@@ -1963,29 +1963,27 @@ TYPED_TEST(GemmCandidates, SplitKOnAnOutOfOrderQueueReducesAfterTheSlices) {
     }
 }
 
-// split-k puts batch * s groups in grid z: a pin is a launch at batch * s <= 65535 and a refusal
-// one item past it (where the device caps the grid), with C left bit for bit.
-TYPED_TEST(GemmCandidates, SplitKGridCeilingIsBatchTimesSlices) {
+// split-k puts batch * s groups in grid z (65535 on CUDA): launch() runs slices of
+// floor(65535 / s) items, so a pin at that slice, one past it and two slices plus one item runs
+// split-k, every item bit-identical to item 0, strided operands, beta != 0.
+TYPED_TEST(GemmCandidates, SplitKPastTheGridRunsAsSlices) {
     using T = typename TestFixture::T;
-    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     const int ceiling = int(test_utils::kCudaGridYZ);
-    if (dev.max_groups_yz > ceiling) GTEST_SKIP() << dev.key << " has no grid z cap";
     for (int sl : {2, 8}) {
         const C c{og::SplitK{16, 16, 16, sl}};
-        const Spec at{kN, kN, 2, 2, 20, ceiling / sl, Layout::Packed};
-        Spec past = at;
-        past.batch += 1;
-        auto p = make_problem<T>(at);
-        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_gemm(*this->ctx, p, name(c, at));
-        auto q = make_problem<T>(past);
-        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
-        for (std::size_t e = 0; e < q.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
+        for (const int batch : {ceiling / sl, ceiling / sl + 1, 2 * (ceiling / sl) + 1}) {
+            Spec s{kN, kN, 2, 2, 20, batch, Layout::Strided};
+            s.period = 1;
+            auto p = make_problem<T>(s);
+            const std::string got = [&] {
+                const Pin pin("gemm", c);
+                return traced_choice([&] { this->run(p); });
+            }();
+            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
+            expect_gemm(*this->ctx, p, name(c, s));
+        }
     }
 }
-
-
 // WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
 // on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
 // 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
@@ -2460,51 +2458,53 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
 }
 
-// can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535 on
-// CUDA), so a pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto
-// serve the larger batch (whichever of small and the vendor the table ranks first; vendor-free:
-// small). Metal has no group-count cap there: one past
-// CUDA's ceiling is a launch too.
-TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
+// direct, tiled, reg and wide put the batch in grid z (65535 on CUDA) and launch() runs a batch past
+// it as slices, so the batch is no can_run term: each pin at 65535, 65536, 2 * 65535 and
+// 2 * 65535 + 1 (one, two, two and three slices) runs its family, every item bit-identical to item
+// 0, strided operands (odd item strides: each slice's base re-derives the leg), beta != 0, a
+// transposed (complex: conjugated) A on the odd batches. small is 1-D and serves them unsliced.
+// Metal has no cap: one slice serves every batch.
+TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
-    const bool capped = dev.max_groups_yz <= ceiling;
-    const Spec at{kN, kN, 2, 2, 2, ceiling, Layout::Packed};
-    const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
+    const Transpose tc = test_utils::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
     for (const C& c : og::candidates<T>()) {
-        // split-k's ceiling is batch * s (SplitKGridCeilingIsBatchTimesSlices)
-        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::Small>(c) ||
-            std::holds_alternative<og::SplitK>(c))
-            continue;
-        if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
-        auto p = make_problem<T>(at);
-        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_gemm(*this->ctx, p, name(c, at));
-        auto q = make_problem<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
-        if (!capped) {
-            expect_gemm(*this->ctx, q, name(c, past));
-            continue;
+        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::SplitK>(c)) continue;
+        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
+            const Transpose ta = batch % 2 ? tc : kN;
+            if (!oracle_native<T>(c, ta, kN, 2, 2, 2)) continue;
+            Spec s{ta, kN, 2, 2, 2, batch, Layout::Strided};
+            s.period = 1;
+            auto p = make_problem<T>(s);
+            const std::string got = [&] {
+                const Pin pin("gemm", c);
+                return traced_choice([&] { this->run(p); });
+            }();
+            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
+            expect_gemm(*this->ctx, p, name(c, s));
         }
-        for (std::size_t e = 0; e < q.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
     }
-    {
-        auto p = make_problem<T>(past);
-        ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
-        expect_gemm(*this->ctx, p, "small past the grid ceiling");
+    {  // an out-of-order Queue: the slices run on an in-order sibling the caller's wait covers
+        Queue ooo(*this->ctx, false);
+        Spec s{kN, kN, 2, 2, 2, 2 * ceiling + 1, Layout::Strided};
+        s.period = 1;
+        auto p = make_problem<T>(s);
+        {
+            const Pin pin("gemm", C{og::Direct{}});
+            (void)gemm<TestFixture::B, T>(ooo, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.ta, s.tb,
+                                          ComputePrecision::Default);
+            ooo.wait();
+        }
+        expect_gemm(*this->ctx, p, "direct past the grid on an out-of-order Queue");
     }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
+    Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
+    past.period = 1;
     auto p = make_problem<T>(past);
     const std::string got = traced_choice([&] { this->run(p); });
-    // Which of the two the table ranks first is a measurement (sm_120 complex rows rank small
-    // since the 2026-10 retune); the invariant is that Auto lands on a choice with no grid cap.
-    EXPECT_TRUE(got == "small" || (TestFixture::kVendor && got == "vendor"))
-        << label(past) << ": Auto past the grid ceiling chose " << got;
-    expect_gemm(*this->ctx, p, "auto past the grid ceiling");
+    expect_gemm(*this->ctx, p, "auto past the grid ceiling -> " + got);
 }
 
 // An empty batch is a no-op under Auto and every pin, vendor-free too (the old native range

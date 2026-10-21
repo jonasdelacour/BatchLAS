@@ -304,7 +304,6 @@ protected:
     // Real C is T to both kernels, so trans never refuses one.
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<sk::Vendor>(c)) return kVendor;
-        if (s.batch > grid_yz) return false;
         if (std::holds_alternative<sk::Gram>(c)) return s.n <= backend::detail::kGramMaxTile;
         return kFloat && backend::detail::triangular_tile_count(s.n) <= grid_yz;
     }
@@ -486,11 +485,13 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
     }
 }
 
-// The grid term (AGENTS §8.9, a launch at the ceiling): the tile kernels put the batch in a grid
-// dimension capped at 65535 on CUDA, and one past it the direct launch throws ("Number of
-// work-groups exceed limit"). A pin at the ceiling launches; one past it is refused, and Auto
-// takes the vendor (vendor-free: no route). Metal has no such cap: one past it launches too.
-TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
+// Past the grid (AGENTS §8.9, launches at the ceiling): the tile kernels put the batch in a grid
+// dimension capped at 65535 on CUDA, and one past it the unsliced kernel launch throws ("Number
+// of work-groups exceed limit"). syrk's launch runs such a batch as slices, so a pin at 65535,
+// 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and three slices) runs that native kernel and
+// answers every item bit-identically to item 0, at padded lds and strides and beta != 0. Metal
+// has no cap: there one slice serves every batch and the unsliced launch runs too.
+TYPED_TEST(SyrkCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, TestFixture::grid_yz) << dev.key;
@@ -498,38 +499,25 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     const bool capped = TestFixture::grid_yz <= ceiling;
     for (const C& c : sk::candidates<T>()) {
         if (std::holds_alternative<sk::Vendor>(c)) continue;
-        Spec at{1, 1, ceiling};
-        at.period = 1;
-        auto p = make_prob<T>(at);
-        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        EXPECT_TRUE(correct(*this->ctx, p)) << name(c, at);
-        auto d = make_prob<T>(at);
-        EXPECT_TRUE(this->direct(c, d)) << name(c, at) << ": the direct launch at the ceiling";
-        Spec past = at;
-        past.batch = ceiling + 1;
-        auto q = make_prob<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
-        auto e = make_prob<T>(past);
-        if (!capped) {
-            EXPECT_TRUE(correct(*this->ctx, q)) << name(c, past);
-            EXPECT_TRUE(this->direct(c, e)) << name(c, past) << ": the direct launch past CUDA's ceiling";
-            continue;
+        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
+            const bool odd = batch % 2;
+            Spec s{5, 3, batch, odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans};
+            s.period = 1;
+            if (!this->expect_runs(c, s)) continue;
+            auto p = make_prob<T>(s);
+            const std::string got = [&] {
+                const Pin pin("syrk", c);
+                return traced_choice([&] { this->run(p); });
+            }();
+            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
+            EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
         }
-        EXPECT_TRUE(untouched(q)) << name(c, past);
+        Spec past{5, 3, ceiling + 1};
+        if (!this->expect_runs(c, past)) continue;
+        auto e = make_prob<T>(past);
         std::string why;
-        EXPECT_FALSE(this->direct(c, e, &why)) << name(c, past) << ": the direct launch past the ceiling ran";
-        EXPECT_NE(why.find("exceed limit"), std::string::npos) << why;
-    }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
-    Spec past{1, 1, ceiling + 1};
-    past.period = 1;
-    auto p = make_prob<T>(past);
-    if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(this->auto_choice(p), "vendor");
-        EXPECT_TRUE(correct(*this->ctx, p)) << "auto past the grid ceiling";
-    } else {
-        const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-        EXPECT_THROW(this->run(p), batchlas::NoRouteError);
+        EXPECT_EQ(this->direct(c, e, &why), !capped) << name(c, past) << ": the unsliced kernel launch";
+        if (capped) EXPECT_NE(why.find("exceed limit"), std::string::npos) << why;
     }
 }
 

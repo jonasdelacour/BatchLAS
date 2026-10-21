@@ -7,8 +7,10 @@
 #include <complex>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 #include <tests/test_utils.hh>
+#include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
 
 using namespace batchlas;
 
@@ -323,30 +325,57 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     }
 }
 
-// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535:
-// with gram pinned, a batch of 65536 must fall back to a route that runs, not throw.
-TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
+// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535 and
+// run a batch past it as slices. With gram pinned, 65535, 65536 and 2 * 65535 + 1 copies of one
+// problem (padded lds and strides, beta != 0, complex data) run the gram kernel:
+// every item is bit-identical to the gram kernel launched directly on item 0 (the vendor loop is
+// another kernel), and right.
+TYPED_TEST(HerkTest, GramBatchPastTheGridRunsAsSlices) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     constexpr Backend Ba = TestFixture::BackendType;
     if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
         GTEST_SKIP() << "the gram opt-in is cuBLAS's herk (no route vendor-free)";
     } else {
-        const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
-        const int n = 8, k = 5, batch = 65536;
-        const real_t alpha = real_t(0.75), beta = real_t(-0.5);
-        auto A = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, batch, 31);
-        auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 37);
-        this->ctx->wait();
-        for (int b = 0; b < batch; ++b)
-            for (int d = 0; d < n; ++d) C0(d, d, b) = T(C0(d, d, b).real(), real_t(0));
-        auto C = C0.clone();
-        this->ctx->wait();
-        ASSERT_NO_THROW((herk<Ba, T>(*(this->ctx), A, C, alpha, beta, Uplo::Lower, Transpose::NoTrans).wait()));
         using MV = MatrixView<T, MatrixFormat::Dense>;
-        EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
-                      MV::gemm_backward_error(*(this->ctx), A, Transpose::NoTrans, A, Transpose::ConjTrans,
-                                              C0, C, MV::up(T(alpha)), MV::up(T(beta)),
-                                              C.all_items(), Uplo::Lower));
+        Queue& q = *(this->ctx);
+        const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
+        const int n = 8, k = 5;
+        const real_t alpha = real_t(0.75), beta = real_t(-0.5);
+        auto A1 = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, 1, 31);
+        auto C1 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, 1, 37);
+        q.wait();
+        for (int d = 0; d < n; ++d) C1(d, d, 0) = T(C1(d, d, 0).real(), real_t(0));
+        auto want = C1.clone();
+        q.wait();
+        (void)backend::detail::syrk_gram_tiles<T, true>(q, A1, want, T(alpha), T(beta), Uplo::Lower,
+                                                        Transpose::NoTrans);
+        q.wait();
+        for (const int batch : {65535, 65536, 2 * 65535 + 1}) {
+            Matrix<T, MatrixFormat::Dense> Ab(n + 3, k + 1, batch), Cb(n + 2, n + 1, batch);
+            const MV A(Ab, n, k), C(Cb, n, n);
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) {
+                        if (j < k) Ab(i, j, b) = A1(i, j, 0);
+                        Cb(i, j, b) = C1(i, j, 0);
+                    }
+            auto C0b = Cb.clone();
+            q.wait();
+            const MV C0(C0b, n, n);
+            (void)herk<Ba, T>(q, A, C, alpha, beta, Uplo::Lower, Transpose::NoTrans);
+            q.wait();
+            int differ = 0;
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = j; i < n; ++i) differ += Cb(i, j, b) != want(i, j, 0);
+            EXPECT_EQ(differ, 0) << "batch " << batch << ": not the gram kernel on every item";
+            const std::vector<int> items{0, batch / 2, batch - 1};
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                          MV::gemm_backward_error(q, A, Transpose::NoTrans, A, Transpose::ConjTrans, C0, C,
+                                                  MV::up(T(alpha)), MV::up(T(beta)), items,
+                                                  Uplo::Lower))
+                << "batch " << batch;
+        }
     }
 }

@@ -50,8 +50,8 @@ kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and h
 `expand` families' inner GEMMs go through the public `gemm` and take its table's choice.
 
 **`can_run` is correctness only.** Every native family needs `B == Backend::CUDA`, a GPU queue, a homogeneous
-batch (tile kernels index `base + batch * stride`), extents >= 1 and `batch <= 65535`. The batch is grid z (y for
-gram); 65536 throws `Number of work-groups exceed limit`, confirmed by launch.
+batch (tile kernels index `base + batch * stride`) and extents >= 1. The batch is grid z (y for gram), where one
+launch of 65536 throws `Number of work-groups exceed limit`; a batch past it runs as slices of at most 65535 items (`select::over_batch_slices`), so the batch is no term.
 
 | op | family | further terms | where |
 |---|---|---|---|

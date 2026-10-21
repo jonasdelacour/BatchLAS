@@ -64,12 +64,13 @@ The common native term (`gemm.cc:97-101`):
 const bool device = d.is_gpu || !d.has_vendor;
 const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
                     A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
-const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
 ```
 
-`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
+`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). The batch is no term: `direct`, `tiled`,
+`reg`, `wide` and `splitk` put it in SYCL dimension 0 (CUDA grid z, 65535; split-k batch × s), and `launch`
+(`src/ops/gemm/gemm.cc:165-180`) runs a larger batch as slices of at most `max_groups_yz` (split-k: `max_groups_yz / s`)
+items, each slice re-deriving its own leg. `small` is 1-D and takes the whole batch
+([the batch slices](level3.md#level-3-the-65535-batch-slices)). Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -1301,9 +1302,9 @@ the batch and each group walks k serially. Pre-188 sm_120 cells: float NT 32×64
   the window.
 - **Tuning grid** (`choice.hh`, tuner only, not in the sm_89 transcription): Gram squares m = n ∈ {16, 32, 64} ×
   k ∈ {1024, 2048, 4096}, and 32 × {64..2048} both ways at k = 2048; panel forms, strided, every grid batch.
-  At batch 32768 batch × s ≥ 65536 refuses every s on CUDA, so split-k is timed at batch 128 and 2048 only, and a
-  call nearer the 32768 row (log distance: batch above about 8192) never picks it. Accepted: at that batch the
-  unsplit grid already fills the device.
+  At batch 32768 batch × s ≥ 65536 refused every s on CUDA when this grid was timed (split-k now runs such a batch
+  as slices), so split-k is timed at batch 128 and 2048 only, and a call nearer the 32768 row (log distance: batch
+  above about 8192) never picks it. Accepted: at that batch the unsplit grid already fills the device.
 
 **Registers** (`scripts/register_probe.sh`, sm_120 GPU-only tree, ptxas only): zero spill on all 544 entry
 functions of `libbatchlas_sycl`; every split body passes the four-partition gate at its host's work-group.
@@ -1325,8 +1326,8 @@ Tests:
   arena (same address), so a skipped store shows as poison rather than fresh zeros or the last call's partials.
 - `GemmCandidates.SplitKOnAnOutOfOrderQueueReducesAfterTheSlices`: `splitk:m=32:n=32:k=16:s=8`, 33×33×300 (136),
   batch 1024 on an out-of-order Queue with poisoned partials, three repetitions.
-- `GemmCandidates.SplitKGridCeilingIsBatchTimesSlices`: s = 2 and 8 at batch ⌊65535 / s⌋ (a launch) and one past
-  (a refusal, C untouched).
+- `GemmCandidates.SplitKPastTheGridRunsAsSlices`: s = 2 and 8 at batch ⌊65535 / s⌋ (one slice), one past it and
+  2 ⌊65535 / s⌋ + 1 (two and three slices), every item bit-identical to item 0.
 - Every generic per-candidate test (pins, `CanRunEqualsLaunch`, the launcher bit for bit, the kernel trace name
   `<host trace>_splitk`, NaN C, the saturating batch, missing instantiations, the candidate set) picks the family
   up from `candidates<T>()`.
@@ -1340,8 +1341,8 @@ Deliberate breaks, unrun:
 - β applied per slice in the reduction (`acc = lin_epi(1, beta, acc, prior)` inside the loop): red only in β ≠ 0
   cases; the NaN-C β = 0 cases stay green.
 - `bid = z % batch` instead of `z / s`: items mix; red in the batch-1024 bit-identity checks.
-- Dropping `batch * s` from `can_run`: `SplitKGridCeilingIsBatchTimesSlices` turns red (the launch fails past
-  the grid).
+- (Before the batch slices) dropping `batch * s` from `can_run`: the split-k grid-ceiling test turned red (the
+  launch fails past the grid). The term is now the per-slice `slice * s <= INT_MAX`.
 - An empty slice returns before its store (`if (k_lo >= k_hi) return;` after the decode): red at s = 8, k = 300
   (float, double, cfloat), s = 4 and 8 at k = 40, and s = 4 and 8 at k = 136 (16-byte scalars), all through the
   poison, and the out-of-order test (s = 8 at k = 300 / 136); green at k = 1 (slice 0 only stores) and at s = 2.

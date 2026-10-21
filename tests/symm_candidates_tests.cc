@@ -447,7 +447,7 @@ TYPED_TEST(SymmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 }
 
 // §8.2 (R3): a pin is accepted exactly when the family's own code launches, over shapes, the
-// grid-z batch ceiling and a heterogeneous B/C (the gemm under expand rejects it).
+// a heterogeneous B/C (the gemm under expand rejects it).
 TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -481,49 +481,34 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// expand_mirrored and its gemm put the batch in grid z: 65535 items launch, 65536 do not on
-// CUDA, so the pin refuses 65536 and Auto takes the vendor (vendor-free: no route). Metal has
-// no such cap: both launch.
-TYPED_TEST(SymmCandidates, GridBatchCeiling) {
+// expand_mirrored and its gemm put the batch in grid z, capped at 65535 on CUDA: both run a batch
+// past it as slices. The expand pin at 65535, 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and
+// three slices) runs expand, every item bit-identical to item 0, at padded lds and strides,
+// beta != 0, both sides; the family's own code (the direct call) launches there too. Metal has no
+// cap: one slice serves every batch.
+TYPED_TEST(SymmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const select::Device& dev = select::device_of<B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
-    for (int batch : {ceiling, ceiling + 1}) {
-        Matrix<T, MatrixFormat::Dense> A(1, 1, batch), Bm(1, 2, batch), Cm(1, 2, batch);
-        A.fill(T(2)), Bm.fill(T(3)), Cm.fill(T(1));
-        auto call = [&] {
-            (void)symm<B, T>(*this->ctx, A, Bm, Cm, T(1), T(1), Side::Left, Uplo::Lower);
-            this->ctx->wait();
-        };
-        std::string why;
-        Matrix<T, MatrixFormat::Dense> Cd(1, 2, batch);
-        Cd.fill(T(1));
-        const bool launches = this->direct(C{sy::Expand{}}, A, Bm, Cd, T(1), T(1), Side::Left, Uplo::Lower, &why);
-        EXPECT_EQ(launches, batch <= dev.max_groups_yz) << "direct expand at batch " << batch << ": " << why;
-        {
-            const Pin pin("symm", C{sy::Expand{}});
-            if (batch <= dev.max_groups_yz) {
-                call();
-                for (int it : {0, batch / 2, batch - 1}) EXPECT_EQ(double(Cm(0, 1, it)), 7.0) << "item " << it;
-                continue;
-            }
-            try {
-                call();
-                ADD_FAILURE() << "expand accepted batch " << batch;
-            } catch (const std::invalid_argument& e) {
-                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
-            }
-        }
-        const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
-        if constexpr (TestFixture::kVendor) {
-            EXPECT_EQ(traced_choice(call), "vendor");
-            EXPECT_EQ(double(Cm(0, 1, batch - 1)), 7.0);
-        } else {
-            EXPECT_THROW(call(), batchlas::NoRouteError);
-        }
+    const C expand{sy::Expand{}};
+    for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
+        const bool odd = batch % 2;
+        Spec s{odd ? Side::Right : Side::Left, odd ? Uplo::Upper : Uplo::Lower, 5, 3, batch};
+        s.period = 1;
+        auto p = make_prob<T>(s);
+        const std::string got = [&] {
+            const Pin pin("symm", expand);
+            return traced_choice([&] { this->run(p); });
+        }();
+        EXPECT_EQ(got, "expand") << name(expand, s);
+        expect_symm(*this->ctx, p, name(expand, s));
     }
+    Spec past{Side::Left, Uplo::Lower, 5, 3, ceiling + 1};
+    auto d = make_prob<T>(past);
+    std::string why;
+    EXPECT_TRUE(this->direct(expand, d, &why)) << name(expand, past) << ": " << why;
 }
 
 // Shape and batch errors throw invalid_argument before choose(), under Auto and every pin, and

@@ -76,6 +76,21 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
     return describe(q.device(), B, has_library<B>(vendor));
 }
 
+/// `launch(queue, first, count)` over [0, @p batch) in slices of <= max_groups_yz / @p groups_per_item
+/// items (a batch in a capped grid dimension); several slices run in order on an in-order queue and the
+/// Event covers them all. evidence: docs/perf/level3.md#level-3-the-65535-batch-slices
+template <class F>
+Event over_batch_slices(Queue& q, std::int64_t batch, F&& launch, std::int64_t groups_per_item = 1) {
+    const std::int64_t cap =
+        std::max<std::int64_t>(1, describe(q.device(), q.backend(), false).max_groups_yz / groups_per_item);
+    if (batch <= cap) return launch(q, 0, static_cast<int>(batch));
+    return ::batchlas::detail::on_in_order_queue(q, [&](Queue& in_order) {
+        for (std::int64_t first = 0; first < batch; first += cap)
+            (void)launch(in_order, static_cast<int>(first), static_cast<int>(std::min(cap, batch - first)));
+        return in_order.get_event();
+    });
+}
+
 /// The dtype key of a table row (the first, exact key of every tuned file): float, double, cfloat or cdouble.
 template <class T>
 constexpr std::string_view dtype_name() {
