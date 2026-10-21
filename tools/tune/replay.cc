@@ -3,7 +3,7 @@
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 //   tune_replay --slowdown [--table <tuned/op.dev.txt>]... [--ledger <op.dev.jsonl>]... [--raw <jsonl>]... [--scheme a,b] [--k n] [--slower f]
 //               [--prior <tuned/op.dev.txt>]... [--batch-ladder CUS [--batch-classes c,c] [--batch-extra b,b]]
-//               [--drop-nonmonotone F]
+//               [--drop-nonmonotone F] [--min-batch B]
 // Slowdown replay: one JSON line per (scheme, source), then per (scheme, overall/<kind>). --table or --ledger
 // implies --slowdown; a ledger takes its family hashes from the --table of the same <op>.<device>. A --prior adds
 // the calibrate schemes for the sources of its op (calibrate_replay). --batch-ladder adds the schemes `ladder` and
@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <set>
@@ -63,6 +64,7 @@ int slowdown_main(int argc, char** argv) {
     std::size_t k = 6;
     double slower = 0.05, drop = 0;
     int cus = 0;
+    std::int64_t min_batch = 0;
     std::vector<double> classes = default_batch_classes();
     std::vector<int> extra;
     for (int i = 1; i < argc; ++i) {
@@ -87,6 +89,7 @@ int slowdown_main(int argc, char** argv) {
         } else if (a == "--batch-extra") {
             for (const std::string& b : split(v, ',')) extra.push_back(std::stoi(b));
         } else if (a == "--drop-nonmonotone") drop = std::stod(v);
+        else if (a == "--min-batch") min_batch = std::stoll(v);
         else {
             std::fprintf(stderr, "tune_replay: unknown argument %s in --slowdown mode\n", a.c_str());
             return 2;
@@ -143,9 +146,11 @@ int slowdown_main(int argc, char** argv) {
     for (std::size_t i = 0; i < sources.size(); ++i) {
         OracleSet& o = sources[i].second;
         const std::size_t before = o.cells.size(), dropped = drop > 0 ? drop_nonmonotone_batch(o, drop) : 0;
+        for (auto it = o.cells.begin(); it != o.cells.end();)  // --min-batch: score (and measure) only batch >= it
+            it = key_get(it->first, "batch") && key_int(it->first, "batch") < min_batch ? o.cells.erase(it) : std::next(it);
         std::string kept;
         if (cus > 0) keep[i] = nearest_batches(o, ladder, extra, &kept);
-        if (drop > 0 || cus > 0)
+        if (drop > 0 || cus > 0 || min_batch > 0)
             std::fputs(Json().str("source", o.label).integer("cells", std::int64_t(before)).integer("dropped", std::int64_t(dropped))
                            .str("ladder", ladder_text).str("kept_batches", kept).line().c_str(), stdout);
     }
