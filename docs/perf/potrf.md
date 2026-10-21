@@ -271,6 +271,48 @@ vendor-free build); **routed** is both seams choosing their own route. Ratios ar
 * A single square gemm does not model the trailing update: the driver issues 217 `32 x 32 x 128` and `mr x 32 x 128`
   gemms, and nsys shows them at 10.63 ms against cuBLAS's 10.95 ms for one square gemm.
 
+### potrf: L2 batch chunking {#potrf-l2-batch-chunking}
+
+> **Status:** current · RTX PRO 6000 Blackwell Max-Q (sm_120, 188 SMs, 128 MiB L2), CUDA 13.2 · measured 2026-10-21
+
+The blocked driver factors the batch in parts (`potrf_blocked_chunk` in `src/ops/potrf/kernels/potrf_blocked.cc`),
+for the reason and by the rule of [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking): `tuning::blocked_chunk_items`,
+`BLOCKED_L2_CHUNK_PERCENT` = 75 % of L2, whole waves, one pass below two chunks, the last part takes the remainder,
+`info` offset per part, workspace (pointer arrays, the `W x W` product scratch, the leaf's) one part's. Two
+differences: an item is its **lower triangle**, `n(n+1)/2 x sizeof(T)`, since the driver reads and writes nothing
+else; and one block (`n <= nb`; float n=64 at sm_120, where the occupancy clamp sets nb) never splits. Auto ranks `lpanel` or
+`vendor` first at every float row of `tuned/potrf.sm_120.txt`, so Auto is unchanged (b=32768: n=64 1.002, n=128 1.000,
+n=256 1.000; n=512 b=16384 0.999); the `blocked` rows were timed before chunking (retune pending).
+
+Chunk at sm_120, float: n=128 3196 items, n=256 940, n=512 376.
+
+Float, `BATCHLAS_POTRF_ROUTE=blocked`, ns per item, protocol as in the LU grid:
+
+| n | batch | off cold | on cold | on/off cold | on/off warm |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 32768 | 64.1 | 64.1 | 1.000 | 1.002 |
+| 128 | 4096 | 216.5 | 216.8 | 1.002 | 1.000 |
+| 128 | 6392 | 215.9 | 222.3 | 1.029 | 1.037 |
+| 128 | 8192 | 222.6 | 220.5 | 0.990 | 0.981 |
+| 128 | 16384 | 241.3 | 218.2 | 0.904 | 0.904 |
+| 128 | 32768 | 236.6 | 220.5 | 0.932 | 0.928 |
+| 256 | 1024 | 1161.5 | 1165.0 | 1.003 | 0.992 |
+| 256 | 1880 | 1044.2 | 1017.3 | 0.974 | 0.980 |
+| 256 | 8192 | 1209.0 | 1069.1 | 0.884 | 0.886 |
+| 256 | 32768 | 1312.4 | 1120.0 | 0.853 | 0.854 |
+| 512 | 752 | 5549.7 | 5575.2 | 1.005 | 1.006 |
+| 512 | 2048 | 5915.2 | 5591.8 | 0.945 | 0.948 |
+| 512 | 8192 | 6259.2 | 5610.3 | 0.896 | 0.898 |
+| 512 | 16384 | 6558.3 | 5624.8 | 0.858 | 0.858 |
+
+21 cells: geomean 0.948 cold, 0.949 warm. The one loss is n=128 just past two chunks (b=6392, two parts of 3196:
++3%): per-item cost at n=128 bottoms out near 4096 items. **cfloat** n=128 pinned: b=4096 0.945, b=8192 0.900,
+b=32768 0.871.
+
+Forced chunk sizes, cold, b=32768 (n=512: 16384): n=64 every size 1.00-1.33 (one block: what made the no-split rule); n=128 1128 1.229,
+3008 0.964, **4136 0.911**, 6016 0.924; n=256 376 1.085, **752 0.866**, 1128 0.916, 1504 0.881, 3008 0.922; n=512 188
+0.916, **376 0.859**, 752 0.862, 3008 0.934. In triangle bytes the best part holds 0.75-1.5 L2.
+
 ### The panel-solve verdict {#the-panel-solve-verdict}
 
 With the gemm seam held at vendor, the panel solve is the only variable. `trsm=vendor / trsm=native` whole-potrf ratios:
