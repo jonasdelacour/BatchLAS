@@ -541,7 +541,7 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
 // Both native launches put the batch in grid z, capped at 65535 on CUDA: trmm's launch runs the
 // tile kernel, and the expansion its expand_triangular, as slices past it. Each pin at 65535,
 // 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and three slices) runs its native family, every
-// item bit-identical to item 0, at padded lds and strides, complex alpha and data with nonzero
+// item bit-identical to item it % 7 (out of phase with every slice), at padded lds and strides, complex alpha and data with nonzero
 // imaginary parts, ConjTrans and a Unit diagonal on the odd batches. The unsliced tile kernel
 // still throws past the ceiling. Metal has no cap: one slice serves every batch.
 TYPED_TEST(TrmmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
@@ -556,7 +556,7 @@ TYPED_TEST(TrmmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
             Spec s{Side::Left, odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::ConjTrans : Transpose::NoTrans,
                    odd ? Diag::Unit : Diag::NonUnit, 5, 3, batch};
             if (std::holds_alternative<tm::Expand>(c) && odd) s.side = Side::Right;
-            s.period = 1;
+            s.period = 7;
             if (!this->expect_runs(c, s)) continue;
             auto p = make_prob<T>(s);
             const std::string got = [&] {

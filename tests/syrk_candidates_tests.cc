@@ -489,7 +489,7 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
 // dimension capped at 65535 on CUDA, and one past it the unsliced kernel launch throws ("Number
 // of work-groups exceed limit"). syrk's launch runs such a batch as slices, so a pin at 65535,
 // 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and three slices) runs that native kernel and
-// answers every item bit-identically to item 0, at padded lds and strides and beta != 0. Metal
+// answers every item bit-identically to item it % 7 (7 distinct items, out of phase with every slice), at padded lds and strides and beta != 0. Metal
 // has no cap: there one slice serves every batch and the unsliced launch runs too.
 TYPED_TEST(SyrkCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     using T = typename TestFixture::T;
@@ -502,7 +502,7 @@ TYPED_TEST(SyrkCandidates, GridBatchPastTheCeilingRunsAsSlices) {
         for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
             const bool odd = batch % 2;
             Spec s{5, 3, batch, odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans};
-            s.period = 1;
+            s.period = 7;
             if (!this->expect_runs(c, s)) continue;
             auto p = make_prob<T>(s);
             const std::string got = [&] {

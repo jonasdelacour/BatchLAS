@@ -418,7 +418,7 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
 
 // The grid terms (R3, AGENTS §8.9). The batch is grid z, capped at 65535 on CUDA: syr2k's launch
 // runs a batch past it as slices, so the pin launches the tile kernel at 65535, 65536, 2 * 65535
-// and 2 * 65535 + 1 (one, two, two and three slices), every item bit-identical to item 0 at padded
+// and 2 * 65535 + 1 (one, two, two and three slices), every item bit-identical to item it % 7 (out of phase with every slice) at padded
 // lds and strides, beta != 0. The tile list is grid y, a term: a launch at n = 46208 (361 tiles a
 // side, 65341 tiles), a refusal at 46209 (65703 tiles). Metal has neither cap: the launches one
 // past CUDA's ceilings run too.
@@ -432,7 +432,7 @@ TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
         const int ceiling = int(test_utils::kCudaGridYZ);
         for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
             const bool odd = batch % 2;
-            const Spec s{odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans, 5, 3, batch, 1,
+            const Spec s{odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans, 5, 3, batch, 7,
                          false, unsigned(batch)};
             auto p = make_prob<T>(s);
             const C tri{s2::Triangular{}};

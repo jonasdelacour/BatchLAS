@@ -483,7 +483,7 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
 
 // expand_mirrored and its gemm put the batch in grid z, capped at 65535 on CUDA: both run a batch
 // past it as slices. The expand pin at 65535, 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and
-// three slices) runs expand, every item bit-identical to item 0, at padded lds and strides,
+// three slices) runs expand, every item bit-identical to item it % 7 (out of phase with every slice), at padded lds and strides,
 // beta != 0, both sides; the family's own code (the direct call) launches there too. Metal has no
 // cap: one slice serves every batch.
 TYPED_TEST(SymmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
@@ -496,7 +496,7 @@ TYPED_TEST(SymmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
         const bool odd = batch % 2;
         Spec s{odd ? Side::Right : Side::Left, odd ? Uplo::Upper : Uplo::Lower, 5, 3, batch};
-        s.period = 1;
+        s.period = 7;
         auto p = make_prob<T>(s);
         const std::string got = [&] {
             const Pin pin("symm", expand);

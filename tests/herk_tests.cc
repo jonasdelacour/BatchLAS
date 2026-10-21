@@ -325,11 +325,11 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     }
 }
 
-// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535 and
-// run a batch past it as slices. With gram pinned, 65535, 65536 and 2 * 65535 + 1 copies of one
-// problem (padded lds and strides, beta != 0, complex data) run the gram kernel:
-// every item is bit-identical to the gram kernel launched directly on item 0 (the vendor loop is
-// another kernel), and right.
+// The gram tile kernel puts the batch in a grid dimension capped at 65535 and runs a batch past it
+// as slices. With gram pinned, 65535, 65536 and 2 * 65535 + 1 items repeating 7 distinct problems
+// (out of phase with every slice; padded lds and strides, beta != 0, complex data) run the gram
+// kernel: every item is bit-identical to the gram kernel launched directly on the 7 (the vendor
+// loop is another kernel), and right.
 TYPED_TEST(HerkTest, GramBatchPastTheGridRunsAsSlices) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -340,15 +340,16 @@ TYPED_TEST(HerkTest, GramBatchPastTheGridRunsAsSlices) {
         using MV = MatrixView<T, MatrixFormat::Dense>;
         Queue& q = *(this->ctx);
         const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
-        const int n = 8, k = 5;
+        const int n = 8, k = 5, period = 7;
         const real_t alpha = real_t(0.75), beta = real_t(-0.5);
-        auto A1 = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, 1, 31);
-        auto C1 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, 1, 37);
+        auto A7 = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, period, 31);
+        auto C7 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, period, 37);
         q.wait();
-        for (int d = 0; d < n; ++d) C1(d, d, 0) = T(C1(d, d, 0).real(), real_t(0));
-        auto want = C1.clone();
+        for (int r = 0; r < period; ++r)
+            for (int d = 0; d < n; ++d) C7(d, d, r) = T(C7(d, d, r).real(), real_t(0));
+        auto want = C7.clone();
         q.wait();
-        (void)backend::detail::syrk_gram_tiles<T, true>(q, A1, want, T(alpha), T(beta), Uplo::Lower,
+        (void)backend::detail::syrk_gram_tiles<T, true>(q, A7, want, T(alpha), T(beta), Uplo::Lower,
                                                         Transpose::NoTrans);
         q.wait();
         for (const int batch : {65535, 65536, 2 * 65535 + 1}) {
@@ -357,8 +358,8 @@ TYPED_TEST(HerkTest, GramBatchPastTheGridRunsAsSlices) {
             for (int b = 0; b < batch; ++b)
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i) {
-                        if (j < k) Ab(i, j, b) = A1(i, j, 0);
-                        Cb(i, j, b) = C1(i, j, 0);
+                        if (j < k) Ab(i, j, b) = A7(i, j, b % period);
+                        Cb(i, j, b) = C7(i, j, b % period);
                     }
             auto C0b = Cb.clone();
             q.wait();
@@ -368,13 +369,63 @@ TYPED_TEST(HerkTest, GramBatchPastTheGridRunsAsSlices) {
             int differ = 0;
             for (int b = 0; b < batch; ++b)
                 for (int j = 0; j < n; ++j)
-                    for (int i = j; i < n; ++i) differ += Cb(i, j, b) != want(i, j, 0);
+                    for (int i = j; i < n; ++i) differ += Cb(i, j, b) != want(i, j, b % period);
             EXPECT_EQ(differ, 0) << "batch " << batch << ": not the gram kernel on every item";
-            const std::vector<int> items{0, batch / 2, batch - 1};
+            std::vector<int> items{batch / 2, batch - 1};
+            for (int r = 0; r < period; ++r) items.push_back(r);
             EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
                           MV::gemm_backward_error(q, A, Transpose::NoTrans, A, Transpose::ConjTrans, C0, C,
                                                   MV::up(T(alpha)), MV::up(T(beta)), items,
                                                   Uplo::Lower))
+                << "batch " << batch;
+        }
+    }
+}
+
+// The GEMM-plus-fold: its gemm and accumulate_hermitian put the batch in grid z (65535 on CUDA)
+// and run a batch past it as slices, where expansion_fits used to refuse it. With the expansion
+// pinned, 65535, 65536 and 2 * 65535 + 1 distinct items take it (its public gemm is in the select
+// trace at the full batch; the per-item loop calls no gemm), at padded lds and strides, beta != 0,
+// both triangles and transposes, C's input diagonal with a nonzero imaginary part (not read; the
+// output's is exactly 0), and every item is right.
+TYPED_TEST(HerkTest, ExpandBatchPastTheGridRunsAsSlices) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend Ba = TestFixture::BackendType;
+    if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
+        GTEST_SKIP() << "the expansion is cuBLAS's herk (no route vendor-free)";
+    } else {
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        Queue& q = *(this->ctx);
+        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const int n = 8, k = 5;
+        const real_t alpha = real_t(0.75), beta = real_t(-0.5);
+        for (const int batch : {65535, 65536, 2 * 65535 + 1}) {
+            const bool odd = batch % 2;
+            const Transpose trans = odd ? Transpose::ConjTrans : Transpose::NoTrans;
+            const Uplo uplo = odd ? Uplo::Upper : Uplo::Lower;
+            const int ar = odd ? k : n, ac = odd ? n : k;
+            auto Ab = Matrix<T, MatrixFormat::Dense>::Random(ar + 3, ac + 1, false, batch, 41);
+            auto Cb = Matrix<T, MatrixFormat::Dense>::Random(n + 2, n + 1, false, batch, 43);
+            auto C0b = Cb.clone();
+            q.wait();
+            const MV A(Ab, ar, ac), C(Cb, n, n), C0(C0b, n, n);
+            for (int b = 0; b < batch; ++b)
+                for (int d = 0; d < n; ++d) C0b(d, d, b) = T(C0b(d, d, b).real(), real_t(0));
+            const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+            ::testing::internal::CaptureStderr();
+            (void)herk<Ba, T>(q, A, C, alpha, beta, uplo, trans);
+            q.wait();
+            const std::string err = ::testing::internal::GetCapturedStderr();
+            EXPECT_NE(err.find("batch=" + std::to_string(batch) + " -> "), std::string::npos)
+                << "batch " << batch << ": no gemm at the full batch, so not the expansion: " << err;
+            int imaginary = 0;
+            for (int b = 0; b < batch; ++b)
+                for (int d = 0; d < n; ++d) imaginary += Cb(d, d, b).imag() != real_t(0);
+            EXPECT_EQ(imaginary, 0) << "batch " << batch << ": an output diagonal kept an imaginary part";
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, k,
+                          MV::gemm_backward_error(q, A, trans, A, odd ? Transpose::NoTrans : Transpose::ConjTrans,
+                                                  C0, C, MV::up(T(alpha)), MV::up(T(beta)), C.all_items(), uplo))
                 << "batch " << batch;
         }
     }

@@ -1965,7 +1965,7 @@ TYPED_TEST(GemmCandidates, SplitKOnAnOutOfOrderQueueReducesAfterTheSlices) {
 
 // split-k puts batch * s groups in grid z (65535 on CUDA): launch() runs slices of
 // floor(65535 / s) items, so a pin at that slice, one past it and two slices plus one item runs
-// split-k, every item bit-identical to item 0, strided operands, beta != 0.
+// split-k, every item bit-identical to item it % 7 (out of phase with every slice), strided operands, beta != 0.
 TYPED_TEST(GemmCandidates, SplitKPastTheGridRunsAsSlices) {
     using T = typename TestFixture::T;
     const int ceiling = int(test_utils::kCudaGridYZ);
@@ -1973,7 +1973,7 @@ TYPED_TEST(GemmCandidates, SplitKPastTheGridRunsAsSlices) {
         const C c{og::SplitK{16, 16, 16, sl}};
         for (const int batch : {ceiling / sl, ceiling / sl + 1, 2 * (ceiling / sl) + 1}) {
             Spec s{kN, kN, 2, 2, 20, batch, Layout::Strided};
-            s.period = 1;
+            s.period = 7;
             auto p = make_problem<T>(s);
             const std::string got = [&] {
                 const Pin pin("gemm", c);
@@ -2461,8 +2461,8 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
 // direct, tiled, reg and wide put the batch in grid z (65535 on CUDA) and launch() runs a batch past
 // it as slices, so the batch is no can_run term: each pin at 65535, 65536, 2 * 65535 and
 // 2 * 65535 + 1 (one, two, two and three slices) runs its family, every item bit-identical to item
-// 0, strided operands (odd item strides: each slice's base re-derives the leg), beta != 0, a
-// transposed (complex: conjugated) A on the odd batches. small is 1-D and serves them unsliced.
+// it % 7 (out of phase with every slice), strided operands (odd item strides: each slice's base
+// re-derives the leg), beta != 0, a transposed (complex: conjugated) A on the odd batches. small is 1-D and serves them unsliced.
 // Metal has no cap: one slice serves every batch.
 TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     using T = typename TestFixture::T;
@@ -2476,7 +2476,7 @@ TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
             const Transpose ta = batch % 2 ? tc : kN;
             if (!oracle_native<T>(c, ta, kN, 2, 2, 2)) continue;
             Spec s{ta, kN, 2, 2, 2, batch, Layout::Strided};
-            s.period = 1;
+            s.period = 7;
             auto p = make_problem<T>(s);
             const std::string got = [&] {
                 const Pin pin("gemm", c);
@@ -2489,7 +2489,7 @@ TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     {  // an out-of-order Queue: the slices run on an in-order sibling the caller's wait covers
         Queue ooo(*this->ctx, false);
         Spec s{kN, kN, 2, 2, 2, 2 * ceiling + 1, Layout::Strided};
-        s.period = 1;
+        s.period = 7;
         auto p = make_problem<T>(s);
         {
             const Pin pin("gemm", C{og::Direct{}});
@@ -2501,7 +2501,7 @@ TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
     }
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
-    past.period = 1;
+    past.period = 7;
     auto p = make_problem<T>(past);
     const std::string got = traced_choice([&] { this->run(p); });
     expect_gemm(*this->ctx, p, "auto past the grid ceiling -> " + got);
