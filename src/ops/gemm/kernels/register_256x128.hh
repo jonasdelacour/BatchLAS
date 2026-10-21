@@ -32,7 +32,7 @@ struct GemmK8S4LargeBody {
     static constexpr int BM = TM / 4, BN = TN / 4;            // 4-wide bands per thread
     static constexpr int AS = TileM + 4, BS = TileN + 4;       // padded slab strides
     static constexpr int SlabA = TileK * AS, SlabB = TileK * BS;
-    static constexpr int SC = TileM + 4, Slots = TileN / 4;    // staged C: one pass = TileN / 4 columns
+    static constexpr int SC = TileM + 16, Slots = TileN / 4;   // staged C: one pass = TileN / 4 columns
     static constexpr int Elems = Stages * (SlabA + SlabB);
     static_assert(Slots * SC <= Elems, "a staged C pass fits the slabs");
     static constexpr bool AK = OpA != Transpose::NoTrans, BK = OpB == Transpose::NoTrans;
