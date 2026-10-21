@@ -679,10 +679,11 @@ constexpr int ekx(int kk) {
 template <bool Pred, int CF, int OpThreads, int TileK>
 inline void eload(Vec4<float> (&r)[CF], const float* p, int ld, int k0, int kb, int ib, int k, int i_lim) {
     const bool al8 = CF == 2 && (reinterpret_cast<std::uintptr_t>(p) & 7u) == 0;
-    // The column step is rebuilt per call: hoisted, its 64-bit multiples spilled at the cap.
-    int step = edi<OpThreads, TileK>(1) * ld * CF;
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-    asm volatile("" : "+r"(step));
+    // The column step is rebuilt per call: hoisted, its multiples spilled at the cap. 64-bit:
+    // 16 ld CF passes INT_MAX at ld ~ 67M (complex<float>).
+    std::ptrdiff_t step = static_cast<std::ptrdiff_t>(edi<OpThreads, TileK>(1)) * ld * CF;
+#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+    asm volatile("" : "+l"(step));
 #endif
     const float* q = p + k0 * CF;
 BATCHLAS_UNROLL_FULL
@@ -1116,7 +1117,7 @@ Event launch_wide64_v2(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
         // The leg (WP-V): three cp.async stages where DPC++ emits cp.async, the device launches
         // their 48 KiB and both bases are 8-byte aligned; measured on sm_120 only, so sm_80-90 take
         // it only under BATCHLAS_GEMM_WIDE_STAGES=3 (=2 forces the register prefetch everywhere).
-        // Else the register prefetch (32 KiB, can_run's term).
+        // Else the register prefetch (two slabs, can_run's wide_slm_bytes term).
         // evidence: docs/perf/gemm.md#gemm-wp-v-three-copy-async-stages-for-the-128x128-complex-float-tile
         using Pipe = GemmWide64Body<T, OpA, OpB, true, TileK, TileM, TileN, 3>;
         constexpr std::size_t pipe_bytes = Pipe::Stages * (Pipe::BufA + Pipe::BufB) * sizeof(float);

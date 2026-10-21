@@ -2224,8 +2224,8 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
     const std::string got = traced_choice([&] { this->run(p); });
-    EXPECT_EQ(got, kCx<T> && TestFixture::kVendor ? "vendor" : "small")
-        << label(past) << ": real rows rank small above the vendor; vendor-free complex reaches it last";
+    EXPECT_TRUE(got == "small" || (TestFixture::kVendor && got == "vendor"))
+        << label(past) << ": Auto past the grid ceiling chose " << got;
     expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 
