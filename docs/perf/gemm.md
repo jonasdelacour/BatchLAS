@@ -2033,6 +2033,54 @@ coarse table (7dc92ec3) ranks `small` first. No kernel code is involved.
 NT/NC strided 64×2048×128, 512×256×64, NN strided 64×2048×64) has the same element-leg loads and was not
 touched. The tables do not rank the change until the retune; the gemm kernel hash moved.
 
+## GEMM: WP-X review, beta zero keeps negative zero
+
+Measured 2026-10-21 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune --mode
+time` (beta = 1, every arm verified), against a snapshot of the 6b4918a5 build, both processes in alternated order.
+
+**beta = 0.** The shared linear epilogues returned alpha · acc + 0 · 0 at beta = 0, so an alpha · acc of -0 was
+stored as +0 on every path but the 128x128 predicated staged store (WP-F's own fix). `wide_scalar::lin_epi` (wide
+v2, the transposed tiles, the split-k reduction) and `LinearEpilogue::apply` now return alpha · acc exactly.
+
+| helper | rule at beta = 0 (callers pass prior = +0, C unread) |
+|---|---|
+| `lin_epi`, real | beta → -0, a select on beta alone (hoisted): alpha · acc + (-0 · +0) is alpha · acc |
+| `lin_epi`, complex | beta.re → -0, beta.im → +0 in the real part and -0 in the imaginary one: each part adds -0 or subtracts +0 |
+| `LinearEpilogue::apply` | `beta == 0 ? alpha * acc : …` (its hot callers already branch on beta, so the select folds) |
+
+At beta ≠ 0 the arithmetic is unchanged. A per-element select in the complex `lin_epi` (and a uniform branch)
+cost 2-3% on the complex<float> transposed cells (NT strided 2048×32×32 b128, 64x32: 0.965 → 0.985-1.001 of the
+vendor, snapshot against itself 0.963 / 0.964); the hoisted form is level (0.965 / 0.972).
+
+**Test.** `BetaZeroKeepsNegativeZeroOnEveryNativeChoice`: every native choice, scalar and form, A = 0, alpha = -1,
+beta = 0, C full of NaN, packed, ld = m + 1 and padded; every element's real part must be -0. Break (both helpers
+restored): red on every `wide` and `splitk` choice of every scalar, in every case they run; green on `direct`,
+`tiled`, `small` and every `reg`.
+
+**Registers** (`scripts/register_probe.sh`, against the same build with the old helpers): zero spill on both
+architectures. sm_120: 830 of 884 gemm entries unchanged, the largest rises complex<double> 64x32 CT element leg
+132 → 153 and complex<float> 16x16 CN split body 72 → 80, neither below its previous occupancy step. sm_89: 833
+unchanged; wide v2 complex<float> 128x128 249 → 253 (one group per SM either way), double 32x64 and 64x32 TN split
+bodies 136-138 → 156 (three groups per SM either way).
+
+**A/B** (ratio to the vendor, mean of two passes, 10 reps; snapshot → this build):
+
+| cell | arm | snapshot | new |
+|---|---|---|---|
+| cfloat NC strided 2048×32×32 b128 | `wide:m=128:n=32:k=16` | 0.962 | 0.943 |
+| cfloat NT strided 2048×32×32 b128 (16 reps) | `wide:m=64:n=32:k=16` | 0.967 / 0.968 | 0.965 / 0.972 |
+| float NT strided 2048×32×128 b2048 | `wide:m=128:n=32:k=16` | 1.066 | 1.065 |
+| cfloat NT strided 64×2048×128 b128 (16 reps) | `wide:m=64:n=64:k=16` | 1.002 / 1.010 | 0.992 / 0.995 |
+| float NN strided 256×256×64 b512 | `wide:m=64:n=64:k=16` | 0.977 | 0.986 |
+| double NT strided 2048×32×64 b512 | `wide:m=64:n=32:k=16` | 0.898 | 0.898 |
+
+(Two figures: two processes of each build.) The 256² float cell's passes are 0.980 / 0.973 against 0.987 / 0.986.
+
+**Other review items.** The transposed tiles' 16-byte copy leg traces `_async_vec` (the element leg `_async`). The
+one-round epilogue asserts that it takes `staged_c_store`'s row map. The pipeline and split-k suites run under
+`BATCHLAS_GEMM_WIDE_STAGES=3` on sm_80+, and `PinnedChoiceLaunchesItsOwnKernel` checks `=3` and the split hosts'
+4-byte base.
+
 ## GEMM: WP-T, TT, TC and CC on the small transposed tiles
 
 Measured 2026-10-20 on threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), one GPU, `batchlas_tune
