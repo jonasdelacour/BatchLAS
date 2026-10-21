@@ -373,7 +373,7 @@ jobs:
           set -eu
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends \
-            clang-20 llvm-20-dev libclang-20-dev libomp-20-dev \
+            clang-20 lld-20 llvm-20-dev libclang-20-dev libomp-20-dev \
             libzstd-dev zlib1g-dev libcurl4-openssl-dev \
             liblapacke-dev liblapack-dev libblas-dev ccache
           echo "LLVM_PKG=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_ENV"
