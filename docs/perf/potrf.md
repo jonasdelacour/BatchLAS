@@ -277,7 +277,7 @@ vendor-free build); **routed** is both seams choosing their own route. Ratios ar
 
 The blocked driver factors the batch in parts (`potrf_blocked_chunk` in `src/ops/potrf/kernels/potrf_blocked.cc`),
 for the reason and by the rule of [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking): `tuning::blocked_chunk_items`,
-`BLOCKED_L2_CHUNK_PERCENT` = 75 % of L2, whole waves, one pass below two chunks, the last part takes the remainder,
+`BLOCKED_L2_CHUNK_PERCENT` = 75 % of L2 rounded up to a multiple of the CU count, one pass below two chunks, the last part takes the remainder,
 `info` offset per part, workspace (pointer arrays, the `W x W` product scratch, the leaf's) one part's. Two
 differences: an item is its **lower triangle**, `n(n+1)/2 x sizeof(T)`, since the driver reads and writes nothing
 else; and one block (`n <= nb`; float n=64 at sm_120, where the occupancy clamp sets nb) never splits. Auto ranks `lpanel` or
@@ -312,6 +312,21 @@ b=32768 0.871.
 Forced chunk sizes, cold, b=32768 (n=512: 16384): n=64 every size 1.00-1.33 (one block: what made the no-split rule); n=128 1128 1.229,
 3008 0.964, **4136 0.911**, 6016 0.924; n=256 376 1.085, **752 0.866**, 1128 0.916, 1504 0.881, 3008 0.922; n=512 188
 0.916, **376 0.859**, 752 0.862, 3008 0.934. In triangle bytes the best part holds 0.75-1.5 L2.
+
+**The shared `info`.** With no caller `info`, every part uses the pool's `ws.info`, so it is zeroed per part and, on an
+out-of-order Queue, only after the previous part's last fixup (a wait before each part after the first): a late
+`info[b] != 0` quenches the next part's item `b` to identity with nothing reported. Breaks against
+`BlockedChunksRezeroSharedInfoPerPart` (chunk 7, item 3 failing in part 1's last block, item 9 in part 2's first),
+planted and reverted:
+
+| break planted | observed |
+|---|---|
+| `ws.info` zeroed only for the first part | red in the four types, in and out of order; exactly items 10, 16 and 17 (3 + 7, 9 + 7, 3 + 14) |
+| the inter-part wait removed | **green** (8 out-of-order reps per type): the race is not reached on this runtime; the wait stays because the submission order alone admits it |
+
+**Retune pending (float and cfloat).** Auto gains nothing until
+`tuned/potrf.sm_120.txt` re-times `blocked`: at cfloat n=128 b=32768 pinned `blocked` with chunking runs 255.8 ns per
+item against Auto's 283.8 (cold), so the retune must re-check cfloat there.
 
 ### The panel-solve verdict {#the-panel-solve-verdict}
 

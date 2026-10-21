@@ -334,12 +334,12 @@ inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
 // Hand-set, not bucketed by n and not written by the tuner from a profile; the generator copies
 // them verbatim. evidence: docs/perf/lu.md#lu-l2-batch-chunking
 inline constexpr int32_t BLOCKED_L2_CHUNK_PERCENT = 75;
-inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_WAVES = 1;
+inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE = 1;
 
 /// @brief Items per chunk for a multi-kernel blocked driver (getrf, potrf) over @p batch items.
 ///
 /// The chunk holds `BLOCKED_L2_CHUNK_PERCENT` % of @p l2_bytes of @p item_bytes items, rounded
-/// up to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_WAVES` x @p compute_units.
+/// up to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` x @p compute_units.
 /// The driver runs parts of that size and the last part takes the remainder, so no part is smaller
 /// than a chunk and the largest is `chunk + batch % chunk`. `BATCHLAS_TUNE_L2_CHUNK_PERCENT` overrides
 /// the percentage; `BATCHLAS_TUNE_L2_CHUNK_ITEMS` forces the chunk size as given.
@@ -352,10 +352,10 @@ inline int64_t blocked_chunk_items(int64_t batch, int64_t item_bytes, int64_t l2
         if (l2_bytes <= 0 || item_bytes <= 0) return batch;
         const int64_t pct = detail::tuning_env_override(settings().geometry.tune.l2_chunk_percent,  // BATCHLAS_TUNE_L2_CHUNK_PERCENT
                                                         BLOCKED_L2_CHUNK_PERCENT);
-        // Whole waves: a part one item past a wave pays for the whole wave.
+        // A multiple of the CU count (not a wave: residency differs per child kernel).
         const int64_t cu = compute_units > 0 ? compute_units : 1;
         chunk = (l2_bytes / 100 * pct / item_bytes + cu - 1) / cu * cu;
-        if (chunk < cu * BLOCKED_L2_CHUNK_MIN_WAVES) chunk = cu * BLOCKED_L2_CHUNK_MIN_WAVES;
+        if (chunk < cu * BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE) chunk = cu * BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE;
     }
     return batch >= 2 * chunk ? chunk : batch;
 }

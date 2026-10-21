@@ -3699,10 +3699,10 @@ TEST(BlockedChunkItems, StraddlesEveryThreshold) {
     EXPECT_EQ(tuning::blocked_chunk_items(4135, f128, l2, cu), 4135) << "under two chunks: one pass";
     EXPECT_EQ(tuning::blocked_chunk_items(4136, f128, l2, cu), 2068);
     EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 2068) << "the last part takes the remainder";
-    const int64_t f512 = 512 * 512 * 4;   // 127 items fill L2: rounded up to one wave
+    const int64_t f512 = 512 * 512 * 4;   // 127 items fill L2: rounded up to one CU multiple
     EXPECT_EQ(tuning::blocked_chunk_items(375, f512, l2, cu), 375);
     EXPECT_EQ(tuning::blocked_chunk_items(376, f512, l2, cu), 188);
-    EXPECT_EQ(tuning::blocked_chunk_items(1000, f128, int64_t(1) << 20, cu), 188) << "15 items: the one-wave floor";
+    EXPECT_EQ(tuning::blocked_chunk_items(1000, f128, int64_t(1) << 20, cu), 188) << "15 items: the one-CU-multiple floor";
     EXPECT_EQ(tuning::blocked_chunk_items(9000, 0, l2, cu), 9000) << "no item size: one chunk";
     EXPECT_EQ(tuning::blocked_chunk_items(9000, f128, 0, cu), 9000) << "no cache reported: one chunk";
     {
@@ -3716,7 +3716,7 @@ TEST(BlockedChunkItems, StraddlesEveryThreshold) {
     }
     const ScopedEnvVar unset("BATCHLAS_TUNE_L2_CHUNK_PERCENT", nullptr);
     const int64_t want = std::max<int64_t>((l2 / 100 * tuning::BLOCKED_L2_CHUNK_PERCENT / f128 + cu - 1) / cu * cu,
-                                           cu * tuning::BLOCKED_L2_CHUNK_MIN_WAVES);
+                                           cu * tuning::BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE);
     EXPECT_EQ(tuning::blocked_chunk_items(2 * want - 1, f128, l2, cu), 2 * want - 1);
     EXPECT_EQ(tuning::blocked_chunk_items(2 * want, f128, l2, cu), want);
 }

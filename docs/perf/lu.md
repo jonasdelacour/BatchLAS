@@ -11,7 +11,7 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 * **Families** (`src/ops/<op>/choice.hh`, in tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields. See [families and their limits](#lu-families-and-their-limits).
 * **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`. It is the only gate. A `can_run` term must never be a speed term, or the shape becomes unservable in a vendor-free build.
 * **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The four sm_89 tables are `transcribed` at `424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The four sm_120 tables are deep-measured; getrf, getri and getrs keep 45, 94 and 790 `transcribed` rows where the deep lattice measured nothing near ([tuned/README.md](../../tuned/README.md)). See [what the tables rank first](#lu-what-the-tables-rank-first).
-* **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:225-237`).
+* **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:240-251`).
 * **Pins**: `BATCHLAS_GETRF_ROUTE`, `BATCHLAS_GETRS_ROUTE`, `BATCHLAS_GETRI_ROUTE`, `BATCHLAS_GESV_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or names a family whose `can_run` refuses the shape throws `std::invalid_argument`. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
 * **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), the blocking factor `nb`, the blocked driver's batch parts ([L2 batch chunking](#lu-l2-batch-chunking)), the tiny bucket and its launch bound. The launchers work these out. They are not families, keys or `can_run` terms.
 
@@ -274,9 +274,12 @@ The `blocked` driver runs four kernels per 32-column panel (panel leaf, right `l
 `info` (`b0`) sub-ranges offset to match.
 
 * **Part size**: `tuning::blocked_chunk_items(batch, n^2 sizeof(T), L2, CUs)` (`include/batchlas/tuning_params.hh`).
-  The chunk is `BLOCKED_L2_CHUNK_PERCENT` = **75** % of `global_mem_cache_size` in items, rounded **up** to whole
-  waves (`max_compute_units`), at least `BLOCKED_L2_CHUNK_MIN_WAVES` = 1 wave. Below two chunks: one pass. Otherwise
-  parts of one chunk, the last taking the remainder, so no part is smaller than a chunk.
+  The chunk is `BLOCKED_L2_CHUNK_PERCENT` = **75** % of `global_mem_cache_size` in items, rounded **up** to a
+  multiple of the compute-unit count (`max_compute_units`), at least `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` = 1 x CUs. Below
+  two chunks: one pass. Otherwise parts of one chunk, the last taking the remainder, so no part is smaller than a chunk.
+* At n >= 256 the round-up, not the percentage, sets the chunk: getrf n=512 wants 96 items (75 % of L2) and gets 188
+  (196 % of L2), potrf n=512 wants 191 and gets 376. A CU multiple is not a wave: a wave is CUs x resident
+  work-groups per CU, which differs per child kernel (1504 for `lpanel:8` at sm_120).
 * **Never split**: one panel (`n <= nb` = 32): nothing is handed off.
 * **Workspace** is one part's, `chunk + batch % chunk` items: `getrf_blocked_buffer_size` and the dispatch call the
   same `getrf_blocked_chunk`.
@@ -317,13 +320,13 @@ pinned: b=2048 0.936, b=16384 0.911, b=32768 0.910.
 **The constant.** Forced chunk sizes, cold, ratio against off: n=64 b=32768 2068 1.089, 4136 0.954, **8272 0.926**,
 16544 0.981; n=128 b=32768 1128 0.898, **1504 0.820**, 2068 0.833, 3008 0.880, 6016 0.953; n=256 b=32768 **376 0.820**,
 752 0.833, 1504 0.895, 3008 0.935; n=512 b=16384 **188 0.892**, 376 0.915, 752 0.952, 3008 0.965. The best part holds
-0.75-1.0 L2 of matrices, and one wave at n=512. Percent 75 against 100, same rule: getrf geomean 0.901 against 0.909
+0.75-1.0 L2 of matrices, and one CU multiple (188) at n=512. Percent 75 against 100, same rule: getrf geomean 0.901 against 0.909
 (19 cells), potrf 0.930 against 0.949 (13 cells).
 
 **Two rules the sweep forced.** Equal parts below one chunk lose: splitting just past one chunk gave n=128 b=2048
 +17% at percent 75 (two parts of 1128), because n=128 is not saturated at 1100 items (416 against 360 ns at 2048). A
-part one item past a wave pays for the wave: equal parts of 391 items at potrf n=512 b=8192 were +6% where whole-wave
-parts of 376 are -10%.
+part one item past a CU multiple pays for the next one: equal parts of 391 items at potrf n=512 b=8192 were +6% where
+CU-multiple parts of 376 are -10%.
 
 ## LU: negative results
 
@@ -393,6 +396,7 @@ Measured with a `PAD=` knob that moves only the declared byte count: **49,024 B 
 
 ## Open debts
 
+* **The getrf and potrf `blocked` rows of the sm_120 tables predate [L2 batch chunking](#lu-l2-batch-chunking)** and are stale; retune float and cfloat. cfloat getrf n=128 b=32768 Auto picks the vendor there (pre-existing). getrf's `ws.info` fallback (no caller `info`) is also shared across parts, but stale `info` only gates the first-zero record, never the factor, so nothing observable depends on its per-part zeroing.
 * **`getrf` window has no batch term** (measured at batch 128-1024 only); `GetrfCandidates.AutoReadsTheShippedTablesOnTheRealDevice` covers `(512, 2)`, below the measured batch range.
 * **`getri` at batch <= 32 beats cuBLAS by 1.7-28x** for every type, but the batch grid starts at 128. Double and cdouble at batch 1-64 are unmeasured.
 * **`getrs` clause-C batch floor of 128 gives up wins** at batch 32 and 64 (`experiments/wp8_getri/gen_floor.py` is the sweep).
