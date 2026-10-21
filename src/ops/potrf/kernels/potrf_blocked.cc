@@ -162,11 +162,12 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
     const auto p = potrf_blocked_params<T>(ctx, n);
 
     const int chunk = potrf_blocked_chunk<T>(ctx, n, p.nb, batch);
+    const int part = chunk + batch % chunk;
     const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
-        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), chunk));
+        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
 
     return workspace_bytes([&](BumpAllocator& pool) {
-        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, chunk, p.W, leaf_bytes);
+        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, part, p.W, leaf_bytes);
     });
 }
 
@@ -281,10 +282,11 @@ Event potrf_blocked_dispatch(Queue& ctx,
     // Chunk by chunk: each pass factors its items completely, so the passes are independent,
     // and the workspace is one chunk's. evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
     const int chunk = potrf_blocked_chunk<T>(ctx, n, nb, batch);
+    const int part = chunk + batch % chunk;   // the largest part: the last takes the remainder
     const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
-        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), chunk));
+        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
     BumpAllocator pool(workspace);
-    auto ws = potrf_blocked_layout<T>(ctx, pool, n, nb, chunk, W, leaf_bytes);
+    auto ws = potrf_blocked_layout<T>(ctx, pool, n, nb, part, W, leaf_bytes);
 
     // An empty OR SHORT caller span means "not requested"; zero THIS span, not info_out.
     const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
@@ -297,8 +299,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
         128, std::max<int>(32, static_cast<int>(
                                    dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE))));
 
-    for (int b0 = 0; b0 < batch; b0 += chunk) {
-        const int cb = std::min(chunk, batch - b0);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
 

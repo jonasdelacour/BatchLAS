@@ -1421,10 +1421,10 @@ TEST(PotrfBlocked, NbFollowsScopedEnv) {
 
 // ---- L2 batch chunking (docs/perf/potrf.md#potrf-l2-batch-chunking) ----------------------
 
-// A chunk forced to 7 over 23 items (7 + 7 + 7 + 2) at nb = 16, W = 8 (n = 40: three blocks,
-// the last short) with a padded ld and odd stride. Items 6, 7, 13 and 22 sit either side of a
-// boundary and in the short tail, each failing at its own column: an info or matrix sub-range
-// at the wrong offset moves only these. info both requested and not ("not requested" is the
+// A chunk forced to 7 over 23 items (7 + 7 + 9: the last part takes the remainder) at nb = 16,
+// W = 8 (n = 40: three blocks, the last short) with a padded ld and odd stride. Items 6, 7, 13
+// and 22 sit either side of a boundary and in the last part, each failing at its own column:
+// an info or matrix sub-range at the wrong offset moves only these. info both requested and not ("not requested" is the
 // chunk-sized pool fallback).
 TYPED_TEST(PotrfBlockedTest, BlockedChunksKeepInfoPerItem) {
     using T = typename TestFixture::T;
@@ -1456,7 +1456,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedChunksKeepInfoPerItem) {
             const auto it = std::find(bad.begin(), bad.end(), b);
             const bool failed = pass_info && it != bad.end();
             if (pass_info) {
-                EXPECT_EQ(info[b], failed ? col[size_t(it - bad.begin())] + 1 : 0) << "item " << b << " (chunk " << b / 7 << ")";
+                EXPECT_EQ(info[b], failed ? col[size_t(it - bad.begin())] + 1 : 0) << "item " << b << " (part " << std::min(b / 7, 2) << ")";
             }
             if (failed) continue;
             EXPECT_VERIFY(T, verify::Check::factorization, n,

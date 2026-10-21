@@ -3698,21 +3698,21 @@ TEST(BlockedChunkItems, StraddlesEveryThreshold) {
     const int64_t f128 = 128 * 128 * 4;   // 2047 items fill L2; rounded up to 11 CUs, 2068
     EXPECT_EQ(tuning::blocked_chunk_items(4135, f128, l2, cu), 4135) << "under two chunks: one pass";
     EXPECT_EQ(tuning::blocked_chunk_items(4136, f128, l2, cu), 2068);
-    EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 2185) << "15 equal parts";
+    EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 2068) << "the last part takes the remainder";
     const int64_t f512 = 512 * 512 * 4;   // 127 items fill L2: rounded up to one wave
     EXPECT_EQ(tuning::blocked_chunk_items(375, f512, l2, cu), 375);
     EXPECT_EQ(tuning::blocked_chunk_items(376, f512, l2, cu), 188);
-    EXPECT_EQ(tuning::blocked_chunk_items(1000, f128, int64_t(1) << 20, cu), 200) << "15 items: the one-wave floor, 5 parts";
+    EXPECT_EQ(tuning::blocked_chunk_items(1000, f128, int64_t(1) << 20, cu), 188) << "15 items: the one-wave floor";
     EXPECT_EQ(tuning::blocked_chunk_items(9000, 0, l2, cu), 9000) << "no item size: one chunk";
     EXPECT_EQ(tuning::blocked_chunk_items(9000, f128, 0, cu), 9000) << "no cache reported: one chunk";
     {
         const ScopedEnvVar half("BATCHLAS_TUNE_L2_CHUNK_PERCENT", "50");
-        EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 1130) << "1023 items -> 6 CUs, 29 parts";
+        EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 1128) << "1023 items rounded up to 6 CUs";
     }
     {
         const ScopedEnvVar seven("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
-        EXPECT_EQ(tuning::blocked_chunk_items(7, f128, l2, cu), 7);
-        EXPECT_EQ(tuning::blocked_chunk_items(8, f128, l2, cu), 7) << "a forced chunk is used as given";
+        EXPECT_EQ(tuning::blocked_chunk_items(13, f128, l2, cu), 13);
+        EXPECT_EQ(tuning::blocked_chunk_items(14, f128, l2, cu), 7) << "a forced chunk is used as given";
     }
     const ScopedEnvVar unset("BATCHLAS_TUNE_L2_CHUNK_PERCENT", nullptr);
     const int64_t want = std::max<int64_t>((l2 / 100 * tuning::BLOCKED_L2_CHUNK_PERCENT / f128 + cu - 1) / cu * cu,
@@ -3721,10 +3721,10 @@ TEST(BlockedChunkItems, StraddlesEveryThreshold) {
     EXPECT_EQ(tuning::blocked_chunk_items(2 * want, f128, l2, cu), want);
 }
 
-// A chunk forced to 7 over 23 items (7 + 7 + 7 + 2) at a padded ld and odd stride: every item's
-// residual, its ipiv range and the cabs1 ratio, with info both requested and not. Items 6, 7,
-// 13 and 22 sit on either side of a boundary and in the short tail, each with its own zero
-// column: a pivot or info sub-range at the wrong offset moves only these.
+// A chunk forced to 7 over 23 items (7 + 7 + 9: the last part takes the remainder) at a padded ld
+// and odd stride: every item's residual, its ipiv range and the cabs1 ratio, with info both
+// requested and not. Items 6, 7, 13 and 22 sit on either side of a boundary and in the last part,
+// each with its own zero column: a pivot or info sub-range at the wrong offset moves only these.
 TYPED_TEST(LuTest, BlockedChunksKeepPivotsAndInfoPerItem) {
     using T = typename TestFixture::T;
     const int nbw = this->nb(256);
@@ -3749,7 +3749,7 @@ TYPED_TEST(LuTest, BlockedChunksKeepPivotsAndInfoPerItem) {
     for (int b = 0; b < batch; ++b) {
         const auto it = std::find(bad.begin(), bad.end(), b);
         const int want = it == bad.end() ? 0 : col[size_t(it - bad.begin())] + 1;
-        EXPECT_EQ(p.info[b], want) << "item " << b << " (chunk " << b / 7 << ")";
+        EXPECT_EQ(p.info[b], want) << "item " << b << " (part " << std::min(b / 7, 2) << ")";
         if (it != bad.end()) continue;
         const int* ip = piv_item(p, b);
         for (int k = 0; k < n; ++k) ASSERT_EQ(ip[k], p.expect_piv[k]) << "item " << b << " ipiv[" << k << "]";

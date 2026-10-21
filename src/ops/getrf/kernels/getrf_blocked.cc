@@ -160,7 +160,7 @@ std::size_t getrf_blocked_buffer_size(Queue& ctx,
     if (batch < 1) return 0;
     const int chunk = getrf_blocked_chunk<T>(ctx, static_cast<int>(A.cols()), batch);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return getrf_blocked_layout<T>(ctx, pool, chunk);
+        return getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
     });
 }
 
@@ -262,7 +262,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
     // independent, and the workspace is one chunk's. evidence: docs/perf/lu.md#lu-l2-batch-chunking
     const int chunk = getrf_blocked_chunk<T>(ctx, n, batch);
     BumpAllocator pool(workspace);
-    auto ws = getrf_blocked_layout<T>(ctx, pool, chunk);
+    auto ws = getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
     // detail::info_target's rule, inlined: an empty OR SHORT caller span means "not
     // requested" and falls back to pool scratch, and it is THAT span that is zeroed.
     const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
@@ -274,8 +274,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
     const int ld = A.ld();
     const int stride = A.stride();
 
-    for (int b0 = 0; b0 < batch; b0 += chunk) {
-        const int cb = std::min(chunk, batch - b0);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int* const piv_ptr = piv_i32.data() + static_cast<std::ptrdiff_t>(b0) * n;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
