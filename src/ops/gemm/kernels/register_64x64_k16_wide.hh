@@ -37,17 +37,23 @@ using batchlas::sycl_device::DevMap;
 using batchlas::sycl_device::dev_is_zero;
 using batchlas::sycl_device::fma_acc;
 
+// beta = 0 is alpha * acc exactly (+ 0 * 0 would turn -0 into +0); callers pass prior = +0 there. The
+// beta terms are then -0 (x + -0 and x - +0 are x): loop-invariant selects, no per-element one
+// (that cost 2-3%). Complex takes beta.im as +0 in the real part and -0 in the imaginary one.
+// evidence: docs/perf/gemm.md#gemm-wp-x-review-beta-zero-keeps-negative-zero
 inline float lin_epi(float alpha, float beta, float acc, float prior) {
-    return alpha * acc + beta * prior;
+    return alpha * acc + (beta == 0.f ? -0.f : beta) * prior;
 }
 inline double lin_epi(double alpha, double beta, double acc, double prior) {
-    return alpha * acc + beta * prior;
+    return alpha * acc + (beta == 0.0 ? -0.0 : beta) * prior;
 }
 template <typename R>
 inline Cx<R> lin_epi(Cx<R> alpha, Cx<R> beta, Cx<R> acc, Cx<R> prior) {
+    const bool bz = beta.re == R(0) && beta.im == R(0);
+    const R br = bz ? R(-0.0) : beta.re, bi_re = bz ? R(0) : beta.im, bi_im = bz ? R(-0.0) : beta.im;
     Cx<R> o;
-    o.re = alpha.re * acc.re - alpha.im * acc.im + beta.re * prior.re - beta.im * prior.im;
-    o.im = alpha.re * acc.im + alpha.im * acc.re + beta.re * prior.im + beta.im * prior.re;
+    o.re = alpha.re * acc.re - alpha.im * acc.im + br * prior.re - bi_re * prior.im;
+    o.im = alpha.re * acc.im + alpha.im * acc.re + br * prior.im + bi_im * prior.re;
     return o;
 }
 

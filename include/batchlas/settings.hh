@@ -305,9 +305,11 @@ struct GeometrySettings {
     /// `BATCHLAS_TRMM_TILE_M`. 0 = unset (a function of m); bucketed to 16, 32, 64 or 128.
     int trmm_tile_m = 0;
 
-    /// `BATCHLAS_GEMM_WIDE_STAGES`: the complex<float> `wide:m=128:n=128:k=8` leg. 0 = unset
-    /// (cp.async stages on sm_120+); 2 forces the register prefetch; 3 allows the cp.async stages
-    /// from sm_80. Other values read as unset.
+    /// `BATCHLAS_GEMM_WIDE_STAGES`: the complex<float> cp.async legs of `wide:m=128:n=128:k=8` and
+    /// of the transposed wide tiles (and their split-k bodies). 0 = unset (cp.async stages on
+    /// sm_120+); 2 forces the register prefetch; 3 allows the cp.async stages from sm_80. Other
+    /// values read as unset. The cp.async stages also need 8-byte bases, and on the transposed
+    /// tiles both ld <= INT_MAX / 128.
     int gemm_wide_stages = 0;
 
     /// `BATCHLAS_TRSM_OUTER_NB`. 0 = unset: 128 for Side::Left, the CTA nb for Side::Right.
