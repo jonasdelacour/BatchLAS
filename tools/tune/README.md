@@ -103,8 +103,8 @@ families changed are re-raced (`partial:<family>`).
 | `--max-dim` | 2048 tiered, off custom | `skip:dim`: no cell with a matrix dimension (m, n, k, order, q, nrhs, derived rows; never `batch`) above this; 0 = off |
 | `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes (`--batches` or `--grid batch=` also turns the batch ladder off) |
-| `--batch-ladder` | `default` (0.25,2,16,128) | tiered: the batch axis is max(1, round(c x CUs)) per class c plus the spec's extras; `off` = the `choice.hh` axis; `c,c,...` = other classes ([the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder)) |
-| `--cus N` | the first `--devices` GPU's compute units | the ladder's unit; `--plan` without it reads the GPU name (RTX PRO 6000 Blackwell 188, RTX 4090 128) or refuses |
+| `--batch-ladder` | `auto` | tiered: the batch axis is max(1, round(c x CUs)) per class c (0.25,2,16,128) plus the spec's extras; `auto` = only where the (op, dtype) ledger has no run or a ladder run; `default` = always; `off` = the `choice.hh` axis; `c,c,...` = other classes, always ([the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder)) |
+| `--cus N` | the first `--devices` GPU's compute units | the ladder's unit; `--plan` without it reads the GPU name (RTX PRO 6000 Blackwell 188, RTX 4090 128; nvidia-smi has no SM count) or refuses; a wrong name entry plans other batches than the measuring run uses |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
 | `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts (see "Guard") |
 | `--guard-backend` | auto | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
@@ -126,9 +126,12 @@ and planning is in `schedule.cc`.
   2; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): preview's stride-2 lattice, coarse and deep's full
   lattice). Later rounds follow over each cell ranked inside the requested grid, until nothing is left,
   `--budget` is spent or, for those ops, the refinement cap is hit.
-- **Batch ladder.** Every tiered run measures batch at CU multiples, not at the `choice.hh` batches:
-  47, 376, 3008, 24064 on 188 SMs (gemm and ormqr without 47; syrk and symm also 1, 2, 4, 8; syr2k 1, 2,
-  3; trmm 1). Old ledger rows stay valid batch points. See "Engine: the CU-aligned batch ladder".
+- **Batch ladder.** A tiered run on a new ledger (or one whose runs used the ladder) measures batch at
+  CU multiples, not at the `choice.hh` batches: 47, 376, 3008, 24064 on 188 SMs (gemm and ormqr
+  without 47; syrk and symm also 1, 2, 4, 8; syr2k 1, 2, 3; trmm 1). On a ledger of `choice.hh`-axis
+  runs only, `auto` keeps the old axis: forcing the ladder there re-measures every cell, so a ladder
+  re-tune starts from a fresh `--ledger` root. Custom and `--only-named` samples never take it. See
+  "Engine: the CU-aligned batch ladder".
 - **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
   (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
   Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm

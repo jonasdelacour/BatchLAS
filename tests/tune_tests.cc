@@ -5991,3 +5991,12 @@ TEST(TuneTieredDriver, AutoLadderLeavesAnOldLedgerAloneAndAForcedOneReRacesItsSt
     EXPECT_EQ(named.keys, (std::vector<std::string>{"n=16,batch=128"}));
     EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128") << "a sample keeps the choice.hh axis";
 }
+
+TEST(TuneReplay, NearestBatchesBreaksALogTieTowardTheSmallerBatch) {
+    OracleSet o;
+    o.label = "tie";
+    for (const char* b : {"32", "128"}) o.cells[{{"dtype", "float"}, {"n", "4"}, {"batch", b}}].ms = {{"a", 1.0}};
+    o.axes = axis_specs({"dtype:exact", "n:log:3", "batch:log"}, {{"dtype", {"float"}}, {"n", {"4"}}, {"batch", {"32", "128"}}});
+    EXPECT_EQ(nearest_batches(o, {64}, {}), (std::set<std::string>{"float |32"})) << "64 is one octave from both";
+    EXPECT_EQ(nearest_batches(o, {65}, {}), (std::set<std::string>{"float |128"}));
+}
