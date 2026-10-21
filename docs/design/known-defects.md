@@ -316,9 +316,10 @@ mirror the named triangle on their copy first (`MatrixView::hermitize`), so they
   refuse batch > 65535 for every 3-D native launch, so vendor-free at L T batch 65536 float (sub-trmm),
   complex<float> and complex<double> (sub-gemm) threw `NoRouteError` from the sub-op. Since the
   level-3 batch slices (`select::over_batch_slices`) those natives run such a batch as slices, so a
-  sub-op no longer refuses it. The 2x4090 box was not re-checked. `can_run(Blocked)` has no batch
-  term. Test: `OrmqrCandidates.BlockedPastTheGridLimitRunsOrHasNoRoute` (L T, batch 65536, pinned
-  `blocked`).
+  sub-op no longer refuses it: the vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, threadripper02, 2026-10-21)
+  runs L T batch 65536 for all four CUDA types and applies Q to every item. The 2x4090 box was not re-checked.
+  `can_run(Blocked)` has no batch term. Test: `OrmqrCandidates.BlockedPastTheGridLimitRuns` (L T, batch 65536,
+  pinned `blocked`; no `NoRouteError` tolerance).
 - **Fix needs:** a reproducer. If one is found: fold the batch into dimension 0 or loop over batch
   chunks; the driver itself still does not check.
 - **Status:** open, not reproduced.

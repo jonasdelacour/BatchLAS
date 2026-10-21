@@ -360,26 +360,16 @@ std::vector<Spec> straddles() {
     return out;
 }
 
-// Known-defects #16, L T as the defect states it: the blocked pin is accepted at batch 65536.
-// With the level-3 vendor it applies Q to the last item as to the first. Vendor-free, a sub-gemm
-// or sub-trmm whose natives stop at 65535 may have no route: then the call throws NoRouteError,
-// and otherwise its answer is right. Never a raw launch error or a wrong answer.
-TYPED_TEST(OrmqrCandidates, BlockedPastTheGridLimitRunsOrHasNoRoute) {
+// Known-defects #16, L T as the defect states it: the blocked pin is accepted at batch 65536 and
+// applies Q to every item, vendor-free too (the sub-gemm and sub-trmm natives run the batch as
+// slices). Never NoRouteError, a raw launch error or a wrong answer.
+TYPED_TEST(OrmqrCandidates, BlockedPastTheGridLimitRuns) {
     using T = typename TestFixture::T;
     const C blocked{om::Blocked{}};
     const Transpose t = kCx<T> ? Transpose::ConjTrans : Transpose::Trans;
     auto p = make_apply<T>(Spec{Side::Left, t, 2, 1, 1, 65536});
     ASSERT_TRUE(this->pin_accepted(blocked, p));
-    if constexpr (!select::level3_vendor_available<TestFixture::B>) {
-        try {
-            this->run_pinned(blocked, p);
-        } catch (const batchlas::NoRouteError& e) {
-            SUCCEED() << e.what();
-            return;
-        }
-    } else {
-        this->run_pinned(blocked, p);
-    }
+    this->run_pinned(blocked, p);
     expect_applied(*this->ctx, p, name(blocked, p.s));
 }
 

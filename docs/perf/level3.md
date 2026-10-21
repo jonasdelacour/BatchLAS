@@ -113,6 +113,9 @@ loop. The batch is now no term. `select::over_batch_slices` (`src/select/select.
 slices of at most `max_groups_yz / groups_per_item` items, each a `MatrixView::batch_range` of every operand. Each
 slice goes through the whole launcher, so it re-derives its own leg (an odd item stride moves the base alignment).
 Slices are independent; on an out-of-order Queue they run on an in-order sibling, as every multi-launch wrapper does.
+That sibling is built per call, so past the cap an out-of-order call is host-synchronous: `~Queue` waits for it,
+and split-k's partials come from the sibling's fresh arena (allocated and freed per call, not pooled). An in-order
+Queue pays neither. An empty batch launches nothing.
 Metal lifts `max_groups_yz` (`src/select/select.cc:294`), so there one slice serves every batch.
 
 Where it is applied: gemm's `launch` (`src/ops/gemm/gemm.cc:165-180`; `small` is 1-D and the vendor loops itself);
@@ -151,10 +154,31 @@ sm_120 table's last batch row is 32768, and from 65535 up cuBLAS wins this shape
 table, not the slicing; the slices cost nothing at 65535 against 65536), open for the next gemm retune.
 
 Tests: `GridBatchPastTheCeilingRunsAsSlices` (gemm, syrk, trmm, symm), `SplitKPastTheGridRunsAsSlices`,
-`Syr2kCandidates.GridCeilingsAreCanRunTerms`, `HemmTest.ExpandBatchPastTheGridRunsAsSlices` and
-`HerkTest.GramBatchPastTheGridRunsAsSlices` pin each native at 65535, 65536, 2 × 65535 and 2 × 65535 + 1 (one, two,
-two and three slices) and check every item. Deliberate break: each later slice drops its last item; red exactly those
-tests, every dtype, and nothing else in the seven binaries.
+`Syr2kCandidates.GridCeilingsAreCanRunTerms`, `HerkTest.GramBatchPastTheGridRunsAsSlices` and the expansion tests
+`HemmTest`, `HerkTest` and `Her2kTest.ExpandBatchPastTheGridRunsAsSlices` (`BATCHLAS_EXPAND_ROUTE=expand`, the
+gemm in the select trace at the full batch) pin each native at 65535, 65536, (2 × 65535) and 2 × 65535 + 1 (one, two,
+two and three slices) and check every item. The pinned-family tests repeat 7 distinct items, out of phase with
+every slice (65535 mod 7 = 1), each item bit-identical to its representative; the expansion tests use distinct
+items, complex alpha and a nonzero imaginary input diagonal. `MatrixViewTest.BatchRangeView` covers
+`MatrixView::batch_range`. `OrmqrCandidates.BlockedPastTheGridLimitRuns` (known-defects #16) runs vendor-free too.
+
+Deliberate breaks, each red exactly the set shown and nothing else in the eight binaries (GPU-only tree, CUDA
+instantiations). Each slice passing one operand at offset 0 instead of `first`:
+
+| site | red |
+|---|---|
+| gemm `launch`, A, B or C (three breaks) | `GemmCandidates/{0..3}.GridBatchPastTheCeilingRunsAsSlices` and `.SplitKPastTheGridRunsAsSlices`, plus `TrmmCandidates/1` and `SymmCandidates/1` `.GridBatchPastTheCeilingRunsAsSlices` (their expansion gemm) |
+| syrk `gram`, A | `SyrkCandidates/{0,1}.GridBatchPastTheCeilingRunsAsSlices` |
+| syrk `triangular`, A | `SyrkCandidates/0.GridBatchPastTheCeilingRunsAsSlices` (float) |
+| syr2k `triangular`, A or B | `Syr2kCandidates/0.GridCeilingsAreCanRunTerms` |
+| trmm `triangular`, A or B; `expand_triangular`, A | `TrmmCandidates/{0..3}.GridBatchPastTheCeilingRunsAsSlices` |
+| `expand_mirrored`, A | `SymmCandidates/{0,1}.GridBatchPastTheCeilingRunsAsSlices`, `HemmTest/{0,1}.ExpandBatchPastTheGridRunsAsSlices` |
+| `accumulate_hermitian`, product | `HerkTest/{0,1}` and `Her2kTest/{0,1}` `.ExpandBatchPastTheGridRunsAsSlices` |
+| herk gram opt-in, A | `HerkTest/{0,1}.GramBatchPastTheGridRunsAsSlices` |
+
+With every item equal (the earlier tests) none of these breaks can turn a test red. An earlier break, each later
+slice dropping its last item inside `over_batch_slices`, reddens every past-the-grid test.
+
 ## Boundaries and their evidence
 
 The windows below were measured against the old gates. The transcribed sm_89 tables reproduce them cell by cell.
