@@ -97,13 +97,15 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
 }
 
 // Items per pass: the trailing update hands A22 between kernels through L2, and the children
-// are routed at this batch. The query and the call must agree, so both use it.
+// are routed at this batch. An item is its lower triangle; one block has no hand-off, so it
+// never splits. The query and the call must agree, so both use it.
 // evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
 template <typename T>
-int potrf_blocked_chunk(Queue& ctx, int n, int batch) {
+int potrf_blocked_chunk(Queue& ctx, int n, int nb, int batch) {
+    if (n <= nb) return batch;
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
-        batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
+        batch, static_cast<int64_t>(n) * (n + 1) / 2 * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
 }
@@ -159,7 +161,7 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
 
     const auto p = potrf_blocked_params<T>(ctx, n);
 
-    const int chunk = potrf_blocked_chunk<T>(ctx, n, batch);
+    const int chunk = potrf_blocked_chunk<T>(ctx, n, p.nb, batch);
     const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
         ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), chunk));
 
@@ -278,7 +280,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
 
     // Chunk by chunk: each pass factors its items completely, so the passes are independent,
     // and the workspace is one chunk's. evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
-    const int chunk = potrf_blocked_chunk<T>(ctx, n, batch);
+    const int chunk = potrf_blocked_chunk<T>(ctx, n, nb, batch);
     const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
         ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), chunk));
     BumpAllocator pool(workspace);

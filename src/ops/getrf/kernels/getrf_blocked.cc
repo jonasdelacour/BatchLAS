@@ -121,10 +121,11 @@ struct GetrfBlockedWs {
 };
 
 // Items per pass: the phases hand the trailing matrix between kernels through L2, and the
-// children are routed at this batch. The query and the call must agree, so both use it.
-// evidence: docs/perf/lu.md#lu-l2-batch-chunking
+// children are routed at this batch. One panel has no hand-off, so it never splits. The query
+// and the call must agree, so both use it. evidence: docs/perf/lu.md#lu-l2-batch-chunking
 template <typename T>
 int getrf_blocked_chunk(Queue& ctx, int n, int batch) {
+    if (n <= getrf_blocked_nb<T>(n)) return batch;
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
         batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
