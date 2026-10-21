@@ -340,7 +340,8 @@ inline constexpr int32_t BLOCKED_L2_CHUNK_MIN_WAVES = 1;
 ///
 /// The chunk holds `BLOCKED_L2_CHUNK_PERCENT` % of @p l2_bytes of @p item_bytes items, rounded
 /// up to a multiple of @p compute_units and at least `BLOCKED_L2_CHUNK_MIN_WAVES` x @p compute_units;
-/// a batch above it is split into equal chunks of at most that size. `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
+/// a batch of at least two such chunks is split into floor(batch / chunk) equal parts.
+/// `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
 /// overrides the percentage; `BATCHLAS_TUNE_L2_CHUNK_ITEMS` forces the chunk size as given.
 /// @return @p batch (one chunk) when the batch fits or the device reports no cache
 /// @ingroup api_config_lowlevel
@@ -354,10 +355,10 @@ inline int64_t blocked_chunk_items(int64_t batch, int64_t item_bytes, int64_t l2
     const int64_t cu = compute_units > 0 ? compute_units : 1;
     int64_t chunk = (l2_bytes / 100 * pct / item_bytes + cu - 1) / cu * cu;
     if (chunk < cu * BLOCKED_L2_CHUNK_MIN_WAVES) chunk = cu * BLOCKED_L2_CHUNK_MIN_WAVES;
-    if (batch <= chunk) return batch;
-    const int64_t chunks = (batch + chunk - 1) / chunk;
-    const int64_t even = ((batch + chunks - 1) / chunks + cu - 1) / cu * cu;
-    return even < chunk ? even : chunk;
+    // floor(batch / chunk) equal parts, each in [chunk, 2 chunk): a part below the chunk under-fills.
+    const int64_t chunks = batch / chunk;
+    if (chunks <= 1) return batch;
+    return (batch + chunks - 1) / chunks;
 }
 
 } // namespace batchlas::tuning
