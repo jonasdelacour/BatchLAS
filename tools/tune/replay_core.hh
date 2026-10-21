@@ -160,12 +160,9 @@ SlowdownReport calibrate_replay(const OracleSet& o, const Prior& prior, const Sc
 
 SlowdownStats slowdown_stats(std::vector<double> ratio);
 
-// Co-tenant contamination: drops each cell whose fastest median, or any arm's, exceeds `factor` x the same at a
-// larger batch of its line (the cell less `batch`). Returns the cells dropped.
-// evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
-std::size_t drop_nonmonotone_batch(OracleSet& o, double factor);
-// Per exact-key group of o (dtype and every exact key), the measured batch nearest (log) each of `want`; `extra`
-// values the group holds are kept too. Returns "group|batch" entries and their union "batch" as text in `kept`.
+// Drops (and counts) cells whose fastest or any arm's median is > factor x the same at a larger batch of their line.
+std::size_t drop_nonmonotone_batch(OracleSet& o, double factor);  // evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+// Each exact-key group's batch nearest (log) each of `want`, plus its `extra`: "group|batch"; `kept` = the union.
 std::set<std::string> nearest_batches(const OracleSet& o, const std::vector<std::int64_t>& want,
                                       const std::vector<int>& extra, std::string* kept = nullptr);
 

@@ -102,7 +102,9 @@ families changed are re-raced (`partial:<family>`).
 | `--cap-gib` | 4 | skip cells whose matrices exceed this |
 | `--max-dim` | 2048 tiered, off custom | `skip:dim`: no cell with a matrix dimension (m, n, k, order, q, nrhs, derived rows; never `batch`) above this; 0 = off |
 | `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
-| `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
+| `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes (`--batches` or `--grid batch=` also turns the batch ladder off) |
+| `--batch-ladder` | `default` (0.25,2,16,128) | tiered: the batch axis is max(1, round(c x CUs)) per class c plus the spec's extras; `off` = the `choice.hh` axis; `c,c,...` = other classes ([the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder)) |
+| `--cus N` | the first `--devices` GPU's compute units | the ladder's unit; `--plan` without it reads the GPU name (RTX PRO 6000 Blackwell 188, RTX 4090 128) or refuses |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
 | `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts (see "Guard") |
 | `--guard-backend` | auto | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
@@ -124,6 +126,9 @@ and planning is in `schedule.cc`.
   2; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): preview's stride-2 lattice, coarse and deep's full
   lattice). Later rounds follow over each cell ranked inside the requested grid, until nothing is left,
   `--budget` is spent or, for those ops, the refinement cap is hit.
+- **Batch ladder.** Every tiered run measures batch at CU multiples, not at the `choice.hh` batches:
+  47, 376, 3008, 24064 on 188 SMs (gemm and ormqr without 47; syrk and symm also 1, 2, 4, 8; syr2k 1, 2,
+  3; trmm 1). Old ledger rows stay valid batch points. See "Engine: the CU-aligned batch ladder".
 - **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
   (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
   Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
@@ -318,6 +323,12 @@ Host-only, no GPU (`build/tools/tune/tune_replay`).
   `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
   failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay).
+- `--batch-ladder CUS` (with `--batch-classes c,c` and `--batch-extra b,b`) adds the schemes `ladder`
+  (only each exact-key group's batches nearest the ladder are measured, all of them) and
+  `ladder+frontier+bisect`, and prints each source's `kept_batches`. `--drop-nonmonotone F` first
+  drops cells whose fastest or any arm's median is more than F x the same at a larger batch of their
+  line (co-tenant contamination); `--min-batch B` drops cells below batch B before anything else.
+  Results: [the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder).
 - `--prior tuned/<op>.<dev>.txt` (repeatable, matched to sources by op) adds the calibrate schemes
   `calibrate` (probe stride 4), `calibrate8`, `calibrate-probe` (no refinement) and `prior` (borrow
   blindly), scored by `calibrate_replay`, with `probes`, `disagreed` and `prior_rows` in the output.
