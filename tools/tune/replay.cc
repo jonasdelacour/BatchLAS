@@ -2,10 +2,13 @@
 //   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 //   tune_replay --slowdown [--table <tuned/op.dev.txt>]... [--ledger <op.dev.jsonl>]... [--raw <jsonl>]... [--scheme a,b] [--k n] [--slower f]
-//               [--prior <tuned/op.dev.txt>]...
+//               [--prior <tuned/op.dev.txt>]... [--batch-ladder CUS [--batch-classes c,c] [--batch-extra b,b]]
+//               [--drop-nonmonotone F]
 // Slowdown replay: one JSON line per (scheme, source), then per (scheme, overall/<kind>). --table or --ledger
 // implies --slowdown; a ledger takes its family hashes from the --table of the same <op>.<device>. A --prior adds
-// the calibrate schemes for the sources of its op (calibrate_replay).
+// the calibrate schemes for the sources of its op (calibrate_replay). --batch-ladder adds the schemes `ladder` and
+// `ladder+frontier+bisect`: only each group's batches nearest the CU classes are measured, every cell is scored.
+// --drop-nonmonotone drops co-tenant-contaminated cells first (drop_nonmonotone_batch).
 
 #include <tools/tune/replay_core.hh>
 
@@ -16,7 +19,9 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <vector>
 
 using namespace batchlas::tune;
 
@@ -56,7 +61,10 @@ void pool(SlowdownReport& into, const SlowdownReport& r) {
 int slowdown_main(int argc, char** argv) {
     std::vector<std::string> tables, ledgers, raws, want, priors;
     std::size_t k = 6;
-    double slower = 0.05;
+    double slower = 0.05, drop = 0;
+    int cus = 0;
+    std::vector<double> classes = default_batch_classes();
+    std::vector<int> extra;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--slowdown") continue;
@@ -72,6 +80,13 @@ int slowdown_main(int argc, char** argv) {
         else if (a == "--scheme") want = split(v, ',');
         else if (a == "--k") k = std::size_t(std::stoul(v));
         else if (a == "--slower") slower = std::stod(v);
+        else if (a == "--batch-ladder") cus = std::stoi(v);
+        else if (a == "--batch-classes") {
+            classes.clear();
+            for (const std::string& c : split(v, ',')) classes.push_back(std::stod(c));
+        } else if (a == "--batch-extra") {
+            for (const std::string& b : split(v, ',')) extra.push_back(std::stoi(b));
+        } else if (a == "--drop-nonmonotone") drop = std::stod(v);
         else {
             std::fprintf(stderr, "tune_replay: unknown argument %s in --slowdown mode\n", a.c_str());
             return 2;
@@ -80,12 +95,14 @@ int slowdown_main(int argc, char** argv) {
     std::vector<Scheme> known = replay_schemes(), schemes;
     for (const Scheme& s : calibrate_schemes())
         if (!priors.empty()) known.push_back(s);
+    if (cus > 0) known.push_back({"ladder", 0, false, 0}), known.push_back({"ladder+frontier+bisect", 2, true, 0, true});
     for (const Scheme& s : known)
         if (want.empty() || std::find(want.begin(), want.end(), s.name) != want.end()) schemes.push_back(s);
     if (schemes.size() != (want.empty() ? known.size() : want.size())) {
         std::fprintf(stderr, "tune_replay: --scheme takes a comma list of full, lattice, stride2, stride4, stride2+frontier, "
                              "stride4+frontier, stride2+frontier+prune, lattice+bisect, stride2+frontier+bisect; with "
-                             "--prior also calibrate, calibrate8, calibrate-probe, prior\n");
+                             "--prior also calibrate, calibrate8, calibrate-probe, prior; with --batch-ladder also ladder, "
+                             "ladder+frontier+bisect\n");
         return 2;
     }
     std::map<std::string, std::unique_ptr<Prior>> prior_of;  // op -> its --prior
@@ -119,9 +136,24 @@ int slowdown_main(int argc, char** argv) {
         const auto cells = load_replay(r, &meta);
         sources.emplace_back("raw", raw_oracle(std::filesystem::path(r).stem().string() + "/raw", cells, meta));
     }
-    for (const Scheme& s : schemes) {
+    const auto ladder = cus > 0 ? batch_ladder(cus, classes, extra) : std::vector<std::int64_t>{};
+    std::string ladder_text;
+    for (const std::string& b : batch_strings(ladder)) ladder_text += (ladder_text.empty() ? "" : ",") + b;
+    std::vector<std::set<std::string>> keep(sources.size());
+    for (std::size_t i = 0; i < sources.size(); ++i) {
+        OracleSet& o = sources[i].second;
+        const std::size_t before = o.cells.size(), dropped = drop > 0 ? drop_nonmonotone_batch(o, drop) : 0;
+        std::string kept;
+        if (cus > 0) keep[i] = nearest_batches(o, ladder, extra, &kept);
+        if (drop > 0 || cus > 0)
+            std::fputs(Json().str("source", o.label).integer("cells", std::int64_t(before)).integer("dropped", std::int64_t(dropped))
+                           .str("ladder", ladder_text).str("kept_batches", kept).line().c_str(), stdout);
+    }
+    for (Scheme s : schemes) {
         std::map<std::string, SlowdownReport> overall;
-        for (const auto& [kind, o] : sources) {
+        for (std::size_t i = 0; i < sources.size(); ++i) {
+            const auto& [kind, o] = sources[i];
+            if (s.name.rfind("ladder", 0) == 0) s.batch_keep = keep[i];
             const auto prior = prior_of.find(o.label.substr(0, o.label.find('/')));
             if (s.calibrate && prior == prior_of.end()) continue;
             SlowdownReport r = s.calibrate ? calibrate_replay(o, *prior->second, s, k, slower) : slowdown_replay(o, s, k, slower);

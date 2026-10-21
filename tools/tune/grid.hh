@@ -122,6 +122,19 @@ private:
 std::vector<CellKey> frontier_start(const std::vector<CellKey>& cells, const std::vector<AxisSpec>& axes, int stride,
                                     bool global = true);
 
+// The CU-aligned batch ladder: max(1, round(c x cus)) per class c, plus `extra`, ascending and unique.
+// evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+inline const std::vector<double>& default_batch_classes() {
+    static const std::vector<double> c{0.25, 1, 8, 64};
+    return c;
+}
+std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& classes, const std::vector<int>& extra = {});
+std::vector<std::string> batch_strings(const std::vector<std::int64_t>& batches);
+
+// `grid` with each line's (the cell less `batch`) batch values replaced by `batches`, in first-seen line order.
+// A line the grid declares at one batch only (syrk's trans=C at batch 1) keeps it.
+std::vector<CellKey> rebatch(const std::vector<CellKey>& grid, const std::vector<std::string>& batches);
+
 // RefineRound::next = flip midpoints, then margin midpoints; stalled = a midpoint without a winner.
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
                             const std::vector<AxisSpec>& axes, double ratio, const RefineOpts& opts = {});

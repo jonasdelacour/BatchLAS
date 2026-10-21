@@ -255,8 +255,13 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     for (const auto& [name, values] : o_.grid)
         for (auto& a : ax)
             if (a.first == name) a.second = values;
+    std::vector<CellKey> grid = s.grid(dtype, o_.grid);
+    for (auto& a : ax)
+        if (a.first == "batch" && !o_.batch_classes.empty()) {
+            a.second = batch_strings(batch_ladder(o_.cus > 0 ? o_.cus : id_.cus, o_.batch_classes, s.ladder_extra_batches()));
+            grid = rebatch(grid, a.second);
+        }
     j->axes = axis_specs(s.key_names(), ax);
-    const std::vector<CellKey> grid = s.grid(dtype, o_.grid);
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());

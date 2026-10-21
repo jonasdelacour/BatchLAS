@@ -101,6 +101,7 @@ struct Scheme {
     double prune = 0;       // > 0: a frontier cell races only arms within prune x the best at one of its neighbours
     bool bisect = false;    // the driver: the frontier picks lattice cells only, bisection (3% tie) adds midpoints off it
     bool calibrate = false;  // calibrate_replay: stride = probe stride (0: none), frontier = CalibrateRound rounds
+    std::set<std::string> batch_keep;  // non-empty: only cells at these batches are measured (the batch-ladder replay)
 };
 // full, lattice, stride2, stride4, stride2+frontier, stride4+frontier, stride2+frontier+prune, lattice+bisect,
 // stride2+frontier+bisect
@@ -158,6 +159,15 @@ SlowdownReport calibrate_replay(const OracleSet& o, const Prior& prior, const Sc
                                 double slower = 0.05);
 
 SlowdownStats slowdown_stats(std::vector<double> ratio);
+
+// Co-tenant contamination: drops each cell whose fastest median, or any arm's, exceeds `factor` x the same at a
+// larger batch of its line (the cell less `batch`). Returns the cells dropped.
+// evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+std::size_t drop_nonmonotone_batch(OracleSet& o, double factor);
+// Per exact-key group of o (dtype and every exact key), the measured batch nearest (log) each of `want`; `extra`
+// values the group holds are kept too. Returns "group|batch" entries and their union "batch" as text in `kept`.
+std::set<std::string> nearest_batches(const OracleSet& o, const std::vector<std::int64_t>& want,
+                                      const std::vector<int>& extra, std::string* kept = nullptr);
 
 constexpr double kGateGeomean = 0.0005, kGateP999 = 1.10;  // evidence: docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay
 // Every cell scored (no failures, something measured), geomean <= kGateGeomean and p99.9 <= kGateP999.
