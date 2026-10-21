@@ -53,6 +53,7 @@ struct Device {
     std::int64_t slm_per_item = 0;  ///< local memory the runtime adds per work-item (Metal: 8)
     /// Work-groups in SYCL dim 0/1 of a 2-D/3-D launch (CUDA grid z/y); Metal: 2^32 - 1.
     std::int64_t max_groups_yz = 65535;
+    std::int64_t scratch_budget = 0;  ///< one call's scratch lease: min(MAX_MEM_ALLOC_SIZE, GLOBAL_MEM_SIZE / 4)
 
     /// slm_budget for a launch of @p wg work-items (>= slm_budget when wg <= max_wg).
     constexpr std::int64_t slm_budget_for(int wg) const {

@@ -58,6 +58,17 @@ The drain covers only the queue the lease came from:
 - **Option-struct overloads** (`blas/options.hh`) hold innermost leases, so on an out-of-order `Queue` those
   calls block at scope exit.
 
+## workspace: the arena keeps its peak
+
+The arena grows geometrically and never shrinks until `trim_workspace()` or `~Queue`. An op that leases
+internal scratch with no `*_buffer_size` (symm and trmm `expand`, gemm `splitk`) therefore pins its peak in
+the `Queue`. Each such family's `can_run` caps its lease, because past the device's memory the arena throws
+`std::bad_alloc` after the choice is made: `expand` at GLOBAL_MEM_SIZE / 4 (`expansion_fits`), `splitk` at
+`select::Device::scratch_budget`, min(MAX_MEM_ALLOC_SIZE, GLOBAL_MEM_SIZE / 4). gemm `splitk` partials are
+s · ldw · n · batch · sizeof(T)
+([split-k](../perf/gemm.md#gemm-wp-l-global-split-k-over-the-transposed-wide-tiles)). Call `trim_workspace()` after
+a large call if the memory is wanted back.
+
 ## workspace: forward declarations in workspace.hh
 
 `workspace.hh` cannot include `util/sycl-span.hh`, which includes it back. `Span` and `Queue` are forward

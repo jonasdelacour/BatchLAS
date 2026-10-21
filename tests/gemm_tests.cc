@@ -87,6 +87,24 @@ bool RegTileFitsOrIsRefused(Queue& ctx, const char* word, int m, int n, int k, i
     return false;
 }
 
+// The same for a wide pin: complex<double> wide v2 64x64x16 asks for 64 KiB, over acpp's 48 KiB
+// and any 64 KiB device's budget, so the refusal is checked wherever it does not fit.
+template <typename T>
+bool WideTileFitsOrIsRefused(Queue& ctx, const char* word) {
+    int m = 0, n = 0, k = 0;
+    if (std::sscanf(word, "wide:m=%d:n=%d:k=%d", &m, &n, &k) != 3 || !NativePinsRun(ctx)) return true;
+    const auto* cfg = std::find_if(ops::gemm::wide_configs.begin(), ops::gemm::wide_configs.end(),
+                                   [&](const ops::gemm::WideCfg& c) { return c.m == m && c.n == n && c.k == k; });
+    if (cfg == ops::gemm::wide_configs.end()) return true;
+    const std::int64_t budget =
+        select::describe(ctx.device(), ctx.backend(), false).slm_budget_for(cfg->threads());
+    if (ops::gemm::wide_slm_bytes<T>(*cfg) <= budget) return true;
+    ExpectPinRefused<T>(ctx, word, 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
+    return false;
+}
+#define SKIP_UNLESS_WIDE_FITS(T, ctx, word) \
+    if (!WideTileFitsOrIsRefused<T>(ctx, word)) GTEST_SKIP() << word << " is above this device's local memory budget; the refusal was checked instead"
+
 // C against alpha op(A) op(B) + beta C0, componentwise in double on every item (Check::blas, k the inner
 // dimension). The reference is the library's, not another gemm: the vendor and the other native kernels
 // are no oracle for each other, and a vendor pin is Auto vendor-free.
@@ -366,6 +384,7 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
     if constexpr (sizeof(ScalarType) < 16) words.push_back("small");
     for (const char* word : words) {
         SCOPED_TRACE(word);
+        if (!WideTileFitsOrIsRefused<ScalarType>(*(this->ctx), word)) continue;
         reset();
         {
             const GemmPin pin(word);
@@ -1072,6 +1091,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
     auto C0 = C.clone();
 
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1103,6 +1123,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     // cannot see an epilogue defect, and the epilogue is where the two paths
     // differ most.
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A, B, C,
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1293,6 +1314,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedL
     auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
 
     {
+        SKIP_UNLESS_WIDE_FITS(ScalarType, *(this->ctx), "wide:m=64:n=64:k=16");
         const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
@@ -1342,6 +1364,7 @@ void RunForcedWideTransposedCheck(Queue& ctx,
                                    int row_offset = 3,
                                    int batch_size = 3) {
     SKIP_UNLESS_NATIVE(ctx);
+    SKIP_UNLESS_WIDE_FITS(ScalarType, ctx, kernel_name);
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;
@@ -1420,36 +1443,37 @@ TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     }
 }
 
-// The small wide tiles instantiate one transposed operand (NT, NC, TN, CN) and CT, but not
-// TT, TC or CC: can_run refuses those for every scalar (a real TT folds to CC) and the pin
-// throws (it used to fall back to Tiled16 silently).
-TYPED_TEST(GemmTest, SmallWideTilesRefuseBothTransposedRequest) {
-    using ScalarType = typename TestFixture::ScalarType;
-    SKIP_UNLESS_NATIVE(*this->ctx);
-    const Transpose T = Transpose::Trans, Cj = Transpose::ConjTrans;
-    const Transpose pairs[][2] = {{T, Cj}, {T, T}, {Cj, Cj}};
-    for (const char* kname : kSmallWideTiles)
-        for (const auto& p : pairs) ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
-}
-
 // The small wide tiles on their transposed forms: ragged in every dimension, k past two staged
-// blocks, a sub-view of a wider parent, beta != 0. A real CT is a TT (CC build, not here).
+// blocks, a sub-view of a wider parent, beta != 0. Since WP-T every tile serves all eight for a real
+// scalar (CC builds its TT, TC, CT) and 32x32 and 16x16 for a complex one; complex 64x32 and 32x64
+// still have no TT, TC or CC, which can_run refuses and the pin throws (no silent fallback).
 TYPED_TEST(GemmTest, SmallWideTilesRunTheirTransposedForms) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
     const Transpose N = Transpose::NoTrans, T = Transpose::Trans, Cj = Transpose::ConjTrans;
-    const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}};
+    const Transpose pairs[][2] = {{N, T}, {N, Cj}, {T, N}, {Cj, N}, {Cj, T}, {T, T}, {T, Cj}, {Cj, Cj}};
+    int ran = 0, refused = 0;
     for (const char* kname : kSmallWideTiles)
         for (const auto& s : kSmallWideShapes)
             for (const auto& p : pairs) {
                 SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " ta=" + std::to_string(int(p[0])) +
                              " tb=" + std::to_string(int(p[1])));
-                if (!test_utils::is_complex<ScalarType>::value && p[0] == Cj && p[1] == T)
+                const bool skinny = std::string(kname).find("m=32:n=32") == std::string::npos &&
+                                    std::string(kname).find("m=16:n=16") == std::string::npos;
+                const bool both = p[0] != N && p[1] != N && !(p[0] == Cj && p[1] == T);
+                if (test_utils::is_complex<ScalarType>::value && skinny && both) {
                     ExpectPinRefused<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1]);
-                else
+                    ++refused;
+                } else {
                     RunForcedWideTransposedCheck<ScalarType>(*this->ctx, kname, s[0], s[1], s[2], p[0], p[1],
                                                              ScalarType(-1), 300);
+                    ++ran;
+                }
             }
+    // 4 tiles x 2 shapes x 8 pairs; complex refuses 2 tiles x 2 shapes x 3 pairs
+    const int cx_refused = test_utils::is_complex<ScalarType>::value ? 12 : 0;
+    EXPECT_EQ(refused, cx_refused);
+    EXPECT_EQ(ran, 64 - cx_refused);
 }
 
 // The register launchers hard-wire OpA/OpB, so running one on a form it was not
@@ -1693,15 +1717,20 @@ TYPED_TEST(GemmTest, WideTransposedCN32x128GeqrfPanelShape) {
 // plausible wrong matrix, so a complex Trans runs its own Trans build: the
 // complex data here has nonzero imaginary parts, so serving it from the
 // ConjTrans build turns complex red and leaves real passing. A form the config
-// does not list (TT on the panel tiles; a real TT folds to CC) is refused.
+// does not list (complex TT and CC on the panel tiles) is refused; a real TT
+// folds to the CC build WP-T added there, and runs.
 // ---------------------------------------------------------------------------
 TYPED_TEST(GemmTest, WideTransposedTransBServedByItsOwnBuild) {
     using ScalarType = typename TestFixture::ScalarType;
     SKIP_UNLESS_NATIVE(*this->ctx);
     RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
                                              Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
-    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::Trans,
-                                 Transpose::Trans);
+    if (test_utils::is_complex<ScalarType>::value)
+        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::Trans,
+                                     Transpose::Trans);
+    else
+        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
+                                                 Transpose::Trans, Transpose::Trans, ScalarType(-1));
 }
 
 // The mirror of the above on the A leg, on the CN tile.
@@ -1710,8 +1739,12 @@ TYPED_TEST(GemmTest, WideTransposedTransAServedByItsOwnBuild) {
     SKIP_UNLESS_NATIVE(*this->ctx);
     RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
                                              Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
-    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::ConjTrans,
-                                 Transpose::ConjTrans);
+    if (test_utils::is_complex<ScalarType>::value)
+        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::ConjTrans,
+                                     Transpose::ConjTrans);
+    else
+        RunForcedWideTransposedCheck<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
+                                                 Transpose::ConjTrans, Transpose::ConjTrans, ScalarType(-1));
 }
 
 // Both operands transposed on the 64x64 tile, which lists all nine forms: complex TT, TC, CT

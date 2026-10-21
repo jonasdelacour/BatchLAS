@@ -516,6 +516,11 @@ boxes.
   does not matter to this project.** Still *profile* across batch sizes: batch-only-parallel kernels
   (one work-group per matrix) starve at small batch. If a kernel's work-group count equals the batch
   size, that is the bug.
+- **Do not tune or optimize double / complex<double> on a 1:64-FP64 GPU** (RTX 4090 sm_89, RTX PRO
+  6000 sm_120, every consumer and workstation part): FP64 is compute-bound there almost everywhere,
+  so kernel and routing work buys little and its windows do not carry over. Keep FP64 *correct*
+  (tests, no spills), skip it in retunes (`--dtype float,cfloat`), and defer its performance work
+  to high-FP64 hardware: a data-centre GPU (1:2) or the CPU backend.
 - **Run one measuring process on the box at a time**, whatever the device pin. Two GPUs on one NUMA
   node and one UVM driver produced 5.5x errors with stable rel_sd while `nvidia-smi` showed no
   foreign process. A display attached to a GPU also slows L2-resident vendor cells: measure on a

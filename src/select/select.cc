@@ -283,6 +283,10 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) 
         resident::device_slm_budget(static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))),
         static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())));
     d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    d.scratch_budget = static_cast<std::int64_t>(std::min<std::size_t>(
+        {static_cast<std::size_t>(dev.get_property(DeviceProperty::MAX_MEM_ALLOC_SIZE)),
+         static_cast<std::size_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_SIZE)) / 4,
+         static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())}));
     if (metal) {
         // impl::local_mem_scratch_per_item and impl::kMetalMaxGlobalRange (src/sycl/), which
         // this sycl-free TU cannot include; resident_capacity_tests holds the two to agree.

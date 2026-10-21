@@ -142,6 +142,9 @@ public:
         std::set<int> kk(mn);
         kk.insert(G::grid_panel_k.begin(), G::grid_panel_k.end());
         kk.insert(G::grid_skinny_k.begin(), G::grid_skinny_k.end());
+        mn.insert(G::grid_gram_mn.begin(), G::grid_gram_mn.end());
+        kk.insert(G::grid_gram_k.begin(), G::grid_gram_k.end());
+        kk.insert(G::grid_large_skinny_k.begin(), G::grid_large_skinny_k.end());
         return {{"ta", {"N", "T", "C"}}, {"tb", {"N", "T", "C"}}, {"layout", {"packed", "strided"}},
                 {"m", ints(mn)},         {"n", ints(mn)},         {"k", ints(kk)},
                 {"batch", ints(G::grid_batch)}};
@@ -168,6 +171,13 @@ public:
                     }
             for (int mn : G::grid_skinny_mn)
                 for (int k : G::grid_skinny_k) {
+                    add(f, false, mn, 32, k);
+                    add(f, false, 32, mn, k);
+                }
+            for (int mn : G::grid_gram_mn)
+                for (int k : G::grid_gram_k) add(f, false, mn, mn, k);
+            for (int mn : G::grid_skinny_mn)
+                for (int k : G::grid_large_skinny_k) {
                     add(f, false, mn, 32, k);
                     add(f, false, 32, mn, k);
                 }
@@ -211,15 +221,23 @@ public:
             // family: reg
             "src/ops/gemm/kernels/load_policies.hh",
             "src/ops/gemm/kernels/register_128x128.hh",
+            "src/ops/gemm/kernels/register_256x128.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/ops/gemm/kernels/vec4.hh",
             // family: wide
             "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/ops/gemm/kernels/vec4.hh",
             // family: reg
             "src/ops/gemm/kernels/register_launchers.hh",
             "src/ops/gemm/kernels/register_tiled_common.hh",
             // family: wide
             "src/ops/gemm/kernels/register_wide_transposed.hh",
+            "src/sycl/device_scalar.hh",
+            // family: splitk
+            "src/ops/gemm/kernels/register_wide_transposed.hh",
+            "src/ops/gemm/kernels/register_64x64_k16_wide.hh",
+            "src/ops/gemm/kernels/copy_async.hh",
             "src/sycl/device_scalar.hh",
             // family: small
             "src/ops/gemm/kernels/small_batched.hh",

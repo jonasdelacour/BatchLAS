@@ -59,6 +59,17 @@ enum class KernelVariant {
     Tiled64x64RegisterK8Wide, Tiled64x64RegisterK8WideNT, Tiled64x64RegisterK8WideNC, Tiled64x64RegisterK8WideTN,
     Tiled64x64RegisterK8WideTT, Tiled64x64RegisterK8WideTC, Tiled64x64RegisterK8WideCN, Tiled64x64RegisterK8WideCT,
     Tiled64x64RegisterK8WideCC,
+    Tiled128x128RegisterK8S4, Tiled128x128RegisterK8S4NT, Tiled128x128RegisterK8S4TN, Tiled128x128RegisterK8S4TT,
+    Tiled128x128RegisterK8Wide, Tiled128x128RegisterK8WideNT, Tiled128x128RegisterK8WideNC,
+    Tiled128x128RegisterK8WideTN, Tiled128x128RegisterK8WideTT, Tiled128x128RegisterK8WideTC,
+    Tiled128x128RegisterK8WideCN, Tiled128x128RegisterK8WideCT, Tiled128x128RegisterK8WideCC,
+    Tiled32x32RegisterK16WideTT, Tiled32x32RegisterK16WideTC, Tiled32x32RegisterK16WideCC,
+    Tiled16x16RegisterK16WideTT, Tiled16x16RegisterK16WideTC, Tiled16x16RegisterK16WideCC,
+    Tiled64x32RegisterK16WideCC, Tiled32x64RegisterK16WideCC,
+    Tiled128x32RegisterK16WideCC, Tiled32x128RegisterK16WideCC,
+    Tiled256x128RegisterK8S4, Tiled256x128RegisterK8S4NT, Tiled256x128RegisterK8S4TN, Tiled256x128RegisterK8S4TT,
+    Tiled128x256RegisterK8S4, Tiled128x256RegisterK8S4NT, Tiled128x256RegisterK8S4TN, Tiled128x256RegisterK8S4TT,
+    Count,  // not a kernel: splitk_trace_name's table size, so append entries above it
 };
 
 // One launcher per gemm family (src/ops/gemm/choice.hh). Each serves exactly what its family's
@@ -96,5 +107,14 @@ BATCHLAS_INTERNAL_API Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const 
                                       const MatrixView<T, MatrixFormat::Dense>& B,
                                       const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
                                       Transpose transA, Transpose transB);
+
+// (tm, tn, tk) must be a split-k host row (ops::gemm::splitk_host) instantiated for the form and
+// splits one of ops::gemm::kSplitKSlices; the partials are leased from ctx's workspace arena.
+template <typename T>
+BATCHLAS_INTERNAL_API Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits,
+                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                        const MatrixView<T, MatrixFormat::Dense>& B,
+                                        const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta,
+                                        Transpose transA, Transpose transB);
 
 } // namespace batchlas::sycl_gemm

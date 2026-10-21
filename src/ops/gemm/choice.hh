@@ -1,7 +1,7 @@
 #pragma once
 
 /// @file
-/// @brief gemm: direct, tiled, small, reg, wide, vendor. evidence: docs/perf/gemm.md @ingroup api_selection_ops
+/// @brief gemm: direct, tiled, small, reg, wide, splitk, vendor. evidence: docs/perf/gemm.md @ingroup api_selection_ops
 // Sycl-free on purpose: tests and the tuner include it to name the choices the library runs.
 
 #include <src/select/select.hh>
@@ -20,8 +20,8 @@ namespace batchlas::ops::gemm {
 struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
 struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
 struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; see small_fits
-/// gemm_reg, float only: m x n x k macro tile with k unroll u; must name a reg_configs entry that
-/// instantiates the call's transpose form, and max_wg must cover its threads().
+/// gemm_reg, float only: m x n x k tile, k unroll u (128x128 u4: predicated copy_async pipeline; aligned = u1);
+/// must name a reg_configs entry instantiating the call's form, and max_wg must cover its threads().
 struct Reg {
     int m = 0, n = 0, k = 0, u = 1;
     static constexpr std::string_view name = "reg";
@@ -40,9 +40,18 @@ struct Wide {
     static Wide from(std::array<int, 3> v) { return {v[0], v[1], v[2]}; }
     bool operator==(const Wide&) const = default;
 };
+/// gemm_splitk, every scalar: wide host tile m x n x k (splitk_host) over s k-slices, then one reduction.
+struct SplitK {
+    int m = 0, n = 0, k = 0, s = 0;
+    static constexpr std::string_view name = "splitk";
+    static constexpr std::array<std::string_view, 4> fields{"m", "n", "k", "s"};
+    std::array<int, 4> values() const { return {m, n, k, s}; }
+    static SplitK from(std::array<int, 4> v) { return {v[0], v[1], v[2], v[3]}; }
+    bool operator==(const SplitK&) const = default;
+};
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemm_vendor; needs the level-3 library
 
-using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, Vendor>;  ///< natives: GPU or vendor-free host, Default precision
+using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, SplitK, Vendor>;  ///< natives: GPU or vendor-free host, Default precision
 
 /// Transpose forms an instantiation exists for, after the real-scalar C->T fold.
 struct Forms {
@@ -51,6 +60,8 @@ struct Forms {
 
 /// One compiled register config: tr/tc thread tile, stages, forms, and whether NN (every form at
 /// 128x128) takes the unpredicated leg when the layout allows (derived per call, never a gate).
+/// aligned_leg names the generic launcher's leg only: the 256x128 / 128x256 kernels derive their
+/// own 16-byte leg (launch_register_k8_s4_large) and leave it false.
 struct RegCfg {
     int m, n, k, u, tr, tc, stages;
     Forms forms;
@@ -58,11 +69,17 @@ struct RegCfg {
     constexpr int threads() const { return (m / tr) * (n / tc); }
     /// Float local memory per work-group (gemm_kernels.cc static_asserts it against each kernel).
     constexpr std::int64_t slm_bytes() const {
-        if (m == 128 && n == 128) return std::int64_t(4) * ((32 * 132 > 2 * k * m ? 32 * 132 : 2 * k * m) + 2 * k * n);
+        if ((m == 256 && n == 128) || (m == 128 && n == 256))
+            return std::int64_t(4) * stages * k * (m + n + 8);  // padded slabs (stride + 4)
+        if (m == 128 && n == 128) {
+            const int pad = stages > 2 ? 4 : 0;  // the copy_async pipeline's padded shared stride
+            const int a = stages * k * (m + pad);
+            return std::int64_t(4) * ((32 * 132 > a ? 32 * 132 : a) + stages * k * (n + pad));
+        }
         return std::int64_t(4) * stages * ((m + 1) * k + (k + 1) * n);
     }
 };
-inline constexpr std::array<RegCfg, 10> reg_configs{{
+inline constexpr std::array<RegCfg, 13> reg_configs{{
     {32, 32, 8, 1, 2, 2, 1, {true, false, false, false}, false},
     {64, 64, 8, 1, 4, 4, 1, {true, false, false, false}, false},
     {64, 64, 16, 1, 4, 4, 1, {true, true, true, true}, false},
@@ -73,6 +90,9 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {128, 64, 32, 4, 8, 4, 2, {true, false, false, false}, true},
     {128, 64, 32, 2, 8, 4, 2, {true, false, false, false}, true},
     {128, 128, 8, 1, 8, 8, 2, {true, true, true, true}, true},  // its own kernel (register_128x128.hh)
+    {128, 128, 8, 4, 8, 8, 4, {true, true, true, true}, true},  // predicated: 4 copy_async stages; aligned: u1's kernel
+    {256, 128, 8, 4, 16, 8, 4, {true, true, true, true}, false},  // 4 copy_async stages, own leg (register_256x128.hh)
+    {128, 256, 8, 4, 8, 16, 4, {true, true, true, true}, false},
 }};
 
 /// A wide form (op(A), op(B)) over {N, T, C} = {0, 1, 2}, as bit 3 op(A) + op(B) of WideCfg::forms.
@@ -81,43 +101,102 @@ inline constexpr unsigned kWideNN = wide_bit(0, 0), kWideNT = wide_bit(0, 1), kW
 inline constexpr unsigned kWideTN = wide_bit(1, 0), kWideTT = wide_bit(1, 1), kWideTC = wide_bit(1, 2);
 inline constexpr unsigned kWideCN = wide_bit(2, 0), kWideCT = wide_bit(2, 1), kWideCC = wide_bit(2, 2);
 inline constexpr unsigned kWideAll = 0x1FF;
-inline constexpr unsigned kWideSmallTileForms = kWideAll & ~(kWideTT | kWideTC | kWideCC);
+inline constexpr unsigned kWideRealAll = kWideNN | kWideNC | kWideCN | kWideCC;
+inline constexpr unsigned kWideNoTTTCCC = kWideAll & ~(kWideTT | kWideTC | kWideCC);
 
-/// One compiled wide config and the forms a complex scalar instantiates. A real scalar compiles
-/// only the N/C forms: conj is the identity, so its C build serves a real T (wide_serves).
+/// The scalars a wide config compiles for, as a bit set over float, double, complex<float>, complex<double>.
+inline constexpr unsigned kWideF = 1, kWideD = 2, kWideCF = 4, kWideCD = 8, kWideAllScalars = 0xF;
+template <class T>
+constexpr unsigned wide_scalar_bit() {
+    static_assert(std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::complex<float>> ||
+                      std::is_same_v<T, std::complex<double>>,
+                  "a wide config compiles only the four BLAS scalars");
+    return std::is_same_v<T, float> ? kWideF : std::is_same_v<T, double> ? kWideD
+         : std::is_same_v<T, std::complex<float>> ? kWideCF : kWideCD;
+}
+
+/// One compiled wide config: complex forms, the N/C forms a real scalar compiles (wide_serves),
+/// the scalars it compiles for and whether a tile other than 64x64 runs wide v2 (GemmWide64Body).
 struct WideCfg {
     int m, n, k, ttm, ttn;
-    unsigned forms;
+    unsigned forms, real;
+    unsigned scalars = kWideAllScalars;
+    bool v2 = false;
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
-    constexpr bool has(int a, int b) const { return (forms & wide_bit(a, b)) != 0; }
+    template <bool Complex>
+    constexpr bool has(int a, int b) const { return ((Complex ? forms : real) & wide_bit(a, b)) != 0; }
+    template <class T>
+    constexpr bool compiles() const { return (scalars & wide_scalar_bit<T>()) != 0; }
 };
-inline constexpr std::array<WideCfg, 8> wide_configs{{
-    {64, 64, 16, 4, 4, kWideAll},
-    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN},  // the potrf trailing update, W = 32
-    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC},  // the geqrf panel update V^H A22, nb = 32
-    {32, 32, 16, 4, 4, kWideSmallTileForms},
-    {16, 16, 16, 2, 2, kWideSmallTileForms},
-    {64, 32, 16, 4, 4, kWideSmallTileForms},
-    {32, 64, 16, 4, 4, kWideSmallTileForms},
-    {64, 64, 8, 4, 4, kWideAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
+// Real CC (its TT) everywhere. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
+inline constexpr std::array<WideCfg, 9> wide_configs{{
+    {64, 64, 16, 4, 4, kWideAll, kWideRealAll},
+    {128, 32, 16, 4, 4, kWideNC | kWideNT | kWideTN | kWideCN, kWideNC | kWideCN | kWideCC},  // potrf update, W = 32
+    {32, 128, 16, 4, 4, kWideCN | kWideTN | kWideNT | kWideNC, kWideNC | kWideCN | kWideCC},  // geqrf V^H A22, nb = 32
+    {32, 32, 16, 4, 4, kWideAll, kWideRealAll},
+    {16, 16, 16, 2, 2, kWideAll, kWideRealAll},
+    {64, 32, 16, 4, 4, kWideNoTTTCCC, kWideRealAll},
+    {32, 64, 16, 4, 4, kWideNoTTTCCC, kWideRealAll},
+    {64, 64, 8, 4, 4, kWideAll, kWideRealAll},  // k <= 8: no zero-filled half slab (wide v2 at TileK = 8)
+    {128, 128, 8, 8, 8, kWideAll, 0, kWideCF, true},  // wide v2's 128x128 tile, 8x8 per thread (WP-O)
 }};
+// wide_compiles would silently ignore a T bit in `real`; real NN never outgrows complex NN.
+static_assert([] {
+    for (const WideCfg& c : wide_configs)
+        if ((c.real & ~kWideRealAll) != 0 || ((c.real & kWideNN) && !(c.forms & kWideNN))) return false;
+    return true;
+}(), "WideCfg::real lists only N/C forms, and real NN only where complex NN is listed");
+
+/// Does this row run wide v2 (GemmWide64Body) for T? 64x64 for every scalar but double, and every
+/// v2 row for the scalars it compiles.
+template <class T>
+constexpr bool wide_v2_row(const WideCfg& c) {
+    return (c.m == 64 && c.n == 64 && !std::is_same_v<T, double>) || (c.v2 && c.compiles<T>());
+}
+
+/// split-k hosts: every wide row launch_wide_transposed runs in all its forms (not 64x64, every scalar).
+constexpr bool splitk_host(const WideCfg& c) {
+    return !(c.m == 64 && c.n == 64) && !c.v2 && c.scalars == kWideAllScalars;
+}
+inline constexpr std::array<int, 3> kSplitKSlices{2, 4, 8};
+/// The partials' column stride: m rounded to 4, so a slice's columns are whole 16-byte granules.
+constexpr std::int64_t splitk_ld(std::int64_t m) { return (m + 3) / 4 * 4; }
+/// One item's partials (all s slices), bytes; can_run holds them to Device::scratch_budget / batch.
+template <class T>
+constexpr std::int64_t splitk_item_bytes(std::int64_t m, std::int64_t n, int s) {
+    return splitk_ld(m) * n * s * std::int64_t(sizeof(T));
+}
 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
 
+/// Does config c compile (op(A), op(B)) for scalar T? A real T compiles no T form.
+template <class T>
+constexpr bool wide_compiles(const WideCfg& c, int a, int b) {
+    return c.compiles<T>() && (is_complex_v<T> || (a != 1 && b != 1)) && c.has<is_complex_v<T>>(a, b);
+}
 /// Does config c serve (op(A), op(B)) for scalar T? A real T folds to C (the build it compiles).
 template <class T>
 constexpr bool wide_serves(const WideCfg& c, int a, int b) {
-    if constexpr (is_complex_v<T>) return c.has(a, b);
-    else return c.has(a == 0 ? 0 : 2, b == 0 ? 0 : 2);
+    if constexpr (is_complex_v<T>) return wide_compiles<T>(c, a, b);
+    else return wide_compiles<T>(c, a == 0 ? 0 : 2, b == 0 ? 0 : 2);
 }
 
-/// Local memory a wide config asks for: one k x (m + n) tile, double-buffered by wide v2 (64x64,
-/// float and complex<float>); gemm_kernels.cc static_asserts it against the kernels.
+/// Shared stages of a wide config's k x (m + n) tile: two for wide v2 (wide_v2_row) and for a
+/// transposed tile other than 64x64 whose two stages fit 40 KiB; else one.
+template <class T>
+constexpr int wide_stages(const WideCfg& c) {
+    if (wide_v2_row<T>(c)) return 2;
+    if (c.m == 64 && c.n == 64) return 1;
+    return 2 * c.k * (c.m + c.n) * std::int64_t(sizeof(T)) <= 40960 ? 2 : 1;
+}
+
+/// Local memory a wide config asks for, at most; gemm_kernels.cc static_asserts it against the
+/// kernels. Wide v2's float and complex<float> element leg pads a k-contiguous operand's rows by 16 B.
 template <class T>
 constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
-    const bool v2 = c.m == 64 && c.n == 64 && (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
-    return std::int64_t(v2 ? 2 : 1) * c.k * (c.m + c.n) * std::int64_t(sizeof(T));
+    const std::int64_t pad = wide_v2_row<T>(c) && sizeof(T) <= 8 ? 2 * 16 : 0;
+    return std::int64_t(wide_stages<T>(c)) * c.k * ((c.m + c.n) * std::int64_t(sizeof(T)) + pad);
 }
 
 // sycl-free copies of the kernels' limits; gemm.cc static_asserts them against the kernels.
@@ -170,22 +249,31 @@ bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>
 constexpr auto candidates() {
-    constexpr std::array<Wide, 8> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
-                                        Wide{16, 16, 16}, Wide{64, 32, 16}, Wide{32, 64, 16}, Wide{64, 64, 8}};
-    if constexpr (std::is_same_v<T, float>) {
-        std::array<GemmChoice, 22> out{};
-        std::size_t i = 0;
-        out[i++] = Direct{};
-        out[i++] = Tiled{};
-        out[i++] = Small{};
+    constexpr std::size_t wides = [] {
+        std::size_t w = 0;
+        for (const WideCfg& c : wide_configs) w += c.compiles<T>();
+        return w;
+    }();
+    constexpr std::size_t hosts = [] {
+        std::size_t h = 0;
+        for (const WideCfg& c : wide_configs) h += splitk_host(c);
+        return h;
+    }();
+    constexpr std::size_t regs = std::is_same_v<T, float> ? reg_configs.size() : 0;
+    std::array<GemmChoice, 4 + regs + wides + hosts * kSplitKSlices.size()> out{};
+    std::size_t i = 0;
+    out[i++] = Direct{};
+    out[i++] = Tiled{};
+    out[i++] = Small{};
+    if constexpr (regs > 0)
         for (const RegCfg& r : reg_configs) out[i++] = Reg{r.m, r.n, r.k, r.u};
-        for (const Wide& w : wides) out[i++] = w;
-        out[i++] = Vendor{};
-        return out;
-    } else {
-        return std::array<GemmChoice, 12>{Direct{}, Tiled{}, Small{}, wides[0], wides[1], wides[2],
-                                          wides[3], wides[4], wides[5], wides[6], wides[7], Vendor{}};
-    }
+    for (const WideCfg& c : wide_configs)
+        if (c.compiles<T>()) out[i++] = Wide{c.m, c.n, c.k};
+    for (const WideCfg& c : wide_configs)
+        if (splitk_host(c))
+            for (int s : kSplitKSlices) out[i++] = SplitK{c.m, c.n, c.k, s};
+    out[i++] = Vendor{};
+    return out;
 }
 
 /// Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
@@ -206,6 +294,10 @@ inline constexpr std::array<int, 6> grid_panel_k{8, 16, 32, 64, 96, 128};
 inline constexpr std::array<int, 6> grid_skinny_mn{64, 128, 256, 512, 1024, 2048};
 inline constexpr std::array<int, 2> grid_skinny_k{256, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};
+/// Large k (not transcribed for sm_89): Gram m = n squares, and 32 x skinny both ways; panel forms, strided.
+inline constexpr std::array<int, 3> grid_gram_mn{16, 32, 64};
+inline constexpr std::array<int, 3> grid_gram_k{1024, 2048, 4096};
+inline constexpr std::array<int, 1> grid_large_skinny_k{2048};
 inline constexpr int grid_packed_panel_min = 128;
 inline constexpr std::array<std::string_view, 4> grid_real_forms{"NN", "NT", "TN", "TT"};
 inline constexpr std::array<std::string_view, 4> grid_real_panel_forms{"NN", "NT", "TN", "TT"};

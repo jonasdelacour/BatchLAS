@@ -90,6 +90,7 @@ the call site; see [geometry defaults](#environment-geometry-defaults-stay-at-th
 | `BATCHLAS_SY2SB_ORMQR_NB` | int, or `off` | unset | `off` or `0` disables the hint. Positive is forced, clamped to kd. Unparseable, negative or above 1024 is unset. |
 | `BATCHLAS_SYTRD_BLOCK_SIZE` | int | `0` (bucketed default) | Bucketed by n and type. |
 | `BATCHLAS_TRMM_TILE_M` | int | `0` (unset) | Bucketed to 16, 32, 64, 128. |
+| `BATCHLAS_GEMM_WIDE_STAGES` | `2`, `3` | `0` (unset) | `complex<float>` leg of `wide:m=128:n=128:k=8` and of the transposed wide tiles and their `splitk` bodies: `2` the register prefetch, `3` the cp.async stages from sm_80 (default sm_120+). Still needs DPC++, the local memory and 8-byte bases; the transposed tiles also need both ld ≤ INT_MAX / 128. |
 | `BATCHLAS_TRSM_OUTER_NB` | int | 128 (`Left`), CTA nb (`Right`) | Re-read per call. |
 | `BATCHLAS_EXPAND_MAX_BYTES` | bytes (`strtoull`) | `GLOBAL_MEM_SIZE / 4` | Only lowers the ceiling. |
 | `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` | int (bare `atoi`) | `1` | Unparseable gives 0 and widens the path; see [parser defects](#environment-parser-defects-recorded-not-fixed). |

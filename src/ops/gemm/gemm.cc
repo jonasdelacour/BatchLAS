@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -120,6 +121,19 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
             return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
                    d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
+        [&](const SplitK& sk) {
+            // The slices put batch * s in grid z (an int group id); one item's partials are int-indexed;
+            // the partials lease must fit the scratch budget (past it the arena throws std::bad_alloc).
+            const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
+                                           [&](const WideCfg& g) { return g.m == sk.m && g.n == sk.n && g.k == sk.k; });
+            const bool slices = std::find(kSplitKSlices.begin(), kSplitKSlices.end(), sk.s) != kSplitKSlices.end();
+            const std::int64_t batch = A.batch_size(), groups_z = batch * sk.s;
+            return grid && slices && groups_z <= d.max_groups_yz && groups_z <= std::numeric_limits<int>::max() &&
+                   cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) &&
+                   d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
+                   splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
+                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
+        },
         [&](Vendor) { return d.has_vendor; },
     }, c);
 }
@@ -137,6 +151,9 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             else throw batchlas::unsupported("gemm: reg is float only");
         },
         [&](const Wide& w) { return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, C, alpha, beta, ta, tb); },
+        [&](const SplitK& sk) {
+            return sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, C, alpha, beta, ta, tb);
+        },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gemm_vendor<B, T>(q, A, Bm, C, alpha, beta, ta, tb, precision);
@@ -147,7 +164,7 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 
 }  // namespace ops::gemm
 
-// gemm takes no workspace (no gemm_buffer_size), so R5 has nothing to size.
+// gemm takes no caller workspace (no gemm_buffer_size): splitk leases its partials from the Queue.
 template <Backend Back, typename T>
 Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,

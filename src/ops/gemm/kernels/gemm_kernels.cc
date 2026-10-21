@@ -6,6 +6,7 @@
 
 #include <src/ops/gemm/kernels/accessors.hh>
 #include <src/ops/gemm/kernels/register_128x128.hh>
+#include <src/ops/gemm/kernels/register_256x128.hh>
 #include <src/ops/gemm/kernels/register_64x64_k16_wide.hh>
 #include <src/ops/gemm/kernels/register_launchers.hh>
 #include <src/ops/gemm/kernels/register_wide_transposed.hh>
@@ -16,8 +17,12 @@
 #include <src/linalg-impl.hh>
 #include <src/ops/gemm/choice.hh>
 #include <src/queue.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <algorithm>
+#include <array>
+#include <climits>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <sycl/sycl.hpp>
@@ -136,8 +141,51 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc";
+    case KernelVariant::Tiled128x128RegisterK8S4: return "gemm_sycl_register_128x128_k8_s4";
+    case KernelVariant::Tiled128x128RegisterK8S4NT: return "gemm_sycl_register_128x128_k8_s4_nt";
+    case KernelVariant::Tiled128x128RegisterK8S4TN: return "gemm_sycl_register_128x128_k8_s4_tn";
+    case KernelVariant::Tiled128x128RegisterK8S4TT: return "gemm_sycl_register_128x128_k8_s4_tt";
+    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide";
+    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt";
+    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc";
+    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn";
+    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt";
+    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc";
+    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn";
+    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct";
+    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc";
+    case KernelVariant::Tiled32x32RegisterK16WideTT: return "gemm_sycl_register_32x32_k16_wide_tt";
+    case KernelVariant::Tiled32x32RegisterK16WideTC: return "gemm_sycl_register_32x32_k16_wide_tc";
+    case KernelVariant::Tiled32x32RegisterK16WideCC: return "gemm_sycl_register_32x32_k16_wide_cc";
+    case KernelVariant::Tiled16x16RegisterK16WideTT: return "gemm_sycl_register_16x16_k16_wide_tt";
+    case KernelVariant::Tiled16x16RegisterK16WideTC: return "gemm_sycl_register_16x16_k16_wide_tc";
+    case KernelVariant::Tiled16x16RegisterK16WideCC: return "gemm_sycl_register_16x16_k16_wide_cc";
+    case KernelVariant::Tiled64x32RegisterK16WideCC: return "gemm_sycl_register_64x32_k16_wide_cc";
+    case KernelVariant::Tiled32x64RegisterK16WideCC: return "gemm_sycl_register_32x64_k16_wide_cc";
+    case KernelVariant::Tiled128x32RegisterK16WideCC: return "gemm_sycl_register_128x32_k16_wide_cc";
+    case KernelVariant::Tiled32x128RegisterK16WideCC: return "gemm_sycl_register_32x128_k16_wide_cc";
+    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4";
+    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt";
+    case KernelVariant::Tiled256x128RegisterK8S4TN: return "gemm_sycl_register_256x128_k8_s4_tn";
+    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt";
+    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4";
+    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt";
+    case KernelVariant::Tiled128x256RegisterK8S4TN: return "gemm_sycl_register_128x256_k8_s4_tn";
+    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt";
+    case KernelVariant::Count: break;
     }
     return "gemm_sycl_unknown";
+}
+
+// A split-k body's name: its host instantiation's, suffixed (static storage for the trace scope).
+const char* splitk_trace_name(KernelVariant variant) {
+    constexpr int kCount = static_cast<int>(KernelVariant::Count);
+    static const std::array<std::string, kCount> names = [] {
+        std::array<std::string, kCount> out;
+        for (int i = 0; i < kCount; ++i) out[i] = std::string(kernel_trace_name(KernelVariant(i))) + "_splitk";
+        return out;
+    }();
+    return names[static_cast<int>(variant)].c_str();
 }
 
 // The unpredicated leg's name where both legs used to share one, so a fast-leg predicate stuck
@@ -168,8 +216,51 @@ const char* aligned_trace_name(KernelVariant variant) {
     case KernelVariant::Tiled64x64RegisterK8WideCN: return "gemm_sycl_register_64x64_k8_wide_cn_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCT: return "gemm_sycl_register_64x64_k8_wide_ct_aligned";
     case KernelVariant::Tiled64x64RegisterK8WideCC: return "gemm_sycl_register_64x64_k8_wide_cc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8Wide: return "gemm_sycl_register_128x128_k8_wide_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideNT: return "gemm_sycl_register_128x128_k8_wide_nt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideNC: return "gemm_sycl_register_128x128_k8_wide_nc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTN: return "gemm_sycl_register_128x128_k8_wide_tn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTT: return "gemm_sycl_register_128x128_k8_wide_tt_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideTC: return "gemm_sycl_register_128x128_k8_wide_tc_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCN: return "gemm_sycl_register_128x128_k8_wide_cn_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCT: return "gemm_sycl_register_128x128_k8_wide_ct_aligned";
+    case KernelVariant::Tiled128x128RegisterK8WideCC: return "gemm_sycl_register_128x128_k8_wide_cc_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4: return "gemm_sycl_register_256x128_k8_s4_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4NT: return "gemm_sycl_register_256x128_k8_s4_nt_aligned";
+    case KernelVariant::Tiled256x128RegisterK8S4TT: return "gemm_sycl_register_256x128_k8_s4_tt_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4: return "gemm_sycl_register_128x256_k8_s4_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4NT: return "gemm_sycl_register_128x256_k8_s4_nt_aligned";
+    case KernelVariant::Tiled128x256RegisterK8S4TT: return "gemm_sycl_register_128x256_k8_s4_tt_aligned";
     default: return kernel_trace_name(variant);
     }
+}
+
+// Wide v2 128x128's cp.async legs: the register-prefetch leg's name, suffixed _s3 (static storage).
+const char* stages3_trace_name(KernelVariant variant, bool vec) {
+    constexpr int kCount = static_cast<int>(KernelVariant::Count);
+    static const std::array<std::string, 2 * kCount> names = [] {
+        std::array<std::string, 2 * kCount> out;
+        for (int i = 0; i < kCount; ++i) {
+            out[2 * i] = std::string(kernel_trace_name(KernelVariant(i))) + "_s3";
+            out[2 * i + 1] = std::string(aligned_trace_name(KernelVariant(i))) + "_s3";
+        }
+        return out;
+    }();
+    return names[2 * static_cast<int>(variant) + (vec ? 1 : 0)].c_str();
+}
+
+// The transposed wide tiles' cp.async leg: suffixed _async (element copies) or _async_vec (16-byte
+// granules along i), after _splitk for a split body.
+const char* async_trace_name(KernelVariant variant, bool split, bool vec) {
+    constexpr int kCount = static_cast<int>(KernelVariant::Count);
+    static const std::array<std::string, 4 * kCount> names = [] {
+        std::array<std::string, 4 * kCount> out;
+        for (int i = 0; i < 4 * kCount; ++i)
+            out[i] = std::string(kernel_trace_name(KernelVariant(i / 4))) + (i % 4 >= 2 ? "_splitk" : "") +
+                "_async" + (i % 2 ? "_vec" : "");
+        return out;
+    }();
+    return names[4 * static_cast<int>(variant) + (split ? 2 : 0) + (vec ? 1 : 0)].c_str();
 }
 
 template <typename T>
@@ -306,6 +397,12 @@ constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
     case 8: return K::Tiled128x64RegisterK32LargeU2;
     case 9: return f == kNN ? K::Tiled128x128RegisterK8 : f == kTN ? K::Tiled128x128RegisterK8TN  // == Body::kVariant
                    : f == kNT ? K::Tiled128x128RegisterK8NT : K::Tiled128x128RegisterK8TT;
+    case 10: return f == kNN ? K::Tiled128x128RegisterK8S4 : f == kTN ? K::Tiled128x128RegisterK8S4TN
+                    : f == kNT ? K::Tiled128x128RegisterK8S4NT : K::Tiled128x128RegisterK8S4TT;
+    case 11: return f == kNN ? K::Tiled256x128RegisterK8S4 : f == kTN ? K::Tiled256x128RegisterK8S4TN
+                    : f == kNT ? K::Tiled256x128RegisterK8S4NT : K::Tiled256x128RegisterK8S4TT;
+    case 12: return f == kNN ? K::Tiled128x256RegisterK8S4 : f == kTN ? K::Tiled128x256RegisterK8S4TN
+                    : f == kNT ? K::Tiled128x256RegisterK8S4NT : K::Tiled128x256RegisterK8S4TT;
     default: return K::Direct;  // a row without a name; launch_reg_cfg static_asserts it is never read
     }
 }
@@ -319,15 +416,25 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
     constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
     if constexpr (c.m == 128 && c.n == 128) {
         static_assert(c.threads() == 256, "the 128x128 kernel runs 256 threads");
-        using Staged = Gemm128x128Body<float, true, true, OA, OB>;
+        using Staged = Gemm128x128Body<float, false, true, OA, OB, c.stages>;
         static_assert(Staged::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
-        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) *
-                                           (Staged::TileAElems + 2 * Staged::TileK * Staged::BStride),
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * (Staged::TileAElems + Staged::TileBElems),
                       "choice.hh's slm_bytes must match the 128x128 kernel's largest leg");
-        // The leg is derived: the unpredicated path whenever the layout allows it.
+        // The leg is derived: the unpredicated path whenever the layout allows it. Every depth's
+        // aligned leg is the two-stage body (a 16-byte copy_async aligned leg lost to it, WP-N2).
         if (can_use_128x128_fast_path<float>(A, B, C, OA, OB))
             return launch_register_128x128_k8<float, true, OA, OB>(ctx, A, B, C, alpha, beta, aligned_trace_name);
-        return launch_register_128x128_k8<float, false, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+        return launch_register_128x128_k8<float, false, OA, OB, c.stages>(ctx, A, B, C, alpha, beta,
+                                                                           kernel_trace_name);
+    } else if constexpr ((c.m == 256 && c.n == 128) || (c.m == 128 && c.n == 256)) {
+        using Body = GemmK8S4LargeBody<c.tr, c.tc, OA, OB, false>;
+        static_assert(Body::TileM == c.m && Body::TileN == c.n && Body::Stages == c.stages && c.threads() == 256,
+                      "choice.hh's row must match the 256x128 / 128x256 kernel");
+        static_assert(Body::kVariant == reg_variant(I, F, false), "the body's trace name must match reg_variant");
+        static_assert(c.slm_bytes() == std::int64_t(sizeof(float)) * Body::Elems,
+                      "choice.hh's slm_bytes must match the kernel's local accessor");
+        return launch_register_k8_s4_large<c.tr, c.tc, OA, OB>(ctx, A, B, C, alpha, beta, kernel_trace_name,
+                                                               aligned_trace_name);
     } else {
         static_assert(reg_variant(I, F, false) != KernelVariant::Direct, "reg_variant has no name for this row");
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
@@ -348,25 +455,32 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
 constexpr KernelVariant wide_variant(std::size_t i, int form) {
     using K = KernelVariant;
     constexpr K x = K::Direct;
-    constexpr K table[8][9] = {
+    constexpr K table[9][9] = {
         {K::Tiled64x64RegisterK16Wide, K::Tiled64x64RegisterK16WideNT, K::Tiled64x64RegisterK16WideNC,
          K::Tiled64x64RegisterK16WideTN, K::Tiled64x64RegisterK16WideTT, K::Tiled64x64RegisterK16WideTC,
          K::Tiled64x64RegisterK16WideCN, K::Tiled64x64RegisterK16WideCT, K::Tiled64x64RegisterK16WideCC},
         {x, K::Tiled128x32RegisterK16WideNT, K::Tiled128x32RegisterK16WideNC, K::Tiled128x32RegisterK16WideTN, x, x,
-         K::Tiled128x32RegisterK16WideCN, x, x},
+         K::Tiled128x32RegisterK16WideCN, x, K::Tiled128x32RegisterK16WideCC},
         {x, K::Tiled32x128RegisterK16WideNT, K::Tiled32x128RegisterK16WideNC, K::Tiled32x128RegisterK16WideTN, x, x,
-         K::Tiled32x128RegisterK16WideCN, x, x},
+         K::Tiled32x128RegisterK16WideCN, x, K::Tiled32x128RegisterK16WideCC},
         {K::Tiled32x32RegisterK16Wide, K::Tiled32x32RegisterK16WideNT, K::Tiled32x32RegisterK16WideNC,
-         K::Tiled32x32RegisterK16WideTN, x, x, K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, x},
+         K::Tiled32x32RegisterK16WideTN, K::Tiled32x32RegisterK16WideTT, K::Tiled32x32RegisterK16WideTC,
+         K::Tiled32x32RegisterK16WideCN, K::Tiled32x32RegisterK16WideCT, K::Tiled32x32RegisterK16WideCC},
         {K::Tiled16x16RegisterK16Wide, K::Tiled16x16RegisterK16WideNT, K::Tiled16x16RegisterK16WideNC,
-         K::Tiled16x16RegisterK16WideTN, x, x, K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, x},
+         K::Tiled16x16RegisterK16WideTN, K::Tiled16x16RegisterK16WideTT, K::Tiled16x16RegisterK16WideTC,
+         K::Tiled16x16RegisterK16WideCN, K::Tiled16x16RegisterK16WideCT, K::Tiled16x16RegisterK16WideCC},
         {K::Tiled64x32RegisterK16Wide, K::Tiled64x32RegisterK16WideNT, K::Tiled64x32RegisterK16WideNC,
-         K::Tiled64x32RegisterK16WideTN, x, x, K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, x},
+         K::Tiled64x32RegisterK16WideTN, x, x,
+         K::Tiled64x32RegisterK16WideCN, K::Tiled64x32RegisterK16WideCT, K::Tiled64x32RegisterK16WideCC},
         {K::Tiled32x64RegisterK16Wide, K::Tiled32x64RegisterK16WideNT, K::Tiled32x64RegisterK16WideNC,
-         K::Tiled32x64RegisterK16WideTN, x, x, K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, x},
+         K::Tiled32x64RegisterK16WideTN, x, x,
+         K::Tiled32x64RegisterK16WideCN, K::Tiled32x64RegisterK16WideCT, K::Tiled32x64RegisterK16WideCC},
         {K::Tiled64x64RegisterK8Wide, K::Tiled64x64RegisterK8WideNT, K::Tiled64x64RegisterK8WideNC,
          K::Tiled64x64RegisterK8WideTN, K::Tiled64x64RegisterK8WideTT, K::Tiled64x64RegisterK8WideTC,
          K::Tiled64x64RegisterK8WideCN, K::Tiled64x64RegisterK8WideCT, K::Tiled64x64RegisterK8WideCC},
+        {K::Tiled128x128RegisterK8Wide, K::Tiled128x128RegisterK8WideNT, K::Tiled128x128RegisterK8WideNC,
+         K::Tiled128x128RegisterK8WideTN, K::Tiled128x128RegisterK8WideTT, K::Tiled128x128RegisterK8WideTC,
+         K::Tiled128x128RegisterK8WideCN, K::Tiled128x128RegisterK8WideCT, K::Tiled128x128RegisterK8WideCC},
     };
     static_assert(std::size(table) == og::wide_configs.size(), "one trace row per wide_configs row");
     return table[i][form];
@@ -381,41 +495,102 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = static_cast<int>(OA == Transpose::Trans) + 2 * static_cast<int>(OA == Transpose::ConjTrans);
     constexpr int fb = static_cast<int>(OB == Transpose::Trans) + 2 * static_cast<int>(OB == Transpose::ConjTrans);
-    static_assert(c.has(fa, fb), "wide_configs does not list this form for this row");
-    if constexpr (c.m == 64 && c.n == 64 && kWide64V2<T>) {
+    static_assert(og::wide_compiles<T>(c, fa, fb), "wide_configs does not list this form and scalar for this row");
+    if constexpr (og::wide_v2_row<T>(c)) {
         constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
-        static_assert((c.k == 16 || c.k == 8) && c.ttm == 4 && c.ttn == 4, "wide v2 is the 64x64x{16,8} 4x4 tile");
-        static_assert(og::wide_slm_bytes<T>(c) ==
-                          std::int64_t(2 * 2) * GemmWide64Body<T, OA, OB, true, c.k>::BufF * std::int64_t(sizeof(float)),
-                      "can_run's wide_slm_bytes must match wide v2's two double-buffered tiles");
-        return launch_wide64_v2<T, OA, OB, c.k>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
-                                                aligned_trace_name(v));
+        using Body = GemmWide64Body<T, OA, OB, true, c.k, c.m, c.n>;
+        static_assert((c.k == 16 || c.k == 8) && c.ttm == Body::TTM && c.ttn == Body::TTN,
+                      "wide v2 is a k = 16 or 8 slab over a 16 x 16 lane grid");
+        using BodyE = GemmWide64Body<T, OA, OB, false, c.k, c.m, c.n>;
+        constexpr std::int64_t padded = std::int64_t(2) * c.k * (c.m + c.n + 8 / Body::CF) * Body::CF * 4;
+        constexpr std::int64_t vec = std::int64_t(2) * (Body::BufA + Body::BufB) * 4;
+        static_assert(og::wide_slm_bytes<T>(c) == (Body::CF == 4 ? vec : padded) &&
+                          og::wide_slm_bytes<T>(c) >= std::int64_t(2) * (BodyE::BufA + BodyE::BufB) * 4,
+                      "can_run's wide_slm_bytes must bound wide v2's two double-buffered tiles on both legs");
+        return launch_wide64_v2<T, OA, OB, c.k, c.m, c.n>(ctx, A, B, C, alpha, beta, kernel_trace_name(v),
+                                                          aligned_trace_name(v), stages3_trace_name(v, false),
+                                                          stages3_trace_name(v, true));
     } else if constexpr (fa == 0 && fb == 0 && c.m == 64 && c.n == 64 && c.k == 16) {
-        // The NN 64x64x16 tile is its own kernel; its leg is derived from the layout. Double and
-        // complex<double> 64x64x8 run launch_wide_transposed in every form, NN included.
+        // The double NN 64x64x16 tile is its own kernel; its leg is derived from the layout.
+        // Double 64x64x8 runs launch_wide_transposed in every form, NN included.
         if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
             return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_64x64_k16_wide<T, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
-        return launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(wide_variant(I, 3 * fa + fb)));
+        constexpr KernelVariant v = wide_variant(I, 3 * fa + fb);
+        return launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB, og::wide_stages<T>(c)}>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name(v), {}, async_trace_name(v, false, false),
+            async_trace_name(v, false, true));
     }
 }
 
 // Form F = 3 op(A) + op(B) of wide_configs[I], launched when it serves the call. A real scalar
 // compiles only the N/C forms, and its C build serves a real T (og::wide_serves).
 // evidence: docs/perf/gemm.md#gemm-wide-instantiations-in-every-transpose-form
-template <typename T, int I, int F>
+// Split: the split-k body of a host row (always launch_wide_transposed), C the partials.
+template <typename T, int I, int F, bool Split = false>
 void launch_wide_form(std::optional<Event>& out, Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
-                      T alpha, T beta, Transpose transA, Transpose transB) {
+                      T alpha, T beta, Transpose transA, Transpose transB, WideSplit split = {}) {
     constexpr og::WideCfg c = og::wide_configs[I];
     constexpr int fa = F / 3, fb = F % 3;
-    if constexpr (c.has(fa, fb) && (og::is_complex_v<T> || (fa != 1 && fb != 1))) {
+    if constexpr (og::wide_compiles<T>(c, fa, fb) && (!Split || og::splitk_host(c))) {
         constexpr Transpose OA = kWideOps[fa], OB = kWideOps[fb];
-        if (!out && wide_trans_matches<T>(transA, OA) && wide_trans_matches<T>(transB, OB))
+        if (out || !wide_trans_matches<T>(transA, OA) || !wide_trans_matches<T>(transB, OB)) return;
+        if constexpr (Split)
+            out = launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}, true>(
+                ctx, A, B, C, alpha, beta, splitk_trace_name(wide_variant(I, F)), split,
+                async_trace_name(wide_variant(I, F), true, false), async_trace_name(wide_variant(I, F), true, true));
+        else
             out = launch_wide_cfg<T, I, OA, OB>(ctx, A, B, C, alpha, beta);
     }
+}
+
+template <typename T>
+class GemmSplitKReduceKernel;
+
+// C = alpha (W[z s] + ... + W[z s + s - 1]) + beta C per item z, the slices summed in that fixed
+// order (deterministic, no atomics); beta = 0 never reads C. One work-item per element, m fastest.
+template <typename T>
+Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int splits,
+                    const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta) {
+    using D = typename sycl_device::DevMap<T>::type;
+    constexpr int kWg = 256;
+    // mn <= ldw n <= INT_MAX (can_run), but the padded range and the global id can pass it.
+    const int m = C.rows(), mn = C.rows() * C.cols();
+    const sycl::range<2> global(static_cast<size_t>(C.batch_size()), (static_cast<size_t>(mn) + kWg - 1) / kWg * kWg);
+    ctx->submit([&](sycl::handler& h) {
+        const D* w_ptr = reinterpret_cast<const D*>(W.data_ptr());
+        D* c_ptr = reinterpret_cast<D*>(C.data_ptr());
+        const int ldw = W.ld(), ldc = C.ld();
+        const std::ptrdiff_t stride_w = W.stride(), stride_c = C.stride();
+        D alpha_d, beta_d;
+        std::memcpy(&alpha_d, &alpha, sizeof(D));
+        std::memcpy(&beta_d, &beta, sizeof(D));
+        batchlas::impl::parallel_for<GemmSplitKReduceKernel<T>>(
+            h, sycl::nd_range<2>(global, sycl::range<2>(1, kWg)), [=](sycl::nd_item<2> item) {
+                const size_t g = item.get_global_id(1);
+                if (g >= static_cast<size_t>(mn)) return;
+                const int e = static_cast<int>(g);
+                const auto b = static_cast<std::ptrdiff_t>(item.get_group(0));
+                const int j = e / m, i = e - j * m;
+                const D* p = w_ptr + b * splits * stride_w + i + static_cast<std::ptrdiff_t>(j) * ldw;
+                D acc = p[0];
+                for (int q = 1; q < splits; ++q) {
+                    const D v = p[q * stride_w];
+                    if constexpr (sycl_device::dev_is_complex_v<D>) {
+                        acc.re += v.re;
+                        acc.im += v.im;
+                    } else {
+                        acc += v;
+                    }
+                }
+                D* dst = c_ptr + b * stride_c + i + static_cast<std::ptrdiff_t>(j) * ldc;
+                const bool beta_zero = sycl_device::dev_is_zero(beta_d);
+                *dst = wide_scalar::lin_epi(alpha_d, beta_zero ? D{} : beta_d, acc, beta_zero ? D{} : *dst);
+            });
+    });
+    return ctx.get_event();
 }
 
 [[noreturn]] void refuse(const std::string& what) {
@@ -514,6 +689,49 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
     return std::move(*out);
 }
 
+template <typename T>
+Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
+                  T beta, Transpose transA, Transpose transB) {
+    const std::string spelling = "splitk:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" +
+                                 std::to_string(tk) + ":s=" + std::to_string(splits);
+    if (std::find(og::kSplitKSlices.begin(), og::kSplitKSlices.end(), splits) == og::kSplitKSlices.end())
+        refuse(spelling + " names no compiled slice count");
+    const auto [m, k] = get_effective_dims(A, transA);
+    const auto [k_b, n] = get_effective_dims(B, transB);
+    static_cast<void>(k_b);
+    const std::int64_t ldw = og::splitk_ld(m);
+    if (ldw * n > INT_MAX) refuse(spelling + ": one item's partials pass int indexing");
+    const int batch = A.batch_size();
+    if (std::int64_t(batch) * splits > INT_MAX) refuse(spelling + ": batch * s passes the int group id");
+    const auto budget = batchlas::select::describe(ctx.device(), ctx.backend(), false).scratch_budget;
+    if (batch > 0 && og::splitk_item_bytes<T>(m, n, splits) > budget / batch)
+        refuse(spelling + ": the partials pass the scratch budget of " + std::to_string(budget) + " B");
+    const int kc = ((k + splits - 1) / splits + tk - 1) / tk * tk;
+    const std::size_t elems = static_cast<std::size_t>(ldw * n) * static_cast<std::size_t>(splits) * batch;
+    auto sizer = BumpAllocator::measuring();
+    sizer.allocate<T>(ctx, elems);
+    auto lease = ctx.workspace(sizer.required_bytes());
+    BumpAllocator pool(lease.span());
+    const auto partials = pool.allocate<T>(ctx, elems);
+    const MatrixView<T, MatrixFormat::Dense> W(partials.data(), m, n, int(ldw), int(ldw * n), batch * splits);
+    std::optional<Event> out;
+    static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
+        constexpr og::WideCfg c = og::wide_configs[I];
+        if (out || !og::splitk_host(c) || c.m != tm || c.n != tn || c.k != tk) return;
+        refuse_over_budget(ctx, "splitk", og::wide_slm_bytes<T>(c), c.threads());
+        static_for<9>([&](auto F) {
+            launch_wide_form<T, decltype(I)::value, decltype(F)::value, true>(out, ctx, A, B, W, T(1), T(0), transA,
+                                                                              transB, WideSplit{splits, kc});
+        });
+    });
+    if (!out) refuse(spelling + " has no instantiation for this transpose form");
+    // An out-of-order queue would let the reduction overtake the slices.
+    if (!ctx.in_order()) out->wait();
+    BATCHLAS_KERNEL_TRACE_SCOPE("gemm_splitk_reduce");
+    return splitk_reduce<T>(ctx, W, splits, C, alpha, beta);
+}
+
 #define GEMM_LAUNCHERS(T)                                                                                       \
     template Event gemm_direct<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                           \
                                   const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
@@ -523,7 +741,10 @@ Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFo
                                  T, T, Transpose, Transpose);                                                   \
     template Event gemm_wide<T>(Queue&, int, int, int, const MatrixView<T, MatrixFormat::Dense>&,             \
                                 const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
-                                T, T, Transpose, Transpose);
+                                T, T, Transpose, Transpose);                                                    \
+    template Event gemm_splitk<T>(Queue&, int, int, int, int, const MatrixView<T, MatrixFormat::Dense>&,       \
+                                  const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                  T, T, Transpose, Transpose);
 
 GEMM_LAUNCHERS(float)
 GEMM_LAUNCHERS(double)
