@@ -60,8 +60,9 @@ ship on. The owning `Matrix` allocates USM shared memory, so host-side fills are
 LD_LIBRARY_PATH=/opt/dpcpp-cuda/lib:"$HOME/inst/lib" ./build-consumer/hello_batched_gemm
 ```
 
-The installed libraries need the SYCL runtime (`libsycl.so.9` for DPC++, `libacpp-rt.so` for
-AdaptiveCpp) and carry no RUNPATH that finds it, so add the compiler's runtime directory
+The executable links the SYCL runtime itself (`libsycl.so.9` for DPC++, `libacpp-rt.so` for
+AdaptiveCpp) and has no RUNPATH that finds it; the RUNPATH a DPC++ install of BatchLAS records for
+its own libraries is not inherited. Add the compiler's runtime directory
 (`<dir of the compiler>/../lib`, the same layout for both). CMake gives the executable an RPATH
 for the BatchLAS libraries it links. Adding `<prefix>/lib` is harmless if the package is relocated.
 

@@ -311,7 +311,7 @@ n = 8) and tripped the `rel_sd` gate on a stable cell.
 the CSV `pin_parsed` column, and the residual and pivot gate runs per arm.
 
 An arm whose pin cannot run the shape throws `std::invalid_argument` before anything is timed. For
-example, `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n = 32 throws (`src/ops/getrf/getrf.cc:48`).
+example, `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n = 32 throws (`src/ops/getrf/getrf.cc:49`).
 
 ## Raw data
 

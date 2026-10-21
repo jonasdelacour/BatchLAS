@@ -190,7 +190,9 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
 - **Device not found at runtime**: the GPU driver and its SYCL adapter must match the compiler
   version (Level-Zero runtime for Intel, CUDA adapter and driver for NVIDIA).
 - **`libsycl.so.9: cannot open shared object file`**: the DPC++ runtime is not on the loader path.
-  Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib`, or add it to `/etc/ld.so.conf.d` and run `ldconfig`.
+  Built and installed binaries carry it as `RUNPATH` (`cmake/BatchLASDetectSYCL.cmake`); a bare
+  `sycl-ls` does not. Export `LD_LIBRARY_PATH=<dpcpp-prefix>/lib`, or add it to `/etc/ld.so.conf.d`
+  and run `ldconfig`.
 - **Wrong double results from the host (NETLIB) backend**: some OpenBLAS builds pick a broken dgemm
   kernel (0.3.20 on Cooperlake Xeons; errors ~66 at n=128). Configure runs a dgemm health check
   (`cmake/BatchLASBlasHealthCheck.cmake`) and ctest sets `OPENBLAS_CORETYPE`; **a bare
@@ -408,15 +410,16 @@ Per-op choices:
 | --- | --- |
 | trsm | `cta`, `sg_left`, `blocked`, `vendor` (a `cta` or `sg_left` pin above order 32 throws) |
 | posv | `tiny`/`cta`/`blocked`, no vendor family; its children select for themselves |
-| gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
+| gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `splitk:m=..:n=..:k=..:s=..` (k split into s slices, then one reduction), `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
 | syrk | `gram` (n <= 128; float and double), `triangular` (float), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
 | syr2k | `triangular` (float; a real ConjTrans runs as Trans), `vendor` |
 | symm | `expand` (mirrored expansion + public gemm, float and double, needs `expansion_fits`), `vendor`; key `form` = sq\|tall\|wide |
 | trmm | `triangular` (Side::Left), `expand` (expansion + public gemm, either side), `vendor` (the `cublas?trmm` loop only; the old `vendor` pin meant expand+gemm, that is now `expand`) |
 
 Level-3 four (`docs/design/flat-kernel-selection.md` §12 "Level-3 four"): all `NoFields`, native
-families CUDA GPU only, homogeneous batch, batch <= 65535. Every level-3 vendor family refuses a
-heterogeneous batch on every backend (the loops run each item at the top-level extents), so a
+families on a `Backend::CUDA` or `Backend::SYCL` GPU queue only (`select::native_gpu_backend`,
+`src/select/vendor.hh`), homogeneous batch, batch <= `max_groups_yz` (65535; 2^32-1 on Metal).
+Every level-3 vendor family refuses a heterogeneous batch on every backend (the loops run each item at the top-level extents), so a
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.
 
@@ -550,7 +553,7 @@ boxes.
   `BATCHLAS_BENCH_BETA` in the gemm benchmarks.
 - Always confirm a GEMM at beta=1 and with a strided `ld`: panel updates always carry their parent's
   `ld`. Pin one gemm kernel with `BATCHLAS_GEMM_ROUTE=<spelling>` (`reg:m=128:n=128:k=8:u=1`,
-  `wide:m=64:n=64:k=16`, `small`, `tiled`, `direct`; old kernel names such as `128x128x8` and
+  `wide:m=64:n=64:k=16`, `splitk:m=16:n=16:k=16:s=4`, `small`, `tiled`, `direct`; old kernel names such as `128x128x8` and
   `tiled16` throw); it throws if that tile has no instantiation for the call's transpose form.
   `BATCHLAS_GEMM_SYCL_KERNEL` and `BATCHLAS_GEMM_EXPERIMENTAL` are not read. Compare gemm kernels with
   `tools/tune/batchlas_tune` (`gemm_spec.cc`: beta=1, complex alpha, strided cells padded by

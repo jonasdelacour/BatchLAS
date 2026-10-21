@@ -158,7 +158,10 @@ pointer.
   `%api_matrix`, `%api_enums`, `%api_options`, `%api_blas2`, `%api_blas3`, `%api_factorizations`,
   `%api_qr`, `%api_eigen`, `%api_tridiag`, `%api_svd`, `%api_sparse`, `%api_extra`, `%api_linalg`,
   `%api_dispatch`, `%api_workspace`, `%api_errors`, `%api_config`, `%api_device_blas`,
-  `%api_internal_helpers`, all nested under `%api_reference`.
+  `%api_internal_helpers`, all nested under `%api_reference`. Each of these may have a
+  `%<group>_lowlevel` child (helpers, argument checks, workspace queries). `%api_selection` and its
+  child `%api_selection_ops` document the uninstalled selection code in `src/select/` and
+  `src/ops/` (see [Documenting an op's choices](#documenting-an-ops-choices)).
 - Add `@ingroup <id>` to the declaration, or wrap a run of declarations in `@addtogroup <id>`
   ... `@{` ... `@}`. Add a new group to `api_groups.dox`, not in a header.
 
@@ -224,7 +227,7 @@ vocabulary in about four comment lines. A new op copies it and needs no page edi
 1. **Raw data** goes in `benchmarks/results/` (Git LFS). Run `git lfs install` once per machine
    before committing, or the file is committed raw and `.github/ci/check_lfs_pointers.py` fails
    CI. Name it `<campaign>_<op>_<dtype>[_<machine>].csv`; the generator reads op, type and machine
-   from the name. The only known machine token is `rtx4090`; another machine needs its token added
+   from the name. The known machine tokens are `rtx4090` and `sm120` (threadripper02); another machine needs its token added
    to `MACHINES` in `docs/tools/gen_db_pages.py`, or its row claims the primary box.
 2. **The evidence section** that uses the data records, next to the numbers: the machine (GPU and
    SM, host if it matters), the date, the command or harness with its flags (batch, warm-up,

@@ -21,7 +21,7 @@ other spelling, or one `can_run` refuses for the call, throws.
 
 `direct` has three bodies in `src/ops/spmm/kernels/spmm_native.cc`: the `NoTrans` gather (body 1), and a scale plus atomic
 scatter pair (bodies 0 and 2) for `Trans` and `ConjTrans`. The body is chosen in the launcher on `transA`. `transA`
-is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gather and scatter stay separable in
+is part of the coverage `variant_key` (`src/select/coverage.cc:38-44`), so gather and scatter stay separable in
 `scripts/route_diff.sh`. Scale and scatter do not.
 
 ### Ranking in the tables
@@ -37,7 +37,7 @@ preceded flat selection (untimed; provenance in `tuned/README.md`); `tuned/spmm.
 | `transA=T`, either `transB` | `vendor`, then `direct` | `vendor`, then `direct` |
 
 The ranking is identical at all 125 `(m, nrhs, batch)` cells of each block (`m` 1..65536, `nrhs` 1..64,
-`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` (`tests/spmm_candidates_tests.cc:845`) pins it.
+`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` (`tests/spmm_candidates_tests.cc:848`) pins it.
 
 The tables have no batch, extent, `is_gpu` or `nnz` term. Each absence is a measured decision: the ranking is
 constant along that axis.
@@ -69,7 +69,7 @@ Deliberate absences:
 * **No `nnz` key** (`key_names` in `src/ops/spmm/choice.hh`). `MatrixView::nnz()` is the batch-maximum capacity. The
   per-item count is in device memory (`row_offsets`), and selection must not read device memory (`spmm.cc:6-7`).
 
-`direct` needs no workspace (`spmm.cc:114-120`). `spmm_buffer_size` runs the same choice as the call, so a
+`direct` needs no workspace (`spmm.cc:113-119`). `spmm_buffer_size` runs the same choice as the call, so a
 `direct` call never asks the vendor sizer.
 
 ## Measurement harness and hygiene
@@ -306,7 +306,7 @@ Four deliberate breaks were run against the transposed path. `B4` (`scatterBound
 reads padding) was **green on all 352 cases** the first time.
 
 The cause: `PaddingAboveNnzIsNotReadTrans` poisoned padding with NaN at an **out-of-range** column index (2^30). The
-scatter's range guard (`spmm_native.cc:367-375`) skips that entry before it is multiplied. The test passed because
+scatter's range guard (`spmm_native.cc:418`) skips that entry before it is multiplied. The test passed because
 of the kernel's guard, not the property it names. Controls showed the over-read is real: with the bound broken and
 the guard removed, the case segfaults (exit 139, `double`). With the bound correct, 352/352 pass.
 
@@ -324,15 +324,15 @@ Rules that followed:
   revert with `md5sum` against a copy taken before the first break.
 
 The transposed tolerance denominator is a backward-error scale (sum of `|a|*|b|`, floored at 1), not `|expected|`. A
-transposed case whose backend throws is skipped unless the pin is native (`tests/spmm_tests.cc:366-373`). A
+transposed case whose backend throws is skipped unless the pin is native (`tests/spmm_tests.cc:388-394`). A
 vendor returning a status code instead of throwing is not covered by the skip. `cusparse.cc` checks no status, so
 `CUSPARSE_STATUS_NOT_SUPPORTED` leaves `C` untouched and is reported as a wrong answer.
 
 ### Two defects filed, not fixed
 
-* **`rocsparse.cc:30-31` and `:62-63`** carry cuSPARSE defect 2 unchanged. A real-scalar `ConjTrans` becomes
+* **`rocsparse.cc`** (`enum_convert<BackendLibrary::ROCSPARSE>`, `src/linalg-impl.hh:267-273`) carries cuSPARSE defect 2 unchanged. A real-scalar `ConjTrans` becomes
   `rocsparse_operation_conjugate_transpose`. **Unmeasured:** there is no AMD device here.
-* **`netlib_lapack.cc:508,520,537,549`**: `trsm` reads `B` at `alpha == 0` (`0 * NaN`). Outside this op.
+* **`netlib_lapack.cc:399,411,428,440`**: `trsm` reads `B` at `alpha == 0` (`0 * NaN`). Outside this op.
 
 ## Negative results
 
@@ -359,7 +359,9 @@ vendor returning a status code instead of throwing is not covered by the skip. `
 
 ## Open debts
 
-* **The transposed scatter has no winning row, and zero in-tree C++ callers.** Nothing exercises it in practice.
+* **The transposed scatter has no winning sm_89 row, and zero in-tree C++ callers.** Nothing exercises it in
+  practice. Stale for sm_120: the deep `tuned/spmm.sm_120.txt` ranks `direct` first in 1055 of its 1823
+  `transA=T` rows, against negative result 1 above, which is sm_89 only.
 * **The sm_89 and CPU tables are transcribed, not timed.** The grid above is sm_89 only. The CPU rows carry the
   same clause without measurement; the sm_120 table is deep-measured.
 * **The `cfloat` gather margin is about 3 %.** A kernel change costing 5 % on `complex<float>` turns admitted cells
@@ -399,7 +401,7 @@ Raw data is at the git tag `perf-evidence/vendor-independence`: `git show perf-e
 Reproduction (device 1 exclusive; `run_all.sh` takes about 21 min per pass, `run_smallbatch.sh` about 25 min):
 
 ```bash
-cmake --build build --target spmm_benchmark -j16
+cmake --build build --target spmm_benchmark -j8
 cd experiments/sparse_spmm
 ./run_all.sh pass1; ./run_all.sh pass2   # then run_boundary / run_cfloat_edge / run_satext /
 ./run_nsys.sh                            # run_scatter_ladder / run_smallbatch, each twice

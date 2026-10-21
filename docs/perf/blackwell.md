@@ -13,14 +13,15 @@ n=32 q=8), cfloat getrs 1.8x (10x at nrhs=16), cfloat potrf 1.6x (9.5x at n=256)
 ## What is on main and what sm_120 selects
 
 Every sm_120 table on main comes from the `--tier deep` campaign of 2026-10-08/09 and its 2026-10-11
-updates ([tuned/README.md](../../tuned/README.md), "The sm_120 deep tables"); `transcribed` rows (an old
+updates ([tuned/README.md](../../tuned/README.md), "The sm_120 deep tables"), except gemm, re-measured
+2026-10-21 for float and complex<float> ([gemm.md](gemm.md)); `transcribed` rows (an old
 router's order, untimed) remain only where the deep lattice measured nothing near. The third column names
 the table, not the branch's windows. "Branch-only" sections were measured on `worktree-blackwell-tuning`
 and are not on main.
 
 | Section | On main | sm_120 table on main |
 |---|---|---|
-| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:308`), `scripts/check_device_calls.py` | n/a |
+| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:367`), `scripts/check_device_calls.py` | n/a |
 | [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/ops/spmm/kernels/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, deep |
 | [compute-capability key](#compute-capability-key) | yes | n/a |
 | [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.sm_120.txt`, deep |
@@ -33,7 +34,7 @@ and are not on main.
 | [geqrf skinny panels](#geqrf-skinny-panels) | no (no `geqrf_skinny.cc`) | `tuned/geqrf.sm_120.txt`, deep |
 | [trsm V1 ladder cap](#trsm-v1-ladder-cap) | yes (`trsm_v1_ladder_wg`, `src/ops/trsm/kernels/trsm_native.cc:98`) | n/a |
 | [trsm sub-group Left kernel](#trsm-sub-group-left-kernel), [side right](#trsm-side-right-on-sm120) | kernel yes (candidate `sg_left`); windows no | `tuned/trsm.sm_120.txt`, deep: every dtype ranks `sg_left` first in some Left rows at order <= 32 |
-| [gemm](#gemm-native-register-tiled-selector) | 16x16 and 32x32 wide NN tiles yes; selector windows no | `tuned/gemm.sm_120.txt`, deep: every wide tile, the 16x16 and 32x32 NN tiles included, ranks first in some rows |
+| [gemm](#gemm-native-register-tiled-selector) | 16x16 and 32x32 wide tiles yes (every form); selector windows no | `tuned/gemm.sm_120.txt`, deep: every wide tile, the 16x16 and 32x32 NN tiles included, ranks first in some rows |
 
 ## Campaign result on the tuning branch
 
@@ -139,7 +140,7 @@ red; under precise it changes the SASS of 158 of 6277 kernels. The flag is the f
 
 `Device::cuda_compute_capability()` returns `major*10+minor`, parsed from the CUDA device's SYCL
 version string and memoized per device. It is the selection device key: `select::describe` names a
-CUDA device `sm_<cc>` (`src/select/select.cc:225-226`), which picks `tuned/<op>.sm_<cc>.txt`.
+CUDA device `sm_<cc>` (`src/select/select.cc:277-278`), which picks `tuned/<op>.sm_<cc>.txt`.
 A device with no table of its own borrows the nearest one with a one-time warning. Value 0 means
 "not CUDA". All four GPUs here return 120.
 
@@ -363,7 +364,7 @@ In-library register counts exceed the sm_89 table: float Trans nrhs 5..8 uses 86
 sm_89 row handed out a 768-lane launch that the driver refused (`FusedGetrsLaunchHoleAt48KiB`). On
 sm_120 the cap reads a probed row.
 
-On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/ops/getrs/kernels/getrs_fused.cc:243-244`)
+On main (`c9352406`): the round-robin kernel, the NR == 1 guard (`src/ops/getrs/kernels/getrs_fused.cc:247-248`)
 and the sm_120 register rows (`:127`). Branch-only: a vendor-present sm_120 window (float nrhs <= 8 at
 n >= 256; cfloat nrhs <= 4 at n >= 128 and nrhs <= 8 at n >= 512), later moved to float n >= 192 and
 cfloat n >= 96 / n >= 384 ([getrs windows](#getrs-windows-after-the-trsm-fix)). Main's sm_120 getrs
@@ -803,9 +804,9 @@ Kernel choice was checked with `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 > `is_sm120_family` routing are deleted, and gemm chooses from `tuned/gemm.<device>.txt`
 > ([gemm.md](gemm.md#choices-flat-selection-p34)). The sm_120 gemm table is deep-measured
 > (`tuned/README.md`), not derived from these windows. The tiles below are ordinary
-> candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only; `wide:m=64:n=64:k=16`,
-> `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the transposed fallback;
-> `src/ops/gemm/choice.hh:85-91`); the deep table times every one of them.
+> candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, now in every form; `wide:m=64:n=64:k=16`,
+> `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the transposed fallback; `wide_configs`,
+> `src/ops/gemm/choice.hh:132-142`); the deep table times every one of them.
 > The old kernel names (`16x16x16wide`, `32x32x16wide`, ...) are not pin words; they throw.
 
 The branch's windows were keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`

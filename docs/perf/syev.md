@@ -16,7 +16,7 @@ sub-group solvers), `blocked`, `two_stage` and `vendor`. `select::choose` takes 
 entry of the nearest row of `tuned/syev.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on
 `jobz`, `n` and `batch`. `can_run` is correctness only: the native families need a non-NETLIB GPU
 backend and a square A with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group. Every
-family, `vendor` included, needs a homogeneous batch (`syev.cc:52-62`).
+family, `vendor` included, needs a homogeneous batch (`syev.cc:50-66`).
 Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
 
 > **Note:** the sm_89 syev table is `transcribed` at `424a45bc`: it replays the previous router's order per
@@ -30,10 +30,10 @@ Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-low
 | eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
 | n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
 | n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
-| backend scope | `can_run` | any GPU backend with a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm has no table and borrows the sm tables with a warning (untested) |
+| backend scope | `can_run` | any non-NETLIB GPU backend; the n ≤ 32 three also need a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm and Apple GPUs have no table and borrow the nearest sm table with a warning (untested on ROCm) |
 | values-only blocked solve | `syev_blocked.stebz_evals` | `stebz` bisection off the tridiagonal, no `stedc` |
 | complex panel width | `sytrd_block_size_default<T>`, `src/ops/syev/kernels/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
-| complex trailing update | `rank2k_trailing_update_supported`, `src/ops/syev/sytrd/sytrd_blocked.cc` | float and complex<float> use the rank-2k path on the CUDA backend. double, complex<double> and other backends keep the GEMM pair |
+| complex trailing update | `rank2k_trailing_update_supported`, `src/ops/syev/sytrd/sytrd_blocked.cc` | float (CUDA or SYCL backend) and complex<float> (CUDA with cuBLAS) use the rank-2k path (`level3_tile_substitution_enabled`). double, complex<double> and other backends keep the GEMM pair |
 | sb2st back-transform | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/ops/syev/sytrd/sytrd_sb2st_hh.cc` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
 | block sizes | `ORMQR_BLOCK_SIZE_*`, `SYTRD_BLOCK_SIZE_*`, `include/batchlas/tuning_params.hh` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (buckets n ≤ 64/128/256/512/else) |
 | sy2sb WY width | `SY2SB_ORMQR_NB_LARGE = 32` | n ≤ 512 bucket only |
@@ -259,15 +259,13 @@ moving the projected solve off CTA flips a near-tie in `ILUKTests.SyevxInstrumen
 
 ### syev: the shadowed tuning header
 
-Two files answer `#include <batchlas/tuning_params.hh>`: the committed `include/batchlas/tuning_params.hh` and one
-CMake generates into `${PROJECT_BINARY_DIR}/include/batchlas/`. `src/CMakeLists.txt` lists the source include
-directory first, so **the committed header wins on every build**; the CMake defaults in
-`cmake/BatchLASGeneratedHeaders.cmake` and any profile-driven retune written to the binary directory are dead
-(2026-08-03: `ormqr_block_size_for_n(512) = 16`, `sytrd_block_size_for_n(512) = 24`; the generated header would say
-128 and 64).
+The committed `include/batchlas/tuning_params.hh` is the only copy; CMake generates none
+(`cmake/BatchLASPackaging.cmake:82-83`). A generated copy in the build tree was shadowed by it on every build,
+which hid a retune (2026-08-03: `ormqr_block_size_for_n(512) = 16`, `sytrd_block_size_for_n(512) = 24`; the
+generated header said 128 and 64), so it was removed.
 
 > **Warning:** a retune takes effect only when its constants are ported by hand into the committed header (the
-> 2026-08-07 retune, `924b3a59`, did). Making the committed header the single source of truth is not done.
+> 2026-08-07 retune, `924b3a59`, did).
 
 Every accessor is overridable through `BATCHLAS_TUNE_*`; overrides are read on every call and feed
 `*_buffer_size` as well as the solve, so they must not change between a buffer-size query and its call.
@@ -333,7 +331,7 @@ flops per element, so it needs a wider panel to amortise the O(n) barrier-and-re
 
 (n = 384 and 448 also have nb = 32 optimal.) `nb = 32` is optimal or within 1.5% at every n in the bucket. Float at
 n = 512 spreads only 1.04× across nb 8–48 (inside the 1.10× neutral band), so float keeps the harness value. The
-override lives at the consumer, not in `tuning_params.hh`, because that header is regenerated from a float-only
+override lives at the consumer, not in `tuning_params.hh`, because that header's constants come from a float-only
 bench. Other complex buckets: n ≤ 128 prefers 8; 128 < n ≤ 256 prefers 16 (n = 192: 33.83 against 36.09 at 8);
 n > 512 is within 1.03× of the committed 48 at nb = 32.
 

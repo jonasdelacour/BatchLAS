@@ -13,14 +13,14 @@ lives on as table rows.
 | Page | Ops | Does anything route natively by default? |
 |---|---|---|
 | [dispatch.md](dispatch.md) | the `BATCHLAS_<OP>_ROUTE` words, the vendor gate, the coverage instrument, level-3 boundaries | n/a (the mechanism) |
-| [gemm.md](gemm.md) | `gemm` | **yes**: `double` broadly, `float` NN squares at `max_dim <= 32`; complex never |
+| [gemm.md](gemm.md) | `gemm` | **yes**: sm_89 `double` broadly, `float` `small` on NN squares up to 48 at batch >= 64, complex never; sm_120 native first in most float and complex<float> rows |
 | [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | symm, syrk, syr2k, trmm: flat selection tables; hemm, herk, her2k: hand-written in `cublas.cc` |
 | [trsm.md](trsm.md) | `trsm` | **yes**, broadly; read its open debts before trusting a ratio |
 | [potrf.md](potrf.md) | `potrf` | **yes**, per cell; measured tables; five native kernels |
 | [qr.md](qr.md) | `geqrf` `orgqr` `ormqr` | **yes**: `ormqr` native-first; `geqrf` above a per-type order floor plus a tall-panel clause; `orgqr` to n = 512 |
 | [lu.md](lu.md) | `getrf` `getrs` `getri` | **yes**: four windows, all `float`/`cfloat`-leaning |
-| [gemv.md](gemv.md) | `gemv` | **yes**: one `complex<double>` transposed window |
-| [spmm.md](spmm.md) | `spmm` | **yes**: the `NoTrans` gather; the transposed scatter stays vendor-first |
+| [gemv.md](gemv.md) | `gemv` | **yes**: sm_89 one `complex<double>` transposed window; sm_120 native first in most rows |
+| [spmm.md](spmm.md) | `spmm` | **yes**: the `NoTrans` gather; the transposed scatter is vendor-first on sm_89, first in most sm_120 `transA=T` rows |
 | [steqr.md](steqr.md) | `steqr_cta` (also the fused small-n `syev` and the `stedc` leaves) | n/a; no vendor arm |
 | [syev.md](syev.md) | `syev` (Jacobi CTA, fused CTA, blocked, two-stage; vendor) | **yes**: native small-n and blocked windows per type |
 | [syevx.md](syevx.md) | `syevx` (Direct, DirectSubset, Filtered, LOBPCG, stebz/stein) | n/a; no vendor arm for the selected-range solve |

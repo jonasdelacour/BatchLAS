@@ -8,7 +8,7 @@ Native QR families (`geqrf`: `tiny`, `cta`, `blocked`; `orgqr` and `ormqr`: `blo
 
 - Timings: `CUDA_VISIBLE_DEVICES=1`, `WARM_S=1.5`, medians of interleaved A/B, cells with relative sd above 10% discarded, nothing timed under `BATCHLAS_KERNEL_TRACE`.
 - "Vendor-free" is `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`. A pin inside a vendor build (`BATCHLAS_GEQRF_ROUTE=cta`) measures one family, not what a vendor-free user gets on Auto.
-- `local_mem_size` is 101,376 B. Every capacity below uses the budget 97,280 B (minus the 4,096 B reserve), read once into `select::Device::slm_budget` (`src/select/select.cc:234-236`). The build-time table value 49,152 B for any `nvidia_gpu_sm_*` (`cmake/BatchLASDetectSYCL.cmake:90-91`) is 2.06x low here, and nothing in this family reads it.
+- `local_mem_size` is 101,376 B. Every capacity below uses the budget 97,280 B (minus the 4,096 B reserve), read once into `select::Device::slm_budget` (`src/select/select.cc:282-284`). The build-time table value 49,152 B for any `nvidia_gpu_sm_*` (`cmake/BatchLASDetectSYCL.cmake:45-46`) is 2.06x low here, and nothing in this family reads it.
 
 ## QR: route arms
 
@@ -16,7 +16,7 @@ Families in tie-break order, the `can_run` that admits them, and the sm_89 rows.
 
 | op | families (`choice.hh`) | `can_run` (correctness only) |
 |---|---|---|
-| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` (`src/ops/geqrf/choice.hh:15-24`) | native: `d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && batch >= 1` (`can_run.hh:29`); `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)` (:32); `cta` is `geqrf_cta_fits<T>(m, n, budget)` (:33); `blocked` needs `geqrf_cta_max_elems_for_slm<T>(budget) >= 1` (:35-38); `vendor` is `d.has_vendor && !A.is_heterogeneous()` (:39) |
+| `geqrf` | `tiny`, `cta`, `blocked`, `vendor` (`src/ops/geqrf/choice.hh:15-24`) | native: `d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && batch >= 1` (`can_run.hh:29`); `tiny` adds `m == n && n <= geqrf_tiny_max_n_for_slm<T>(budget)` (:32); `cta` is `geqrf_cta_fits<T>(m, n, budget)` (:33); `blocked` needs `geqrf_blocked_available<T>()` and `geqrf_cta_max_elems_for_slm<T>(budget) >= 1` (:35-38); `vendor` is `d.has_vendor && !A.is_heterogeneous()` (:39) |
 | `orgqr` | `blocked`, `vendor`; last resort `vendor`, then `blocked` (`src/ops/orgqr/choice.hh:14-22`) | `blocked`: `d.is_gpu && orgqr_blocked_available<T>() && !heterogeneous && A.cols() <= A.rows()` (`orgqr.cc:43-44`); `vendor`: `d.has_vendor && !heterogeneous` (:46) |
 | `ormqr` | `blocked`, `vendor` (`src/ops/ormqr/choice.hh:14-20`) | not complex `Trans`, homogeneous A and C, and `d.is_gpu` / `d.has_vendor` (`ormqr.cc:50-58`); no batch term (known-defects #16) |
 
@@ -30,7 +30,7 @@ Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n
 | `cdouble` | `vendor` below 256; `cta` from 256 | `cta` from n 256, and from 32 when aspect >= 8; `vendor` below | `vendor` |
 
 - Where a row ranks `cta` first and `can_run` refuses it (past CTA's area, [CTA capacity](#cta-capacity)), `blocked` runs. For the complex types that is the only way `blocked` is selected.
-- `orgqr` rows rank `blocked` first at every `m <= 512` and `vendor` from `m = 513`, all four types ([the shipped orgqr ceiling](#the-shipped-orgqr-ceiling)). `ormqr` rows rank `blocked` then `vendor` (the complex `trans=T` `vendor`-only rows are rejected earlier by `throw_if_undefined`, `ormqr.cc:59-64`); `ormqr` is native-first in every build, which `orgqr`'s `blocked` family (identity fill plus the public `ormqr`) relies on.
+- `orgqr` rows rank `blocked` first at every `m <= 512` and `vendor` from `m = 513`, all four types ([the shipped orgqr ceiling](#the-shipped-orgqr-ceiling)). `ormqr` rows rank `blocked` then `vendor` (the complex `trans=T` `vendor`-only rows are rejected earlier by `throw_if_undefined`, `ormqr.cc:62-67`); `ormqr` is native-first in every build, which `orgqr`'s `blocked` family (identity fill plus the public `ormqr`) relies on.
 - Vendor-free, the second entry runs. For `geqrf` that is `tiny` in the float and cfloat gaps, `cta` for square double n <= 48 and cdouble n <= 255, `blocked` for square double 49..75, and `cta` then `blocked` elsewhere ([the native tiny tie-break](#the-native-tiny-tie-break)).
 - Pins `BATCHLAS_{GEQRF,ORGQR,ORMQR}_ROUTE` take `auto`, `native`, `vendor` or a family spelling; a family `can_run` refuses throws `invalid_argument` (R6). `geqrf_cta_dispatch`, `geqrf_blocked_dispatch` and `orgqr_blocked_dispatch` bypass selection.
 
@@ -39,12 +39,12 @@ Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n
 **Correctness terms.**
 
 - `m >= n` for native `geqrf`: a wide view walks past the bottom of the panel in the trailing update. `n <= m` for `orgqr`: Q's columns live in \f$C^m\f$.
-- GPU-only for both. Heterogeneous batches are refused by both (nothing in this tree gets heterogeneous-batch QR right, netlib included, `src/backends/netlib_lapack.cc:1207-1217` (geqrf), `:1249-1252` (orgqr)).
-- `d.has_sg32` is `geqrf`'s alone. It enumerates `sycl::info::device::sub_group_sizes` (`src/select/select.cc:231`, `src/util/queue-impl.cc:338-349`) and is never inferred from `MAX_SUB_GROUP_SIZE`, which returns the first size and so accepts a `{64}` device; a `reqd_sub_group_size(32)` kernel there aborts at launch. `orgqr`'s `can_run` has neither `has_sg32` nor the SLM budget, because `ormqr_blocked` has no `reqd_sub_group_size` and holds nothing resident.
+- GPU-only for both. Heterogeneous batches are refused by both (nothing in this tree gets heterogeneous-batch QR right, netlib included, `src/backends/netlib_lapack.cc:1207-1220` (geqrf), `:1249-1264` (orgqr)).
+- `d.has_sg32` is `geqrf`'s alone. It enumerates `sycl::info::device::sub_group_sizes` (`src/select/select.cc:279`, `src/util/queue-impl.cc:366-378`) and is never inferred from `MAX_SUB_GROUP_SIZE`, which returns the first size and so accepts a `{64}` device; a `reqd_sub_group_size(32)` kernel there aborts at launch. `orgqr`'s `can_run` has neither `has_sg32` nor the SLM budget, because `ormqr_blocked` has no `reqd_sub_group_size` and holds nothing resident.
 
 ### CTA capacity
 
-`geqrf`'s CTA family holds the whole `m x n` panel in a `local_accessor`. The ceiling is an area, `m*n <= cta_max_elems` in int64, tested by `geqrf_cta_fits` (`src/ops/geqrf/kernels/geqrf_cta.cc:334-346`); `can_run` (`can_run.hh:33`) and the CTA entry point (`geqrf_cta.cc:512`) both call it. The per-row bound is not binding (`geqrf_cta_max_m_for_slm` is `min(elems, INT_MAX)`, `geqrf_cta.cc:324-328`).
+`geqrf`'s CTA family holds the whole `m x n` panel in a `local_accessor`. The ceiling is an area, `m*n <= cta_max_elems` in int64, tested by `geqrf_cta_fits` (`src/ops/geqrf/kernels/geqrf_cta.cc:334-345`); `can_run` (`can_run.hh:33`) and the CTA entry point (`geqrf_cta.cc:513`) both call it. The per-row bound is not binding (`geqrf_cta_max_m_for_slm` is `min(elems, INT_MAX)`, `geqrf_cta.cc:325-329`).
 
 The tier is occupancy-scaled: `geqrf_cta_fits` divides the budget by `kGeqrfMinBlocksPerSm = 2` (`src/ops/geqrf/geqrf_native.hh:22`).
 
@@ -64,7 +64,7 @@ sm_89 rows rank `cta` before `blocked` for square float n <= 96 and `blocked` fi
 
 ### Block-width evidence
 
-`geqrf` and `orgqr` compute their own block width, keyed on type and clamped to `k = min(m,n)`: **16 for double, 32 otherwise** (`geqrf_blocked.cc:41-181`, `orgqr_blocked.cc:36-107`). Neither inherits `tuning::ormqr_block_size_for_n`.
+`geqrf` and `orgqr` compute their own block width, keyed on type and clamped to `k = min(m,n)`: **16 for double, 32 otherwise** (`geqrf_blocked.cc:43-56`, `orgqr_blocked.cc:36-49`). Neither inherits `tuning::ormqr_block_size_for_n`.
 
 `ormqr` WY apply (on an identity), `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE` forced, median ms, vendor-free, n=1024 batch=64 (`]` shipped `ormqr_block_size_for_n`, `*` best):
 
@@ -119,7 +119,7 @@ n = 2048, batch 32 reaches 181x / 85x / 103x / 14.9x. The batch schedule varies 
 
 **Batch dominates for FP64.** At n = 64 the double vendor/native ratio is 4.37x at batch 32, 1.16x at 512, then **0.46x / 0.53x / 0.53x** at 2048 / 8192 / 16384 (cdouble 0.55 / 0.53 / 0.52). Both arms are launch-bound below batch ~512. **Quote 0.53x**, not the 4-5x at batch 32.
 
-**Tall panels**, the shape the callers issue (`src/ops/syev/sytrd/band_reduction.cc:604`, `src/ops/syev/sytrd/sytrd_sy2sb.cc:343`), `tall.csv`: native wins 26 of 32 cells, geomeans 3.34x / 2.37x / 2.44x / 0.96x (float / double / cfloat / cdouble), and the margin grows with m at fixed n (128x32 b4096 1.57 / 0.62 / 3.31 / 0.71; 1024x128 b256 10.85 / 8.30 / 7.27 / 1.67).
+**Tall panels**, the shape the callers issue (`src/ops/syev/sytrd/band_reduction.cc:587`, `src/ops/syev/sytrd/sytrd_sy2sb.cc:343`), `tall.csv`: native wins 26 of 32 cells, geomeans 3.34x / 2.37x / 2.44x / 0.96x (float / double / cfloat / cdouble), and the margin grows with m at fixed n (128x32 b4096 1.57 / 0.62 / 3.31 / 0.71; 1024x128 b256 10.85 / 8.30 / 7.27 / 1.67).
 
 ### `orgqr` grid
 
@@ -145,7 +145,7 @@ nsys `cuda_gpu_kern_sum`, vendor-free (not committed, not timings; agree with `o
 
 ### `ormqr` WY `trmm` gate
 
-`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:50-62`) picks the trmm tile kernel over a GEMM for the WY apply inside `blocked`: `tile_kernel_enabled && !is_complex<T> && ib <= 64`, where `tile_kernel_enabled` is `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:96-98`). It is a leg derived inside the family, so no table sees it. `BATCHLAS_ORMQR_WY=gemm|trmm` pins it (`ormqr_blocked.cc:32-46`).
+`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:50-62`) picks the trmm tile kernel over a GEMM for the WY apply inside `blocked`: `tile_kernel_enabled && !is_complex<T> && ib <= 64`, where `tile_kernel_enabled` is `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:103-105`). It is a leg derived inside the family, so no table sees it. `BATCHLAS_ORMQR_WY=gemm|trmm` pins it (`ormqr_blocked.cc:32-46`).
 
 On `ormqr_blocked_benchmark`, `Side::Left`, `ConjTrans`, batch 256 (128 for cdouble), nb in {16,32,64}, gemm/trmm (> 1 means trmm ahead): float 1.006-1.046x, double 1.004-1.016x, **cfloat 0.944-0.995x**, cdouble 0.958-1.010x. The n set was not recorded, so this is unverified. `ib <= 64` stays: past it the tile kernel measured 0.83-0.97x in float (a local dip; it is ahead again at m >= 512, 1.07-1.32x), and no `ormqr` block width reaches there. netlib is excluded (OpenBLAS `?trmm` is weak on a 16x16 triangle, 0.336-1.199x), as is ROCm (`rocblas_?trmm` is a per-batch loop).
 
@@ -222,8 +222,8 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 5. **`larft_forward_columnwise_wg_legacy` is 15.2% of float n=1024 and 20.3% of cdouble n=256** for about 1/60 of the GEMM's arithmetic (it re-reads two V columns per pair; the T-update is serial on `lid == 0`).
 7. **The `!dev_is_zero(r)` half of the reciprocal guard is untested** (`r == 0` needs `alpha - beta` to overflow, input ~1e308).
 8. **Per-call host overhead of the eigen drivers' `geqrf` calls is unmeasured** (`sytrd_sy2sb.cc` calls it about 500 times at n=1024).
-9. **`ormqr`'s `blocked` width ladder is float-only and keyed on `A.rows()`** (`block_size()`, `ormqr.cc:70-74`; `tuning_params.hh:139-145`, :232-235), costing 1.11-1.55x for three types. It is a derived leg, so no table retune fixes it. `build/include/batchlas/tuning_params.hh` is never compiled (`src/CMakeLists.txt` puts `${PROJECT_SOURCE_DIR}/include` first).
-10. **Callers that size once at a bounding panel pay the blocked layout**: `geqrf_buffer_size_bound` (`geqrf.cc:97-107`) reserves 168 MB (float) or 671 MB (cdouble) at n=64 batch=8192 even where `cta` runs; sizing W1/W2 on `n - nb` took about 28% off.
+9. **`ormqr`'s `blocked` width ladder is float-only and keyed on `A.rows()`** (`block_size()`, `ormqr.cc:72-77`; `tuning_params.hh:138-145`, :232-235), costing 1.11-1.55x for three types. It is a derived leg, so no table retune fixes it. The checked-in `include/batchlas/tuning_params.hh` is the only copy; nothing is generated.
+10. **Callers that size once at a bounding panel pay the blocked layout**: `geqrf_buffer_size_bound` (`geqrf.cc:100-111`) reserves 168 MB (float) or 671 MB (cdouble) at n=64 batch=8192 even where `cta` runs; sizing W1/W2 on `n - nb` took about 28% off.
 14. **double and cdouble rank `cta` ahead of `tiny` in the vendor-free walk**, though the tiny grid measured CTA and Blocked at 0.14-0.67x of vendor at n = 8..28 against `tiny` 0.33-1.13x. One retune or measured edit fixes it; cdouble has no grid.
 
 Closed: the occupancy-scaled tier capacity (P7), the `potrf` tier order, the `ormqr` route resolution (P5), the tiny window.
@@ -236,7 +236,7 @@ Git tag `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-inde
 
 ### What 96x96 resolves to, per type
 
-96 is a probe shape in `GeqrfCandidates.AutoReadsTheTranscribedTable` (`tests/geqrf_candidates_tests.cc:590`). Per type, native over vendor ([small-n-baseline.md#geqrf](small-n-baseline.md#geqrf), n = 96, batch 8192): float row `tiny, cta, blocked, vendor` runs `cta`, **2.69x** (last float order ranked `cta` first); cfloat same row runs `blocked`, **2.28x** (CTA measured; the cfloat area is 5,888 elems and 9,216 does not fit; P7 measured blocked ahead, 0.924); double row `blocked, tiny, cta, vendor` runs `blocked`, **1.16x** (1.70x with the register leaf, [what the shipped route does now](#what-the-shipped-route-does-now)); cdouble row `vendor, cta, tiny, blocked` runs `vendor`, 0.49x (floor n >= 256; ranking it native would ship a loss). The tier half of the answer is the row order and the tile fit, read from the device; nothing is hardcoded to this box.
+96 is a probe shape in `GeqrfCandidates.AutoReadsTheTranscribedTable` (`tests/geqrf_candidates_tests.cc:595`). Per type, native over vendor ([small-n-baseline.md#geqrf](small-n-baseline.md#geqrf), n = 96, batch 8192): float row `tiny, cta, blocked, vendor` runs `cta`, **2.69x** (last float order ranked `cta` first); cfloat same row runs `blocked`, **2.28x** (CTA measured; the cfloat area is 5,888 elems and 9,216 does not fit; P7 measured blocked ahead, 0.924); double row `blocked, tiny, cta, vendor` runs `blocked`, **1.16x** (1.70x with the register leaf, [what the shipped route does now](#what-the-shipped-route-does-now)); cdouble row `vendor, cta, tiny, blocked` runs `vendor`, 0.49x (floor n >= 256; ranking it native would ship a loss). The tier half of the answer is the row order and the tile fit, read from the device; nothing is hardcoded to this box.
 
 ### How the window is guarded
 
@@ -252,7 +252,7 @@ The 512 ceiling is the load-bearing bracket: above it cfloat n = 1024 is 0.82x, 
 
 ## CTA capacity: the `INT_MAX` reading
 
-The device reading behind [CTA capacity](#cta-capacity); a test that gives `geqrf` a permissive capacity makes half its assertions vacuous. The row bound equals the element bound, so the area binds: budget 97,280 B gives float 24,320 elems, double and cfloat 12,160, cdouble 6,080 at residency, half at target 2. The complex rows rank `cta` before `blocked` at every order, so only the fit sends them to `blocked` and an unbounded-budget test can never observe it (float and double keep a real column edge, 96 and 48). Hence `GeqrfCandidates.AutoReadsTheTranscribedTable` runs only at the real budget (`this->budget() != 97280` skips, `tests/geqrf_candidates_tests.cc:593`); its cfloat 77x77 and cdouble 96x96 vendor-free rows expect `blocked` from the fit alone.
+The device reading behind [CTA capacity](#cta-capacity); a test that gives `geqrf` a permissive capacity makes half its assertions vacuous. The row bound equals the element bound, so the area binds: budget 97,280 B gives float 24,320 elems, double and cfloat 12,160, cdouble 6,080 at residency, half at target 2. The complex rows rank `cta` before `blocked` at every order, so only the fit sends them to `blocked` and an unbounded-budget test can never observe it (float and double keep a real column edge, 96 and 48). Hence `GeqrfCandidates.AutoReadsTheTranscribedTable` (`tests/geqrf_candidates_tests.cc:595`) compares Auto and the `native` walk with `table_pick` at the device's real budget; its cfloat 77x77 and cdouble 96x96 vendor-free rows reach `blocked` from the fit alone.
 
 ## The `geqrf` order floor and the tall-panel clause
 
@@ -273,7 +273,7 @@ Float n = 48 (1.02) and cdouble n = 192 (1.06) sit in the gate's dead band. The 
 
 ### Tall panels cross over earlier
 
-Callers issue `m x kd` panels with kd typically 32 (`src/ops/syev/sytrd/sytrd_sy2sb.cc:343`, `src/ops/syev/sytrd/band_reduction.cc:604`), and every square cell at that width loses. Native over vendor at the top of the batch ladder (b16384 for `512x*` and `128x32`, b8192 for `1024x128`):
+Callers issue `m x kd` panels with kd typically 32 (`src/ops/syev/sytrd/sytrd_sy2sb.cc:343`, `src/ops/syev/sytrd/band_reduction.cc:587`), and every square cell at that width loses. Native over vendor at the top of the batch ladder (b16384 for `512x*` and `128x32`, b8192 for `1024x128`):
 
 | shape | aspect | float | cfloat | double | cdouble |
 |---|---|---|---|---|---|
@@ -300,7 +300,7 @@ A route-era window that answered true for whichever tier led pre-empted the tier
 
 ### Settling the target on the tall panels
 
-The tall panels (`src/ops/syev/sytrd/sytrd_sy2sb.cc:343`, `ortho.cc`, `src/ops/syev/sytrd/band_reduction.cc:604`, `m x nb`, nb 32..64) are what the eigen drivers issue on every call. At target 2 Auto goes `cta` to `blocked` for float 512x32, 384x32 and 256x64, cfloat 256x32 and double 256x32, and the move costs nothing (`benchmarks/results/p7_occupancy_geqrf_tall.csv`, 144 rows, interleaved, residual and orthogonality checked). `blocked_ms / cta_ms` (> 1 means CTA ahead), batch 8192: float 512x32 1.001, 384x32 1.002, 256x32 1.004, **256x64 0.703**; cfloat 256x32 1.001; **double 256x32 0.935**. Float 1024x128 (131,072 elems, batch 4096) is the control: never CTA-eligible, blocked 63.9 ms vs vendor 366.7. CTA wins no cell that the clamp moves.
+The tall panels (`src/ops/syev/sytrd/sytrd_sy2sb.cc:343`, `ortho.cc`, `src/ops/syev/sytrd/band_reduction.cc:587`, `m x nb`, nb 32..64) are what the eigen drivers issue on every call. At target 2 Auto goes `cta` to `blocked` for float 512x32, 384x32 and 256x64, cfloat 256x32 and double 256x32, and the move costs nothing (`benchmarks/results/p7_occupancy_geqrf_tall.csv`, 144 rows, interleaved, residual and orthogonality checked). `blocked_ms / cta_ms` (> 1 means CTA ahead), batch 8192: float 512x32 1.001, 384x32 1.002, 256x32 1.004, **256x64 0.703**; cfloat 256x32 1.001; **double 256x32 0.935**. Float 1024x128 (131,072 elems, batch 4096) is the control: never CTA-eligible, blocked 63.9 ms vs vendor 366.7. CTA wins no cell that the clamp moves.
 
 **Why the ties are ties.** The blocked width here is nb = 32 (16 for double, `geqrf_blocked_debug_params`). At n <= nb the blocked route factorises the whole panel in one leaf call, the same `geqr2_panel_device` launch as the CTA tier through `geqrf_leaf_fits` at the whole budget; the 0.1-0.4% is host-side framing and results are bit-equal. At n > nb the driver splits: float 256x64 becomes two 256x32 panels plus `larft` and a trailing GEMM and is 1.42x faster than the one-shot panel (b4096 0.729, b8192 0.703, b16384 0.690); double 256x32 splits into two 256x16 panels and wins 1.07x.
 
@@ -389,7 +389,7 @@ Not instantiated: `geqrf_tiny_type_ceiling<complex<double>>()` is 16. `trsm_nati
 
 ### Why bit-identity against the CTA route is not the padding test
 
-The CTA route reduces the column norm over 32 sub-group lanes (`geqrf_sg_sum`, `src/ops/geqrf/geqrf_cta_device.hh:161-186`); the tiny kernel uses an N-lane butterfly, so the last ulp differs and bit-identity is unobtainable. The shipped guard: NaN in the `ld` pad, the stride pad and every row and column beyond `n`, then a finite correct factor and an unchanged NaN pad.
+The CTA route reduces the column norm over 32 sub-group lanes (`geqrf_sg_sum`, `src/ops/geqrf/geqrf_cta_device.hh:161-179`); the tiny kernel uses an N-lane butterfly, so the last ulp differs and bit-identity is unobtainable. The shipped guard: NaN in the `ld` pad, the stride pad and every row and column beyond `n`, then a finite correct factor and an unchanged NaN pad.
 
 ### Why the elementwise scan is the m x n window only
 
@@ -541,7 +541,7 @@ These grids were first taken while NVML was broken (kernel module 595.84 against
 
 Four breaks against `geqrf_tests` on the route-era `tiny_window()`: admit n = 17..20 (a measured float loss) **RED**; let CTA answer inside the window too (R8b) **RED**; fire the window with `tiny_max_n == 0` green; drop the square-only gate green (`supports()` already refused both, so the property was defended twice; a green break is evidence about the test, not the code).
 
-Under flat selection the two live breaks are a float row in 17..20 ranking `tiny` first and a window row ranking `cta` ahead of `tiny`; `GeqrfCandidates.AutoReadsTheTranscribedTable` runs both edges through Auto and the `native` walk, and `GeqrfTranscribedTable.RowsHoldTheTranscribedPreference` reads float 17 and 21 directly. The other two terms live only in `can_run` (`can_run.hh:32`), armed with a pin by `GeqrfCandidates.CanRunFalsePinsThrow` (`tests/geqrf_candidates_tests.cc:482`) and `PinnedCandidatesStraddleTheirLimits` (:346).
+Under flat selection the two live breaks are a float row in 17..20 ranking `tiny` first and a window row ranking `cta` ahead of `tiny`; `GeqrfCandidates.AutoReadsTheTranscribedTable` runs both edges through Auto and the `native` walk, and `GeqrfTranscribedTable.RowsHoldTheTranscribedPreference` reads float 17 and 21 directly. The other two terms live only in `can_run` (`can_run.hh:32`), armed with a pin by `GeqrfCandidates.CanRunFalsePinsThrow` (`tests/geqrf_candidates_tests.cc:485`) and `PinnedCandidatesStraddleTheirLimits` (:328).
 
 ## The re-cut, against a working guard
 

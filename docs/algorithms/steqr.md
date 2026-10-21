@@ -117,7 +117,7 @@ which avoids the cancellation of the quadratic formula.
 - `steqr_wg` always uses the Wilkinson shift.
 - `steqr_cta` selects it with `SteqrParams::cta_shift_strategy`: `SteqrShiftStrategy::Lapack`
   (default) or `Wilkinson`.
-- `syev`'s CTA arms (`syev_cta_steqr_params`, `include/batchlas/blas/functions/syev.hh`) set
+- `syev`'s CTA arms (`cta_steqr_params`, `src/ops/syev/syev.cc:70-76`) set
   `Wilkinson` and `max_sweeps = 400`. The solver runs inside `syevx`, where an inaccurate Ritz
   solve stalls the outer iteration, so the slower, more robust setting is used.
 

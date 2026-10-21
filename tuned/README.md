@@ -1,6 +1,6 @@
 # Tuned selection tables {#tuned_tables_readme}
 
-> **Status:** current · inventory as of 2026-10-11 · the generated @ref selection_tables page is always current.
+> **Status:** current · inventory as of 2026-10-21 · the generated @ref selection_tables page is always current.
 
 One file per (op, device): `<op>.<device>.txt`, for example `potrf.sm_120.txt`. The first key is
 `dtype`; each row is one shape of one dtype and the ranked list of every candidate timed there,
@@ -29,7 +29,7 @@ Counts: 39 files, 19 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
-| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near | "The sm_120 deep tables" below |
+| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only | "The sm_120 deep tables" below |
 | sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
@@ -60,6 +60,9 @@ user had damaged (`--remeasure-keys`). Details are in
   - carried over by sample-proof rehash lines (docs/design/tuning-data.md, "Kernel hashes"): gemm
     (9 noise-level disagreements re-measured at deep with `--only-named`), geqrf, getrf, orgqr,
     ormqr, gesvd, symm.
+- **gemm, 2026-10-21.** float and cfloat re-measured at deep (refinement cap 2x) on the round-5
+  kernels, the first rows that time `splitk` (`docs/perf/gemm.md`); double and cdouble keep their
+  transcribed rows (FP64 is not tuned on 1:64 parts).
 - **Dimension cap 2048.** No cell was planned with a matrix dimension above 2048 (`--max-dim`). The
   first run measured some larger cells before the cap existed; they stay. Above the cap the nearest
   measured row decides.

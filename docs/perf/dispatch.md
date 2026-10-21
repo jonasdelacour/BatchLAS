@@ -13,22 +13,23 @@ table edges. How ops choose in general: @ref design_flat_selection and @ref api_
 cuBLAS and `potrf`/`syev` from cuSOLVER; on AMD all come from rocSOLVER (`src/select/vendor.hh:29-41`):
 
 ```cpp
-template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k
+template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
 inline constexpr bool level3_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
     B == Backend::NETLIB ? kHasNetlib : false;
 ```
 
-- `factorization_`, `solver_` and `sparse_` are siblings; `kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`.
+- `factorization_`, `solver_` and `sparse_` are siblings; `kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`;
+  `kHasCudaVendor` is cuBLAS, cuSOLVER and cuSPARSE together (configure rejects a partial set).
 - Each `OpSpec` names its library (`select::Lib::level3` for the level-3 four). Selection sets
   `select::Device::has_vendor`, which every `vendor` family's `can_run` reads. The `vendor` launch compiles the
   vendor call only under `if constexpr (select::has_library<B>(spec.vendor))`, so an absent library is not compiled.
 - With nothing runnable, `select::throw_no_vendor_route<T>` records a coverage miss and throws
   `batchlas::NoRouteError` (`include/batchlas/no_route.hh`).
-- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:96-98`) gates where `ormqr_blocked.cc`,
+- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:103-105`) gates where `ormqr_blocked.cc`,
   `ortho.cc` and `sytrd_blocked.cc` swap a gemm for a level-3 tile kernel, and the static coverage table's float
-  native rows: CUDA and (float or a cuBLAS build). It is narrower than where those kernels now run vendor-free;
+  native rows: a native GPU backend (`CUDA` or `SYCL`) and (float, or CUDA with cuBLAS). It is narrower than where those kernels now run vendor-free;
   widening it would change ortho's and ormqr's choices, which are unmeasured.
 
 ## Level-3 route arms {#level-3-route-arms}
@@ -49,9 +50,11 @@ kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and h
 `form` is `sq` when `2*min >= max` over C's `m, n` (symm) or over `n, k` (syrk), else `tall` or `wide`. The
 `expand` families' inner GEMMs go through the public `gemm` and take its table's choice.
 
-**`can_run` is correctness only.** Every native family needs `B == Backend::CUDA`, a GPU queue, a homogeneous
-batch (tile kernels index `base + batch * stride`), extents >= 1 and `batch <= 65535`. The batch is grid z (y for
-gram); 65536 throws `Number of work-groups exceed limit`, confirmed by launch.
+**`can_run` is correctness only.** Every native family needs a native GPU backend
+(`select::native_gpu_backend<B>`: CUDA or SYCL; symm's `expand` also ROCm), a GPU queue, a homogeneous
+batch (tile kernels index `base + batch * stride`), extents >= 1 and `batch <= d.max_groups_yz` (65535; Metal
+2^32 - 1, `src/select/select.hh:55`). The batch is grid z (y for gram); 65536 throws
+`Number of work-groups exceed limit`, confirmed by launch.
 
 | op | family | further terms | where |
 |---|---|---|---|
@@ -60,8 +63,8 @@ gram); 65536 throws `Number of work-groups exceed limit`, confirmed by launch.
 | `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:61-64` |
 | `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:52-56` |
 | `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:59-62` |
-| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:63-68` |
-| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:65`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:69` |
+| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:63-69` |
+| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:65`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:70` |
 
 syrk is real-only, so `ConjTrans` reaches its kernels as `Trans`. It is not a `can_run` term; the exact `trans` key
 keeps real `ConjTrans` on the vendor.
@@ -237,8 +240,8 @@ her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` 
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
 > (`k = ib = nb` in {16, 24, 32}, n2 up to 480), where the fold adds an `n2^2 x batch` write and read that the two
 > direct GEMMs never pay. Those cells are unmeasured. `complex<double>` is excluded from this route for the same
-> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:778-783`; the her2k
-> call and its fit check are at `:830-845`).
+> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:707-717`; the her2k
+> call and its fit check are at `:760-773`).
 
 ## Negative results {#dispatch-negative-results}
 
@@ -255,7 +258,7 @@ Built, measured, rejected.
 | `syr2k` for the `sytrd_blocked` trailing update, in `double` | 7.7x and 7.4x slower at n2=256, batch 1024; 1.9x slower at n2=512, batch 512; 1.55x faster only at n2=2048, batch 32 | Rejected for `double`. Float ships: 1.25x–1.66x on the update, 1.07x–1.27x end to end. The float path drops the upper-triangle symmetrize pass: nothing in the `sytrd_blocked` pipeline reads A's upper triangle, so the pass cost more than half the win |
 | `syr2k` at n = 1024 after WP1 S2, reported 10.9% faster | Repeating the step gave a 5.65–6.40 ms spread: noise | Not a win. Repeat flattering results as carefully as alarming ones |
 | `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_substitution_enabled<B, T>` |
-| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:157-161` records that no build option exists |
+| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:172-178` records that no build option exists |
 
 ## Correctness findings {#dispatch-correctness-findings}
 
@@ -292,7 +295,7 @@ Wrong answers found, how they hid, and what guards them now.
   error, so the load-bearing check is the relative one.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard copied only the size ceiling. Both
   halves now live in `her2k_takes_gemm_route` (`src/expansion_budget.hh`), which the call site asks
-  (`src/ops/syev/sytrd/sytrd_blocked.cc:839`).
+  (`src/ops/syev/sytrd/sytrd_blocked.cc:768`).
 
 ### The ormqr chooser's forced pin {#dispatch-the-ormqr-chooser-that-forced-past-supports}
 
@@ -365,7 +368,7 @@ The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are 
 whatever vendor library is present (`src/CMakeLists.txt:167-171`); `BACKEND_COMMON_SOURCES`
 (`src/backends/CMakeLists.txt:1-3`) holds only `backend_handle_instantiations.cc`. The vendor TUs keep their library
 gates (`src/backends/CMakeLists.txt:13-35`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not
-created when no CUDA math library is present (`src/CMakeLists.txt:16-18`).
+created unless cuBLAS, cuSOLVER and cuSPARSE are all present (`BATCHLAS_HAS_CUDA_VENDOR_TUS`, `src/CMakeLists.txt:16-18`).
 
 ## Open debts
 

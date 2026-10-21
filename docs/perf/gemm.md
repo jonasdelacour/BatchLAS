@@ -30,7 +30,7 @@ Float mid shapes are closed by WP-W's 256×128 and 128×256 tiles (every remaini
 0.5 ms of excess); a 128×64 float tile for ragged n (181) was considered and not built, those cells now
 summing to under 1 ms. Every work package has its own section below.
 
-Measurement setup: one dedicated GPU (`experiments/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
+Measurement setup: one dedicated GPU (`benchmarks/gpu_guard.sh`), warm SYCL JIT (`--warmup=5`), median of 3,
 both β=0 and β=1 unless a row says otherwise. Sanity anchors: vendor SGEMM reaches 45–48 TFLOP/s at 512³ (a
 number near 80 is TF32); vendor DGEMM stays below ~1.45 TFLOP/s (FP64 is 1/64 of FP32 on this part).
 
@@ -46,30 +46,34 @@ Auto on sm_89:
 ### Choices (flat selection, P3.4)
 
 The vocabulary is `src/ops/gemm/choice.hh`, listed in tie-break order. `src/ops/gemm/gemm.cc` validates the
-views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
+views, calls `select::run` (`gemm.cc:192-200`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
 
 | spelling | launcher | scalars | `can_run` beyond the common term (`gemm.cc`) |
 |---|---|---|---|
-| `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:103`) |
-| `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:104`) |
-| `small` | `gemm_small`, `small_batched.hh` | all | `max(m,n,k) <= small_max_dim<T>()` (64; 32 for complex<double>), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within the budget (`small_fits`, `src/ops/gemm/choice.hh`) |
-| `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()` (`:109-115`) |
-| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all (`wide:m=128:n=128:k=8` complex<float> only) | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()` (`:116-120`) |
-| `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` |
-| `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
+| `direct` | `gemm_direct`, one work-item per C element | all | `grid && max_wg >= 64` (`:104`) |
+| `tiled` | `gemm_tiled`, 16×16 shared tile | all | `grid && max_wg >= 256` (`:105`) |
+| `small` | `gemm_small`, `small_batched.hh` | all | `native` (no `grid` term: 1-D launch), `max(m,n,k) <= small_max_dim<T>()` (64; 32 for 16-byte scalars), `max_wg >= 128` (144 or 196 for float NN 33..56), sub-group 32 except on the float NN tiled leg, `small_slm_bytes` within `slm_budget_for(wg)` (`small_fits`, `src/ops/gemm/choice.hh:240-247`; `:106-109`) |
+| `reg:m=..:n=..:k=..:u=..` | `gemm_reg`, register-tiled family | float | `grid`, a `reg_configs` entry, `reg_form(*cfg, ta, tb)`, `max_wg >= cfg->threads()`, `slm_budget_for(threads) >= cfg->slm_bytes()` (`:110-117`) |
+| `wide:m=..:n=..:k=..` | `gemm_wide`, 16-byte-granule tiles | all (`wide:m=128:n=128:k=8` complex<float> only) | `grid`, a `wide_configs` entry, `wide_form<T>` (`wide_serves<T>` in `choice.hh`: a complex form must be listed exactly; a real `Trans` uses the listed `ConjTrans` instance), `max_wg >= cfg->threads()`, `slm_budget_for(threads) >= wide_slm_bytes<T>(*cfg)` (`:118-123`) |
+| `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction ([WP-L](#gemm-wp-l-global-split-k-over-the-transposed-wide-tiles); timed only in the sm_120 deep float and complex<float> rows) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` (`:124-136`) |
+| `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:137`) |
 
-The common native term (`gemm.cc:97-101`):
+The common native term (`gemm.cc:97-102`):
 
 ```cpp
 const bool device = d.is_gpu || !d.has_vendor;
 const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
-                    A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
-const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
+                    A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
+                    !C.is_heterogeneous();
+// every 3-D launch but small's: kMaxGridBatch on CUDA, the device's grid elsewhere
+const bool grid = native && A.batch_size() <= d.max_groups_yz;
 ```
 
-`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
+`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the device's grid limit in SYCL
+dimension 0, where the batch goes: `Device::max_groups_yz` (`src/select/select.hh:56`), 65535 on CUDA
+(`kMaxGridBatch`, `src/ops/gemm/choice.hh:218`), \f$2^{32}-1\f$ on Metal (`src/select/select.cc:301`). A larger batch is
+native only through `small`. Candidate counts (`candidates<T>()`, `choice.hh:250-277`): float 43, double 30 (no `reg`),
+complex<float> 31, complex<double> 30 (no `reg`); each includes 18 `splitk` choices (six hosts × s ∈ {2, 4, 8}).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -112,15 +116,15 @@ Selection is the first runnable entry of the nearest row of `tuned/gemm.<device>
 `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, else `strided`. Every log key has
 weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU and `precision != Default`).
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
-build (`gemm.cc:156-164`), and each item chooses separately.
+build (`gemm.cc:172-180`), and each item chooses separately.
 
 The sm_89 table is transcribed. `tuned/gemm.sm_120.txt` comes from the `--tier deep` campaign
-(`tools/tune/gemm_spec.cc`): 32225 deep rows, plus 14733 `transcribed` rows where the lattice measured nothing near.
+(`tools/tune/gemm_spec.cc`): 22203 deep rows (float, complex<float>), plus 14314 `transcribed` rows (all of double and complex<double>, and float and complex<float> cells the lattice measured nothing near).
 
 **Callers.** Every library gemm goes through the public `gemm` and its table: the blocked drivers' trailing
-updates (`src/ops/potrf/potrf.cc:75`, `getrf.cc:74`, `geqrf.cc:46`, `trsm.cc:77`), the level-3 `expand` families
-(`src/ops/symm/symm.cc:81-83`, `src/ops/trmm/trmm.cc:90-91`), and the hemm, herk and her2k expansions in
-`src/backends/cublas.cc` (`:221`, `:225`, `:381`, `:447`). No caller reaches a kernel the table did not choose.
+updates (`src/ops/potrf/potrf.cc:76`, `getrf.cc:76`, `geqrf.cc:46`, `trsm.cc:77`), the level-3 `expand` families
+(`src/ops/symm/symm.cc:81-83`, `src/ops/trmm/trmm.cc:91-92`), symm's ROCm `vendor` (`symm.cc:96-99`), and the hemm,
+herk and her2k expansions in `src/backends/cublas.cc` (`:228`, `:232`, `:393`, `:463`). No caller reaches a kernel the table did not choose.
 
 ### Pins and environment
 
@@ -607,7 +611,7 @@ float NN rows that satisfy it (936 packed, 1236 strided), and of no other row.
 * **Nine transposed launchers computed the wrong answer for `ConjTrans`** (fixed in `f236575`). They hard-wire
   OpA/OpB, so a `<Trans, NoTrans>` instance dropped the conjugation silently. Forceable only by name, which is how
   a benchmark compares variants. The guard is `ForcedTransposedLauncherRejectsMismatchedTransposeForm`
-  (`tests/gemm_tests.cc`), which checks against `Tiled16`, not the vendor (inert in a vendor-free build).
+  (`tests/gemm_tests.cc:1487`): a pin of a tile on a form it does not instantiate must be refused.
 * **Eighteen NN-only register variants computed NN on a transposed call** (fixed in P3.4). `can_run` lists the
   instantiated forms per config (`reg_form`, `wide_form`, `src/ops/gemm/gemm.cc:76-86`), so such a pin throws.
 * **Heterogeneous batches**: members with `m == 0` or `n == 0` are skipped, a `k == 0` member is `C := beta*C`, and
@@ -1273,6 +1277,9 @@ before WP-K every cdouble instance sat at 124-136 with zero spill.
 ## GEMM: WP-L, global split-k over the transposed wide tiles
 
 *unmeasured* (2026-10-19; no GPU time). Design, registers and tests only.
+
+> **Note:** stale: the sm_120 deep table (2026-10-21) times every `splitk` choice for float and complex<float>
+> and ranks one first in 649 deep rows. No per-window A/B of split-k is recorded here.
 
 Target: few tiles with a large k (tiles × batch below about 2 × SMs, k ≥ 256), where the work-group count is
 the batch and each group walks k serially. Pre-188 sm_120 cells: float NT 32×64×1024 b128 3.36×, cfloat NC

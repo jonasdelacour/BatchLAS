@@ -19,15 +19,15 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 ### LU: families and their limits
 
-The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:43-44`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
+The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:44-45`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
 
 | op | family | driver | `can_run` beyond the common term |
 |---|---|---|---|
-| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:48`) |
-| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:50`) |
-| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:53-54`) |
+| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:49`) |
+| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:51`) |
+| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:54-55`) |
 | `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
-| `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
+| `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `getrs_fused_available<T>()`, `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
 | `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
 | `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |
 | `getri` | `blocked` | `getri_blocked.cc`, writes P into C, two public `trsm`, zero workspace | `getri_blocked_available<T>()` (`getri.cc:49-50`) |
@@ -346,7 +346,7 @@ Measured with a `PAD=` knob that moves only the declared byte count: **49,024 B 
 * **Float `n = 65` takes CTA in a vendor-free build**, where blocked is 1.62x faster ([which tier serves 33 to 256](#which-native-tier-serves-33-to-256)).
 * **`getrf_panel_reg.cc` duplicates the sub-partition gate** of `resident::sm89_max_work_group`. They agree today; collapsing them is owed.
 * **Recursive panel not attempted**; no float or cfloat phase split exists; residual tolerances `c*n*eps` with c in [200, 800] are not tightened against a measured distribution.
-* **Latent vendor gate** closes by reading (`src/select/vendor.hh:32-35`); no cuSOLVER-absent configure has been built.
+* **Latent vendor gate** closes by reading (`src/select/vendor.hh:36-42`); no cuSOLVER-absent configure has been built.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`.** Pre-existing, not fixed.
 
 ## Raw evidence
@@ -380,9 +380,9 @@ P4's raw rows are in the tree: `benchmarks/results/p4_leaf_getrf_{float,cfloat,d
 ### One spelling per ceiling
 
 * `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` takes a runtime `local_mem_size` budget. The footprint covers the pivot-search scratch as well as the tile. 0 means the tier is absent from this build.
-* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:34`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:90-91`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
+* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:35`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:45-46`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
 * `getrf_cta_fits` is the tier's admission test, occupancy-scaled. `getrf_leaf_fits` is the residency question, asked at the whole budget ([panel leaf](#lu-the-panel-leaf-is-not-the-tier-ceiling)).
-* `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:328-332`).
+* `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:329-333`).
 * `getrf_tiny_buffer_size` is not zero: a short or empty caller `info` span means "not requested" and draws pool scratch.
 * `getrf_cta_debug_launch<T>(ctx, m, n)` packs G (matrices per work-group) in the low 16 bits and the work-group width in the high 16. It answers 0 when the panel is not resident. `G > 1` implies sub-group-scoped barriers; see [packed resident leaves](#packed-resident-leaves).
 * `getrf_blocked_debug_params<T>(ctx, n)` packs nb in the low 16 bits and the leading panel's leaf in the high 16 (1 = local, 2 = global).
@@ -575,7 +575,7 @@ On sm_89 the register file is four sub-partitions of 16,384 registers, and a blo
 ceil(warps / 4) * 32 * ((regs + 7) & ~7) <= 16,384
 ```
 
-equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-103`, used by `getrs_fused.cc:156`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
+equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-95`, used by `getrs_fused.cc:159`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
 
 Device-link register counts (1,082 entry functions, 0 with spill):
 
