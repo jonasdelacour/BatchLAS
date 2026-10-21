@@ -165,6 +165,9 @@ BATCHLAS_UNROLL_FULL
         // everyone's), refills the buffer slab s - 1 was read from, commits and computes. A slab past
         // k is issued anyway: every copy is zero-filled (src-size 0, nothing read) into a buffer no
         // step reads, so no branch guards it. Unrolled by Stages so the buffer is a constant.
+        // Trap: a zero-size copy keeps its unclamped address, up to (TileN - 1) * ld (TileM - 1 elements)
+        // past the operand at a ragged edge and 3 slabs past k: safe only while cp.async never
+        // translates a src-size 0 address (not promised by PTX). Clamping cost 0.6-1.5% (WP-W review).
         const int slabs = (k + TileK - 1) / TileK;
         [&]<int... J>(std::integer_sequence<int, J...>) __attribute__((always_inline)) {
             (issue(J * TileK, std::integral_constant<int, J>{}), ...);

@@ -1512,9 +1512,10 @@ WP-I test run for u4 as well as u1. Deliberate breaks, run on sm_120 (first red 
 | A's k bound dropped (packet operand, `lim = m - (m0 + a_m)`) | NN k = 5 (NaN); WP-I test NN k = 37 (NaN) | WP-I NN k = 72 |
 
 A 16-byte-aligned ragged view (Padded 300×200×40) is in the test too, so an aligned-base shortcut in the pipeline
-is caught. **Accepted assumption:** a zero-filled copy (`src-size` 0) still names its computed address, which can
-lie past the allocation (rows ≥ m, up to ~127·ld; a slab bumped past k). PTX reads no bytes at `src-size` 0
-(CUTLASS relies on the same); the tests use one poison-padded buffer, so an unmapped address is never hit.
+is caught. A zero-filled copy (`src-size` 0) once named its computed address, up to ~127·ld past the operand at a
+ragged edge or 7 k rows past k. Since the WP-W review it names the operand's batch base instead (`a_ptr`, `b_ptr`):
++0.0-0.7% on u4 strided TT 1024²×362, TN packed 1024²×362, NN strided 512×256×128 b2048 and NT packed 1024³ (10
+reps × 2 passes; see [WP-W](#gemm-wp-w-a-256x128-float-tile-with-four-copy-async-stages)).
 
 ## GEMM: WP-Q, a one-round staged epilogue for wide v2
 
@@ -2182,7 +2183,7 @@ New choices `reg:m=256:n=128:k=8:u=4` and `reg:m=128:n=256:k=8:u=4` (float, NN N
 | staging | 4 slabs of k = 8, 3 in flight; one zero-filled 4-byte `cp.async` per element (any ld, any base), u4's lane maps (packet operand m/n-fastest, k-contiguous operand k-fastest), strides padded by 4: 50,176 B (`RegCfg::slm_bytes`, the >48 KiB opt-in; `can_run` refuses a smaller budget) |
 | loop | step s: `wait_group 2`, barrier, issue slab s + 3, commit, compute. A slab past k is issued anyway (every copy `src-size` 0), so no branch guards the refill |
 | 16-byte leg | derived in `launch_register_k8_s4_large`, never a field: when every packet operand (A in NN/NT, Bᵀ in NT/TT) has a 16-byte base and ld, stride ≡ 0 mod 4, it copies 16-byte granules (edge granule clipped by `src-size`); TN has no packet operand. Traces `…_s4[_nt\|_tn\|_tt]` and `…_aligned` |
-| epilogue | staged at every k: 4 passes of TileN / 4 columns, whole-column stores; pass p + 1's 32 priors load while pass p stores; none at beta = 0, where the store is `alpha * acc` |
+| epilogue | staged at every k: 4 passes of TileN / 4 columns, whole-column stores; pass p + 1's 32 priors load while pass p stores; none at beta = 0, where the store is `alpha * acc`. Stage stride TileM + 16 (≡ 16 mod 32): the two column slots of an 8-lane `STS.128` phase take distinct banks |
 
 **ncu** (`--set full`, TT strided 1024×1024×362 b128, durations at ncu's locked clock):
 
@@ -2211,6 +2212,11 @@ Spreading the copies moves the stall from `lg_throttle` to `mio_throttle` (ncu: 
 the fragment reads) and loses everywhere but TN 1448×256×128. The 16-byte leg against the element leg on the
 same aligned views (8 reps): NT packed 1024³ 0.971 vs 0.993, TT packed 512³ 1.045 vs 1.057, NN packed 1024³
 1.033 vs 1.041, NN packed 1024×2048×96 0.725 vs 0.727, TT packed 1024²×362 1.036 vs 1.039: shipped.
+
+Stage stride (review): at TileM + 4 (≡ 4 mod 32) the second column slot of each 8-lane `STS.128` phase overlapped
+the first in 12 banks. TileM + 16 (32 × 272 and 64 × 144 floats, within the 12,544 of the slabs), ncu on 256×128
+TT strided 1024²×362: shared-store bank conflicts 4,194,304 → 0, store wavefronts 8,388,608 → 4,194,304; time
+flat (±0.2% on the four review cells, 10 reps × 2 passes): shipped.
 
 **A/B, shipped build** (best of u1/u4 against best of the two new tiles, each ×vendor in the same run):
 
@@ -2241,8 +2247,10 @@ same aligned views (8 reps): NT packed 1024³ 0.971 vs 0.993, TT packed 512³ 1.
 | NT strided 362×1024×96 | 0.413 | u4 | 0.984 | 128×256 | 0.987 (0.982, 0.991) | 1.003 |
 | NN strided 512×512×1024 b256 | 3.713 | u4 | 1.184 | 256×128 | 1.028 (1.031, 1.026) | 0.868 |
 
-Every strided target cell gains 5-13% (median 0.91 of the parent's best), and 5 of the 16 strided cells now beat cuBLAS. NT
-strided 2048×1024×128 gains least (0.952): NT has no k-contiguous operand, where u4 lost least. On aligned
+15 of the 16 strided cells gain 5-13% (median 0.91 of the parent's best); NT strided 362×1024×96 is flat (1.003).
+4 strided cells beat cuBLAS in both passes: TN 1024×2048×128, TN 181×512×128, TT 256×512×128 and NT 362×1024×96
+(where u4 already did); TN 1448×256×128 (1.007, 0.991) and NN 256×512×78 (1.002, 0.955) straddle 1. NT strided
+2048×1024×128 gains least among the gainers (0.952): NT has no k-contiguous operand, where u4 lost least. On aligned
 cells the new tiles win at k ≥ 512 (NN 1024³ 0.959, 512³ b2048 0.965) and lose 2-3% at k ≤ 96 and on TT 512³
 (noisy, the vendor arm moved 0.90 ↔ 1.03 between passes) to u1, which stays a candidate: nothing about u1 or
 u4 changed, so those cells keep their arm once raced. 128×256 serves TT best, 256×128 NN and TN; on n = 128
@@ -2250,13 +2258,16 @@ the 128×256 tile is half empty (1.44-1.48×), on m = 362 the 256×128 one (1.14
 
 **Registers** (`scripts/register_probe.sh`, `libbatchlas_sycl`, zero spill and zero stack on all 14 entries,
 both arches): sm_120 256×128 255 (all 7), 128×256 210-214; sm_89 255 (7) and 212-218 (7). One group per
-SM either way (8 warps × 255 ≤ 65,536).
+SM: ⌈8 warps / 4⌉ × 32 × 256 = 16,384 ≤ 16,384 per sub-partition, zero margin (ptxas allocates in units of 8, so
+255 counts as 256). Holding the priors one pass ahead in a single buffer (load after the store, `prior[CW][RW]`)
+left 256×128 at 255 (128×256 203-209) and was 0.1-1.5% slower on the four review cells: rejected.
 
 Tests: `GemmCandidates.RegLargeTilesEveryFormSlabCountAndLegAtSaturatingBatch` (both tiles, NN NT TN TT CC,
 m/n straddling 256/128 at 255-300, k from 1 to 17 slabs including 3 = the prologue alone, Strided / Gap1 /
 OddLd / ItemSkew element legs and Padded / Packed 16-byte legs, NaN-poisoned k tails, batch 1024 repeating 7
 problems, then NaN C at beta = 0; 160 cases) and `RegLargeTilesBetaZeroAndTheDerivedLeg` (-0.0 at beta = 0 on
-both legs; the leg taken per (A, B) layout pair by kernel trace, then its values). The generic suites
+both legs; the leg taken per (A, B) layout pair, and at base + 1 element with whole-granule ld and stride, by
+kernel trace, then its values). The generic suites
 (`PinnedCandidatesEveryFormShapeAndLayout`, `PinnedChoiceLaunchesItsOwnKernel`, `BetaZeroDoesNotReadC`,
 `CoalescedCEpilogue…`, `CanRunEqualsLaunch`) pick the rows up from `reg_rows`.
 
@@ -2276,14 +2287,32 @@ generic suites above; first red in the new slab test):
 | leg derivation ignores Bᵀ's alignment | all six; the leg test's trace part names `…_nt_aligned` where `…_nt` was expected | TT 256×128×5 |
 | 16-byte leg's k bound dropped | slab test only (after the fix below) | NN Padded 264×136×45 under NaN poison |
 | store guard `col >= n` dropped (writes past n) | `PinnedCandidates…`, `BetaZeroDoesNotReadC` (wrote outside C), then the process aborts (CUDA out of resources) in the slab test | — |
+| leg derivation ignores the base (review) | leg test only: `…_aligned` for the 6 base + 1 cases with a packet operand (NN, NT, TT of both tiles), then NN 256×128 base + 1 wrong (backward error 960: the misaligned 16-byte copy reads other elements, no fault) | — |
 
 The 16-byte leg's k bound first stayed green: no 16-byte leg in the slab test had a k tail under NaN poison
 (Padded 264×136 ran at k = 48). It now runs at k = 45, NaN-poisoned.
 
 **Not covered by values:** the packet copy's row bound and the 16-byte edge clip (rows past m, n feed only
-discarded accumulators), and priors read at beta = 0 (the beta = 0 store never uses them). The accepted
-`src-size` 0 assumption of WP-N2 holds: zero-filled copies, including the slabs past k, name addresses up to
-three slabs past the operand.
+discarded accumulators), and priors read at beta = 0 (the beta = 0 store never uses them).
+
+**Accepted assumption: `src-size` 0 never translates its address.** A zero-filled copy keeps its computed
+address. Worst case past the operand: a k-contiguous operand (B, Aᵀ) at a ragged n (m) edge names up to
+(TileN − 1)·ld (TileM − 1) beyond the last column of the last item, and 3 slabs (+23 elements) past k; a
+packet operand (A, Bᵀ) up to TileM − 1 (TileN − 1) elements past a column and (k + 23)·ld into the slabs
+past k. PTX does not promise that such an address is never translated (CUTLASS relies on the same); the tests
+use one poison-padded buffer, so an unmapped address is never hit. Measured fixes (10 reps × 2 passes, ×vendor,
+399a5a4e against the fix in the same session):
+
+| fix | TT str 1024²×362 | TN packed 1024²×362 | NN str 512×256×128 b2048 | NT packed 1024³ | verdict |
+|---|---|---|---|---|---|
+| clamp every zero-size copy to `a_ptr` / `b_ptr`, 256×128 | 1.043 → 1.049, 1.051 → 1.059 | 0.948 → 0.961 | 1.020 → 1.028 | 0.972 → 0.975 | +0.3-1.4%: rejected |
+| same, 128×256 | 1.033 → 1.049, 1.043 → 1.058 | 0.961 → 0.974 | 1.044 → 1.054 | 0.992 → 0.992 | +0.1-1.5%: rejected |
+| skip the slabs past k (uniform branch), 256×128 | 1.045 → 1.048 | 0.948 → 0.964 | 1.019 → 1.019 | 0.973 → 0.971 | +1.7% on TN: rejected |
+| same, 128×256 (210 → 247-255 registers) | 1.037 → 1.052 | 0.961 → 0.958 | 1.042 → 1.037 | 0.992 → 0.974 | +1.4% on TT: rejected |
+| clamp, u4 128×128 (predicated leg) | 1.164 → 1.164, 1.162 → 1.162 | 1.090 → 1.097 | 1.126 → 1.130 | 0.996 → 0.995 | ≤ 0.7%: **shipped** |
+
+The u4 128×128 pipeline (WP-N2) now names the operand's batch base; the large tiles keep the assumption. Wide v2
+(`wide_v2::acopy`) has the same pattern and was not measured.
 
 **Unranked:** no row of `tuned/gemm.sm_120.txt` names the new spellings, so Auto runs them only after the float
 race is re-run; every ratio above is a pinned arm. sm_89: probed, not timed. The new header is in the kernel

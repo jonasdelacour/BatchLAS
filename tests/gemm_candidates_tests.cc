@@ -1656,7 +1656,7 @@ TYPED_TEST(GemmCandidates, RegLargeTilesBetaZeroAndTheDerivedLeg) {
         std::filesystem::remove(path);
         ASSERT_EQ(got.size(), cases.size()) << "one native kernel per pinned call";
         for (std::size_t i = 0; i < cases.size(); ++i) EXPECT_EQ(got[i], cases[i].kernel) << name(cases[i].c, cases[i].s);
-        // And the values: every pair's result is right (the 16-byte leg on a misaligned operand faults).
+        // And the values: every pair is right (a 16-byte leg at a misaligned base reads wrong elements).
         for (const auto& k : cases) {
             auto p = make_problem<T>(k.s);
             if (k.base4) this->run_pinned_base8(k.c, p);

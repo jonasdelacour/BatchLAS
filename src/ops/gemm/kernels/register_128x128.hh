@@ -357,7 +357,8 @@ BATCHLAS_UNROLL_FULL
             // before that barrier) and computes. One commit per step, empty past the end, keeps the wait
             // count at Stages - 2. Element copies, in range iff the row (column) and the k index are; each
             // operand pointer bumps one slab per issue (a k0 * ld product spilled staged NN and NT at the
-            // 128 cap). Unrolled by Stages: the buffer is a constant.
+            // 128 cap). Unrolled by Stages: the buffer is a constant. A zero-size copy names the
+            // operand's batch base, not its own address (up to 127 m/n or 7 k indices past the operand).
             // 32 ld, rebuilt per issue: hoisted and held across the mainloop it spilled 16 B in staged u4
             // NN, TN and TT on sm_89 at the 128 cap.
             auto ld32 = [](int ld) __attribute__((always_inline)) {
