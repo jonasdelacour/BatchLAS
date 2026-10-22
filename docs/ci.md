@@ -47,6 +47,7 @@ every pull request queues behind it.
 | `gpu-build-test` | `[self-hosted, linux, x64, cuda]` | push to `main`, non-fork PRs | Configure, assert the CUDA target, build, `ctest -LE slow`, `compare_failures.py`, install and check the export. Timeout 180 min |
 | `gpu-nightly-full` | same | 03:17 UTC, `workflow_dispatch` with `run_nightly` | Full `ctest`, then a vendor-free configure, build and ctest that reports without gating. Timeout 360 min |
 | `acpp-compile` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 (cached), then configures BatchLAS with it and compiles library, tests and benchmarks. Timeout 90 min |
+| `acpp-cuda-consumer` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 with its CUDA backend against CUDA 12.8 (cached), then a vendor-free BatchLAS for `cuda:sm_89`, installs it and builds `examples/consumer` as C++23 against the prefix. Nothing runs. Timeout 120 min |
 | `tuned-tables` | `ubuntu-latest` | every trigger | `check_tuned_tables.py --self-test`, then the stale-table report (never fails) |
 | `tuned-tables-ledgers` | `ubuntu-latest` | every trigger | Fetches the ledger LFS objects (cached by their pointers' oids), then `sweep_to_table.py --self-test` and `--check` |
 | `docs` | `ubuntu-latest` | every trigger | Builds the site (below) |
@@ -118,6 +119,23 @@ Run it locally:
 .github/ci/build_adaptivecpp.sh "$HOME/acpp-ci"          # or reuse an existing 25.10 install
 JOBS=32 .github/ci/acpp_compile.sh "$HOME/acpp-ci" build/acpp-ci
 ```
+
+### The acpp-cuda-consumer job {#ci_acpp_cuda_consumer_job}
+
+The fullerenes toolchain, `acpp -std=c++23 --acpp-targets=cuda:sm_89` (multipass CUDA), as an
+outside project. [Multipass CUDA](design/sycl-implementations.md#sycl-impl-cuda-aot) needs a
+CUDA 12.x toolkit: acpp 25.10's clang rejects CUDA 13 headers.
+
+| Step | What |
+| --- | --- |
+| Toolchain | as `acpp-compile`, plus `cuda-nvcc cuda-cudart-dev cuda-driver-dev cuda-cccl libcurand-dev` 12.8 from NVIDIA's apt network repo (12.8 is the newest CUDA LLVM 20 knows) |
+| AdaptiveCpp | `ACPP_CUDA_PATH=/usr/local/cuda-12.8 build_adaptivecpp.sh`: also the CUDA runtime backend (linked against the toolkit's `libcuda` stub); cached on tag, commit, LLVM and CUDA package versions |
+| BatchLAS | `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, `BATCHLAS_ACPP_CUDA_PATH`, `BATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `Release`, target `batchlas_components`, installed to a temp prefix |
+| Vendor-free check | `readelf -d` of every installed `libbatchlas*.so`: no LAPACKE, CBLAS, BLAS or CUDA math library in `NEEDED`. Red until P0.3 (no LAPACKE/CBLAS link when vendor BLAS is off) is merged |
+| Consumer | `examples/consumer` with `CMAKE_CXX_STANDARD=23`, `CMAKE_CXX_EXTENSIONS=OFF`; the verbose build log must show `-std=c++23` and `--acpp-targets=cuda:sm_89` |
+
+Not yet run on GitHub. The local equivalent (threadripper02, HPC SDK CUDA 12.9 instead of 12.8,
+`cuda:sm_120`) is in [multipass CUDA](design/sycl-implementations.md#sycl-impl-cuda-aot).
 
 ### Required properties of the GPU jobs
 
