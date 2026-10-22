@@ -34,10 +34,8 @@ family variant. The vendor library is the family `vendor`.
   `select::has_library<B>(spec.vendor)`. Without the library, every vendor entry is unrunnable and the
   first runnable native entry of the row runs. `can_run` is correctness only; table order is speed.
 * **Nothing runnable** is reported by `select::pick` as `NoRouteError`.
-* **Ops without `choice.hh`** select by hand: `hemm`, `herk` and `her2k` (entry points in
-  `src/ops/level3/level3.cc`; the expand-or-vendor choice is in `src/backends/cublas.cc`, see
-  [docs/perf/level3.md](../perf/level3.md)). `BATCHLAS_EXPAND_ROUTE=expand|loop` pins that decision. @ref selection_tables lists the ops that select from
-  tables.
+* **Every op has a `choice.hh`**: `hemm`, `herk` and `her2k` were the last to migrate (2026-10-22,
+  [docs/perf/level3.md](../perf/level3.md)). @ref selection_tables lists the ops that select from tables.
 
 The MathDx device libraries (cuBLASDx, cuSolverDx) counted as vendor, because their source is NVIDIA's
 and ships only for NVIDIA. Flat selection (#147) deleted every cuBLASDx path. The rule still applies to

@@ -126,26 +126,26 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
 
     sweep("default");
 
-    if constexpr (TestFixture::BackendType == Backend::CUDA) {
+    if constexpr (TestFixture::BackendType == Backend::CUDA || TestFixture::BackendType == Backend::SYCL) {
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+            ScopedEnvVar route("BATCHLAS_HEMM_ROUTE", "expand");
             sweep("expansion");
         }
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            ScopedEnvVar route("BATCHLAS_HEMM_ROUTE", "vendor");  // Auto vendor-free
             sweep("vendor-loop");
         }
     }
 }
 
-// expand_mirrored puts the batch in grid z (65535): with the expansion pinned, a batch of 65536
-// must fall back to the per-item loop, not throw.
-TYPED_TEST(HemmTest, ExpandBatchAboveGridFallsBack) {
+// expand_mirrored puts the batch in grid z (65535 on CUDA): the pinned expansion chunks a batch
+// of 65536 instead of refusing it, and every item is right (vendor-free too).
+TYPED_TEST(HemmTest, ExpandChunksABatchAboveTheGrid) {
     using T = typename TestFixture::ScalarType;
-    if constexpr (TestFixture::BackendType != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
-        GTEST_SKIP() << "the expansion is cuBLAS's (hemm has no route vendor-free)";
+    if constexpr (!(TestFixture::BackendType == Backend::CUDA || TestFixture::BackendType == Backend::SYCL)) {
+        GTEST_SKIP() << "expand is a GPU family";
     } else {
-        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const ScopedEnvVar route("BATCHLAS_HEMM_ROUTE", "expand");
         const int n = 8, m = 6, batch = 65536;
         const T alpha = T(0.5, -1.25), beta = T(0.75, 0.5);
         auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);

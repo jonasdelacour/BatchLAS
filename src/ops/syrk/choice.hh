@@ -7,8 +7,8 @@
 
 #include <algorithm>
 #include <array>
+#include <complex>
 #include <cstdint>
-#include <string>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -16,16 +16,22 @@
 namespace batchlas::ops::syrk {
 
 struct Gram : select::NoFields<"gram"> {};              ///< syrk_gram_tiles: one tile covers C; n <= 128, tile SLM fits
-struct Triangular : select::NoFields<"triangular"> {};  ///< syrk_triangular_tiles<float>: 128-wide tiles of one half
+struct Triangular : select::NoFields<"triangular"> {};  ///< syrk_triangular_tiles<T>: 128-wide tiles of one half
 struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syrk_vendor (per-item ?syrk loop)
 
 using SyrkChoice = std::variant<Gram, Triangular, Vendor>;  ///< fieldless (tile, leg derived); natives: CUDA GPU
 
-template <class T>  /// Every compiled choice in tie-break order (§6.3); triangular is float only (R7).
+/// Every compiled choice in tie-break order (§6.3); complex<double> has no triangular (registers).
+template <class T>
 constexpr auto candidates() {
-    if constexpr (std::is_same_v<T, float>) return std::array<SyrkChoice, 3>{Gram{}, Triangular{}, Vendor{}};
-    else return std::array<SyrkChoice, 2>{Gram{}, Vendor{}};
+    if constexpr (std::is_same_v<T, std::complex<double>>) return std::array<SyrkChoice, 2>{Gram{}, Vendor{}};
+    else return select::all_of<SyrkChoice>();
 }
+
+/// Is the per-item vendor loop linked for (B, T)? rocblas.cc wraps the real ?syrk only.
+template <Backend B, class T>
+inline constexpr bool vendor_wired = select::has_library<B>(select::Lib::level3) &&
+                                     !(B == Backend::ROCM && !std::is_floating_point_v<T>);
 
 inline constexpr std::array<std::string_view, 3> last_resort{"triangular", "gram", "vendor"};  ///< none runs
 inline constexpr select::OpSpec spec{Op::syrk, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
@@ -54,6 +60,10 @@ inline constexpr std::array<int, 17> grid_batch{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 
 inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< batch ceiling of both tile kernels
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular's tile-count ceiling
 inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
+template <class T>
+constexpr std::int64_t triangular_slm_bytes() {  ///< two staged 8 x 128 operand tiles
+    return std::int64_t(2) * 8 * 128 * std::int64_t(sizeof(T));
+}
 inline constexpr std::int64_t triangular_groups(std::int64_t n, std::int64_t tile) {  // T(T+1)/2, T = ceil(n/tile)
     const std::int64_t t = (n + tile - 1) / tile;
     return t * (t + 1) / 2;
@@ -68,13 +78,6 @@ inline constexpr int gram_threads(std::int64_t n) {  // the lanes meeting the tr
 template <class T>
 constexpr std::int64_t gram_slm_bytes(std::int64_t n) {  // the staged [KC][tile] operand
     return std::int64_t(32) * gram_tile(n) * std::int64_t(sizeof(T));
-}
-
-/// herk's opt-in to the conjugating gram kernel: syrk's pin is exactly `gram`.
-inline bool herk_gram_pinned() {
-    std::string source;
-    const auto text = select::detail::pin_text("syrk", &source);
-    return text && *text == "gram";
 }
 
 }  // namespace batchlas::ops::syrk

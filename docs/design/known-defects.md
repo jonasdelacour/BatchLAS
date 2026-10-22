@@ -25,7 +25,7 @@ closed and kept only for numbering.
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/ops/syev/sytrd/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/ops/gemm/kernels/epilogue_linear.hh`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
-| 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
+| 12 | every `can_run` in `src/ops/`, `src/ops/{hemm,herk,her2k}/` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |

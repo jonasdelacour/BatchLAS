@@ -2,12 +2,12 @@
 
 > **Status:** current · RTX 4090 (sm_89), CUDA 13.2, `RelWithDebInfo` · measured 2026-09-05; sm_89 tables transcribed 2026-10-06, sm_120 tables deep
 
-Routing and measurements for the seven level-3 ops. `symm`, `syrk`, `syr2k` and `trmm` choose from
-tuned tables. `hemm`, `herk` and `her2k` choose by fixed rules in the cuBLAS backend. The sm_89 table rows
-for the four are transcribed from the deleted hand-written gates (at `ff340fc6`) and are untimed; the sm_120
-tables are deep-measured (`tuned/README.md`).
+Routing and measurements for the seven level-3 ops. All seven choose from tuned tables. The sm_89 table rows
+for `symm`, `syrk`, `syr2k` and `trmm` are transcribed from the deleted hand-written gates (at `ff340fc6`) and are
+untimed; their sm_120 tables are deep-measured (`tuned/README.md`). `hemm`, `herk` and `her2k` moved to tables on
+2026-10-22; both their tables transcribe the deleted cuBLAS-backend rules (at `409c2fb4`).
 
-## Level-3: how the table-selected four choose
+## Level-3: how the table-selected ops choose
 
 `src/ops/<op>/choice.hh` lists the families. `src/ops/<op>/<op>.cc` validates shapes (throwing
 `std::invalid_argument` on every backend), returns a no-op event for an empty problem, and calls
@@ -16,27 +16,41 @@ tables are deep-measured (`tuned/README.md`).
 
 ### Level-3: the families and their can_run terms
 
-Every native family requires `B == Backend::CUDA`, `d.is_gpu`, homogeneous operands, extents and batch
->= 1, and batch <= 65535 (the CUDA grid z; 65536 throws `Number of work-groups exceed limit`). The
-vendor family needs `d.has_vendor` and refuses heterogeneous operands, since each vendor loop runs
-every item at the top-level extents.
+Every native family requires a native GPU backend (`Backend::CUDA` or `Backend::SYCL`; the gemm-based
+`expand` and `fold` also `Backend::ROCM`), `d.is_gpu`, homogeneous operands and extents and batch >= 1. The
+batch sits in grid z (65535 on CUDA; 65536 throws `Number of work-groups exceed limit` from a direct launch),
+so every native launch splits the batch into sub-views of at most `Device::max_groups_yz` items
+(`src/ops/level3/batched.hh`, `for_each_chunk`): `can_run` has no batch term. The vendor family needs
+`d.has_vendor` and refuses heterogeneous operands, since each vendor loop runs every item at the top-level
+extents; hemm's, herk's and her2k's also refuse ROCm (rocBLAS wraps none of them).
 
 | op | spelling | driver | further `can_run` terms | dtypes |
 |---|---|---|---|---|
-| `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:52-56`) | float, double |
+| `symm` | `expand` | `expand_mirrored`, then the public `gemm`, per chunk | `max_wg >= 256`; one item's scratch fits (`expansion_chunk >= 1`) | float, double |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | float, double |
 | `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:58-59`) | float, double |
-| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:62-63`) | float |
+| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; two staged tiles in SLM; T(T+1)/2 <= 65535, T = ceil(n/128) | float, double |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; four staged tiles in SLM; tile ceiling; a real `ConjTrans` is folded to `Trans` | float, double |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
 | `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:56-61`) | all four |
-| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:63-68`) | all four |
+| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0, per chunk | `max_wg >= 256`; one item's scratch fits | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
+| `hemm` | `expand` | `expand_mirrored<Conjugate>`, then the public `gemm`, per chunk | `max_wg >= 256`; one item's scratch fits | cfloat, cdouble |
+| `hemm` | `vendor` | `backend::hemm_vendor`: `?hemm` per item | not ROCm | cfloat, cdouble |
+| `herk` | `gram` | `syrk_gram_tiles<T, Conjugate>` | n <= 128; `max_wg >= gram_threads(n)` (8-wide thread tile at the 128 tile); tile fits SLM | cfloat, cdouble |
+| `herk` | `triangular` | `syrk_triangular_tiles<T, Conjugate>` | `max_wg >= 256`; tile SLM; tile ceiling | cfloat |
+| `herk` | `fold` | the public `gemm` of op(A) op(A)^H into an n x n scratch, then `fold_hermitian`, per chunk | `max_wg >= 256`; one item's scratch fits | cfloat, cdouble |
+| `herk` | `vendor` | `backend::herk_vendor`: `?herk` per item | not ROCm | cfloat, cdouble |
+| `her2k` | `triangular` | `syr2k_triangular_tiles<T, Conjugate>`: A staged times alpha (conj(alpha) for C) | `max_wg >= 256`; four tiles in SLM; tile ceiling | cfloat |
+| `her2k` | `fold` | one `gemm` of alpha op(A) op(B)^H, then the two-sided `fold_hermitian`, per chunk | `max_wg >= 256`; one item's scratch fits | cfloat, cdouble |
+| `her2k` | `vendor` | `backend::her2k_vendor`: `?her2k` per item | not ROCm | cfloat, cdouble |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
-vendor. The last resort when nothing runs is `expand, vendor` (symm), `triangular, gram, vendor`
-(syrk), `triangular, vendor` (syr2k) and `expand, triangular, vendor` (trmm).
+vendor. The last resort when nothing runs is `expand, vendor` (symm, hemm), `triangular, gram, vendor`
+(syrk), `triangular, vendor` (syr2k), `expand, triangular, vendor` (trmm), `fold, triangular, gram, vendor`
+(herk) and `fold, triangular, vendor` (her2k). complex<double> has no `triangular`: 64 accumulators of 16 bytes
+fill the 255-register file alone, and her2k's four staged tiles would need 64 KB of SLM.
 
 ### Level-3: what the shipped tables rank first
 
@@ -66,33 +80,30 @@ are listed at [the level-3 pin words](dispatch.md#the-level-3-pin-words).
 
 - `BATCHLAS_TRMM_ROUTE=vendor` is always the `cublas?trmm` loop, even where a tile kernel ranks first.
   The old meaning (expand plus gemm) is now `expand`.
-- `herk` reaches the Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`),
-  and then only where syrk's Gram `can_run` would admit it: `batch` in [1, 65535], `max_wg >= gram_threads(n)`
-  and the tile in SLM (`src/backends/cublas.cc:374-377`).
-- `symm` does not read `BATCHLAS_EXPAND_ROUTE`; hemm, herk and her2k do.
+- `herk`'s Gram kernel is its own `gram` family (`BATCHLAS_HERK_ROUTE=gram`); the old opt-in through
+  `BATCHLAS_SYRK_ROUTE=gram` and `BATCHLAS_EXPAND_ROUTE=expand|loop` are gone.
 
-### Level-3: hemm, herk and her2k still choose by fixed rules
+### Level-3: hemm, herk and her2k transcribe the old fixed rules {#level3-hemm-herk-her2k-transcribed-rules}
 
-These three have no `choice.hh` and no table. Their entry points (`src/ops/level3/level3.cc`) call
-`backend::<op>_vendor` directly, or throw `NoRouteError` when no level-3 library is compiled in. The
-cuBLAS backend then picks between one batched GEMM into scratch and the per-item vendor loop:
+Until 2026-10-22 these three chose inside `src/backends/cublas.cc` (vendor builds only; `NoRouteError`
+vendor-free, on Backend::SYCL and on ROCm). Their tables (`tuned/{hemm,herk,her2k}.{sm_89,sm_120}.txt`) put
+the old choice first at every grid cell, with the fit term dropped because the scratch families now chunk:
 
-```cpp
-// hemm_vendor (src/backends/cublas.cc:200-201); expansion_preferred is triangular_expand.hh:32-43
-expansion_fits(ctx, k, batch, bytes) && expansion_preferred(max(m, n, k), batch)  // batch >= 4 || max_dim >= 256
-// herk_vendor (cublas.cc:383); herk_gemm_preferred is cublas.cc:270-276
-herk_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)             // batch >= 4 && n <= 768
-// her2k_vendor (cublas.cc:457); her2k_gemm_preferred is src/expansion_budget.hh:70-74
-her2k_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)            // batch >= 2 || n >= 128
-```
+| op | ranked first | grid edges |
+|---|---|---|
+| `hemm` | `expand` iff batch >= 4 or max(m, n) >= 256, else `vendor` | m, n 255\|256; batch 3\|4 |
+| `herk` | `fold` iff batch >= 4 and n <= 768, else `vendor`; `gram` last; cfloat `triangular` first in the measured windows below | n 768\|769; batch 3\|4 |
+| `her2k` | `fold` iff batch >= 2 or n >= 128, else `vendor`; cfloat `triangular` first in the measured windows below | n 127\|128; batch 1\|2 |
 
-`BATCHLAS_EXPAND_ROUTE=expand|loop` overrides the preference, not the fit. The host backend runs the
-per-item `cblas_?hemm`/`?herk`/`?her2k` loops; ROCm instantiates none of the three.
+So a vendor build routes as before, except past the old fit (where the per-item loop used to run and the
+chunked native family now does) and in the measured cfloat `triangular` windows, and a vendor-free build, Backend::SYCL and ROCm walk past `vendor` to the
+first native entry. `sytrd_blocked`'s rank-2k update asks `ops::her2k::picks_batched_route`, the same selection.
 
 ### Level-3: dtype reach of the native families
 
-`gram` and `triangular` admit non-float scalars, so double `syrk` at n <= 128 and `trmm` in every dtype
-run vendor-free; `syr2k` has no non-float family. `level3_tile_substitution_enabled`
+`gram`, `triangular` and the scratch families admit every dtype they are listed for above, so every GPU shape
+of every level-3 op has a native route (vendor-free included) except an item too large for its own scratch
+(`expand`/`fold` refuse it; `trmm` Left and `syrk`/`syr2k`/`herk` still have their tile kernels). `level3_tile_substitution_enabled`
 (`src/select/vendor.hh:96-98`) is deliberately kept float-or-cuBLAS, because `sytrd_blocked`, `ortho`,
 `ormqr_blocked` and the coverage census read it; widening it would move their routes.
 
@@ -101,6 +112,48 @@ run vendor-free; `syr2k` has no non-float family. `level3_tile_substitution_enab
 Up to `ff340fc6` these four ops chose by hand-written gates in `src/backends/*_custom_dispatch.cc`. The
 gates were gate-only, so the transcriber evaluated the whole old decision per grid cell. The tables hold
 the effective window, not the predicates.
+
+### Level-3: hemm, herk and her2k families measured on sm_89 {#level3-hermitian-families-measured-sm89}
+
+`batchlas_tune <op> --dtype cfloat --reps 8 --warm 0.5 --no-refine` (custom protocol, every arm verified),
+RTX 4090 GPU 1, vendor build (so `fold` and `expand` run whatever gemm the gemm table picks), 2026-10-22.
+Milliseconds for the whole batch, the median of the second pass. The per-item vendor loop loses by
+**5x-200x at every batch >= 128 cell below n = 1024**:
+
+| op, shape | batch | native winner | runner-up | vendor |
+|---|---|---|---|---|
+| herk N n=32 k=64 | 1024 | `fold` 0.032 | `gram` 0.040 | 5.73 |
+| herk N n=128 k=64 | 1024 | `fold` 0.472 | `triangular` 0.560 | 7.29 |
+| herk N n=128 k=8 | 1024 | `triangular` 0.353 | `fold` 0.420 | 3.79 |
+| herk N n=256 k=64 | 1024 | `triangular` 1.64 | `fold` 1.75 | 7.64 |
+| herk N n=256 k=512 | 1024 | `fold` 5.97 | `triangular` 6.68 | 34.5 |
+| herk N n=512 k=8 | 128 | `triangular` 0.480 | vendor 0.699 | `fold` 0.774 |
+| herk N n=768 k=8 | 128 | `triangular` 0.920 | vendor 1.03 | `fold` 1.70 |
+| herk N n=1024 k=8 | 128 | vendor 1.415 | `triangular` 1.509 | `fold` 2.96 |
+| herk N n=1024 k=512 | 128 | `triangular` 10.4 | vendor 11.3 | `fold` 12.2 |
+| her2k n=32 k=64 | 1024 | `fold` 0.036 | `triangular` 0.483 | 11.5 |
+| her2k n=256 k=8 | 1024 | `triangular` 1.19 | `fold` 1.87 | 6.99 |
+| her2k n=256 k=512 | 1024 | `fold` 6.40 | `triangular` 11.3 | 63.6 |
+| her2k n=512 k=8 | 128 | `triangular` 0.553 | `fold` 1.02 | 1.05 |
+| her2k n=1024 k=64 | 128 | `triangular` 3.67 | vendor 3.70 | `fold` 4.01 |
+| hemm m=n=128 | 1024 | `expand` 0.850 | | 8.38 |
+| hemm m=512 n=128 | 1024 | `expand` 9.96 | | 69.2 |
+
+ConjTrans herk matches NoTrans within 3%. Two rules follow, both written into the cfloat rows of
+`tuned/{herk,her2k}.{sm_89,sm_120}.txt`:
+
+- **The old herk fold window was wrong at small k above n = 256.** At n = 512 k = 8 it ranked `fold` (0.774 ms)
+  first, which loses to the vendor loop (0.699) as well as to `triangular` (0.480). The cfloat rows now rank
+  `triangular` first at 256 <= n <= 768 (except n = 256, k >= 512, where `fold` wins by 12%) and at n <= 128 with
+  k <= 8 and batch >= 1024; n > 768 keeps the vendor first (n = 1024 k = 8: vendor by 6%).
+- **her2k's `triangular` is two fused products,** so it pays for k: it wins only at k <= 8 (n >= 256, or n >= 128 at
+  batch >= 1024) and at n >= 1024 with k <= 64; `fold` wins everywhere else.
+
+complex<double> rows keep the transcribed rule (FP64 is not tuned on a 1:64 card, agent-guide §10). The
+complex-symmetric syrk and syr2k cfloat rows are ranked from these herk and her2k timings (the same kernels
+without the conjugate): `gram` first at n <= 64, `triangular` first up to n = 768, at batch >= 4 (syr2k batch >= 2).
+symm's complex rows copy hemm's rule. Vendor-free, `fold` and `expand` feed the native gemm; those builds were
+tested, not timed.
 
 ## Boundaries and their evidence
 
@@ -433,8 +486,8 @@ netlib's host tasks throw `std::runtime_error`.
 
 ### Level-3: scratch expansions and their ceilings
 
-`src/kernels/common/triangular_expand.hh` and `src/expansion_budget.hh`. Consumers are symm's and trmm's `expand` families
-(`expansion_fits` in `can_run`) and the fixed rules of `hemm_vendor`, `herk_vendor` and `her2k_vendor`.
+`src/kernels/common/triangular_expand.hh`, `src/expansion_budget.hh` and `src/ops/level3/batched.hh`. Consumers are the
+`expand` families of symm, hemm and trmm and the `fold` families of herk and her2k.
 
 - **Why an expansion.** SYMM, HEMM and TRMM must not touch the unreferenced triangle (TRMM under `Diag::Unit` must not
   touch the diagonal; HEMM not its imaginary part), and a GEMM aimed at the caller's A would read all of them. The
@@ -442,17 +495,16 @@ netlib's host tasks throw `std::runtime_error`.
   costs several times the GEMM it feeds, and it would be freed while kernels are still enqueued.
 - **Mirrored expansion.** It stages one tile pair per work-group through local memory: 1.5 n^2 of traffic, against
   3 n^2 for a copy plus an in-place symmetrize.
-- **Three hard ceilings.** The batch sits in grid z of `expand_mirrored` and `accumulate_hermitian`, so
-  `expansion_fits` refuses batch > 65535 (`ops::symm::kMaxGridBatch`). SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31
-  elements (a thrown `sycl::exception` at n = 2048 batch 512). The scratch also shares the device with A, B and C,
-  so the budget is a quarter of global memory. `BATCHLAS_EXPAND_MAX_BYTES` lowers the memory ceiling. A shape past
-  any ceiling fails `can_run` (hemm, herk, her2k: takes the per-item loop), and the row's next entry runs.
-- **Why `expansion_budget.hh` is outside `src/backends/`.** `src/ops/syev/sytrd/sytrd_blocked.cc` must know whether her2k
-  takes its GEMM route, and it is also built for ROCm and the host. There is one definition, because a reimplemented
-  ceiling drifts silently.
+- **Three hard ceilings, met by chunking.** The batch sits in grid z of `expand_mirrored` and `fold_hermitian`
+  (65535 on CUDA). SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31 elements
+  (a thrown `sycl::exception` at n = 2048 batch 512). The scratch also shares the device with A, B and C, so the
+  budget is a quarter of global memory; `BATCHLAS_EXPAND_MAX_BYTES` lowers it. `expansion_chunk` gives the most items
+  one launch may take under all three; the launch leases that much scratch once and walks the batch in chunks of
+  it (one expansion or gemm, then one gemm or fold, per chunk: batch / chunk launches, never batch). `can_run` refuses
+  only a shape whose single item does not fit, and the row's next entry runs.
 - **A guard must model the whole predicate.** The her2k guard in `sytrd_blocked` once replicated only the size ceiling,
-  and under `BATCHLAS_EXPAND_ROUTE=loop` it assumed the GEMM route while the loop ran. Hence `her2k_takes_gemm_route`
-  and `expansion_route_pin` (`1` = expand, `0` = loop, `-1` = unset).
+  and under the old `BATCHLAS_EXPAND_ROUTE=loop` it assumed the GEMM route while the loop ran. It now asks her2k's own
+  selection (`ops::her2k::picks_batched_route`, `src/ops/her2k/route.hh`).
 
 ### trmm: the generic recursion reads the whole square of A
 
@@ -464,16 +516,19 @@ reading A's unreferenced triangle. It was never instantiated by any backend and 
 
 - **trmm tile kernel is `Side::Left` only.** Every Right row ranks `expand` first. `ormbr` has the same WY update, is
   not wired, and feeds gesvd.
-- **ROCm has no native level-3 path** and no hemm, herk or her2k; its `syrk`, `syr2k` and `trmm` take the rocBLAS loop.
-- **`her2k_gemm_preferred` was swept only over square rank-k shapes.** The narrow panel case (k = nb in {16,24,32},
+- **ROCm has only the gemm-based families** (symm, hemm and trmm `expand`; herk and her2k `fold`); its `syrk`,
+  `syr2k` and `trmm` Left take the rocBLAS loop, and ROCm level-3 has never run here (syntax-checked only).
+- **her2k's transcribed `fold` window was swept only over square rank-k shapes.** The narrow panel case (k = nb in {16,24,32},
   n2 up to 480) awaits an A/B at n2 in {224,480}, `complex<float>`. `complex<double>` is unmeasured.
 - **The sm_89 tables are transcribed, not timed.** Suspects: `sq` rows that rank `triangular` from n = 129 (only n >= 384
   was measured to win); double `symm` rows that rank `vendor` first; `complex<float>` Left `trmm` rows that rank
   `triangular` first (it loses below m = 512). Retune by sweeping the families on the saturated grid (`tools/tune`).
 - **Unverified boundaries:** `257 <= n <= 383` for `syrk` `triangular`; batch 3 and `769 <= n <= 895` for herk; batch 1
   with `n >= 128` for her2k; the slack between the symm/hemm loss region and the shipped constants.
-- **Vendor-free gaps.** Still `NoRouteError` in a vendor-free build: hemm, herk, her2k, double syrk above n = 128, and
-  double syr2k. Their rows hold only `vendor`. Read the per-op census, not the pass count.
+- **Vendor-free gaps.** None on a GPU queue with homogeneous operands (2026-10-22): hemm, herk, her2k, double syrk
+  above n = 128 and double syr2k now have native families, and symm, syrk and syr2k take complex `T` (complex-symmetric,
+  2026-10-22). Left: complex<double> syr2k (vendor only: its triangular tile would need 64 KB of SLM) and complex<double>
+  syrk above n = 128 (gram only), and complex-symmetric syrk and syr2k on ROCm (rocblas.cc wraps neither, no ROCm tile).
 - **Instrumentation.** `symm_benchmark`, `syrk_benchmark` and `syr2k_benchmark` abort on the host backend at tiny shapes
   (SYCL assertion `adjustNDRangePerKernel: NDR.LocalSize[0] == 0`). Recorded 2026-09, not re-checked.
 - **Kernel headroom.** The trmm tile kernel runs at ~70% of cuBLAS's per-flop rate; closing that would turn m = 128..256

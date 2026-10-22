@@ -343,7 +343,7 @@ inline Event symm(Queue& ctx, const MA& A, const MB& B, const MC& C, const SymmO
 /// @param C     m x n per item; overwritten
 /// @param opts  alpha, beta, side, uplo
 /// @return      event of the last enqueued kernel
-/// @note  Real `T` only; use hemm() for complex.
+/// @note  Complex `T` is complex-symmetric; use hemm() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
@@ -454,7 +454,7 @@ inline Event syrk(Queue& ctx, const MA& A, const MC& C, const SyrkOptions<T>& op
 ///              left exactly as it was (mirror it with `symmetrize` if needed)
 /// @param opts  alpha, beta, uplo, trans
 /// @return      event of the last enqueued kernel
-/// @note  Real `T` only; use herk() for complex.
+/// @note  Complex `T` is complex-symmetric (NoTrans/Trans); use herk() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>
@@ -480,7 +480,7 @@ inline Event syr2k(Queue& ctx, const MA& A, const MB& B, const MC& C,
 /// @param C     n x n per item; only the `uplo` triangle is written
 /// @param opts  alpha, beta, uplo, trans
 /// @return      event of the last enqueued kernel
-/// @note  Real `T` only; use her2k() for complex.
+/// @note  Complex `T` is complex-symmetric (NoTrans/Trans); use her2k() for Hermitian.
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MB, detail::DenseMatrixLike MC,
           typename T = detail::dense_scalar_t<MA>>

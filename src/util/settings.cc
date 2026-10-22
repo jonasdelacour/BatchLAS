@@ -93,7 +93,6 @@ void load_routing(RoutingSettings& r) {
 }
 
 void load_selection(SelectionSettings& s) {
-    set_if_present(s.expand_route, "BATCHLAS_EXPAND_ROUTE");
     set_if_present(s.gemv_segt, "BATCHLAS_GEMV_SEGT");
     set_if_present(s.gesvd_bidiag, "BATCHLAS_GESVD_BIDIAG");
     set_if_present(s.geqrf_leaf, "BATCHLAS_GEQRF_LEAF");

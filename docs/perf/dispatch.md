@@ -104,9 +104,9 @@ Every other word throws: another level-3 op's spelling, `cublasdx`, the legacy `
 (`SyrkCandidates.UnknownPinsThrow`, `SymmCandidates.UnknownPinsThrow`,
 `TrmmCandidates.UnknownPinsThrow`). Pins apply and are checked for every dtype.
 
-Two neighbouring variables are not pins of these four ops. `herk` reaches syrk's conjugating Gram kernel only when
-`BATCHLAS_SYRK_ROUTE` is exactly `gram` (`ops::syrk::herk_gram_pinned()` in `src/ops/syrk/choice.hh`).
-`BATCHLAS_EXPAND_ROUTE=expand|loop` is read by hemm, herk and her2k only.
+hemm, herk and her2k are pinned the same way, by `BATCHLAS_HEMM_ROUTE`, `BATCHLAS_HERK_ROUTE` and
+`BATCHLAS_HER2K_ROUTE` (2026-10-22); the old `BATCHLAS_EXPAND_ROUTE` and herk's `BATCHLAS_SYRK_ROUTE=gram`
+opt-in are gone.
 
 ## Measured boundaries {#dispatch-measured-boundaries}
 
@@ -120,8 +120,8 @@ saturating batch (batch 1 is not a design target).
 ### Expansion crossover
 
 The old rule: expand when `batch >= 4 || max_dim >= 256` (`kExpandMinBatch`/`kExpandMinDim` in
-`src/kernels/common/triangular_expand.hh`). In code it survives only in `expansion_preferred`, which decides **hemm** and
-reads `BATCHLAS_EXPAND_ROUTE` first. For **symm** the rule is the float `form=sq` rows of `tuned/symm.sm_89.txt`.
+`src/kernels/common/triangular_expand.hh`, deleted). It survives as the rows of `tuned/hemm.sm_89.txt` (both dtypes)
+and the float `form=sq` rows of `tuned/symm.sm_89.txt`.
 
 Measured against a per-batch loop over the vendor's triangular primitive (float symm n 16..2048 x batch 1..512;
 complex64 hemm n 16..512 x batch 1..16), expansion wins **1.2x to 72x** everywhere except **batch <= 2 with n <= 128**,
@@ -226,13 +226,12 @@ above, with different constants.
 
 | predicate | shipped condition | evidence | bracketing non-winner |
 |---|---|---|---|
-| `herk_gemm_preferred` (`src/backends/cublas.cc`) | `batch >= 4 && n <= 768` | complex64, n 32..1024 x batch 1..256: 1.6x–72x for batch >= 4 at n <= 512 | a wash at n = 640..768; **0.82x–0.93x from n = 896 up**; batch <= 2 a wash or loss at every n |
-| `her2k_gemm_preferred` (`src/expansion_budget.hh`) | `batch >= 2` or `n >= 128` | 1.4x–128x everywhere else | batch 1 at n <= 64: **0.74x at n = 32, 0.89x at n = 64** |
+| `herk_gemm_preferred` (deleted; now `tuned/herk.sm_89.txt`) | `batch >= 4 && n <= 768` | complex64, n 32..1024 x batch 1..256: 1.6x–72x for batch >= 4 at n <= 512 | a wash at n = 640..768; **0.82x–0.93x from n = 896 up**; batch <= 2 a wash or loss at every n |
+| `her2k_gemm_preferred` (deleted; now `tuned/her2k.sm_89.txt`) | `batch >= 2` or `n >= 128` | 1.4x–128x everywhere else | batch 1 at n <= 64: **0.74x at n = 32, 0.89x at n = 64** |
 
 herk's rule is a conjunction with a large-n ceiling, because its GEMM computes both triangles and keeps one. The
-her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` before their window
-(`expansion_route_pin` in `src/expansion_budget.hh`, read by `herk_gemm_preferred` in `cublas.cc`), and both also need
-`expansion_fits`, else they take the vendor loop.
+her2k rule is a disjunction with no ceiling. Both were transcribed into their tables' `fold` rows; the old fit term
+is gone, since `fold` now chunks the batch to its scratch budget.
 
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
 > (`k = ib = nb` in {16, 24, 32}, n2 up to 480), where the fold adds an `n2^2 x batch` write and read that the two
@@ -251,7 +250,7 @@ Built, measured, rejected.
 | Vendor-independence stub layer `src/dispatch/absent/*.cc` | Restated all 26 vendor signatures; the two real bugs of the work were signature divergence between copies | Declined. The `if constexpr` at the call site replaces it |
 | `syrk`/`herk` for `ortho`'s Gram matrix, before a Gram kernel existed | 73x–96x slower at m 256..2048, k 32..128, batch 256..2048 (k < 384 failed both disjuncts; one `cublasSsyrk` per batch member) | Reversed once the Gram-tile kernel existed ([syrk tile boundaries](#syrk-tile-boundaries)) |
 | `trmm` for the WY block factor, before a tile kernel existed | Lost at every shape (0.195 to 0.238 ms at ib=32, nC=256, batch 2048; 0.779 to 1.152 ms at ib=256). The tile kernel then won: float 1.006x–1.046x, double 1.004x–1.016x; `complex<float>` 0.944x–0.995x; `complex<double>` 0.958x–1.010x at ib=16; netlib float/double 0.336x/0.379x at n=128, ib=16 | Shipped for float and double only; complex takes the GEMM. Split is per type, not per precision. A 16-row tile took `complex<double>` ib=16 from 0.958x to 0.996x and `double` to 1.013x–1.036x; it is kept for `double` |
-| Complex Gram tiles (`herk`) | 0.217 vs 0.206 ms at n=32, batch 2048; 2.08 vs 1.57 ms at n=128, batch 512. A complex multiply is four real ones, so herk is compute bound where real syrk is bandwidth bound | Rejected. The conjugating path stays reachable only with `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`), so it stays testable |
+| Complex Gram tiles (`herk`) | 0.217 vs 0.206 ms at n=32, batch 2048; 2.08 vs 1.57 ms at n=128, batch 512. A complex multiply is four real ones, so herk is compute bound where real syrk is bandwidth bound | Rejected (vendor build). Now herk's `gram` family, ranked after `fold` and `vendor`; pin `BATCHLAS_HERK_ROUTE=gram` |
 | `syr2k` for the `sytrd_blocked` trailing update, in `double` | 7.7x and 7.4x slower at n2=256, batch 1024; 1.9x slower at n2=512, batch 512; 1.55x faster only at n2=2048, batch 32 | Rejected for `double`. Float ships: 1.25x–1.66x on the update, 1.07x–1.27x end to end. The float path drops the upper-triangle symmetrize pass: nothing in the `sytrd_blocked` pipeline reads A's upper triangle, so the pass cost more than half the win |
 | `syr2k` at n = 1024 after WP1 S2, reported 10.9% faster | Repeating the step gave a 5.65–6.40 ms spread: noise | Not a win. Repeat flattering results as carefully as alarming ones |
 | `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_substitution_enabled<B, T>` |
@@ -291,8 +290,8 @@ Wrong answers found, how they hid, and what guards them now.
   when `alpha = -0.5` is forced. Its backward-error bound (`4 n eps ||A||`) is about 1000x looser than either route's
   error, so the load-bearing check is the relative one.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard copied only the size ceiling. Both
-  halves now live in `her2k_takes_gemm_route` (`src/expansion_budget.hh`), which the call site asks
-  (`src/ops/syev/sytrd/sytrd_blocked.cc:839`).
+  halves lived in `her2k_takes_gemm_route`; since her2k selects from a table, the call site asks her2k's own
+  selection (`ops::her2k::picks_batched_route`, `src/ops/her2k/route.hh`).
 
 ### The ormqr chooser's forced pin {#dispatch-the-ormqr-chooser-that-forced-past-supports}
 
@@ -369,12 +368,12 @@ created when no CUDA math library is present (`src/CMakeLists.txt:16-18`).
 
 ## Open debts
 
-1. **`syr2k` has no non-float native route.** `syr2k_triangular_tiles` is float only.
-2. **hemm, herk and her2k have no tables and no `BATCHLAS_<OP>_ROUTE`.** Vendor-free, they throw `NoRouteError`.
+1. **Closed 2026-10-22:** `syr2k_triangular_tiles` now serves double and complex<float> too.
+2. **Closed 2026-10-22:** hemm, herk and her2k select from tables and read `BATCHLAS_<OP>_ROUTE`.
 3. **The sm_89 level-3 tables are transcribed and untimed.** Only sm_120 has measured level-3 tables.
 4. **Unverified windows**, each a transcribed row edge with no bracketing grid: the 257 <= n <= 383 band that
    the float rows of `tuned/syrk.sm_89.txt` rank `triangular` first; the batch-3 and 128 < n < 256 `form=sq` cells that
-   the float rows of `tuned/symm.sm_89.txt` rank `vendor` first (and the same constants in hemm's `expansion_preferred`); and the old
+   the float rows of `tuned/symm.sm_89.txt` rank `vendor` first (and the same constants in the rows of `tuned/hemm.sm_89.txt`); and the old
    squareish 2:1 aspect ratio (the `form=sq` edge of the syrk table).
 5. **A coverage row cannot confirm that a particular shape ran.** Rows are keyed on a power-of-two `shape_class` and
    are first-writer-wins, so the m/n/k/batch columns can describe a different call. Prove a shape with a break that is

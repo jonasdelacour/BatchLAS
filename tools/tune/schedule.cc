@@ -294,6 +294,9 @@ const std::map<std::string, std::vector<std::string>>& op_dependencies() {
         {"trsm", {"gemm"}},
         {"trmm", {"gemm"}},
         {"symm", {"gemm"}},
+        {"hemm", {"gemm"}},
+        {"herk", {"gemm"}},
+        {"her2k", {"gemm"}},
         {"potrf", {"gemm", "trsm"}},
         {"getrf", {"gemm", "trsm"}},
         {"getrs", {"trsm"}},
@@ -312,7 +315,8 @@ const std::map<std::string, std::vector<std::string>>& op_dependencies() {
 const std::vector<std::string>& canonical_op_order() {
     static const std::vector<std::string> order{"gemm",  "trsm",  "syr2k", "gemv",  "spmm", "trmm",  "symm",
                                                 "syrk",  "potrf", "getrf", "getrs", "geqrf", "ormqr", "getri",
-                                                "posv",  "gesv",  "orgqr", "syev",  "gesvd"};
+                                                "posv",  "gesv",  "orgqr", "syev",  "gesvd", "hemm",  "herk",
+                                                "her2k"};
     return order;
 }
 

@@ -70,6 +70,11 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/gesv/kernels/gesv_tiny.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/posv/kernels/posv_tiny.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/trsm/kernels/trsm_sg_left.cc
+        # complex<float> 8x8 tile MACs of the triangular kernels (herk/her2k, complex syrk/syr2k)
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/syrk/syrk.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/syr2k/syr2k.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/herk/herk.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/her2k/her2k.cc
         PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
 endif()
 
@@ -151,7 +156,7 @@ add_custom_command(
 )
 target_sources(batchlas_selection_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are root-based
-# (<src/...>). ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
+# (<src/...>). ops/level3 holds headers the level-3 ops share (batch chunking, expand, fold).
 target_sources(batchlas_selection_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -165,7 +170,7 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/symm/symm.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/level3/level3.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/hemm/hemm.cc ops/herk/herk.cc ops/her2k/her2k.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
