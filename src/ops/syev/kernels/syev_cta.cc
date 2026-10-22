@@ -19,6 +19,7 @@
 #include <src/math-helpers.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 
@@ -89,10 +90,9 @@ Span<std::byte> ws_remaining(Span<std::byte> ws, std::size_t offset_bytes) {
     return Span<std::byte>(ws.data() + offset_bytes, ws.size() - offset_bytes);
 }
 
-} // namespace
 
 template <Backend B, typename T>
-Event syev_cta(Queue& ctx,
+Event syev_cta_part(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& a_in,
                Span<typename base_type<T>::type> eigenvalues,
                JobType jobz,
@@ -541,7 +541,7 @@ Event syev_cta(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t syev_cta_buffer_size(Queue& ctx,
+size_t syev_cta_part_buffer_size(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& a,
                             JobType jobz,
                             SteqrParams<T> steqr_params) {
@@ -671,6 +671,71 @@ size_t syev_cta_buffer_size(Queue& ctx,
     bytes += steqr_buffer_size<T>(ctx, d_dummy, e_dummy, evals_dummy, jobz, steqr_params_local);
 
     return bytes;
+}
+
+// Items per pass: sytrd_cta, steqr and ormqx_cta hand A, Z and the packed reflectors between
+// launches through L2. An item is A plus its share of the part workspace (the difference of two
+// part sizes, so per-allocation padding cancels). The query and the call must agree, so both use
+// it. evidence: docs/perf/syev.md#syev-l2-batch-chunking
+template <Backend B, typename T>
+int syev_cta_chunk(Queue& ctx, int n, int batch, JobType jobz, const SteqrParams<T>& params) {
+    constexpr int k = 64;
+    const auto part_ws = [&](int items) {
+        return static_cast<int64_t>(syev_cta_part_buffer_size<B, T>(
+            ctx, MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, items), jobz, params));
+    };
+    const auto dev = ctx.device();
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)) + (part_ws(2 * k) - part_ws(k)) / k,
+        static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
+} // namespace
+
+template <Backend B, typename T>
+Event syev_cta(Queue& ctx,
+               const MatrixView<T, MatrixFormat::Dense>& a_in,
+               Span<typename base_type<T>::type> eigenvalues,
+               JobType jobz,
+               Uplo uplo,
+               const Span<std::byte>& ws,
+               SteqrParams<T> steqr_params,
+               size_t cta_wg_size_multiplier,
+               Span<int32_t> info) {
+    const int n = static_cast<int>(a_in.rows());
+    const int batch = static_cast<int>(a_in.batch_size());
+    if (n < 1 || n > 32 || batch < 1 || a_in.rows() != a_in.cols())
+        return syev_cta_part<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, steqr_params, cta_wg_size_multiplier, info);
+    if (eigenvalues.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch))
+        throw batchlas::invalid_argument("syev_cta: eigenvalues span too small for n*batch.");
+    // Each part is a complete solve of its items, so the parts are independent; they share the
+    // one part-sized workspace, hence the wait between parts on an out-of-order queue.
+    const int chunk = syev_cta_chunk<B, T>(ctx, n, batch, jobz, steqr_params);
+    const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
+        if (b0 > 0 && !ctx.in_order()) ctx.wait();
+        (void)syev_cta_part<B, T>(
+            ctx, a_in.batch_range(b0, cb),
+            eigenvalues.subspan(static_cast<std::size_t>(b0) * n, static_cast<std::size_t>(cb) * n), jobz, uplo, ws,
+            steqr_params, cta_wg_size_multiplier,
+            info_requested ? info.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb)) : Span<int32_t>());
+    }
+    return ctx.get_event();
+}
+
+template <Backend B, typename T>
+size_t syev_cta_buffer_size(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& a,
+                            JobType jobz,
+                            SteqrParams<T> steqr_params) {
+    const int n = static_cast<int>(a.rows());
+    const int batch = static_cast<int>(a.batch_size());
+    if (n < 1 || n > 32 || batch < 1 || a.rows() != a.cols())
+        return syev_cta_part_buffer_size<B, T>(ctx, a, jobz, steqr_params);
+    const int chunk = syev_cta_chunk<B, T>(ctx, n, batch, jobz, steqr_params);
+    return syev_cta_part_buffer_size<B, T>(ctx, a.batch_range(0, chunk + batch % chunk), jobz, steqr_params);
 }
 
 #define SYEV_CTA_INSTANTIATE(back, fp) \

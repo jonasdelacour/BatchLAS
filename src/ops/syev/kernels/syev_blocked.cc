@@ -90,10 +90,9 @@ inline MatrixView<T, MatrixFormat::Dense> sytrd_lower_qsub_reflector_view(
     return a_sytrd({1, SliceEnd()}, {0, p});
 }
 
-} // namespace
 
 template <Backend B, typename T>
-Event syev_blocked(Queue& ctx,
+Event syev_blocked_part(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& a_in,
                    Span<typename base_type<T>::type> eigenvalues,
                    JobType jobz,
@@ -465,7 +464,7 @@ Event syev_blocked(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t syev_blocked_buffer_size(Queue& ctx,
+size_t syev_blocked_part_buffer_size(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& a,
                                 JobType jobz,
                                 Uplo uplo,
@@ -587,6 +586,70 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 
         return bytes;
     }
+}
+
+// Items per pass: sytrd_blocked, stedc and ormqr_blocked hand A, Z and the tridiagonal between
+// launches through L2, and their children (gemm, syr2k, trmm) are routed at this batch. An item
+// is A plus its share of the part workspace (the difference of two part sizes, so per-allocation
+// padding cancels). The query and the call must agree, so both use it.
+// evidence: docs/perf/syev.md#syev-l2-batch-chunking
+template <Backend B, typename T>
+int syev_blocked_chunk(Queue& ctx, int n, int batch, JobType jobz, Uplo uplo,
+                       const StedcParams<typename base_type<T>::type>& params) {
+    constexpr int k = 64;
+    const auto part_ws = [&](int items) {
+        return static_cast<int64_t>(syev_blocked_part_buffer_size<B, T>(
+            ctx, MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, items), jobz, uplo, params));
+    };
+    const auto dev = ctx.device();
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)) + (part_ws(2 * k) - part_ws(k)) / k,
+        static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
+} // namespace
+
+template <Backend B, typename T>
+Event syev_blocked(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& a_in,
+                   Span<typename base_type<T>::type> eigenvalues,
+                   JobType jobz,
+                   Uplo uplo,
+                   const Span<std::byte>& ws,
+                   StedcParams<typename base_type<T>::type> stedc_params,
+                   Span<int32_t> info) {
+    validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
+    const int n = static_cast<int>(a_in.rows());
+    const int batch = static_cast<int>(a_in.batch_size());
+    // Each part is a complete solve of its items, so the parts are independent; they share the
+    // one part-sized workspace on the in-order queue syev_blocked_part requires.
+    const int chunk = syev_blocked_chunk<B, T>(ctx, n, batch, jobz, uplo, stedc_params);
+    const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
+        (void)syev_blocked_part<B, T>(
+            ctx, a_in.batch_range(b0, cb),
+            eigenvalues.subspan(static_cast<std::size_t>(b0) * n, static_cast<std::size_t>(cb) * n), jobz, uplo, ws,
+            stedc_params,
+            info_requested ? info.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb)) : Span<int32_t>());
+    }
+    return ctx.get_event();
+}
+
+template <Backend B, typename T>
+size_t syev_blocked_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& a,
+                                JobType jobz,
+                                Uplo uplo,
+                                StedcParams<typename base_type<T>::type> stedc_params) {
+    const int n = static_cast<int>(a.rows());
+    const int batch = static_cast<int>(a.batch_size());
+    if (n < 1 || batch < 1 || a.rows() != a.cols())
+        return syev_blocked_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
+    const int chunk = syev_blocked_chunk<B, T>(ctx, n, batch, jobz, uplo, stedc_params);
+    return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, chunk + batch % chunk), jobz, uplo,
+                                               stedc_params);
 }
 
 #define SYEV_BLOCKED_INSTANTIATE(back, fp) \
