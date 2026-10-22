@@ -96,7 +96,7 @@ void throw_if_unservable(const MV<T>& A, const MV<T>& Bm, const char* who) {
 
 template <Backend Back, typename T>
 Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
+           Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
     gesv_validate_params<T>(A, B);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -107,7 +107,7 @@ Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
         ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::gesv::can_run<Back, T>(c, d, A, B); }, shape,
         {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
-        [&](const auto& c) { return ops::gesv::launch<Back, T>(ctx, c, A, B, pivots, work_space, info); });
+        [&](const auto& c) { return ops::gesv::launch<Back, T>(ctx, c, A, B, pivots, workspace, info); });
 }
 
 template <Backend Back, typename T>

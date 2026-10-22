@@ -94,7 +94,7 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A           batch of n x n matrices; overwritten with the Cholesky factor
 /// @param B           batch of n x nrhs right-hand sides; overwritten with X
 /// @param uplo        triangle of A that is read and receives the factor
-/// @param work_space  device-accessible scratch of at least posv_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least posv_buffer_size() bytes
 /// @param info        per-item status as for potrf(): 0 on success, i > 0 if the
 ///                    leading minor of order i is not positive definite (that
 ///                    item's X is meaningless). Empty span = not requested.
@@ -106,7 +106,7 @@ BATCHLAS_API Event posv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B,
                         Uplo uplo,
-                        Span<std::byte> work_space,
+                        Span<std::byte> workspace,
                         Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that posv() needs for these operands on this queue.
@@ -128,8 +128,8 @@ inline Event posv(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B,
                   Uplo uplo,
-                  Span<std::byte> work_space) {
-    return posv<Back, T>(ctx, A, B, uplo, work_space, Span<int32_t>{});
+                  Span<std::byte> workspace) {
+    return posv<Back, T>(ctx, A, B, uplo, workspace, Span<int32_t>{});
 }
 
 

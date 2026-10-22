@@ -116,7 +116,7 @@ void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const Matr
 
 template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
+           Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     posv_validate_params<T>(A, B, uplo);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -130,7 +130,7 @@ Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
         [&](const auto& c) {
             // Cta and Blocked chain potrf into the solves, so they need an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::posv::launch<Back, T>(q, c, A, B, uplo, work_space, info);
+                return ops::posv::launch<Back, T>(q, c, A, B, uplo, workspace, info);
             });
         });
 }

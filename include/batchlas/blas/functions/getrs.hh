@@ -89,7 +89,7 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param B           batch of n x nrhs right-hand sides; overwritten with X
 /// @param transA      which of A, A^T, A^H to solve with
 /// @param pivots      pivots from getrf(), `n * batch` entries
-/// @param work_space  device-accessible scratch of at least getrs_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least getrs_buffer_size() bytes
 /// @return event of the last enqueued kernel
 /// @pre `A.rows() == A.cols() == B.rows()`, equal batch sizes, and
 ///      `pivots.size() >= n * batch` (checked by the option overloads only)
@@ -104,7 +104,7 @@ BATCHLAS_API Event getrs(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& B,
                         Transpose transA,
                         Span<int64_t> pivots,
-                        Span<std::byte> work_space);
+                        Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that getrs() needs for these operands on this queue.
 /// @ingroup api_factorizations_lowlevel
@@ -130,7 +130,7 @@ BATCHLAS_API Event getrs_vendor(Queue& ctx,
                                 const MatrixView<T,MatrixFormat::Dense>& B,
                                 Transpose transA,
                                 Span<int64_t> pivots,
-                                Span<std::byte> work_space);
+                                Span<std::byte> workspace);
 
 
 /// @brief Workspace query of the vendor arm of getrs().

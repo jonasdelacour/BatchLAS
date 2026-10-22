@@ -107,7 +107,7 @@ std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
 
 template <Backend B, typename T>
 Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
-            Span<std::byte> work_space, Span<int32_t> info) {
+            Span<std::byte> workspace, Span<int32_t> info) {
     getrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -117,7 +117,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
     return select::run<B, T>(
         ops::getrf::spec, ctx, key, ops::getrf::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getrf::can_run<B, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getrf::launch<B, T>(ctx, c, A, pivots, work_space, info); });
+        [&](const auto& c) { return ops::getrf::launch<B, T>(ctx, c, A, pivots, workspace, info); });
 }
 
 template <Backend B, typename T>

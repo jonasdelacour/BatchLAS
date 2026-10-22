@@ -817,13 +817,13 @@ namespace batchlas {
     Event geqrf_vendor(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
         Span<T> tau,
-        Span<std::byte> work_space) {
+        Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
         auto k = std::min(m, n);
         auto batch_size = A.batch_size();
-        auto pool = BumpAllocator(work_space);
+        auto pool = BumpAllocator(workspace);
         if (batch_size <= 1) {
             handle.setStream(ctx);  // the query below runs on whatever stream the static handle last had
             cusolverDnParams_t params;
@@ -1070,12 +1070,12 @@ namespace batchlas {
         const MatrixView<T,MatrixFormat::Dense>& B,
         Transpose transA,
         Span<int64_t> pivots,
-        Span<std::byte> work_space) {
+        Span<std::byte> workspace) {
             static LinalgHandle<Back> handle;
             auto n = A.rows();
             auto nrhs = B.cols();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // ONE ARM FOR EVERY BATCH SIZE, and the deleted `batch_size <= 1`
             // special case was a CRASH, not an optimisation.
             //
@@ -1126,12 +1126,12 @@ namespace batchlas {
     Event getrf_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
         Span<int64_t> pivots,
-        Span<std::byte> work_space,
+        Span<std::byte> workspace,
         Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // cuBLAS's infoArray is a genuine per-item device array with LAPACK
             // semantics (0 = ok, >0 = the column where U went exactly singular).
             // It used to be pool scratch that nothing ever read.
@@ -1158,7 +1158,7 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& A,
         const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
         Span<int64_t> pivots,
-        Span<std::byte> work_space,
+        Span<std::byte> workspace,
         Span<int32_t> info_out) {
             if (A.data_ptr() == C.data_ptr()) {
                 throw batchlas::invalid_argument("getri_vendor (CUBLAS): cublas<t>getriBatched is out of place; C aliases A");
@@ -1166,7 +1166,7 @@ namespace batchlas {
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // Same story as getrf_vendor: cuBLAS writes a per-item infoArray
             // (>0 = U(i,i) is exactly zero, so this item has no inverse) and the
             // result was thrown away, leaving the caller a matrix of infinities.

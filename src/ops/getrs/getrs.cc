@@ -93,7 +93,7 @@ std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T
 
 template <Backend Back, typename T>
 Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-            Transpose transA, Span<int64_t> pivots, Span<std::byte> work_space) {
+            Transpose transA, Span<int64_t> pivots, Span<std::byte> workspace) {
     getrs_validate_params<T>(A, B);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -104,7 +104,7 @@ Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     return select::run<Back, T>(
         ops::getrs::spec, ctx, key, ops::getrs::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getrs::can_run<Back, T>(c, d, A, B); }, shape, key,
-        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, A, B, transA, pivots, work_space); });
+        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, A, B, transA, pivots, workspace); });
 }
 
 template <Backend Back, typename T>

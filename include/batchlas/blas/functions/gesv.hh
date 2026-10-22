@@ -89,21 +89,21 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A           batch of n x n matrices; overwritten with L and U
 /// @param B           batch of n x nrhs right-hand sides; overwritten with X
 /// @param pivots      pivot output, `n * batch` entries in getrf()'s format
-/// @param work_space  device-accessible scratch of at least gesv_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least gesv_buffer_size() bytes
 /// @param info        per-item status as for getrf(): 0 on success, i > 0 if
 ///                    U(i,i) is exactly zero (that item's X is meaningless).
 ///                    Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
 /// @throws batchlas::workspace_error if the composed getrf + getrs route is
-///         chosen and @p work_space is shorter than its getrf leg needs
+///         chosen and @p workspace is shorter than its getrf leg needs
 /// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event gesv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B,
                         Span<int64_t> pivots,
-                        Span<std::byte> work_space,
+                        Span<std::byte> workspace,
                         Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that gesv() needs for these operands on this queue.
@@ -124,8 +124,8 @@ inline Event gesv(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B,
                   Span<int64_t> pivots,
-                  Span<std::byte> work_space) {
-    return gesv<Back, T>(ctx, A, B, pivots, work_space, Span<int32_t>{});
+                  Span<std::byte> workspace) {
+    return gesv<Back, T>(ctx, A, B, pivots, workspace, Span<int32_t>{});
 }
 
 

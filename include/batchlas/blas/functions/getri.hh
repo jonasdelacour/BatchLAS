@@ -95,7 +95,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A           batch of n x n LU factors from getrf()
 /// @param C           batch of n x n outputs, receives \f$ A^{-1} \f$
 /// @param pivots      pivots from getrf(), `n * batch` entries
-/// @param work_space  device-accessible scratch of at least getri_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least getri_buffer_size() bytes
 /// @param info        per-item LAPACK status, one int32 per batch item: 0 on
 ///                    success, i > 0 if U(i,i) is exactly zero, so the item has
 ///                    no inverse (its C is not meaningful). Empty span = not requested.
@@ -113,7 +113,7 @@ BATCHLAS_API Event getri(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          Span<int64_t> pivots,
-                         Span<std::byte> work_space,
+                         Span<std::byte> workspace,
                          Span<int32_t> info);
 
 /// @brief getri() without per-item status (`info` not requested).
@@ -124,8 +124,8 @@ inline Event getri(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots,
-            Span<std::byte> work_space) {
-        return getri<B,T>(ctx, A, C, pivots, work_space, Span<int32_t>{});
+            Span<std::byte> workspace) {
+        return getri<B,T>(ctx, A, C, pivots, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.
@@ -151,7 +151,7 @@ BATCHLAS_API Event getri_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
                                 const MatrixView<T, MatrixFormat::Dense>& C,
                                 Span<int64_t> pivots,
-                                Span<std::byte> work_space,
+                                Span<std::byte> workspace,
                                 Span<int32_t> info_out);
 
 

@@ -89,7 +89,7 @@ std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
 
 template <Backend Back, typename T>
 Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
-            Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
+            Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
     getri_validate_params<T>(A, C);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -99,7 +99,7 @@ Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     return select::run<Back, T>(
         ops::getri::spec, ctx, key, ops::getri::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, work_space, info); });
+        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, workspace, info); });
 }
 
 template <Backend Back, typename T>

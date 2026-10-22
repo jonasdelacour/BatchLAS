@@ -74,7 +74,7 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 }  // namespace ops::geqrf
 
 template <Backend Back, typename T>
-Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> work_space) {
+Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     geqrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -85,7 +85,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     return select::run<Back, T>(
         ops::geqrf::spec, ctx, key, ops::geqrf::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::geqrf::can_run<T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, work_space); });
+        [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
 template <Backend Back, typename T>
