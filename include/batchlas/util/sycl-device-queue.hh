@@ -238,6 +238,7 @@ struct BATCHLAS_API Device{
     /// @brief The device's vendor.
     Vendor get_vendor() const;
     /// @brief The value of one device property (units as documented on DeviceProperty).
+    /// @throws batchlas::invalid_argument for a value that names no DeviceProperty.
     size_t get_property(DeviceProperty property) const;
 
     /// @brief True when `size` is one of the device's supported sub-group sizes.

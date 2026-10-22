@@ -353,7 +353,8 @@ size_t Device::get_property(DeviceProperty property) const {
         case 8: return d.get_info<sycl::info::device::mem_base_addr_align>();
         case 9: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
         case 10: return d.get_info<sycl::info::device::global_mem_cache_size>();
-        default: std::cerr << "Unknown property" << std::endl; return 0;
+        default: throw batchlas::invalid_argument("Device::get_property: unknown DeviceProperty " +
+                                                  std::to_string(int(property)));
     }
 }
 

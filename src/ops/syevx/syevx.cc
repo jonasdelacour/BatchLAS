@@ -7,6 +7,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <src/queue.hh>
 #include <src/ops/syevx/syevx.hh>
+#include <src/util/internal-api.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>
@@ -269,14 +270,11 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
             }
             // Environment override: degrade (to Direct, the one universal
             // substitute) so a forced-algorithm diagnostic sweep can finish.
-            static std::once_flag warned;
-            std::call_once(warned, [name]() {
-                std::fprintf(stderr,
-                             "batchlas: BATCHLAS_SYEVX_ALGORITHM=%s cannot answer a non-extremal "
-                             "range (SyevxSelect::Index / ::Value); degrading to Direct for those "
-                             "calls. This warning is printed once per process.\n",
-                             name);
-            });
+            batchlas::detail::warn_once(std::string("syevx_degrade:") + name,
+                                        std::string("BATCHLAS_SYEVX_ALGORITHM=") + name +
+                                            " cannot answer a non-extremal range (SyevxSelect::Index / ::Value); "
+                                            "degrading to Direct for those calls. This warning is printed once "
+                                            "per process.");
             return SyevxAlgorithm::Direct;
         }
     }

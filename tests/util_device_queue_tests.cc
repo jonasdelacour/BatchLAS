@@ -66,6 +66,8 @@ TEST(DeviceTest, DeviceProperties) {
             size_t wg_size = device.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
             size_t compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
         });
+        // Was a stderr print and a silent 0.
+        EXPECT_THROW((void)device.get_property(static_cast<DeviceProperty>(999)), batchlas::invalid_argument);
         
         // Device name and vendor should return something
         EXPECT_FALSE(device.get_name().empty());

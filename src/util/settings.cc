@@ -8,13 +8,16 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
+#include <src/util/internal-api.hh>
 
 #include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <optional>
 #include <cstdlib>
+#include <functional>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -45,20 +48,25 @@ std::once_flag g_load_once;
 // Closes configure(). Atomic: a Queue may be built on another thread.
 std::atomic<bool> g_queue_constructed{false};
 
-// The unsafe gate: one warning per VARIABLE per process (reloads are frequent); never reset.
+// The unsafe gate: one warning per VARIABLE per process (reloads are frequent).
 #if !BATCHLAS_ALLOW_UNSAFE_ENV
-std::once_flag g_warn_skip_pointer_checks;
-std::once_flag g_warn_latrd_force_unsafe;
-std::once_flag g_warn_blas_health_off;
-
 void warn_unsafe_ignored(const char* variable, const char* consequence) {
-    std::fprintf(stderr,
-                 "batchlas: %s is set in the environment, but this build was configured "
-                 "with BATCHLAS_ALLOW_UNSAFE_ENV=OFF, so it is being IGNORED (%s). "
-                 "Reconfigure with -DBATCHLAS_ALLOW_UNSAFE_ENV=ON to allow it.\n",
-                 variable, consequence);
+    detail::warn_once(std::string("unsafe:") + variable,
+                      std::string(variable) + " is set in the environment, but this build was configured "
+                      "with BATCHLAS_ALLOW_UNSAFE_ENV=OFF, so it is being IGNORED (" + consequence +
+                      "). Reconfigure with -DBATCHLAS_ALLOW_UNSAFE_ENV=ON to allow it.");
 }
 #endif
+
+std::mutex& warn_mutex() {
+    static auto* m = new std::mutex();  // leaked: a warning may come from a static destructor
+    return *m;
+}
+
+std::set<std::string, std::less<>>& warned_tags() {
+    static auto* s = new std::set<std::string, std::less<>>();
+    return *s;
+}
 
 // ---------------------------------------------------------------------------
 
@@ -286,27 +294,20 @@ void load_unsafe(UnsafeSettings& u) {
     // BlasHealth::Error is stricter than the default and is let through.
     if (u.skip_pointer_checks && !base.skip_pointer_checks) {
         u.skip_pointer_checks = base.skip_pointer_checks;
-        std::call_once(g_warn_skip_pointer_checks, [] {
-            warn_unsafe_ignored("BATCHLAS_SKIP_POINTER_CHECKS",
-                                "device-pointer argument checks stay ENABLED");
-        });
+        warn_unsafe_ignored("BATCHLAS_SKIP_POINTER_CHECKS", "device-pointer argument checks stay ENABLED");
     }
     if (u.latrd_grid_force_unsafe && !base.latrd_grid_force_unsafe) {
         u.latrd_grid_force_unsafe = false;
-        std::call_once(g_warn_latrd_force_unsafe, [] {
-            warn_unsafe_ignored("BATCHLAS_LATRD_GRID_FORCE_UNSAFE",
-                                "the grid-latrd work-group count stays clamped to the "
-                                "co-residency cap, which is what keeps its spin barrier "
-                                "from deadlocking");
-        });
+        warn_unsafe_ignored("BATCHLAS_LATRD_GRID_FORCE_UNSAFE",
+                            "the grid-latrd work-group count stays clamped to the "
+                            "co-residency cap, which is what keeps its spin barrier "
+                            "from deadlocking");
     }
     if (u.blas_health == UnsafeSettings::BlasHealth::Off && base.blas_health != u.blas_health) {
         u.blas_health = base.blas_health;
-        std::call_once(g_warn_blas_health_off, [] {
-            warn_unsafe_ignored("BATCHLAS_BLAS_HEALTH=off",
-                                "the host-dgemm correctness probe still runs; it is the only "
-                                "detection of a host BLAS that computes dgemm incorrectly");
-        });
+        warn_unsafe_ignored("BATCHLAS_BLAS_HEALTH=off",
+                            "the host-dgemm correctness probe still runs; it is the only "
+                            "detection of a host BLAS that computes dgemm incorrectly");
     }
 #endif
 }
@@ -358,6 +359,24 @@ void note_queue_constructed() noexcept {
 
 bool queue_constructed() noexcept {
     return g_queue_constructed.load(std::memory_order_relaxed);
+}
+
+void warn(std::string_view text) {
+    std::fprintf(stderr, "batchlas: %.*s\n", static_cast<int>(text.size()), text.data());
+}
+
+bool warn_once(std::string_view tag, std::string_view text) {
+    {
+        std::lock_guard<std::mutex> lock(warn_mutex());
+        if (!warned_tags().emplace(tag).second) return false;
+    }
+    warn(text);
+    return true;
+}
+
+void reset_warnings() {
+    std::lock_guard<std::mutex> lock(warn_mutex());
+    warned_tags().clear();
 }
 
 }  // namespace detail

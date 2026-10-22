@@ -1,6 +1,7 @@
 #pragma once
 #include <batchlas/blas/linalg.hh>
 #include <src/queue.hh>
+#include <src/util/internal-api.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/util/mempool.hh>
 #include <execution>
@@ -854,15 +855,18 @@ namespace batchlas{
                 cudaDeviceSynchronize();
                 auto blas_status = cublasDestroy(blas_handle_);
                 if (blas_status != CUBLAS_STATUS_SUCCESS) {
-                    std::cerr << "CUBLAS initialization failed with status: " << blas_status << std::endl;
+                    batchlas::detail::warn("cuBLAS handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(blas_status)));
                 }
                 auto sparse_status = cusparseDestroy(sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
-                    std::cerr << "CUSPARSE initialization failed with status: " << sparse_status << std::endl;
+                    batchlas::detail::warn("cuSPARSE handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(sparse_status)));
                 }
                 auto solver_status = cusolverDnDestroy(solver_handle_);
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
-                    std::cerr << "CUSOLVER initialization failed with status: " << solver_status << std::endl;
+                    batchlas::detail::warn("cuSOLVER handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(solver_status)));
                 }
                 cudaDeviceSynchronize();
             }
