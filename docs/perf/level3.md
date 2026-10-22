@@ -148,10 +148,35 @@ before the timed call). ns per item; both passes agree within 2%; pass 2 shown.
 | | 65536 | vendor | 189.7 / 192.8 | wide, 2 slices | 213.1 / 213.6 |
 | | 131072 | vendor | 201.5 / 199.6 | wide, 3 slices | 217.8 / 217.6 |
 
-syrk past 65535 is 76× faster and flat in the batch. gemm 32^3 is flat and 1.5-2% faster than `small`. gemm 128^3
-past 65535 is 7-12% slower than the vendor it used to fall to, and so is the single-launch `wide` at 65535: the
-sm_120 table's last batch row is 32768, and from 65535 up cuBLAS wins this shape. That is a missing table row (the
-table, not the slicing; the slices cost nothing at 65535 against 65536), open for the next gemm retune.
+syrk past 65535 is 76× faster and flat in the batch. gemm 32^3 is flat and 1.5-2% faster than `small`.
+
+**gemm 128^3 float NN packed, the vendor comparison** (2026-10-22, same GPU and harness, one tree; three passes of
+9 reps each, arm order rotated per pass, warm and cold interleaved; median of the three pass medians, ns per item;
+ratio to the vendor pin). Auto is `wide:m=64:n=64:k=16` at every batch:
+
+| batch | Auto warm / cold | vendor warm / cold | `wide 64×64×16` | `reg 128×128×8 u1` | Auto / vendor | reg / vendor |
+|---:|---:|---:|---:|---:|---:|---:|
+| 32768 | 179.5 / 189.6 | 174.8 / 177.5 | 176.1 / 186.0 | 171.3 / 171.1 | 1.03 / 1.07 | 0.98 / 0.96 |
+| 65535 | 214.8 / 215.1 | 193.8 / 195.1 | 210.6 / 211.4 | 178.1 / 177.7 | 1.11 / 1.10 | 0.92 / 0.91 |
+| 65536 | 219.3 / 217.6 | 197.7 / 197.6 | 212.7 / 213.5 | 178.6 / 177.7 | 1.11 / 1.10 | 0.90 / 0.90 |
+| 131072 | 212.2 / 213.4 | 199.4 / 200.5 | 213.0 / 212.6 | 178.1 / 178.3 | 1.06 / 1.06 | 0.89 / 0.89 |
+
+Auto past 65535 is 6-11% slower than the vendor it used to fall to, as `wide` alone is at 65535 (a single launch),
+so the slices cost nothing. The vendor is not the best arm: `reg 128×128×8` is 9-11% faster than it past 65535 and
+2-4% at 32768. Past 32768 the per-pass spread is 5-9% for Auto, `wide` and the vendor (the first pass lowest), under 3.3% for
+`reg`; every pass ranks `reg` < vendor < Auto and `wide`. The select trace shows why: the row Auto reads is
+`m=n=k=64 batch=32768` (`wide 64×64×16 1.45 ms`), not a 128^3 row. 128^3 has rows at batch 128 and 2048 only (`reg`
+first at 2048): from 32768 up its cells exceed the tuner's 4 GiB byte cap, so the weighted log distance reaches the
+64^3 row first. A row at 65536 does not help this shape under the default cap
+([tiered tuning](../design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder)); it needs `--cap-gib 32`.
+
+One pass each, Auto against the vendor pin (same harness, 9 reps): gemm 64^3 Auto (`wide 64×64×16`, its own row)
+is 6-9% faster than the vendor at 32768-131072; gemm 256^3 (32768-65536) reads a transcribed `vendor` row and
+matches it (+0.1-0.6%); syrk n = k = 128 Auto (`gram`) is 15× faster than the vendor loop at every batch. Of the
+shapes checked only gemm 128^3 regresses, from 32768 up (3-7% there, before the cliff).
+
+Files: `benchmarks/results/batch_sensitivity/f4b/` (`gemm128_timing.csv`, `gemm128_routes.log`,
+`gemm128_summary.txt`, `quick_timing.csv`, `quick_routes.log`; the harness `bsweep.cc.txt` and `timing.sh.txt`).
 
 Tests: `GridBatchPastTheCeilingRunsAsSlices` (gemm, syrk, trmm, symm), `SplitKPastTheGridRunsAsSlices`,
 `Syr2kCandidates.GridCeilingsAreCanRunTerms`, `HerkTest.GramBatchPastTheGridRunsAsSlices` and the expansion tests
