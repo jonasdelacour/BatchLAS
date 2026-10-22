@@ -6,6 +6,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <cstdint>
+#include <cstring>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
@@ -392,6 +393,142 @@ TYPED_TEST(SyevTest, VendorRouteHonoursLdSubViewsAndBatchStride) {
                               MV::orthogonality(*this->ctx, A, A0.all_items()))
                     << where;
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Defect 14 (the entry mirrors the named triangle) and repeatability under a pinned route.
+// evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Item b is H diag(d) H^H with H = I - 2 u u^H, |u| = 1 (complex u for complex T) and a graded,
+// sign-mixed d = +-10^[-2, 2]: entry (i, j) = d_i [i = j] + 2 (2 s - d_i - d_j) u_i conj(u_j), with
+// s = sum d_k |u_k|^2, so the batch costs O(n^2). `buf` (ld = n + 3, stride = ld n + 5) gets the
+// `uplo` triangle and `poison` in the other one; `full` gets the whole matrix. Returns sorted d.
+template <typename T>
+std::vector<std::vector<double>> fill_graded_hermitian(T* buf, int ld, int stride, Uplo uplo, T poison,
+                                                       MatrixView<T, MatrixFormat::Dense> full) {
+    const int n = full.rows();
+    std::vector<std::vector<double>> lambda(full.batch_size());
+    for (int b = 0; b < full.batch_size(); ++b) {
+        std::mt19937 gen(91u + 13u * unsigned(b) + unsigned(n));
+        std::uniform_real_distribution<double> dis(-1.0, 1.0);
+        std::vector<std::complex<double>> u(n);
+        double nrm = 0.0;
+        for (auto& x : u) {
+            x = {dis(gen), is_std_complex_v<T> ? dis(gen) : 0.0};
+            nrm += std::norm(x);
+        }
+        std::vector<double> d(n);
+        double s = 0.0;
+        for (int i = 0; i < n; ++i) {
+            u[i] /= std::sqrt(nrm);
+            d[i] = (i % 2 ? -1.0 : 1.0) * std::pow(10.0, n == 1 ? 0.0 : -2.0 + 4.0 * i / (n - 1)) * (1.0 + 0.01 * b);
+            s += d[i] * std::norm(u[i]);
+        }
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) {
+                std::complex<double> a = 2.0 * (2.0 * s - (d[i] + d[j])) * u[i] * std::conj(u[j]);
+                if (i == j) a = {a.real() + d[i], 0.0};
+                const T v = vendor_syev_cast<T>(a);
+                full(i, j, b) = v;
+                const bool named = uplo == Uplo::Lower ? i >= j : i <= j;
+                buf[size_t(b) * stride + i + size_t(j) * ld] = named ? v : poison;
+            }
+        std::sort(d.begin(), d.end());
+        lambda[b] = d;
+    }
+    return lambda;
+}
+
+template <typename T>
+T unreferenced_poison() {
+    return vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
+}
+
+}  // namespace
+
+// Large finite poison (90 ||A||_2) in the triangle the caller did not name, under Auto, on a strided
+// batch. Auto reaches the small solvers at n <= 32 and blocked / two_stage above (by jobz and dtype);
+// before the entry mirror several of them read the other triangle.
+TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    const int batch = 2;
+    for (const int n : {5, 32, 40, 400, 1024})
+        for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                const std::string where = "n=" + std::to_string(n) + (uplo == Uplo::Lower ? " L" : " U") +
+                                          (jobz == JobType::EigenVectors ? " V" : " N");
+                const int ld = n + 3, stride = ld * n + 5;
+                UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                const auto lambda = fill_graded_hermitian<T>(buf.data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
+                MV A(buf.data(), n, n, ld, stride, batch);
+                UnifiedVector<Real> W(size_t(n) * batch, Real(0));
+                UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W.to_span(), jobz, uplo));
+                (void)syev<B, T>(*this->ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                this->ctx->wait();
+
+                double scale = 0.0;
+                for (const auto& l : lambda) scale = std::max({scale, std::fabs(l.front()), std::fabs(l.back())});
+                const VectorView<Real> w(W.data(), n, batch);
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, scale, A0.all_items())) << where;
+                if (jobz != JobType::EigenVectors) continue;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
+                    << where;
+                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(*this->ctx, A, A0.all_items()))
+                    << where;
+            }
+}
+
+// Same device, same route, same build: two solves of copies of one batch agree bit for bit (W and
+// the whole buffer: eigenvectors, the other triangle and the padding). cta's batch of 1024 fills
+// the device with sub-group partitions.
+TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "the pinned native families are GPU kernels";
+    } else {
+        struct Case {
+            const char* route;
+            int n, batch;
+        };
+        const Case cases[] = {{"cta", 17, 64},      {"cta", 32, 1024},     {"blocked", 32, 64},
+                              {"blocked", 400, 64}, {"two_stage", 40, 64}, {"two_stage", 400, 64}};
+        for (const Case& c : cases) {
+            if (B == Backend::ROCM && std::string(c.route) == "cta") continue;
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", c.route);
+            for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    const std::string where = std::string(c.route) + " n=" + std::to_string(c.n) +
+                                              (uplo == Uplo::Lower ? " L" : " U") +
+                                              (jobz == JobType::EigenVectors ? " V" : " N");
+                    const int ld = c.n + 3, stride = ld * c.n + 5;
+                    Matrix<T, MatrixFormat::Dense> A0(c.n, c.n, c.batch);
+                    UnifiedVector<T> buf[2] = {UnifiedVector<T>(size_t(stride) * c.batch, T(0)),
+                                               UnifiedVector<T>(size_t(stride) * c.batch, T(0))};
+                    UnifiedVector<Real> W[2] = {UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-1)),
+                                                UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-2))};
+                    for (int r = 0; r < 2; ++r) {
+                        (void)fill_graded_hermitian<T>(buf[r].data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
+                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch);
+                        UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo));
+                        (void)syev<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                        this->ctx->wait();
+                    }
+                    EXPECT_EQ(0, std::memcmp(W[0].data(), W[1].data(), W[0].size() * sizeof(Real)))
+                        << where << ": eigenvalues differ between two runs";
+                    EXPECT_EQ(0, std::memcmp(buf[0].data(), buf[1].data(), buf[0].size() * sizeof(T)))
+                        << where << ": eigenvectors or A differ between two runs";
+                }
         }
     }
 }
