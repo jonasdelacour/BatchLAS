@@ -5,6 +5,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syr2k.hh>
+#include <batchlas/error.hh>
 
 #include <src/ops/syr2k/choice.hh>
 #include <src/select/select.hh>
@@ -69,7 +70,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
                 return backend::detail::syr2k_triangular_tiles<float>(q, A, Bm, C, alpha, beta, uplo, t);
             }
             else
-                throw std::logic_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
+                throw batchlas::internal_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -85,7 +86,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, RealScalar T>
 Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Uplo uplo, Transpose transA) {
-    backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+    backend::shape::validate_rank_2k<batchlas::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as syrk's does (the cuBLAS loop faults on one).
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

@@ -7,6 +7,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trmm.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/trmm/choice.hh>
@@ -100,13 +101,13 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             if constexpr (select::native_gpu_backend<B>)
                 return backend::detail::trmm_triangular_tiles<T>(q, A, Bm, C, alpha, uplo, transA, diag);
             else
-                throw std::logic_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (select::native_gpu_backend<B>)
                 return launch_expand<B, T>(q, A, Bm, C, alpha, side, uplo, transA, diag);
             else
-                throw std::logic_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -123,7 +124,7 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, typename T>
 Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
-    (void)backend::shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
+    (void)backend::shape::validate_product<batchlas::invalid_argument>("TRMM", A, B, C, side);
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
     // and the cuBLAS loop faults on one.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();

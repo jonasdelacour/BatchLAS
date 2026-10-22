@@ -9,8 +9,9 @@
 namespace batchlas::backend::shape {
 
 // The level-3 shape checks shared by every backend. E is the exception type.
-// The public entries (level3.cc, symm/syrk/syr2k/trmm) already throw std::invalid_argument
-// up front; netlib's host-task copy (std::runtime_error) is a second check.
+// The public entries (level3.cc, symm/syrk/syr2k/trmm) and the cuBLAS/rocBLAS families throw
+// batchlas::invalid_argument; netlib's host-task copy runs after the public check, so a throw
+// there is a batchlas::internal_error.
 // evidence: docs/perf/level3.md#level-3-one-set-of-shape-validators
 
 // What symm/hemm/trmm derive: C is m x n and A is square of order k.

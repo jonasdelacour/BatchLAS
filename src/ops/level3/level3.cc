@@ -41,7 +41,7 @@ Event hemm(Queue& ctx,
            Uplo uplo) {
     // Both arms (expansion into one gemm, the per-item vendor loop) run each item at the top-level
     // extents, so a heterogeneous batch would get a padded answer.
-    backend::shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+    backend::shape::validate_product<batchlas::invalid_argument>("HEMM", A, B, C, side);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous())
         throw batchlas::invalid_argument("HEMM: a heterogeneous batch (per-item active dims), which no arm serves");
     // An empty problem is a no-op in every build and under any pin, as symm's is.
@@ -64,7 +64,7 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
-    backend::shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+    backend::shape::validate_rank_k<batchlas::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
     if (A.is_heterogeneous() || C.is_heterogeneous())
         throw batchlas::invalid_argument("HERK: a heterogeneous batch (per-item active dims), which no arm serves");
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
@@ -87,7 +87,7 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
-    backend::shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+    backend::shape::validate_rank_2k<batchlas::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous())
         throw batchlas::invalid_argument("HER2K: a heterogeneous batch (per-item active dims), which no arm serves");
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();

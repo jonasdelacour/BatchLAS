@@ -9,6 +9,7 @@
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <sycl/sycl.hpp>
@@ -334,7 +335,7 @@ Event small_batched(Queue& ctx,
     default:
         if constexpr (kSmallMaxDimFor<T> >= 64)
             return launch_small_batched<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
-        else throw std::logic_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
+        else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
     }
 }
 

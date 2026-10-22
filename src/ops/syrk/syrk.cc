@@ -5,6 +5,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syrk.hh>
+#include <batchlas/error.hh>
 
 #include <src/ops/syrk/choice.hh>
 #include <src/backends/level3_shape.hh>
@@ -76,13 +77,13 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
             if constexpr (select::native_gpu_backend<B>)
                 return backend::detail::syrk_gram_tiles<T, false>(q, A, C, alpha, beta, uplo, transA);
             else
-                throw std::logic_error("syrk: gram is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>)
                 return backend::detail::syrk_triangular_tiles<float>(q, A, C, alpha, beta, uplo, transA);
             else
-                throw std::logic_error("syrk: triangular is a float native-GPU kernel");
+                throw batchlas::internal_error("syrk: triangular is a float native-GPU kernel");
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -98,7 +99,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 template <Backend Back, RealScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
-    (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+    (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.
