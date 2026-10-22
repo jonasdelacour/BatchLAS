@@ -822,21 +822,23 @@ namespace batchlas{
             LinalgHandle() {
                 cudaDeviceSynchronize();
                 auto blas_status = cublasCreate(&blas_handle_);
-                if (blas_status != CUBLAS_STATUS_SUCCESS) {
-                    std::cerr << "CUBLAS initialization failed with status: " << blas_status << std::endl;
-                    throw batchlas::device_error("CUBLAS initialization failed");
-                }
+                if (blas_status != CUBLAS_STATUS_SUCCESS)
+                    throw batchlas::device_error("cuBLAS initialization failed with status " +
+                                                 std::to_string(static_cast<int>(blas_status)));
 
                 auto sparse_status = cusparseCreate(&sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
-                    std::cerr << "CUSPARSE initialization failed with status: " << sparse_status << std::endl;
-                    throw batchlas::device_error("CUSPARSE initialization failed");
+                    cublasDestroy(blas_handle_);  // no destructor runs for a throwing constructor
+                    throw batchlas::device_error("cuSPARSE initialization failed with status " +
+                                                 std::to_string(static_cast<int>(sparse_status)));
                 }
 
                 auto solver_status = cusolverDnCreate(&solver_handle_);
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
-                    std::cerr << "CUSOLVER initialization failed with status: " << solver_status << std::endl;
-                    throw batchlas::device_error("CUSOLVER initialization failed");
+                    cusparseDestroy(sparse_handle_);
+                    cublasDestroy(blas_handle_);
+                    throw batchlas::device_error("cuSOLVER initialization failed with status " +
+                                                 std::to_string(static_cast<int>(solver_status)));
                 }
                 cudaDeviceSynchronize();
             }
