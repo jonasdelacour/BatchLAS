@@ -19,14 +19,14 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 ### LU: families and their limits
 
-The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:43-44`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
+The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`; getrf: any m x n, see [getrf non-square](#getrf-non-square-m-x-n)), and `n, batch >= 1` (`getrf.cc`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
 
 | op | family | driver | `can_run` beyond the common term |
 |---|---|---|---|
-| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:48`) |
-| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:50`) |
-| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:53-54`) |
-| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
+| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | square, `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` |
+| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | square: `n <= getrf_cta_max_n_for_slm<T>(budget)`; m x n: `getrf_cta_fits_rect<T>(m, n, budget)`; both occupancy-scaled |
+| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`; any m x n |
+| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only. The only family for a non-square A on NETLIB; a heterogeneous A has no route |
 | `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
 | `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
 | `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |

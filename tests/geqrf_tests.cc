@@ -921,8 +921,10 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         struct S { int m, n; bool blocked; };
-        const S shapes[] = {{40, 24, false}, {96, 96, true}, {100, 70, true}};
+        // The wide rows: cuSOLVER takes m < n, so the native wide factor must be its drop-in too.
+        const S shapes[] = {{40, 24, false}, {96, 96, true}, {100, 70, true}, {16, 40, false}, {40, 130, true}};
         for (const S& s : shapes) {
+            if (!s.blocked && !this->cta_fits(s.m, s.n)) continue;
             auto p = make_problem<T>(s.m, s.n, 3, 5309u + unsigned(s.n));
             auto V = view_of(p);
             const std::size_t vws =
@@ -979,55 +981,81 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
     }
 }
 
-// G8. m < n, m == n, m > n. geqrf's can_run refuses m < n as a CORRECTNESS gate: a wide
-// view walks the trailing update past the bottom of the panel. The direct entry points are
-// reachable without the selector, so both are checked.
-TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
+// G8. m < n: the whole wide factorization, k = m reflectors, R upper trapezoidal m x n. A wide
+// shape used to be refused; the residual, the pad scan and the ormqr round trip below are what
+// see a trailing update that stops at column m or walks past row m. Straddles nb (m = 1, nb,
+// nb + 1, several panels) and the CTA fit; both pins and both direct entry points.
+// evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
+TYPED_TEST(GeqrfTest, WideFactorsTheWholeMatrix) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
     using ops::geqrf::GeqrfChoice;
-
-    // (a) a cta or blocked PIN is refused on m < n (R6: a can_run-false pin throws), and
-    // accepted on m == n and m > n (cta only where it fits).
-    {
-        auto p = make_problem<T>(24, 40, 2, 11u);           // WIDE
-        auto V = view_of(p);
+    const int nb = this->nb(256, 256);
+    struct S { int m, n, b; };
+    const S shapes[] = {{1, 7, 3}, {8, 100, 3}, {24, 40, 3}, {nb, 3 * nb + 5, 3}, {nb + 1, 2 * nb + 3, 3},
+                        {70, 200, 2}, {3 * nb + 2, 4 * nb, 2}};
+    int cta_ran = 0;
+    for (const S& sh : shapes) {
+        const std::string what = std::to_string(sh.m) + "x" + std::to_string(sh.n);
         for (const GeqrfChoice c : {GeqrfChoice{ops::geqrf::Cta{}}, GeqrfChoice{ops::geqrf::Blocked{}}}) {
+            const bool cta = std::holds_alternative<ops::geqrf::Cta>(c);
+            auto p = make_problem<T>(sh.m, sh.n, sh.b, 11u + 7u * unsigned(sh.m) + unsigned(sh.n));
+            auto V = view_of(p);
             select::ScopedPin<GeqrfChoice> pin("geqrf", c);
-            EXPECT_THROW(((void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())), std::invalid_argument)
-                << select::to_string(c);
+            if (cta && !this->cta_fits(sh.m, sh.n)) {
+                EXPECT_THROW(((void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())), std::invalid_argument)
+                    << what << ": a cta pin past the fit was accepted";
+                continue;
+            }
+            cta_ran += cta;
+            const std::size_t ws = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
+            UnifiedVector<std::byte> w(std::max<std::size_t>(ws, 1));
+            ASSERT_NO_THROW((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>(w.data(), ws)))
+                << select::to_string(c) << " " << what;
+            this->ctx->wait();
+            check_one(*this->ctx, p, (select::to_string(c) + " wide " + what).c_str());
+            if (this->HasFailure()) return;
         }
     }
-    const std::pair<int, int> ok[] = {{40, 40}, {64, 40}};
-    for (const auto& dims : ok) {
-        auto p = make_problem<T>(dims.first, dims.second, 2, 12u);
-        auto V = view_of(p);
-        {
-            select::ScopedPin<GeqrfChoice> pin("geqrf", ops::geqrf::Blocked{});
-            EXPECT_NO_THROW(((void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())))
-                << dims.first << "x" << dims.second;
-        }
-        select::ScopedPin<GeqrfChoice> pin("geqrf", ops::geqrf::Cta{});
-        bool accepted = true;
-        try {
-            (void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
-        } catch (const std::invalid_argument&) {
-            accepted = false;
-        }
-        EXPECT_EQ(accepted, this->cta_fits(dims.first, dims.second)) << dims.first << "x" << dims.second;
-    }
+    EXPECT_GE(cta_ran, 3) << "the CTA tier fit too few wide shapes to be covered";
 
-    // (b) the KERNELS refuse it too, rather than returning wrong numbers.
+    // The direct entry points agree with the pins: blocked takes every wide shape.
     {
         auto p = make_problem<T>(24, 40, 2, 13u);
         auto V = view_of(p);
-        UnifiedVector<std::byte> wb(4096);
-        EXPECT_THROW(
-            (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
-            std::invalid_argument);
-        EXPECT_THROW(
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam()),
-            std::invalid_argument);
+        UnifiedVector<std::byte> wb(std::max<std::size_t>(1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
+        EXPECT_NO_THROW(
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam()));
+        this->ctx->wait();
+        check_one(*this->ctx, p, "blocked direct wide");
+    }
+
+    // The consumer: Q from the routed ormqr on the leading m x m reflector block, then
+    // ||A0 - Q triu(F)|| over the whole m x n. A wrong A(:, m:n) leaves the residual above green.
+    {
+        const int m = 40, n = 3 * nb + 9, batch = 3;
+        auto p = make_problem<T>(m, n, batch, 2469u);
+        auto V = view_of(p);
+        select::ScopedPin<GeqrfChoice> pin("geqrf", ops::geqrf::Blocked{});
+        const std::size_t ws = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
+        UnifiedVector<std::byte> w(std::max<std::size_t>(ws, 1));
+        (void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>(w.data(), ws));
+        this->ctx->wait();
+        const MatrixView<T, MatrixFormat::Dense> Lead(p.buf.data(), m, m, p.ld, p.stride, batch, p.ptrs.data());
+        const int cld = m + 3, cstride = cld * m + 7;
+        UnifiedVector<T> C(static_cast<size_t>(cstride) * batch, MVof<T>::make(0, 0));
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < m; ++j) C[static_cast<size_t>(b) * cstride + static_cast<size_t>(j) * cld + j] = MVof<T>::make(1, 0);
+        UnifiedVector<T*> cptrs(static_cast<size_t>(batch), nullptr);
+        MatrixView<T, MatrixFormat::Dense> Cv(C.data(), m, m, cld, cstride, batch, cptrs.data());
+        const std::size_t ows = ormqr_buffer_size<B, T>(*this->ctx, Lead, Cv, Side::Left, Transpose::NoTrans, p.tau.to_span(), 0);
+        UnifiedVector<std::byte> ow(ows ? ows : 1);
+        (void)ormqr<B, T>(*this->ctx, Lead, Cv, Side::Left, Transpose::NoTrans, p.tau.to_span(), ow.to_span(), 0);
+        this->ctx->wait();
+        const MVof<T> A0v(p.a0.data(), m, n, p.ld, p.stride, batch), Fv(p.buf.data(), m, n, p.ld, p.stride, batch);
+        const double err = MVof<T>::qr_reconstruction(*this->ctx, A0v, Cv, Fv, A0v.all_items());
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m, err, residual_slack<T>(m, m))
+            << "ormqr's Q from a wide factor does not reproduce A0 over all n columns";
     }
 }
 

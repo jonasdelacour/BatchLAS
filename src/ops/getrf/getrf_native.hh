@@ -106,6 +106,11 @@ BATCHLAS_INTERNAL_API bool getrf_cta_fits(
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
 template <typename T>
+BATCHLAS_INTERNAL_API bool getrf_cta_fits_rect(
+    int m, int n, std::size_t slm_budget_bytes,
+    int min_blocks_per_sm = resident::kMinBlocksPerSm);
+
+template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n);  // G | wg<<16
 
 template <typename T>

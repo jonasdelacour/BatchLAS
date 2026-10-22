@@ -17,6 +17,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 
+#include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
 
 #include <src/ops/getrf/getrf_native.hh>
@@ -121,6 +122,75 @@ void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool i
     }
 }
 
+// An m x n batch: padded ld, a stride that is not ld * n, a poisoned pad, unstructured entries with
+// an imaginary part, an optional exactly-zero column (its U diagonal is exactly zero, so info is
+// zero_col + 1). The pivot span is exactly min(m, n) * batch int64s; the int32 tail past the packed
+// list is poisoned and must survive.
+template <typename T>
+struct Rect {
+    int m = 0, n = 0, batch = 0, ld = 0, stride = 0;
+    UnifiedVector<T> buf;
+    std::vector<T> a0;
+    UnifiedVector<T*> ptrs;
+    UnifiedVector<int64_t> piv;
+    UnifiedVector<int32_t> info;
+    int mn() const { return std::min(m, n); }
+    MVof<T> A() { return MVof<T>(buf.data(), m, n, ld, stride, batch, ptrs.data()); }
+    Span<int64_t> pivots() { return Span<int64_t>(piv.data(), std::size_t(mn()) * batch); }
+    const int* ip(int b) const { return reinterpret_cast<const int*>(piv.data()) + std::size_t(b) * mn(); }
+};
+
+template <typename T>
+Rect<T> make_rect(int m, int n, int batch, unsigned seed, int period = 0, int zero_col = -1) {
+    Rect<T> p;
+    p.m = m, p.n = n, p.batch = batch, p.ld = m + 3, p.stride = p.ld * n + 5;
+    p.buf = UnifiedVector<T>(std::size_t(p.stride) * batch, MVof<T>::make(-9.75e3, 4.5e3));
+    p.ptrs = UnifiedVector<T*>(std::size_t(batch), nullptr);
+    p.piv = UnifiedVector<int64_t>(std::size_t(p.mn()) * batch + 8, int64_t(0x0BADBEEF0BADBEEFLL));
+    p.info = UnifiedVector<int32_t>(std::size_t(batch), int32_t(-12345));
+    for (int b = 0; b < batch; ++b) {
+        const unsigned src = unsigned(period > 0 ? b % period : b);
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i) {
+                const unsigned e = seed * 7919u + src * 104729u + unsigned(j) * 1009u + unsigned(i);
+                const double re = double(int((e * 2654435761u) % 1999u) - 999) / 500.0;
+                const double im = double(int((e * 40503u) % 13u) - 6) / 4.0;
+                p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + i] =
+                    j == zero_col ? MVof<T>::make(0.0, 0.0) : MVof<T>::make(re, im);
+            }
+    }
+    p.a0.assign(p.buf.begin(), p.buf.end());
+    return p;
+}
+
+template <typename T>
+void expect_rect_factored(Queue& ctx, const Rect<T>& p, const std::string& what, int zero_col) {
+    const int mn = p.mn();
+    const int want_info = (zero_col >= 0 && zero_col < mn) ? zero_col + 1 : 0;
+    for (int b = 0; b < p.batch; ++b) ASSERT_EQ(p.info[b], want_info) << what << " item " << b;
+    const int* raw = reinterpret_cast<const int*>(p.piv.data());
+    for (std::size_t i = std::size_t(mn) * p.batch; i < 2 * p.piv.size(); ++i)
+        ASSERT_EQ(raw[i], int(0x0BADBEEF)) << what << ": pivot tail written at int32 " << i;
+    std::vector<int> items{0, p.batch - 1};
+    if (p.batch == 1) items = {0};
+    const MVof<T> A0(const_cast<T*>(p.a0.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    for (int b : items) {
+        for (int k = 0; k < mn; ++k)
+            ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.m) << what << " item " << b << " pivot " << k;
+        std::vector<std::int32_t> ref;
+        if (verify::getrf_pivots(A0, b, ref))
+            for (int k = 0; k < mn; ++k) ASSERT_EQ(p.ip(b)[k], ref[k]) << what << " item " << b << ": LAPACKE pivot " << k;
+    }
+    const MVof<T> F(const_cast<T*>(p.buf.data()), p.m, p.n, p.ld, p.stride, p.batch);
+    const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.ip(0))), mn, p.batch, 1, mn);
+    const double r = MVof<T>::getrf_residual(ctx, A0, F, piv, items);
+    EXPECT_VERIFY(T, verify::Check::factorization, std::max(p.m, p.n), r) << what << " residual " << r;
+    for (std::size_t e = 0; e < p.a0.size(); ++e) {
+        const int rr = int(e % p.stride), i = rr % p.ld, j = rr / p.ld;
+        if (!(i < p.m && j < p.n)) ASSERT_TRUE(same_bits(p.buf[e], p.a0[e])) << what << ": padding written at " << e;
+    }
+}
+
 // The choice the outermost getrf trace line names for whatever `run` calls.
 template <class F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
@@ -193,6 +263,24 @@ protected:
         if (std::holds_alternative<gf::Blocked>(c)) return sycl_getrf::getrf_blocked_available<T>();
         return kVendor;
     }
+    bool expect_runs_rect(const C& c, int m, int n) const {
+        if (m == n) return expect_runs(c, n);
+        if (m < 1 || n < 1) return false;
+        if (std::holds_alternative<gf::Cta>(c)) return sycl_getrf::getrf_cta_fits_rect<T>(m, n, budget());
+        if (std::holds_alternative<gf::Blocked>(c)) return sycl_getrf::getrf_blocked_available<T>();
+        return std::holds_alternative<gf::Vendor>(c) && kVendor && B != Backend::CUDA;
+    }
+    // The CTA fit's edges at 24 columns / 24 rows, asked of the predicate rather than hardcoded.
+    int cta_tall_m() const {
+        int m = 24;
+        while (sycl_getrf::getrf_cta_fits_rect<T>(m + 1, 24, budget())) ++m;
+        return m;
+    }
+    int cta_wide_n() const {
+        int n = 24;
+        while (sycl_getrf::getrf_cta_fits_rect<T>(24, n + 1, budget())) ++n;
+        return n;
+    }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor exists.
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<gf::Vendor>(c) && !kVendor; }
 
@@ -206,6 +294,41 @@ protected:
     void run_pinned(const C& c, Lu<T>& p) {
         const Pin pin("getrf", c);
         run(p);
+    }
+    void run_rect(Rect<T>& p) {
+        const std::size_t bytes = getrf_buffer_size<B, T>(*this->ctx, p.A());
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
+        (void)getrf<B, T>(*this->ctx, p.A(), p.pivots(), Span<std::byte>(ws.data(), bytes), p.info.to_span());
+        this->ctx->wait();
+    }
+    bool direct_rect(const C& c, Rect<T>& p, std::string* why) {
+        Queue& q = *this->ctx;
+        const MV A = p.A();
+        try {
+            if (std::holds_alternative<gf::Tiny>(c)) {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_tiny_buffer_size<T>(q, A)));
+                (void)sycl_getrf::getrf_tiny_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
+            } else if (std::holds_alternative<gf::Cta>(c)) {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_cta_buffer_size<T>(q, A)));
+                (void)sycl_getrf::getrf_cta_dispatch<T>(q, A, p.pivots(), ws.to_span(), p.info.to_span());
+            } else if (std::holds_alternative<gf::Blocked>(c)) {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(1, sycl_getrf::getrf_blocked_buffer_size<T>(q, A)));
+                (void)sycl_getrf::getrf_blocked_dispatch<T>(
+                    q, A, p.pivots(), ws.to_span(), p.info.to_span(),
+                    [](Queue& c2, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
+                       ComputePrecision pr) { return gemm<B, T>(c2, ga, gb, gc, al, be, ta, tb, pr); },
+                    [](Queue& c2, const MV& ta, const MV& tb, T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
+                        return trsm<B, T>(c2, ta, tb, al, sd, ul, tr, dg);
+                    });
+            } else {
+                return false;
+            }
+            q.wait();
+            return true;
+        } catch (const std::exception& e) {
+            if (why) *why = e.what();
+            return false;
+        }
     }
     // getrf_buffer_size runs choose() and launches nothing.
     bool pin_accepted(const C& c, const MV& A) {
@@ -365,11 +488,19 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
             EXPECT_TRUE(this->pin_accepted(c, a.A())) << TestFixture::name(c, 8, 0);
             EXPECT_NO_THROW(this->run_pinned(c, a)) << TestFixture::name(c, 8, 0);
         }
-        // A non-square view: refused by the pin and by the driver alike.
-        UnifiedVector<T> w(std::size_t(24) * 32, MVof<T>::make(1.0, 0.5));
-        UnifiedVector<T*> wp(1, nullptr);
-        const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
-        EXPECT_FALSE(this->pin_accepted(c, W)) << select::to_string(c) << " non-square";
+        // Non-square views, wide and tall, inside and past the CTA fit: pin == driver == oracle.
+        for (auto [m, n] : {std::pair{24, 32}, std::pair{32, 24}, std::pair{24, this->cta_wide_n() + 1},
+                            std::pair{this->cta_tall_m() + 1, 24}}) {
+            auto a = make_rect<T>(m, n, 2, 63u + m);
+            auto b = make_rect<T>(m, n, 2, 63u + m);
+            const bool pin = this->pin_accepted(c, a.A());
+            std::string why;
+            const bool run = this->direct_rect(c, b, &why);
+            const std::string what = select::to_string(c) + " " + std::to_string(m) + "x" + std::to_string(n);
+            EXPECT_EQ(pin, run) << what << ": can_run says " << pin << ", the driver " << (run ? "launches" : "refuses: " + why);
+            EXPECT_EQ(pin, this->expect_runs_rect(c, m, n)) << what << ": can_run disagrees with the oracle";
+            disagreements += pin != run;
+        }
     }
     EXPECT_EQ(disagreements, 0);
 }
@@ -396,24 +527,71 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
 }
 
-// The squareness gate: every native pin
-// refuses a non-square getrf. On a GPU queue the vendor is cuBLAS getrfBatched, square-only, so
-// there is no route; vendor-free, NoRouteError. NETLIB and ROCm take it: GetrfVendor below.
-TYPED_TEST(GetrfCandidates, NonSquareHasNoRouteOnTheGpuQueue) {
+// A4: an m x n getrf is the whole ?GETRF on the native tiers -- min(m, n) pivots per item at stride
+// min(m, n), packed -- so CUDA (whose cuBLAS getrfBatched is square-only) and vendor-free builds both
+// serve it. Tall and wide, straddling 1, the blocked width 32 and the CTA fit, under each pin and Auto:
+// LAPACKE's pivots exactly, an exactly-zero column's info, the residual, the pad and the pivot tail.
+// evidence: docs/perf/lu.md#getrf-non-square-m-x-n
+TYPED_TEST(GetrfCandidates, NonSquareFactorsWholeMatrixNatively) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
-    UnifiedVector<T> w(std::size_t(24) * 32 * 2, MVof<T>::make(1.0, 0.5));
-    UnifiedVector<T*> wp(2, nullptr);
-    const MVof<T> W(w.data(), 24, 32, 24, 24 * 32, 2, wp.data());
+    const std::pair<int, int> shapes[] = {{2, 1},   {1, 2},   {9, 1},    {1, 9},    {33, 32},  {32, 33},
+                                          {64, 24}, {24, 64}, {65, 33},  {33, 65},  {300, 70}, {70, 300},
+                                          {512, 64}, {64, 512}, {this->cta_tall_m(), 24}, {24, this->cta_wide_n()}};
+    std::vector<C> pins;
     for (const C& c : gf::candidates<T>())
-        if (!std::holds_alternative<gf::Vendor>(c)) EXPECT_FALSE(this->pin_accepted(c, W)) << select::to_string(c);
-    const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
-    if constexpr (B == Backend::ROCM && TestFixture::kVendor)
-        EXPECT_EQ((getrf_buffer_size<B, T>(*this->ctx, W)), (backend::getrf_vendor_buffer_size<B, T>(*this->ctx, W)));
-    else if constexpr (TestFixture::kVendor)
-        EXPECT_NO_RUNNABLE_KERNEL((void)getrf_buffer_size<B, T>(*this->ctx, W));
-    else
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), batchlas::NoRouteError);
+        if (!std::holds_alternative<gf::Vendor>(c)) pins.push_back(c);
+    int ran = 0;
+    for (auto [m, n] : shapes)
+        for (int zero_col : {-1, std::min(m, n) / 2})
+            for (std::size_t k = 0; k <= pins.size(); ++k) {
+                const bool is_auto = k == pins.size();
+                auto p = make_rect<T>(m, n, 3, 97u + 13u * unsigned(m) + unsigned(n), 0, zero_col);
+                const std::string what = (is_auto ? std::string("auto") : select::to_string(pins[k])) + " " +
+                                         std::to_string(m) + "x" + std::to_string(n) + " zero_col=" + std::to_string(zero_col);
+                if (is_auto) {
+                    const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
+                    const std::string got = traced_choice([&] { this->run_rect(p); });
+                    if constexpr (TestFixture::B == Backend::CUDA)
+                        EXPECT_NE(got, "vendor") << what << ": cuBLAS getrfBatched is square-only";
+                } else {
+                    if (!this->expect_runs_rect(pins[k], m, n)) {
+                        EXPECT_FALSE(this->pin_accepted(pins[k], p.A())) << what << " was accepted";
+                        continue;
+                    }
+                    const Pin pin("getrf", pins[k]);
+                    this->run_rect(p);
+                }
+                ++ran;
+                expect_rect_factored(*this->ctx, p, what, zero_col);
+                if (::testing::Test::HasFatalFailure()) return;
+            }
+    EXPECT_GE(ran, 60);
+}
+
+// The packed SLM leaf (Cta) and the blocked driver's SLM gathers, saturated: 2048 / 1024 identical
+// m x n items, each bit-identical to item 0, tall and wide.
+TYPED_TEST(GetrfCandidates, NonSquareSaturatingBatchIsBitIdentical) {
+    using T = typename TestFixture::T;
+    struct S { C c; int m, n, batch; };
+    const S cases[] = {{gf::Cta{}, 12, 20, 2048}, {gf::Cta{}, 20, 12, 2048}, {gf::Cta{}, 40, 24, 1024},
+                       {gf::Blocked{}, 80, 40, 1024}, {gf::Blocked{}, 40, 80, 1024}};
+    for (const S& k : cases) {
+        if (!this->expect_runs_rect(k.c, k.m, k.n)) continue;
+        auto p = make_rect<T>(k.m, k.n, k.batch, 171u, /*period=*/1);
+        const Pin pin("getrf", k.c);
+        this->run_rect(p);
+        const std::string what = select::to_string(k.c) + " " + std::to_string(k.m) + "x" + std::to_string(k.n);
+        expect_rect_factored(*this->ctx, p, what, -1);
+        const int mn = p.mn();
+        for (int it = 1; it < p.batch; ++it) {
+            for (int j = 0; j < k.n; ++j)
+                for (int i = 0; i < k.m; ++i)
+                    ASSERT_TRUE(same_bits(p.buf[std::size_t(it) * p.stride + std::size_t(j) * p.ld + i],
+                                          p.buf[std::size_t(j) * p.ld + i]))
+                        << what << ": item " << it << " differs at (" << i << "," << j << ")";
+            for (int q = 0; q < mn; ++q) ASSERT_EQ(p.ip(it)[q], p.ip(0)[q]) << what << " item " << it;
+        }
+    }
 }
 
 // B6: a non-square getrf is the whole m x n factorization with min(m, n) pivots per item (packed),
@@ -427,7 +605,7 @@ TYPED_TEST(GetrfVendor, NonSquareFactorsWholeMatrix) {
     using T = typename TypeParam::ScalarType;
     static constexpr Backend B = TypeParam::BackendVal;
     if constexpr (B != Backend::NETLIB || !batchlas::select::factorization_vendor_available<B>) {
-        GTEST_SKIP() << "the NETLIB vendor only; CUDA: GetrfCandidates.NonSquareHasNoRouteOnTheGpuQueue";
+        GTEST_SKIP() << "the NETLIB vendor only; GPU: GetrfCandidates.NonSquareFactorsWholeMatrixNatively";
     } else {
         const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
         for (auto [m, n] : {std::pair{24, 32}, std::pair{32, 24}}) {

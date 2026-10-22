@@ -176,10 +176,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
     }
-    if (m < n) {
-        throw batchlas::invalid_argument(
-            "geqrf_blocked: m < n is not supported (geqrf's can_run refuses it)");
-    }
+    // m < n is ?GEQRF's own loop: k = m panels, each trailing update spanning all n columns,
+    // so the reflectors' Q^H reaches A(:, m:n) with no separate ormqr pass.
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
     }

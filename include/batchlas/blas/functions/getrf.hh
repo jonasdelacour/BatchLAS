@@ -46,9 +46,9 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 /// @brief Validates the arguments of the positional getrf() entry point.
 ///
 /// Checks only non-negative extents. Squareness and the pivot span's length are
-/// checked by the option overloads, not here: every native kernel's can_run
-/// refuses a non-square view, which sends it to the vendor rather than rejecting
-/// it (in a vendor-free build: batchlas::NoRouteError).
+/// checked by the option overloads, not here: this positional entry point factors
+/// an m x n view whole (the native cta and blocked kernels, and the NETLIB and
+/// ROCm vendors, take it; cuBLAS does not).
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup api_factorizations_lowlevel
 // Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
@@ -87,9 +87,9 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
 /// @param ctx         queue the kernels are enqueued on
 /// @param A           batch of n x n matrices; overwritten with L and U. An m x n batch is
-///                    factored whole by the NETLIB and ROCm vendors (min(m, n) pivots per item,
-///                    packed); CUDA has no route for it
-/// @param pivots      pivot output, at least `n * batch` `int64_t` elements
+///                    factored whole, min(m, n) pivots per item packed at stride min(m, n),
+///                    by the native kernels on a GPU queue and by the NETLIB and ROCm vendors
+/// @param pivots      pivot output, at least `min(m, n) * batch` `int64_t` elements
 /// @param work_space  device-accessible scratch of at least getrf_buffer_size() bytes
 /// @param info        per-item LAPACK status, one int32 per batch item: 0 on
 ///                    success, i > 0 if U(i,i) is exactly zero (1-based; the

@@ -38,7 +38,7 @@ Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n
 
 **Correctness terms.**
 
-- `m >= n` for native `geqrf`: a wide view walks past the bottom of the panel in the trailing update. `n <= m` for `orgqr`: Q's columns live in \f$C^m\f$.
+- Native `geqrf` takes any m x n on `cta` and `blocked` ([geqrf wide shapes](#geqrf-wide-shapes-m-less-than-n)); `tiny` is square-only. `n <= m` for `orgqr`: Q's columns live in \f$C^m\f$.
 - GPU-only for both. Heterogeneous batches are refused by both (nothing in this tree gets heterogeneous-batch QR right, netlib included, `src/backends/netlib_lapack.cc:1207-1217` (geqrf), `:1249-1252` (orgqr)).
 - `d.has_sg32` is `geqrf`'s alone. It enumerates `sycl::info::device::sub_group_sizes` (`src/select/select.cc:231`, `src/util/queue-impl.cc:338-349`) and is never inferred from `MAX_SUB_GROUP_SIZE`, which returns the first size and so accepts a `{64}` device; a `reqd_sub_group_size(32)` kernel there aborts at launch. `orgqr`'s `can_run` has neither `has_sg32` nor the SLM budget, because `ormqr_blocked` has no `reqd_sub_group_size` and holds nothing resident.
 
@@ -188,7 +188,7 @@ Break K3 replaced LAPACK's real-beta `larfg` sign convention with `internal::lar
 
 ### Short final panels on square matrices
 
-Reference break 1 (drop the last reflector) is green for float and double on a square matrix and red for complex: the final reflector acts on a 1x1 block, where LAPACK returns `tau = 0` for a real scalar but non-zero for a complex one. **A short-final-panel regression test on a square real matrix guards nothing**; use `m > n`, a middle panel, or complex. Break 5 (drop a middle reflector) is red for all four types and is the standing check. Break N1 (`ib` to `nb` in the larft and pack_v calls) cannot turn anything red: `can_run` requires `m >= n`, so a short final panel has `n2 == 0` and the driver exits before the WY update; the error class exists only at the leaf (break KD).
+Reference break 1 (drop the last reflector) is green for float and double on a square matrix and red for complex: the final reflector acts on a 1x1 block, where LAPACK returns `tau = 0` for a real scalar but non-zero for a complex one. **A short-final-panel regression test on a square real matrix guards nothing**; use `m > n`, a middle panel, or complex. Break 5 (drop a middle reflector) is red for all four types and is the standing check. Break N1 (`ib` to `nb` in the larft and pack_v calls) could not turn anything red while `can_run` required `m >= n`: a short final panel then has `n2 == 0` and the driver exits before the WY update. A wide A now gives the short final panel a trailing block, so `GeqrfTest.WideFactorsTheWholeMatrix` (`m = nb + 1`, `3 nb + 2`) is the case that can see it.
 
 ### Break sweeps
 
