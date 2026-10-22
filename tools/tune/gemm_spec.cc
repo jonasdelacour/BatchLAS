@@ -12,6 +12,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -185,7 +186,7 @@ public:
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-                throw std::invalid_argument("gemm has no grid axis '" + name + "'");
+                throw batchlas::invalid_argument("gemm has no grid axis '" + name + "'");
         auto keep = [&](const std::string& name, const std::string& v) {
             const auto it = overrides.find(name);
             return it == overrides.end() || std::find(it->second.begin(), it->second.end(), v) != it->second.end();
@@ -199,7 +200,7 @@ public:
                 if (std::all_of(key.begin(), key.end(), [&](const auto& kv) { return keep(kv.name, kv.value); }))
                     out.push_back(std::move(key));
             }
-        if (out.empty()) throw std::invalid_argument("gemm: the --grid filters leave no cell of the declared grid");
+        if (out.empty()) throw batchlas::invalid_argument("gemm: the --grid filters leave no cell of the declared grid");
         return out;
     }
     double bytes(const std::string& dtype, const CellKey& key) const override {  // A, B, C0, C

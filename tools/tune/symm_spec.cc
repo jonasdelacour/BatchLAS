@@ -13,6 +13,7 @@
 
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -144,7 +145,7 @@ public:
         return with_real_dtype("symm", req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             if (*key_get(req.key, "form") != Y::form_of(m, n))
-                throw std::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
+                throw batchlas::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
             SymmProblem<T> p(q, m, n, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.m);
             if (req.mode == "race") return run_race<Y::SymmChoice>("symm", p, req, tol);

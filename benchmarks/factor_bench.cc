@@ -29,6 +29,7 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -313,7 +314,7 @@ template <typename T>
 static int run(const Cfg& c) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)c;
-    throw std::runtime_error("factor_bench measures a GPU backend; this build has none");
+    throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
 #else
     auto q = std::make_shared<Queue>(Device("gpu"), BE);
     using MV = MatrixView<T, MatrixFormat::Dense>;

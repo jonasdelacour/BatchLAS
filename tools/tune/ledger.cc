@@ -1,5 +1,7 @@
 #include <tools/tune/ledger.hh>
 
+#include <batchlas/error.hh>
+
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -75,7 +77,7 @@ std::string cell_line(const CellRecord& r, const std::string& dtype) {
 
 Tier need_tier(const Record& r) {
     const auto t = parse_tier(r.get("tier"));
-    if (!t) throw std::runtime_error("unknown tier '" + r.get("tier") + "'");
+    if (!t) throw batchlas::invalid_argument("unknown tier '" + r.get("tier") + "'");
     return *t;
 }
 
@@ -106,7 +108,7 @@ CellRecord parse_cell(const Record& r) {
     c.run_id = r.get("run_id");
     c.tier = need_tier(r);
     const auto key = parse_key_arg(r.get("key"));
-    if (!key) throw std::runtime_error("bad key '" + r.get("key") + "'");
+    if (!key) throw batchlas::invalid_argument("bad key '" + r.get("key") + "'");
     c.key = *key;
     c.round = static_cast<int>(r.number("round"));
     c.date = r.get("date");
@@ -118,7 +120,7 @@ CellRecord parse_cell(const Record& r) {
         cr.cand = names[i];
         cr.hash = r.get("h" + n);
         cr.status = r.get("s" + n);
-        if (!kStatuses.count(cr.status)) throw std::runtime_error("unknown status '" + cr.status + "'");
+        if (!kStatuses.count(cr.status)) throw batchlas::invalid_argument("unknown status '" + cr.status + "'");
         cr.reason = r.get("r" + n);
         cr.median_ms = r.number("m" + n);
         cr.lo = r.number("lo" + n);
@@ -155,7 +157,7 @@ std::string ledger_file(const std::string& root, const std::string& op, const st
 LedgerWriter::LedgerWriter(std::string path, RunMeta meta) : path_(std::move(path)), meta_(std::move(meta)) {
     if (const fs::path parent = fs::path(path_).parent_path(); !parent.empty()) fs::create_directories(parent);
     fd_ = ::open(path_.c_str(), O_RDWR | O_CREAT | O_APPEND, 0644);
-    if (fd_ < 0) throw std::runtime_error("cannot open " + path_);
+    if (fd_ < 0) throw batchlas::error("cannot open " + path_);
     put(run_line(meta_));
 }
 
@@ -164,7 +166,7 @@ LedgerWriter::LedgerWriter(std::string path, RunMeta meta) : path_(std::move(pat
 // after it would make it a malformed middle line.
 void LedgerWriter::repair_tail() {
     struct stat st{};
-    if (::fstat(fd_, &st) != 0) throw std::runtime_error("cannot stat " + path_);
+    if (::fstat(fd_, &st) != 0) throw batchlas::error("cannot stat " + path_);
     const off_t size = st.st_size;
     char last = '\n';
     if (size == 0 || ::pread(fd_, &last, 1, size - 1) != 1 || last == '\n') return;
@@ -173,7 +175,7 @@ void LedgerWriter::repair_tail() {
     while (start > 0) {
         const off_t n = std::min<off_t>(start, 65536);
         std::string chunk(static_cast<std::size_t>(n), '\0');
-        if (::pread(fd_, chunk.data(), static_cast<std::size_t>(n), start - n) != n) throw std::runtime_error("cannot read " + path_);
+        if (::pread(fd_, chunk.data(), static_cast<std::size_t>(n), start - n) != n) throw batchlas::error("cannot read " + path_);
         const std::size_t nl = chunk.rfind('\n');
         if (nl != std::string::npos) {
             tail = chunk.substr(nl + 1) + tail;
@@ -184,9 +186,9 @@ void LedgerWriter::repair_tail() {
         start -= n;
     }
     if (parse_record(tail)) {
-        if (::write(fd_, "\n", 1) != 1) throw std::runtime_error("cannot repair " + path_);
+        if (::write(fd_, "\n", 1) != 1) throw batchlas::error("cannot repair " + path_);
     } else if (::ftruncate(fd_, start) != 0) {
-        throw std::runtime_error("cannot repair " + path_);
+        throw batchlas::error("cannot repair " + path_);
     }
 }
 
@@ -197,14 +199,14 @@ LedgerWriter::~LedgerWriter() {
 // One unbuffered write() per line under flock: another writer's line never interleaves, and a kill
 // lands between lines or tears only the one in flight.
 void LedgerWriter::put(const std::string& line) {
-    if (::flock(fd_, LOCK_EX) != 0) throw std::runtime_error("cannot lock " + path_);
+    if (::flock(fd_, LOCK_EX) != 0) throw batchlas::error("cannot lock " + path_);
     struct Unlock {
         int fd;
         ~Unlock() { ::flock(fd, LOCK_UN); }
     } unlock{fd_};
     repair_tail();
     const ssize_t n = ::write(fd_, line.data(), line.size());
-    if (n < 0 || static_cast<std::size_t>(n) != line.size()) throw std::runtime_error("ledger write failed: " + path_);
+    if (n < 0 || static_cast<std::size_t>(n) != line.size()) throw batchlas::error("ledger write failed: " + path_);
 }
 
 void LedgerWriter::cell(const CellRecord& r) { cell(r, meta_.tier); }
@@ -238,19 +240,19 @@ Ledger read_ledger(const std::string& path, const std::string& dtype) {
     for (int no = 1; std::getline(f, line); ++no)
         if (line.find_first_not_of(" \t\r") != std::string::npos) lines.emplace_back(no, line);
     if (!lines.empty() && lines[0].second.rfind("version https://git-lfs.github.com/spec/v1", 0) == 0)
-        throw std::runtime_error(path + ": Git LFS pointer: run git lfs pull");
+        throw batchlas::invalid_argument(path + ": Git LFS pointer: run git lfs pull");
     std::map<std::string, std::map<std::string, std::string>> rehash;  // family -> from -> to
     for (std::size_t i = 0; i < lines.size(); ++i) {
         try {
             std::string err;
             const auto rec = parse_record(lines[i].second, &err);
-            if (!rec) throw std::runtime_error(err);
+            if (!rec) throw batchlas::invalid_argument(err);
             const std::string kind = rec->get("kind");
             if (kind == "rehash") {
                 rehash[rec->get("family")][rec->get("from")] = rec->get("to");
                 continue;
             }
-            if (!rec->has("dtype")) throw std::runtime_error("no dtype");
+            if (!rec->has("dtype")) throw batchlas::invalid_argument("no dtype");
             if (rec->get("dtype") != dtype) continue;
             if (kind == "run") {
                 RunMeta m = parse_run(*rec);
@@ -263,7 +265,7 @@ Ledger read_ledger(const std::string& path, const std::string& dtype) {
             }
         } catch (const std::exception& e) {
             const std::string where = path + ":" + std::to_string(lines[i].first) + ": " + e.what();
-            if (i + 1 != lines.size()) throw std::runtime_error(where);
+            if (i + 1 != lines.size()) throw batchlas::invalid_argument(where);
             l.warnings.push_back("skipping truncated last line, " + where);
         }
     }
@@ -375,7 +377,7 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
                     const std::map<std::string, std::string>& family_hash, const std::string& op_hash_now, Tier tier,
                     const std::vector<std::pair<std::string, std::vector<std::string>>>& axes) {
     std::ifstream f(raw_jsonl);
-    if (!f) throw std::runtime_error("cannot open " + raw_jsonl);
+    if (!f) throw batchlas::invalid_argument("cannot open " + raw_jsonl);
     std::vector<std::string> names, cands;
     std::string kernels, date;
     std::unique_ptr<LedgerWriter> w;
@@ -388,7 +390,7 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
         if (!rec) continue;
         const std::string kind = rec->get("kind");
         if (kind == "meta") {
-            if (rec->get("schema") != "1") throw std::runtime_error(raw_jsonl + ": not a schema 1 sweep");
+            if (rec->get("schema") != "1") throw batchlas::invalid_argument(raw_jsonl + ": not a schema 1 sweep");
             for (const std::string& kn : split(rec->get("keys"), ' ')) names.push_back(split_fields(kn, ':')[0]);
             cands = split(rec->get("candidates"), '|');
             kernels = rec->get("kernels");
@@ -408,13 +410,13 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
             continue;
         }
         if (kind != "pass" && kind != "cell") continue;
-        if (!w) throw std::runtime_error(raw_jsonl + ": record before meta");
+        if (!w) throw batchlas::invalid_argument(raw_jsonl + ": record before meta");
         CellKey key;
         for (const std::string& n : names)
             if (axes.empty()) key.push_back({n, rec->get(n)});
         for (const auto& [n, values] : axes) {
             const bool fixed = values.size() == 1 && std::find(names.begin(), names.end(), n) == names.end();
-            if (!rec->has(n) && !fixed) throw std::runtime_error(raw_jsonl + ": a record lacks grid axis '" + n + "'");
+            if (!rec->has(n) && !fixed) throw batchlas::invalid_argument(raw_jsonl + ": a record lacks grid axis '" + n + "'");
             key.push_back({n, rec->has(n) ? rec->get(n) : values[0]});
         }
         if (kind == "pass") {
@@ -447,7 +449,7 @@ void import_schema1(const std::string& raw_jsonl, const std::string& ledger_root
         }
         w->cell(c);
     }
-    if (!w) throw std::runtime_error(raw_jsonl + ": no meta record");
+    if (!w) throw batchlas::invalid_argument(raw_jsonl + ": no meta record");
 }
 
 }  // namespace batchlas::tune

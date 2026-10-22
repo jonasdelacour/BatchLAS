@@ -51,4 +51,6 @@ target_compile_definitions(batchlas_tune PRIVATE BATCHLAS_TUNE_OPENBLAS_CORETYPE
 # no batchlas_configure_binary_target, no SYCL.
 add_executable(tune_replay replay.cc replay_core.cc race.cc grid.cc ledger.cc tune_core.cc)
 target_compile_features(tune_replay PRIVATE cxx_std_20)
-target_include_directories(tune_replay PRIVATE "${PROJECT_SOURCE_DIR}")
+# <batchlas/error.hh> is header-only; export.hh is generated into the build tree.
+target_include_directories(tune_replay PRIVATE "${PROJECT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/include"
+                                               "${PROJECT_BINARY_DIR}/include")

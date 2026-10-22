@@ -12,6 +12,7 @@
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -112,7 +113,7 @@ public:
         std::erase_if(cells, [&](const CellKey& c) {
             return key_int(c, "k") > key_int(c, "m") || (cplx && *key_get(c, "trans") == "T");
         });
-        if (cells.empty()) throw std::invalid_argument("ormqr: the --grid values leave no cell with k <= m");
+        if (cells.empty()) throw batchlas::invalid_argument("ormqr: the --grid values leave no cell with k <= m");
         return cells;
     }
     double bytes(const std::string& dtype, const CellKey& c) const override {  // A0, A, C0, C
@@ -148,7 +149,7 @@ public:
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), k = int(key_int(req.key, "k"));
-            if (k > m) throw std::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
+            if (k > m) throw batchlas::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
             OrmqrProblem<T> p(q, side, trans_of(*key_get(req.key, "trans")), m, k, int(key_int(req.key, "q")),
                               int(key_int(req.key, "batch")), req.ld_pad);

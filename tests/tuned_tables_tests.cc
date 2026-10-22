@@ -3,6 +3,7 @@
 
 #include <gtest/gtest.h>
 
+#include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 
 #include <src/ops/gemm/choice.hh>
@@ -362,7 +363,7 @@ const sel::Table& embedded(const std::string& op, const std::string& dtype, cons
             if (e.name == name)
                 for (sel::Table& t : sel::parse_tables(e.text, e.name))
                     if (t.dtype == dtype) it = cache.emplace(id, std::move(t)).first;
-    if (it == cache.end()) throw std::runtime_error(id + " is not embedded");
+    if (it == cache.end()) throw batchlas::internal_error(id + " is not embedded");
     return it->second;
 }
 

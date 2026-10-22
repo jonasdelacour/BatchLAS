@@ -6,6 +6,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/error.hh>
 #include <batchlas/no_route.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/util/env.hh>
@@ -308,7 +309,7 @@ protected:
                         return backend::potrf_vendor<B, T>(q, A, uplo, w, info);
                     });
                 } else {
-                    throw std::runtime_error("no vendor solver in this build");
+                    throw batchlas::unsupported("no vendor solver in this build");
                 }
             }
         }, c);

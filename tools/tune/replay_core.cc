@@ -3,6 +3,8 @@
 #include <tools/tune/ledger.hh>
 #include <tools/tune/race.hh>
 
+#include <batchlas/error.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -32,7 +34,7 @@ struct RawCell {
 
 std::vector<ReplayCell> load_replay(const std::string& raw_jsonl, ReplayMeta* meta_out) {
     std::ifstream f(raw_jsonl);
-    if (!f) throw std::runtime_error("cannot open " + raw_jsonl);
+    if (!f) throw batchlas::invalid_argument("cannot open " + raw_jsonl);
     ReplayMeta meta;
     std::vector<std::string> names;
     int passes = 0;
@@ -52,7 +54,7 @@ std::vector<ReplayCell> load_replay(const std::string& raw_jsonl, ReplayMeta* me
             continue;
         }
         if (kind != "rep" && kind != "pass" && kind != "cell") continue;
-        if (!have_meta) throw std::runtime_error(raw_jsonl + ": record before meta");
+        if (!have_meta) throw batchlas::invalid_argument(raw_jsonl + ": record before meta");
         CellKey key;
         for (const std::string& n : names) key.push_back({n, rec->get(n)});
         RawCell& c = raw[key];
@@ -73,7 +75,7 @@ std::vector<ReplayCell> load_replay(const std::string& raw_jsonl, ReplayMeta* me
         a.resize(std::max<std::size_t>({a.size(), std::size_t(passes), std::size_t(pass)}));
         a[pass - 1].arms[cand] = {rec->get("status"), rec->get("reason"), rec->number("median_ms")};
     }
-    if (!have_meta) throw std::runtime_error(raw_jsonl + ": no meta record");
+    if (!have_meta) throw batchlas::invalid_argument(raw_jsonl + ": no meta record");
 
     std::vector<std::set<std::string>> seen(names.size());
     std::vector<ReplayCell> out;
@@ -122,17 +124,17 @@ double best_time(const std::map<std::string, double>& times) {
 
 void shrink_axis(std::vector<AxisSpec>& axes, const std::string& name, const std::string& spec, bool keep) {
     const auto it = std::find_if(axes.begin(), axes.end(), [&](const AxisSpec& a) { return a.name == name; });
-    if (it == axes.end()) throw std::invalid_argument("unknown axis " + name);
+    if (it == axes.end()) throw batchlas::invalid_argument("unknown axis " + name);
     if (!keep) {
         const int k = std::stoi(spec);
-        if (k < 1) throw std::invalid_argument("axis stride must be >= 1");
+        if (k < 1) throw batchlas::invalid_argument("axis stride must be >= 1");
         it->values = subsample_axis(it->values, k);
         return;
     }
     std::vector<std::string> kept;
     for (const std::string& v : split(spec, ':')) {
         if (std::find(it->values.begin(), it->values.end(), v) == it->values.end())
-            throw std::invalid_argument("axis " + name + " has no value " + v);
+            throw batchlas::invalid_argument("axis " + name + " has no value " + v);
         kept.push_back(v);
     }
     it->values = std::move(kept);
@@ -321,7 +323,7 @@ void finish(OracleSet& o, const std::vector<std::string>& key_names) {
 
 std::vector<std::string> header_field(const std::string& tuned_txt, const std::string& prefix) {
     std::ifstream f(tuned_txt);
-    if (!f) throw std::runtime_error("cannot open " + tuned_txt);
+    if (!f) throw batchlas::invalid_argument("cannot open " + tuned_txt);
     std::string line;
     while (std::getline(f, line) && line.rfind("#", 0) == 0)
         for (const std::string& w : split(line.substr(1), ' '))
@@ -343,7 +345,7 @@ std::map<std::string, std::string> table_family_hashes(const std::string& tuned_
 
 OracleSet load_table_oracle(const std::string& tuned_txt) {
     std::ifstream f(tuned_txt);
-    if (!f) throw std::runtime_error("cannot open " + tuned_txt);
+    if (!f) throw batchlas::invalid_argument("cannot open " + tuned_txt);
     OracleSet o;
     const auto op = header_field(tuned_txt, "op=");
     o.label = op.empty() ? tuned_txt : op.front();
@@ -355,14 +357,14 @@ OracleSet load_table_oracle(const std::string& tuned_txt) {
             for (const std::string& kn : key_names) names.push_back(split_fields(kn, ':')[0]);
         }
         if (line.empty() || line[0] == '#') continue;
-        if (names.empty()) throw std::runtime_error(tuned_txt + ": row before '# keys:'");
+        if (names.empty()) throw batchlas::invalid_argument(tuned_txt + ": row before '# keys:'");
         auto parts = split_fields(line.substr(0, line.find('#')), '|');
         std::map<std::string, std::string> kv;
         for (const std::string& w : split(parts.front(), ' '))
             if (const auto eq = w.find('='); eq != std::string::npos) kv[w.substr(0, eq)] = w.substr(eq + 1);
         CellKey key;
         for (const std::string& n : names) {
-            if (!kv.count(n)) throw std::runtime_error(tuned_txt + ": row lacks key " + n + ": " + line);
+            if (!kv.count(n)) throw batchlas::invalid_argument(tuned_txt + ": row lacks key " + n + ": " + line);
             key.push_back({n, kv[n]});
         }
         RefineCell c;

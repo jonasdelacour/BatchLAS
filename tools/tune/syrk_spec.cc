@@ -12,6 +12,7 @@
 
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -149,7 +150,7 @@ public:
             const Transpose trans = t == "N" ? Transpose::NoTrans : t == "T" ? Transpose::Trans : Transpose::ConjTrans;
             const int n = int(key_int(req.key, "n")), k = int(key_int(req.key, "k"));
             if (*key_get(req.key, "form") != K::form_of(n, k))
-                throw std::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
+                throw batchlas::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
             SyrkProblem<T> p(q, trans, n, k, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.k);
             if (req.mode == "race") return run_race<K::SyrkChoice>("syrk", p, req, tol);

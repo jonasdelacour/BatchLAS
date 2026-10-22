@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/error.hh>
 #include <batchlas/sycl_interop.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -430,7 +431,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
             return gemm<kGpu, T>(c, ga, gb, gc, al, be, ta, tb, p);
 #else
             (void)c, (void)ga, (void)gb, (void)gc, (void)al, (void)be, (void)ta, (void)tb, (void)p;
-            throw std::logic_error("RunTrsmBlocked: no CUDA or SYCL backend in this build");
+            throw batchlas::unsupported("RunTrsmBlocked: no CUDA or SYCL backend in this build");
 #endif
         });
     ctx->wait();

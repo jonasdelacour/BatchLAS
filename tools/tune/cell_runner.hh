@@ -20,6 +20,7 @@
 #include <tools/tune/spec.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
@@ -62,9 +63,9 @@ decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
 #else
     if (dtype == "double" || dtype == "cdouble")
-        throw std::invalid_argument("dtype '" + dtype + "' needs device fp64, which this build lacks");
+        throw batchlas::invalid_argument("dtype '" + dtype + "' needs device fp64, which this build lacks");
 #endif
-    throw std::invalid_argument("unknown dtype '" + dtype + "'");
+    throw batchlas::invalid_argument("unknown dtype '" + dtype + "'");
 }
 
 // symm, syrk and syr2k are real-only (RealScalar): no complex instantiation and no complex table.
@@ -74,9 +75,9 @@ decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, 
 #if BATCHLAS_TUNE_FP64
     if (dtype == "double") return f.template operator()<double>();
 #else
-    if (dtype == "double") throw std::invalid_argument(op + ": 'double' needs device fp64, which this build lacks");
+    if (dtype == "double") throw batchlas::invalid_argument(op + ": 'double' needs device fp64, which this build lacks");
 #endif
-    throw std::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
+    throw batchlas::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
 }
 
 // A non-lattice grid() (form derived from the extents) under `--grid name=v1:v2`: the overrides
@@ -86,7 +87,7 @@ inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> c
     const auto ax = s.axes();
     for (const auto& [name, values] : overrides)
         if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-            throw std::invalid_argument(s.op() + " has no grid axis '" + name + "'");
+            throw batchlas::invalid_argument(s.op() + " has no grid axis '" + name + "'");
     std::vector<CellKey> out;
     for (CellKey& key : cells)
         if (std::all_of(key.begin(), key.end(), [&](const auto& kv) {
@@ -94,7 +95,7 @@ inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> c
                 return it == overrides.end() || std::find(it->second.begin(), it->second.end(), kv.value) != it->second.end();
             }))
             out.push_back(std::move(key));
-    if (out.empty()) throw std::invalid_argument(s.op() + ": the --grid filters leave no cell of the declared grid");
+    if (out.empty()) throw batchlas::invalid_argument(s.op() + ": the --grid filters leave no cell of the declared grid");
     return out;
 }
 

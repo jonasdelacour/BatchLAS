@@ -1,5 +1,6 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/error.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -101,12 +102,12 @@ std::vector<T> parse_csv_list(const std::string& text) {
         T value{};
         item_stream >> value;
         if (item_stream.fail()) {
-            throw std::invalid_argument("Failed to parse list item: " + item);
+            throw batchlas::invalid_argument("Failed to parse list item: " + item);
         }
         values.push_back(value);
     }
     if (values.empty()) {
-        throw std::invalid_argument("Expected a non-empty comma-separated list");
+        throw batchlas::invalid_argument("Expected a non-empty comma-separated list");
     }
     return values;
 }
@@ -300,11 +301,11 @@ int main(int argc, char** argv) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)argc;
     (void)argv;
-    throw std::runtime_error("iluk_convergence_stats requires a configured GPU backend");
+    throw batchlas::unsupported("iluk_convergence_stats requires a configured GPU backend");
 #else
     const Options opt = parse_args(argc, argv);
     if (opt.n <= 0 || opt.batch <= 0 || opt.neigs <= 0 || opt.iterations <= 0 || opt.samples_per_bucket <= 0) {
-        throw std::invalid_argument("All size/count options must be positive");
+        throw batchlas::invalid_argument("All size/count options must be positive");
     }
 
     const auto densities = parse_csv_list<float>(opt.densities);
@@ -337,7 +338,7 @@ int main(int argc, char** argv) {
     std::ofstream trace(trace_path);
     std::ofstream summary(summary_path);
     if (!trace.good() || !summary.good()) {
-        throw std::runtime_error("Failed to open ILUK convergence output files");
+        throw batchlas::error("Failed to open ILUK convergence output files");
     }
 
     trace << "sample_id,bucket_label,density,diag_boost,seed,level,label,iter,batch,eig,best_res,current_res,rate,ritz,converged\n";

@@ -1,5 +1,7 @@
 #include <tools/tune/tune_core.hh>
 
+#include <batchlas/error.hh>
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -99,7 +101,7 @@ std::int64_t key_int(const CellKey& k, std::string_view name) {
     const std::string* v = key_get(k, name);
     std::int64_t out = 0;
     if (!v || std::from_chars(v->data(), v->data() + v->size(), out).ptr != v->data() + v->size())
-        throw std::runtime_error("cell " + key_text(k) + " has no integer '" + std::string(name) + "'");
+        throw batchlas::invalid_argument("cell " + key_text(k) + " has no integer '" + std::string(name) + "'");
     return out;
 }
 
@@ -403,13 +405,13 @@ std::optional<Record> parse_record(std::string_view line, std::string* err) {
 
 std::vector<Record> read_records(const std::string& path) {
     std::ifstream f(path);
-    if (!f) throw std::runtime_error("cannot read " + path);
+    if (!f) throw batchlas::invalid_argument("cannot read " + path);
     std::vector<Record> out;
     std::string line, err;
     for (int no = 1; std::getline(f, line); ++no) {
         if (line.find_first_not_of(" \t\r") == std::string::npos) continue;
         auto r = parse_record(line, &err);
-        if (!r) throw std::runtime_error(path + ":" + std::to_string(no) + ": " + err);
+        if (!r) throw batchlas::invalid_argument(path + ":" + std::to_string(no) + ": " + err);
         out.push_back(std::move(*r));
     }
     return out;
@@ -592,7 +594,7 @@ KernelBlock parse_kernel_block(std::string_view spec_source) {
 KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file) {
     const std::string path = repo + "/" + spec_file;
     std::ifstream f(path);
-    if (!f) throw std::runtime_error("cannot read " + path);
+    if (!f) throw batchlas::invalid_argument("cannot read " + path);
     std::ostringstream ss;
     ss << f.rdbuf();
     return parse_kernel_block(ss.str());
@@ -612,7 +614,7 @@ std::map<std::string, std::string> family_hashes(const std::string& repo, const 
         if (const auto it = b.deps.find(f); it != b.deps.end()) paths.insert(paths.end(), it->second.begin(), it->second.end());
         std::string missing;
         const auto h = kernel_hash(repo, paths, &missing);
-        if (!h) throw std::runtime_error("kernel source missing for family '" + f + "': " + missing);
+        if (!h) throw batchlas::invalid_argument("kernel source missing for family '" + f + "': " + missing);
         out[f] = *h;
     }
     return out;

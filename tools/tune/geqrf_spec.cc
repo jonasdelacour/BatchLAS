@@ -11,6 +11,7 @@
 
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -107,7 +108,7 @@ public:
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-                throw std::invalid_argument("geqrf has no grid axis '" + name + "'");
+                throw batchlas::invalid_argument("geqrf has no grid axis '" + name + "'");
         auto keep = [&](const std::string& name, const std::string& v) {
             const auto it = overrides.find(name);
             return it == overrides.end() || std::find(it->second.begin(), it->second.end(), v) != it->second.end();
@@ -124,7 +125,7 @@ public:
             for (int a : ops::geqrf::grid_aspect) add("tall", n, a);
         for (int n : ops::geqrf::grid_wide_n)
             for (int a : ops::geqrf::grid_wide_aspect) add("wide", n, a);
-        if (out.empty()) throw std::invalid_argument("geqrf: the --grid filters leave no cell of the declared grid");
+        if (out.empty()) throw batchlas::invalid_argument("geqrf: the --grid filters leave no cell of the declared grid");
         return out;
     }
     std::vector<std::int64_t> dims(const std::string&, const CellKey& k) const override {  // m derives from (form, n, aspect)
@@ -180,7 +181,7 @@ public:
         return with_dtype(req.dtype, [&]<class T>() {
             const int n = int(key_int(req.key, "n"));
             const auto m = rows_of(*key_get(req.key, "form"), n, int(key_int(req.key, "aspect")));
-            if (!m) throw std::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
+            if (!m) throw batchlas::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
             GeqrfProblem<T> p(q, *m, n, qr_batch(double(*m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
             return run_arms<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);

@@ -2,6 +2,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/linalg.hh>
 #include <benchmarks/accuracy_utils.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include <src/queue.hh>
@@ -95,7 +96,7 @@ Options parse_args(int argc, char** argv) {
             } else if (val == "exp") {
                 opt.scheme = SteqrUpdateScheme::EXP;
             } else {
-                throw std::invalid_argument("Invalid --scheme value (use pg or exp)");
+                throw batchlas::invalid_argument("Invalid --scheme value (use pg or exp)");
             }
         } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);

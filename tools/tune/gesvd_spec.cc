@@ -88,12 +88,12 @@ struct GesvdProblem {
     std::size_t workspace() {
         std::string src;
         if (job == SvdVectors::None && m != n && select::detail::pin_text("gesvd", &src) == std::optional<std::string>("vendor"))
-            throw std::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
+            throw batchlas::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
         try {
             return herm ? gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
                         : gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job);
         } catch (const batchlas::unsupported& e) {
-            throw std::invalid_argument(e.what());
+            throw batchlas::invalid_argument(e.what());
         }
     }
     void reset() {
@@ -172,7 +172,7 @@ public:
                 continue;
             out.push_back(std::move(c));
         }
-        if (out.empty()) throw std::invalid_argument("gesvd: the --grid values leave no keyable cell");
+        if (out.empty()) throw batchlas::invalid_argument("gesvd: the --grid values leave no keyable cell");
         return out;
     }
     double bytes(const std::string& dtype, const CellKey& key) const override {  // A0, A, U, Vh at the derived batch

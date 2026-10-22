@@ -12,6 +12,7 @@
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -88,7 +89,7 @@ public:
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
         auto cells = OpSpec::grid(dtype, overrides);
         std::erase_if(cells, [](const CellKey& k) { return key_int(k, "n") > key_int(k, "m"); });
-        if (cells.empty()) throw std::invalid_argument("orgqr: the --grid values leave no cell with n <= m");
+        if (cells.empty()) throw batchlas::invalid_argument("orgqr: the --grid values leave no cell with n <= m");
         return cells;
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {  // A0, A (tau is n per item; M is the check's)
@@ -122,7 +123,7 @@ public:
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         return with_dtype(req.dtype, [&]<class T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
-            if (n > m) throw std::invalid_argument("orgqr: n > m has no native family to tune");
+            if (n > m) throw batchlas::invalid_argument("orgqr: n > m has no native family to tune");
             OrgqrProblem<T> p(q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
             return run_arms<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);

@@ -1,3 +1,4 @@
+#include <batchlas/error.hh>
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions.hh>
@@ -45,7 +46,7 @@ inline std::vector<int32_t> parse_int_list(const std::string& csv) {
 inline BandReductionMode parse_mode_or_throw(const std::string& mode) {
     if (mode == "phase") return BandReductionMode::Phase;
     if (mode == "sequence") return BandReductionMode::Sequence;
-    throw std::runtime_error("--mode must be one of: phase, sequence");
+    throw batchlas::invalid_argument("--mode must be one of: phase, sequence");
 }
 
 inline void resolve_schedule_or_throw(int32_t fallback_nb,
@@ -68,15 +69,15 @@ inline void resolve_schedule_or_throw(int32_t fallback_nb,
         d_seq.assign(block_size_seq.size(), std::max<int32_t>(0, fallback_d));
     }
     if (block_size_seq.size() != d_seq.size()) {
-        throw std::runtime_error("--nb-seq and --d-seq must have the same length");
+        throw batchlas::invalid_argument("--nb-seq and --d-seq must have the same length");
     }
 
     for (size_t i = 0; i < block_size_seq.size(); ++i) {
         if (block_size_seq[i] <= 0) {
-            throw std::runtime_error("--nb-seq values must be > 0");
+            throw batchlas::invalid_argument("--nb-seq values must be > 0");
         }
         if (d_seq[i] < 0) {
-            throw std::runtime_error("--d-seq values must be >= 0");
+            throw batchlas::invalid_argument("--d-seq values must be >= 0");
         }
     }
 }
@@ -127,7 +128,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
     const Uplo uplo = Uplo::Lower;
 
     if (g_mode == BandReductionMode::Phase && (!g_block_size_seq.empty() || !g_d_seq.empty())) {
-        throw std::runtime_error("--nb-seq/--d-seq are only supported with --mode=sequence");
+        throw batchlas::invalid_argument("--nb-seq/--d-seq are only supported with --mode=sequence");
     }
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B, /*in_order=*/true);
@@ -199,7 +200,7 @@ int main(int argc, char** argv) {
             } else if (arg.starts_with("--phase-reduce=")) {
                 g_phase_reduce = static_cast<int32_t>(std::stoi(arg.substr(std::string("--phase-reduce=").size())));
                 if (g_phase_reduce < 0) {
-                    throw std::runtime_error("--phase-reduce must be >= 0");
+                    throw batchlas::invalid_argument("--phase-reduce must be >= 0");
                 }
             } else if (arg == "--help" || arg == "-h") {
                 std::cout << "Band reduction benchmark options:\n"
@@ -223,7 +224,7 @@ int main(int argc, char** argv) {
         }
 
         if (g_mode == BandReductionMode::Phase && (!g_block_size_seq.empty() || !g_d_seq.empty())) {
-            throw std::runtime_error("--nb-seq/--d-seq require --mode=sequence");
+            throw batchlas::invalid_argument("--nb-seq/--d-seq require --mode=sequence");
         }
 
         std::vector<char*> forwarded_argv;

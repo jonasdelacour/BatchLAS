@@ -2,6 +2,7 @@
 
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <src/queue.hh>
 
@@ -31,7 +32,7 @@ inline SteqrShiftStrategy parse_shift_strategy(const std::string& value) {
     const auto key = to_lower(value);
     if (key == "lapack") return SteqrShiftStrategy::Lapack;
     if (key == "wilkinson") return SteqrShiftStrategy::Wilkinson;
-    throw std::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
+    throw batchlas::invalid_argument("Invalid --cta-shift value (use lapack or wilkinson)");
 }
 
 // FNV-1a over the bytes of item b's rows x cols entries, column-major. The input is built on
@@ -81,7 +82,7 @@ inline void share_inputs(const std::string& dir, int first_sample, const MatrixV
             }
         }
     }
-    if (!f) throw std::runtime_error("share_inputs: cannot " + std::string(load ? "read " : "write ") + path.string());
+    if (!f) throw batchlas::error("share_inputs: cannot " + std::string(load ? "read " : "write ") + path.string());
 }
 
 template <typename Real>

@@ -3,6 +3,8 @@
 #include <tools/tune/grid.hh>
 #include <tools/tune/race.hh>
 
+#include <batchlas/error.hh>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -273,7 +275,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
 
 std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& path) {
     std::ifstream in(path);
-    if (!in) throw std::runtime_error("--remeasure-keys: cannot read " + path);
+    if (!in) throw batchlas::invalid_argument("--remeasure-keys: cannot read " + path);
     std::map<std::string, std::set<CellKey>> out;
     int n = 0;
     for (std::string line; std::getline(in, line);) {
@@ -283,7 +285,7 @@ std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& 
         if (f.empty()) continue;
         const auto key = f.size() == 3 ? parse_key_arg(f[2]) : std::nullopt;
         if (!key)
-            throw std::runtime_error(path + ":" + std::to_string(n) + ": want '<op> <dtype> <name=v,...>', got '" + line + "'");
+            throw batchlas::invalid_argument(path + ":" + std::to_string(n) + ": want '<op> <dtype> <name=v,...>', got '" + line + "'");
         out[f[0] + "." + f[1]].insert(*key);
     }
     return out;

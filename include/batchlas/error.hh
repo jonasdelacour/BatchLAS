@@ -98,7 +98,7 @@ public:
 /// @brief Base of the runtime arm: the call failed for a reason that is not a bad argument.
 ///
 /// Catch a child to say which reason. Derives from `std::runtime_error` (Python `RuntimeError`),
-/// and every runtime class stays inside it. Nothing throws a bare `error` today.
+/// and every runtime class stays inside it. The library never throws a bare `error`.
 /// @ingroup api_errors
 class BATCHLAS_API error : public detail::exception_bridge<std::runtime_error> {
 public:

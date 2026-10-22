@@ -4,6 +4,8 @@
 #include <tools/tune/ledger.hh>
 #include <tools/tune/replay_core.hh>
 
+#include <batchlas/error.hh>
+
 #include <unistd.h>
 
 #include <algorithm>
@@ -243,7 +245,7 @@ void TieredRun::emit(Json j) {
 void TieredRun::build(const std::string& op, const std::string& dtype) {
     auto j = std::make_unique<Job>();
     j->spec = find_spec(op);
-    if (!j->spec) throw std::runtime_error("unknown op '" + op + "' (--list)");
+    if (!j->spec) throw batchlas::invalid_argument("unknown op '" + op + "' (--list)");
     const OpSpec& s = *j->spec;
     j->dtype = dtype;
     j->cands = s.candidates(dtype);
@@ -267,7 +269,7 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (calibrate()) {
         const std::string path = prior_table(o_.repo + "/tuned", op, id_.device, o_.prior);
         if (path.empty())
-            throw std::runtime_error("--tier calibrate: no prior table for " + op + " in " + o_.repo + "/tuned" +
+            throw batchlas::invalid_argument("--tier calibrate: no prior table for " + op + " in " + o_.repo + "/tuned" +
                                      (o_.prior.empty() ? " (pass --prior <device>)" : " for --prior " + o_.prior));
         j->prior = std::make_unique<Prior>(path);
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
@@ -292,14 +294,14 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
         j->remeasure = r->second;
         if (j->next.empty() && grid.empty())
-            throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " has an empty grid to check the keys against");
+            throw batchlas::invalid_argument("--remeasure-keys: " + op + " " + dtype + " has an empty grid to check the keys against");
         std::vector<std::string> names;
         for (const KV& f : j->next.empty() ? grid.front() : j->next.front()) names.push_back(f.name);
         for (const CellKey& k : r->second) {
             std::vector<std::string> got;
             for (const KV& f : k) got.push_back(f.name);
             if (got != names)
-                throw std::runtime_error("--remeasure-keys: " + op + " " + dtype + " " + key_arg(k) + ": want the fields " +
+                throw batchlas::invalid_argument("--remeasure-keys: " + op + " " + dtype + " " + key_arg(k) + ": want the fields " +
                                          join(names, ",") + " in that order");
             if (std::find(j->next.begin(), j->next.end(), k) == j->next.end()) j->next.push_back(k);
         }
@@ -846,7 +848,7 @@ int TieredRun::go() {
         }
     for (const auto& [od, keys] : o_.remeasure)
         if (std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& j) { return j->spec->op() + "." + j->dtype == od; }))
-            throw std::runtime_error("--remeasure-keys names " + od + ", which this run does not tune");
+            throw batchlas::invalid_argument("--remeasure-keys names " + od + ", which this run does not tune");
     double est = 0, est_refine = 0, refine_cells = 0;
     std::size_t to_measure = 0;
     for (auto& j : jobs_) {
@@ -922,10 +924,10 @@ int TieredRun::go() {
              .integer("refine_cells", std::int64_t(std::llround(refine_cells))).num("est_refine_s", est_refine)
              .num("est_total_s", est + est_refine));
     if (o_.plan) return 0;
-    if (!m_) throw std::logic_error("run_tiered: no measurer");
+    if (!m_) throw batchlas::internal_error("run_tiered: no measurer");
     batchlas_ = git_head(o_.repo);
     if (batchlas_.ends_with("-dirty") && !o_.allow_dirty)
-        throw std::runtime_error("the tree at --repo " + o_.repo + " has uncommitted changes to tracked files (" + batchlas_ +
+        throw batchlas::api_misuse("the tree at --repo " + o_.repo + " has uncommitted changes to tracked files (" + batchlas_ +
                                  "): commit them, or pass --allow-dirty (such a run never reaches tuned/)");
     t0_ =std::chrono::steady_clock::now();
     for (auto& j : jobs_)
@@ -980,7 +982,7 @@ int TieredRun::go() {
         for (const std::string& op : written) {
             const std::string cmd = "python3 '" + o_.repo + "/scripts/sweep_to_table.py' --ledger '" + o_.ledger_root +
                                     "' --op '" + op + "' --device '" + id_.device + "' --out '" + o_.out + "'";
-            if (std::system(cmd.c_str()) != 0) throw std::runtime_error("table generation failed: " + cmd);
+            if (std::system(cmd.c_str()) != 0) throw batchlas::error("table generation failed: " + cmd);
         }
     emit(Json().str("ev", "done"));
     return 0;
@@ -1124,12 +1126,12 @@ int status_main(const std::string& repo, const std::string& ledger_root, const s
 int import_raw_main(const std::string& repo, const std::string& ledger_root, const std::string& raw) {
     std::ifstream f(raw);
     std::string first;
-    if (!f || !std::getline(f, first)) throw std::runtime_error("cannot read " + raw);
+    if (!f || !std::getline(f, first)) throw batchlas::invalid_argument("cannot read " + raw);
     const auto meta = parse_record(first);
-    if (!meta || meta->get("kind") != "meta") throw std::runtime_error(raw + ": the first line is not a meta record");
+    if (!meta || meta->get("kind") != "meta") throw batchlas::invalid_argument(raw + ": the first line is not a meta record");
     const std::string op = meta->get("op"), dtype = meta->get("dtype"), device = meta->get("device");
     const OpSpec* spec = find_spec(op);
-    if (!spec) throw std::runtime_error(raw + ": no spec for op '" + op + "'");
+    if (!spec) throw batchlas::invalid_argument(raw + ": no spec for op '" + op + "'");
     const auto op_hash = kernel_hash(repo, spec->kernel_sources());
     import_schema1(raw, ledger_root, current_hashes(repo, *spec, dtype), op_hash.value_or(""), Tier::deep, spec->axes());
     std::printf("imported %s into %s as a deep run%s\n", raw.c_str(), ledger_file(ledger_root, op, device).c_str(),

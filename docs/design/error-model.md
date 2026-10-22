@@ -68,7 +68,7 @@ Rule four (every class carries `BATCHLAS_API`) is in
 | --- | --- | --- |
 | `invalid_argument` | The call violates the API contract. | No; fix the call. |
 | `out_of_range` | An index is outside its container (`MatrixView::at`, `batch_item`). | No. Kept separate so Python raises `IndexError`. |
-| `error` | Base of the runtime arm. Nothing throws it directly. | n/a |
+| `error` | Base of the runtime arm. The library never throws it directly; `tools/tune` and `benchmarks/` throw it for an OS I/O failure (open, lock, write, a failed child command). | n/a |
 | `unsupported` | No route, kernel or backend in this build on this device serves the request. | Not as asked; another route, backend, type or shape may work. |
 | `device_error` | The device or its vendor runtime failed. | Sometimes. A repeating status code is a real fault. |
 | `workspace_error` | Scratch is too small, or the arena ran out. | Yes: re-query `*_buffer_size()`, or halve the batch. |
@@ -83,6 +83,10 @@ Rule four (every class carries `BATCHLAS_API`) is in
   empty problem or a heterogeneous batch before selection runs, so a pin cannot change it. By
   meaning these are `invalid_argument` or `unsupported`.
 - `api_misuse` is for a valid argument used at the wrong time or from the wrong thread.
+- `tools/tune` and `benchmarks/` throw the same classes: a bad flag, ledger, sweep or input file is
+  `invalid_argument`, an OS I/O failure is `error`, a getrf breakdown in generated input is
+  `convergence_error`, a dirty `--repo` tree is `api_misuse`, a build without a GPU backend is
+  `unsupported`.
 
 ## error model: Python exception classes {#error-model-python-exception-classes}
 

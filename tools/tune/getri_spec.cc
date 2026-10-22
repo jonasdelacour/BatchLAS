@@ -8,6 +8,7 @@
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -54,7 +55,7 @@ struct GetriProblem {
         (void)getrf<kBackend, T>(q, LUv, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
-            if (info[std::size_t(b)] != 0) throw std::runtime_error("getri input: getrf reported a singular item");
+            if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("getri input: getrf reported a singular item");
     }
     std::size_t workspace() { return getri_buffer_size<kBackend, T>(q, Av); }
     void reset() {  // A is read only, restored anyway so one arm cannot corrupt the next one's input
