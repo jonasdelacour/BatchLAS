@@ -8,6 +8,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <tests/test_utils.hh>
 #include <complex>
+#include <iostream>
 #include <src/queue.hh>
 
 #include <algorithm>
@@ -485,9 +486,12 @@ TEST(QueueTest, EmptyNdRangeEventFollowsEarlierWork) {
 TEST(SyclInterop, QueueFromSyclSharesContext) {
     std::vector<sycl::device> gpus = sycl::device::get_devices(sycl::info::device_type::gpu);
     if (gpus.empty()) GTEST_SKIP() << "no gpu device";
-    sycl::device dev = gpus.front();
+    // The last gpu: with several visible, a Queue that took the wrong logical index shows up.
+    const size_t dev_pos = gpus.size() - 1;
+    sycl::device dev = gpus[dev_pos];
     sycl::context ctx(dev);
     Queue q = batchlas::queue_from_sycl(ctx, dev);
+    EXPECT_EQ(q.device().idx, dev_pos);
     EXPECT_TRUE(batchlas::sycl_queue(q).get_context() == ctx);
     EXPECT_TRUE(batchlas::sycl_queue(q).get_device() == dev);
     EXPECT_EQ(q.device().type, DeviceType::GPU);
@@ -527,23 +531,30 @@ TEST(SyclInterop, QueueFromSyclSharesContext) {
     sycl::free(c0, plain);
 }
 
+// Every rejection is a batchlas::device_error. Which cases run depends on the machine: a
+// sub-device needs a partitionable gpu, "not in the context" needs a second device (a second gpu
+// or a cpu device). The test says which ran.
 TEST(SyclInterop, QueueFromSyclRejectsForeignDevice) {
     std::vector<sycl::device> gpus = sycl::device::get_devices(sycl::info::device_type::gpu);
     if (gpus.empty()) GTEST_SKIP() << "no gpu device";
-    // A sub-device is the documented failure, where the device can be partitioned.
-    bool partitioned = false;
+    int ran = 0;
     try {
         auto subs = gpus.front().create_sub_devices<sycl::info::partition_property::partition_equally>(1);
         sycl::context sub_ctx(subs.front());
         EXPECT_THROW(batchlas::queue_from_sycl(sub_ctx, subs.front()), batchlas::device_error);
-        partitioned = true;
+        ++ran;
     } catch (const sycl::exception&) {
     }
-    // A device that is not in the context is rejected as a device_error, not an out_of_range.
+    sycl::context ctx0(gpus[0]);
     if (gpus.size() >= 2) {
-        sycl::context ctx0(gpus[0]);
         EXPECT_THROW(batchlas::queue_from_sycl(ctx0, gpus[1]), batchlas::device_error);
-    } else if (!partitioned) {
-        GTEST_SKIP() << "no sub-device partition and a single gpu: nothing foreign to construct";
+        ++ran;
     }
+    const auto cpus = sycl::device::get_devices(sycl::info::device_type::cpu);
+    if (!cpus.empty()) {
+        EXPECT_THROW(batchlas::queue_from_sycl(ctx0, cpus.front()), batchlas::device_error);
+        ++ran;
+    }
+    if (ran == 0) GTEST_SKIP() << "one gpu, no sub-device partition, no cpu device: nothing foreign to construct";
+    std::cout << "[ INFO ] foreign-device cases run: " << ran << "\n";
 }

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <src/queue.hh>
 #include <src/sycl/local_mem.hh>
 #include <cstdio>
