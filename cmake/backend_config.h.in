@@ -17,6 +17,10 @@
 // Device code avoids sycl::vec/ext_vector registers (Metal build only; CUDA keeps them).
 #cmakedefine01 BATCHLAS_DEVICE_NO_VECTOR_TYPES
 
+// Whether the compiler lowers reqd_work_group_size(1, 1, N) to a correct .reqntid on NVPTX
+// (configure probe in cmake/BatchLASDetectSYCL.cmake; gemm register functors read it).
+#cmakedefine01 BATCHLAS_NVPTX_REQD_WG_OK
+
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
 
