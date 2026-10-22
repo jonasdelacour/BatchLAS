@@ -143,7 +143,7 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     // The lean cell: one untimed and two cut runs, kWarmMinRounds warm rounds (capped), the reps.
     const int reps = ms.empty() ? 0 : lean_max_reps(*std::max_element(ms.begin(), ms.end()), p);
     double s = overhead_s + (ms.empty() ? 0 : kVerifyS);
-    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m);
+    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m) + (reps + 3 + kWarmMinRounds) * kScrubS;
     return s;
 }
 

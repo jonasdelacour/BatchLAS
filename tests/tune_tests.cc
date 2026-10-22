@@ -2516,14 +2516,15 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
     CellKey lower = nkey(100);
     lower.insert(lower.begin(), {"uplo", "L"});
     EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
-    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s; one verify a cell.
+    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s, a scrub per
+    // run; one verify a cell.
     // 2 ms: 50 ms / 2 ms = 25 reps, capped at 16. 200 ms: 1 rep, raised to coarse's floor 4.
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS);
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS);
     l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 200.0)}, {"vendor"}, 4096));
-    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + kVerifyS);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + 9 * kScrubS + kVerifyS);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor", "cta"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3))
+                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3) + 2 * 9 * kScrubS)
         << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16; one verification (the tie set)";
 }
 
@@ -2602,7 +2603,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
         r.phases.guard = 0.05, r.phases.ipc = 0.01, r.phases.start = 4.0, r.phases.mode = mode;
         return r;
     };
-    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS;  // coarse: 16 reps of 2 ms
+    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS;  // coarse: 16 reps of 2 ms
     bool hist = true;
     const Tier co = Tier::coarse;
     l.cells = {phased(64, 0.5, "old")};
@@ -2621,7 +2622,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, upper, {"a"}, 1e9, co, 0.49, &hist), model) << "exact fields must match";
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, Tier::deep, 0.49, &hist),
-                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS) << "coarse history prices no deep cell (16 reps)";
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS) << "coarse history prices no deep cell (16 reps)";
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist, "fresh"), model) << "worker history, fresh run";
     EXPECT_FALSE(hist);

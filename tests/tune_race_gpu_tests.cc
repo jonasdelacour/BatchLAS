@@ -136,6 +136,13 @@ TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
     }
     std::printf("gemm 32^3 x 4096 wide 32: tuner %.4g ms, back-to-back %.4g ms (%.2fx)\n", cold, median(warm),
                 cold / median(warm));
+    std::vector<double> scrub;  // the per-run cost the protocol adds (schedule.cc kScrubS models it)
+    for (int i = 0; i < 10; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        bench::scrub_l2(q);
+        scrub.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("scrub of %zu MiB: %.3f ms per run\n", bench::scrub_bytes(q) >> 20, median(scrub));
     EXPECT_GT(cold, 1.5 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
 }
 
