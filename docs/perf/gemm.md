@@ -62,14 +62,27 @@ The common native term (`gemm.cc:97-101`):
 
 ```cpp
 const bool device = d.is_gpu || !d.has_vendor;
-const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
+const bool native = device && native_serves_precision<T>(precision, d.has_vendor) && s.m > 0 && s.n > 0 && s.k > 0 &&
                     A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
-const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
+const bool grid = native;  // no batch term: launch() chunks the batch
 ```
 
-`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). `grid` is the CUDA grid-z limit: the
-batch goes in SYCL dimension 0, so a batch above 65535 (`kMaxGridBatch`, `src/ops/gemm/choice.hh:139`) is native only through
-`small`. Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
+`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). {#gemm-batch-chunking}
+**Batch above the grid-z cap.** The batch goes in SYCL dimension 0 = CUDA grid z (65535, `kMaxGridBatch` in
+`src/ops/gemm/choice.hh`), which used to make every 3-D family refuse a larger batch (only `small`, 1-D, and the
+vendor served it). `launch()` now runs `direct`, `tiled`, `reg` and `wide` on consecutive chunks of at most
+`device.max_groups_yz` items, and `splitk` on chunks of `max_groups_yz / s` (its grid is batch x s). The chunk views are
+the strided sub-batches the kernels already read, the chunks are disjoint in C, and an out-of-order Queue is drained
+before the last Event is returned. The `can_run` batch terms are gone (splitk keeps `s <= max_groups_yz`).
+Tests: `GridCeilingIsServedByBatchChunking` and `SplitKGridCeilingIsServedByBatchChunking` launch at, one past and
+several chunks past the cap, so a chunk-seam offset error is red.
+
+**Precision.** `native_serves_precision<T>`: `Default` and the scalar's own precision (F32 for float and
+complex<float>, F64 for double and complex<double>) are exact and served by every native. F16, BF16 and TF32 on a
+single-precision scalar only permit a less accurate product (the cuBLAS `FAST` compute types), so a vendor build sends
+them to the vendor (`can_run` is false for the natives) and a vendor-free build answers at full precision. F64 on float
+and F32/F16/BF16/TF32 on double are refused everywhere (cuBLAS `unsupported`, vendor-free `NoRouteError`).
+Test: `ComputePrecisionContract`. Candidate counts: float 25, double 12 (no `reg`), complex<float> 13, complex<double> 12 (no `reg`).
 
 Forms are folded after the real-scalar C→T fold:
 
@@ -110,7 +123,7 @@ and `CanRunEqualsLaunch` (`tests/gemm_candidates_tests.cc`) hold.
 Selection is the first runnable entry of the nearest row of `tuned/gemm.<device>.txt`, keyed
 `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to `T` for real scalars.
 `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, else `strided`. Every log key has
-weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU and `precision != Default`).
+weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU, and a lower-precision hint in a vendor build).
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
 build (`gemm.cc:156-164`), and each item chooses separately.
 
@@ -1325,8 +1338,8 @@ Tests:
   arena (same address), so a skipped store shows as poison rather than fresh zeros or the last call's partials.
 - `GemmCandidates.SplitKOnAnOutOfOrderQueueReducesAfterTheSlices`: `splitk:m=32:n=32:k=16:s=8`, 33×33×300 (136),
   batch 1024 on an out-of-order Queue with poisoned partials, three repetitions.
-- `GemmCandidates.SplitKGridCeilingIsBatchTimesSlices`: s = 2 and 8 at batch ⌊65535 / s⌋ (a launch) and one past
-  (a refusal, C untouched).
+- `GemmCandidates.SplitKGridCeilingIsServedByBatchChunking`: s = 2 and 8 at batch ⌊65535 / s⌋, one past and three
+  chunks past, all correct (a refusal before the chunking landed).
 - Every generic per-candidate test (pins, `CanRunEqualsLaunch`, the launcher bit for bit, the kernel trace name
   `<host trace>_splitk`, NaN C, the saturating batch, missing instantiations, the candidate set) picks the family
   up from `candidates<T>()`.
@@ -1340,8 +1353,8 @@ Deliberate breaks, unrun:
 - β applied per slice in the reduction (`acc = lin_epi(1, beta, acc, prior)` inside the loop): red only in β ≠ 0
   cases; the NaN-C β = 0 cases stay green.
 - `bid = z % batch` instead of `z / s`: items mix; red in the batch-1024 bit-identity checks.
-- Dropping `batch * s` from `can_run`: `SplitKGridCeilingIsBatchTimesSlices` turns red (the launch fails past
-  the grid).
+- Chunking splitk at `max_groups_yz` instead of `max_groups_yz / s`: `SplitKGridCeilingIsServedByBatchChunking`
+  turns red (the launch fails past the grid).
 - An empty slice returns before its store (`if (k_lo >= k_hi) return;` after the decode): red at s = 8, k = 300
   (float, double, cfloat), s = 4 and 8 at k = 40, and s = 4 and 8 at k = 136 (16-byte scalars), all through the
   poison, and the out-of-order test (s = 8 at k = 300 / 136); green at k = 1 (slice 0 only stores) and at s = 2.
@@ -1578,7 +1591,7 @@ Deliberate breaks, run on the GPU (filter: those four plus `PinnedCandidatesEver
   `PinnedCandidatesEveryFormShapeAndLayout`.
 - row term only, `nc = lim` (rows past m written into the ld gap; review follow-up, full binaries): no
   abort. `gemm_candidates_tests` red 33 (the wide v2 and C-epilogue suites, `BetaZeroDoesNotReadC`,
-  `ParentLdPanelUpdate`, `GridCeilingIsACanRunTerm`, `SaturatingBatchIsBitIdentical…`, `PinnedRun…`, and
+  `ParentLdPanelUpdate`, `GridCeilingIsServedByBatchChunking`, `SaturatingBatchIsBitIdentical…`, `PinnedRun…`, and
   complex `AutoReadsEveryKeyField`: every case with a ragged m on the staged group), `gemm_tests` red 21 (the
   forced wide ragged and sub-view cases), float, complex<float> and complex<double> alike.
 - priors read at beta = 0: red exactly `WideV2EveryForm`, `WideK8Slab` and `CoalescedCEpilogue` for float,
@@ -2034,7 +2047,7 @@ temporary run-time switch (first red per test; the suites stop at the first fata
 | `=2` ignored | PinnedChoiceLaunchesItsOwnKernel: the 304 `=2` cases only | the 4-byte-base and derived-leg cases |
 
 Full suites on sm_120 (`BATCHLAS_TEST_BACKEND=CUDA`): `gemm_tests` 158 passed; `tune_tests` 221 passed, 1 skipped
-(an LFS pointer in a fresh worktree); `gemm_candidates_tests` 132 passed, 2 failed: `GridCeilingIsACanRunTerm`
+(an LFS pointer in a fresh worktree); `gemm_candidates_tests` 132 passed, 2 failed: `GridCeilingIsServedByBatchChunking`
 for complex<float> and complex<double>, which expects the vendor first at 2×2×2 b65536 while the shipped sm_120
 coarse table (7dc92ec3) ranks `small` first. No kernel code is involved.
 
@@ -2741,8 +2754,8 @@ outside the tiled leg are `can_run` terms (`small_wg`, `small_fits` in `choice.h
 * **sm_120 has no measured gemm table.** Its windows in [blackwell.md](blackwell.md) (gemm section)
   are not reachable by Auto until a `tools/tune` sweep.
 * **TF32 is reachable but unmeasured.** `experiments/sycl_vs_cuda/tf32_smoke.cpp` emits real `mma.sync` TF32
-  instructions with correct results. No staging, so no throughput number. Every native `can_run` rejects
-  `ComputePrecision != Default`.
+  instructions with correct results. No staging, so no throughput number. The natives answer a TF32 request only in a
+  vendor-free build, at full precision ([precision contract](#gemm-batch-chunking)).
 * **The direct kernel's batch offsets are `int`.** `gemm_direct` can overflow at large batch × stride. Not a
   `can_run` term.
 

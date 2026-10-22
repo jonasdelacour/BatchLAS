@@ -498,10 +498,13 @@ namespace batchlas {
 
     /// @brief Internal compute precision of a GEMM (the cuBLAS `cublasComputeType_t`).
     ///
-    /// Anything but `Default` is served only by the vendor library: the native GEMM
-    /// kernels do not support it. On cuBLAS, a single-precision scalar accepts
-    /// F32, F16, BF16 and TF32, a double-precision scalar only F64; any other
-    /// combination throws batchlas::unsupported.
+    /// A request for the scalar's own precision (`Default`, or `F32` for float and complex<float>,
+    /// `F64` for double and complex<double>) is answered exactly by every path. `F16`, `BF16` and
+    /// `TF32` on a single-precision scalar are a PERMISSION to lose accuracy, not a demand for
+    /// it: the vendor library uses the faster mode where it has one, and a build or backend
+    /// without it answers at full single precision, which is within the permission. Every other
+    /// combination (F64 on float, F32/F16/BF16/TF32 on double) is refused: batchlas::unsupported
+    /// from cuBLAS, batchlas::NoRouteError where no vendor library exists.
     enum class ComputePrecision {
         Default, ///< The precision of the scalar type.
         F32,     ///< 32-bit float accumulation.

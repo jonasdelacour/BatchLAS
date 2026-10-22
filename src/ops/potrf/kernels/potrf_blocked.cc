@@ -1,6 +1,8 @@
-// Native batched POTRF: the blocked right-looking driver, Uplo::Lower only. Per panel j:
-// the leaf potrf on the ib x ib diagonal block, an info-merge/quench fixup, the panel solve
-// L21 = A21 L11^{-H}, and A22 -= L21 L21^H. See docs/perf/potrf.md#the-blocked-driver
+// Native batched POTRF: the blocked right-looking driver. Per panel j: the leaf potrf on the
+// ib x ib diagonal block, an info-merge/quench fixup, the panel solve L21 = A21 L11^{-H}, and
+// A22 -= L21 L21^H. Uplo::Upper is the same schedule on the transposed block rows: U12 =
+// U11^{-H} A12 (Left/Upper/ConjTrans) and A22 -= U12^H U12, touching only the upper triangle.
+// See docs/perf/potrf.md#the-blocked-driver and #the-blocked-upper-driver
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potrf/kernels/symmetric_product_fold.hh>
@@ -37,6 +39,9 @@ template <> struct PotrfIsComplex<std::complex<double>> : std::true_type {};
 template <typename T>
 constexpr Transpose kTrailingTransB =
     PotrfIsComplex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+
+template <typename T>
+constexpr Transpose kTrailingTransA = kTrailingTransB<T>;
 
 // nb is the diagonal block order -- the leaf's order and the trailing update's k -- and W
 // the trailing panel width; neither is potrf_cta_max_n<T>(). evidence: docs/perf/potrf.md#nb-and-w
@@ -171,8 +176,10 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
                                 T* a_ptr, int ld, int stride,
                                 int j, int ib, int m2, int batch,
                                 int32_t* info_ptr, const int32_t* leaf_ptr,
-                                int wg) {
-    const int rows = ib + m2;          // the whole column panel A(j:n, j:j+ib)
+                                int wg, bool upper) {
+    // Lower: the whole column panel A(j:n, j:j+ib) (rows x ib). Upper: the whole row panel
+    // A(j:j+ib, j:n), stored as ib rows x cols columns.
+    const int rows = ib + m2;
     const T one = T(1);
     const T zero = T(0);
 
@@ -202,13 +209,16 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
                                           static_cast<std::size_t>(ib);
                 for (std::size_t e = static_cast<std::size_t>(tid); e < total;
                      e += static_cast<std::size_t>(wg)) {
+                    // (r, c) in the panel's own orientation: Upper swaps the roles.
                     const int c = static_cast<int>(e / static_cast<std::size_t>(rows));
                     const int r = static_cast<int>(e % static_cast<std::size_t>(rows));
+                    const std::ptrdiff_t off = upper ? static_cast<std::ptrdiff_t>(r) * ld + c
+                                                     : static_cast<std::ptrdiff_t>(c) * ld + r;
                     if (r < ib) {
-                        if (r < c) continue;                 // upper triangle: untouched
-                        base[static_cast<std::ptrdiff_t>(c) * ld + r] = (r == c) ? one : zero;
+                        if (r < c) continue;                 // opposite triangle: untouched
+                        base[off] = (r == c) ? one : zero;
                     } else {
-                        base[static_cast<std::ptrdiff_t>(c) * ld + r] = zero;
+                        base[off] = zero;
                     }
                 }
             });
@@ -244,11 +254,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
     if (n < 1 || batch < 1) {
         throw batchlas::invalid_argument("potrf_blocked: degenerate extents");
     }
-    if (uplo != Uplo::Lower) {
-        throw batchlas::invalid_argument(
-            "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
-            "lower triangle only; see can_run in src/ops/potrf/potrf.cc)");
-    }
+    const bool upper = (uplo == Uplo::Upper);
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
     }
@@ -303,21 +309,23 @@ Event potrf_blocked_dispatch(Queue& ctx,
         // is already ordered after this one and the Event carries nothing the caller needs.
         // The SAME occupancy target nb was clamped against: the leaf's gate and the block
         // width are one decision, and a mismatch makes the leaf throw on a legal block.
-        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
+        (void)potrf_cta_dispatch<T>(ctx, A11, uplo, ws.leaf_ws, ws.leaf_info,
                                     p.leaf_min_blocks);
 
         // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
         if (!ctx.in_order()) ctx.wait();
 
         (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
-                                     info.data(), ws.leaf_info.data(), fixup_wg);
+                                     info.data(), ws.leaf_info.data(), fixup_wg, upper);
 
         if (m2 == 0) break;
 
         if (!ctx.in_order()) ctx.wait();
 
-        const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
-        (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
+        // Lower: A21 (m2 x ib) = A21 L11^{-H}. Upper: A12 (ib x m2) = U11^{-H} A12.
+        const auto A21 = upper ? sub(j, ib, j + ib, m2, ws.a21_ptrs.data())
+                               : sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
+        (void)panel_solve(ctx, A11, A21, T(1), upper ? Side::Left : Side::Right, uplo,
                     Transpose::ConjTrans, Diag::NonUnit);
 
         if (!ctx.in_order()) ctx.wait();
@@ -327,27 +335,45 @@ Event potrf_blocked_dispatch(Queue& ctx,
         for (int c = 0; c < m2; c += W) {
             const int w = std::min(W, m2 - c);
 
-            const auto Lrow = sub(j + ib + c, w, j, ib, nullptr);
+            // Lower: Lrow = L(w rows of the panel), product = -Lrow Lrow^H. Upper: Lrow is the
+            // ib x w column block of U12 and the product is -Lrow^H Lrow.
+            const auto Lrow = upper ? sub(j, ib, j + ib + c, w, nullptr)
+                                    : sub(j + ib + c, w, j, ib, nullptr);
             const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
             const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, batch);
 
-            (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
-                          Transpose::NoTrans, kTrailingTransB<T>,
-                          ComputePrecision::Default);
+            if (upper) {
+                (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
+                              kTrailingTransA<T>, Transpose::NoTrans,
+                              ComputePrecision::Default);
+            } else {
+                (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
+                              Transpose::NoTrans, kTrailingTransB<T>,
+                              ComputePrecision::Default);
+            }
 
             // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
             if (!ctx.in_order()) ctx.wait();
 
             (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
-                ctx, Cd, Sc, T(1), Uplo::Lower);
+                ctx, Cd, Sc, T(1), uplo);
 
             const int mr = m2 - c - w;
             if (mr > 0) {
-                const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
-                const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
-                (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
-                              Transpose::NoTrans, kTrailingTransB<T>,
-                              ComputePrecision::Default);
+                if (upper) {
+                    // Rest of this block row of the upper triangle: C(w x mr) -= Lrow^H U12(:, rest).
+                    const auto Ur = sub(j, ib, j + ib + c + w, mr, nullptr);
+                    const auto Cr = sub(j + ib + c, w, j + ib + c + w, mr, nullptr);
+                    (void)trailing_gemm(ctx, Lrow, Ur, Cr, T(-1), T(1),
+                                  kTrailingTransA<T>, Transpose::NoTrans,
+                                  ComputePrecision::Default);
+                } else {
+                    const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
+                    const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
+                    (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
+                                  Transpose::NoTrans, kTrailingTransB<T>,
+                                  ComputePrecision::Default);
+                }
             }
 
             // WAR: the next panel's gemm overwrites the scratch this fold still reads.

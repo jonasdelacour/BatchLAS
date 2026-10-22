@@ -15,7 +15,7 @@ closed and kept only for numbering.
 | # | where | status |
 |---|---|---|
 | 1 | `src/ops/ortho/ortho.cc:190-192` | open, latent (routed to the vendor) |
-| 2 | `src/util/cond.cc:48,54,131` | open, throws in a vendor-free build |
+| 2 | `src/util/cond.cc`, `src/util/norm.cc` | fixed: both call the public `syev` |
 | 3 | `src/ops/lanczos/lanczos.cc:111-116` | open, 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:37-38,70-71` | open, inferred, unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:399,411,428,440` | open, NaN from unwritten workspace |
@@ -32,7 +32,7 @@ closed and kept only for numbering.
 | 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
 | 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:68-71,596` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89 |
-| 19 | `src/ops/potrf/potrf.cc` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
+| 19 | `src/ops/potrf/potrf.cc` `can_run` | fixed: `blocked` serves Upper |
 | 20 | `src/sycl/kernel_attrs.hh` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
@@ -66,15 +66,15 @@ closed and kept only for numbering.
   transposes the factor back. `tests/ortho_tests.cc` runs both orientations for every algorithm.
 - **Status:** fixed (WP8).
 
-## Defect 2: `cond` calls the vendor `syev` directly
+## Defect 2: `cond` and `norm` called the vendor `syev` directly
 
-- **Symptom:** throws in a vendor-free build.
-- **Cause:** `src/util/cond.cc:48`, `:54` and `:133` call
-  `ops::syev::detail::syev_vendor_or_throw` and its buffer-size query, which bypass the public
-  `syev` selection.
-- **Fix needs:** call the public `syev` and `syev_buffer_size`, and move the workspace query with
-  the call. The shims are in `src/ops/syev/vendor.hh`.
-- **Status:** open.
+- **Symptom:** the Spectral `cond` and `norm` threw in a vendor-free build on CUDA and ROCm.
+- **Cause:** both called `ops::syev::detail::syev_vendor_or_throw` and its buffer-size query for every
+  backend but SYCL, bypassing the public `syev` selection.
+- **Fix:** `cond_spectral_impl` and `norm_spectral_vendor_impl` call the public `syev` and `syev_buffer_size` for
+  every backend, so selection picks the vendor or a native route. Tests: `cond_tests` and `norm_tests` in a
+  `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` tree.
+- **Status:** fixed.
 
 ## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
@@ -379,8 +379,11 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `Uplo::Lower`, so only `tiny` and `cta` serve Upper, and `cta` is capped by
   `potrf_cta_max_n_for_slm(budget)`. With the vendor family absent nothing else is runnable. On CUDA
   the 97,280 B budget puts the ceiling higher, and a vendor build still has the `vendor` family.
-- **Fix needs:** an Upper arm for `lpanel` or `blocked` (or a transpose into the Lower path).
-- **Status:** open.
+- **Fix:** the blocked driver has an Upper schedule (`potrf_blocked.cc`): leaf `potrf` Upper on the diagonal
+  block, `trsm` Left/Upper/ConjTrans on the row panel, and the trailing update `-U12^H U12` through the public
+  gemm folded into the upper triangle only. `can_run` for `blocked` no longer reads `uplo`; `lpanel` stays
+  Lower-only. `posv` Upper inherits it. Tests: `PotrfBlockedTest.BlockedUpper*`, `FacadeBlockedUpper`.
+- **Status:** fixed. Metal's ledger entry in `tests/known-failures-acpp-metal.txt` needs a re-run to confirm.
 
 ## Defect 20: `BATCHLAS_LAUNCH_BOUNDS` emits no `.maxntid`, so ptxas ignores the bound
 
