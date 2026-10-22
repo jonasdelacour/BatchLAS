@@ -588,22 +588,16 @@ size_t syev_blocked_part_buffer_size(Queue& ctx,
     }
 }
 
-// Items per pass: sytrd_blocked, stedc and ormqr_blocked hand A, Z and the tridiagonal between
-// launches through L2, and their children (gemm, syr2k, trmm) are routed at this batch. An item
-// is A plus its share of the part workspace (the difference of two part sizes, so per-allocation
-// padding cancels). The query and the call must agree, so both use it.
+// Items per pass: sytrd_blocked, stedc and ormqr_blocked hand A, Z and stedc's merge matrix (three
+// n x n matrices) between launches through L2, and their children (gemm, syr2k, trmm) are routed at
+// this batch. The item is those three, not the part workspace (10-31 n^2 at n = 64-256, much of it
+// touched by one kernel only). The query and the call must agree, so both use it.
 // evidence: docs/perf/syev.md#syev-l2-batch-chunking
-template <Backend B, typename T>
-int syev_blocked_chunk(Queue& ctx, int n, int batch, JobType jobz, Uplo uplo,
-                       const StedcParams<typename base_type<T>::type>& params) {
-    constexpr int k = 64;
-    const auto part_ws = [&](int items) {
-        return static_cast<int64_t>(syev_blocked_part_buffer_size<B, T>(
-            ctx, MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, items), jobz, uplo, params));
-    };
+template <typename T>
+int syev_blocked_chunk(Queue& ctx, int n, int batch) {
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
-        batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)) + (part_ws(2 * k) - part_ws(k)) / k,
+        batch, 3 * static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
 }
@@ -624,7 +618,7 @@ Event syev_blocked(Queue& ctx,
     const int batch = static_cast<int>(a_in.batch_size());
     // Each part is a complete solve of its items, so the parts are independent; they share the
     // one part-sized workspace on the in-order queue syev_blocked_part requires.
-    const int chunk = syev_blocked_chunk<B, T>(ctx, n, batch, jobz, uplo, stedc_params);
+    const int chunk = syev_blocked_chunk<T>(ctx, n, batch);
     const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
@@ -647,7 +641,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
     const int batch = static_cast<int>(a.batch_size());
     if (n < 1 || batch < 1 || a.rows() != a.cols())
         return syev_blocked_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
-    const int chunk = syev_blocked_chunk<B, T>(ctx, n, batch, jobz, uplo, stedc_params);
+    const int chunk = syev_blocked_chunk<T>(ctx, n, batch);
     return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, chunk + batch % chunk), jobz, uplo,
                                                stedc_params);
 }

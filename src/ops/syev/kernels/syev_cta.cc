@@ -673,20 +673,15 @@ size_t syev_cta_part_buffer_size(Queue& ctx,
     return bytes;
 }
 
-// Items per pass: sytrd_cta, steqr and ormqx_cta hand A, Z and the packed reflectors between
-// launches through L2. An item is A plus its share of the part workspace (the difference of two
-// part sizes, so per-allocation padding cancels). The query and the call must agree, so both use
-// it. evidence: docs/perf/syev.md#syev-l2-batch-chunking
-template <Backend B, typename T>
-int syev_cta_chunk(Queue& ctx, int n, int batch, JobType jobz, const SteqrParams<T>& params) {
-    constexpr int k = 64;
-    const auto part_ws = [&](int items) {
-        return static_cast<int64_t>(syev_cta_part_buffer_size<B, T>(
-            ctx, MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, items), jobz, params));
-    };
+// Items per pass: sytrd_cta, steqr and ormqx_cta hand A, Z and the packed reflectors (three n x n
+// matrices) between launches through L2. The item is those three, not the part workspace: most of
+// that is steqr_wg's rotation store, which the CTA kernels never touch. The query and the call must
+// agree, so both use it. evidence: docs/perf/syev.md#syev-l2-batch-chunking
+template <typename T>
+int syev_cta_chunk(Queue& ctx, int n, int batch) {
     const auto dev = ctx.device();
     return static_cast<int>(tuning::blocked_chunk_items(
-        batch, static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)) + (part_ws(2 * k) - part_ws(k)) / k,
+        batch, 3 * static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
 }
@@ -711,7 +706,7 @@ Event syev_cta(Queue& ctx,
         throw batchlas::invalid_argument("syev_cta: eigenvalues span too small for n*batch.");
     // Each part is a complete solve of its items, so the parts are independent; they share the
     // one part-sized workspace, hence the wait between parts on an out-of-order queue.
-    const int chunk = syev_cta_chunk<B, T>(ctx, n, batch, jobz, steqr_params);
+    const int chunk = syev_cta_chunk<T>(ctx, n, batch);
     const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
@@ -734,7 +729,7 @@ size_t syev_cta_buffer_size(Queue& ctx,
     const int batch = static_cast<int>(a.batch_size());
     if (n < 1 || n > 32 || batch < 1 || a.rows() != a.cols())
         return syev_cta_part_buffer_size<B, T>(ctx, a, jobz, steqr_params);
-    const int chunk = syev_cta_chunk<B, T>(ctx, n, batch, jobz, steqr_params);
+    const int chunk = syev_cta_chunk<T>(ctx, n, batch);
     return syev_cta_part_buffer_size<B, T>(ctx, a.batch_range(0, chunk + batch % chunk), jobz, steqr_params);
 }
 
