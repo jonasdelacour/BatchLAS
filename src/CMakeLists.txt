@@ -397,7 +397,10 @@ else()
 endif()
 
 
-if(BATCHLAS_HAS_HOST_BACKEND)
+# Linked only when the library may call LAPACKE/CBLAS (BATCHLAS_HAS_LAPACKE/CBLAS: found AND
+# vendor math allowed). A vendor-free build keeps the host device family but calls no netlib, so
+# no libbatchlas*.so records DT_NEEDED on it; batchlas_verify (static, test-only) links it itself.
+if(BATCHLAS_HAS_HOST_BACKEND AND BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS)
     # PRIVATE: these are absolute -dev symlink paths
     # (/usr/lib/x86_64-linux-gnu/liblapacke.so). PUBLIC put them verbatim into
     # the exported BatchLAS::batchlas_backends interface, so a consumer on a
