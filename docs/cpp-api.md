@@ -169,6 +169,8 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `trmm(ctx, A, B, C, opts)` | `C := α·op(A)·B` or `α·B·op(A)` | **`C`**; `B` untouched |
 | `trsm(ctx, A, B, opts)` | solves `op(A)·X = α·B` or `X·op(A) = α·B` | **`B`**, overwritten with `X` |
 | `potrf(ctx, A, opts)` | Cholesky, `A = L·Lᴴ` or `Uᴴ·U` | `A` in place, `uplo` triangle |
+| `potrs(ctx, A, B, uplo)` | solves `A·X = B` from `potrf`'s factor | `B`; `A` read-only |
+| `potri(ctx, A, uplo, full, ws, info)` | `A⁻¹` from `potrf`'s factor (LAPACK `?potri`) | `A` in place, `uplo` triangle (both with `full`) |
 | `getrf(ctx, A, pivots)` | LU with partial pivoting | `A` and `pivots` |
 | `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors | `B` |
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |

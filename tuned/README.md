@@ -25,7 +25,7 @@ and syr2k are real only) on sm_89 and sm_120. spmm also ships a CPU table. Any o
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
 checks this inventory.
 
-Counts: 39 files, 19 per GPU device plus `spmm.cpu.txt`.
+Counts: 41 files, 20 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
@@ -37,7 +37,7 @@ Transcribed rows reproduce deleted routers' windows at their grid points; they a
 measurements, and a measured row near them replaces them. Their provenance (transcriber, commit)
 is the run line of the ledger, run id `transcribed-<sha>`: posv `7e71a6e0`, trsm `8b9adeb3`; gemm,
 gemv, getri, gesv, spmm, syev, geqrf, orgqr, ormqr, getrf, getrs, gesvd `424a45bc`; symm, syrk,
-syr2k, trmm `ff340fc6`. The transcribers' sources are in git history, for example
+syr2k, trmm `ff340fc6`; potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
 ledgers is in the commit that added them (`git log -- scripts/migrate_tuning_data.py`).
 
