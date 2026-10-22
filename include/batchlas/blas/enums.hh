@@ -110,22 +110,22 @@ namespace batchlas {
     /// Only the backends compiled into the build (`BATCHLAS_HAS_*_BACKEND`) are
     /// available; Queue::backend_available() reports which.
     enum class BATCHLAS_API Backend {
-        AUTO,    ///< A request, not a backend: the Queue resolves it from its device on first query.
+        Auto,    ///< A request, not a backend: the Queue resolves it from its device on first query.
         CUDA,    ///< NVIDIA GPU: cuBLAS / cuSOLVER / cuSPARSE and the native SYCL kernels.
         ROCM,    ///< AMD GPU: rocBLAS / rocSOLVER / rocSPARSE and the native SYCL kernels.
         MKL,     ///< Reserved; no dispatch target, never available.
         MAGMA,   ///< Reserved; no dispatch target, never available.
         SYCL,    ///< Native SYCL kernels on a GPU with no vendor library (AdaptiveCpp Metal); float and
                  ///< complex<float> only unless the build has device fp64 (`BATCHLAS_HAS_DEVICE_FP64`).
-        NETLIB   ///< Host CBLAS / LAPACKE; the fallback for any device.
-        // Add more as needed
+        NETLIB,  ///< Host CBLAS / LAPACKE; the fallback for any device.
+        AUTO [[deprecated("use Backend::Auto")]] = Auto  ///< Deprecated spelling of Auto.
     };
 
     /// @brief Spelling of @p v as in source.
     /// @ingroup api_enums_lowlevel
     inline constexpr std::string_view to_string(Backend v) {
         switch (v) {
-            case Backend::AUTO:   return "AUTO";
+            case Backend::Auto:   return "Auto";
             case Backend::CUDA:   return "CUDA";
             case Backend::ROCM:   return "ROCM";
             case Backend::MKL:    return "MKL";

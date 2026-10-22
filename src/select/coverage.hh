@@ -17,7 +17,7 @@ namespace batchlas::coverage {  /** @addtogroup api_selection */ /** @{ */
 struct Shape {  // the row key: different triangles or operands are different rows
     Op op = Op::COUNT;
     ScalarKind scalar = ScalarKind::F32;
-    Backend backend = Backend::AUTO;
+    Backend backend = Backend::Auto;
     int64_t m = 0, n = 0, k = 0;  // square ops set all three
     int64_t batch = 1;
     Transpose transA = Transpose::NoTrans;

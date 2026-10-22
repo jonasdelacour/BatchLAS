@@ -726,7 +726,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                      std::invalid_argument)
             << select::to_string(c);
     }
-    // The syev_supports_* bindings ask can_run with Backend::AUTO, so only the is_gpu term refuses.
+    // The syev_supports_* bindings ask can_run with Backend::Auto, so only the is_gpu term refuses.
     {
         auto sq = make_eig<T>(s);
         EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));

@@ -43,10 +43,10 @@ Matrix<float, MatrixFormat::Dense> make_matrix(int n, int batch, float scale) {
 
 TEST(BackendDispatch, AutoResolvesToACompiledBackendAndIsStable) {
     Queue q;
-    EXPECT_EQ(q.requested_backend(), Backend::AUTO);
+    EXPECT_EQ(q.requested_backend(), Backend::Auto);
 
     const Backend b = q.backend();
-    EXPECT_NE(b, Backend::AUTO) << "backend() must never hand back the request";
+    EXPECT_NE(b, Backend::Auto) << "backend() must never hand back the request";
     EXPECT_TRUE(Queue::backend_available(b));
     EXPECT_EQ(q.backend(), b) << "resolution must be stable across queries";
 }
@@ -79,8 +79,8 @@ TEST(BackendDispatch, AvailabilityMatchesBuildConfiguration) {
     // SYCL is the vendor-free native GPU backend (AdaptiveCpp Metal).
     EXPECT_EQ(Queue::backend_available(Backend::SYCL), bool(BATCHLAS_HAS_SYCL_BACKEND));
 
-    // AUTO is a request, not a target; MAGMA has nothing behind it.
-    EXPECT_FALSE(Queue::backend_available(Backend::AUTO));
+    // Auto is a request, not a target; MAGMA has nothing behind it.
+    EXPECT_FALSE(Queue::backend_available(Backend::Auto));
     EXPECT_FALSE(Queue::backend_available(Backend::MAGMA));
 }
 
@@ -93,7 +93,7 @@ TEST(BackendDispatch, PinningAnAbsentBackendThrowsImmediately) {
     EXPECT_THROW(q.set_backend(Backend::SYCL), std::runtime_error);
 #endif
     // The failed attempts left the queue alone.
-    EXPECT_EQ(q.requested_backend(), Backend::AUTO);
+    EXPECT_EQ(q.requested_backend(), Backend::Auto);
     EXPECT_TRUE(Queue::backend_available(q.backend()));
 }
 
@@ -105,9 +105,9 @@ TEST(BackendDispatch, PinningAndReturningToAuto) {
     EXPECT_EQ(q.requested_backend(), automatic);
     EXPECT_EQ(q.backend(), automatic);
 
-    q.set_backend(Backend::AUTO);
-    EXPECT_EQ(q.requested_backend(), Backend::AUTO);
-    EXPECT_EQ(q.backend(), automatic) << "AUTO must re-resolve, not go stale";
+    q.set_backend(Backend::Auto);
+    EXPECT_EQ(q.requested_backend(), Backend::Auto);
+    EXPECT_EQ(q.backend(), automatic) << "Auto must re-resolve, not go stale";
 }
 
 TEST(BackendDispatch, BackendSurvivesMoveAssignment) {

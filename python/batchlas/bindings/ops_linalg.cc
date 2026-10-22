@@ -43,7 +43,7 @@ DenseMatrix elementwise_impl(const DenseMatrix& a_wrapper,
     const auto& a = typed<T>(a_wrapper);
     const auto& b = typed<T>(b_wrapper);
     DenseMatrixT<T> c(a.rows(), a.cols(), a.batch_size());
-    Queue& queue = acquire_queue(device_name, Backend::AUTO);
+    Queue& queue = acquire_queue(device_name, Backend::Auto);
     (void)linalg::elementwise_into<T, Op>(queue, a.view(), b.view(), c.view());
     queue.wait();
     return wrap_dense(std::move(c));
@@ -69,7 +69,7 @@ DenseMatrix axpby_impl(const DenseMatrix& a_wrapper,
     const auto& a = typed<T>(a_wrapper);
     const auto& b = typed<T>(b_wrapper);
     DenseMatrixT<T> c(a.rows(), a.cols(), a.batch_size());
-    Queue& queue = acquire_queue(device_name, Backend::AUTO);
+    Queue& queue = acquire_queue(device_name, Backend::Auto);
     (void)linalg::axpby_into<T>(queue, scalar_from_object<T>(alpha_object), a.view(),
                           scalar_from_object<T>(beta_object), b.view(), c.view());
     queue.wait();
@@ -83,7 +83,7 @@ DenseMatrix scale_impl(const DenseMatrix& a_wrapper,
                        const py::object& alpha_object,
                        const std::optional<std::string>& device_name) {
     const auto& a = typed<T>(a_wrapper);
-    Queue& queue = acquire_queue(device_name, Backend::AUTO);
+    Queue& queue = acquire_queue(device_name, Backend::Auto);
     auto c = linalg::scaled<T>(queue, a.view(), scalar_from_object<T>(alpha_object));
     queue.wait();
     return wrap_dense(std::move(c));
@@ -354,7 +354,7 @@ void init_linalg_ops(py::module_& module) {
     bind_mask("_linalg_tril", false);
 
     module.def("_linalg_transpose", [](const DenseMatrix& a, const py::object& device) {
-        Queue& queue = acquire_queue(optional_string_from_obj(device), Backend::AUTO);
+        Queue& queue = acquire_queue(optional_string_from_obj(device), Backend::Auto);
         return visit_real_only(a, "linalg.transpose is real-only (nothing conjugates)", [&](auto tag) -> py::object {
             using T = typename decltype(tag)::type;
             auto c = linalg::transpose(queue, typed<T>(a).view());

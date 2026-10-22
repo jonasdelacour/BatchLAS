@@ -1229,7 +1229,7 @@ TEST(SyevxProjectedSyevPin, CtaFusedAtOrBelow32EvenWhenTheTableRanksTheVendorFir
 #elif BATCHLAS_HAS_ROCM_BACKEND
     constexpr Backend kGpu = Backend::ROCM;
 #else
-    constexpr Backend kGpu = Backend::AUTO;
+    constexpr Backend kGpu = Backend::Auto;
 #endif
     constexpr int n = 120, batch = 2;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);

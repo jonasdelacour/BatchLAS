@@ -305,7 +305,7 @@ struct QueueImpl;
 /// arena.
 ///
 /// @code
-/// Queue ctx;                                   // default device, in-order, backend AUTO
+/// Queue ctx;                                   // default device, in-order, backend Auto
 /// Queue ooo(device, /*in_order=*/false);       // out-of-order
 /// Queue host(device, Backend::NETLIB);         // backend pinned
 /// Queue sibling(ctx, /*in_order=*/true);       // shares ctx's context and device
@@ -322,11 +322,11 @@ struct QueueImpl;
 /// @ingroup api_core
 struct BATCHLAS_API Queue{
 
-    /// @brief A Queue on Device::default_device(), in-order, backend AUTO.
+    /// @brief A Queue on Device::default_device(), in-order, backend Auto.
     Queue();
     ~Queue();
 
-    /// @brief A Queue on `device` with backend AUTO.
+    /// @brief A Queue on `device` with backend Auto.
     /// @param device   the device
     /// @param in_order true (default) for an in-order queue; out-of-order queues make arena-backed
     ///                 workspace releases drain the queue
@@ -396,14 +396,14 @@ struct BATCHLAS_API Queue{
     /// @brief True for an in-order Queue.
     bool in_order() const { return in_order_; }
 
-    /// @brief The backend calls dispatch to; never Backend::AUTO (an AUTO Queue resolves once, on
+    /// @brief The backend calls dispatch to; never Backend::Auto (an Auto Queue resolves once, on
     /// first query, from the device vendor and the compiled-in backends).
-    /// @throws batchlas::unsupported if AUTO finds no compiled-in backend that serves the device
+    /// @throws batchlas::unsupported if Auto finds no compiled-in backend that serves the device
     batchlas::Backend backend() const;
-    /// @brief The backend as requested, possibly Backend::AUTO.
+    /// @brief The backend as requested, possibly Backend::Auto.
     batchlas::Backend requested_backend() const { return backend_; }
 
-    /// @brief Pin this Queue to `backend`, or pass Backend::AUTO to hand it back to automatic
+    /// @brief Pin this Queue to `backend`, or pass Backend::Auto to hand it back to automatic
     /// selection.
     /// @throws batchlas::unsupported if `backend` is not compiled into this build
     void set_backend(batchlas::Backend backend);
@@ -433,8 +433,8 @@ struct BATCHLAS_API Queue{
     private:
         Device device_;
         bool in_order_;
-        batchlas::Backend backend_ = batchlas::Backend::AUTO;
-        mutable batchlas::Backend resolved_backend_ = batchlas::Backend::AUTO;
+        batchlas::Backend backend_ = batchlas::Backend::Auto;
+        mutable batchlas::Backend resolved_backend_ = batchlas::Backend::Auto;
 };
 
 namespace detail {

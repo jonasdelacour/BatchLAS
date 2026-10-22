@@ -118,9 +118,9 @@ void validate(const MV<T>& A, const char* who) {
 // backend term is the ROCm exclusion.
 template <typename T>
 bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
-    const select::Device& d = select::describe(q.device(), Backend::AUTO, false);
+    const select::Device& d = select::describe(q.device(), Backend::Auto, false);
     if (q.backend() == Backend::ROCM) return can_run<Backend::ROCM, T>(c, d, A);
-    return can_run<Backend::AUTO, T>(c, d, A);
+    return can_run<Backend::Auto, T>(c, d, A);
 }
 
 }  // namespace ops::syev

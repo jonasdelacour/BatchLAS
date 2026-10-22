@@ -654,16 +654,17 @@ call `attach_to_current_thread()` from the new owner before its first use.
 ## The backend comes from the Queue
 
 ```cpp
-Queue ctx(Device::default_device());                    // AUTO: resolved from the device vendor
+Queue ctx(Device::default_device());                    // Auto: resolved from the device vendor
 Queue host(Device::default_device(), Backend::NETLIB);  // pinned
 ctx.set_backend(Backend::CUDA);                         // or change it later
 Backend b = ctx.backend();                              // the resolved backend
 if (Queue::backend_available(Backend::CUDA)) { /* ... */ }
 ```
 
-`Backend::AUTO` resolves once on first use and is cached; `set_backend` resets the cache.
+`Backend::Auto` resolves once on first use and is cached; `set_backend` resets the cache. `Backend::AUTO` is a
+deprecated alias of `Backend::Auto`.
 
-| Backend | Chosen by `AUTO` for | Available when |
+| Backend | Chosen by `Auto` for | Available when |
 | --- | --- | --- |
 | `CUDA` | an NVIDIA GPU | the CUDA backend is compiled in (`BATCHLAS_ENABLE_CUDA`) |
 | `ROCM` | an AMD GPU | the ROCm backend is compiled in |
