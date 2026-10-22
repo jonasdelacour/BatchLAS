@@ -1759,6 +1759,15 @@ void write_run(const TempDir& d, Tier tier, const std::string& date, const CellR
     w.cell(c);
 }
 
+// A Ledger whose records (run id "") belong to a kProtocol run, as a cold run writes them.
+Ledger cold_ledger() {
+    Ledger l;
+    RunMeta m;
+    m.protocol = kProtocol;
+    l.runs.push_back(m);
+    return l;
+}
+
 CellRecord two_family_cell() {
     return cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)},
                     {"lpanel:panel=8", "vendor"});
@@ -2252,7 +2261,7 @@ ArmOutcome arm(const std::string& name, const std::string& status, std::vector<d
 }  // namespace
 
 TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = two_family_cell();
     r.tier = Tier::deep;
     l.cells.push_back(r);
@@ -2283,9 +2292,58 @@ TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
     EXPECT_EQ(plan[0].tier, Tier::coarse);
 }
 
+// A measured record of another protocol (lean timed L2-warm operands) is re-measured in full at the
+// running tier whatever its tier and hashes, and a cold record outranks it at any tier; unhashed
+// tiers carry no protocol.
+TEST(TuneSchedule, AnotherProtocolsRecordIsReMeasuredAndRanksBelowACold) {
+    Ledger l;
+    RunMeta warm, cold;
+    warm.run_id = "w", warm.protocol = "lean";
+    cold.run_id = "c", cold.protocol = kProtocol;
+    l.runs = {warm, cold};
+    CellRecord r = two_family_cell();
+    r.tier = Tier::deep, r.run_id = "w", r.date = "2026-10-01";
+    l.cells.push_back(r);
+    const std::set<std::string> runs = protocol_runs(l);
+    EXPECT_TRUE(other_protocol(l.cells[0], runs));
+    auto plan = plan_round(plan_spec(kTwo), Tier::preview, {nkey(64)}, l, kHashes, 4, 0);
+    EXPECT_EQ(plan[0].reason, "protocol") << "a current deep lean record does not satisfy even preview";
+    EXPECT_EQ(plan[0].arms, kTwo);
+    EXPECT_EQ(plan[0].tier, Tier::preview);
+
+    CellRecord c = r;
+    c.tier = Tier::preview, c.run_id = "c", c.date = "2026-09-01";
+    l.cells.push_back(c);
+    const auto best = best_records(l, kHashes);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->run_id, "c") << "an older cold preview record outranks a warm deep one";
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::preview, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+
+    l.cells[0].tier = Tier::transcribed;
+    EXPECT_FALSE(other_protocol(l.cells[0], runs)) << "an untimed tier is never re-measured for its protocol";
+}
+
+// The clock metadata of a cell round-trips through a ledger line; `throttled` is derived from it.
+TEST(TuneLedger, ClockMetadataRoundTrips) {
+    TempDir d;
+    CellRecord r = two_family_cell();
+    r.phases.clk = {8, 3, 8 * 1500.0};
+    r.throttle_reraces = 1;
+    write_run(d, Tier::deep, "2026-10-01", r, "20261001T000000-a-1");
+    const std::string text = read_file(d.led());
+    EXPECT_NE(text.find("\"clk_n\": 8"), std::string::npos) << text;
+    EXPECT_NE(text.find("\"throttled\": 1"), std::string::npos) << "3 of 8 capped is above 25%\n" << text;
+    const Ledger l = read_ledger(d.led(), "float");
+    ASSERT_EQ(l.cells.size(), 1u);
+    EXPECT_EQ(l.cells[0].phases.clk.n, 8);
+    EXPECT_EQ(l.cells[0].phases.clk.capped, 3);
+    EXPECT_DOUBLE_EQ(l.cells[0].phases.clk.mean_mhz(), 1500.0);
+    EXPECT_EQ(l.cells[0].throttle_reraces, 1);
+}
+
 TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
     const std::vector<std::string> cands{"lpanel:panel=8", "lpanel:panel=16", "vendor", "wide:m=1", "cta"};
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("lpanel:panel=16", "h1", "ok", 1.5),
                              cres("vendor", "v1", "ok", 2.0), cres("cta", "c1", "ok", 3.0), cres("old:x", "o1", "ok", 5.0)},
                             {"lpanel:panel=8", "lpanel:panel=16", "vendor", "cta", "old:x"});
@@ -2759,7 +2817,7 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
 // with every candidate; the other cells keep their skip reasons.
 // evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
 TEST(TuneRemeasure, PlanRoundTreatsANamedCellAsMissing) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = two_family_cell();
     r.tier = Tier::deep;
     r.round = 3;
@@ -2966,7 +3024,7 @@ TEST(TuneMaxDim, TieredRunNeverMeasuresACellOverTheLimit) {
 }
 
 TEST(TuneSchedule, AllErrorRecordCountsAsMissing) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord failed = cell_rec({cres("lpanel:panel=8", "h1", "error"), cres("vendor", "v1", "error")}, {});
     failed.tier = Tier::deep;
     l.cells.push_back(failed);
@@ -3720,6 +3778,47 @@ public:
 
 }  // namespace
 
+namespace {
+
+// Every race reports the SW power cap in `capped` of its 4 clock samples.
+class ThrottledMeasurer : public FakeMeasurer {
+public:
+    explicit ThrottledMeasurer(int capped_) : capped(capped_) {}
+    ArmBatch measure(const CellJob& j) override {
+        ArmBatch b = FakeMeasurer::measure(j);
+        b.phases.clk = {4, capped, 4 * 1200.0};
+        ++calls;
+        return b;
+    }
+    int capped, calls = 0;
+};
+
+}  // namespace
+
+// A race the power cap held in more than 25% of its samples runs once more (kThrottleReraces), and
+// the record says so; at 25% or below nothing is re-raced.
+TEST(TuneTieredDriver, AThrottledCellIsRacedOnceMore) {
+    for (const int capped : {1, 2, 4}) {
+        TempDir repo, ledger;
+        TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+        o.audit_fraction = 0;
+        ThrottledMeasurer m(capped);
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        (void)testing::internal::GetCapturedStdout();
+        const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+        std::size_t raced = 0;
+        for (const CellRecord& c : l.cells) {
+            if (c.phases.clk.n == 0) continue;  // a single-candidate cell is not raced
+            ++raced;
+            EXPECT_EQ(c.throttle_reraces, capped > 1 ? 1 : 0) << capped << " " << key_text(c.key);
+            EXPECT_EQ(c.phases.clk.n, 4) << "the last race's samples only";
+        }
+        ASSERT_GT(raced, 0u);
+        EXPECT_EQ(std::size_t(m.calls), raced * (capped > 1 ? 2 : 1)) << capped << " of 4 capped";
+    }
+}
+
 TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
@@ -3727,7 +3826,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     std::string out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
     o.plan = false;
     o.tier = Tier::preview;
@@ -3745,7 +3844,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
+    EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
 
     // A changed family-b source: every preview lattice cell is raced again at preview, from history.
@@ -3760,7 +3859,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     out = testing::internal::GetCapturedStdout();
     ::close(fd);
     EXPECT_NE(out.find("(2 measure, 2 partial)"), std::string::npos) << out;
-    EXPECT_NE(out.find("(4 cells from lean phase history, 0 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(4 cells from lean-cold phase history, 0 from the model)"), std::string::npos) << out;
     EXPECT_NE(out.find("est=1.25s (history)"), std::string::npos) << out;
     const double per_cell = 4.0 / double(l.cells.size());  // 1 worker start over every preview record
     char line[96];

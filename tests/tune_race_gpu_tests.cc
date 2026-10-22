@@ -2,6 +2,10 @@
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).
 
+#include <batchlas/blas/functions/gemm.hh>
+#include <batchlas/blas/matrix.hh>
+
+#include <src/ops/gemm/choice.hh>
 #include <tools/tune/cell_runner.hh>
 #include <tools/tune/grid.hh>
 #include <tools/tune/schedule.hh>
@@ -99,6 +103,39 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
     ASSERT_FALSE(tw.empty());
     EXPECT_LE(median(find(timed, rw)->ms), 1.03 * median(find(timed, tw)->ms))
         << "race winner " << rw << " vs 16-rep winner " << tw << " (" << eliminated << " eliminated)";
+}
+
+// The cold protocol (docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol): every
+// timed run starts with its read-only operands out of L2. gemm 32^3 float at batch 4096 reads
+// 32 MiB of A and B, which stay L2-resident between back-to-back calls on sm_89 (72 MB) and sm_120
+// (128 MiB), so the same call timed warm, as reset_and_run timed it before, is much faster.
+TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
+    using batchlas::Matrix;
+    batchlas::Queue& q = gpu_queue();
+    constexpr int kN = 32, kBatch = 4096, kReps = 15;
+    CellRequest r = request("gemm", "float", "ta=N,tb=N,layout=packed,m=32,n=32,k=32,batch=4096", "time");
+    r.arms = {"vendor"};
+    r.reps = kReps;
+    const auto got = find_spec("gemm")->run_cell(r, q);
+    ASSERT_EQ(got.size(), 1u);
+    ASSERT_EQ(got[0].status, "ok") << got[0].reason;
+    EXPECT_GE(q.workspace_capacity(), bench::scrub_bytes(q)) << "the scrub buffer is leased from the worker Queue's arena";
+    const double cold = median(got[0].ms);
+
+    auto A = Matrix<float>::Random(kN, kN, false, kBatch, 1), B = Matrix<float>::Random(kN, kN, false, kBatch, 2);
+    auto C = Matrix<float>::Random(kN, kN, false, kBatch, 3);
+    batchlas::select::ScopedPin<batchlas::ops::gemm::GemmChoice> pin("gemm", "vendor", batchlas::select::StrictPin{});
+    std::vector<double> warm;
+    for (int i = 0; i < 3 + kReps; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)batchlas::gemm<kBackend, float>(q, A.view(), B.view(), C.view(), 1.0f, 1.0f, batchlas::Transpose::NoTrans,
+                                             batchlas::Transpose::NoTrans);
+        q.wait();
+        if (i >= 3) warm.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("gemm 32^3 x 4096 vendor: tuner %.4g ms, back-to-back %.4g ms (%.2fx)\n", cold, median(warm),
+                cold / median(warm));
+    EXPECT_GT(cold, 1.3 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
 }
 
 // An arm raced alone (a benched arm's fresh child) has no rival to beat: race_step calls it the

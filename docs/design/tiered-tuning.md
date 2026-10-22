@@ -135,8 +135,18 @@ coupling is explicit: posv's families list the potrf and trsm families they call
 ## Engine: the lean cell
 
 The race of one cell (`run_race`, `tools/tune/cell_runner.hh`; constants in `race.hh`). Ledgers
-record it as `protocol=lean`; `full` is the engine before it (a fixed 0.2 s warm-up per arm), and an
-absent field is older still. `--plan` history reads only `lean` cells.
+record it as `protocol=lean-cold`: every run (warm-up, race, verification) restores the inputs, scrubs
+L2 with a read of min(4 x L2, memory / 16) bytes leased from the worker Queue's arena, waits, then
+starts the clock ([the cold protocol](../perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol)).
+`lean` is the same race on L2-warm operands, `full` the engine before it (a fixed 0.2 s warm-up per
+arm), and an absent field is older still. A measured record of any other protocol ranks below every
+`lean-cold` record of its cell whatever its tier (C++ `best_records`, `sweep_to_table.py`), and the
+planner re-measures its cell in full (`protocol`), on and off round 0; until then the table keeps it.
+`--plan` history reads only `lean-cold` cells, so the first cold run plans from the model.
+
+After each timed run the worker samples NVML (SM clock, clock-event reason 0x4, SW power cap). A cell
+capped in more than 25% of its samples is raced once more; the record carries `clk_n`, `clk_capped`,
+`clk_mhz`, `throttled` and `throttle_reraces` (@ref design_tuning_data).
 
 1. **One untimed run per arm**, so JIT and module loads stay out of the cut.
 2. **Gross cut.** Two timed interleaved rounds, then `race_step`. Two pairs are below every tier's
@@ -661,7 +671,7 @@ interface above:
 | reads `--status` | reads the ledgers through `scripts/sweep_to_table.py` (`read_ledger`, best record, staleness, `ledger_rows`, `parse_table`, `nearest`) | the views show exactly what `sweep_to_table.py` would write next and need no build |
 | status matrix: staleness | per kernel family: the table header's hash against hash v2 of the sources now, the keys the ledger holds stale in it per dtype, and `stale_kernel_warnings`; per dtype, the table's rows and `behind` when its header does not name the newest run | one table per (op, device) carries the hashes; a row-exact check per dtype (the `--check` rule, header hashes) is in the op view, where it costs one `ledger_rows` |
 | launch: tiers | preview, calibrate, coarse, deep, and custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible | the tuner's flags since the tuning data layout (@ref design_tuning_data) |
-| `gpu_guard.sh`, campaign store | the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`) | the tuner already guards every GPU it uses; a run is not a campaign |
+| `gpu_guard.sh`, campaign store | the tuner's own guard (`--guard-wait`; no foreign context on a measured GPU); runs in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`) | the tuner already guards every GPU it uses; a run is not a campaign |
 | figure style | interactive SVG | the map is clicked, not printed |
 
 Since the tuning data layout the tab reads one ledger and one table per (op, device) and filters
@@ -891,7 +901,7 @@ the tables; the committed ledger stays in git history:
 
     L=$HOME/batchlas-tuning/ladder-sm120/ledger; mkdir -p $L
     batchlas_tune all --tier deep --dtype float,cfloat --devices 0,2,3 --ledger $L --plan
-    batchlas_tune all --tier deep --dtype float,cfloat --devices 0,2,3 --ledger $L --allow-idle-foreign \
+    batchlas_tune all --tier deep --dtype float,cfloat --devices 0,2,3 --ledger $L \
         --guard-wait 86400 --progress-fd 3 3>events.jsonl
     cp $L/*.sm_120.jsonl benchmarks/results/tuning/ledger/
     python3 scripts/sweep_to_table.py --device sm_120
@@ -1163,7 +1173,6 @@ microseconds of their neighbours.
   The worker's warm start and each cell's warm-until-stable are the defence. The replay cannot test this, because the raw
   files come from warm, back-to-back runs.
 - If the audit fails often, the speedup depends mostly on racing and the adaptive grid.
-- Deferred, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and tolerated foreign
-  pids and the guard thresholds (`--util-ceiling`, `--allow-idle-foreign`) in `run` records; the guard
-  backend is recorded (`guard`).
+- Deferred, not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and the guard
+  threshold (`--util-ceiling`) in `run` records; the guard backend is recorded (`guard`).
 - Budgets assume one GPU on a quiet box. On the shared 4090 box, guard waits come on top.

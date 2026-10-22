@@ -517,10 +517,11 @@ boxes.
   does not matter to this project.** Still *profile* across batch sizes: batch-only-parallel kernels
   (one work-group per matrix) starve at small batch. If a kernel's work-group count equals the batch
   size, that is the bug.
-- **The tuner and minibench time L2-warm operands** (reset copy, then the clock; no flush), so per-item
-  time "degrades" once batch pushes the working set past L2 (128 MiB sm_120, 72 MB sm_89): gemm 32^3
-  1.9x, gemv 3x. Compare kernels cold (a 1 GiB read scan before each timed call);
-  `docs/perf/batch-sensitivity.md#batch-sensitivity-c1-the-l2-warm-timing-artifact`.
+- **The tuner and minibench time cold operands**: reset, an L2 scrub (`bench::scrub_l2`, a read of
+  min(4 x L2, memory / 16)), a wait, then one synchronous call per sample (ledger `protocol=lean-cold`).
+  Tables and ledgers from `lean` runs timed L2-warm operands: below the L2 edge (128 MiB sm_120, 72 MB
+  sm_89) they read up to 1.9x (gemm 32^3) or 3x (gemv) fast, so per-item time "degrades" with batch.
+  A standalone harness must scrub too; `docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol`.
 - **Do not tune or optimize double / complex<double> on a 1:64-FP64 GPU** (RTX 4090 sm_89, RTX PRO
   6000 sm_120, every consumer and workstation part): FP64 is compute-bound there almost everywhere,
   so kernel and routing work buys little and its windows do not carry over. Keep FP64 *correct*
