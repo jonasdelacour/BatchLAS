@@ -27,7 +27,7 @@ closed and kept only for numbering.
 | 11 | `src/ops/gemm/kernels/epilogue_linear.hh`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
-| 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
+| 14 | Hermitian drivers in gesvd and syev | syev: fixed at the public entry; gesvd: open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
@@ -280,18 +280,27 @@ With large finite poison in the triangle the caller did not name:
 - `syev_cta` with Upper (n = 5, 17, 32) reads the lower triangle. `syev_blocked` with Lower at
   n <= 32 reads the upper. `syev_two_stage` with Lower at n = 40 reads the upper.
 
-Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. syev sends cfloat
-n = 9..32 and cdouble n <= 32 to `syev_cta`. syev `two_stage` with Lower is the Auto choice for
-jobz=N above n = 320, and for float V with n = 449..1024. A caller that stores only the upper
-triangle gets a wrong answer today. `linalg::eigh`, `eigvalsh` and the Hermitian `linalg::svd`
-mirror the named triangle on their copy first (`MatrixView::hermitize`), so they are unaffected.
+Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. Before the syev fix,
+Auto sent cfloat n = 9..32 and cdouble n <= 32 to `syev_cta`, and `two_stage` with Lower was its
+choice for jobz=N above n = 320 and for float V with n = 449..1024. `linalg::eigh`, `eigvalsh` and
+the Hermitian `linalg::svd` mirror the named triangle on their copy first
+(`MatrixView::hermitize`), so they were never affected.
 
-- **Tests:** `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
-  (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
-  (`tests/syev_candidates_tests.cc`). Both are skipped for exactly these drivers.
-- **Fix needs:** mirror or read only the named triangle in each driver, then remove the skip list.
+- **syev fix:** the public `syev` (`src/ops/syev/syev.cc`) runs `A.hermitize(q, uplo)` before every
+  native family, so each one sees the same Hermitian matrix. The vendor family reads only `uplo`
+  and is not mirrored. The documented contract: the other triangle may be overwritten, and the
+  diagonal's imaginary part is taken as zero. The drivers themselves still read the other triangle
+  when called directly (`syev_cta`, `syev_blocked`, `syev_two_stage`); only the entry is fixed.
+- **Tests:** `SyevTest.AutoIgnoresUnreferencedTriangle` (`tests/syev_tests.cc`: Auto, n = 5, 32,
+  40, 400, 1024, both `uplo`, both jobz, poison 9e3 against \f$\lVert A\rVert_2 = 1\f$, strided
+  batch) and `SyevCandidates.OtherTriangleIsNeverRead` (every pinned family, no skip list since the
+  fix). Without the entry mirror, the first fails for the complex types at n = 5 and 32 (Auto
+  `cta`) and at n = 400 and 1024 Lower (Auto `two_stage`); the second fails for exactly the three
+  drivers above. gesvd: `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
+  (`tests/gesvd_candidates_tests.cc`), still skipped for its two drivers.
+- **gesvd fix needs:** the same entry mirror, or reading only the named triangle in each driver.
   gesvd's `can_run` also refuses blocked Hermitian Upper, which the driver could run by mirroring.
-- **Status:** open.
+- **Status:** syev fixed at the entry; gesvd open.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 

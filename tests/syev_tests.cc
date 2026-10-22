@@ -404,56 +404,31 @@ TYPED_TEST(SyevTest, VendorRouteHonoursLdSubViewsAndBatchStride) {
 
 namespace {
 
-// Item b is H diag(d) H^H with H = I - 2 u u^H, |u| = 1 (complex u for complex T) and a graded,
-// sign-mixed d = +-10^[-2, 2]: entry (i, j) = d_i [i = j] + 2 (2 s - d_i - d_j) u_i conj(u_j), with
-// s = sum d_k |u_k|^2, so the batch costs O(n^2). `buf` (ld = n + 3, stride = ld n + 5) gets the
-// `uplo` triangle and `poison` in the other one; `full` gets the whole matrix. Returns sorted d.
+// A graded Hermitian batch from the library fill (lambda_i = 10^(-6 i / (n - 1)), a different Q per
+// item, deterministic in the seed) in A's strided storage, copied whole into `full`. Then a large
+// finite poison (9e3 against ||A||_2 = 1) overwrites the triangle `uplo` does not name.
 template <typename T>
-std::vector<std::vector<double>> fill_graded_hermitian(T* buf, int ld, int stride, Uplo uplo, T poison,
-                                                       MatrixView<T, MatrixFormat::Dense> full) {
-    const int n = full.rows();
-    std::vector<std::vector<double>> lambda(full.batch_size());
-    for (int b = 0; b < full.batch_size(); ++b) {
-        std::mt19937 gen(91u + 13u * unsigned(b) + unsigned(n));
-        std::uniform_real_distribution<double> dis(-1.0, 1.0);
-        std::vector<std::complex<double>> u(n);
-        double nrm = 0.0;
-        for (auto& x : u) {
-            x = {dis(gen), is_std_complex_v<T> ? dis(gen) : 0.0};
-            nrm += std::norm(x);
-        }
-        std::vector<double> d(n);
-        double s = 0.0;
-        for (int i = 0; i < n; ++i) {
-            u[i] /= std::sqrt(nrm);
-            d[i] = (i % 2 ? -1.0 : 1.0) * std::pow(10.0, n == 1 ? 0.0 : -2.0 + 4.0 * i / (n - 1)) * (1.0 + 0.01 * b);
-            s += d[i] * std::norm(u[i]);
-        }
+std::vector<std::vector<double>> fill_poisoned(Queue& ctx, MatrixView<T, MatrixFormat::Dense> A, Uplo uplo,
+                                               const MatrixView<T, MatrixFormat::Dense>& full) {
+    const int n = A.rows();
+    A.fill_graded_hermitian(ctx, 6.0, 91u + unsigned(n)).wait();
+    MatrixView<T, MatrixFormat::Dense>::copy(ctx, full, A).wait();
+    const T poison = vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
+    for (int b = 0; b < A.batch_size(); ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i) {
-                std::complex<double> a = 2.0 * (2.0 * s - (d[i] + d[j])) * u[i] * std::conj(u[j]);
-                if (i == j) a = {a.real() + d[i], 0.0};
-                const T v = vendor_syev_cast<T>(a);
-                full(i, j, b) = v;
-                const bool named = uplo == Uplo::Lower ? i >= j : i <= j;
-                buf[size_t(b) * stride + i + size_t(j) * ld] = named ? v : poison;
-            }
-        std::sort(d.begin(), d.end());
-        lambda[b] = d;
-    }
-    return lambda;
-}
-
-template <typename T>
-T unreferenced_poison() {
-    return vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
+            for (int i = 0; i < n; ++i)
+                if (uplo == Uplo::Lower ? i < j : i > j) A(i, j, b) = poison;
+    std::vector<double> lam(n);
+    for (int i = 0; i < n; ++i) lam[i] = std::pow(10.0, n == 1 ? 0.0 : -6.0 * i / (n - 1));
+    std::sort(lam.begin(), lam.end());
+    return std::vector<std::vector<double>>(A.batch_size(), lam);
 }
 
 }  // namespace
 
-// Large finite poison (90 ||A||_2) in the triangle the caller did not name, under Auto, on a strided
-// batch. Auto reaches the small solvers at n <= 32 and blocked / two_stage above (by jobz and dtype);
-// before the entry mirror several of them read the other triangle.
+// Poison in the triangle the caller did not name, under Auto, on a strided batch (ld = n + 3,
+// stride = ld n + 5). Auto reaches the small solvers at n <= 32 and blocked / two_stage above (by jobz
+// and dtype); before the entry mirror several of them read the other triangle.
 TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -467,19 +442,17 @@ TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
                                           (jobz == JobType::EigenVectors ? " V" : " N");
                 const int ld = n + 3, stride = ld * n + 5;
                 UnifiedVector<T> buf(size_t(stride) * batch, T(0));
-                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
-                const auto lambda = fill_graded_hermitian<T>(buf.data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
                 UnifiedVector<T*> ptrs(batch, nullptr);
                 MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                const auto lambda = fill_poisoned<T>(*this->ctx, A, uplo, A0);
                 UnifiedVector<Real> W(size_t(n) * batch, Real(0));
                 UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W.to_span(), jobz, uplo));
                 (void)syev<B, T>(*this->ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
                 this->ctx->wait();
 
-                double scale = 0.0;
-                for (const auto& l : lambda) scale = std::max({scale, std::fabs(l.front()), std::fabs(l.back())});
                 const VectorView<Real> w(W.data(), n, batch);
-                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, scale, A0.all_items())) << where;
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
                 if (jobz != JobType::EigenVectors) continue;
                 EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
                     << where;
@@ -488,9 +461,9 @@ TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
             }
 }
 
-// Same device, same route, same build: two solves of copies of one batch agree bit for bit (W and
-// the whole buffer: eigenvectors, the other triangle and the padding). cta's batch of 1024 fills
-// the device with sub-group partitions.
+// Same device, same route, same build: two solves of identical copies of one batch agree bit for bit
+// (W and the whole buffer: eigenvectors, the other triangle and the padding). cta's batch of 1024
+// fills the device with sub-group partitions.
 TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -518,10 +491,16 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
                                                UnifiedVector<T>(size_t(stride) * c.batch, T(0))};
                     UnifiedVector<Real> W[2] = {UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-1)),
                                                 UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-2))};
+                    UnifiedVector<T*> ptrs[2] = {UnifiedVector<T*>(c.batch, nullptr), UnifiedVector<T*>(c.batch, nullptr)};
                     for (int r = 0; r < 2; ++r) {
-                        (void)fill_graded_hermitian<T>(buf[r].data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
-                        UnifiedVector<T*> ptrs(c.batch, nullptr);
-                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs.data());
+                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
+                        (void)fill_poisoned<T>(*this->ctx, A, uplo, A0);
+                        if (r == 1)
+                            ASSERT_EQ(0, std::memcmp(buf[0].data(), buf[1].data(), buf[0].size() * sizeof(T)))
+                                << where << ": the inputs differ";
+                    }
+                    for (int r = 0; r < 2; ++r) {
+                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
                         UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo));
                         (void)syev<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
                         this->ctx->wait();
