@@ -112,6 +112,6 @@ static void BM_GESVD_BLOCKED(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
-BATCHLAS_REGISTER_BENCHMARK(BM_GESVD_BLOCKED, GesvdBlockedBenchSizes);
+BATCHLAS_REGISTER_BENCHMARK_ALL_TYPES(BM_GESVD_BLOCKED, GesvdBlockedBenchSizes);
 
 MINI_BENCHMARK_MAIN();

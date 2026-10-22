@@ -18,10 +18,12 @@ keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kern
 |---|---|---|
 | `jacobi` | `gesvdj_cta` (`src/ops/gesvd/kernels/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) |
 | `cta` | `gesvd_cta` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
-| `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
-| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked, and a homogeneous batch (`gesvd.cc:79`) |
+| `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU; any general input (complex since 2026-10-22), or square Hermitian, either triangle |
+| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked; on CUDA only cuSOLVER's envelope: \f$\max(m,n) \le 32\f$, packed A and U, no thin factor, not values-only non-square; never on ROCm (no binding) |
 
-Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc:66-79`): each runs every item at the top-level extents.
+Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc`, `can_run`): each runs every item at the top-level extents.
+Since `can_run(vendor)` holds the binding's own refusals, a row that ranks `vendor` above a shape the vendor cannot run
+falls to the next entry or the last resort (`blocked`) instead of throwing at launch.
 
 The sm_89 table is transcribed at `424a45bc` (the old router's order replayed per cell, not timed); the sm_120
 table is deep-measured. First family per input on sm_89:
@@ -30,8 +32,8 @@ table is deep-measured. First family per input on sm_89:
 |---|---|
 | real general, \f$\max(m,n) \le 32\f$ | `jacobi` (`cta`, `blocked` behind it) |
 | real general, \f$\max(m,n) \ge 33\f$ | `blocked`; in 33..64 `jacobi` stays behind `vendor` |
-| complex general | `jacobi` up to its ceiling, then `vendor` |
-| Hermitian, square | `cta` to 32, then `blocked` (Lower) or `vendor` (Upper) |
+| complex general | `jacobi` up to its ceiling, then `blocked` (hand-edited rows, see [the complex blocked path](#gesvd-complex-general-on-the-blocked-path)) |
+| Hermitian, square | `cta` to 32, then `blocked`; Upper rows copy the Lower ranking |
 | Hermitian, non-square | `vendor` |
 
 Pin with `BATCHLAS_GESVD_ROUTE=<family>` or `select::ScopedPin`; a pin that `can_run` refuses throws
