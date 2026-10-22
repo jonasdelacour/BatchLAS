@@ -128,13 +128,13 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
 // Gemm128x128Pipelined, u4) also declares its work-group size: ptxas sees .reqntid and holds the two-group cap (128 registers); the launch bound alone is
 // dropped (known defect #20) and left u1 at up to 139 and staged u4 at 155-159 (one group per SM).
 // NVPTX device code only, like BATCHLAS_LAUNCH_BOUNDS (none under acpp: speed only). Local, not in
-// kernel_attrs.hh: that header is in every op's tuning hash. It replaces BATCHLAS_LAUNCH_BOUNDS:
-// .maxntid next to .reqntid is a ptxas error ("Conflicting directives") on CUDA 13.2 sm_89.
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#define BATCHLAS_GEMM_REQD_WG(n, min_groups) \
-    [[sycl::reqd_work_group_size(1, 1, n), intel::min_work_groups_per_cu(min_groups)]]
+// kernel_attrs.hh: that header is in every op's tuning hash. A compiler that mis-lowers it
+// (BATCHLAS_NVPTX_REQD_WG_OK, configure probe) keeps BATCHLAS_LAUNCH_BOUNDS alone, which it emits.
+#if !BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_NVPTX_REQD_WG_OK && defined(__SYCL_DEVICE_ONLY__) && \
+    defined(__NVPTX__)
+#define BATCHLAS_GEMM_REQD_WG(n) [[sycl::reqd_work_group_size(1, 1, n)]]
 #else
-#define BATCHLAS_GEMM_REQD_WG(n, min_groups)
+#define BATCHLAS_GEMM_REQD_WG(n)
 #endif
 
 // A FUNCTOR, not a lambda, only so the launch bound can be spelled.
@@ -184,7 +184,8 @@ struct Gemm128x128Body {
     T alpha, beta;
     sycl::local_accessor<T, 1> tile_a, tile_b;
 
-    BATCHLAS_GEMM_REQD_WG(Threads, kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_GEMM_REQD_WG(Threads)
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
         if (bid >= batch) {
@@ -573,7 +574,8 @@ template <typename Body>
 struct Gemm128x128Inlined {
     Body body;
 
-    BATCHLAS_GEMM_REQD_WG(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);
     }
@@ -583,7 +585,8 @@ template <typename Body>
 struct Gemm128x128Pipelined {
     Body body;
 
-    BATCHLAS_GEMM_REQD_WG(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS(Body::Threads, Body::kMinGroupsPerCu)
+    BATCHLAS_GEMM_REQD_WG(Body::Threads)
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         [[clang::always_inline]] body(item);
     }

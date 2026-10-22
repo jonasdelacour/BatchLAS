@@ -529,11 +529,12 @@ BATCHLAS_UNROLL_FULL
 // .reqntid: without it ptxas ignores LAUNCH_BOUNDS' .minnctapersm on this functor (that
 // max_work_group_size emits no .maxntid here). The launch is (1, 1, 256) exactly.
 // evidence: docs/perf/gemm.md#gemm-wp-q-the-launch-bound-was-ignored
-#if !BATCHLAS_SYCL_IMPL_ACPP && defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
-#define BATCHLAS_WIDE_V2_REQD_WG(min_groups) \
-    [[sycl::reqd_work_group_size(1, 1, 256), intel::min_work_groups_per_cu(min_groups)]]
+// Off where the compiler mis-lowers it (BATCHLAS_NVPTX_REQD_WG_OK, see register_128x128.hh).
+#if !BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_NVPTX_REQD_WG_OK && defined(__SYCL_DEVICE_ONLY__) && \
+    defined(__NVPTX__)
+#define BATCHLAS_WIDE_V2_REQD_WG [[sycl::reqd_work_group_size(1, 1, 256)]]
 #else
-#define BATCHLAS_WIDE_V2_REQD_WG(min_groups)
+#define BATCHLAS_WIDE_V2_REQD_WG
 #endif
 
 template <typename T>
@@ -877,7 +878,8 @@ struct GemmWide64Body {
     }
 
     // always_inline: left out of line (complex<float>), the body spilled behind a call.
-    BATCHLAS_WIDE_V2_REQD_WG(kMinGroupsPerCu)
+    BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
+    BATCHLAS_WIDE_V2_REQD_WG
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;
         const int bid = static_cast<int>(item.get_group(0));
