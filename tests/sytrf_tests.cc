@@ -395,6 +395,27 @@ TYPED_TEST(SytrfTest, VendorFactorSolvesWithNativeSytrs) {
     }
 }
 
+// The pivot decisions are ?sytf2's: on random data (no near ties) the wg kernel, whose argmax spans
+// several sub-groups above n = 32, picks cuSOLVER's ipiv entry for entry. A residual alone cannot see a
+// wrong pivot choice: any nonzero pivot still gives a valid factorization.
+TYPED_TEST(SytrfTest, WgPivotsMatchVendor) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk != Backend::CUDA) GTEST_SKIP() << "the CUDA vendor arm only";
+    else {
+        if (!select::kHasCudaVendor) GTEST_SKIP() << "vendor-free build";
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (int n : {24, 100, 200}) {
+                auto w = make_sys<T>(n, 1, 3, uplo, Gen::random, 700u + unsigned(n));
+                auto v = make_sys<T>(n, 1, 3, uplo, Gen::random, 700u + unsigned(n));
+                this->factor(w, ops::sytrf::Wg{});
+                this->factor(v, ops::sytrf::Vendor{});
+                const int* wp = reinterpret_cast<const int*>(w.piv.data());
+                const int* vp = reinterpret_cast<const int*>(v.piv.data());
+                for (int e = 0; e < n * w.batch; ++e) ASSERT_EQ(wp[e], vp[e]) << "n=" << n << tag(uplo) << " at " << e;
+            }
+    }
+}
+
 // A saturating batch of identical KKT matrices: every item's factor, ipiv, info and X must equal item
 // 0's bit for bit, on the local-memory kernels (cta, sysv cta) and the work-group kernels (wg, sytrs).
 TYPED_TEST(SytrfTest, SaturatingBatchIsBitIdenticalToItemZero) {
