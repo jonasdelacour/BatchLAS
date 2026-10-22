@@ -111,7 +111,7 @@ struct Opts {
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     std::string guard_backend = "auto";
     bool jit = true, refine = true, guard = kHasGpuGuard, devices_given = false, dtype_given = false;
-    bool allow_idle_foreign = false, allow_dirty = false, only_named = false;
+    bool allow_dirty = false, only_named = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
     double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
@@ -385,7 +385,6 @@ struct ChildOut {
     bool ok = false;
     bool guard = false;  // child_once only: the after-check discarded it (child() re-runs it)
     std::string error;
-    std::vector<std::string> tolerated;  // idle foreign pids accepted before the child
     std::vector<Record> records;
     pid_t pid = -1;
     Phases phases;  // the child's, plus guard and spawn (process start, CUDA init, exit)
@@ -423,6 +422,7 @@ public:
             },
             [&] { return refuse_wait(gpu); }, o_.guard_wait);
         if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+        spent.clk = c.phases.clk;  // a discarded try's clock samples are not this result's
         c.phases = spent;
         return c;
     }
@@ -432,7 +432,7 @@ public:
                         const std::string& coverage, int reps, double warm, const std::vector<std::string>& extra) {
         ChildOut c;
         auto t = std::chrono::steady_clock::now();
-        const std::vector<std::string> tolerated = guard(gpu);
+        guard(gpu);
         c.phases.guard = seconds_since(t);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
@@ -453,14 +453,13 @@ public:
         c.phases.spawn = seconds_since(t);
         c.phases.mode = "fresh";
         c.pid = s.pid;
-        c.tolerated = tolerated;
         if (s.status != 0) {
             c.error = (s.timed_out ? "timeout" : "exit " + std::to_string(s.status)) + ": " + tail(log);
             return c;
         }
-        // gpu_guard.sh's after-check. Strict mode tolerated nothing, so any foreign entry is new.
+        // gpu_guard.sh's after-check: any foreign entry voids the child's numbers.
         t = std::chrono::steady_clock::now();
-        const auto fresh = after(gpu, tolerated, since);
+        const auto fresh = after(gpu, since);
         c.phases.add(&Phases::guard, seconds_since(t));
         if (!fresh.empty()) {
             c.guard = true;
@@ -552,14 +551,13 @@ private:
     std::ofstream raw_;
     std::vector<std::string> cands_;
 
-    std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
     CellRequest race_request(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
     std::vector<ProcUtil> activity(int gpu, unsigned long long since_us, bool device);
-    GuardCheck check(int gpu, bool device);
-    std::vector<std::string> after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us);
-    std::vector<std::string> guard(int gpu);
+    std::string check(int gpu, bool device);
+    std::vector<std::string> after(int gpu, unsigned long long since_us);
+    void guard(int gpu);
     std::string preflight();
     void write(const std::string& line) {
         std::lock_guard<std::mutex> lock(out_mu_);
@@ -634,20 +632,19 @@ std::vector<ProcUtil> Driver::activity(int gpu, unsigned long long since_us, boo
     return {{"", utilization(gpu)}};
 }
 
-// Before a run: no untolerated compute process, no foreign activity in the last second (README "Guard").
-GuardCheck Driver::check(int gpu, bool device) {
-    const GuardCheck g = guard_before(apps(gpu), o_.allow_idle_foreign);
-    if (!g.refuse.empty()) return g;
-    const auto active = foreign_active(activity(gpu, nvml::now_us() - 1000000, device), g.tolerated, o_.util_ceiling);
-    if (!active.empty()) return {"activity [" + join(active, ",") + "]", {}};
-    return g;
+// Before a run on `gpu` ("" = measure): no foreign compute context on that GPU, idle or not, and no
+// foreign activity in the last second (README "Guard"). Other GPUs of the box are not checked.
+std::string Driver::check(int gpu, bool device) {
+    if (std::string refuse = guard_refusal(apps(gpu)); !refuse.empty()) return refuse;
+    const auto active = foreign_active(activity(gpu, nvml::now_us() - 1000000, device), o_.util_ceiling);
+    return active.empty() ? std::string() : "activity [" + join(active, ",") + "]";
 }
 
 // After a run: a new compute process, or foreign activity since it started, voids its numbers.
-std::vector<std::string> Driver::after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us) {
+std::vector<std::string> Driver::after(int gpu, unsigned long long since_us) {
     if (!o_.guard) return {};
-    std::vector<std::string> bad = guard_new_foreign(apps(gpu), tolerated);
-    for (std::string& a : foreign_active(activity(gpu, since_us, false), tolerated, o_.util_ceiling)) bad.push_back(std::move(a));
+    std::vector<std::string> bad = apps(gpu).foreign;
+    for (std::string& a : foreign_active(activity(gpu, since_us, false), o_.util_ceiling)) bad.push_back(std::move(a));
     return bad;
 }
 
@@ -659,14 +656,15 @@ double Driver::refuse_wait(int gpu) {
     return seconds_since(t);
 }
 
-// The foreign pids this child runs beside (always empty in strict mode).
-std::vector<std::string> Driver::guard(int gpu) {
-    if (!o_.guard) return {};
+// Waits up to --guard-wait for check() to pass on `gpu`, then dies naming what holds it.
+void Driver::guard(int gpu) {
+    if (!o_.guard) return;
     for (double waited = 0;; waited += 1) {
-        const GuardCheck g = check(gpu, true);
-        if (g.refuse.empty()) return g.tolerated;
+        const std::string refuse = check(gpu, true);
+        if (refuse.empty()) return;
         if (waited >= o_.guard_wait)
-            die("GPU " + std::to_string(gpu) + " is busy (" + g.refuse + "); refusing to measure");
+            die("GPU " + std::to_string(gpu) + " is busy (" + refuse + "); refusing to measure. Every GPU in --devices "
+                "must hold no other compute context, idle or not: pick a free GPU (nvidia-smi) or wait");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
@@ -698,16 +696,6 @@ std::string Driver::preflight() {
         if (capture(q + " --query-gpu=display_active --format=csv,noheader 2>/dev/null") == "Enabled")
             std::fprintf(stderr, "batchlas_tune: warning: GPU %d drives a display, which slows L2-resident cells "
                                  "(docs/developer/agent-guide.md §13); prefer a headless GPU\n", gpu);
-        if (!o_.allow_idle_foreign || !o_.guard) continue;
-        std::vector<std::string> who;
-        for (const std::string& pid : apps(gpu).foreign) {
-            const std::string user = pid.find_first_not_of("0123456789") == std::string::npos
-                                         ? capture("ps -o user= -p " + pid + " 2>/dev/null") : "";
-            who.push_back(pid + "(" + (user.empty() ? "?" : user) + ")");
-        }
-        std::fprintf(stderr, "batchlas_tune: warning: --allow-idle-foreign: GPU %d tolerates idle foreign compute "
-                             "processes [%s] while utilization <= %g%%\n", gpu, join(who, ",").c_str(), o_.util_ceiling);
-        tolerated_at_start_ += (tolerated_at_start_.empty() ? "" : ";") + std::to_string(gpu) + ":" + join(who, ",");
     }
     for (const std::string& idx : split(capture("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null"), '\n')) {
         if (idx.find_first_not_of("0123456789") != std::string::npos ||
@@ -743,7 +731,6 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
         Json j;
         j.str("kind", kind).str("op", spec_.op()).str("dtype", dtype_).str("device", device_).key(c.key)
             .integer("pass", pass + 1).integer("attempt", attempt).boolean("reverse", reverse).integer("gpu", c.gpu);
-        if (o_.allow_idle_foreign) j.str("tolerated_foreign", join(ch.tolerated, ","));
         return j;
     };
     for (const auto& cand : cands_) {
@@ -853,6 +840,7 @@ WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guar
         },
         [&] { return refuse_wait(j.gpu); }, o_.guard_wait);
     if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+    spent.clk = r.phases.clk;  // a discarded try's clock samples are not this result's
     r.phases = spent;
     return r;
 }
@@ -864,19 +852,15 @@ WorkerTry Driver::race_worker_once(WorkerProcess& w, const CellJob& j, bool full
     WorkerTry r;
     r.phases.mode = "worker";
     auto t = std::chrono::steady_clock::now();
-    std::vector<std::string> tolerated;
     const bool device = full_guard && !g_nvml;
     if (device && o_.guard) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         t = std::chrono::steady_clock::now();  // the periodic idle second is no cell's guard cost
     }
     for (double waited = 0; o_.guard; waited += 1) {
-        const GuardCheck g = check(j.gpu, device);
-        if (g.refuse.empty()) {
-            tolerated = g.tolerated;
-            break;
-        }
-        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + g.refuse + "); refusing to measure");
+        const std::string refuse = check(j.gpu, device);
+        if (refuse.empty()) break;
+        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + refuse + "); refusing to measure");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     r.phases.guard = seconds_since(t);
@@ -893,7 +877,7 @@ WorkerTry Driver::race_worker_once(WorkerProcess& w, const CellJob& j, bool full
         return r;
     }
     t = std::chrono::steady_clock::now();
-    const auto fresh = after(j.gpu, tolerated, since);
+    const auto fresh = after(j.gpu, since);
     r.phases.add(&Phases::guard, seconds_since(t));
     if (!fresh.empty()) {
         r.guard = true;
@@ -955,7 +939,6 @@ std::string Driver::meta_line(const std::string& name) const {
         .integer("reps", o_.reps).num("warm_s", o_.warm).integer("passes", o_.passes).num("tie", kTie)
         .num("remeasure", o_.remeasure).num("refine_ratio", o_.refine ? o_.refine_ratio : 0.0)
         .num("cap_gib", o_.cap_gib).integer("ld_pad", o_.ld_pad).str("devices", join(devs, ","))
-        .boolean("allow_idle_foreign", o_.allow_idle_foreign).str("tolerated_foreign", tolerated_at_start_)
         .str("guard_backend", guard_backend_now()).str("argv", join(o_.argv, " ")).line();
 }
 
@@ -1076,9 +1059,7 @@ int Driver::gate() {
         fs::create_directories(o_.raw);
         raw_.open(o_.raw + "/gate." + spec_.op() + "." + device_ + ".jsonl", std::ios::trunc);
         if (raw_.is_open())
-            write(Json().str("kind", "guard").boolean("guard", o_.guard).str("guard_backend", guard_backend_now())
-                      .boolean("allow_idle_foreign", o_.allow_idle_foreign)
-                      .str("tolerated_foreign", tolerated_at_start_).line());
+            write(Json().str("kind", "guard").boolean("guard", o_.guard).str("guard_backend", guard_backend_now()).line());
     }
     const double cap = o_.cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::string> rows(cells.size());
@@ -1295,7 +1276,7 @@ void usage() {
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
-        "         --util-ceiling 5 --allow-idle-foreign --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
+        "         --util-ceiling 5 --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         --batch-ladder auto|default|off|c,c,.. (batch = c x compute units; auto: not on an old-axis ledger;\n"
         "         --batches turns it off) --cus N\n"
@@ -1452,7 +1433,9 @@ int main(int argc, char** argv) {
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
         else if (f == "--util-ceiling") o.util_ceiling = std::stod(val());
-        else if (f == "--allow-idle-foreign") o.allow_idle_foreign = true;
+        else if (f == "--allow-idle-foreign")
+            die("--allow-idle-foreign was removed: a GPU holding another compute context, even an idle one, time-slices "
+                "with it (docs/perf/batch-sensitivity.md); measure on a GPU nvidia-smi shows free");
         else if (f == "--guard-backend") o.guard_backend = val();
         else if (f == "--allow-dirty") o.allow_dirty = true;
         else if (f == "--lock-dir") o.lock_dir = val();

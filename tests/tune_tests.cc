@@ -764,42 +764,12 @@ TEST(TuneGuard, EveryOtherLineIsForeignIncludingUnparseableOnes) {
 
 AppScan foreign(std::vector<std::string> f) { return AppScan{std::move(f), false}; }
 
-TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), false).refuse, "compute processes [610696]");
-    const GuardCheck ok = guard_before(foreign({}), false);
-    EXPECT_EQ(ok.refuse, "");
-    EXPECT_TRUE(ok.tolerated.empty());
-    EXPECT_EQ(guard_new_foreign(foreign({"610696"}), ok.tolerated), (std::vector<std::string>{"610696"}));
-    EXPECT_TRUE(guard_new_foreign(foreign({}), ok.tolerated).empty());
-}
-
-TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
-    const GuardCheck g = guard_before(foreign({"610696", "671125"}), true);
-    EXPECT_EQ(g.refuse, "");
-    EXPECT_EQ(g.tolerated, (std::vector<std::string>{"610696", "671125"}));
-    EXPECT_TRUE(guard_new_foreign(foreign({"671125", "610696"}), g.tolerated).empty());
-    EXPECT_TRUE(guard_new_foreign(foreign({"610696"}), g.tolerated).empty());  // one exited
-}
-
-TEST(TuneGuard, NewForeignPidDuringTheChildDiscards) {
-    const GuardCheck g = guard_before(foreign({"610696"}), true);
-    ASSERT_EQ(g.refuse, "");
-    EXPECT_EQ(guard_new_foreign(foreign({"610696", "700001"}), g.tolerated), (std::vector<std::string>{"700001"}));
-    EXPECT_EQ(guard_new_foreign(foreign({"[N/A]"}), g.tolerated), (std::vector<std::string>{"[N/A]"}));
-}
-
-// The whole-GPU figure (nvidia-smi) refuses above the ceiling whatever pids are tolerated.
-TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
-    const GuardCheck g = guard_before(foreign({"610696"}), true);
-    ASSERT_EQ(g.refuse, "");
-    EXPECT_EQ(foreign_active({{"", 57}}, g.tolerated, 5), (std::vector<std::string>{"GPU at 57%"}));
-    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
-    EXPECT_TRUE(foreign_active({{"", 5}}, g.tolerated, 5).empty());
-    EXPECT_TRUE(foreign_active({{"", 3}}, g.tolerated, 5).empty()) << "idle tolerated contexts at 3%";
-}
-
-TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), true).refuse, "compute processes [610696,[N/A]]");
+// An idle foreign context still time-slices with a measurement (docs/perf/batch-sensitivity.md):
+// any one refuses, unparseable entries included; there is no tolerance mode.
+TEST(TuneGuard, AnyForeignContextOnTheGpuRefuses) {
+    EXPECT_EQ(guard_refusal(foreign({"610696"})), "compute processes [610696]");
+    EXPECT_EQ(guard_refusal(foreign({"610696", "[N/A]"})), "compute processes [610696,[N/A]]");
+    EXPECT_EQ(guard_refusal(foreign({})), "");
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
@@ -832,24 +802,16 @@ TEST(TuneGuard, AFailedQueryRetriesWithDoublingBackoffUntilTheWaitExpires) {
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
-TEST(TuneGuard, ToleratedPidsAndTheWholeGpuAreActiveOnlyAboveTheCeiling) {
-    const std::vector<std::string> tol{"610696", "671125"};
-    EXPECT_TRUE(foreign_active({}, tol, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
-    EXPECT_TRUE(foreign_active({{"610696", 0}, {"671125", 5}}, tol, 5).empty()) << "idle tolerated pids, 5 is not above 5";
-    EXPECT_EQ(foreign_active({{"610696", 0}, {"671125", 6}}, tol, 5), (std::vector<std::string>{"671125 at 6%"}));
-    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, tol, 5),
+TEST(TuneGuard, AForeignPidIsActiveAtAnySmLoadTheWholeGpuAboveTheCeiling) {
+    EXPECT_TRUE(foreign_active({}, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
+    EXPECT_EQ(foreign_active({{"700001", 1}}, 5), (std::vector<std::string>{"700001 at 1%"}));
+    EXPECT_TRUE(foreign_active({{"700001", 0}}, 5).empty()) << "a sample with no SM load (memory or video only)";
+    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, 5),
               (std::vector<std::string>{"671125 at 37%"}))
         << "one entry per pid, at its peak sample";
-    EXPECT_TRUE(foreign_active({{"", 5}}, {}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
-    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
-    EXPECT_EQ(foreign_active({{"", 57}}, tol, 5), (std::vector<std::string>{"GPU at 57%"}));
-    EXPECT_EQ(foreign_active({{"671125", 6}}, tol, 10), std::vector<std::string>{}) << "the ceiling is the caller's";
-}
-
-TEST(TuneGuard, AnUntoleratedPidIsActiveAtAnySmLoad) {
-    EXPECT_EQ(foreign_active({{"700001", 1}}, {"610696"}, 5), (std::vector<std::string>{"700001 at 1%"}));
-    EXPECT_EQ(foreign_active({{"700001", 1}}, {}, 5), (std::vector<std::string>{"700001 at 1%"})) << "strict mode";
-    EXPECT_TRUE(foreign_active({{"700001", 0}}, {}, 5).empty()) << "a sample with no SM load (memory or video only)";
+    EXPECT_TRUE(foreign_active({{"", 5}}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
+    EXPECT_EQ(foreign_active({{"", 6}}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_TRUE(foreign_active({{"", 6}}, 10).empty()) << "the ceiling is the caller's";
 }
 
 TEST(TuneGuard, BackendAutoPrefersNvmlAndFallsBackToNvidiaSmiWithAWarning) {

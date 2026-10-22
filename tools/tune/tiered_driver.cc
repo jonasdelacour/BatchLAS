@@ -176,7 +176,7 @@ struct Job {
 };
 
 bool measurable(const PlannedCell& c) {
-    return c.reason.empty() || c.reason == "remeasure" || c.reason.rfind("partial:", 0) == 0;
+    return c.reason.empty() || c.reason == "remeasure" || c.reason == "protocol" || c.reason.rfind("partial:", 0) == 0;
 }
 
 class TieredRun {
@@ -303,12 +303,19 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (j->frontier || calibrate()) {
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
         const std::set<CellKey> r0(j->next.begin(), j->next.end());
-        // Under the ladder a partly stale old-axis row inside the Region is re-raced too, not left with stale times.
+        // Under the ladder a partly stale old-axis row inside the Region is re-raced too, not left with stale times;
+        // so is every row another protocol timed (warm L2), whatever its tier.
+        const std::set<std::string> cold = protocol_runs(j->ledger);
         for (const auto& [k, r] : best_records(j->ledger, j->fh))
             if ((j->on_grid.count(k) || (j->ladder && j->region->contains(k))) && !r0.count(k) &&
-                tier_rank(r->tier) >= tier_rank(o_.tier) &&
-                freshness(*r, j->fh) == Freshness::partly_stale)
+                (other_protocol(*r, cold) ||
+                 (tier_rank(r->tier) >= tier_rank(o_.tier) && freshness(*r, j->fh) == Freshness::partly_stale)))
                 j->next.push_back(k);
+    } else if (!named_only()) {  // a lattice run: off-lattice rows (earlier refinement midpoints) another protocol timed
+        const std::set<std::string> cold = protocol_runs(j->ledger);
+        const std::set<CellKey> r0(j->next.begin(), j->next.end());
+        for (const auto& [k, r] : best_records(j->ledger, j->fh))
+            if (other_protocol(*r, cold) && j->region->contains(k) && !r0.count(k)) j->next.push_back(k);
     }
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
@@ -549,6 +556,21 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
         worker = m_->persistent() && !j.fresh && !job.arms.empty();
     }
     ArmBatch b = job.arms.empty() ? ArmBatch{} : worker ? m_->measure(job) : m_->measure_fresh(job);
+    // A cell the SW power cap held for most of its timed runs is raced again; the record keeps the
+    // last try's clocks and every try's wall time. evidence: docs/perf/batch-sensitivity.md#batch-sensitivity-timing-hygiene
+    int reraces = 0;
+    while (b.error.empty() && b.phases.clk.capped_fraction() > kThrottledFraction && reraces < kThrottleReraces) {
+        ++reraces;
+        std::printf("[gpu%d] %s %s %s: SW power cap in %d of %d clock samples; racing it again\n", gpu, op.c_str(),
+                    j.dtype.c_str(), key_text(c.key).c_str(), b.phases.clk.capped, b.phases.clk.n);
+        std::fflush(stdout);
+        emit(Json().str("ev", "throttled").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
+                 .integer("capped", b.phases.clk.capped).integer("samples", b.phases.clk.n));
+        Phases before = b.phases;
+        before.clk = {};
+        b = worker ? m_->measure(job) : m_->measure_fresh(job);
+        b.phases += before;
+    }
     verdicts(j, c.key, b.arms);
     b.arms.insert(b.arms.end(), ld_bad.begin(), ld_bad.end());
     std::vector<std::string> ld_failed;
@@ -596,6 +618,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                                    NAN, 0, true});
     r.phases = b.phases;
     r.phases.arms = static_cast<int>(job.arms.size());
+    r.throttle_reraces = reraces;
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto& live = j.runnable[c.key];
@@ -1110,7 +1133,9 @@ int status_main(const std::string& repo, const std::string& ledger_root, const s
                     r.runs = l.runs.size();
                     r.cells = keys.size();
                     r.stale = keys.size() - best.size();
+                    const std::set<std::string> cold = protocol_runs(l);
                     for (const auto& [k, c] : best) {
+                        r.stale += other_protocol(*c, cold);  // a warm-L2 record: re-measured by the next run
                         r.tiers[c->tier]++;
                         r.partial += freshness(*c, fh) == Freshness::partly_stale;
                     }
