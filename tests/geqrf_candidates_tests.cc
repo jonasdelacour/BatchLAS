@@ -757,7 +757,7 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         EXPECT_EQ(w[9], "vendor");
         EXPECT_EQ(w[10], "vendor");
         EXPECT_EQ(w[12], "1");
-        EXPECT_EQ(w[13], "0") << "no native candidate runs a wide view";
+        EXPECT_EQ(w[13], "1") << "cta and blocked run a wide view; the table still ranks the vendor first";
     }
 }
 
