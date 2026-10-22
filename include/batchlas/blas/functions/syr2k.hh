@@ -69,7 +69,7 @@ using syr2k_vendor = Event(Queue&,
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, `float`, not `ConjTrans`,
-///         with homogeneous operands and batch <= 65535 (the `triangular` tiles;
+///         with homogeneous operands (the `triangular` tiles;
 ///         @ref md_docs_2perf_2level3).
 /// @see her2k, syrk, Syr2kOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3

@@ -45,7 +45,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 
 // Correctness only (R3); shapes were validated at entry. Both native launches address every item
 // as base + b * stride at one (order, q), so neither takes a heterogeneous batch (the expansion's
-// gemm throws on one), and both put the batch in grid z; triangular puts its tile list in grid y.
+// gemm throws on one). Both put the batch in grid z and run a batch past it as slices; triangular
+// puts its tile list in grid y, a term.
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
 template <Backend B, class T>
@@ -54,7 +55,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && A.batch_size() >= 1 && A.batch_size() <= d.max_groups_yz;
+                        C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Triangular) {
             return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
@@ -64,8 +65,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
             if (!native) return false;
             const int k = A.rows(), batch = A.batch_size();
             return backend::detail::expansion_fits<T>(q, k, batch,
-                                                   backend::detail::expanded_workspace_bytes<T>(q, k, batch),
-                                                   d.max_groups_yz);
+                                                   backend::detail::expanded_workspace_bytes<T>(q, k, batch));
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
@@ -98,7 +98,12 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B>)
-                return backend::detail::trmm_triangular_tiles<T>(q, A, Bm, C, alpha, uplo, transA, diag);
+                return select::over_batch_slices(q, A.batch_size(), [&](Queue& sq, int first, int count) {
+                    return backend::detail::trmm_triangular_tiles<T>(sq, A.batch_range(first, count),
+                                                                     Bm.batch_range(first, count),
+                                                                     C.batch_range(first, count), alpha, uplo,
+                                                                     transA, diag);
+                });
             else
                 throw std::logic_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
         },

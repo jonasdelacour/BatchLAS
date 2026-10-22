@@ -16,22 +16,24 @@ tables are deep-measured (`tuned/README.md`).
 
 ### Level-3: the families and their can_run terms
 
-Every native family requires `B == Backend::CUDA`, `d.is_gpu`, homogeneous operands, extents and batch
->= 1, and batch <= 65535 (the CUDA grid z; 65536 throws `Number of work-groups exceed limit`). The
-vendor family needs `d.has_vendor` and refuses heterogeneous operands, since each vendor loop runs
-every item at the top-level extents.
+Every native family requires `B == Backend::CUDA`, `d.is_gpu`, homogeneous operands, and extents and
+batch >= 1. The batch is no term: each native kernel puts it in a grid dimension capped at 65535
+(`select::Device::max_groups_yz`; one launch past it throws `Number of work-groups exceed limit`), so the
+op's `launch` runs a larger batch as slices of at most that many items (`select::over_batch_slices`, see
+[the batch slices](#level-3-the-65535-batch-slices)). The vendor family needs `d.has_vendor` and refuses
+heterogeneous operands, since each vendor loop runs every item at the top-level extents.
 
 | op | spelling | driver | further `can_run` terms | dtypes |
 |---|---|---|---|---|
 | `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:52-56`) | float, double |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | float, double |
-| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:58-59`) | float, double |
-| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:62-63`) | float |
+| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:57-58`) | float, double |
+| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:61-62`) | float |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-54`); a real `ConjTrans` is folded to `Trans` | float |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
-| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:56-61`) | all four |
-| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:63-68`) | all four |
+| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:60-63`) | all four |
+| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:64-69`) | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
@@ -67,8 +69,8 @@ are listed at [the level-3 pin words](dispatch.md#the-level-3-pin-words).
 - `BATCHLAS_TRMM_ROUTE=vendor` is always the `cublas?trmm` loop, even where a tile kernel ranks first.
   The old meaning (expand plus gemm) is now `expand`.
 - `herk` reaches the Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`),
-  and then only where syrk's Gram `can_run` would admit it: `batch` in [1, 65535], `max_wg >= gram_threads(n)`
-  and the tile in SLM (`src/backends/cublas.cc:374-377`).
+  and then only where syrk's Gram `can_run` would admit it: `batch >= 1`, `max_wg >= gram_threads(n)`
+  and the tile in SLM (`src/backends/cublas.cc:377-388`); a batch past 65535 runs as slices.
 - `symm` does not read `BATCHLAS_EXPAND_ROUTE`; hemm, herk and her2k do.
 
 ### Level-3: hemm, herk and her2k still choose by fixed rules
@@ -101,6 +103,81 @@ run vendor-free; `syr2k` has no non-float family. `level3_tile_substitution_enab
 Up to `ff340fc6` these four ops chose by hand-written gates in `src/backends/*_custom_dispatch.cc`. The
 gates were gate-only, so the transcriber evaluated the whole old decision per grid cell. The tables hold
 the effective window, not the predicates.
+
+### Level-3: the 65535 batch slices
+
+Every level-3 native kernel, and gemm's `direct`, `tiled`, `reg`, `wide` and `splitk`, puts the batch in a grid
+dimension that CUDA caps at 65535 work-groups (`select::Device::max_groups_yz`; split-k puts batch × s there). Until
+2026-10-21 `can_run` refused a batch past it, so Auto fell to the vendor: for syrk that is the per-item `?syrk`
+loop. The batch is now no term. `select::over_batch_slices` (`src/select/select.hh:79-94`) runs a larger batch as
+slices of at most `max_groups_yz / groups_per_item` items, each a `MatrixView::batch_range` of every operand. Each
+slice goes through the whole launcher, so it re-derives its own leg (an odd item stride moves the base alignment).
+Slices are independent; on an out-of-order Queue they run on an in-order sibling, as every multi-launch wrapper does.
+That sibling is built per call, so past the cap an out-of-order call is host-synchronous: `~Queue` waits for it,
+and split-k's partials come from the sibling's fresh arena (allocated and freed per call, not pooled). An in-order
+Queue pays neither. An empty batch launches nothing.
+Metal lifts `max_groups_yz` (`src/select/select.cc:294`), so there one slice serves every batch.
+
+Where it is applied: gemm's `launch` (`src/ops/gemm/gemm.cc:165-180`; `small` is 1-D and the vendor loops itself);
+syrk `gram` and `triangular`, syr2k and trmm `triangular` in each op's `launch`; `expand_triangular`,
+`expand_mirrored` (`src/kernels/common/triangular_expand.hh`) and `accumulate_hermitian` and herk's gram opt-in
+(`src/backends/cublas.cc`). symm and trmm `expand`, hemm's expansion and herk's and her2k's GEMM-plus-fold get it
+through those kernels and the public gemm. split-k's scratch lease is per slice, so its `can_run` budget term reads
+the slice, not the batch. The tile-count terms (grid y) stay.
+
+**The cliff that remains:** `expansion_fits` keeps the `int`-linearised scratch limit, 2^31 elements of
+`expanded_ld(n) × n × batch` (float n = 64: 524287 items). Past it symm and trmm `expand` are refused and hemm, herk
+and her2k take the per-item loop. It moves with the hemm/herk/her2k migration.
+
+Measured on threadripper02 GPU 2 (RTX PRO 6000 Max-Q, sm_120), float, `bsweep` harness, base `409c2fb4` against the
+slices, median of 7 (5 at 128^3), two passes in alternating order, warm and cold (L2 scrubbed by a 1 GiB read
+before the timed call). ns per item; both passes agree within 2%; pass 2 shown.
+
+| shape | batch | base route | base warm / cold | sliced route | sliced warm / cold |
+|---|---:|---|---:|---|---:|
+| syrk n = k = 64 | 32768 | gram | 45.4 / 45.0 | gram | 45.6 / 44.9 |
+| | 65535 | gram | 45.4 / 44.8 | gram | 45.1 / 44.8 |
+| | 65536 | vendor loop | 3481 / 3479 | gram, 2 slices | 46.0 / 45.7 |
+| | 131072 | vendor loop | 3486 / 3485 | gram, 3 slices | 46.1 / 45.8 |
+| gemm 32^3 NN | 32768 | wide 32×32×16 | 10.94 / 10.06 | same | 10.91 / 10.08 |
+| | 65535 | wide 32×32×16 | 10.75 / 10.30 | same | 10.75 / 10.30 |
+| | 65536 | small | 11.00 / 10.62 | wide, 2 slices | 10.82 / 10.38 |
+| | 131072 | small | 10.78 / 10.59 | wide, 3 slices | 10.71 / 10.50 |
+| gemm 128^3 NN | 32768 | wide 64×64×16 | 179.3 / 178.5 | same | 179.2 / 178.4 |
+| | 65535 | wide 64×64×16 | 212.9 / 213.3 | same | 211.1 / 212.3 |
+| | 65536 | vendor | 189.7 / 192.8 | wide, 2 slices | 213.1 / 213.6 |
+| | 131072 | vendor | 201.5 / 199.6 | wide, 3 slices | 217.8 / 217.6 |
+
+syrk past 65535 is 76× faster and flat in the batch. gemm 32^3 is flat and 1.5-2% faster than `small`. gemm 128^3
+past 65535 is 7-12% slower than the vendor it used to fall to, and so is the single-launch `wide` at 65535: the
+sm_120 table's last batch row is 32768, and from 65535 up cuBLAS wins this shape. That is a missing table row (the
+table, not the slicing; the slices cost nothing at 65535 against 65536), open for the next gemm retune.
+
+Tests: `GridBatchPastTheCeilingRunsAsSlices` (gemm, syrk, trmm, symm), `SplitKPastTheGridRunsAsSlices`,
+`Syr2kCandidates.GridCeilingsAreCanRunTerms`, `HerkTest.GramBatchPastTheGridRunsAsSlices` and the expansion tests
+`HemmTest`, `HerkTest` and `Her2kTest.ExpandBatchPastTheGridRunsAsSlices` (`BATCHLAS_EXPAND_ROUTE=expand`, the
+gemm in the select trace at the full batch) pin each native at 65535, 65536, (2 × 65535) and 2 × 65535 + 1 (one, two,
+two and three slices) and check every item. The pinned-family tests repeat 7 distinct items, out of phase with
+every slice (65535 mod 7 = 1), each item bit-identical to its representative; the expansion tests use distinct
+items, complex alpha and a nonzero imaginary input diagonal. `MatrixViewTest.BatchRangeView` covers
+`MatrixView::batch_range`. `OrmqrCandidates.BlockedPastTheGridLimitRuns` (known-defects #16) runs vendor-free too.
+
+Deliberate breaks, each red exactly the set shown and nothing else in the eight binaries (GPU-only tree, CUDA
+instantiations). Each slice passing one operand at offset 0 instead of `first`:
+
+| site | red |
+|---|---|
+| gemm `launch`, A, B or C (three breaks) | `GemmCandidates/{0..3}.GridBatchPastTheCeilingRunsAsSlices` and `.SplitKPastTheGridRunsAsSlices`, plus `TrmmCandidates/1` and `SymmCandidates/1` `.GridBatchPastTheCeilingRunsAsSlices` (their expansion gemm) |
+| syrk `gram`, A | `SyrkCandidates/{0,1}.GridBatchPastTheCeilingRunsAsSlices` |
+| syrk `triangular`, A | `SyrkCandidates/0.GridBatchPastTheCeilingRunsAsSlices` (float) |
+| syr2k `triangular`, A or B | `Syr2kCandidates/0.GridCeilingsAreCanRunTerms` |
+| trmm `triangular`, A or B; `expand_triangular`, A | `TrmmCandidates/{0..3}.GridBatchPastTheCeilingRunsAsSlices` |
+| `expand_mirrored`, A | `SymmCandidates/{0,1}.GridBatchPastTheCeilingRunsAsSlices`, `HemmTest/{0,1}.ExpandBatchPastTheGridRunsAsSlices` |
+| `accumulate_hermitian`, product | `HerkTest/{0,1}` and `Her2kTest/{0,1}` `.ExpandBatchPastTheGridRunsAsSlices` |
+| herk gram opt-in, A | `HerkTest/{0,1}.GramBatchPastTheGridRunsAsSlices` |
+
+With every item equal (the earlier tests) none of these breaks can turn a test red. An earlier break, each later
+slice dropping its last item inside `over_batch_slices`, reddens every past-the-grid test.
 
 ## Boundaries and their evidence
 
@@ -442,11 +519,13 @@ netlib's host tasks throw `std::runtime_error`.
   costs several times the GEMM it feeds, and it would be freed while kernels are still enqueued.
 - **Mirrored expansion.** It stages one tile pair per work-group through local memory: 1.5 n^2 of traffic, against
   3 n^2 for a copy plus an in-place symmetrize.
-- **Three hard ceilings.** The batch sits in grid z of `expand_mirrored` and `accumulate_hermitian`, so
-  `expansion_fits` refuses batch > 65535 (`ops::symm::kMaxGridBatch`). SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31
-  elements (a thrown `sycl::exception` at n = 2048 batch 512). The scratch also shares the device with A, B and C,
-  so the budget is a quarter of global memory. `BATCHLAS_EXPAND_MAX_BYTES` lowers the memory ceiling. A shape past
-  any ceiling fails `can_run` (hemm, herk, her2k: takes the per-item loop), and the row's next entry runs.
+- **Two hard ceilings.** SYCL linearises the global id into an `int`, so one work-item per element fails at 2^31
+  elements of the padded `expanded_ld x n x batch` scratch (a thrown `sycl::exception` at n = 2048 batch 512); this
+  is the cliff that remains, at batch > 2^31 / (expanded_ld(n) n), e.g. 524287 items at float n = 64. The scratch
+  also shares the device with A, B and C, so the budget is a quarter of global memory. `BATCHLAS_EXPAND_MAX_BYTES`
+  lowers the memory ceiling. A shape past either ceiling fails `can_run` (hemm, herk, her2k: takes the per-item
+  loop), and the row's next entry runs. The batch is no ceiling: `expand_triangular`, `expand_mirrored` and
+  `accumulate_hermitian` put it in grid z and run a batch past 65535 as slices.
 - **Why `expansion_budget.hh` is outside `src/backends/`.** `src/ops/syev/sytrd/sytrd_blocked.cc` must know whether her2k
   takes its GEMM route, and it is also built for ROCm and the host. There is one definition, because a reimplemented
   ceiling drifts silently.

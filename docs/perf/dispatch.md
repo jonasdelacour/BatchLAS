@@ -50,18 +50,18 @@ kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and h
 `expand` families' inner GEMMs go through the public `gemm` and take its table's choice.
 
 **`can_run` is correctness only.** Every native family needs `B == Backend::CUDA`, a GPU queue, a homogeneous
-batch (tile kernels index `base + batch * stride`), extents >= 1 and `batch <= 65535`. The batch is grid z (y for
-gram); 65536 throws `Number of work-groups exceed limit`, confirmed by launch.
+batch (tile kernels index `base + batch * stride`) and extents >= 1. The batch is grid z (y for gram), where one
+launch of 65536 throws `Number of work-groups exceed limit`; a batch past it runs as slices of at most 65535 items (`select::over_batch_slices`), so the batch is no term.
 
 | op | family | further terms | where |
 |---|---|---|---|
 | `symm` | `expand` | `max_wg >= 256` (8 x 32 group); `expansion_fits(q, k, batch, bytes)` (int-linearised grid, `BATCHLAS_EXPAND_MAX_BYTES` or a quarter of memory) | `src/ops/symm/symm.cc:44-56` |
 | `syrk` | `gram` | `syrk_gram_supported` (square C, `n <= 128`; past it the kernel answers wrongly rather than throwing); `max_wg >= gram_threads(n)`; SLM tile fits | `src/ops/syrk/syrk.cc:57-60` |
-| `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:61-64` |
-| `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:52-56` |
-| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:59-62` |
-| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:63-68` |
-| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:65`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:69` |
+| `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:60-63` |
+| `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:53-56` |
+| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:60-63` |
+| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:64-69` |
+| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:64`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:70` |
 
 syrk is real-only, so `ConjTrans` reaches its kernels as `Trans`. It is not a `can_run` term; the exact `trans` key
 keeps real `ConjTrans` on the vendor.

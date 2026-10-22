@@ -98,11 +98,10 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
     const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
-    // every 3-D launch but small's: kMaxGridBatch on CUDA, the device's grid elsewhere
-    const bool grid = native && A.batch_size() <= d.max_groups_yz;
+    // A batch past the grid runs as slices (launch), so the batch is no term of any family.
     return std::visit(overloaded{
-        [&](Direct) { return grid && d.max_wg >= kDirectWg; },
-        [&](Tiled) { return grid && d.max_wg >= kTiledWg; },
+        [&](Direct) { return native && d.max_wg >= kDirectWg; },
+        [&](Tiled) { return native && d.max_wg >= kTiledWg; },
         [&](Small) {
             const bool nn = ta == Transpose::NoTrans && tb == Transpose::NoTrans;
             return native && small_fits<T>(d, nn, std::max({s.m, s.n, s.k}));
@@ -112,35 +111,36 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
             const auto* cfg = std::find_if(reg_configs.begin(), reg_configs.end(), [&](const RegCfg& g) {
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
-            return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+            return native && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
                    d.slm_budget_for(cfg->threads()) >= cfg->slm_bytes();
         },
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+            return native && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
                    d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
         [&](const SplitK& sk) {
-            // The slices put batch * s in grid z (an int group id); one item's partials are int-indexed;
-            // the partials lease must fit the scratch budget (past it the arena throws std::bad_alloc).
+            // A launch slice puts slice * s in grid z (an int group id), slice = min(batch, max_groups_yz / s);
+            // one item's partials are int-indexed; each slice's partials lease must fit the scratch budget
+            // (past it the arena throws std::bad_alloc).
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == sk.m && g.n == sk.n && g.k == sk.k; });
             const bool slices = std::find(kSplitKSlices.begin(), kSplitKSlices.end(), sk.s) != kSplitKSlices.end();
-            const std::int64_t batch = A.batch_size(), groups_z = batch * sk.s;
-            return grid && slices && groups_z <= d.max_groups_yz && groups_z <= std::numeric_limits<int>::max() &&
+            const std::int64_t slice = std::min<std::int64_t>(A.batch_size(), d.max_groups_yz / std::max(1, sk.s));
+            return native && slices && slice >= 1 && slice * sk.s <= std::numeric_limits<int>::max() &&
                    cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) &&
                    d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
                    splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
-                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
+                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / slice;
         },
         [&](Vendor) { return d.has_vendor; },
     }, c);
 }
 
 template <Backend B, class T>
-Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
-             Transpose ta, Transpose tb, ComputePrecision precision) {
+Event launch_slice(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+                   Transpose ta, Transpose tb, ComputePrecision precision) {
     return std::visit(overloaded{
         [&](Direct) { return sycl_gemm::gemm_direct<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](Tiled) { return sycl_gemm::gemm_tiled<T>(q, A, Bm, C, alpha, beta, ta, tb); },
@@ -160,6 +160,23 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             else select::no_vendor<B, T>(spec);
         },
     }, c);
+}
+
+// direct, tiled, reg and wide put the batch in grid z, splitk batch * s: a batch past the grid
+// runs as slices. small is 1-D and the vendor loops itself, so both take the whole batch.
+template <Backend B, class T>
+Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+             Transpose ta, Transpose tb, ComputePrecision precision) {
+    if (std::holds_alternative<Small>(c) || std::holds_alternative<Vendor>(c))
+        return launch_slice<B, T>(q, c, A, Bm, C, alpha, beta, ta, tb, precision);
+    const std::int64_t groups_per_item = std::holds_alternative<SplitK>(c) ? std::get<SplitK>(c).s : 1;
+    return select::over_batch_slices(
+        q, A.batch_size(),
+        [&](Queue& sq, int first, int count) {
+            return launch_slice<B, T>(sq, c, A.batch_range(first, count), Bm.batch_range(first, count),
+                                      C.batch_range(first, count), alpha, beta, ta, tb, precision);
+        },
+        groups_per_item);
 }
 
 }  // namespace ops::gemm

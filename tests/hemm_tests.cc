@@ -138,30 +138,46 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
     }
 }
 
-// expand_mirrored puts the batch in grid z (65535): with the expansion pinned, a batch of 65536
-// must fall back to the per-item loop, not throw.
-TYPED_TEST(HemmTest, ExpandBatchAboveGridFallsBack) {
+// expand_mirrored and its gemm put the batch in grid z (65535 on CUDA) and run a batch past it as
+// slices: with the expansion pinned, 65535, 65536 and 2 * 65535 + 1 distinct items take the
+// expansion (its public gemm is in the select trace at the full batch; the per-item loop calls no
+// gemm) and every item is right, at padded lds and strides, complex alpha and beta, both sides.
+TYPED_TEST(HemmTest, ExpandBatchPastTheGridRunsAsSlices) {
     using T = typename TestFixture::ScalarType;
     if constexpr (TestFixture::BackendType != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
         GTEST_SKIP() << "the expansion is cuBLAS's (hemm has no route vendor-free)";
     } else {
-        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
-        const int n = 8, m = 6, batch = 65536;
-        const T alpha = T(0.5, -1.25), beta = T(0.75, 0.5);
-        auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 41);
-        A.hermitize(*(this->ctx), Uplo::Lower).wait();
-        auto B = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 43);
-        auto C0 = Matrix<T, MatrixFormat::Dense>::Random(n, m, false, batch, 47);
-        this->ctx->wait();
-        auto C = C0.clone();
-        this->ctx->wait();
-        ASSERT_NO_THROW((hemm(*(this->ctx), A, B, C,
-                              {.alpha = alpha, .beta = beta, .side = Side::Left, .uplo = Uplo::Lower})
-                             .wait()));
         using MV = MatrixView<T, MatrixFormat::Dense>;
-        EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
-                      MV::gemm_backward_error(*(this->ctx), A, Transpose::NoTrans, B, Transpose::NoTrans,
-                                              C0, C, MV::up(alpha), MV::up(beta), C.all_items()));
+        Queue& q = *(this->ctx);
+        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const int n = 8, m = 6;
+        const T alpha = T(0.5, -1.25), beta = T(0.75, 0.5);
+        for (const int batch : {65535, 65536, 2 * 65535 + 1}) {
+            const Side side = batch % 2 ? Side::Right : Side::Left;
+            const Uplo uplo = batch % 2 ? Uplo::Upper : Uplo::Lower;
+            const int r = side == Side::Left ? n : m, c = side == Side::Left ? m : n;
+            auto Ab = Matrix<T, MatrixFormat::Dense>::Random(n + 3, n + 1, false, batch, 41);
+            auto Bb = Matrix<T, MatrixFormat::Dense>::Random(r + 2, c + 1, false, batch, 43);
+            auto Cb = Matrix<T, MatrixFormat::Dense>::Random(r + 1, c + 2, false, batch, 47);
+            const MV A(Ab, n, n), B(Bb, r, c), C(Cb, r, c);
+            A.hermitize(q, uplo).wait();
+            auto C0b = Cb.clone();
+            q.wait();
+            const MV C0(C0b, r, c);
+            const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+            ::testing::internal::CaptureStderr();
+            (void)hemm(q, A, B, C, {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo});
+            q.wait();
+            const std::string err = ::testing::internal::GetCapturedStderr();
+            EXPECT_NE(err.find("batch=" + std::to_string(batch) + " -> "), std::string::npos)
+                << "batch " << batch << ": no gemm at the full batch, so not the expansion: " << err;
+            const bool left = side == Side::Left;
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, n,
+                          MV::gemm_backward_error(q, left ? A : B, Transpose::NoTrans, left ? B : A,
+                                                  Transpose::NoTrans, C0, C, MV::up(alpha), MV::up(beta),
+                                                  C.all_items()))
+                << "batch " << batch;
+        }
     }
 }
 

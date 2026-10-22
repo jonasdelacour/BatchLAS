@@ -66,7 +66,7 @@ using syrk_vendor = Event(Queue&,
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
-///         batch <= 65535, and either `T` is `float` (the `triangular` tiles) or the
+///         and either `T` is `float` (the `triangular` tiles) or the
 ///         `gram` tile admits the shape (@ref md_docs_2perf_2level3).
 /// @see herk, syr2k, SyrkOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3

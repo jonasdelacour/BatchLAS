@@ -37,8 +37,7 @@ inline constexpr std::array<int, 13> grid_n{1, 2, 4, 8, 16, 32, 64, 128, 256, 51
 inline constexpr std::array<int, 5> grid_k{1, 8, 64, 512, 4096};  ///< k axis of the grid
 inline constexpr std::array<int, 7> grid_batch{1, 2, 3, 128, 1024, 8192, 32768};  ///< batch axis of the grid
 
-// The tile kernel puts the batch in grid z (SYCL dim 0) and its tile list in grid y: 65535 each.
-inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< batch ceiling of the tile kernel
+// The tile kernel puts its tile list in grid y (65535); the batch, in grid z, runs as slices past it.
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< tile-count ceiling of the tile kernel
 
 }  // namespace batchlas::ops::syr2k

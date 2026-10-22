@@ -310,9 +310,10 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   `lpanel:panel=16` is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
-- **Grid-z ceiling.** Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
-  work-groups. The phase-5 kernels were not audited for it. ormqr's blocked driver was reported to hit it
-  (known-defects #16), but that did not reproduce on sm_120.
+- **Grid-z ceiling.** gemm (`direct`, `tiled`, `reg`, `wide`, `splitk`), syrk, syr2k, trmm, symm and the hemm,
+  herk and her2k expansions run a batch past 65535 as slices (`select::over_batch_slices`). Other ops that put the
+  batch in dimension 0 of a 3-D range abort above 65535 work-groups; the phase-5 kernels were not audited for it.
+  ormqr's blocked driver was reported to hit it (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_substitution_enabled`** is conservative (float, or any type with cuBLAS). Widening
   it moves the vendor-free routes of ortho and ormqr, so that is a separate change.
 - **Stale comment** at `potrf.hh:51-53` (wrong `options.hh` line numbers).
@@ -405,8 +406,8 @@ unless a line says otherwise.
   | `wide` 32·128·16 | CN |
   | `wide` 32·32·16, 16·16·16 | NN |
 
-- **Terms:** `direct`, `tiled`, `reg` and `wide` need `batch <= 65535`, because the batch is the
-  CUDA grid z. `small` needs sub-group 32, except the float NN tiled leg for 33 to 56. Native
+- **Terms:** no batch term: `direct`, `tiled`, `reg`, `wide` and `splitk` put the batch in CUDA grid
+  z (65535; split-k batch × s), and `launch` runs a larger batch as slices. `small` needs sub-group 32, except the float NN tiled leg for 33 to 56. Native
   families run when `is_gpu || !has_vendor`.
 - **Derived in the launcher, never a field, key or term:** the aligned or predicated leg, the
   transpose instantiation, the `small` bucket, and TR, TC and the stages.
@@ -505,7 +506,7 @@ unless a line says otherwise.
 - Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
   `choose()`. The vendor spells a real ConjTrans as Trans.
 - `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
-  Vendor-free past 65535 its sub-gemm or sub-trmm may throw `NoRouteError` itself.
+  Its sub-gemm and sub-trmm natives run a batch past 65535 as slices.
 
 ### spmm {#phase-5-spmm}
 
@@ -567,8 +568,8 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
 
 **Shared terms:**
 - Native families run only on CUDA (ROCm and the host stay on the vendor), on a GPU, with homogeneous
-  operands, extents and batch ≥ 1, and `batch <= 65535`. The batch is the grid z dimension, and 65536
-  throws at launch.
+  operands, and extents and batch ≥ 1. The batch is the grid z dimension, where one launch of 65536
+  throws, so a batch past it runs as slices of at most 65535 items (`select::over_batch_slices`).
 - The vendor family needs `has_vendor` and refuses a heterogeneous operand on every backend.
 - syrk, syr2k, symm and trmm return a no-op event for an empty problem.
 - `form` (symm and syrk) is sq when `2·min ≥ max`. Otherwise it is tall when `a > 2b` and wide when it is not, with `a` and `b` as in `form_of`

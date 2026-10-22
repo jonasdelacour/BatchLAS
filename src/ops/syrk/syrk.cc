@@ -42,8 +42,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3): false means the kernel would throw or answer wrongly. The tile kernels
 // are portable SYCL wired only for CUDA, take one (n, k, ld, stride) per launch
 // (no heterogeneous batch) and put the batch, and triangular its tile count, in grid dimensions
-// capped at 65535. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
-// can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
+// capped at 65535: a batch past it runs as slices (launch), the tile count is a term. syrk is
+// real-only, so ConjTrans is Trans to both kernels (the table, not can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
 template <Backend B, class T>
@@ -51,8 +51,7 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
-    const bool native = select::native_gpu_backend<B> && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
-                        batch <= d.max_groups_yz;
+    const bool native = select::native_gpu_backend<B> && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1;
     return std::visit(overloaded{
         [&](Gram) {
             return native && backend::detail::syrk_gram_supported<T>(A, C, real_trans, false) &&
@@ -74,13 +73,21 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
     return std::visit(overloaded{
         [&](Gram) -> Event {
             if constexpr (select::native_gpu_backend<B>)
-                return backend::detail::syrk_gram_tiles<T, false>(q, A, C, alpha, beta, uplo, transA);
+                return select::over_batch_slices(q, C.batch_size(), [&](Queue& sq, int first, int count) {
+                    return backend::detail::syrk_gram_tiles<T, false>(sq, A.batch_range(first, count),
+                                                                      C.batch_range(first, count), alpha, beta,
+                                                                      uplo, transA);
+                });
             else
                 throw std::logic_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>)
-                return backend::detail::syrk_triangular_tiles<float>(q, A, C, alpha, beta, uplo, transA);
+                return select::over_batch_slices(q, C.batch_size(), [&](Queue& sq, int first, int count) {
+                    return backend::detail::syrk_triangular_tiles<float>(sq, A.batch_range(first, count),
+                                                                         C.batch_range(first, count), alpha,
+                                                                         beta, uplo, transA);
+                });
             else
                 throw std::logic_error("syrk: triangular is a float native-GPU kernel");
         },

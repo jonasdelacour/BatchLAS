@@ -39,7 +39,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3). The kernel is wired for CUDA (design D6) and
 // instantiated for float. One launch covers the batch with a single (n, k, ld, stride), so no
 // heterogeneous operand. A real ConjTrans is Trans, folded by the launch, so it is no term. The
-// grid terms are the launch's own limits (GridCeilingsAreCanRunTerms). Every vendor loop (cuBLAS,
+// tile-count term is the launch's own limit (GridCeilingsAreCanRunTerms); a batch past the grid
+// runs as slices (launch). Every vendor loop (cuBLAS,
 // rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
 // batch, so the vendor is refused one too.
 template <Backend B, class T>
@@ -51,8 +52,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
     return std::visit(overloaded{
         [&](Triangular) {
             return select::native_gpu_backend<B> && std::is_same_v<T, float> && d.is_gpu && d.max_wg >= 256 &&
-                   homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
-                   batch <= d.max_groups_yz && side * (side + 1) / 2 <= d.max_groups_yz;
+                   homogeneous && n >= 1 && k >= 1 && batch >= 1 && side * (side + 1) / 2 <= d.max_groups_yz;
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
@@ -66,7 +66,11 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
             // Instantiated only where can_run can admit it, so no other (B, T) compiles the kernel.
             if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>) {
                 const Transpose t = transA == Transpose::ConjTrans ? Transpose::Trans : transA;  // real T
-                return backend::detail::syr2k_triangular_tiles<float>(q, A, Bm, C, alpha, beta, uplo, t);
+                return select::over_batch_slices(q, C.batch_size(), [&](Queue& sq, int first, int count) {
+                    return backend::detail::syr2k_triangular_tiles<float>(
+                        sq, A.batch_range(first, count), Bm.batch_range(first, count), C.batch_range(first, count),
+                        alpha, beta, uplo, t);
+                });
             }
             else
                 throw std::logic_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
