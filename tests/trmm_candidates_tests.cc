@@ -289,10 +289,9 @@ protected:
     // the expansion's fit (BATCHLAS_EXPAND_MAX_BYTES included), the vendor's presence.
     std::int64_t grid_yz() const { return test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family); }
     bool expect_runs(const C& c, const Spec& s) {
-        const bool grid = s.batch <= grid_yz();
-        if (std::holds_alternative<tm::Triangular>(c)) return grid && s.side == Side::Left;
-        if (std::holds_alternative<tm::Expand>(c))
-            return grid && backend::detail::expansion_fits<T>(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch), grid_yz());
+        if (std::holds_alternative<tm::Triangular>(c)) return s.side == Side::Left;  // the batch is chunked
+        if (std::holds_alternative<tm::Expand>(c))  // chunked: one item's scratch must fit
+            return backend::detail::expansion_fits<T>(*this->ctx, s.n, 1, expand_bytes(s.n, 1), grid_yz());
         return kVendor;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<tm::Vendor>(c) && !kVendor; }
@@ -418,16 +417,16 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(refused, 0);
 }
 
-// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: the exact scratch
-// size runs, one byte less is refused, and Auto, under a table ranking expand first, then takes the
-// next route (triangular on the Left, the vendor on the Right).
+// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: one item's exact
+// scratch runs (one item per chunk), one byte less is refused, and Auto, under a table ranking
+// expand first, then takes the next route (triangular on the Left, the vendor on the Right).
 TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
     using T = typename TestFixture::T;
     const TableGuard restore;
     this->rank_trmm("expand 1 | triangular 2 | vendor 3", "expand 1 | vendor 2");
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Upper, Transpose::Trans, Diag::Unit, 37, 6, 4};
-        const std::size_t bytes = this->expand_bytes(s.n, s.batch);
+        const std::size_t bytes = this->expand_bytes(s.n, 1);
         {
             const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes).c_str());
             auto p = make_prob<T>(s);
@@ -538,9 +537,9 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// Both native launches put the batch in grid z: a pin launches at 65535 and is refused at 65536
-// on CUDA, where the direct launch throws; Auto then takes the vendor (vendor-free: no route).
-// Metal has no such cap: one past it launches too.
+// Both native launches put the batch in grid z: the direct launch runs at 65535 and throws at
+// 65536 on CUDA; the op chunks the batch, so a pin runs both and is right. Metal has no such cap:
+// one past it launches directly too.
 TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
@@ -555,24 +554,12 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         Spec past = at;
         past.batch = ceiling + 1;
         auto r = make_prob<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, r), !capped) << name(c, past);
-        if (!capped) {
-            expect_trmm(*this->ctx, r, name(c, past));
-            continue;
-        }
+        EXPECT_TRUE(this->pin_accepted(c, r)) << name(c, past);
+        expect_trmm(*this->ctx, r, name(c, past));
+        if (!capped) continue;
         auto d = make_prob<T>(past);
         std::string why;
         EXPECT_FALSE(this->direct(c, d, &why)) << name(c, past) << ": the launch ran past the grid ceiling";
-    }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
-    Spec past{Side::Right, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling + 1};
-    auto p = make_prob<T>(past);
-    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
-    if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor");
-        expect_trmm(*this->ctx, p, "auto past the grid ceiling");
-    } else {
-        EXPECT_THROW(this->run(p), batchlas::NoRouteError);
     }
 }
 

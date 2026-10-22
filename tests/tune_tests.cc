@@ -384,7 +384,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
             EXPECT_EQ(std::count(b.all.begin(), b.all.end(), h), 1) << name << " " << h;
         }
     }
-    EXPECT_EQ(specs, 19);
+    EXPECT_EQ(specs, 22);
 }
 
 TEST(TuneHash, SpecsDeclareTheirFamilies) {
@@ -2439,10 +2439,11 @@ TEST(TuneSchedule, PosvAfterPotrfAndTrsm) {
     EXPECT_EQ(op_order({"potrf", "gemm"}), (V{"gemm", "potrf"})) << "blocked potrf calls the public gemm";
 }
 
-TEST(TuneSchedule, AllNineteenOpsFollowTheirDependencies) {
+TEST(TuneSchedule, AllTwentyTwoOpsFollowTheirDependencies) {
     using V = std::vector<std::string>;
     const V want{"gemm", "trsm", "syr2k", "gemv", "spmm", "trmm", "symm", "syrk", "potrf", "getrf",
-                 "getrs", "geqrf", "ormqr", "getri", "posv", "gesv", "orgqr", "syev", "gesvd"};
+                 "getrs", "geqrf", "ormqr", "getri", "posv", "gesv", "orgqr", "syev", "gesvd", "hemm",
+                 "herk", "her2k"};
     V shuffled = want;
     std::reverse(shuffled.begin(), shuffled.end());
     std::rotate(shuffled.begin(), shuffled.begin() + 7, shuffled.end());
