@@ -56,7 +56,7 @@ namespace batchlas{
     // Helper type traits to identify our enum types
     template<typename T>
     struct is_linalg_enum : std::false_type {};
-    
+
     template<> struct is_linalg_enum<Side> : std::true_type {};
     template<> struct is_linalg_enum<Uplo> : std::true_type {};
     template<> struct is_linalg_enum<Transpose> : std::true_type {};
@@ -299,7 +299,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
             using BaseType = typename base_type<T>::type;
-            
+
             // Handle default precision first
             if (precision == ComputePrecision::Default) {
                 if constexpr (std::is_same_v<BaseType, float>) {
@@ -319,7 +319,7 @@ namespace batchlas{
                     default:
                         throw batchlas::unsupported("Unsupported precision for single precision type");
                 }
-            } 
+            }
             else if constexpr (std::is_same_v<BaseType, double>) {
                 if (precision == ComputePrecision::F64) {
                     return CUBLAS_COMPUTE_64F;
@@ -389,7 +389,7 @@ namespace batchlas{
         }
     }
 
-    
+
 
 
     template<BackendLibrary B, typename T>
@@ -523,7 +523,7 @@ namespace batchlas{
             using ReturnT = std::conditional_t<std::is_const_v<T>,
                                              const CudaT*,
                                              CudaT*>;
-            
+
             if constexpr (std::is_same_v<BaseT, float> || std::is_same_v<BaseT, double>) {
                 return ptr; // No conversion needed
             } else {
@@ -601,7 +601,7 @@ namespace batchlas{
         return status;
     }
 #endif
-    
+
 #if BATCHLAS_HAS_CUDA_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
@@ -678,14 +678,14 @@ namespace batchlas{
     // Variadic template for converting multiple enums
 /*     template <Backend B, typename... Args>
     auto enum_convert(Args&&... args) {
-        static_assert((is_linalg_enum<std::remove_reference_t<Args>>::value && ...), 
+        static_assert((is_linalg_enum<std::remove_reference_t<Args>>::value && ...),
                      "All arguments must be linalg enum types");
         return std::make_tuple(enum_convert<B>(std::forward<Args>(args))...);
     }
  */
 
 
-        
+
 
 
     #if BATCHLAS_HAS_CUDA_BACKEND
@@ -704,17 +704,17 @@ namespace batchlas{
             static constexpr cudaDataType_t type = CUDA_R_32F;
         };
 
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUBLAS> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
         };
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUSPARSE> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
         };
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUSOLVER> {
             static constexpr cudaDataType_t type = CUDA_R_64F;

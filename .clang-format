@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: MIT
+# Describes the existing style for editors and for formatting new code. The tree is NOT
+# bulk-formatted with it, and CI does not enforce it: run clang-format on lines you write,
+# never on a whole existing file.
+---
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++20
+ColumnLimit: 120
+IndentWidth: 4
+ContinuationIndentWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+NamespaceIndentation: None
+FixNamespaceComments: false
+BreakBeforeBraces: Attach
+PointerAlignment: Left
+DerivePointerAlignment: false
+ReferenceAlignment: Pointer
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: All
+AlwaysBreakTemplateDeclarations: Yes
+SpaceAfterTemplateKeyword: true
+IndentCaseLabels: true
+SortIncludes: Never
+IncludeBlocks: Preserve
+ReflowComments: false

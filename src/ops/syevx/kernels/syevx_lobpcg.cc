@@ -296,7 +296,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         auto P = S({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S
         auto R = S({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S
         auto XP = S({0,n}, {0,2 * block_vectors});                  //First two blocks of S
-        
+
         auto AS =   MatrixView(ASdata.data(), n, block_vectors*3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto AX =   AS({0,n}, {0,block_vectors});                       //First block of AS
         auto AP =   AS({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS
@@ -421,7 +421,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         size_t staged_samples = 0;
 
 
-        //Double buffering pointer swap approach as opposed to copying data unnecessarily                                                                        
+        //Double buffering pointer swap approach as opposed to copying data unnecessarily
         auto swap_subspace = [&](){
             std::swap(X, X_new);
             std::swap(P, P_new);
@@ -1323,7 +1323,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
-                        
+
             if constexpr (MFormat == MatrixFormat::CSR) {
                 // Runs ILU(k)'s symbolic phase for an upper bound on the fill; the solve
                 // does not repeat it, it sub-allocates from the pool tail.
@@ -1386,7 +1386,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
         const SyevxParams<BATCHLAS_UNPAREN fp>&);
-    
+
 
     #define SYEVX_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
         BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(SYEVX_INSTANTIATE, back, fp)

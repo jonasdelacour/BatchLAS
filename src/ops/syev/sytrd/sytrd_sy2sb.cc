@@ -313,8 +313,8 @@ Event sytrd_sy2sb(Queue& ctx,
                                                            ormqr_nb_hint);
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
-    
-    
+
+
     // Main loop: i advances in blocks of kd.
     for (int i = 0; i <= n - kd_i - 1; i += kd_i) {
         const int pn = n - i - kd_i;

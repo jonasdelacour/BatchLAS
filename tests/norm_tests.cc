@@ -17,7 +17,7 @@ using namespace batchlas;
 
 /**
  * Comprehensive test suite for the norm function.
- * 
+ *
  * This test suite covers all norm types (Frobenius, One, Inf, Max)
  * and works with batched matrices in both Dense and CSR formats.
  * Uses matrix factory methods to generate test matrices.
@@ -41,7 +41,7 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
     }
-    
+
     // Small helper to map NormType to a string for readable failure messages
     static const char* norm_name(NormType t) {
         switch (t) {
@@ -253,10 +253,10 @@ TYPED_TEST(NormTest, NormsTriangularMatrix) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int n = 4, batch_size = 2;
-    
+
     // Create upper triangular matrix with diagonal=2, off-diagonal=1
     T diag_val, off_diag_val;
-    if constexpr (std::is_same_v<T, std::complex<float>> || 
+    if constexpr (std::is_same_v<T, std::complex<float>> ||
                  std::is_same_v<T, std::complex<double>>) {
         diag_val = T(real_t(2), real_t(0));
         off_diag_val = T(real_t(1), real_t(0));
@@ -264,7 +264,7 @@ TYPED_TEST(NormTest, NormsTriangularMatrix) {
         diag_val = T(2);
         off_diag_val = T(1);
     }
-    
+
     auto mat = Matrix<T, MatrixFormat::Dense>::Triangular(n, Uplo::Upper, diag_val, off_diag_val, batch_size);
 
     this->check_all_norms_positive(mat);
@@ -288,10 +288,10 @@ TYPED_TEST(NormTest, LargeBatchNorms) {
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 777);
     auto result = UnifiedVector<real_t>(batch_size);
-    
+
     (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
     this->ctx->wait();
-    
+
     for (int b = 0; b < batch_size; ++b) {
         EXPECT_GT(result[b], real_t(0))
             << "Batch " << b << " norm should be positive";
@@ -302,16 +302,16 @@ TYPED_TEST(NormTest, LargeBatchNorms) {
 TYPED_TEST(NormTest, DifferentMatrixSizes) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
-    
+
     std::vector<std::pair<int, int>> sizes = {{1, 1}, {2, 3}, {5, 2}, {10, 10}};
-    
+
     for (auto [rows, cols] : sizes) {
         auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, 1, 888);
         auto result = UnifiedVector<real_t>(1);
-        
+
         (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
         this->ctx->wait();
-        
+
         EXPECT_GT(result[0], real_t(0))
             << "Size " << rows << "x" << cols << " norm should be positive";
     }
@@ -322,12 +322,12 @@ TYPED_TEST(NormTest, NormConsistency) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     const int rows = 2, cols = 2, batch_size = 1;
-    
+
     // Create a known matrix
     auto mat = Matrix<T, MatrixFormat::Dense>(rows, cols, batch_size);
     auto data = mat.data();
-    
-    if constexpr (std::is_same_v<T, std::complex<float>> || 
+
+    if constexpr (std::is_same_v<T, std::complex<float>> ||
                  std::is_same_v<T, std::complex<double>>) {
         data[0] = T(real_t(1), real_t(0));   // (0,0)
         data[1] = T(real_t(2), real_t(0));   // (1,0)
@@ -339,7 +339,7 @@ TYPED_TEST(NormTest, NormConsistency) {
         data[2] = T(3);  // (0,1)
         data[3] = T(4);  // (1,1)
     }
-    
+
     auto expected_fn = [](NormType ntype, int) {
         using real_t = typename base_type<T>::type;
         switch (ntype) {
@@ -363,15 +363,15 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
 
     auto mat = Matrix<T, MatrixFormat::Dense>::Random(rows, cols, false, batch_size, 1111);
     auto result = UnifiedVector<real_t>(batch_size);
-    
+
     auto start = std::chrono::high_resolution_clock::now();
 
     (void)norm(*(this->ctx), mat, NormType::Frobenius, result.to_span());
     this->ctx->wait();
-    
+
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    
+
     // Verify results are reasonable
     for (int b = 0; b < batch_size; ++b) {
         EXPECT_GT(result[b], real_t(0))
@@ -379,7 +379,7 @@ TYPED_TEST(NormTest, StressTestLargeMatrix) {
         EXPECT_LT(result[b], real_t(1000))
             << "Large matrix norm should be reasonable";
     }
-    
+
     // Performance should be reasonable (less than 1 second for this size)
     EXPECT_LT(duration.count(), 1000)
         << "Large matrix norm computation should complete in reasonable time";

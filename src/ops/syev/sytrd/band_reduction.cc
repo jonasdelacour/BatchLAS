@@ -933,7 +933,7 @@ inline int bandr1_run_chase_sweeps(
                 }
 
                 bandr1_one_qr_step<B, T>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         buffers.Bmat, buffers.Symmat, buffers.Postmat, 
+                                         buffers.Bmat, buffers.Symmat, buffers.Postmat,
                                          buffers.Premat, buffers.Rightmat,
                                          buffers.tau_buf, buffers.ws_backend);
                 ++steps_done;
@@ -1136,7 +1136,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
 
     size_t off = 0;
     auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, abw_out, kd, kd_work, nb_target, ws, off);
-    
+
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
     bandr1_run_chase_sweeps<B, T>(ctx, abw_out, kd_work, kd, n, d_seq_single, nb_seq_single, max_sweeps, max_steps, buffers);
 

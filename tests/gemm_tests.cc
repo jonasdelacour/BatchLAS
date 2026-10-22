@@ -223,7 +223,7 @@ protected:
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        
+
         if (!this->ctx) {
             return;
         }
@@ -232,7 +232,7 @@ protected:
         A_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
         B_data = UnifiedVector<ScalarType>(cols * cols * batch_size);
         C_data = UnifiedVector<ScalarType>(rows * cols * batch_size, static_cast<ScalarType>(0));
-        
+
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
@@ -240,7 +240,7 @@ protected:
                 }
             }
         }
-        
+
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < cols; ++i) {
                 for (int j = 0; j < cols; ++j) {
@@ -311,7 +311,7 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->cols, this->cols, this->ld);
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld);
-    
+
     // Perform C = A * B (which should equal A since B is identity)
     (void)gemm(*(this->ctx),
                       A_view,
@@ -333,14 +333,14 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
-    
+
     // Adding the ComputePrecision parameter
     (void)gemm(*(this->ctx),
                       A_view,
                       B_view,
                       C_view,
                       {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
-    
+
     this->ctx->wait();
 
     for (int i = 0; i < this->rows * this->cols * this->batch_size; ++i)

@@ -24,209 +24,209 @@ namespace {
 
 template <typename Real>
 void ref_sytd2_upper(std::vector<Real>& a, int n, std::vector<Real>& d, std::vector<Real>& e, std::vector<Real>& tau) {
-	// Unblocked SYTD2-style reference for Upper (0-based, column-major).
-	// Produces d (diag), e (offdiag), tau (reflector scalars). Reflectors are stored in a(0:m-2, k) for k=1..n-1.
-	auto idx = [&](int r, int c) { return r + c * n; };
+    // Unblocked SYTD2-style reference for Upper (0-based, column-major).
+    // Produces d (diag), e (offdiag), tau (reflector scalars). Reflectors are stored in a(0:m-2, k) for k=1..n-1.
+    auto idx = [&](int r, int c) { return r + c * n; };
 
-	d.assign(static_cast<std::size_t>(n), Real(0));
-	e.assign(static_cast<std::size_t>(std::max(0, n - 1)), Real(0));
-	tau.assign(static_cast<std::size_t>(std::max(0, n - 1)), Real(0));
+    d.assign(static_cast<std::size_t>(n), Real(0));
+    e.assign(static_cast<std::size_t>(std::max(0, n - 1)), Real(0));
+    tau.assign(static_cast<std::size_t>(std::max(0, n - 1)), Real(0));
 
-	if (n <= 0) return;
-	if (n == 1) {
-		d[0] = a[idx(0, 0)];
-		return;
-	}
+    if (n <= 0) return;
+    if (n == 1) {
+        d[0] = a[idx(0, 0)];
+        return;
+    }
 
-	auto sign_nonzero = [](Real x) { return std::signbit(static_cast<double>(x)) ? Real(-1) : Real(1); };
+    auto sign_nonzero = [](Real x) { return std::signbit(static_cast<double>(x)) ? Real(-1) : Real(1); };
 
-	for (int k = n - 1; k >= 1; --k) {
-		const int m = k;
-		const int alpha_row = k - 1;
-		const int col = k;
+    for (int k = n - 1; k >= 1; --k) {
+        const int m = k;
+        const int alpha_row = k - 1;
+        const int col = k;
 
-		Real alpha = a[idx(alpha_row, col)];
-		Real xnorm2 = Real(0);
-		for (int r = 0; r < m - 1; ++r) {
-			const Real x = a[idx(r, col)];
-			xnorm2 += x * x;
-		}
-		const Real xnorm = std::sqrt(xnorm2);
+        Real alpha = a[idx(alpha_row, col)];
+        Real xnorm2 = Real(0);
+        for (int r = 0; r < m - 1; ++r) {
+            const Real x = a[idx(r, col)];
+            xnorm2 += x * x;
+        }
+        const Real xnorm = std::sqrt(xnorm2);
 
-		Real taui = Real(0);
-		Real beta = alpha;
-		Real scale = Real(0);
-		if (m <= 1 || xnorm == Real(0)) {
-			taui = Real(0);
-			beta = alpha;
-			scale = Real(0);
-		} else {
-			beta = -sign_nonzero(alpha) * std::hypot(alpha, xnorm);
-			taui = (beta - alpha) / beta;
-			scale = Real(1) / (alpha - beta);
-		}
+        Real taui = Real(0);
+        Real beta = alpha;
+        Real scale = Real(0);
+        if (m <= 1 || xnorm == Real(0)) {
+            taui = Real(0);
+            beta = alpha;
+            scale = Real(0);
+        } else {
+            beta = -sign_nonzero(alpha) * std::hypot(alpha, xnorm);
+            taui = (beta - alpha) / beta;
+            scale = Real(1) / (alpha - beta);
+        }
 
-		if (taui != Real(0)) {
-			for (int r = 0; r < m - 1; ++r) {
-				a[idx(r, col)] *= scale;
-			}
-		}
-		a[idx(alpha_row, col)] = beta;
+        if (taui != Real(0)) {
+            for (int r = 0; r < m - 1; ++r) {
+                a[idx(r, col)] *= scale;
+            }
+        }
+        a[idx(alpha_row, col)] = beta;
 
-		e[k - 1] = beta;
-		tau[k - 1] = taui;
+        e[k - 1] = beta;
+        tau[k - 1] = taui;
 
-		if (taui != Real(0)) {
-			std::vector<Real> v(static_cast<std::size_t>(m), Real(0));
-			for (int r = 0; r < m - 1; ++r) v[r] = a[idx(r, col)];
-			v[m - 1] = Real(1);
+        if (taui != Real(0)) {
+            std::vector<Real> v(static_cast<std::size_t>(m), Real(0));
+            for (int r = 0; r < m - 1; ++r) v[r] = a[idx(r, col)];
+            v[m - 1] = Real(1);
 
-			std::vector<Real> w(static_cast<std::size_t>(m), Real(0));
-			for (int r = 0; r < m; ++r) {
-				Real sum = Real(0);
-				for (int c = 0; c < m; ++c) {
-					sum += a[idx(r, c)] * v[c];
-				}
-				w[r] = taui * sum;
-			}
+            std::vector<Real> w(static_cast<std::size_t>(m), Real(0));
+            for (int r = 0; r < m; ++r) {
+                Real sum = Real(0);
+                for (int c = 0; c < m; ++c) {
+                    sum += a[idx(r, c)] * v[c];
+                }
+                w[r] = taui * sum;
+            }
 
-			Real dot = Real(0);
-			for (int r = 0; r < m; ++r) dot += w[r] * v[r];
-			const Real alpha2 = Real(-0.5) * taui * dot;
-			for (int r = 0; r < m; ++r) w[r] += alpha2 * v[r];
+            Real dot = Real(0);
+            for (int r = 0; r < m; ++r) dot += w[r] * v[r];
+            const Real alpha2 = Real(-0.5) * taui * dot;
+            for (int r = 0; r < m; ++r) w[r] += alpha2 * v[r];
 
-			for (int r = 0; r < m; ++r) {
-				for (int c = 0; c < m; ++c) {
-					a[idx(r, c)] -= v[r] * w[c] + w[r] * v[c];
-				}
-			}
-		}
-	}
+            for (int r = 0; r < m; ++r) {
+                for (int c = 0; c < m; ++c) {
+                    a[idx(r, c)] -= v[r] * w[c] + w[r] * v[c];
+                }
+            }
+        }
+    }
 
-	for (int i = 0; i < n; ++i) d[i] = a[idx(i, i)];
+    for (int i = 0; i < n; ++i) d[i] = a[idx(i, i)];
 }
 
 template <typename Real>
 static std::vector<Real> extract_host_matrix_colmajor(const Matrix<Real, MatrixFormat::Dense>& A, int n) {
-	std::vector<Real> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
-	auto v = A.view();
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			out[static_cast<std::size_t>(i + j * n)] = v(i, j, 0);
-		}
-	}
-	return out;
+    std::vector<Real> out(static_cast<std::size_t>(n) * static_cast<std::size_t>(n));
+    auto v = A.view();
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            out[static_cast<std::size_t>(i + j * n)] = v(i, j, 0);
+        }
+    }
+    return out;
 }
 
 // Build Q from Householder vectors stored in A/tau, following the same loop order
 // as sytrd_cta.cc.
 template <Backend B, typename Real>
 Matrix<Real, MatrixFormat::Dense> build_q_from_sytrd_cta(Queue& ctx,
-												const Matrix<Real, MatrixFormat::Dense>& A_out,
-												Vector<Real>& tau,
-												int n,
-												Uplo uplo) {
-	// We build Q via BatchLAS `ormqr` by packing the Householder vectors into a QR-like
-	// reflector matrix for a (n-1)x(n-1) subspace and embedding it into an n x n Q.
-	//
-	// - Lower: reflectors act on trailing submatrices, so subspace is rows/cols 1..n-1.
-	// - Upper: reflectors act on leading submatrices with the implicit 1 at the bottom.
-	//   We convert to QR form by reversing the subspace basis (a permutation similarity).
-	if (n <= 1) return Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
+                                                const Matrix<Real, MatrixFormat::Dense>& A_out,
+                                                Vector<Real>& tau,
+                                                int n,
+                                                Uplo uplo) {
+    // We build Q via BatchLAS `ormqr` by packing the Householder vectors into a QR-like
+    // reflector matrix for a (n-1)x(n-1) subspace and embedding it into an n x n Q.
+    //
+    // - Lower: reflectors act on trailing submatrices, so subspace is rows/cols 1..n-1.
+    // - Upper: reflectors act on leading submatrices with the implicit 1 at the bottom.
+    //   We convert to QR form by reversing the subspace basis (a permutation similarity).
+    if (n <= 1) return Matrix<Real, MatrixFormat::Dense>::Identity(n, /*batch_size=*/1);
 
-	const int p = n - 1;
-	auto Av = A_out.view();
+    const int p = n - 1;
+    auto Av = A_out.view();
 
-	Matrix<Real, MatrixFormat::Dense> Aq(p, p, /*batch=*/1);
-	Matrix<Real, MatrixFormat::Dense> Qsub = Matrix<Real, MatrixFormat::Dense>::Identity(p, /*batch_size=*/1);
-	Vector<Real> tau_qr(p, /*batch=*/1);
-	auto aq = Aq.view();
+    Matrix<Real, MatrixFormat::Dense> Aq(p, p, /*batch=*/1);
+    Matrix<Real, MatrixFormat::Dense> Qsub = Matrix<Real, MatrixFormat::Dense>::Identity(p, /*batch_size=*/1);
+    Vector<Real> tau_qr(p, /*batch=*/1);
+    auto aq = Aq.view();
 
-	// Zero Aq.
-	for (int j = 0; j < p; ++j) {
-		for (int i = 0; i < p; ++i) {
-			aq(i, j, 0) = Real(0);
-		}
-	}
+    // Zero Aq.
+    for (int j = 0; j < p; ++j) {
+        for (int i = 0; i < p; ++i) {
+            aq(i, j, 0) = Real(0);
+        }
+    }
 
-	if (uplo == Uplo::Lower) {
-		// Pack reflectors for the subspace (global indices 1..n-1).
-		for (int i = 0; i < p; ++i) {
-			aq(i, i, 0) = Real(1);
-			tau_qr(i, 0) = tau(i, 0);
-			for (int r = i + 1; r < p; ++r) {
-				// sub row r corresponds to global row (r+1)
-				aq(r, i, 0) = Av(r + 1, i, 0);
-			}
-		}
-	} else {
-		// Upper: operate on subspace (global indices 0..n-2), reversed into QR form.
-		// Reflector i (0..p-1) comes from column k=i+1 with implicit 1 at row i.
-		// In reversed coordinates, it becomes a QR reflector starting at j = p-1-i,
-		// with below-diagonal entries in reverse order.
-		for (int i = 0; i < p; ++i) {
-			const int j = (p - 1) - i;
-			aq(j, j, 0) = Real(1);
-			tau_qr(j, 0) = tau(i, 0);
-			const int k = i + 1;
-			// Fill below-diagonal entries for this reflector.
-			for (int t = 1; t <= i; ++t) {
-				// v_rev[t] = v[i - t], and v[r] is stored at A_out(r, k) for r=0..i-1.
-				const int r_src = i - t;
-				aq(j + t, j, 0) = Av(r_src, k, 0);
-			}
-		}
-	}
+    if (uplo == Uplo::Lower) {
+        // Pack reflectors for the subspace (global indices 1..n-1).
+        for (int i = 0; i < p; ++i) {
+            aq(i, i, 0) = Real(1);
+            tau_qr(i, 0) = tau(i, 0);
+            for (int r = i + 1; r < p; ++r) {
+                // sub row r corresponds to global row (r+1)
+                aq(r, i, 0) = Av(r + 1, i, 0);
+            }
+        }
+    } else {
+        // Upper: operate on subspace (global indices 0..n-2), reversed into QR form.
+        // Reflector i (0..p-1) comes from column k=i+1 with implicit 1 at row i.
+        // In reversed coordinates, it becomes a QR reflector starting at j = p-1-i,
+        // with below-diagonal entries in reverse order.
+        for (int i = 0; i < p; ++i) {
+            const int j = (p - 1) - i;
+            aq(j, j, 0) = Real(1);
+            tau_qr(j, 0) = tau(i, 0);
+            const int k = i + 1;
+            // Fill below-diagonal entries for this reflector.
+            for (int t = 1; t <= i; ++t) {
+                // v_rev[t] = v[i - t], and v[r] is stored at A_out(r, k) for r=0..i-1.
+                const int r_src = i - t;
+                aq(j + t, j, 0) = Av(r_src, k, 0);
+            }
+        }
+    }
 
-	UnifiedVector<std::byte> ws_ormqr(
-		ormqr_buffer_size(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data()));
+    UnifiedVector<std::byte> ws_ormqr(
+        ormqr_buffer_size(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data()));
 
-	// Apply Qsub := Qsub * Q (since Qsub starts as identity, this forms Qsub).
-	// ormqr applies the product of Householder reflectors encoded in Aq/tau_qr.
-	// We run it on the provided execution context.
-	//
-	// Some backends may require a non-empty workspace.
-	ormqr(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
+    // Apply Qsub := Qsub * Q (since Qsub starts as identity, this forms Qsub).
+    // ormqr applies the product of Householder reflectors encoded in Aq/tau_qr.
+    // We run it on the provided execution context.
+    //
+    // Some backends may require a non-empty workspace.
+    ormqr(ctx, Aq, Qsub, Side::Left, Transpose::NoTrans, tau_qr.data(), ws_ormqr.to_span()).wait();
 
-	Matrix<Real, MatrixFormat::Dense> Q = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
-	auto Qv = Q.view();
-	auto Qsv = Qsub.view();
+    Matrix<Real, MatrixFormat::Dense> Q = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
+    auto Qv = Q.view();
+    auto Qsv = Qsub.view();
 
-	if (uplo == Uplo::Lower) {
-		Qv(0, 0, 0) = Real(1);
-		for (int r = 0; r < p; ++r) {
-			for (int c = 0; c < p; ++c) {
-				Qv(r + 1, c + 1, 0) = Qsv(r, c, 0);
-			}
-		}
-	} else {
-		// Undo the subspace reversal: Qsub_orig = J * Qsub_rev * J.
-		// Also embed as a top-left block, leaving the last row/col fixed.
-		for (int r = 0; r < p; ++r) {
-			for (int c = 0; c < p; ++c) {
-				Qv(r, c, 0) = Qsv((p - 1) - r, (p - 1) - c, 0);
-			}
-		}
-		Qv(n - 1, n - 1, 0) = Real(1);
-	}
+    if (uplo == Uplo::Lower) {
+        Qv(0, 0, 0) = Real(1);
+        for (int r = 0; r < p; ++r) {
+            for (int c = 0; c < p; ++c) {
+                Qv(r + 1, c + 1, 0) = Qsv(r, c, 0);
+            }
+        }
+    } else {
+        // Undo the subspace reversal: Qsub_orig = J * Qsub_rev * J.
+        // Also embed as a top-left block, leaving the last row/col fixed.
+        for (int r = 0; r < p; ++r) {
+            for (int c = 0; c < p; ++c) {
+                Qv(r, c, 0) = Qsv((p - 1) - r, (p - 1) - c, 0);
+            }
+        }
+        Qv(n - 1, n - 1, 0) = Real(1);
+    }
 
-	return Q;
+    return Q;
 }
 
 // tridiag(d, e) stored densely, zeros outside the band.
 template <typename Real>
 Matrix<Real, MatrixFormat::Dense> tridiagonal_matrix(int n, Vector<Real>& d, Vector<Real>& e) {
-	auto T = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
-	auto Tv = T.view();
-	for (int i = 0; i < n; ++i) Tv(i, i, 0) = d(i, 0);
-	for (int i = 0; i < n - 1; ++i) Tv(i + 1, i, 0) = Tv(i, i + 1, 0) = e(i, 0);
-	return T;
+    auto T = Matrix<Real, MatrixFormat::Dense>::Zeros(n, n, /*batch_size=*/1);
+    auto Tv = T.view();
+    for (int i = 0; i < n; ++i) Tv(i, i, 0) = d(i, 0);
+    for (int i = 0; i < n - 1; ++i) Tv(i + 1, i, 0) = Tv(i, i + 1, 0) = e(i, 0);
+    return T;
 }
 
 template <typename T, Backend B>
 struct SytrdCtaConfig {
-	using ScalarType = T;
-	static constexpr Backend BackendVal = B;
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
 };
 
 } // namespace
@@ -248,118 +248,118 @@ TYPED_TEST_SUITE(SytrdCtaTest, SytrdCtaTestTypes);
 
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
-	using Real = typename TestFixture::ScalarType;
-	constexpr Backend B = TestFixture::BackendType;
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 16;
-	const int batch = 1;
+    const int n = 16;
+    const int batch = 1;
 
-	Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
-	Matrix<Real, MatrixFormat::Dense> A = A0;
-	Vector<Real> d(n, batch);
-	Vector<Real> e(n - 1, batch);
-	Vector<Real> tau(n - 1, batch);
-	UnifiedVector<std::byte> ws(1, std::byte{0});
+    Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
+    Matrix<Real, MatrixFormat::Dense> A = A0;
+    Vector<Real> d(n, batch);
+    Vector<Real> e(n - 1, batch);
+    Vector<Real> tau(n - 1, batch);
+    UnifiedVector<std::byte> ws(1, std::byte{0});
 
     (void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
+    const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Lower);
 
-	using MV = MatrixView<Real, MatrixFormat::Dense>;
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
-	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
+    const auto Tri = tridiagonal_matrix(n, d, e);
+    EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
 }
 
 TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
-	using Real = typename TestFixture::ScalarType;
-	constexpr Backend B = TestFixture::BackendType;
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 16;
-	const int batch = 1;
+    const int n = 16;
+    const int batch = 1;
 
-	Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
-	Matrix<Real, MatrixFormat::Dense> A = A0;
-	Vector<Real> d(n, batch);
-	Vector<Real> e(n - 1, batch);
-	Vector<Real> tau(n - 1, batch);
-	UnifiedVector<std::byte> ws(1, std::byte{0});
+    Matrix<Real, MatrixFormat::Dense> A0 = Matrix<Real, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
+    Matrix<Real, MatrixFormat::Dense> A = A0;
+    Vector<Real> d(n, batch);
+    Vector<Real> e(n - 1, batch);
+    Vector<Real> tau(n - 1, batch);
+    UnifiedVector<std::byte> ws(1, std::byte{0});
 
     (void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
-	// Sanity: compare d/e/tau against a CPU reference implementation.
-	{
-		std::vector<Real> a_ref = extract_host_matrix_colmajor(A0, n);
-		std::vector<Real> d_ref, e_ref, tau_ref;
-		ref_sytd2_upper(a_ref, n, d_ref, e_ref, tau_ref);
-		// d and e against the reference relative to ||A0||_F; tau and the stored reflectors are O(1) already.
-		double dev_de = 0, dev_refl = 0;
-		for (int i = 0; i < n; ++i) dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(d(i, 0)) - double(d_ref[static_cast<std::size_t>(i)])));
-		for (int i = 0; i < n - 1; ++i) {
-			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(e(i, 0)) - double(e_ref[static_cast<std::size_t>(i)])));
-			dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(tau(i, 0)) - double(tau_ref[static_cast<std::size_t>(i)])));
-		}
-		// Diagnostic: the reflector storage in A must match the reference. If d/e/tau match but these
-		// don't, Q reconstruction from A will be wrong.
-		auto Aoutv = A.view();
-		for (int k = 1; k < n; ++k) {
-			// Reflector v is stored in column k, rows 0..k-2; implicit v[k-1] = 1. Its beta is stored at (k-1, k).
-			for (int r = 0; r < k - 1; ++r)
-				dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(Aoutv(r, k, 0)) - double(a_ref[static_cast<std::size_t>(r + k * n)])));
-			dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
-		}
-		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / norm(*this->ctx, A0.view().template astype<double>())[0]);
-		// Reference agreement (absolute elementwise difference vs the independent host sytd2), borrowing the factorization kind's bound.
-		EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_refl);
-	}
+    // Sanity: compare d/e/tau against a CPU reference implementation.
+    {
+        std::vector<Real> a_ref = extract_host_matrix_colmajor(A0, n);
+        std::vector<Real> d_ref, e_ref, tau_ref;
+        ref_sytd2_upper(a_ref, n, d_ref, e_ref, tau_ref);
+        // d and e against the reference relative to ||A0||_F; tau and the stored reflectors are O(1) already.
+        double dev_de = 0, dev_refl = 0;
+        for (int i = 0; i < n; ++i) dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(d(i, 0)) - double(d_ref[static_cast<std::size_t>(i)])));
+        for (int i = 0; i < n - 1; ++i) {
+            dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(e(i, 0)) - double(e_ref[static_cast<std::size_t>(i)])));
+            dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(tau(i, 0)) - double(tau_ref[static_cast<std::size_t>(i)])));
+        }
+        // Diagnostic: the reflector storage in A must match the reference. If d/e/tau match but these
+        // don't, Q reconstruction from A will be wrong.
+        auto Aoutv = A.view();
+        for (int k = 1; k < n; ++k) {
+            // Reflector v is stored in column k, rows 0..k-2; implicit v[k-1] = 1. Its beta is stored at (k-1, k).
+            for (int r = 0; r < k - 1; ++r)
+                dev_refl = batchlas::verify::nanmax(dev_refl, std::abs(double(Aoutv(r, k, 0)) - double(a_ref[static_cast<std::size_t>(r + k * n)])));
+            dev_de = batchlas::verify::nanmax(dev_de, std::abs(double(Aoutv(k - 1, k, 0)) - double(a_ref[static_cast<std::size_t>((k - 1) + k * n)])));
+        }
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_de / norm(*this->ctx, A0.view().template astype<double>())[0]);
+        // Reference agreement (absolute elementwise difference vs the independent host sytd2), borrowing the factorization kind's bound.
+        EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, dev_refl);
+    }
 
-	const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
+    const auto Q = build_q_from_sytrd_cta<B>(*this->ctx, A, tau, n, Uplo::Upper);
 
-	using MV = MatrixView<Real, MatrixFormat::Dense>;
-	EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
-	const auto Tri = tridiagonal_matrix(n, d, e);
-	EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    EXPECT_VERIFY(Real, batchlas::verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q));
+    const auto Tri = tridiagonal_matrix(n, d, e);
+    EXPECT_VERIFY(Real, batchlas::verify::Check::factorization, n, MV::similarity_residual(*this->ctx, A0, Q, Tri));
 }
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
 TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
-	// On typical CPU devices, subgroup size 32 is unsupported; sytrd_cta should
-	// throw a clear runtime_error rather than misbehaving.
-	Queue ctx("cpu");
+    // On typical CPU devices, subgroup size 32 is unsupported; sytrd_cta should
+    // throw a clear runtime_error rather than misbehaving.
+    Queue ctx("cpu");
 
-	const int n = 8;
-	Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/7);
-	Vector<float> d(n, 1);
-	Vector<float> e(n - 1, 1);
-	Vector<float> tau(n - 1, 1);
-	UnifiedVector<std::byte> ws(1, std::byte{0});
+    const int n = 8;
+    Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, /*batch=*/1, /*seed=*/7);
+    Vector<float> d(n, 1);
+    Vector<float> e(n - 1, 1);
+    Vector<float> tau(n - 1, 1);
+    UnifiedVector<std::byte> ws(1, std::byte{0});
 
-	EXPECT_THROW(
-		((void)sytrd_cta(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
-		std::exception);
+    EXPECT_THROW(
+        ((void)sytrd_cta(ctx, A, d, e, tau, Uplo::Lower, ws.to_span(), 1), ctx.wait()),
+        std::exception);
 }
 #endif
 
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
 // Batch 0: no launch, no throw, nothing written (acpp 25.10 launches an empty nd_range).
 TYPED_TEST(SytrdCtaTest, EmptyBatchIsANoOp) {
-	using Real = typename TestFixture::ScalarType;
-	constexpr Backend B = TestFixture::BackendType;
-	const int n = 16;
-	UnifiedVector<Real> sentinel(4 * n * n, Real(7));
-	MatrixView<Real, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 2, (n + 2) * n, 0);
-	VectorView<Real> d(sentinel.data() + 3 * n * n, n, 0), e(sentinel.data() + 3 * n * n + n, n - 1, 0),
-		tau(sentinel.data() + 3 * n * n + 2 * n, n - 1, 0);
-	UnifiedVector<std::byte> ws(1, std::byte{0});
-	for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
-		const auto run = [&] {
-			(void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, uplo, ws.to_span(), 1);
-			this->ctx->wait();
-		};
-		EXPECT_NO_THROW(run());
-	}
-	for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+    using Real = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 16;
+    UnifiedVector<Real> sentinel(4 * n * n, Real(7));
+    MatrixView<Real, MatrixFormat::Dense> A(sentinel.data(), n, n, n + 2, (n + 2) * n, 0);
+    VectorView<Real> d(sentinel.data() + 3 * n * n, n, 0), e(sentinel.data() + 3 * n * n + n, n - 1, 0),
+        tau(sentinel.data() + 3 * n * n + 2 * n, n - 1, 0);
+    UnifiedVector<std::byte> ws(1, std::byte{0});
+    for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+        const auto run = [&] {
+            (void)sytrd_cta<B, Real>(*this->ctx, A, d, e, tau, uplo, ws.to_span(), 1);
+            this->ctx->wait();
+        };
+        EXPECT_NO_THROW(run());
+    }
+    for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
 }
 #endif
 

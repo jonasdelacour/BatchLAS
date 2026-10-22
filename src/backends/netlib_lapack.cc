@@ -210,7 +210,7 @@ namespace batchlas{
     }
 
     } // namespace backend
-    
+
     // The netlib gemm IS the vendor implementation (the CBLAS call), hence gemm_vendor here.
     namespace backend {
 
@@ -867,7 +867,7 @@ namespace batchlas{
     }
 
     template <Backend B, typename T>
-    size_t syev_vendor_buffer_size(Queue& /*ctx*/, 
+    size_t syev_vendor_buffer_size(Queue& /*ctx*/,
                                    const MatrixView<T, MatrixFormat::Dense>& /*descrA*/,
                                    Span<typename base_type<T>::type> /*eigenvalues*/,
                                    JobType /*jobtype*/,

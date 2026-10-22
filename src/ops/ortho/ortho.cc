@@ -27,7 +27,7 @@ namespace batchlas {
 
     template <Backend B, typename T>
     struct OrthoNormalizeVector {};
-    
+
     template <Backend B, typename T>
     struct StridedCopyKernel {};
 
@@ -150,7 +150,7 @@ namespace batchlas {
             algo = OrthoAlgorithm::Householder;
         }
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
-        Transpose inv_trans = is_A_trans ? Transpose::NoTrans : 
+        Transpose inv_trans = is_A_trans ? Transpose::NoTrans :
                             std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
@@ -187,7 +187,7 @@ namespace batchlas {
 
         auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
         auto square = [](T value) { if constexpr (internal::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
-        
+
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
@@ -252,18 +252,18 @@ namespace batchlas {
                     const int64_t vstep = is_A_trans ? A.ld() : 1;
 
                     batchlas::impl::parallel_for<OrthoNormalizeVector<B, T>>(h,
-                        sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}), 
+                        sycl::nd_range<1>(sycl::range{size_t(batch_size * normalize_wg_size)}, sycl::range{size_t(normalize_wg_size)}),
                         [=](sycl::nd_item<1> item){
                             auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
                             auto cta = item.get_group();
                             T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
                             auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
-                            
+
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
                                 Anext_squared_span[j] = square(A_local_vector[j * vstep]);
                             }
-                            
+
                             sycl::group_barrier(cta);
                             auto squared_norm = batchlas::portable::joint_reduce(cta, &Anext_squared[0], &Anext_squared[0] + Anext_squared.size(), sycl::plus<float_t>());
                             auto norm = std::sqrt(squared_norm);
@@ -271,7 +271,7 @@ namespace batchlas {
                             for (int j = tid; j < m; j+= cta.get_local_linear_range()){
                                 A_local_vector[j * vstep] /= norm;
                             }
-                        }); 
+                        });
                 });
             }
         };
@@ -300,7 +300,7 @@ namespace batchlas {
             chol_alg();
             chol_alg();
         };
-        
+
         auto diags = wsl.diags;
         auto lambdas = wsl.lambdas;
         auto syev_workspace = wsl.syev_ws;
@@ -434,7 +434,7 @@ namespace batchlas {
             default:
                 throw batchlas::invalid_argument("Unknown orthogonalization algorithm");
         }
-        
+
         return ctx.get_event();
     }
 
@@ -470,11 +470,11 @@ namespace batchlas {
         //When orthogonalizing against an external basis M,
         //M must be an orthonormal basis
         //Both A and M must be either tall-and-skinny or short-and-fat
-        //Furthermore the number of vectors in A and M must sum to at most the dimension of these vectors 
+        //Furthermore the number of vectors in A and M must sum to at most the dimension of these vectors
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto k = transA == Transpose::NoTrans ? A.rows_ : A.cols_;
-        
+
         // Initialize the matrices if not already done
         if(nA + nM > k){
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
@@ -492,7 +492,7 @@ namespace batchlas {
         // ConjTrans for complex: a bool cast to Transpose is Trans, which projects onto conj(M).
         auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
         auto is_second_transposed = ((transA == trans) && (transM == no_trans)) ? trans : no_trans;
-        
+
         for (size_t i = 0; i < iterations; i++){
             (void)gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
             (void)gemm<B>(ctx,
@@ -520,10 +520,10 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
-        
+
         return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo)) +
                 BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
-    }  
+    }
 
     #define ORTHO_INSTANTIATE(back, fp) \
     template Event ortho<back, BATCHLAS_UNPAREN fp>( \

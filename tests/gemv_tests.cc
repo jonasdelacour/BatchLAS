@@ -48,17 +48,17 @@ class GemvMatrixViewTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
-    
-    const int rows = 10; 
+
+    const int rows = 10;
     const int cols = 10;
     const int batch_size = 5;
     UnifiedVector<ScalarType> A_data;
-    UnifiedVector<ScalarType> x_data; 
-    UnifiedVector<ScalarType> y_data; 
+    UnifiedVector<ScalarType> x_data;
+    UnifiedVector<ScalarType> y_data;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        
+
         if (!this->ctx) {
             return;
         }
@@ -71,7 +71,7 @@ protected:
         for (int b = 0; b < this->batch_size; ++b) {
             for (int j = 0; j < this->cols; ++j) {
                 for (int i = 0; i < this->rows; ++i) {
-                    this->A_data[b * this->rows * this->cols + j * this->rows + i] = 
+                    this->A_data[b * this->rows * this->cols + j * this->rows + i] =
                         static_cast<ScalarType>(i + j * this->rows + 1 + b * 100);
                 }
             }
@@ -83,7 +83,7 @@ protected:
                 this->x_data[b * std::max(this->rows, this->cols) + j] = static_cast<ScalarType>(j + 1 + b * 10);
             }
         }
-        
+
         for (int b = 0; b < this->batch_size; ++b) {
             for (int i = 0; i < this->rows; ++i) {
                 this->y_data[b * this->rows + i] = static_cast<ScalarType>(0.0);
@@ -107,9 +107,9 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1); 
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1); 
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0);
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, 1);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, 1);
 
     ScalarType alpha = static_cast<ScalarType>(1.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
@@ -127,7 +127,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 
     ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
-    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0); 
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 0);
     VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, 1);
     VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, 1);
 
@@ -150,10 +150,10 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
-                                                this->rows * this->cols, this->batch_size); 
-    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, this->batch_size); 
-    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, this->batch_size); 
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows,
+                                                this->rows * this->cols, this->batch_size);
+    VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, this->batch_size);
+    VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, this->batch_size);
 
     ScalarType alpha = static_cast<ScalarType>(1.0);
     ScalarType beta = static_cast<ScalarType>(0.0);
@@ -172,7 +172,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
     ASSERT_EQ(this->rows, this->cols) << "Transpose test requires square matrix in this fixture setup.";
 
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows,
-                                                this->rows * this->cols, this->batch_size); 
+                                                this->rows * this->cols, this->batch_size);
     VectorView<ScalarType> x_vec(this->x_data.data(), this->rows, this->batch_size);
     VectorView<ScalarType> y_vec(this->y_data.data(), this->cols, this->batch_size);
 
@@ -194,8 +194,8 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows, 
-                                                this->rows * this->cols, this->batch_size); 
+    MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->rows,
+                                                this->rows * this->cols, this->batch_size);
     VectorView<ScalarType> x_vec(this->x_data.data(), this->cols, this->batch_size);
     VectorView<ScalarType> y_vec(this->y_data.data(), this->rows, this->batch_size);
 

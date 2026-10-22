@@ -110,7 +110,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
             for (int i = tid; i < n; i += bdim)
                 temp_indices[i] = batch_indices[i];
             sycl::group_barrier(cta);
-            
+
             for (int i = 0; i < n; ++i) {
                 if (temp_indices[i] < 0) continue;               // already processed
                 int curr_ix = i;
@@ -160,7 +160,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
     ctx -> submit([&](sycl::handler& h) {
         auto local_indices = sycl::local_accessor<K, 1>(sycl::range<1>(n), h);
         auto local_values = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
-        
+
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto tid = item.get_local_linear_id();

@@ -341,7 +341,7 @@ int run_accuracy(const Options& opt) {
         }
         q->wait();
 
-        auto call_lapack_variant = [&](Vector<Real>& out, const char* func_name, 
+        auto call_lapack_variant = [&](Vector<Real>& out, const char* func_name,
                                         int (*func_ptr)(int, Real*, Real*)) {
             const Real nan_val = std::numeric_limits<Real>::quiet_NaN();
             for (int b = 0; b < cur_batch; ++b) {

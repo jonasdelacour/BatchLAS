@@ -136,7 +136,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
 
     // Create input band matrix (kd+1 rows, n columns, in lower-band format)
     auto ab_in = Matrix<T>::Random(kd + 1, n, /*hermitian=*/false, batch, /*seed=*/2027);
-    
+
     using Real = typename base_type<T>::type;
     auto d = Vector<Real>::zeros(n, batch);
     auto e = Vector<Real>::zeros(n - 1, batch);

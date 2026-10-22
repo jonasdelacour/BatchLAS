@@ -325,7 +325,7 @@ Event Queue::create_event_after_external_work() {
 
 std::vector<Device> Device::get_devices(DeviceType type){
     std::vector<Device> devices(QueueImpl::device_arrays.at(static_cast<int>(type)).size());
-    std::generate(devices.begin(), devices.end(), 
+    std::generate(devices.begin(), devices.end(),
         [i = size_t{0}, type]() mutable { return Device(i++, type); });
     return devices;
 }
@@ -341,7 +341,7 @@ Vendor Device::get_vendor() const {
 
 size_t Device::get_property(DeviceProperty property) const {
     auto d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
-    
+
     switch(int(property)){
         case 0: return d.get_info<sycl::info::device::max_work_group_size>();
         case 1: return d.get_info<sycl::info::device::max_clock_frequency>();

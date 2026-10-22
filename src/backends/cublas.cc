@@ -1113,7 +1113,7 @@ namespace batchlas {
             });
             return ctx.create_event_after_external_work();
         }
-    
+
     template <Backend Back, typename T>
     size_t getrs_vendor_buffer_size(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,

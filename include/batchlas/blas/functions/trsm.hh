@@ -61,7 +61,7 @@ inline void trsm_validate_params(
         int lda = A.ld(), ldb = B.ld();
 
         if (m < 0 || n < 0) {
-                throw batchlas::invalid_argument("trsm: Matrix dimensions cannot be negative (m=" + std::to_string(m) + 
+                throw batchlas::invalid_argument("trsm: Matrix dimensions cannot be negative (m=" + std::to_string(m) +
                                           ", n=" + std::to_string(n) + ")");
         }
 
@@ -80,22 +80,22 @@ inline void trsm_validate_params(
 
         if (side == Side::Left) {
                 if (A.rows() != m || A.cols() != m) {
-                        throw batchlas::invalid_argument("trsm: For left side, A must be square matrix of size m x m. Got " + 
-                                                std::to_string(A.rows()) + "x" + std::to_string(A.cols()) + 
+                        throw batchlas::invalid_argument("trsm: For left side, A must be square matrix of size m x m. Got " +
+                                                std::to_string(A.rows()) + "x" + std::to_string(A.cols()) +
                                                 " instead of " + std::to_string(m) + "x" + std::to_string(m));
                 }
                 if (lda < std::max(1, m)) {
-                        throw batchlas::invalid_argument("trsm: lda must be >= max(1, m). Got lda=" + 
+                        throw batchlas::invalid_argument("trsm: lda must be >= max(1, m). Got lda=" +
                                                 std::to_string(lda) + ", m=" + std::to_string(m));
                 }
         } else {
                 if (A.rows() != n || A.cols() != n) {
-                        throw batchlas::invalid_argument("trsm: For right side, A must be square matrix of size n x n. Got " + 
-                                                std::to_string(A.rows()) + "x" + std::to_string(A.cols()) + 
+                        throw batchlas::invalid_argument("trsm: For right side, A must be square matrix of size n x n. Got " +
+                                                std::to_string(A.rows()) + "x" + std::to_string(A.cols()) +
                                                 " instead of " + std::to_string(n) + "x" + std::to_string(n));
                 }
                 if (lda < std::max(1, n)) {
-                        throw batchlas::invalid_argument("trsm: lda must be >= max(1, n). Got lda=" + 
+                        throw batchlas::invalid_argument("trsm: lda must be >= max(1, n). Got lda=" +
                                                 std::to_string(lda) + ", n=" + std::to_string(n));
                 }
         }

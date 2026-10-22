@@ -108,7 +108,7 @@ namespace batchlas {
             });
             return ctx.get_event();
         }
-        
+
 
         template <typename T>
         inline constexpr auto nrm2(const sycl::group<1>& cta, const VectorView<T>& v)
@@ -221,7 +221,7 @@ namespace batchlas {
             }
             return result;
         }
-        
+
         template <RealScalar T>
         inline constexpr T safmin(){
             constexpr auto eps = std::numeric_limits<T>::epsilon();
@@ -260,7 +260,7 @@ namespace batchlas {
         template <typename T>
         inline constexpr T sbig() {
             constexpr T e = std::ceil( (std::numeric_limits<T>::max_exponent + std::numeric_limits<T>::digits - 1) * T(0.5) );
-            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e)); 
+            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e));
         }
 
         template <typename T>

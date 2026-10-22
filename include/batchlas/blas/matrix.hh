@@ -344,7 +344,7 @@ namespace batchlas {
             base += col_start * ld + row_start; // column-major offset
         }
 
-        
+
         template <typename T>
         T convert_to_fill_value(int64_t value) {
             if constexpr (std::is_floating_point_v<T>) {
@@ -1291,8 +1291,8 @@ namespace batchlas {
                         os << "  ...\n";
                     }
                 } else if constexpr (MType == MatrixFormat::CSR) {
-                    os << "CSR Matrix (rows: " << current_item_view.rows_ 
-                       << ", cols: " << current_item_view.cols_ 
+                    os << "CSR Matrix (rows: " << current_item_view.rows_
+                       << ", cols: " << current_item_view.cols_
                        << ", nnz: " << current_item_view.nnz_ << ")\n";
 
                     os << "  Values:      [";
@@ -1525,7 +1525,7 @@ namespace batchlas {
             result.fill_triangular_random(uplo, diag, seed).wait();
             return result;
         }
-        
+
         /// @brief A batch of zero matrices.
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>

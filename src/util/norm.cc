@@ -12,7 +12,7 @@
 #include <src/sycl/sscp_target.hh>
 
 namespace batchlas
-{   
+{
     template <typename T, MatrixFormat MF> struct NormKernel;
     template <Backend B, typename T> struct NormSpectralKernel;
 
@@ -122,7 +122,7 @@ namespace batchlas
         //Zero extra memory allocation kernels
         ctx -> submit([&](sycl::handler &cgh) {
             // Get the data pointers and sizes
-            auto [data, batch_size, rows, cols, ld, stride] = 
+            auto [data, batch_size, rows, cols, ld, stride] =
                 std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
 
             auto wgs = std::min(size_t(rows * cols), get_kernel_max_wg_size<NormKernel<T, MF>>(ctx));
@@ -214,7 +214,7 @@ namespace batchlas
 
                 norms[batch_idx] = result;
             });
-        }); 
+        });
 
         return ctx.get_event();
     }

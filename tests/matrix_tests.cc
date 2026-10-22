@@ -99,7 +99,7 @@ TEST(MatrixDenseTest, BasicConstructionAndFill) {
     EXPECT_EQ(mat.cols_, cols);
     EXPECT_EQ(mat.batch_size_, batch);
     EXPECT_EQ(mat.data().size(), rows * cols * batch);
-    
+
     // Fill and check
     mat.fill(7.5f);
     for (auto v : mat.data()) {
@@ -765,7 +765,7 @@ TEST(MatrixCSRTest, CopyFromView) {
     for (int i = 0; i < rows + 1; ++i) EXPECT_EQ(dst.row_offsets()[i], row_offsets[i]);
     for (int i = 0; i < nnz; ++i) EXPECT_EQ(dst.col_indices()[i], col_indices[i]);
 }
- 
+
 TEST(MatrixCSRTest, ExceptionOnCopyFromMismatchedShape) {
     Matrix<float, MatrixFormat::CSR> a(2, 2, NonZeros{2}, 1);
     Matrix<float, MatrixFormat::CSR> b(3, 2, NonZeros{2}, 1);

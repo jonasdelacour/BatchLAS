@@ -486,7 +486,7 @@ int run_accuracy(const Options& opt) {
                     steqr_params.cta_update_scheme = opt.scheme;
                     steqr_params.cta_shift_strategy = parse_shift_strategy(opt.cta_shift);
                     params.leaf_steqr_params = steqr_params;
-                    
+
                     UnifiedVector<std::byte> ws(
                         stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
                     (void)stedc<B, Real>(*q,

@@ -75,27 +75,27 @@ inline std::string_view backend_to_string(batchlas::Backend backend) {
 inline bool should_run_backend(batchlas::Backend backend) {
     const char* env = std::getenv("BATCHLAS_TEST_BACKEND");
     if (!env) return true;  // No filter, run all
-    
+
     std::string backend_filter(env);
     std::transform(backend_filter.begin(), backend_filter.end(), backend_filter.begin(), ::toupper);
-    
+
     // Check if filter matches a known backend
     bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" ||
                        backend_filter == "SYCL" || backend_filter == "NETLIB");
-    
+
     if (!recognized) {
-        std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
+        std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env
                   << " is not recognized. Valid values are: CUDA, ROCM, SYCL, NETLIB. "
                   << "Skipping all tests." << std::endl;
         return false;
     }
-    
+
     // Match backend to filter
     if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
     if (backend == batchlas::Backend::ROCM && backend_filter == "ROCM") return true;
     if (backend == batchlas::Backend::SYCL && backend_filter == "SYCL") return true;
     if (backend == batchlas::Backend::NETLIB && backend_filter == "NETLIB") return true;
-    
+
     return false;  // Filter doesn't match, skip
 }
 
@@ -113,10 +113,10 @@ template <typename T>
 inline bool should_run_float_type() {
     const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
     if (!env) return true;  // No filter, run all
-    
+
     std::string type_filter(env);
     std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
-    
+
     if (type_filter == "float") {
         return is_float_type_v<T>;
     } else if (type_filter == "double") {
@@ -124,7 +124,7 @@ inline bool should_run_float_type() {
     } else if (type_filter == "complex") {
         return is_complex_type_v<T>;
     }
-    
+
     return false;  // Filter doesn't match, skip
 }
 
@@ -331,18 +331,18 @@ protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr batchlas::Backend BackendType = Config::BackendVal;
     std::shared_ptr<Queue> ctx;
-    
+
     void SetUp() override {
         // Runtime filtering
         if (!should_run_backend(BackendType)) {
             GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
         }
-        
+
         // Use portable template-based type filtering instead of typeid().name()
         if (!should_run_float_type<ScalarType>()) {
             GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
         }
-        
+
         // The queue carries the backend. Tests are typed on a Backend, so bind
         // it here rather than passing it at every call: that is what lets a test
         // body say `syev(*ctx, ...)` and still be the BackendType test, and it
@@ -371,7 +371,7 @@ protected:
             ctx = std::make_shared<Queue>(Device("cpu"), BackendType, true);
         }
     }
-    
+
     void TearDown() override {
         if (ctx) {
             ctx->wait();

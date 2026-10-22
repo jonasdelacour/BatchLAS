@@ -306,9 +306,9 @@ struct QueueImpl : public sycl::queue{
     }
 
     // Exported so the vague-linkage fold yields ONE device cache per process, not one per library.
-    inline static BATCHLAS_INTERNAL_API const auto device_arrays = std::array{ 
-                sycl::device::get_devices(sycl::info::device_type::cpu), 
-                sycl::device::get_devices(sycl::info::device_type::gpu), 
+    inline static BATCHLAS_INTERNAL_API const auto device_arrays = std::array{
+                sycl::device::get_devices(sycl::info::device_type::cpu),
+                sycl::device::get_devices(sycl::info::device_type::gpu),
                 sycl::device::get_devices(sycl::info::device_type::accelerator),
                 sycl::device::get_devices(sycl::info::device_type::host)};
 
@@ -364,7 +364,7 @@ struct QueueImpl : public sycl::queue{
         if (traced) batchlas_kernel_trace::record_event(*this, event, trace_label_or_default(default_label), trace_tid_);
         return event;
     }
-    
+
     // impl::on_async_errors: wait_and_throw throws instead of the default std::terminate.
     QueueImpl(Device dev, bool in_order)
         : sycl::queue(shared_context(dev),

@@ -56,7 +56,7 @@ TYPED_TEST(SyevTest, DiagTest) {
             diag[i] = dis(gen);
         }
     }
-    
+
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Diagonal(diag.to_span());
     auto A_view = A.view();
 

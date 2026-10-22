@@ -771,7 +771,7 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
                 << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
             this->ctx->wait();
 
-            const double res = lu_solve_residual<T>(*this->ctx, 
+            const double res = lu_solve_residual<T>(*this->ctx,
                 p.buf.data(), reinterpret_cast<const int*>(p.piv.data()),
                 rhs.buf.data(), rhs.b0.data(), n, nrhs, p.ld, rhs.ld, op);
             if (verbose())
@@ -1890,7 +1890,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                     this->ctx->wait();
 
                     for (int b = 0; b < batch; ++b) {
-                        const double res = solve_residual<T>(*this->ctx, 
+                        const double res = solve_residual<T>(*this->ctx,
                             p.a0.data() + size_t(b) * p.stride,
                             rhs.buf.data() + size_t(b) * rhs.stride,
                             rhs.b0.data() + size_t(b) * rhs.stride,
@@ -2801,7 +2801,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                                 rhs.buf[size_t(b) * rhs.stride + size_t(c) * rhs.ld + i])))
                                 << "a NEARLY singular factor produced a non-finite answer at kz="
                                 << kz << " transA=" << int(op) << " b=" << b;
-                    const double res = lu_solve_residual<T>(*this->ctx, 
+                    const double res = lu_solve_residual<T>(*this->ctx,
                         p.buf.data() + size_t(b) * p.stride,
                         reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * n,
                         rhs.buf.data() + size_t(b) * rhs.stride,

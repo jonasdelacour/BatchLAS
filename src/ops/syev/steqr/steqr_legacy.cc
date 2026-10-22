@@ -61,8 +61,8 @@ Event steqr_impl(Queue& ctx,
     auto scratch = steqr_impl_layout<T>(ctx, allocator, n, batch_size);
     auto scan_view = scratch.scan;
     auto temp_deflation_indices = scratch.temp_deflation_indices;
-    
-    
+
+
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
         ctx -> submit([&](sycl::handler& cgh) {
@@ -97,7 +97,7 @@ Event steqr_impl(Queue& ctx,
         // is already ordered after this one and the Event carries nothing the caller needs.
         (void)internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
     }
-    
+
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_writeout");
         ctx -> submit([&](sycl::handler& cgh) {
@@ -472,7 +472,7 @@ STEQR_LEGACY_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
 #define STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE(fp) \
-template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>); 
+template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 
 BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE)
 

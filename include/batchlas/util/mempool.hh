@@ -150,7 +150,7 @@ struct BumpAllocator {
         data = static_cast<std::byte*>(data) + bytes;
         byte_size -= bytes;
     }
-    
+
     private:
 
         struct measure_tag {};

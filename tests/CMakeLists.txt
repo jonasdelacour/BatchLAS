@@ -3,7 +3,7 @@ find_package(GTest QUIET)
 if(NOT GTest_FOUND)
     # Include FetchContent for downloading dependencies
     include(FetchContent)
-    
+
     # Fetch GoogleTest
     FetchContent_Declare(
         googletest

@@ -194,7 +194,7 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
 
     (void)steqr<B, float_type>(*this->ctx, a, b, c,
         ws.to_span(), JobType::EigenVectors, params, eigvects);
-        
+
     this->ctx->wait();
 
     auto dense_A = Matrix<float_type>::TriDiagToeplitz(n, float_type(1.0), float_type(1.0), float_type(1.0), batch);
@@ -234,7 +234,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
 
     (void)steqr<B, float_type>(*this->ctx, diag, sub_diag, eigenvalues,
         ws.to_span(), JobType::EigenVectors, params, eigvects);
-        
+
     this->ctx->wait();
 
     double norm2 = 0;
