@@ -1,7 +1,8 @@
 #pragma once
 
 /// @file
-/// @brief potri: fused, blocked. evidence: docs/perf/potri.md#potri-selection @ingroup api_selection_ops
+/// @brief potri: fused, blocked.
+/// `evidence: docs/perf/potri.md#potri-selection` @ingroup api_selection_ops
 
 #include <src/select/select.hh>
 
@@ -23,7 +24,6 @@ inline constexpr select::OpSpec spec{Op::potri, select::Lib::none};  ///< no lib
 
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work ~ n^3 batch
 
-/// Log grid through the fused ceiling (8) and past it; the table's transcriber spells the same grid.
 inline constexpr std::array<int, 18> grid_n{1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512};
 inline constexpr std::array<int, 5> grid_batch{128, 512, 2048, 8192, 32768};
 
