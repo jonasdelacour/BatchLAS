@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The canonical fold shared by every native TRSM kernel: the 24 (side, uplo, transA,

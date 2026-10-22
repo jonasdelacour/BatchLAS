@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The tuner's GPU side (docs/design/tiered-tuning.md): the child-side race against the fixed-rep
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).

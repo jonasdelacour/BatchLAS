@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests of MatrixView's verification checks (docs/design/verification.md#verification-acceptance).
 // Every "exact" input is built from small integers and dyadic scalars, so the host reference is
 // exact in every dtype and an exact result scores 0. Unread triangles and padding hold large finite

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrf (flat-kernel-selection.md §4.3, R1; phase 5): select::run takes the first entry of the nearest
 // tuned/getrf.<device>.txt row that can_run() admits. Tiny holds the whole matrix in registers,
 // Cta in local memory; Blocked factorises Cta-sized panels and updates the rest with the public trsm and

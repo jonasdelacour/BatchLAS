@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched POSV, the fused register-resident tier for order n <= 32, nrhs <= 4:
 // potrf_tiny.cc's unblocked Cholesky followed, in the same kernel, by both triangular
 // solves with L still in registers. Zero local memory, zero barriers, every cross-lane

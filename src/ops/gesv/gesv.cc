@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesv (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-gesv): select::run
 // takes the first entry of the nearest tuned/gesv.<device>.txt row that can_run() admits. Tiny is
 // the fused LU factor-and-solve kernel; Blocked composes the public getrf and getrs, and each child picks

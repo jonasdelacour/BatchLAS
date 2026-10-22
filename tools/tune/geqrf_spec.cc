@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // geqrf for the tuner (docs/design/flat-kernel-selection.md#phase-5-geqrf): MatrixView::fill_random A
 // (complex parts both), ld = m + ld_pad. Verified on the default items by MatrixView::qr_residual
 // (factorization) and the orthogonality of Q's first min(m, n) columns from MatrixView::form_q

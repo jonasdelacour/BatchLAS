@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 //
 // DECOY. This is not a BatchLAS header and it is not meant to compile.

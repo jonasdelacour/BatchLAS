@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Two-stage (sy2sb -> sb2st_hh -> stedc -> Q2 -> Q1) versus the blocked
 // single-stage baseline (sytrd_blocked -> stedc -> ormqr_blocked), with
 // eigenvectors. The band width kd is swept as range(2) so the two-stage cost

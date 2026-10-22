@@ -16,7 +16,7 @@ local-memory and scaling rules, and the traps. Measurements are in @ref perf_ges
 | one-sided Jacobi kernel | `src/ops/gesvd/kernels/gesvdj_cta.cc` |
 | `cta` and `blocked` drivers | `src/ops/gesvd/kernels/gesvd_blocked.cc` |
 | sub-ops | `src/ops/gesvd/{gebrd,bdsdc,bdsqr,ormbr}/` |
-| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1731` |
+| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1732` |
 
 ## gesvd design: why one-sided Jacobi
 
@@ -83,13 +83,13 @@ factor of n. The rejected criteria are in the
 deficiency of multiplicity 1-5, and the all-zero matrix.
 
 `BATCHLAS_GESVD_BIDIAG` picks the `blocked` path's bidiagonal solver
-(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:55-63`):
+(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:56-64`):
 
 | Value | Solver | Note |
 |---|---|---|
 | unset, `bdsdc`, anything else | `bdsdc` | default |
 | `bdsqr` | one thread per matrix, zero-shift QR | keeps relative accuracy for tiny \f$\sigma\f$ at 300-400x the cost |
-| `normal` | tridiagonal of \f$B^T B\f$ | squares \f$\kappa\f$; overridden for a thin tall U (`:79-81`) |
+| `normal` | tridiagonal of \f$B^T B\f$ | squares \f$\kappa\f$; overridden for a thin tall U (`:80-82`) |
 
 ## gesvdj_cta: the lane-equals-row mapping decision
 
@@ -143,9 +143,9 @@ Bytes per problem with V resident, plus the work-group pair table:
 
 The RTX 4090 reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
 launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim<T>(want_vectors, budget)`
-(`src/ops/gesvd/gesvd_native.hh:29`) returns the widest C whose smallest work-group fits the
-device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:72`) and the kernel guard
-`gesvdj_cta_max_dim` (`gesvdj_cta.cc:801`) both read it, so a device with less local memory gets
+(`src/ops/gesvd/gesvd_native.hh:30`) returns the widest C whose smallest work-group fits the
+device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:73`) and the kernel guard
+`gesvdj_cta_max_dim` (`gesvdj_cta.cc:802`) both read it, so a device with less local memory gets
 a lower cap. Other types drop to 1-2 work-groups per SM, against 10 at C=32. Occupancy, not the
 cap, is the binding limit.
 
@@ -209,7 +209,7 @@ input keeps \f$\beta = 1\f$. The column-norm epilogue uses a scaled sum of squar
 underflowing norm gives \f$\sigma = 0\f$ and fabricates a U column.
 
 > **Note:** the \f$\max\f$/\f$\min\f$ reductions read `Nrm_local` only for the first 32 columns
-> (`gesvdj_cta.cc:353`). On the C=64 rung, columns 32..63 do not affect \f$\beta\f$. Correctness
+> (`gesvdj_cta.cc:354`). On the C=64 rung, columns 32..63 do not affect \f$\beta\f$. Correctness
 > holds, but the overflow headroom covers only those 32 columns. Read from the code, not measured;
 > listed as an [unverified candidate](known-defects.md#unverified-candidates).
 
@@ -291,13 +291,13 @@ LAPACK 'O' is absent. If added, append an enumerator so existing ordinals stay s
 
 ## gesvd design: vendor binding and dispatch
 
-- **The header declares `backend::gesvd_vendor` only** (`include/batchlas/blas/functions/gesvd.hh:219`).
-  Each backend TU (`src/backends/cusolver.cc:416`, `rocsolver.cc:419`, `netlib_lapack.cc:880`)
+- **The header declares `backend::gesvd_vendor` only** (`include/batchlas/blas/functions/gesvd.hh:220`).
+  Each backend TU (`src/backends/cusolver.cc:417`, `rocsolver.cc:420`, `netlib_lapack.cc:881`)
   defines and instantiates it for its own `Backend`. A throwing definition in the header would
   collide with `cusolver.cc`.
 - **One branch per family, checked by the compiler.** `launch` and `workspace` in
   `src/ops/gesvd/gesvd.cc` are `std::visit`s over `GesvdChoice`.
-- **`can_run` (`gesvd.cc:63-81`) is correctness only.** Every family needs a homogeneous batch.
+- **`can_run` (`gesvd.cc:64-82`) is correctness only.** Every family needs a homogeneous batch.
   `jacobi`: not Hermitian, sub-group 32, \f$\max(m,n) \le\f$ `gesvd_jacobi_max_dim`. `cta`:
   sub-group 32, \f$\max(m,n) \le 32\f$, not thin; real general or square Hermitian. `blocked`: real
   general or square Hermitian Lower. `vendor`: the solver library.

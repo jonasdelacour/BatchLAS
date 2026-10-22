@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syr2k (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/syr2k.<device>.txt row that can_run() admits. Triangular is the 128x128x8 tile-masked
 // kernel that writes only the requested half of C.

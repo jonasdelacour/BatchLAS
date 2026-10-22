@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/mempool.hh>

@@ -43,7 +43,7 @@ The native families' `can_run` requires `d.is_gpu` for `geqrf`, `orgqr`, `ormqr`
 (their `blocked` delegates to children that select for themselves) (`src/ops/<op>/<op>.cc`; geqrf's
 in `can_run.hh`). Exceptions: `gemv`'s `direct` arm and `spmm`'s
 `direct`, which run on a host queue, and `gemm`, which accepts `is_gpu || !has_vendor`
-(`src/ops/gemm/gemm.cc:97`).
+(`src/ops/gemm/gemm.cc:98`).
 
 ### The metric: the `NoRouteError` census
 
@@ -93,13 +93,13 @@ Route = the first runnable native entry of the op's table (`tuned/<op>.<device>.
 | `getri` | `blocked`. sm_89: `float` order >= 128, `cfloat` order >= 256. | Census 16, host rows. Unrouted win at `batch <= 32`, every type (levers below). |
 | `gesv` | `tiny`, `blocked`. No vendor family. | None recorded. |
 | `spmm` | `direct`. sm_89: CSR, `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans`. | Census 0. Transposed scatter is vendor-first: 169 of 458 saturated cells lose, worst 3.011, and no clause recovers a window ([spmm.md](../perf/spmm.md)). |
-| `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`. | Census 87. `cond` and `norm` call `syev_vendor_or_throw` directly (`src/util/cond.cc:67`, `src/util/norm.cc:55`; `Backend::SYCL` uses the public `syev`), so they throw vendor-free on CUDA (known-defects #2). LOBPCG's projected solves (`src/ops/syevx/kernels/syevx_lobpcg.cc:548`, `:1107`) do so only under the opt-in `BATCHLAS_SYEVX_PROJECTED_VENDOR`. Fix: call the public `syev`. |
+| `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`. | Census 87. `cond` and `norm` call `syev_vendor_or_throw` directly (`src/util/cond.cc:68`, `src/util/norm.cc:56`; `Backend::SYCL` uses the public `syev`), so they throw vendor-free on CUDA (known-defects #2). LOBPCG's projected solves (`src/ops/syevx/kernels/syevx_lobpcg.cc:549`, `:1108`) do so only under the opt-in `BATCHLAS_SYEVX_PROJECTED_VENDOR`. Fix: call the public `syev`. |
 | `gesvd` | `jacobi`, `cta`, `blocked`. sm_89: real 33..64 is `blocked\|vendor\|jacobi` ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)). | Host rows refused. |
 | `symm` | `expand` (mirrored expansion + public `gemm`; float and double; needs `expansion_fits`). | Census 8 (2026-09-06, before double `expand`). |
 | `syrk` | `gram` (`n <= 128`, float and double), `triangular` (float). | Census 12 (before double `gram`). Double above n = 128 has no native family. |
 | `syr2k` | `triangular` (float only). A real ConjTrans runs as Trans. | Census 10. No non-float native family. |
 | `trmm` | `triangular` (`Side::Left`), `expand`; all four types. | Census 16 (before every dtype got both families). |
-| `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError` (`src/ops/level3/level3.cc:33-102`). | Census 12, 16, 12. Throws on Metal too. |
+| `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError` (`src/ops/level3/level3.cc:34-103`). | Census 12, 16, 12. Throws on Metal too. |
 
 Native level-3 families need a native GPU backend (CUDA or SYCL) and `batch <= max_groups_yz`.
 Rows that stay vendor-first by measurement are the vendor's wins; kernel work will not change them.

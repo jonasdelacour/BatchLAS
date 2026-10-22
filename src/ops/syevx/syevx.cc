@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syevx: dispatch over the partial-eigensolve algorithm families. The routing
 // rule (dense: Direct, or DirectSubset for real T with eigenvectors at large
 // n * batch; sparse: LOBPCG, or Filtered on request) is measured, not flop-derived.

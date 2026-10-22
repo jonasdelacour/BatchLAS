@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The per-op tuner spec (docs/design/flat-kernel-selection.md §6.1): what a cell is, how to

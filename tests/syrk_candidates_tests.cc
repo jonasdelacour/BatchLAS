@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every syrk candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md §12. The limit oracle reads the kernels' own constants; which
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct

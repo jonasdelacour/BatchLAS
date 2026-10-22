@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // symm for the tuner (real only): C = alpha A B + beta C, A symmetric m x m held in its lower
 // triangle (MatrixView::fill_random, the strict upper triangle then poisoned with a large finite
 // value), B and C0 fill_random, beta = 0.75 so C is read. side and uplo are not table keys: fixed at

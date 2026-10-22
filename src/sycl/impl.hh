@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // The only header above kernel level that names a SYCL implementation (DPC++ or AdaptiveCpp).
 // Every helper expands on DPC++ to the exact calls it replaced.

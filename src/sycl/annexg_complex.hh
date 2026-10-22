@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Force-included (-include) into every acpp TU: device definitions of the C99 Annex G libcalls
 // clang emits for std::complex * and /, absent from the SSCP device library. Each TU needs its own

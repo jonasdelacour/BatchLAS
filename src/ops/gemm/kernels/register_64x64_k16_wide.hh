@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // A 64x64x16 register-tiled GEMM with a 4x4 thread tile. The 4x4 tile is the widest

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Stage-2 band -> tridiagonal by Householder bulge chasing, reflectors RETAINED for Z := Q2 Z

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // trmm for the tuner: C = alpha op(A) B (Left) or alpha B op(A) (Right), out of place. A is
 // lower triangular, MatrixView::fill_random with its strict upper triangle then poisoned with a
 // large finite value; B is fill_random; alpha has an imaginary part; C is re-poisoned before every

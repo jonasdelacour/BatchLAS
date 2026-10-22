@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <sycl/sycl.hpp>
 #include <batchlas/util/mempool.hh>

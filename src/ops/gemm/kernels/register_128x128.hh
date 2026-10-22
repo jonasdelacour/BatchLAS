@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // A 128x128x8 register-tiled GEMM with 8x8 accumulators per thread.

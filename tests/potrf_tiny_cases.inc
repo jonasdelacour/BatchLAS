@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The TINY tier: one matrix per sub-group partition, held in registers. Included by
 // potrf_tests.cc inside its anonymous namespace, so make_spd, make_planted_ldl,
 // potrf_error and kLeafSlack are in scope.

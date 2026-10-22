@@ -85,7 +85,7 @@ Header and non-op callers use `*_vendor_or_throw` shims instead (`src/ops/syev/v
 
 Whether `sytrd_blocked`, `ortho` and `ormqr_blocked` swap a gemm for a level-3 **tile kernel** is a
 separate question, answered by `select::level3_tile_substitution_enabled<B, T>`
-(`src/select/vendor.hh:104-105`): `native_gpu_backend<B> && (T is float || (B == Backend::CUDA &&
+(`src/select/vendor.hh:105-106`): `native_gpu_backend<B> && (T is float || (B == Backend::CUDA &&
 BATCHLAS_HAS_CUBLAS))`, with `native_gpu_backend` = CUDA or SYCL. Do not test `B == Backend::CUDA`
 alone: the backend is still `CUDA` in a vendor-free build. The gate is narrower than where those
 kernels run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
@@ -103,7 +103,7 @@ With `BATCHLAS_HAS_CUBLAS` on, the answer is `true` for every type on CUDA, so v
 behaviour is unchanged. The internal callers that check it are `ortho.cc`, `ormqr_blocked.cc`,
 `sytrd_blocked.cc` and `src/select/coverage.cc`. The level-3 four launch from
 `src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`; each native `can_run` has a
-`kWired = select::native_gpu_backend<B>` term (for example `src/ops/trmm/trmm.cc:54`; symm adds ROCm).
+`kWired = select::native_gpu_backend<B>` term (for example `src/ops/trmm/trmm.cc:55`; symm adds ROCm).
 
 `factorization_vendor_available` covers six ops over two NVIDIA libraries; a per-op split is open
 debt (see [What is still open](#what-is-still-open-architecturally)). It is moot on CUDA while the
@@ -125,7 +125,7 @@ flag, because a CUDA device with no math libraries is a valid configuration.
   with no vendor handles. The type must be complete, because native TUs declare one
   (`src/ops/ortho/ortho.cc`).
 - The ROCm headers (`hip_runtime.h`, `rocblas`, `rocsparse`, `rocsolver`) are still included on the
-  family flag `BATCHLAS_HAS_ROCM_BACKEND` (`src/linalg-impl.hh:37-43`). Unverified: no AMD GPU here.
+  family flag `BATCHLAS_HAS_ROCM_BACKEND` (`src/linalg-impl.hh:38-44`). Unverified: no AMD GPU here.
 
 Symbols follow the same split: public instantiations are keyed on the device family, the vendor TUs
 instantiate only their `backend::*_vendor` symbols. See

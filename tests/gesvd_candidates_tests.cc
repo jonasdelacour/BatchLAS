@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every gesvd candidate, pinned: docs/design/flat-kernel-selection.md §8, phase 5. The limit
 // oracle reads the drivers' own ceilings; which kernel ran is read back from the select trace
 // or a bit-for-bit comparison with the direct driver, never assumed from an accepted pin.

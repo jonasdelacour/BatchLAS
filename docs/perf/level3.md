@@ -23,15 +23,15 @@ every item at the top-level extents.
 
 | op | spelling | driver | further `can_run` terms | dtypes |
 |---|---|---|---|---|
-| `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:52-56`) | float, double |
+| `symm` | `expand` | `expand_mirrored`, then the public `gemm` | `max_wg >= 256`; `expansion_fits` (`src/ops/symm/symm.cc:53-57`) | float, double |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | float, double |
-| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:58-59`) | float, double |
-| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:62-63`) | float |
+| `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:59-60`) | float, double |
+| `syrk` | `triangular` | `syrk_triangular_tiles`: 128x128x8 tiles of one half | `max_wg >= 256`; T(T+1)/2 <= 65535, T = ceil(n/128) (`src/ops/syrk/syrk.cc:63-64`) | float |
 | `syrk` | `vendor` | `backend::syrk_vendor`: `?syrk` per item | | float, double |
-| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:53-55`); a real `ConjTrans` is folded to `Trans` | float |
+| `syr2k` | `triangular` | `syr2k_triangular_tiles`: both products fused | `max_wg >= 256`; tile ceiling (`src/ops/syr2k/syr2k.cc:54-56`); a real `ConjTrans` is folded to `Trans` | float |
 | `syr2k` | `vendor` | `backend::syr2k_vendor`: `?syr2k` per item | | float, double |
-| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:56-61`) | all four |
-| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:63-69`) | all four |
+| `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:57-62`) | all four |
+| `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0 | `max_wg >= 256`; `expansion_fits` (`src/ops/trmm/trmm.cc:64-70`) | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
@@ -68,7 +68,7 @@ are listed at [the level-3 pin words](dispatch.md#the-level-3-pin-words).
   The old meaning (expand plus gemm) is now `expand`.
 - `herk` reaches the Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`),
   and then only where syrk's Gram `can_run` would admit it: `batch` in [1, 65535], `max_wg >= gram_threads(n)`
-  and the tile in SLM (`src/backends/cublas.cc:369-372`).
+  and the tile in SLM (`src/backends/cublas.cc:370-373`).
 - `symm` does not read `BATCHLAS_EXPAND_ROUTE`; hemm, herk and her2k do.
 
 ### Level-3: hemm, herk and her2k still choose by fixed rules
@@ -78,11 +78,11 @@ These three have no `choice.hh` and no table. Their entry points (`src/ops/level
 cuBLAS backend then picks between one batched GEMM into scratch and the per-item vendor loop:
 
 ```cpp
-// hemm_vendor (src/backends/cublas.cc:199-200); expansion_preferred is triangular_expand.hh:32-43
+// hemm_vendor (src/backends/cublas.cc:200-201); expansion_preferred is triangular_expand.hh:33-44
 expansion_fits(ctx, k, batch, bytes) && expansion_preferred(max(m, n, k), batch)  // batch >= 4 || max_dim >= 256
-// herk_vendor (cublas.cc:378); herk_gemm_preferred is cublas.cc:265-271
+// herk_vendor (cublas.cc:379); herk_gemm_preferred is cublas.cc:266-272
 herk_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)             // batch >= 4 && n <= 768
-// her2k_vendor (cublas.cc:452); her2k_gemm_preferred is src/expansion_budget.hh:74-78
+// her2k_vendor (cublas.cc:453); her2k_gemm_preferred is src/expansion_budget.hh:75-79
 her2k_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes)            // batch >= 2 || n >= 128
 ```
 
@@ -93,7 +93,7 @@ per-item `cblas_?hemm`/`?herk`/`?her2k` loops; ROCm instantiates none of the thr
 
 `gram` and `triangular` admit non-float scalars, so double `syrk` at n <= 128 and `trmm` in every dtype
 run vendor-free; `syr2k` has no non-float family. `level3_tile_substitution_enabled`
-(`src/select/vendor.hh:103-105`) is deliberately kept float-or-cuBLAS, because `sytrd_blocked`, `ortho`,
+(`src/select/vendor.hh:104-106`) is deliberately kept float-or-cuBLAS, because `sytrd_blocked`, `ortho`,
 `ormqr_blocked` and the coverage census read it; widening it would move their routes.
 
 ### Level-3: before flat selection
@@ -199,7 +199,7 @@ x batch 1..512, and complex64 `cublas?hemm` over n 16..512 x batch 1..16. The ex
 everywhere except `batch <= 2 && n <= 128`, where the call is launch-bound and the expansion loses by up to **2.5x**.
 
 The shipped edge is more conservative than that loss region: `kExpandMinBatch = 4` and `kExpandMinDim = 256`
-(`src/kernels/common/triangular_expand.hh:28-29`), used by the float `symm` rows and by `hemm_vendor`. Batch 3 at every
+(`src/kernels/common/triangular_expand.hh:29-30`), used by the float `symm` rows and by `hemm_vendor`. Batch 3 at every
 n, and batch <= 2 with `129 <= n <= 255`, take the loop although they lie outside the loss region. That slack
 is deliberate; the exploration numbers would support 2 and 128. `symm` ranks `vendor` first on every `tall` and
 `wide` row (no bracketing cell exists). Double `symm` ranks `vendor` first everywhere, and `expand` for double is unmeasured.
@@ -330,7 +330,7 @@ up. Check which family ran with `BATCHLAS_SELECT_TRACE=1`.
 shapes, because a skinny Gram matrix failed both routers and dropped to one `cublasSsyrk` per batch member
 (m=256 k=32 batch 2048: GEMM 0.350 ms, syrk 33.73 ms). That motivated `syrk_gram_tiles`. Once it existed the
 substitution was taken: at k = 32 float 1.450 -> **0.895** ms (1.62x), and ShiftChol3 1.998 -> **1.298** ms
-(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/ops/ortho/ortho.cc:172`):
+(1.54x) at m = 1024 batch 512. `gram_max_k` is 64 for float and 128 for double (`src/ops/ortho/ortho.cc:173`):
 float k=128 is 0.96x, double k=128 is 1.34x. `svqb_alg` keeps its GEMM, since a one-triangle result would
 multiply uninitialised workspace. The precision table is at
 [the Gram matrix through syrk, per precision](ortho.md#ortho-the-gram-matrix-through-syrk-per-precision).
@@ -355,7 +355,7 @@ Before the tile kernel, trmm for `W2 = T^H W1` lost at every shape. Re-measured 
 | `complex<double>` | 0.958x–1.010x | loses at ib = 16; excluded |
 | `netlib float` / `netlib double` | 0.336x–1.199x / 0.379x–1.064x | excluded (per-batch cblas loops both ways) |
 
-`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:52`) is therefore per type, plus `ib <= 64`. The effect
+`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:53`) is therefore per type, plus `ib <= 64`. The effect
 on syev is small (1.036x at n=64 batch 2048, 1.003x at n=512). The 16-row tile moved `double` to 1.013x–1.036x
 and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 
@@ -363,7 +363,7 @@ and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 
 - `X^H A X` (`syevx_lobpcg.cc`, `syevx_filtered.cc`): a product of two different matrices; `syr2k` does not express it.
 - `A X` with symmetric A (`syevx_lobpcg.cc`, `lanczos.cc`, `ritz_values.cc`): symm would expand and then GEMM, adding a copy.
-- `gebrd_blocked.cc:358,359`: looks like syr2k, but `a22` is not symmetric.
+- `gebrd_blocked.cc:359,360`: looks like syr2k, but `a22` is not symmetric.
 - Transcribing the thresholds into the old `RouteTable::preferred` was killed: a `tiles_per_side >= 3` rule rejected
   the tile route for `129 <= n <= 383`, sending n = 256 to a kernel that wrote **both triangles**.
 
@@ -374,18 +374,18 @@ and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 The 128-wide Gram tile first split each thread's 8 rows into two 4-wide bands 64 apart, as the square kernels
 do. That is incompatible with taking the triangle at thread-tile granularity: thread (0,1) owns element (64,4),
 in the lower triangle while its tile is not, so nothing wrote it. It was silent and appeared only at n > 64.
-`SyrkTest.NarrowShapesMatchGemmReference` (`tests/syrk_tests.cc:79`) sweeps n in {24,32,48,64,96,128} x trans x
+`SyrkTest.NarrowShapesMatchGemmReference` (`tests/syrk_tests.cc:80`) sweeps n in {24,32,48,64,96,128} x trans x
 uplo at k = 200 and mirrors both sides before comparing.
 
 ### The herk test that could not fail
 
 `HerkTest` could not catch conjugating the wrong operand, which returns `conj(C)`: still Hermitian and consistent.
-`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:266`) compares against a GEMM and fails when the conjugation flips.
+`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:267`) compares against a GEMM and fails when the conjugation flips.
 
 ### The trmm poison test
 
 Other trmm tests used `RandomTriangular`, already zeroed opposite the triangle, which passes an implementation that
-ignores `uplo` and `diag`. `TrmmTest.IgnoresUnreferencedTriangleAndUnitDiagonal` (`tests/trmm_tests.cc:94`)
+ignores `uplo` and `diag`. `TrmmTest.IgnoresUnreferencedTriangleAndUnitDiagonal` (`tests/trmm_tests.cc:95`)
 poisons the forbidden storage and compares against a GEMM on the clean A, over both sides, uplo, diag, three
 transposes and ragged shapes. On CUDA it re-runs with `BATCHLAS_EXPAND_MAX_BYTES=0` to reach the `cublas?trmm` loop.
 
@@ -395,7 +395,7 @@ transposes and ragged shapes. On CUDA it re-runs with `BATCHLAS_EXPAND_MAX_BYTES
 `alpha = -0.5` fails it (worst eigenvalue error 2.777 against a 3.2e-3 bound; the GEMM route is at 2.6e-6). The
 assertion is relative: `4 * (GEMM route error) + 8 eps ||A||`. The same change removed a symmetrize pass: float
 n=512 batch 1024 goes 263.97 -> **227.51** ms (nb=16). The gate stays CUDA with `float` or `complex<float>`
-(`rank2k_trailing_update_supported`, `sytrd_blocked.cc:715-717`). In double it **inverts**: 7.56 vs 58.52 ms at
+(`rank2k_trailing_update_supported`, `sytrd_blocked.cc:716-718`). In double it **inverts**: 7.56 vs 58.52 ms at
 n2=256 batch 1024 (**7.7x slower**), because double syr2k has only the per-batch `vendor` loop.
 
 ### Level-3: generic syrk and syr2k fallbacks fold one triangle

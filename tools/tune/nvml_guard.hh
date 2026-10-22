@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The guard's NVML source (dlopen, no nvml.h, no CUDA context); nullopt = the query failed.

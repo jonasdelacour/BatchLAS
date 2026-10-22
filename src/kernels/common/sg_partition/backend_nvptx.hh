@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // NVPTX backend (device pass only): one warp-synchronous PTX instruction per
 // primitive.

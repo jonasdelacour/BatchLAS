@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // A 128x128x8 register-tiled SYR2K over the triangular tile set, fusing both

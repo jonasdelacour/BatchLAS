@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """NumPy-referenced tests for the batchlas.linalg submodule (the C++ batchlas::linalg layer).
 
 Every case runs batch 3 with distinct items and at least one non-contiguous operand; a routine

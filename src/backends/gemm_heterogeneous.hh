@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The heterogeneous-batch GEMM loop, shared by every backend and the vendor-free

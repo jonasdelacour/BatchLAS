@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Compare any two logs: two campaigns' results, paired cell by cell.
 
     python3 benchmarks/benchviz logs                             # every log on this box

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEMV: five kernel bodies, the work-group ladder they share, and
 // the capability flags. src/ops/gemv/gemv_native.hh holds the layout premise.
 // evidence: docs/perf/gemv.md#the-five-kernel-bodies

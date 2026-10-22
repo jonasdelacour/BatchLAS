@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesvd for the tuner. herm=N: MatrixView::fill_random m x n A (complex parts both); herm=L|U:
 // MatrixView::fill_graded_hermitian (condition 100) with both triangles valid (the vendor family
 // reads all of A). Every item differs. Verified on the default items (docs/design/verification.md):

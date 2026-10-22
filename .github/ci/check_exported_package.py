@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that the CMake package BatchLAS exports stays consumable off this box.
 
 Two modes, because CI has no SYCL compiler and therefore cannot generate the

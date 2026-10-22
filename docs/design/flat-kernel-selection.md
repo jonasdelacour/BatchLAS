@@ -322,14 +322,14 @@ tables):
 - **sm_89 live gate** for potrf and for every op with a transcribed sm_89 table.
 - **hemm, herk and her2k** select by hand in `src/backends/cublas.cc` (vendor builds only). They
   expand or fold into the public gemm when `expansion_preferred`, `herk_gemm_preferred`
-  (batch ≥ 4 and n ≤ 768, `cublas.cc:265-271`) or `her2k_gemm_preferred` (batch ≥ 2 or n ≥ 128,
-  `src/expansion_budget.hh:74-78`) hold and the expansion fits, and otherwise use the per-item vendor
+  (batch ≥ 4 and n ≤ 768, `cublas.cc:266-272`) or `her2k_gemm_preferred` (batch ≥ 2 or n ≥ 128,
+  `src/expansion_budget.hh:75-79`) hold and the expansion fits, and otherwise use the per-item vendor
   loop. They honour `BATCHLAS_EXPAND_ROUTE=expand|loop`; herk's gram opt-in is
   `BATCHLAS_SYRK_ROUTE=gram`. They have no `BATCHLAS_<OP>_ROUTE` and throw `NoRouteError` in a
   vendor-free build (including Metal, `tests/known-failures-acpp-metal.txt`). Planned families: hemm
   `{expand, vendor}`, herk `{gram, fold, vendor}`, her2k `{fold, vendor}`.
 - **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch`
-  (`src/ops/potrf/kernels/potrf_blocked.cc:306`). `Blocked` has no fields: `nb` and `W` come from
+  (`src/ops/potrf/kernels/potrf_blocked.cc:307`). `Blocked` has no fields: `nb` and `W` come from
   `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`. `lpanel:panel=16`
   is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
   Upper above the `cta` ceiling has no vendor-free route (known-defects #19).
@@ -337,11 +337,11 @@ tables):
   the batch in dimension 0 of a 3-D range were not audited. ormqr's blocked driver was reported to
   hit it (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_substitution_enabled`** is conservative (a native GPU backend, and float or
-  CUDA with cuBLAS; `src/select/vendor.hh:104-105`). Widening it moves the vendor-free routes of
+  CUDA with cuBLAS; `src/select/vendor.hh:105-106`). Widening it moves the vendor-free routes of
   ortho and ormqr, so that is a separate change.
 
 Closed since 2026-10-06: gemm `direct` rebases each item in 64 bits
-(`src/ops/gemm/kernels/gemm_kernels.cc:309-312`); the stale `options.hh` line numbers in the potrf
+(`src/ops/gemm/kernels/gemm_kernels.cc:310-313`); the stale `options.hh` line numbers in the potrf
 header comment are gone.
 
 Known defects that affect routing are in [known defects](known-defects.md): #12 (heterogeneous
@@ -359,7 +359,7 @@ otherwise. The generated @ref selection_tables page lists every op's families an
 - **Families:** `tiny`, `cta`, `lpanel:panel=8`, `blocked`, `vendor`. Float also has
   `lpanel:panel=16`. Float has 6 candidates, the other dtypes 5.
 - **Keys:** `uplo:exact n:log:3 batch:log` (work \f$\sim n^3\f$).
-- **`can_run`** (`src/ops/potrf/potrf.cc:34-57`): native needs a GPU, sub-group 32, a homogeneous
+- **`can_run`** (`src/ops/potrf/potrf.cc:35-58`): native needs a GPU, sub-group 32, a homogeneous
   batch, `n >= 1` and `batch >= 1`.
   - `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= kPotrfTinyWgSize` (64).
   - `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (min blocks 4).
@@ -395,7 +395,7 @@ otherwise. The generated @ref selection_tables page lists every op's families an
 - **Families:** `cta`, `sg_left`, `blocked`, `vendor`, all field-less.
 - **Keys:** `side:exact trans:exact order:log:2 q:log batch:log`, with `q = side==Left ? B.cols : B.rows`
   and ConjTrans folded to T. `uplo` and `diag` are not keys.
-- **`can_run`** (`src/ops/trsm/trsm.cc:45-61`): common terms are a GPU, homogeneous operands, and
+- **`can_run`** (`src/ops/trsm/trsm.cc:46-62`): common terms are a GPU, homogeneous operands, and
   order, q and batch of at least 1.
   - `cta`: `order <= trsm_cta_max_n<T>()` (32) and `max_wg >= 32`.
   - `sg_left`: Left only, sub-group 32, `order <= kTrsmSgLeftMaxN` (32) and `max_wg >= kTrsmSgLeftWgSize` (128).
@@ -424,7 +424,7 @@ The full family, form and window reference is [the gemm page](../perf/gemm.md) (
   real scalars. `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, otherwise
   `strided`.
 - **Last resort:** `direct`, then `vendor`.
-- **Common term** (`src/ops/gemm/gemm.cc:97-102`): native needs `is_gpu || !has_vendor` (a CPU with a
+- **Common term** (`src/ops/gemm/gemm.cc:98-103`): native needs `is_gpu || !has_vendor` (a CPU with a
   host BLAS keeps the vendor), `precision == Default`, m, n, k, batch ≥ 1 and homogeneous operands;
   every 3-D launch (all but `small`) also needs `batch <= max_groups_yz`.
 - **Forms:** `can_run` admits exactly the instantiated (config, ta, tb) forms (`reg_form`,
@@ -553,7 +553,7 @@ The full family, form and window reference is [the gemm page](../perf/gemm.md) (
 
 - **Families:** `cta` (`syev_cta`), `cta_fused`, `jacobi` (`syev_jacobi_cta`), `blocked`, `two_stage`
   and `vendor`, in tie order.
-- **`can_run`** (`src/ops/syev/syev.cc:51-66`): native needs backend not NETLIB, a GPU, a homogeneous
+- **`can_run`** (`src/ops/syev/syev.cc:52-67`): native needs backend not NETLIB, a GPU, a homogeneous
   batch, a square A and n ≥ 1. `cta`, `cta_fused` and `jacobi` also need n ≤ 32 and sub-group 32;
   `cta` and `cta_fused` are not ROCm. `blocked` and `two_stage` need batch ≥ 1. A non-square A throws
   `invalid_argument`.
@@ -571,7 +571,7 @@ The full family, form and window reference is [the gemm page](../perf/gemm.md) (
 
 - **Families:** `jacobi` (`gesvdj_cta`), `cta`, `blocked`, `vendor`. The jobs are canonicalised once,
   Thin to All where they coincide.
-- **`can_run`** (`src/ops/gesvd/gesvd.cc:63-81`): native needs a GPU, a homogeneous batch and
+- **`can_run`** (`src/ops/gesvd/gesvd.cc:64-82`): native needs a GPU, a homogeneous batch and
   `m, n, batch >= 1`.
   - `jacobi`: sub-group 32, not Hermitian, and `max(m, n) <= gesvd_jacobi_max_dim<T>(vectors, slm_budget)`
     (64, halved until its local memory fits).

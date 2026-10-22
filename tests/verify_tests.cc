@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests of batchlas::verify (docs/design/verification.md): tolerances, LAPACKE references, and
 // MatrixView's verification scalars and item lists.
 

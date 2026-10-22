@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <iostream>
@@ -3351,8 +3352,8 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
 //
 // syevx is the one routine in this family whose forcing knob, per-item flag and
 // host read ALL already existed: SyevxParams::iterations is a genuine public
-// parameter that caps both LOBPCG (syevx_lobpcg.cc:558) and the Chebyshev
-// filtered path (syevx_filtered.cc:438), and both routines already computed a
+// parameter that caps both LOBPCG (syevx_lobpcg.cc:559) and the Chebyshev
+// filtered path (syevx_filtered.cc:439), and both routines already computed a
 // per-item converged flag, read it on the host, collapsed it into one bool and
 // discarded it. Nothing here needs a tier call or an environment variable.
 //
@@ -3364,7 +3365,7 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
 //     item and success on every broken one, and a one-directional test would not
 //     notice. Both directions are asserted below, on the same matrix.
 //   * SyevxInstrumentation::iterations_done LOOKS like per-item convergence
-//     information and is not: syevx_lobpcg.cc:1139 fills every entry with the
+//     information and is not: syevx_lobpcg.cc:1140 fills every entry with the
 //     same batch-global scalar. It is not used here.
 // ---------------------------------------------------------------------------
 
@@ -3427,7 +3428,7 @@ TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
 
     // WHY THIS DOES NOT ASSERT info == 0 FOR EVERY ITEM, even though all four
     // matrices are byte-identical: LOBPCG's starting block is random PER ITEM.
-    // syevx_lobpcg.cc:466-479 keys its philox draw on the FLAT
+    // syevx_lobpcg.cc:467-480 keys its philox draw on the FLAT
     // buffer index, reproducing fill_random's walk, so item b starts from a
     // different subspace than item b-1. Convergence within a fixed iteration
     // budget is therefore a property of the item's draw, not only of the matrix;

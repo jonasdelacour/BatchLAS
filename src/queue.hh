@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/sycl_interop.hh>

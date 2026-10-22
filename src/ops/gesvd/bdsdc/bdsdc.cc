@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Bidiagonal SVD via stedc, NOT a port of LAPACK's dlasd*: the perfect-shuffled
 // Golub-Kahan matrix [0 B^T; B 0] is tridiagonal with zero diagonal and
 // off-diagonal (d_0, e_0, d_1, ..., d_{n-1}), eigenvalues +/- sigma_i. Nothing is

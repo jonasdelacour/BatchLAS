@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Batched GEMM for orders <= 64: several matrices per work-group, op(B) staged in local

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Cross-implementation accuracy A/B: one accuracy harness, two build trees, identical inputs.
 
   impl_diff.py run --tree-a build-dpcpp --tree-b build-acpp-tests --harness eigensolver_accuracy \

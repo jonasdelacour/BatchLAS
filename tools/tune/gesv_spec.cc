@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesv for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A,
 // fill_random B, verified on the default items by MatrixView::solve_residual against the unfactored A
 // (Check::solve, docs/design/verification.md). blocked's time

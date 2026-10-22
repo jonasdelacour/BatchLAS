@@ -12,16 +12,16 @@ RTX 4090 (device 1, 128 SMs, 72 MB L2, 1008 GB/s DRAM roof), CUDA backend, in-or
 | spelling | implementation | `can_run` (correctness only) |
 |---|---|---|
 | `direct` | `sycl_spmm::spmm_native_csr` | CSR; the body for this `transA` compiled; `one_spmm()` shape checks; no heterogeneous B or C; batch >= 1 |
-| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library and no heterogeneous dense B or C, minus two known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)). The `complex<double>` N/N one-column refusal is gone (defect 13 fixed; `spmm.cc:85-90`) |
+| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library and no heterogeneous dense B or C, minus two known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B ([known-defects #17](../design/known-defects.md#defect-17-cusparse-spmm-shapes-refused-in-can_run-and-the-alignment-waiver)). The `complex<double>` N/N one-column refusal is gone (defect 13 fixed; `spmm.cc:86-91`) |
 
 Selection is the first runnable entry of the nearest row of `tuned/spmm.<device>.txt`, keyed
-`transA:exact transB:exact m:log nrhs:log batch:log`. `ConjTrans` folds to `T` (`src/ops/spmm/spmm.cc:33-39`). The
+`transA:exact transB:exact m:log nrhs:log batch:log`. `ConjTrans` folds to `T` (`src/ops/spmm/spmm.cc:34-40`). The
 last resort is `vendor`, then `direct`. `BATCHLAS_SPMM_ROUTE` takes `auto`, `native`, `vendor` or `direct`. Any
 other spelling, or one `can_run` refuses for the call, throws.
 
 `direct` has three bodies in `src/ops/spmm/kernels/spmm_native.cc`: the `NoTrans` gather (body 1), and a scale plus atomic
 scatter pair (bodies 0 and 2) for `Trans` and `ConjTrans`. The body is chosen in the launcher on `transA`. `transA`
-is part of the coverage `variant_key` (`src/select/coverage.cc:38-44`), so gather and scatter stay separable in
+is part of the coverage `variant_key` (`src/select/coverage.cc:39-45`), so gather and scatter stay separable in
 `scripts/route_diff.sh`. Scale and scatter do not.
 
 ### Ranking in the tables
@@ -37,7 +37,7 @@ preceded flat selection (untimed; provenance in `tuned/README.md`); `tuned/spmm.
 | `transA=T`, either `transB` | `vendor`, then `direct` | `vendor`, then `direct` |
 
 The ranking is identical at all 125 `(m, nrhs, batch)` cells of each block (`m` 1..65536, `nrhs` 1..64,
-`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` (`tests/spmm_candidates_tests.cc:848`) pins it.
+`batch` 1..16384). `SpmmTranscribedTable.RowsHoldTheTranscribedPreference` (`tests/spmm_candidates_tests.cc:849`) pins it.
 
 The tables have no batch, extent, `is_gpu` or `nnz` term. Each absence is a measured decision: the ranking is
 constant along that axis.
@@ -52,9 +52,9 @@ The other three types move at all three `transB` spellings.
 
 ## supports(), and what is deliberately not in it
 
-The `direct` `can_run` terms (`src/ops/spmm/spmm.cc:71-84`) are correctness gates only: CSR format (`:76`), the
-capability flag of the body that will run (`:79-80`), `one_spmm()` (`:44-59`: matching extents and batch, positive
-`ld`s, an offset stride of at least `m + 1`), no heterogeneous dense batch (`:81-82`), and `batch >= 1` (`:82`). An empty batch returns before selection, so
+The `direct` `can_run` terms (`src/ops/spmm/spmm.cc:72-85`) are correctness gates only: CSR format (`:77`), the
+capability flag of the body that will run (`:80-81`), `one_spmm()` (`:45-60`: matching extents and batch, positive
+`ld`s, an offset stride of at least `m + 1`), no heterogeneous dense batch (`:82-83`), and `batch >= 1` (`:83`). An empty batch returns before selection, so
 that term is never the reason a call has no route.
 A CSR view is never heterogeneous in the `active_rows_` sense. Per-item `nnz` variation is handled exactly through
 the row offsets.
@@ -67,9 +67,9 @@ Deliberate absences:
   `transB = Trans` cuts the gather's `op(B)` traffic from `nrhs` 32-byte sectors per nonzero to
   `ceil(nrhs*sizeof(T)/32)`.
 * **No `nnz` key** (`key_names` in `src/ops/spmm/choice.hh`). `MatrixView::nnz()` is the batch-maximum capacity. The
-  per-item count is in device memory (`row_offsets`), and selection must not read device memory (`spmm.cc:6-7`).
+  per-item count is in device memory (`row_offsets`), and selection must not read device memory (`spmm.cc:7-8`).
 
-`direct` needs no workspace (`spmm.cc:113-119`). `spmm_buffer_size` runs the same choice as the call, so a
+`direct` needs no workspace (`spmm.cc:114-120`). `spmm_buffer_size` runs the same choice as the call, so a
 `direct` call never asks the vendor sizer.
 
 ## Measurement harness and hygiene
@@ -289,13 +289,13 @@ The three are shipping wrong answers that predate `direct`. `tests/spmm_tests.cc
 transpose spellings, heterogeneous `nnz`, empty rows, padded strides, alpha/beta corners) is the first suite to cover
 these axes.
 
-1. **`netlib_lapack.cc:248,272`: `spmm` read `A` at `alpha == 0` and `C` at `beta == 0`.** `0 * NaN` poisons the
+1. **`netlib_lapack.cc:249,273`: `spmm` read `A` at `alpha == 0` and `C` at `beta == 0`.** `0 * NaN` poisons the
    result. The host arm now skips the alpha term and substitutes `T(0)` for the beta term.
 2. **`cusparse.cc` mapped `ConjTrans` to `CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE` for real scalars.** On a real
    scalar `ConjTrans` is `Trans`, and `CUDA_R_32F` and `CUDA_R_64F` returned wrong results. It applied to both
    operands. The complex arms, which use the enum correctly, hid it.
 3. **Heterogeneous `nnz` and padding over-read.** `cusparseCreateCsr` takes one `nnz`, and
-   `backend_handle_impl.hh:63` passed `A.nnz()`, the per-item capacity. Short items' descriptors covered values the
+   `backend_handle_impl.hh:64` passed `A.nnz()`, the per-item capacity. Short items' descriptors covered values the
    conversion never wrote. The result was wrong last rows, and `CUDA_ERROR_ILLEGAL_ADDRESS` with a dead process on the
    padding case. The fix takes `nnz` from each item's row offsets. A uniform batch keeps one batched call. A
    non-uniform batch issues one `cusparseSpMM` per item.
@@ -306,7 +306,7 @@ Four deliberate breaks were run against the transposed path. `B4` (`scatterBound
 reads padding) was **green on all 352 cases** the first time.
 
 The cause: `PaddingAboveNnzIsNotReadTrans` poisoned padding with NaN at an **out-of-range** column index (2^30). The
-scatter's range guard (`spmm_native.cc:418`) skips that entry before it is multiplied. The test passed because
+scatter's range guard (`spmm_native.cc:419`) skips that entry before it is multiplied. The test passed because
 of the kernel's guard, not the property it names. Controls showed the over-read is real: with the bound broken and
 the guard removed, the case segfaults (exit 139, `double`). With the bound correct, 352/352 pass.
 
@@ -324,15 +324,15 @@ Rules that followed:
   revert with `md5sum` against a copy taken before the first break.
 
 The transposed tolerance denominator is a backward-error scale (sum of `|a|*|b|`, floored at 1), not `|expected|`. A
-transposed case whose backend throws is skipped unless the pin is native (`tests/spmm_tests.cc:388-394`). A
+transposed case whose backend throws is skipped unless the pin is native (`tests/spmm_tests.cc:389-395`). A
 vendor returning a status code instead of throwing is not covered by the skip. `cusparse.cc` checks no status, so
 `CUSPARSE_STATUS_NOT_SUPPORTED` leaves `C` untouched and is reported as a wrong answer.
 
 ### Two defects filed, not fixed
 
-* **`rocsparse.cc`** (`enum_convert<BackendLibrary::ROCSPARSE>`, `src/linalg-impl.hh:267-273`) carries cuSPARSE defect 2 unchanged. A real-scalar `ConjTrans` becomes
+* **`rocsparse.cc`** (`enum_convert<BackendLibrary::ROCSPARSE>`, `src/linalg-impl.hh:268-274`) carries cuSPARSE defect 2 unchanged. A real-scalar `ConjTrans` becomes
   `rocsparse_operation_conjugate_transpose`. **Unmeasured:** there is no AMD device here.
-* **`netlib_lapack.cc:399,411,428,440`**: `trsm` reads `B` at `alpha == 0` (`0 * NaN`). Outside this op.
+* **`netlib_lapack.cc:400,412,429,441`**: `trsm` reads `B` at `alpha == 0` (`0 * NaN`). Outside this op.
 
 ## Negative results
 
@@ -349,7 +349,7 @@ vendor returning a status code instead of throwing is not covered by the skip. `
    b=32 and 1.71-1.73 at b=512.
 7. **The `cfloat` gather margin is about 3 %, not 2x.** Across the batch ladder it is 0.910-1.078.
 8. **Reversing the route-era order array did not send admitted shapes back to cuSPARSE.** Exactly one unit test went
-   red. Under flat selection the candidate order is only the tie-break (`src/ops/spmm/choice.hh:19-20`). The ranking is in each
+   red. Under flat selection the candidate order is only the tie-break (`src/ops/spmm/choice.hh:20-21`). The ranking is in each
    table row.
 9. **Vendor-free suite counts are the wrong metric for this op.** The metric that moved is the per-op `NoRouteError`
    count: `spmm` went from 2 to 0. Six recovered cases are the type conditional: `transA = NoTrans` with

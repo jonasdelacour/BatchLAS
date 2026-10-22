@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #define BATCHLAS_UNPAREN(...) __VA_ARGS__

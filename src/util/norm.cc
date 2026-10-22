@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/util/group-collectives.hh>

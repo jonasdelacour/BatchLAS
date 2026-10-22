@@ -11,7 +11,7 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 * **Families** (`src/ops/<op>/choice.hh`, in tie-break order): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (fused narrow-RHS), `blocked` (composition), `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`. None has fields. See [families and their limits](#lu-families-and-their-limits).
 * **Correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`. It is the only gate. A `can_run` term must never be a speed term, or the shape becomes unservable in a vendor-free build.
 * **Speed** is the first runnable entry of the nearest row of `tuned/<op>.<device>.txt`. Keys: getrf and getri `n:log:3 batch:log`; getrs `n:log:2 nrhs:log batch:log`; gesv `n:log:3 nrhs:log`. The four sm_89 tables are `transcribed` at `424a45bc`: the old routers' order evaluated per grid cell, **untimed**. The four sm_120 tables are deep-measured; getrf, getri and getrs keep 45, 94 and 790 `transcribed` rows where the deep lattice measured nothing near ([tuned/README.md](../../tuned/README.md)). See [what the tables rank first](#lu-what-the-tables-rank-first).
-* **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:225-237`).
+* **Sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which select from their own tables (@ref selection_tables). An empty seam throws (`getrf_blocked.cc:226-238`).
 * **Pins**: `BATCHLAS_GETRF_ROUTE`, `BATCHLAS_GETRS_ROUTE`, `BATCHLAS_GETRI_ROUTE`, `BATCHLAS_GESV_ROUTE` take `auto`, `native`, `vendor` or a family spelling. A spelling that does not parse, is not compiled, or names a family whose `can_run` refuses the shape throws `std::invalid_argument`. `native` takes the best runnable non-vendor entry. `vendor` with no runnable vendor family (vendor-free builds; always for gesv) warns once and runs Auto.
 * **Derived, not chosen**: the panel leaf (`BATCHLAS_GETRF_LEAF`), the interchange spellings (`BATCHLAS_GETRF_LASWP`, `BATCHLAS_GETRF_RIGHT_LASWP`, `BATCHLAS_GETRS_LASWP`), the blocking factor `nb`, the tiny bucket and its launch bound. The launchers work these out. They are not families, keys or `can_run` terms.
 
@@ -19,21 +19,21 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 ### LU: families and their limits
 
-The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:44-45`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
+The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:45-46`, `getrs.cc:42-44`, `getri.cc:50-51`, `gesv.cc:46`). Beyond it:
 
 | op | family | driver | `can_run` beyond the common term |
 |---|---|---|---|
-| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:49`) |
-| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:51`) |
-| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:54-55`) |
-| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
-| `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `getrs_fused_available<T>()`, `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
-| `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
-| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |
-| `getri` | `blocked` | `getri_blocked.cc`, writes P into C, two public `trsm`, zero workspace | `getri_blocked_available<T>()` (`getri.cc:49-50`) |
-| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B> && !A.is_heterogeneous()` (`getri.cc:52`) |
-| `gesv` | `tiny` | `gesv_tiny.cc`, fused factor and solve | `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4`, `max_wg >= 64` (`gesv.cc:45-47`) |
-| `gesv` | `blocked` | public `getrf`, then public `getrs`; each child selects for itself | homogeneous A and B (`gesv.cc:49`) |
+| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:50`) |
+| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:52`) |
+| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:55-56`) |
+| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:59`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
+| `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `getrs_fused_available<T>()`, `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:48-51`) |
+| `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:53`) |
+| `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:54`); also takes a non-conforming pair |
+| `getri` | `blocked` | `getri_blocked.cc`, writes P into C, two public `trsm`, zero workspace | `getri_blocked_available<T>()` (`getri.cc:50-51`) |
+| `getri` | `vendor` | `cublas?getriBatched`, rocSOLVER, LAPACKE | `factorization_vendor_available<B> && !A.is_heterogeneous()` (`getri.cc:53`) |
+| `gesv` | `tiny` | `gesv_tiny.cc`, fused factor and solve | `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4`, `max_wg >= 64` (`gesv.cc:46-48`) |
+| `gesv` | `blocked` | public `getrf`, then public `getrs`; each child selects for itself | homogeneous A and B (`gesv.cc:50`) |
 
 The blocked `getrf`'s trailing GEMM and panel TRSM, and both solves of `getrs` and `getri`, go through the public `gemm` and `trsm`, never a kernel-local GEMM.
 
@@ -238,7 +238,7 @@ Correctness: the three spellings (`inloop`, `defer_walk`, `defer_gather`, select
 
 ### `getrs` collapsed permutation
 
-`GetrsPermGatherKernel` in `getrs_native.cc`, the default at `nrhs >= kGetrsPermGatherMinNrhs = 16` (`getrs_native.hh:47`). One work-group per item stages a column tile and the index array in local memory, then writes `B[i] = tile[idxs[i]]` back to B's own addresses. A/B against the walk (`BATCHLAS_GETRS_LASWP`), interleaved, bit-identical solutions:
+`GetrsPermGatherKernel` in `getrs_native.cc`, the default at `nrhs >= kGetrsPermGatherMinNrhs = 16` (`getrs_native.hh:48`). One work-group per item stages a column tile and the index array in local memory, then writes `B[i] = tile[idxs[i]]` back to B's own addresses. A/B against the walk (`BATCHLAS_GETRS_LASWP`), interleaved, bit-identical solutions:
 
 | nrhs | cells | geomean | min | max |
 |---:|---:|---:|---:|---:|
@@ -346,7 +346,7 @@ Measured with a `PAD=` knob that moves only the declared byte count: **49,024 B 
 * **Float `n = 65` takes CTA in a vendor-free build**, where blocked is 1.62x faster ([which tier serves 33 to 256](#which-native-tier-serves-33-to-256)).
 * **`getrf_panel_reg.cc` duplicates the sub-partition gate** of `resident::sm89_max_work_group`. They agree today; collapsing them is owed.
 * **Recursive panel not attempted**; no float or cfloat phase split exists; residual tolerances `c*n*eps` with c in [200, 800] are not tightened against a measured distribution.
-* **Latent vendor gate** closes by reading (`src/select/vendor.hh:36-42`); no cuSOLVER-absent configure has been built.
+* **Latent vendor gate** closes by reading (`src/select/vendor.hh:37-43`); no cuSOLVER-absent configure has been built.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`.** Pre-existing, not fixed.
 
 ## Raw evidence
@@ -380,9 +380,9 @@ P4's raw rows are in the tree: `benchmarks/results/p4_leaf_getrf_{float,cfloat,d
 ### One spelling per ceiling
 
 * `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` takes a runtime `local_mem_size` budget. The footprint covers the pivot-search scratch as well as the tile. 0 means the tier is absent from this build.
-* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:35`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:45-46`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
+* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:36`) serves only the convenience overloads. The generated `device_limits.hh` says 49,152 for any `nvidia_gpu_sm_*` pattern (`cmake/BatchLASDetectSYCL.cmake:45-46`), 2.06x wrong here, so nothing on a decision path reads it. See [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings).
 * `getrf_cta_fits` is the tier's admission test, occupancy-scaled. `getrf_leaf_fits` is the residency question, asked at the whole budget ([panel leaf](#lu-the-panel-leaf-is-not-the-tier-ceiling)).
-* `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:329-333`).
+* `getrf_tiny_max_n<T>()` is a compile-time property of the kernel, the {4, 8, 16, 32} ladder ([N=4 bucket](#the-n4-bucket-and-the-cta-band)). It is the one place that ceiling is spelled (`getrf_tiny.cc:330-334`).
 * `getrf_tiny_buffer_size` is not zero: a short or empty caller `info` span means "not requested" and draws pool scratch.
 * `getrf_cta_debug_launch<T>(ctx, m, n)` packs G (matrices per work-group) in the low 16 bits and the work-group width in the high 16. It answers 0 when the panel is not resident. `G > 1` implies sub-group-scoped barriers; see [packed resident leaves](#packed-resident-leaves).
 * `getrf_blocked_debug_params<T>(ctx, n)` packs nb in the low 16 bits and the leading panel's leaf in the high 16 (1 = local, 2 = global).
@@ -575,7 +575,7 @@ On sm_89 the register file is four sub-partitions of 16,384 registers, and a blo
 ceil(warps / 4) * 32 * ((regs + 7) & ~7) <= 16,384
 ```
 
-equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:90-95`, used by `getrs_fused.cc:159`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
+equivalently `threads <= 128 * floor(512 / regs_alloc)`. The `& ~7` is ptxas's allocation granularity. The rules coincide only when the work-group is a multiple of 128 wide. The site now calls `resident::sm89_max_work_group(regs)` (`src/util/resident_capacity.hh:91-96`, used by `getrs_fused.cc:160`). Any site still dividing into 65,536 uses the wrong spelling. `getrs_fused.cc` had four cells on or past the partition limit (for example double NoTrans nrhs 5..8, exactly at it).
 
 Device-link register counts (1,082 entry functions, 0 with spill):
 
@@ -687,7 +687,7 @@ Three orders x three batches x three types = 27 paired cells no longer resolve `
 
 ## The fused gesv tier
 
-`src/ops/gesv/kernels/gesv_tiny.cc`: one launch for `A X = B` at n <= 32 (cdouble 16) and nrhs <= 4. `getrf_tiny`'s elimination carries the RHS in `D rB[NR]` alongside `D rA[N]`, with forward substitution fused into elimination and back substitution in the same kernel. The `blocked` family is the composition: public `getrf` then public `getrs`, each selecting from its own table (`gesv.cc:60-66`). `BATCHLAS_GESV_ROUTE=tiny` reaches the kernel at any shape `can_run(tiny)` admits.
+`src/ops/gesv/kernels/gesv_tiny.cc`: one launch for `A X = B` at n <= 32 (cdouble 16) and nrhs <= 4. `getrf_tiny`'s elimination carries the RHS in `D rB[NR]` alongside `D rA[N]`, with forward substitution fused into elimination and back substitution in the same kernel. The `blocked` family is the composition: public `getrf` then public `getrs`, each selecting from its own table (`gesv.cc:61-67`). `BATCHLAS_GESV_ROUTE=tiny` reaches the kernel at any shape `can_run(tiny)` admits.
 
 * **No batched vendor gesv exists on any backend.** cuBLAS, cuSOLVER and rocSOLVER ship none, so `GesvChoice` has no vendor family and a `vendor` pin runs Auto.
 * **B is permuted for free.** Lane `lane` loads row `lane` of B, and its `rowid` moves with A's under the lazy relabel. No `laswp` is needed.

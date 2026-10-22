@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched GETRI declarations: the arm writes P straight into C, then two

@@ -19,9 +19,9 @@ keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kern
 | `jacobi` | `gesvdj_cta` (`src/ops/gesvd/kernels/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) |
 | `cta` | `gesvd_cta` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
 | `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
-| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked, and a homogeneous batch (`gesvd.cc:79`) |
+| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked, and a homogeneous batch (`gesvd.cc:80`) |
 
-Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc:66-79`): each runs every item at the top-level extents.
+Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc:67-80`): each runs every item at the top-level extents.
 
 The sm_89 table is transcribed at `424a45bc` (the old router's order replayed per cell, not timed); the sm_120
 table is deep-measured. First family per input on sm_89:

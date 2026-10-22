@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A := its upper triangle mirrored into the lower, in place, so Lower-only syev drivers serve
 // Upper. The complex diagonal's imaginary part is NOT zeroed. Declaration only: an inline kernel
 // here is an ODR error once two TUs call it; instantiations are in uplo_mirror.cc.

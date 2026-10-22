@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // src/select/select.hh on a synthetic choice variant and synthetic tables (no GPU, no kernel),
 // then the batch policy every public entry point shares, on a real queue.
 // docs/design/flat-kernel-selection.md §5 and §8.5.

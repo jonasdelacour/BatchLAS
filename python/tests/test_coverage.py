@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """NumPy-referenced tests for bound routines that test_batchlas.py does not reach.
 
 Every case runs batch > 1 with distinct items, feeds at least one non-contiguous operand (the

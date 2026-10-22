@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // symm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/symm.<device>.txt row that can_run() admits. Expand mirrors A's referenced triangle into a
 // dense scratch copy and hands it to the public gemm, which picks its own kernel; Vendor is the per-item

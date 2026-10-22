@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <algorithm>
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>

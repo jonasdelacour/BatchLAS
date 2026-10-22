@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // A register-tiled GEMM for TRANSPOSED and CONJUGATE-TRANSPOSED operands with

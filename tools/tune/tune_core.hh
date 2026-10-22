@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The tuner's host-only logic (flat-kernel-selection.md §6): §6.3 statistics and tie rule, §6.2

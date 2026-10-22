@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
 #include <src/math-helpers.hh>
 

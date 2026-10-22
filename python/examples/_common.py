@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Small helpers shared by the BatchLAS examples.
 
 Nothing here is required to use BatchLAS -- these are just utilities that keep

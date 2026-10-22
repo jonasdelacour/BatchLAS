@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Device-side building blocks of the CTA (sub-group-partition) STEQR solver, shared by

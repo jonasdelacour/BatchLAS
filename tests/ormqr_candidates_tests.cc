@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // ormqr's flat-selection suite (docs/design/flat-kernel-selection.md §8): every candidate
 // pinned on shapes straddling its limits, pinned-equals-direct bit for bit, a saturating batch,
 // can_run equals launch, the exact workspace in a poisoned arena, the pin rules, key fields,

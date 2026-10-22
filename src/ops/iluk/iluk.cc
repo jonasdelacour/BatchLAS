@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/linalg-impl.hh>
 
 #include <src/util/template-instantiations.hh>

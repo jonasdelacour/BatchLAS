@@ -83,7 +83,7 @@ private `release_(bool)`. Without the class annotation a consumer gets an unreso
 
 ## symbol visibility: Event carries per-member exports
 
-`Event` is `struct [[nodiscard]] Event` (`include/batchlas/util/sycl-device-queue.hh:279`), with
+`Event` is `struct [[nodiscard]] Event` (`include/batchlas/util/sycl-device-queue.hh:280`), with
 `BATCHLAS_API` on each of its ten out-of-line members.
 g++ 13 rejects a class-key with both a C++11 and a GNU attribute, in either order (`-std=c++20`), so the
 class-level form does not compile there. Clang accepts both. `Event` has no virtual member, so

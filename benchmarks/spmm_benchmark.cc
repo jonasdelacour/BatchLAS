@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Batched CSR SpMM -- C = alpha * A * op(B) + beta * C -- at the shapes lanczos and
 // LOBPCG use. Two arms: WARM reuses long-lived MatrixViews (the honest vendor
 // baseline); COLD rebuilds a MatrixView per call to price the per-call host chain.

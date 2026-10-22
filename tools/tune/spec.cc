@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <tools/tune/spec.hh>
 
 #include <batchlas/error.hh>

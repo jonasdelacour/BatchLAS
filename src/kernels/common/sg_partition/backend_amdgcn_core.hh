@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // AMDGCN cross-lane primitives for chunked sub-group partitions, SYCL-free:
 // plain clang AMDGPU builtins over 32-bit words, so a HIP TU can compile this

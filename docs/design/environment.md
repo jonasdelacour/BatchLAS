@@ -139,17 +139,17 @@ Fields are in the `unsafe` group. See [the unsafe group and its gate](#environme
 ## Route pins are raw strings {#environment-route-pins-are-raw-strings}
 
 `Settings::routing` holds one raw `EnvValue` per op, in the order of `RoutingSettings::ops`
-(`include/batchlas/settings.hh:84`, 19 ops: gemm, gemv, trsm, trmm, symm, syrk, syr2k, potrf,
+(`include/batchlas/settings.hh:85`, 19 ops: gemm, gemv, trsm, trmm, symm, syrk, syr2k, potrf,
 posv, getrf and the rest of that array). The names are built from the op (`BATCHLAS_` + upper-cased
-op + `_ROUTE`, `src/util/settings.cc:83-93`), so a grep for string literals misses them.
-`select::detail::pin_text` and `resolve_pin` (`src/select/select.hh:324, 407`) parse the value:
+op + `_ROUTE`, `src/util/settings.cc:84-94`), so a grep for string literals misses them.
+`select::detail::pin_text` and `resolve_pin` (`src/select/select.hh:325, 408`) parse the value:
 
 - The value is trimmed and case-folded. An empty value is `auto`.
 - A spelling that does not parse, is not a compiled candidate, or cannot run the shape throws
   `batchlas::invalid_argument` (which derives from `std::invalid_argument`).
 - `native` and `vendor` warn once and fall back to `auto` when nothing in their class can run.
 
-Tests pin a route with `select::ScopedPin` (`src/select/select.hh:452`), which wins over the
+Tests pin a route with `select::ScopedPin` (`src/select/select.hh:453`), which wins over the
 environment on its thread and nests. A `StrictPin` scoped pin (the tuner's arms) makes a class word
 that cannot serve the shape throw instead of falling back.
 Python pins with `batchlas.set_route(op, spelling)` or the `batchlas.route(op, spelling)` context

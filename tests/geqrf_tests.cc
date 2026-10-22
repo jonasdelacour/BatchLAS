@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF and the ORGQR that consumes its output.
 //
 // Every numerical test calls the native entry points directly, bypassing the selector,

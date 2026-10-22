@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Stage-2 band -> tridiagonal by Householder bulge chasing, retaining the
 // reflectors for the eigenvector back-transform. See sytrd_sb2st_hh.hh for the
 // rationale and for the schedule, which is validated in

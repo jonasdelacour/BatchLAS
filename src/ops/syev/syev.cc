@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syev (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-syev): select::run
 // takes the first entry of the nearest tuned/syev.<device>.txt row that can_run() admits. Cta,
 // CtaFused and Jacobi are the three n <= 32 sub-group solvers; Blocked (sytrd_blocked + stedc) and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/matrix.hh>
@@ -1169,12 +1170,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
 // this file produces one -- they all build standalone Matrix objects, where
 // ld == rows by construction. That matters for two separate reasons:
 //
-//   * can_use_128x128_fast_path (register_128x128.hh:71-91) tests ld % 4 and a
+//   * can_use_128x128_fast_path (register_128x128.hh:72-92) tests ld % 4 and a
 //     16-byte base pointer, NOT contiguity, so the ALIGNED leg can and does
 //     fire on a strided sub-view. Nothing has ever checked that it is right
 //     there.
 //   * MatrixView::operator()(Slice, Slice) offsets the base by
-//     c_start*ld + r_start (matrix.hh:1129-1141), so an odd r_start breaks the
+//     c_start*ld + r_start (matrix.hh:1130-1142), so an odd r_start breaks the
 //     16-byte alignment and drops the same call onto the PREDICATED leg.
 //
 // Both legs are exercised below, and everything of the parent outside the

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Minimal CMake list-file lexer shared by the CI checks in this directory.
 
 It is deliberately not a full CMake implementation: it blanks comments and

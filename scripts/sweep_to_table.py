@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Write and verify the tuned selection tables (tuned/<op>.<device>.txt) from the tuning ledgers.
 
 Spec: docs/design/tuning-data.md (files, ledger lines, generation, the check);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesvd (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/gesvd.<device>.txt row that can_run() admits. Jacobi is one-sided Jacobi in local memory;
 // Cta forms the normal equations and solves them with syev_cta; Blocked bidiagonalises (or, Hermitian,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <batchlas/blas/linalg.hh>
 #include <src/queue.hh>

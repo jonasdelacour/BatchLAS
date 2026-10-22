@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/uplo_mirror.hh>
 #include <src/kernels/common/info_span.hh>
@@ -397,7 +398,7 @@ Event syev_blocked(Queue& ctx,
             // tier below clears `info` itself, and this early return is the
             // DEFAULT path for 32 < n <= 320 in values mode, so leaving the span
             // untouched hands the caller whatever was in the buffer. Mirrors
-            // syev_two_stage.cc:275.
+            // syev_two_stage.cc:276.
             detail::info_clear(ctx, info, batch);
             (void)stebz<B, T>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 

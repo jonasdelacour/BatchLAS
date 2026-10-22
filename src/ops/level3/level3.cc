@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The public hemm/herk/her2k entry points, defined outside every vendor TU so the API
 // links in a build with no vendor library. After the shape checks they go to backend::<op>_vendor<B, T>
 // (whose expand/fold-into-gemm arms are still hand-written in cublas.cc), or throw

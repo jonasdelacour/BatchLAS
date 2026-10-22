@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // A single-tile batched SYRK/HERK for n <= kGramMaxTile (ortho's tall, skinny

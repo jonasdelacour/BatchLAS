@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // LASWP -- apply a LAPACK interchange list to the rows of a column block, and

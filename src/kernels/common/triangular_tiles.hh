@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The triangular tile grid, packet type and MAC helpers the level-3 tile

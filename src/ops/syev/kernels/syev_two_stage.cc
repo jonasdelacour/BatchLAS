@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/uplo_mirror.hh>
 #include <batchlas/blas/functions.hh>

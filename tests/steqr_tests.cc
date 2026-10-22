@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -715,7 +716,7 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
 // returned, and the caller read eigenvalues that were simply wrong for it.
 //
 // TWO TIERS, ONE SPAN. `steqr` picks steqr_cta when n <= the device sub-group
-// width and steqr_wg otherwise (src/ops/syev/steqr/steqr.cc:43), so at n = 32 these
+// width and steqr_wg otherwise (src/ops/syev/steqr/steqr.cc:44), so at n = 32 these
 // cases exercise the CTA arm on CUDA and the work-group arm on the host -- which
 // is deliberate: the two tiers derive the status by completely different means
 // (a bool out of steqr_cta_solve vs. a post-hoc scan of `e`), and a test that
@@ -798,7 +799,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
     // "nothing wrote it at all", and "nothing wrote it" is the exact failure this
     // mechanism exists to make impossible: a status channel that is never filled
     // reports universal success. steqr clears the span itself
-    // (src/ops/syev/steqr/steqr.cc:66), so a surviving -1 means that clear never ran.
+    // (src/ops/syev/steqr/steqr.cc:67), so a surviving -1 means that clear never ran.
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
     auto ws = UnifiedVector<std::byte>(
@@ -823,13 +824,13 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
 // failure on the SAME input and asserts the opposite direction.
 //
 // The knob is SteqrParams::max_sweeps, and 1 rather than a "reduced" value such
-// as 50, for a reason: syev_cta.cc:177-180 and syev_cta_fused.cc:554-557 silently
+// as 50, for a reason: syev_cta.cc:178-181 and syev_cta_fused.cc:555-558 silently
 // REWRITE max_sweeps to 400 whenever a caller leaves it at the default 50, so a
 // test that lowered the cap to that default would be answered by 400 and pass
 // vacuously. Calling steqr directly avoids the rewrite; 1 escapes it regardless.
 //
 // One sweep per pass gives the CTA arm a budget of max_sweeps*n = 32 sweeps
-// (steqr_cta_device.hh:764) and the work-group arm n-1 = 31 passes of one sweep
+// (steqr_cta_device.hh:765) and the work-group arm n-1 = 31 passes of one sweep
 // each, against a 32x32 Toeplitz that needs 2-3 sweeps per eigenvalue.
 TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     using T = typename TestFixture::ScalarType;

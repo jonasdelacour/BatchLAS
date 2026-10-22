@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched ORGQR: one tier, the `blocked` choice -- ormqr applied to an identity.

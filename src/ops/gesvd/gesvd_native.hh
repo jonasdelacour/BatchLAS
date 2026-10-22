@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The gesvd drivers' own shape ceilings, sycl-free, read by gesvd's can_run and the drivers.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-vector.hh>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Tuning tiers (docs/design/tiered-tuning.md, "Engine: tiers"). Host-only.

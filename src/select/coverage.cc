@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/select/coverage.hh>
 
 #include <src/select/vendor.hh>

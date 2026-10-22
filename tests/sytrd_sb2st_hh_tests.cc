@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Validation for the Householder stage-2 chase (sytrd_sb2st_hh).
 //
 // The point of this routine, versus the shipped Givens sytrd_sb2st, is that it

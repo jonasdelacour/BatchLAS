@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate the database pages of the documentation site.
 
 Three pages are derived from the tree on every docs build, so they cannot drift:

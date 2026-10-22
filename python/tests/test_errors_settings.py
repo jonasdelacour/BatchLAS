@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Exception classes, route pins, settings reload and the build-feature report."""
 
 from __future__ import annotations

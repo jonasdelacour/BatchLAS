@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // htev_compare_benchmark.cc
 //
 // Head-to-head benchmark: BatchLAS STEQR vs STEDC for batched tridiagonal

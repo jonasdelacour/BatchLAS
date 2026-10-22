@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF -- the BLOCKED tier: a right-looking blocked Householder QR.
 // Per panel: geqr2 leaf, pack V, larft T, then W1 = V^H A22; W2 = T^H W1; A22 -= V W2.
 // The update applies (I - V T^H V^H), not (I - V T V^H); identical for real scalars, so

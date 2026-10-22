@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GESV, the fused register-resident tier for order n <= 32, nrhs <= 4:
 // getrf_tiny.cc's elimination with the RHS carried in `D rB[NR]` alongside `D rA[N]`, so
 // forward substitution happens inside the elimination loop and back substitution follows

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/internal/ormqr_blocked.hh>

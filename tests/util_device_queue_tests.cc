@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>

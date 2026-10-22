@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The per-GPU worker (host-only): one request_line() per cell on stdin; back come the cell's

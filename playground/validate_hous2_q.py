@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Validate that the HOUS2 reflector store from `sb2st_householder` actually
 reconstructs the stage-2 similarity transform.
 

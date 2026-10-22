@@ -45,5 +45,5 @@ neither (measured before 2026-09-30; stale, not re-measured).
 **Both edges must stay cut.** The headers form a cycle. Restoring either include brings back the whole
 umbrella, so cutting one edge gains nothing.
 
-Code sites: `include/batchlas/blas/linalg.hh:13` and `include/batchlas/sycl_interop.hh:17`. Consumers
+Code sites: `include/batchlas/blas/linalg.hh:14` and `include/batchlas/sycl_interop.hh:18`. Consumers
 must configure with the same SYCL compiler; see `docs/cpp-api.md`, "Building against BatchLAS".

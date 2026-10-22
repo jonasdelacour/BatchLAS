@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // posv (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.1): select::run takes
 // the first entry of the nearest tuned/posv.<device>.txt row that can_run() admits. Tiny is the
 // fused factor-and-solve kernel; Cta and Blocked compose the public potrf with one fused solve (Cta) or

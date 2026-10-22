@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The child side of one cell (docs/design/flat-kernel-selection.md §6.1, §6.3): probe every

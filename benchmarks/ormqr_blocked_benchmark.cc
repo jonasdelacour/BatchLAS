@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/internal/ormqr_blocked.hh>

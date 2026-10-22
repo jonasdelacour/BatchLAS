@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every posv candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // flat-kernel-selection-phase3-plan.md §1.1. The limit oracle reads the drivers' own capacity
 // queries; which kernel ran is read back from the select trace or a bit-for-bit comparison

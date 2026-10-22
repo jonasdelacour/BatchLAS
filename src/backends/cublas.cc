@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
 //#include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
@@ -1081,12 +1082,12 @@ namespace batchlas {
             // It called cusolverDnXgetrs, whose ipiv is GENUINE int64, and handed
             // it `pivots.data()` raw. Every getrf in this tree writes PACKED
             // 1-based int32 into that same span -- getrf_vendor below at :1508
-            // does `pivots.as_span<int>()`, and so do rocsolver.cc:227 and both
+            // does `pivots.as_span<int>()`, and so do rocsolver.cc:228 and both
             // native tiers -- so at batch 1 the solve read two packed pivots per
             // int64 slot as one row index and indexed out of bounds.
             // `getrf<CUDA,float>` then `getrs<CUDA,float>` at n=40, nrhs=3,
             // batch=1 -- the exact sequence linalg::solve issues
-            // (linalg-ops.hh:343-344) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
+            // (linalg-ops.hh:344-345) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
             // (exit 134). cublas?getrsBatched reads the packed int32 the getrf
             // actually wrote and is correct at batchCount = 1, so the two-arm
             // split bought nothing and cost the only pivot format the family

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Exported but NOT ABI: private symbols only in-tree tests link. evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers

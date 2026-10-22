@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrf for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted
 // inputs (row-permuted dominant, complex parts both), verified on the default items by
 // MatrixView::getrf_residual (factorization) and MatrixView::pivot_ratio (the partial-pivoting rule

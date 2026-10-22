@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The Tuning tab: the tuner's ledgers and tables, and runs of tools/tune/batchlas_tune.
 
 Everything that reads a ledger or a table goes through scripts/sweep_to_table.py, the code the

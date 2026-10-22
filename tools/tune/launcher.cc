@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // batchlas_tune: the SYCL-free front end of batchlas_tune_impl (docs/design/flat-kernel-selection.md
 // §6). Linking libbatchlas enumerates devices during static init, which retains a CUDA primary
 // context on every visible GPU, so the driver must never see a GPU: for driver modes this hides

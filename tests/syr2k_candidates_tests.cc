@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every syr2k candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace, the
 // kernel trace or a bit-for-bit comparison with the direct vendor call, never assumed from the

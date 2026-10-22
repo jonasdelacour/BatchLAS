@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The LPANEL tier's cases, in their own file only for length; they sit inside
 // potrf_tests.cc's anonymous namespace so make_spd, make_planted_ldl and
 // potrf_error above are the same oracles the CTA cases use.

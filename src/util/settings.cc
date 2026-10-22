@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The one place BatchLAS calls std::getenv. RULE: each field uses the SAME parser its call site
 // used (bespoke parsers stay at the site; the field is an EnvValue). Field order follows the header.
 // evidence: docs/design/runtime-internals.md#runtime-internals-the-settings-loader

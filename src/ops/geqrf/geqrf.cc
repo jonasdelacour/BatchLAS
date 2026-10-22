@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // geqrf (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-geqrf):
 // select::run takes the first entry of the nearest tuned/geqrf.<device>.txt row that can_run()
 // (can_run.hh) admits. Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local

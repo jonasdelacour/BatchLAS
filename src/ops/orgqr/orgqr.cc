@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // orgqr (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/orgqr.<device>.txt row that can_run() admits. Blocked writes an identity and applies Q to
 // it through the public ormqr, which picks its own kernel; Vendor is the library's per-item orgqr loop.

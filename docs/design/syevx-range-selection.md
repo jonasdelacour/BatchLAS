@@ -51,12 +51,12 @@ comes from a reversal in the finalize kernel.
 
 ### syevx range: SyevxSelect rather than EigenRangeType
 
-`SyevxSelect { Extremal, Index, Value }` (`include/batchlas/blas/enums.hh:414`). `Extremal` is the default. It
+`SyevxSelect { Extremal, Index, Value }` (`include/batchlas/blas/enums.hh:415`). `Extremal` is the default. It
 is normalized to an Index range internally, but it stays a separate value so no caller depends on a changed default.
-`EigenRangeType` (`include/batchlas/blas/extensions.hh:714`) is not reused, because its default `All` means every
+`EigenRangeType` (`include/batchlas/blas/extensions.hh:715`) is not reused, because its default `All` means every
 eigenvalue.
 
-`SyevxParams` (`include/batchlas/blas/extensions.hh:68-83`) has `select`, `il`, `iu` (inclusive, 0-based;
+`SyevxParams` (`include/batchlas/blas/extensions.hh:69-84`) has `select`, `il`, `iu` (inclusive, 0-based;
 `iu = -1` means \f$n-1\f$), `vl`, `vu` (the interval \f$(v_l, v_u]\f$), `abstol` (non-positive means
 \f$\epsilon\|T\|\f$) and `order`. All have defaults. `vl`, `vu` and `abstol` are `float_type`, since eigenvalues
 are real.
@@ -72,14 +72,14 @@ Overloads without `m` are legal only when the count is static (`Extremal` and `I
 - A bare `{}` picks a positional overload. Each `m` overload takes `params` in the same trailing position, and the
   tests call each one with `{}`.
 - Do not edit exported overloads in place. The `m`-less ones are inline forwarders, and
-  `SyevxRangeValidationTest.SolverEntryPointsKeepTheirMLessOverloads` (`tests/syevx_tests.cc:2764`) fails if they go
+  `SyevxRangeValidationTest.SolverEntryPointsKeepTheirMLessOverloads` (`tests/syevx_tests.cc:2765`) fails if they go
   missing.
 
 ## syevx range: normalization and validation
 
-`syevx_resolve_range(n, neigs, params)` (`include/batchlas/blas/extensions.hh:400`, forwarding to the
-field-by-field overload defined at `src/ops/syevx/syevx.cc:179`) returns a
-`SyevxResolvedRange { value_range, il, iu, max_count, reverse }` (`extensions.hh:365`); `vl` and `vu` are read from
+`syevx_resolve_range(n, neigs, params)` (`include/batchlas/blas/extensions.hh:401`, forwarding to the
+field-by-field overload defined at `src/ops/syevx/syevx.cc:180`) returns a
+`SyevxResolvedRange { value_range, il, iu, max_count, reverse }` (`extensions.hh:366`); `vl` and `vu` are read from
 `params` directly. It is the single normalization point for every solve and every `buffer_size`.
 
 | Input | Result |
@@ -92,7 +92,7 @@ field-by-field overload defined at `src/ops/syevx/syevx.cc:179`) returns a
 `reverse` for `Extremal` comes from `find_largest`, and `order` is ignored. `max_count` is clamped to \f$n\f$; the
 caller's `neigs` stays the output stride.
 
-Validation (`validate_syevx_range_params`, `src/ops/syevx/syevx.cc:110`) throws `batchlas::invalid_argument` for: Index with \f$il < 0\f$, \f$iu \ge n\f$, \f$il > iu\f$, or
+Validation (`validate_syevx_range_params`, `src/ops/syevx/syevx.cc:111`) throws `batchlas::invalid_argument` for: Index with \f$il < 0\f$, \f$iu \ge n\f$, \f$il > iu\f$, or
 `neigs != iu - il + 1`; Value with \f$v_l \ge v_u\f$; and Value on an overload without `m`. Value with \f$v_l \ge v_u\f$
 throws rather than returning an empty answer, because a swapped pair costs a full \f$O(n^3)\f$ reduction.
 
@@ -114,14 +114,14 @@ and `jobz`.
 
 - Index: a copy from `src = reverse ? iu - i : il + i` of the sorted `syev` output.
 - Value: \f$(v_l, v_u]\f$ maps to the block \f$[\mathrm{lower}(v_l), \mathrm{lower}(v_u))\f$, where \f$\mathrm{lower}(x)\f$ counts
-  eigenvalues \f$\le x\f$ (an upper bound, `:44`). Two binary searches run in local memory, then a barrier, using the
+  eigenvalues \f$\le x\f$ (an upper bound, `:45`). Two binary searches run in local memory, then a barrier, using the
   same predicate as `stebz`.
 
 ### DirectSubset
 
 `DirectSubset` (`src/ops/syevx/kernels/syevx_direct_subset.cc`) is real-only and needs an in-order Queue.
 
-- **Workspace.** `stebz` throws if `w.size() < max_wanted` (`src/ops/syev/tridiag/stebz.cc:92-94`), which is \f$n\f$ for a Value range and \f$k\f$ otherwise. Every
+- **Workspace.** `stebz` throws if `w.size() < max_wanted` (`src/ops/syev/tridiag/stebz.cc:93-95`), which is \f$n\f$ for a Value range and \f$k\f$ otherwise. Every
   allocation is mirrored in `syevx_direct_subset_buffer_size` through `BumpAllocator::allocation_size<>`, in the same
   order. An exactly computed size is too small, because the allocator advances by the raw size.
 - **Uniform-column back-transforms.** `stein` zeroes columns at or beyond `m[b]`. The back-transforms keep the capacity column
@@ -136,7 +136,7 @@ which eigenvalues are wanted. The bisection takes the same number of steps at an
 
 ## syevx range: routing
 
-`syevx_select_algorithm` (`src/ops/syevx/syevx.cc:235`) sends every non-extremal request to `Direct` or
+`syevx_select_algorithm` (`src/ops/syevx/syevx.cc:236`) sends every non-extremal request to `Direct` or
 `DirectSubset`.
 
 ### syevx range: throw, do not degrade
@@ -152,7 +152,7 @@ which eigenvalues are wanted. The bisection takes the same number of steps at an
 The measured crossovers depend on \f$(n, \mathrm{batch}, \mathrm{jobz})\f$, not on \f$k\f$, and position cannot change the cost of
 either dense path. So no re-measurement was done. For a Value range the selector is fed `max_count = neigs`, the capacity, because
 both paths scale with it. A routing unit test pins the decision. The timing check `BM_SYEVX_RangePosition`
-(`benchmarks/syevx_benchmark.cc:430`) has not been run. If the argument is wrong, the symptom is a slower correct
+(`benchmarks/syevx_benchmark.cc:431`) has not been run. If the argument is wrong, the symptom is a slower correct
 answer, never a wrong one.
 
 ### syevx range: iterative paths cannot answer an interior range
@@ -178,7 +178,7 @@ batch 128, float, needs about 2.8 GB of scratch on a 24 GB card, plus 0.5 GB for
 
 `stein` (`src/ops/syev/tridiag/stein.cc`) takes one uniform \f$k\f$. With a Value range, item \f$b\f$ may have \f$m[b] < k\f$ valid eigenvalues, and the rest holds stale workspace.
 
-- **Phase 1 needs the bound.** Without it, inverse iteration runs on garbage shifts. The `kb` bound (`stein.cc:186`) keeps them out.
+- **Phase 1 needs the bound.** Without it, inverse iteration runs on garbage shifts. The `kb` bound (`stein.cc:187`) keeps them out.
 - **Phase 2 cannot corrupt valid columns.** Modified Gram-Schmidt writes column \f$j\f$ and reads only \f$i < j\f$, and `cluster_start`
   depends only on \f$w(0..j)\f$. Its bound is for cost: without it a stale tail joins the last real eigenvalue into one bogus cluster.
 
@@ -189,12 +189,12 @@ Each bound was verified by removing it separately.
 ### syevx range: the host reference oracle
 
 A full host `syev`, sorted ascending, then selection by index or by \f$(v_l, v_u]\f$. The Python tests
-(`python/tests/test_batchlas.py:604-823`, the `test_syevx_*range*` cases) use `numpy.linalg.eigvalsh` as the same
+(`python/tests/test_batchlas.py:605-824`, the `test_syevx_*range*` cases) use `numpy.linalg.eigvalsh` as the same
 oracle.
 
 ### syevx range: the stein poisoned-tail test
 
-`SteinTest.PerItemCountsIgnorePoisonedTail` (`tests/stein_tests.cc:212`) fills item 1's tail with a bogus cluster. Its first assertion, orthonormal vectors
+`SteinTest.PerItemCountsIgnorePoisonedTail` (`tests/stein_tests.cc:213`) fills item 1's tail with a bogus cluster. Its first assertion, orthonormal vectors
 with a small residual, does not discriminate: with the bound removed it reports zero failures. The second assertion does: item 1's unused columns,
 pre-poisoned with a sentinel, must come back exactly zero. Without the bound that reports 639 failures. Keep both.
 
@@ -214,9 +214,9 @@ The consistency tests put boundaries in spectral gaps. One test puts a boundary 
 
 ## syevx range: Python surface
 
-- `SyevxOptions` (`python/batchlas/_options.py:18`) has `select` (default `"extremal"`), `il`, `iu`, `vl`, `vu`, `abstol` and `order`, each defaulting to the C++ `SyevxParams` value.
-- `bl.syevx` (`python/batchlas/_api.py:1336`) returns `m` only when a range is requested, so existing unpacking is unchanged.
-- `bl.syevx_range` (`_api.py:1453`) returns per-item arrays sliced to \f$\min(m[b], \mathrm{capacity})\f$, plus `counts`, `truncated` and `capacity`. It returns lists, because a rectangular array would misstate the slots past \f$m[b]\f$.
+- `SyevxOptions` (`python/batchlas/_options.py:19`) has `select` (default `"extremal"`), `il`, `iu`, `vl`, `vu`, `abstol` and `order`, each defaulting to the C++ `SyevxParams` value.
+- `bl.syevx` (`python/batchlas/_api.py:1337`) returns `m` only when a range is requested, so existing unpacking is unchanged.
+- `bl.syevx_range` (`_api.py:1454`) returns per-item arrays sliced to \f$\min(m[b], \mathrm{capacity})\f$, plus `counts`, `truncated` and `capacity`. It returns lists, because a rectangular array would misstate the slots past \f$m[b]\f$.
   A Value range requires `neigs`. The only safe default is \f$n\f$, the [stein workspace](#syevx-range-stein-workspace-scaling) worst case.
   `select="extremal"` raises `ValueError`: use `bl.syevx`.
 
@@ -232,8 +232,8 @@ Deferred by design. Do not build them speculatively, because `DirectSubset` alre
 
 | Item | State |
 |---|---|
-| Python layer | verified: built with `BATCHLAS_BUILD_PYTHON=ON` and run (2026-10-15, `302aec2b`, `866f42af`). Under ctest it runs as `batchlas_python_build_import` (`python/CMakeLists.txt:96`). `test_syevx_value_range_batch_items_may_disagree_on_the_count` was red from stride-0 int32 count arrays (pybind11 2.11 with NumPy 2) until `int32_array` (`python/batchlas/bindings/support.hh:1091`). |
-| `BM_SYEVX_RangePosition` | in `benchmarks/syevx_benchmark.cc:430`; **not run**, no result in `benchmarks/results/`. The claim that the thresholds carry over is structural, backed by a routing unit test. Also listed in the [syevx open measurement debts](../perf/syevx.md#syevx-open-measurement-debts). |
+| Python layer | verified: built with `BATCHLAS_BUILD_PYTHON=ON` and run (2026-10-15, `302aec2b`, `866f42af`). Under ctest it runs as `batchlas_python_build_import` (`python/CMakeLists.txt:96`). `test_syevx_value_range_batch_items_may_disagree_on_the_count` was red from stride-0 int32 count arrays (pybind11 2.11 with NumPy 2) until `int32_array` (`python/batchlas/bindings/support.hh:1092`). |
+| `BM_SYEVX_RangePosition` | in `benchmarks/syevx_benchmark.cc:431`; **not run**, no result in `benchmarks/results/`. The claim that the thresholds carry over is structural, backed by a routing unit test. Also listed in the [syevx open measurement debts](../perf/syevx.md#syevx-open-measurement-debts). |
 
 ```sh
 # Python bindings and the range tests

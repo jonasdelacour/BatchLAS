@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syrk for the tuner (real only): C = alpha op(A) op(A)^T + beta C on the lower triangle, A and
 // C0 from MatrixView::fill_random, C0's strict upper triangle and ld padding then poisoned with a
 // large finite value, beta = 0.75 so C is read. trans C is the real Trans spelled C (the key keeps

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <src/ops/gemm/kernels/register_tiled_common.hh>

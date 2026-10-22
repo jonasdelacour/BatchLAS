@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Sub-group (CTA-style) SB2ST implementation.
 //
 // This translation unit intentionally contains ONLY the sub-group/chunked-partition

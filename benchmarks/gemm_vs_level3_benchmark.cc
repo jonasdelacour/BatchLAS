@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Head-to-head: the GEMM spellings that src/ops actually uses, against
 // the specialised level-3 op that expresses the same thing.
 //

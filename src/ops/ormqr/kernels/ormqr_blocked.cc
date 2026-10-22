@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/device.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/functions.hh>

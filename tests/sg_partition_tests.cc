@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Correctness suite for the chunked sub-group partition layer
 // (src/kernels/common/sg_partition/): SubGroupPartition<P, Masked> and every
 // collective of its front end, on whatever backend the device pass selects.

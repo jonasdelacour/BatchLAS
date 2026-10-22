@@ -10,7 +10,7 @@ table edges. How ops choose in general: @ref design_flat_selection and @ref api_
 ## The vendor-availability gate
 
 `src/select/vendor.hh` checks availability per library, not per device family. On NVIDIA, `getrf`/`getri` come from
-cuBLAS and `potrf`/`syev` from cuSOLVER; on AMD all come from rocSOLVER (`src/select/vendor.hh:29-41`):
+cuBLAS and `potrf`/`syev` from cuSOLVER; on AMD all come from rocSOLVER (`src/select/vendor.hh:30-42`):
 
 ```cpp
 template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
@@ -27,7 +27,7 @@ inline constexpr bool level3_vendor_available =
   vendor call only under `if constexpr (select::has_library<B>(spec.vendor))`, so an absent library is not compiled.
 - With nothing runnable, `select::throw_no_vendor_route<T>` records a coverage miss and throws
   `batchlas::NoRouteError` (`include/batchlas/no_route.hh`).
-- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:103-105`) gates where `ormqr_blocked.cc`,
+- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:104-106`) gates where `ormqr_blocked.cc`,
   `ortho.cc` and `sytrd_blocked.cc` swap a gemm for a level-3 tile kernel, and the static coverage table's float
   native rows: a native GPU backend (`CUDA` or `SYCL`) and (float, or CUDA with cuBLAS). It is narrower than where those kernels now run vendor-free;
   widening it would change ortho's and ormqr's choices, which are unmeasured.
@@ -53,18 +53,18 @@ kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and h
 **`can_run` is correctness only.** Every native family needs a native GPU backend
 (`select::native_gpu_backend<B>`: CUDA or SYCL; symm's `expand` also ROCm), a GPU queue, a homogeneous
 batch (tile kernels index `base + batch * stride`), extents >= 1 and `batch <= d.max_groups_yz` (65535; Metal
-2^32 - 1, `src/select/select.hh:55`). The batch is grid z (y for gram); 65536 throws
+2^32 - 1, `src/select/select.hh:56`). The batch is grid z (y for gram); 65536 throws
 `Number of work-groups exceed limit`, confirmed by launch.
 
 | op | family | further terms | where |
 |---|---|---|---|
-| `symm` | `expand` | `max_wg >= 256` (8 x 32 group); `expansion_fits(q, k, batch, bytes)` (int-linearised grid, `BATCHLAS_EXPAND_MAX_BYTES` or a quarter of memory) | `src/ops/symm/symm.cc:44-56` |
-| `syrk` | `gram` | `syrk_gram_supported` (square C, `n <= 128`; past it the kernel answers wrongly rather than throwing); `max_wg >= gram_threads(n)`; SLM tile fits | `src/ops/syrk/syrk.cc:57-60` |
-| `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:61-64` |
-| `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:52-56` |
-| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:59-62` |
-| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:63-69` |
-| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:65`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:70` |
+| `symm` | `expand` | `max_wg >= 256` (8 x 32 group); `expansion_fits(q, k, batch, bytes)` (int-linearised grid, `BATCHLAS_EXPAND_MAX_BYTES` or a quarter of memory) | `src/ops/symm/symm.cc:45-57` |
+| `syrk` | `gram` | `syrk_gram_supported` (square C, `n <= 128`; past it the kernel answers wrongly rather than throwing); `max_wg >= gram_threads(n)`; SLM tile fits | `src/ops/syrk/syrk.cc:58-61` |
+| `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:62-65` |
+| `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:53-57` |
+| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:60-63` |
+| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:64-70` |
+| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:58`, `src/ops/syrk/syrk.cc:66`, `src/ops/syr2k/syr2k.cc:58`, `src/ops/trmm/trmm.cc:71` |
 
 syrk is real-only, so `ConjTrans` reaches its kernels as `Trans`. It is not a `can_run` term; the exact `trans` key
 keeps real `ConjTrans` on the vendor.
@@ -158,11 +158,11 @@ The old triangular gate (`syrk_prefer_triangular_tiles` at `ff340fc6`, `kTriangu
 > **Warning:** `n >= 257` is the edge the rows carry, but the supporting measurement says "from n = 384 up every
 > saturated shape won" (`experiments/GEMM_TO_LEVEL3_SURVEY.md`). The band **257 <= n <= 383** ranks `triangular`
 > first with no bracketing cell. Every shape there takes the predicated path: the unpredicated fast path needs
-> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:37-45`),
+> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:38-46`),
 > and the sweep never sampled the predicated path. On `tall`/`wide` rows, n = 256 (`tiles_per_side == 2`) ranks
 > `vendor` first, a recorded 0.89x pre-existing loss on the tile route.
 
-The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/ops/syrk/kernels/syrk_gram_tiles.hh:29`). It is now a `can_run`
+The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/ops/syrk/kernels/syrk_gram_tiles.hh:30`). It is now a `can_run`
 term and the row edge: every row with `n <= 128` ranks `gram` first, float and double. Float, against the GEMM
 spelling (`experiments/TRMM_SYRK_BATCHED_KERNELS.md`):
 
@@ -240,8 +240,8 @@ her2k rule is a disjunction with no ceiling. Both check `BATCHLAS_EXPAND_ROUTE` 
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
 > (`k = ib = nb` in {16, 24, 32}, n2 up to 480), where the fold adds an `n2^2 x batch` write and read that the two
 > direct GEMMs never pay. Those cells are unmeasured. `complex<double>` is excluded from this route for the same
-> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:707-717`; the her2k
-> call and its fit check are at `:760-773`).
+> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:708-718`; the her2k
+> call and its fit check are at `:761-774`).
 
 ## Negative results {#dispatch-negative-results}
 
@@ -295,7 +295,7 @@ Wrong answers found, how they hid, and what guards them now.
   error, so the load-bearing check is the relative one.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard copied only the size ceiling. Both
   halves now live in `her2k_takes_gemm_route` (`src/expansion_budget.hh`), which the call site asks
-  (`src/ops/syev/sytrd/sytrd_blocked.cc:768`).
+  (`src/ops/syev/sytrd/sytrd_blocked.cc:769`).
 
 ### The ormqr chooser's forced pin {#dispatch-the-ormqr-chooser-that-forced-past-supports}
 
@@ -305,7 +305,7 @@ the buffer size and the call could disagree (see the correctness finding above).
 that fails `can_run` throws, and `ormqr_buffer_size` runs the same `select::pick` as the call.
 
 `ormqr` has no measured window. Its tables rank `blocked`, then `vendor`, in every row where `blocked` can run, and
-`vendor` alone on the complex `trans=T` rows, where `blocked`'s `can_run` refuses (`src/ops/ormqr/choice.hh:14`).
+`vendor` alone on the complex `trans=T` rows, where `blocked`'s `can_run` refuses (`src/ops/ormqr/choice.hh:15`).
 
 ## Buffer-size queries {#dispatch-buffer-size-queries-and-the-route-they-size}
 

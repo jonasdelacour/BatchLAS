@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every gemm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // flat-kernel-selection-phase3-plan.md §1.3. The oracle for which (config, form) pairs exist is
 // the old KernelVariant list, written out here; which kernel ran is read back from the select

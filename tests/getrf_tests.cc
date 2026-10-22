@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched LU -- getrf, getrs and getri: both getrf tiers (CTA and
 // blocked), both getrs arms (composed and fused narrow-RHS), and getri.
 // Every numerical test drives the native dispatch entry points DIRECTLY against a
@@ -329,7 +330,7 @@ protected:
     }
 
     // Run one tier DIRECTLY. `pass_info` false exercises the info_target
-    // fallback, of which src/ops/inv/inv.cc:48 is a real instance.
+    // fallback, of which src/ops/inv/inv.cc:49 is a real instance.
     void run_cta(Lu<T>& p, bool pass_info = true) {
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -596,7 +597,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         << "this test's local-memory formula is not the library's; every byte "
            "count below names some other size and the ladder proves nothing";
 
-    // The hole band's endpoints, from getrf_cta.cc:136-138.
+    // The hole band's endpoints, from getrf_cta.cc:137-139.
     constexpr std::size_t kLo = 47104, kHi = 49664, kPadTo = 49920;
 
     struct Row { std::size_t bytes; int m, n; };
@@ -2401,7 +2402,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
             << "getri must refuse C aliasing A: C is zeroed before A's triangles are read";
         // A DISTINCT C, so the alias gate above cannot fire first. Passing A as
         // both operands made this assertion vacuous: it threw on the aliasing
-        // check at getri_blocked.cc:193 and never reached the empty-seam refusal
+        // check at getri_blocked.cc:194 and never reached the empty-seam refusal
         // at :204, so deleting that refusal entirely left the test green -- and a
         // direct caller that forgot the injection would then call an empty
         // std::function rather than getting a diagnostic.

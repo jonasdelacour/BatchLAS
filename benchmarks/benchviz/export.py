@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A static, phone-friendly snapshot of one or more campaigns: one HTML page
 plus downscaled figure PNGs, readable anywhere without the live server.
 

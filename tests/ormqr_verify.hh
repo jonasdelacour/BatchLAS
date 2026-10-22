@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/verify/tolerance.hh>

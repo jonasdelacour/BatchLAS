@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/ops/syev/uplo_mirror.hh>
 
 #include <sycl/sycl.hpp>

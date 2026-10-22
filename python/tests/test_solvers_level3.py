@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """gesv, posv, the Hermitian level-3 ops, per-item info, thin SVD and the newer option fields."""
 
 from __future__ import annotations

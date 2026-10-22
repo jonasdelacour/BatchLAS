@@ -28,7 +28,7 @@ Files: `src/ops/posv/{choice.hh,posv.cc}`.
 - The names `cta` and `blocked` are kept although they are misnomers, so benchviz and the scripts
   keep working.
 
-Now: as planned (`src/ops/posv/posv.cc:41-58`).
+Now: as planned (`src/ops/posv/posv.cc:42-59`).
 
 ### 1.2 trsm
 
@@ -50,7 +50,7 @@ Files: `src/ops/trsm/{choice.hh,trsm.cc}`.
 - Fields (`cta:wg`, `blocked:outer`): deferred; none exist.
 
 Now: `cta` and `blocked` also need `max_wg >= 32`; `sg_left` needs sub-group 32 and
-`max_wg >= 128`; `vendor` is `has_vendor` and homogeneous operands (`src/ops/trsm/trsm.cc:45-61`).
+`max_wg >= 128`; `vendor` is `has_vendor` and homogeneous operands (`src/ops/trsm/trsm.cc:46-62`).
 
 ### 1.3 gemm
 
@@ -75,7 +75,7 @@ Files: `src/ops/gemm/{choice.hh,gemm.cc}`. The vendor TUs keep only the vendor i
 - Before the rewrite, 18 NN-only register variants computed wrong answers on transposed calls; a pin
   on a `can_run`-false transposed call now throws.
 
-Now (`src/ops/gemm/gemm.cc:92-139`; [the gemm page](../perf/gemm.md), "GEMM: what ships"):
+Now (`src/ops/gemm/gemm.cc:93-140`; [the gemm page](../perf/gemm.md), "GEMM: what ships"):
 
 | Planned | Now |
 |---|---|

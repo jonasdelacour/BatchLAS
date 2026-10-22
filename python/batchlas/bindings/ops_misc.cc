@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <python/batchlas/bindings/init.hh>
 #include <python/batchlas/bindings/support.hh>
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getri (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/getri.<device>.txt row that can_run() admits. Blocked writes P into C and solves with two
 // public trsm calls (each picks its own kernel); Vendor is cublas<t>getriBatched / rocsolver / LAPACKE.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <tools/tune/grid.hh>
 
 #include <algorithm>

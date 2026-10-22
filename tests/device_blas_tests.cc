@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/test_utils.hh>

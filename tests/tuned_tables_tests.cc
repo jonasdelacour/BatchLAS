@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every table embedded from tuned/<op>.<device>.txt (docs/design/tuning-data.md,
 // docs/design/flat-kernel-selection.md §8.4). No GPU.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Auto's expected pick for one shape, read from the shipped tables, so a retune changes the

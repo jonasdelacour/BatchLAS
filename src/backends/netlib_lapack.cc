@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
 #include <src/backends/level3_shape.hh>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // ormqr for the tuner (src/ops/ormqr/choice.hh): reflectors and tau from one untimed public geqrf
 // (Auto) of a MatrixView::fill_random m x k matrix, MatrixView::fill_random C (complex parts both),
 // every ld padded by ld_pad, block_size_hint 0 so blocked derives its WY width as a library caller's

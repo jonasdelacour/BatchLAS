@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRF: the CTA tier and the panel leaf both tiers share -- stage the tile into
 // local memory, factor by ?GETF2's right-looking rank-1 recurrence with partial pivoting, store
 // back. The device body lives in getrf_cta_device.hh because getrf_blocked.cc's panel step runs

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getri for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A
 // factored once, untimed, by the public getrf under Auto, then C = inv(A) checked on the default items
 // by MatrixView::solve_residual with an empty B (|| A0 C - I ||, seeded probe columns above 2^28

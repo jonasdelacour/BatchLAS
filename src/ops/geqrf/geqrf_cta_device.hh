@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // All of the native batched GEQRF panel's device code: LAPACK ?GEQR2 over a `Tile`,

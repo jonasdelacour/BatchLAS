@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every potrf candidate, pinned: docs/design/flat-kernel-selection.md §8.1-§8.3 and §8.5.
 // The limit oracle below reads the drivers' own capacity queries; whether a pin was taken is
 // read back from the select trace, never assumed from the pin being accepted.

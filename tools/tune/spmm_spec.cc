@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // spmm for the tuner (GPU tables only; the cpu tables stay transcribed): a square m x m CSR A with
 // min(m, 8) sorted, scattered columns per row (a hashed start, stride m / r; items cycle through four
 // patterns, item 0 and batch-1 differ), values, B and C0 from MatrixView::fill_random (complex parts

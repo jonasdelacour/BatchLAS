@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every getrs candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-getrs. The limit oracle reads the drivers' own capacity
 // constants; which kernel ran is read back from the select trace or a bit-for-bit comparison

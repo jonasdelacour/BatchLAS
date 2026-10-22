@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potrf (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/potrf.<device>.txt row that can_run() admits. Kernel bodies live in
 // kernels/potrf_{tiny,cta,lpanel,blocked}.cc.

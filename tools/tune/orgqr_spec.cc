@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // orgqr for the tuner (src/ops/orgqr/choice.hh): reflectors and tau from one untimed public geqrf
 // (Auto) of a MatrixView::fill_random M, R on and above the diagonal (values orgqr must ignore),
 // ld = m + ld_pad. Verified on the default items by MatrixView::qr_reconstruction, ||M - Q R||_F /

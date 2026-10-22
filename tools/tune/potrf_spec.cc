@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the MatrixView::potrf_residual
 // factorization residual (docs/design/verification.md), every candidates<T>() entry pinned through
 // the public potrf.

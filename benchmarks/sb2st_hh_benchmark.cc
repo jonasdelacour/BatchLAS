@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Splits the Householder stage-2 cost: the chase (sytrd_sb2st_hh) versus the
 // Q2 back-transform (unmqr_hb2st), so it is clear which one to optimise.
 

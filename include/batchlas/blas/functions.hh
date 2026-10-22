@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #ifndef BATCHLAS_BLAS_FUNCTIONS_HH
 #define BATCHLAS_BLAS_FUNCTIONS_HH
 

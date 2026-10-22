@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """A campaign on disk: config, append-only results, status, figures.
 
     <root>/<name>/campaign.json   the request, plus provenance (git, device)

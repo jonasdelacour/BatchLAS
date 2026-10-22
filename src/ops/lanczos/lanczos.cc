@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //Implementation file for Lanczos algorithm
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>

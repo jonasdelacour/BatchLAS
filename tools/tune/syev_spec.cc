@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syev for the tuner: a graded Hermitian A from MatrixView::fill_graded_hermitian (condition 1e6, a
 // different eigenbasis per item, so item 0 and batch-1 differ), Lower named, the ld padding poisoned
 // with a large finite value. The upper triangle holds the mirror, not poison: blocked (n <= 32) and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // ormqr (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/ormqr.<device>.txt row that can_run() admits. Blocked is the WY apply (larft + level-3
 // updates) in ormqr_blocked.cc; Vendor is cuSOLVER / rocSOLVER / LAPACKE ormqr.

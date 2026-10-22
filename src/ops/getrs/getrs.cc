@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrs (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/getrs.<device>.txt row that can_run() admits. Cta permutes and solves both triangles in
 // one kernel with the right-hand sides resident in local memory; Blocked applies the interchanges and

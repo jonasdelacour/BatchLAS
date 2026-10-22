@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syr2k for the tuner (real only): C = alpha (A B^T + B A^T) + beta C on the lower triangle, A, B
 // and C0 from MatrixView::fill_random, C0's strict upper triangle then poisoned with a large finite
 // value, beta = 0.75 so C is read. uplo and trans are not table keys: fixed at L and N (the

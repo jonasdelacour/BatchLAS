@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRI. With A = F^{-1} L U (F the interchange sequence applied
 // FORWARDS), A^-1 = U^-1 L^-1 F: set C := F, then two ROUTED triangular solves.
 // F is traced straight into C from ipiv, so there is no permutation kernel, no

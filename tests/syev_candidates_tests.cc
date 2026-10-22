@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every syev candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-syev. Inputs have a known spectrum (A = Q diag(lambda) Q^H with a
 // host Householder Q), so no reference goes through the code under test. Which kernel ran is

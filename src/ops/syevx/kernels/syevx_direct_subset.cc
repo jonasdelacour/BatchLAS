@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syevx_direct_subset: partial symmetric eigensolve via reduction to tridiagonal
 // form, a subset tridiagonal solve, and back-transforms narrowed to the selected
 // columns. Compare syev_two_stage.cc.

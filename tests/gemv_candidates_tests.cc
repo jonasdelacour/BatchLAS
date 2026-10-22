@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every gemv candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-gemv. The limit oracle reads the drivers' own rules; which
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct

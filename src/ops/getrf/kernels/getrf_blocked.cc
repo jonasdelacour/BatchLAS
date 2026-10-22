@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRF, BLOCKED tier: right-looking driver, (P) panel, (S) interchanges,
 // (T) solve L11 \ A12, (G) update A22 -= L21 U12. Must stay in EXTENSIONS_CTA_SOURCES:
 // (P) calls a device symbol from getrf_cta.cc and the two share one device-code cluster.

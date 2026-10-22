@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Fail when a Markdown file lives outside docs/.
 
 WHY THIS EXISTS

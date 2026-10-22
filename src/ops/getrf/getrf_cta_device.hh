@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // All of the native batched GETRF panel's device code. FOUR spellings here are wrong

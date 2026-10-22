@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Host-only tests of the tuner core (tools/tune/tune_core.cc; flat-kernel-selection.md §6):
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, kernel hash v2, the
 // ledger, and the round trip through scripts/sweep_to_table.py. No GPU.

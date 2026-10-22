@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // P0 of docs/design/small-n-factorization-plan.md: the in-tree, correct,
 // saturation-aware A/B harness for the batched factorizations
 // (potrf / getrf / getrs / geqrf / orgqr / gesv / posv) at n = 4..512.

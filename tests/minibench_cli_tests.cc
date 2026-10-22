@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/enums.hh>

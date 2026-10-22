@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // End-to-end checks for syev_two_stage in eigenvector mode.
 //
 // Until sytrd_sb2st_hh existed, this path forced kd=1 (syev_two_stage.cc), so

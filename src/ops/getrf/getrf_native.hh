@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched GETRF, declarations only. The blocked driver's panel leaf IS the CTA tier's

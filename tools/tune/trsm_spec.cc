@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // trsm for the tuner (flat-kernel-selection-phase3-plan.md §1.2, §3): a strongly diagonally
 // dominant triangular A (other triangle poisoned with a large finite value), random B, alpha with
 // an imaginary part, and the componentwise backward error of op(A) X = alpha B (Left) or

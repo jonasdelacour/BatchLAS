@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //#include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
 #include <batchlas/blas/device/detail/group_blas_common.hh>

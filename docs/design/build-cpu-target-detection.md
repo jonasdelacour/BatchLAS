@@ -63,9 +63,9 @@ verification layer run on the OpenMP device (@ref design_sycl_implementations).
 - `minibench_cli_tests` is not built. It is the only member of `CPU_SYCL_DEPENDENT_TESTS`
   (`tests/CMakeLists.txt:137-147`).
 - Every NETLIB instantiation of every typed suite is compiled out. `backend_types`,
-  `backend_types_filtered` and `backend_types_complex` (`tests/test_utils.hh:131-212`) add the NETLIB
+  `backend_types_filtered` and `backend_types_complex` (`tests/test_utils.hh:132-213`) add the NETLIB
   block only when `BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET`. Any NETLIB configuration
-  still reached is skipped in `BatchLASTest::SetUp()` (`tests/test_utils.hh:364`).
+  still reached is skipped in `BatchLASTest::SetUp()` (`tests/test_utils.hh:365`).
 
 > **Note:** Other test binaries still build (for example `ormqr_cta_tests`, `syev_cta_tests`,
 > `sytrd_cta_tests`), because their GPU kernels compile and host LAPACK needs no SYCL kernel. Their

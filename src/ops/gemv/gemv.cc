@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gemv (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-gemv): select::run
 // takes the first entry of the nearest tuned/gemv.<device>.txt row that can_run() admits. Direct
 // is one work-item per output (bodies 1/2/4), Cta one sub-group per output (bodies 3/5); which body runs

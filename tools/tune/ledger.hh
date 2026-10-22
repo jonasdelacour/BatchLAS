@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The tuning ledger, one JSONL file per (op, device), host-only.

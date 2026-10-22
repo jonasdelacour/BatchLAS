@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share. The device
 // body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
 // against a global accessor -- correctness fixes belong there. Whether Auto picks THIS arm is

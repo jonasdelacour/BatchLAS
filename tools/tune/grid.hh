@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Tier lattices and multi-axis bisection (docs/design/tiered-tuning.md, "Engine: tiers"). Host-only.

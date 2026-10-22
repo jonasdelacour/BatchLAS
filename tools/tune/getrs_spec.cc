@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrs for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A
 // factored once, untimed, by the public getrf under Auto (factor_bench's protocol), fill_random B,
 // NoTrans, verified on the default items by MatrixView::lu_solve_residual against those factors

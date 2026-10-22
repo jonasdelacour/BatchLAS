@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // posv for the tuner (flat-kernel-selection-phase3-plan.md §1.1): SPD A, random B, the
 // MatrixView::solve_residual (docs/design/verification.md). posv's cta and blocked times
 // include the public potrf and trsm the composition calls, each choosing for itself (plan §2 "Coupling").
