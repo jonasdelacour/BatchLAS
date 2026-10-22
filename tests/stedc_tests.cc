@@ -212,6 +212,30 @@ TYPED_TEST(StedcTest, BatchedRandomMatrices) {
     test_utils::expect_eigenpairs<float_type>(*this->ctx, dense, eigvects, eigvals, n);
 }
 
+// The deflation scan (merge order >= 512) reads the kept widths from the CALLER's workspace;
+// a device-only one must work. A host read of it segfaulted (gesvd n=256's bdsdc, syev n=512).
+TYPED_TEST(StedcTest, DeviceWorkspaceAtTheDeflationScanOrder) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int n = 512, batch = 2;
+    auto a = Vector<float_type>::random(n, batch);
+    auto b = Vector<float_type>::random(n - 1, batch);
+    UnifiedVector<float_type> eigvals(static_cast<size_t>(n) * batch);
+    auto eigvects = Matrix<float_type>::Identity(n, batch);
+    Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
+    dense.fill_tridiag(*this->ctx, b, a, b).wait();
+    const StedcParams<float_type> params{};
+    const size_t bytes = stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params);
+    std::byte* dev = sycl::malloc_device<std::byte>(bytes, (*this->ctx)->get_device(), (*this->ctx)->get_context());
+    ASSERT_NE(dev, nullptr);
+    (void)stedc(*this->ctx, a, b, VectorView<float_type>(eigvals, n, batch), Span<std::byte>(dev, bytes),
+                JobType::EigenVectors, params, eigvects);
+    this->ctx->wait();
+    sycl::free(dev, (*this->ctx)->get_context());
+    test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n);
+    test_utils::expect_eigenpairs<float_type>(*this->ctx, dense, eigvects, eigvals, n);
+}
+
 // The level-synchronous driver is the default; this pins it against the
 // recursive one it replaced. n = 128 needs no padding (32 * 2^2 = 128), n = 100
 // and n = 129 both do, which is where the padded diagonal tail and the
