@@ -576,3 +576,61 @@ The header holds `ormqr_blocked.cc`'s bodies (moved verbatim); a third private c
 ### larft_wy.hh: pack_v indexes the row fastest
 
 `sycl::id<3>` makes dim 2 the fastest-varying index and both operands are column-major, so with the column in dim 2 a warp read and wrote 32 sectors instead of 4. Before the swap `pack_v` on a 17.3 MB job (float m = n = 1024, batch 128, nb = 32) took 63.7 us median per instance, 3.4x the DRAM floor (the 72 MB L2 hid most of the amplification; about 8x at larger m or batch). The same fix covers `OrgqrIdentityKernel` and `OrgqrCopyBackKernel`.
+
+## geqrf wide shapes, m less than n
+
+**2026-10-23, RTX 4090 (sm_89), GPU 1.** A wide `geqrf` (m < n) writes the k = m reflectors below the diagonal, and their \f$Q^H\f$ applied to every column above it, so R is upper trapezoidal m x n. Tau holds `min(m, n)` entries per item, as before.
+
+- **What changed:** before this, `can_run` refused m < n on every native family, so a wide `geqrf` had no route in a vendor-free build or on `Backend::SYCL`.
+- **No new kernel:** `cta`'s `?GEQR2` and the blocked driver already ran `min(m, n)` reflectors and applied each one across all n trailing columns, which is LAPACK's own m < n path. The fix removes the gate in `can_run.hh`, `geqrf_cta.cc` and `geqrf_blocked.cc`. `tiny` stays square-only.
+- **No separate ormqr pass:** the wide part `A(:, m:n)` is the last panels' trailing update, so the "QR of the leading block, then `ormqr`" composition is not needed.
+- **Consumers:** orgqr and ormqr take the leading m x m reflector block. `GeqrfTest.WideFactorsTheWholeMatrix` forms Q with the routed `ormqr` and checks \f$\|A_0 - Q\,\mathrm{triu}(F)\|\f$ over all n columns.
+
+### geqrf wide: native against cuSOLVER
+
+`factor_bench geqrf`, median ms, arms interleaved, best native arm shown.
+
+| type | shape | batch 128: vendor / native | ratio | batch 1024: vendor / native | ratio |
+|---|---|---:|---:|---:|---:|
+| float | 48x64 | 1.066 / 0.118 cta | 9.0x | 1.074 / 0.337 cta | 3.2x |
+| float | 4x64 | 0.098 / 0.016 cta | 6.3x | 0.103 / 0.035 cta | 3.0x |
+| float | 32x256 | 3.98 / 0.251 cta | 15.9x | 4.01 / 0.694 blocked | 5.8x |
+| float | 128x256 | 18.0 / 1.30 blocked | 13.8x | 29.7 / 3.60 blocked | 8.3x |
+| float | 64x512 | 17.6 / 0.725 blocked | 24.3x | 25.5 / 2.21 blocked | 11.5x |
+| float | 256x1024 | 269 / 4.58 blocked | 58.7x | 461 / 24.6 blocked | 18.7x |
+| float | 16x1024 | 7.79 / 0.160 blocked | 48.6x | 8.07 / 0.696 blocked | 11.6x |
+| float | 1000x1024 | 2200 / 34.4 blocked | 64x | 4323 / 248 blocked | 17.4x |
+| float | 128x8192 | 1056 / 7.97 blocked | 132x | 1364 / 57.9 blocked | 23.6x |
+| cfloat | 48x64 | 1.197 / 0.136 cta | 8.8x | 1.207 / 0.543 cta | 2.2x |
+| cfloat | 4x64 | 0.116 / 0.019 cta | 6.2x | 0.118 / 0.046 blocked | 2.6x |
+| cfloat | 128x256 | 20.3 / 2.51 blocked | 8.1x | 48.7 / 6.80 blocked | 7.2x |
+| cfloat | 64x512 | 19.5 / 1.41 blocked | 13.9x | 36.0 / 4.26 blocked | 8.4x |
+| cfloat | 256x1024 | 355 / 9.34 blocked | 38x | 732 / 47.9 blocked | 15.3x |
+| cfloat | 16x1024 | 8.23 / 0.195 blocked | 42x | not admitted | |
+| cfloat | 128x8192 | 1224 / 15.8 blocked | 78x | not admitted | |
+
+The native arm wins every measured cell.
+
+- **Contaminated cells, not admitted:** the cfloat batch-1024 runs of 128x8192, 1000x1024, 16x1024 and 8x256 were taken while another user's process held GPU 1 at 100% (23 GB). A 128x8192 cfloat batch-1024 problem alone is about 8.6 GB per buffer, so it also oversubscribes the card. These runs were noisy (`rel_sd` up to 0.35) and repeated badly.
+- **The smallest cells (1x2 to 8x16):** all quantized to about 2.26 ms under that contention, so they say nothing.
+
+### geqrf wide: the table rows
+
+sm_89 `form=wide` rows for float and cfloat, edited by hand and tagged `# measured: <this section>`; the next `tools/tune` pass should absorb them:
+
+- n = 64, aspects 1, 4 and 64: `cta | blocked | vendor`.
+- n = 1024, aspects 1, 4 and 64, and n = 8192 aspect 64: `blocked | cta | vendor`.
+- Left at `vendor` (unmeasured): n = 2 (the cells drowned in contention) and n = 8192 at aspects 1 and 4 (too large to measure at batch >= 128). Double and cdouble stay `vendor` (1:64 FP64 card: not tuned).
+
+A vendor-free build takes the last resort, `blocked`, on every row that names only the vendor.
+
+### geqrf wide: armed break
+
+Stopping the blocked trailing update at column m (`n2 = min(m, n) - j2`) turned red exactly these tests, on all four types, and nothing square or tall:
+
+- `GeqrfTest.WideFactorsTheWholeMatrix`;
+- `NativeFactorMatchesTheVendorElementwise` (its wide rows);
+- `GeqrfCandidates.PinnedCandidatesStraddleTheirLimits`;
+- `ExactWorkspaceInAPoisonedArena`.
+
+Reverted.
