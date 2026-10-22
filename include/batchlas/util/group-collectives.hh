@@ -101,13 +101,13 @@ inline constexpr bool kExactWgReducePass = ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP ||
 
 // One scratch per T per kernel, shared by every op and call site, as AdaptiveCpp's own is.
 template <typename T>
-__attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
+ACPP_UNIVERSAL_TARGET __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
     local_ptr<T> p = nullptr;
     __acpp_if_target_sscp(static __attribute__((loader_uninitialized))
                           __attribute__((address_space(3))) T buf[32];
                           p = &buf[0];)
-    __acpp_if_target_hiplike(__shared__ alignas(T) unsigned char raw[32 * sizeof(T)];
-                             p = (local_ptr<T>)reinterpret_cast<T*>(&raw[0]);)
+    __acpp_if_target_hiplike(__shared__ std::aligned_storage_t<32 * sizeof(T), alignof(T)> raw;
+                             p = (local_ptr<T>)reinterpret_cast<T*>(&raw);)
     return p;
 }
 

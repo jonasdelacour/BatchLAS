@@ -7,6 +7,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -2819,4 +2820,76 @@ TEST(DeviceBlasTest, PortableGroupReductionsAreExact) {
     check_portable_group_reductions_on<float>(*cpu, "cpu device");
     check_portable_group_reductions_on<double>(*cpu, "cpu device");
 #endif
+}
+
+namespace {
+
+// Integers of mixed magnitude (1 .. 2^42, either sign) plus one 2^50 per group. Every partial sum of
+// a group stays below 2^53 in magnitude, so ANY summation order is exact in double and the sum must
+// equal the int64 sum bit for bit; the sums keep about 50 significant bits, so a reduce that rounds
+// on the way (acpp's SSCP broadcast keeps ~42) or loses a partial cannot pass.
+std::int64_t mixed_magnitude_integer(std::uint64_t i, std::uint64_t in_group) {
+    if (in_group == 1) return std::int64_t(1) << 50;
+    const std::uint64_t h = test_hash(i * 7 + 3);
+    const std::int64_t v = static_cast<std::int64_t>(1 + ((h >> 20) % 1023)) << ((h >> 40) % 33);
+    return (h >> 63) ? -v : v;
+}
+
+int significant_bits(std::int64_t v) {
+    std::uint64_t a = static_cast<std::uint64_t>(v < 0 ? -v : v);
+    if (a == 0) return 0;
+    while (!(a & 1)) a >>= 1;
+    int bits = 0;
+    for (; a != 0; a >>= 1) ++bits;
+    return bits;
+}
+
+}  // namespace
+
+// P0.6: a double WORK-GROUP sum through batchlas::portable is exact on every SYCL implementation,
+// including AdaptiveCpp multipass CUDA (cuda:sm_XX), whose own reduce reuses its scratch without a
+// trailing barrier. Two sums back to back (the second is minus the first) catch a reused scratch.
+TEST(DeviceBlasTest, PortableWorkGroupDoubleSumIsExact) {
+    if (test_utils::native_gpu_lacks_fp64) GTEST_SKIP() << "no device fp64";
+    Queue ctx(Device::default_device());
+    constexpr size_t kBatch = 1024;
+    const size_t max_wg = std::min<size_t>(1024, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    for (size_t wg : {size_t(64), size_t(96), size_t(256), max_wg}) {
+        if (wg > max_wg) continue;
+        UnifiedVector<double> in(kBatch * wg), out(kBatch * wg), out_neg(kBatch * wg);
+        std::vector<std::int64_t> want(kBatch, 0);
+        int strong = 0;
+        for (size_t b = 0; b < kBatch; ++b) {
+            for (size_t i = 0; i < wg; ++i) {
+                const std::int64_t v = mixed_magnitude_integer(b * wg + i, i);
+                in[b * wg + i] = static_cast<double>(v);
+                want[b] += v;
+            }
+            strong += significant_bits(want[b]) >= 46;
+        }
+        ASSERT_GT(strong, static_cast<int>(kBatch / 2)) << "inputs no longer need 46+ significant bits";
+        const double* pin = in.data();
+        double* po = out.data();
+        double* pn = out_neg.data();
+        ctx->parallel_for(sycl::nd_range<1>(kBatch * wg, wg), [=](sycl::nd_item<1> it) {
+            const auto g = it.get_group();
+            const size_t gid = it.get_global_linear_id();
+            const size_t mirror = g.get_group_linear_id() * wg + (wg - 1 - it.get_local_linear_id());
+            po[gid] = batchlas::portable::reduce_over_group(g, pin[gid], sycl::plus<double>());
+            pn[gid] = batchlas::portable::reduce_over_group(g, -pin[mirror], sycl::plus<double>());
+        });
+        ctx.wait_and_throw();
+        int bad = 0;
+        for (size_t b = 0; b < kBatch && bad < 8; ++b) {
+            const double w = static_cast<double>(want[b]);
+            const double wn = -w;
+            for (size_t i = 0; i < wg && bad < 8; ++i) {
+                const bool ok = std::memcmp(&out[b * wg + i], &w, sizeof(double)) == 0 &&
+                                std::memcmp(&out_neg[b * wg + i], &wn, sizeof(double)) == 0;
+                bad += !ok;
+                EXPECT_TRUE(ok) << "wg=" << wg << " group " << b << " item " << i << ": got " << out[b * wg + i]
+                                << " and " << out_neg[b * wg + i] << ", exact " << want[b];
+            }
+        }
+    }
 }

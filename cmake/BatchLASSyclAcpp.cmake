@@ -64,6 +64,53 @@ get_filename_component(_acpp_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
 get_filename_component(_acpp_real "${CMAKE_CXX_COMPILER}" REALPATH)
 get_filename_component(_acpp_real_bin "${_acpp_real}" DIRECTORY)
 get_filename_component(_acpp_root "${_acpp_real_bin}" DIRECTORY)
+
+# Multipass CUDA (cuda:sm_XX) compiles device code with acpp's clang (LLVM 20 for 25.10) in CUDA
+# mode, which rejects CUDA 13 headers: such a tree needs a CUDA 12.x toolkit. Design:
+# docs/design/sycl-implementations.md#sycl-impl-cuda-aot
+set(BATCHLAS_ACPP_CUDA_PATH "" CACHE PATH
+    "CUDA toolkit for --acpp-targets=cuda:sm_XX (--acpp-cuda-path); empty: acpp's configured default")
+string(REGEX MATCH "cuda:(sm_[0-9]+a?)" _acpp_cuda_target "${BATCHLAS_ACPP_TARGETS}")
+set(BATCHLAS_ACPP_CUDA_AOT_ARCH "${CMAKE_MATCH_1}")
+set(_acpp_cuda_flags "")
+if(BATCHLAS_ACPP_CUDA_AOT_ARCH)
+    set(_acpp_aot_cuda "${BATCHLAS_ACPP_CUDA_PATH}")
+    if(_acpp_aot_cuda)
+        list(APPEND _acpp_cuda_flags "--acpp-cuda-path=${_acpp_aot_cuda}")
+        if(NOT CUDAToolkit_ROOT)
+            set(CUDAToolkit_ROOT "${_acpp_aot_cuda}" CACHE PATH "CUDA toolkit root (BATCHLAS_ACPP_CUDA_PATH)")
+        endif()
+    elseif(EXISTS "${_acpp_root}/etc/AdaptiveCpp/acpp-cuda.json")
+        file(READ "${_acpp_root}/etc/AdaptiveCpp/acpp-cuda.json" _acpp_cuda_json)
+        if(_acpp_cuda_json MATCHES "\"default-cuda-path\"[ \t]*:[ \t]*\"([^\"]+)\"")
+            set(_acpp_aot_cuda "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+    # clang's CUDA wrapper includes curand headers, which an NVIDIA HPC SDK keeps in math_libs/<v>.
+    if(_acpp_aot_cuda AND NOT EXISTS "${_acpp_aot_cuda}/include/curand_mtgp32_kernel.h"
+       AND _acpp_aot_cuda MATCHES "^(.*)/cuda/([0-9.]+)/?$")
+        set(_hpc_math "${CMAKE_MATCH_1}/math_libs/${CMAKE_MATCH_2}/targets/x86_64-linux/include")
+        if(EXISTS "${_hpc_math}/curand_mtgp32_kernel.h")
+            list(APPEND _acpp_cuda_flags "-isystem${_hpc_math}")
+        endif()
+    endif()
+    if(_acpp_aot_cuda AND EXISTS "${_acpp_aot_cuda}/version.json")
+        file(READ "${_acpp_aot_cuda}/version.json" _cuda_version_json)
+        if(_cuda_version_json MATCHES "\"cuda\"[^}]*\"version\"[ \t]*:[ \t]*\"([0-9]+)\\.([0-9]+)")
+            if(CMAKE_MATCH_1 GREATER_EQUAL 13)
+                message(FATAL_ERROR "--acpp-targets=${BATCHLAS_ACPP_TARGETS} with CUDA ${CMAKE_MATCH_1}.${CMAKE_MATCH_2} "
+                    "(${_acpp_aot_cuda}): acpp's clang cannot compile CUDA 13 headers. Set "
+                    "BATCHLAS_ACPP_CUDA_PATH to a CUDA 12.x toolkit.")
+            endif()
+            if(CMAKE_MATCH_1 EQUAL 12 AND CMAKE_MATCH_2 GREATER 8)
+                list(APPEND _acpp_cuda_flags "-Wno-unknown-cuda-version")
+            endif()
+        endif()
+    endif()
+    message(STATUS "AdaptiveCpp multipass CUDA ${BATCHLAS_ACPP_CUDA_AOT_ARCH}: toolkit "
+        "'${BATCHLAS_ACPP_CUDA_PATH}' (empty: acpp's default), extra flags '${_acpp_cuda_flags}'")
+endif()
+
 find_program(BATCHLAS_ACPP_INFO acpp-info HINTS "${_acpp_bin}" "${_acpp_real_bin}" NO_DEFAULT_PATH)
 
 set(_acpp_devices "")
@@ -146,6 +193,14 @@ foreach(_dev IN LISTS _acpp_devices)
         set(_min_budget "${_budget}")
     endif()
 endforeach()
+# An explicit cuda:sm_XX target names the device, so a GPU-less box (hosted CI) still builds the
+# CUDA backend for it; the install must have acpp's CUDA runtime backend to run it anywhere.
+if(BATCHLAS_ACPP_CUDA_AOT_ARCH AND NOT BATCHLAS_DETECTED_NVIDIA_GPU
+   AND EXISTS "${_acpp_root}/lib/hipSYCL/librt-backend-cuda${CMAKE_SHARED_LIBRARY_SUFFIX}")
+    set(BATCHLAS_DETECTED_NVIDIA_GPU TRUE)
+    message(STATUS "No CUDA device visible; building the CUDA backend for --acpp-targets "
+        "${BATCHLAS_ACPP_CUDA_AOT_ARCH}")
+endif()
 if(_min_budget EQUAL 0)
     set(_min_budget 28672)
 endif()
@@ -236,7 +291,7 @@ set(BATCHLAS_SYCL_TARGETS_NO_CPU "")
 set(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING "")
 set(BATCHLAS_SYCL_BACKEND_OPTION "")
 set(BATCHLAS_SYCL_BACKEND_OPTION_STRING "")
-set(BATCHLAS_SYCL_CONSUMER_OPTIONS "--acpp-targets=${BATCHLAS_ACPP_TARGETS}")
+set(BATCHLAS_SYCL_CONSUMER_OPTIONS "--acpp-targets=${BATCHLAS_ACPP_TARGETS}" ${_acpp_cuda_flags})
 message(STATUS "Using AdaptiveCpp targets: ${BATCHLAS_ACPP_TARGETS}")
 
 # Literal target names, not a foreach: check_exported_package.py lints only calls it can name.
@@ -246,6 +301,12 @@ target_link_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:--acpp-ta
 target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:--acpp-targets=${BATCHLAS_ACPP_TARGETS}>>")
 target_link_options(batchlas_sycl_no_cpu_options INTERFACE "$<BUILD_INTERFACE:--acpp-targets=${BATCHLAS_ACPP_TARGETS}>")
+foreach(_flag IN LISTS _acpp_cuda_flags)
+    target_compile_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_flag}>>")
+    target_compile_options(batchlas_sycl_no_cpu_options INTERFACE "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_flag}>>")
+    target_link_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:${_flag}>")
+    target_link_options(batchlas_sycl_no_cpu_options INTERFACE "$<BUILD_INTERFACE:${_flag}>")
+endforeach()
 
 # Device __mulsc3/__muldc3/__divsc3/__divdc3 (Annex G) in every TU; SSCP ships none, and a shared
 # definitions TU cannot link (see the header). Joined -include<path>: one option, never de-duplicated.
@@ -255,11 +316,12 @@ target_compile_options(batchlas_sycl_options INTERFACE
 target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
     "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-include${BATCHLAS_ACPP_ANNEXG_HEADER}>>")
 
-# The acpp driver adds -ffp-contract=fast at -O2 and above (fusing across statements); DPC++ fuses
-# only within one expression. Spelling it out keeps both rounding the same way (design page, A11).
+# The acpp driver adds -ffp-contract=fast at -O2 and above (fusing across statements) unless one is
+# given; DPC++ fuses only within one expression. Spelling it out keeps both rounding the same way
+# (design page, A11; BATCHLAS_FP_CONTRACT in BatchLASOptions.cmake).
 target_compile_options(batchlas_sycl_options INTERFACE
-    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>>")
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=${BATCHLAS_FP_CONTRACT_RESOLVED}>>")
 target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
-    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=on>>")
+    "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:-ffp-contract=${BATCHLAS_FP_CONTRACT_RESOLVED}>>")
 
 message(STATUS "Using AdaptiveCpp for SYCL: ${CMAKE_CXX_COMPILER}")
