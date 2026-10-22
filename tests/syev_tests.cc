@@ -469,7 +469,8 @@ TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
                 UnifiedVector<T> buf(size_t(stride) * batch, T(0));
                 Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
                 const auto lambda = fill_graded_hermitian<T>(buf.data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
-                MV A(buf.data(), n, n, ld, stride, batch);
+                UnifiedVector<T*> ptrs(batch, nullptr);
+                MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
                 UnifiedVector<Real> W(size_t(n) * batch, Real(0));
                 UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W.to_span(), jobz, uplo));
                 (void)syev<B, T>(*this->ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
@@ -519,7 +520,8 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
                                                 UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-2))};
                     for (int r = 0; r < 2; ++r) {
                         (void)fill_graded_hermitian<T>(buf[r].data(), ld, stride, uplo, unreferenced_poison<T>(), A0);
-                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch);
+                        UnifiedVector<T*> ptrs(c.batch, nullptr);
+                        MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs.data());
                         UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo));
                         (void)syev<B, T>(*this->ctx, A, W[r].to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
                         this->ctx->wait();

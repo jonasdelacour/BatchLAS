@@ -60,7 +60,8 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  *                    otherwise its contents are destroyed
  * @param eigenvalues n real eigenvalues per batch item, packed, ascending
  * @param jobtype     `EigenVectors` or `NoEigenVectors`
- * @param uplo        which triangle of `descrA` holds the matrix
+ * @param uplo        which triangle of `descrA` holds the matrix; only it is read (the
+ *                    diagonal's imaginary part is taken as zero), the other may be overwritten
  * @param workspace   at least syev_buffer_size() bytes for the same arguments
  * @param info        per-item convergence status: 0 converged, > 0 LAPACK-like (the
  *                    number of off-diagonals that failed to converge, or 1 where the tier
