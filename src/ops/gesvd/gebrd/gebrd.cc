@@ -2,6 +2,7 @@
 #include <batchlas/backend_config.h>
 
 #include <src/math-helpers.hh>
+#include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -125,6 +126,72 @@ Event gebrd_unblocked_real(Queue& ctx,
     return ctx.get_event();
 }
 
+// zgebd2, one work-item per matrix: d, e real; row i holds conj(u_i) on exit (unmbr 'P' order).
+template <typename T>
+Event gebrd_unblocked_complex(Queue& ctx,
+                              const MatrixView<T, MatrixFormat::Dense>& a,
+                              const VectorView<typename base_type<T>::type>& d,
+                              const VectorView<typename base_type<T>::type>& e,
+                              const VectorView<T>& tauq,
+                              const VectorView<T>& taup) {
+    using Real = typename base_type<T>::type;
+    using gebrd_detail::conj;
+    const int32_t m = static_cast<int32_t>(a.rows());
+    const int32_t n = static_cast<int32_t>(a.cols());
+    const int32_t batch = static_cast<int32_t>(a.batch_size());
+
+    ctx->submit([&](sycl::handler& cgh) {
+        auto A = a.kernel_view();
+        auto D = d;
+        auto E = e;
+        auto TAUQ = tauq;
+        auto TAUP = taup;
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            const int32_t b = static_cast<int32_t>(tid[0]);
+            for (int32_t i = 0; i < n; ++i) {
+                Real sigma = Real(0);
+                for (int32_t r = i + 1; r < m; ++r) sigma += internal::norm_squared(A(r, i, b));
+                const auto lq = gebrd_detail::larfg_real_beta(A(i, i, b), sycl::sqrt(sigma), m - i);
+                for (int32_t r = i + 1; r < m; ++r) A(r, i, b) *= lq.scale;
+                A(i, i, b) = T(1);
+                // A := H^H A, H^H = I - conj(tau) v v^H.
+                const T ctau = conj(lq.tau);
+                for (int32_t c = i + 1; c < n && lq.tau != T(0); ++c) {
+                    T dot = T(0);
+                    for (int32_t r = i; r < m; ++r) dot += conj(A(r, i, b)) * A(r, c, b);
+                    dot *= ctau;
+                    for (int32_t r = i; r < m; ++r) A(r, c, b) -= A(r, i, b) * dot;
+                }
+                D(i, b) = internal::real_part(lq.beta);
+                A(i, i, b) = lq.beta;
+                TAUQ(i, b) = lq.tau;
+                if (i >= n - 1) {
+                    TAUP(i, b) = T(0);
+                    continue;
+                }
+                for (int32_t c = i + 1; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
+                Real sigma_r = Real(0);
+                for (int32_t c = i + 2; c < n; ++c) sigma_r += internal::norm_squared(A(i, c, b));
+                const auto rp = gebrd_detail::larfg_real_beta(A(i, i + 1, b), sycl::sqrt(sigma_r), n - (i + 1));
+                for (int32_t c = i + 2; c < n; ++c) A(i, c, b) *= rp.scale;
+                A(i, i + 1, b) = T(1);
+                // A := A G, G = I - tau u u^H.
+                for (int32_t r = i + 1; r < m && rp.tau != T(0); ++r) {
+                    T dot = T(0);
+                    for (int32_t c = i + 1; c < n; ++c) dot += A(r, c, b) * A(i, c, b);
+                    dot *= rp.tau;
+                    for (int32_t c = i + 1; c < n; ++c) A(r, c, b) -= dot * conj(A(i, c, b));
+                }
+                for (int32_t c = i + 2; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
+                E(i, b) = internal::real_part(rp.beta);
+                A(i, i + 1, b) = rp.beta;
+                TAUP(i, b) = rp.tau;
+            }
+        });
+    });
+    return ctx.get_event();
+}
+
 } // namespace
 
 template <Backend B, typename T>
@@ -140,7 +207,7 @@ Event gebrd_unblocked(Queue& ctx,
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
     if constexpr (internal::is_complex<T>::value) {
-        throw batchlas::unsupported("gebrd_unblocked: complex types are not implemented yet");
+        return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup);
     } else {
         return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);
     }
