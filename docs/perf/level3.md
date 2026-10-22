@@ -175,9 +175,6 @@ is 6-9% faster than the vendor at 32768-131072; gemm 256^3 (32768-65536) reads a
 matches it (+0.1-0.6%); syrk n = k = 128 Auto (`gram`) is 15× faster than the vendor loop at every batch. Of the
 shapes checked only gemm 128^3 regresses, from 32768 up (3-7% there, before the cliff).
 
-Files: `benchmarks/results/batch_sensitivity/f4b/` (`gemm128_timing.csv`, `gemm128_routes.log`,
-`gemm128_summary.txt`, `quick_timing.csv`, `quick_routes.log`; the harness `bsweep.cc.txt` and `timing.sh.txt`).
-
 Tests: `GridBatchPastTheCeilingRunsAsSlices` (gemm, syrk, trmm, symm), `SplitKPastTheGridRunsAsSlices`,
 `Syr2kCandidates.GridCeilingsAreCanRunTerms`, `HerkTest.GramBatchPastTheGridRunsAsSlices` and the expansion tests
 `HemmTest`, `HerkTest` and `Her2kTest.ExpandBatchPastTheGridRunsAsSlices` (`BATCHLAS_EXPAND_ROUTE=expand`, the

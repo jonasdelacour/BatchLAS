@@ -883,8 +883,7 @@ itself is unchanged, so no kernel hash moves). herk has no spec. A cell still pa
 128^3), so the large shapes need `--cap-gib 32` (96 GB parts) to get their rows. Host-only `--plan`, sm_120
 (`--cus 188`), all ops, float and cfloat, before → after: empty ledger 12883 → 13357 cells, 11.00 → 11.73 GPU-h
 with refinement; the committed ledger on its old axis 14149 → 14627 cells, 13.52 → 13.92 h; at `--cap-gib 32`
-(empty ledger) 17542 → 19614 cells, 39.3 → 52.1 h. gemm is +428 of the 474 cells at the default cap
-(`benchmarks/results/batch_sensitivity/f4b/plan_*.txt`). The committed-ledger totals are above the 6748 cells
+(empty ledger) 17542 → 19614 cells, 39.3 → 52.1 h. gemm is +428 of the 474 cells at the default cap. The committed-ledger totals are above the 6748 cells
 quoted below because F4b's `src/ops/gemm/choice.hh` edit moved gemm's op hash, so every gemm record is stale.
 
 **Re-tune** (sm_120, GPUs 0, 2, 3; not run). A fresh ledger root, so no old-axis row survives into
