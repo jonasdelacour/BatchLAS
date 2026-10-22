@@ -420,7 +420,7 @@ heterogeneous batch on every backend (the loops run each item at the top-level e
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.
 
-**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 19 ops) takes `auto`,
+**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 24 ops) takes `auto`,
 `native`, `vendor` or a spelling (`lpanel:panel=8`, `lpanel:8`), case-folded and trimmed.
 
 - **A bad pin THROWS** (unparsable, not a compiled candidate, or cannot run the shape). Only the class
