@@ -52,29 +52,29 @@ inline void posv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                  Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
-            "POSV: Matrix dimensions cannot be negative (A: rows=" +
+            "posv: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) +
             "; B: rows=" + std::to_string(B.rows()) +
             ", cols=" + std::to_string(B.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument(
-            "POSV: A must be square, got " + std::to_string(A.rows()) + "x" +
+            "posv: A must be square, got " + std::to_string(A.rows()) + "x" +
             std::to_string(A.cols()));
     }
     if (A.rows() != B.rows()) {
         throw batchlas::invalid_argument(
-            "POSV: B must have A.rows() rows, got " + std::to_string(B.rows()) +
+            "posv: B must have A.rows() rows, got " + std::to_string(B.rows()) +
             " against " + std::to_string(A.rows()));
     }
     if (A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument(
-            "POSV: A and B must share a batch size, got " +
+            "posv: A and B must share a batch size, got " +
             std::to_string(A.batch_size()) + " and " + std::to_string(B.batch_size()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
         throw batchlas::invalid_argument(
-            "POSV: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
+            "posv: Invalid uplo parameter: " + std::to_string(static_cast<int>(uplo)));
     }
 }
 

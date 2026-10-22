@@ -230,7 +230,7 @@ namespace batchlas{
         auto C_view = descrC;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
             if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
-                throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+                throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
             }
 
             if (A_view.batch_size() == 1) {
@@ -468,7 +468,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
-            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("SYMM", A_view, B_view, C_view, side);
+            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("symm", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?symm takes A's order from side, not as an argument
 
             // The two complex slots have no callee because this overload is
@@ -516,7 +516,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
-            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("HEMM", A_view, B_view, C_view, side);
+            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("hemm", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?hemm takes A's order from side, not as an argument
 
             // The two real slots have no callee because BLAS has no real ?hemm;
@@ -563,7 +563,7 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
-            const auto [n, k] = backend::shape::validate_rank_k<batchlas::internal_error>("HERK", A_view, C_view, transA, /*hermitian=*/true);
+            const auto [n, k] = backend::shape::validate_rank_k<batchlas::internal_error>("herk", A_view, C_view, transA, /*hermitian=*/true);
 
             // The two real slots have no callee because BLAS has no real
             // ?herk -- that is syrk; T is constrained to complex, so they are
@@ -608,7 +608,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
-            const auto [n, k] = backend::shape::validate_rank_2k<batchlas::internal_error>("HER2K", A_view, B_view, C_view, transA, /*hermitian=*/true);
+            const auto [n, k] = backend::shape::validate_rank_2k<batchlas::internal_error>("her2k", A_view, B_view, C_view, transA, /*hermitian=*/true);
 
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
@@ -651,7 +651,7 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
-            const auto [n, k] = backend::shape::validate_rank_k<batchlas::internal_error>("SYRK", A_view, C_view, transA, /*hermitian=*/false);
+            const auto [n, k] = backend::shape::validate_rank_k<batchlas::internal_error>("syrk", A_view, C_view, transA, /*hermitian=*/false);
 
             // The two complex slots have no callee because this overload is
             // constrained to a real T; the complex rank-k update is herk.
@@ -695,7 +695,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
-            const auto [n, k] = backend::shape::validate_rank_2k<batchlas::internal_error>("SYR2K", A_view, B_view, C_view, transA, /*hermitian=*/false);
+            const auto [n, k] = backend::shape::validate_rank_2k<batchlas::internal_error>("syr2k", A_view, B_view, C_view, transA, /*hermitian=*/false);
 
             // The two complex slots have no callee because this overload is
             // constrained to a real T; the complex rank-2k update is her2k.
@@ -743,7 +743,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
-            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("TRMM", A_view, B_view, C_view, side);
+            const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("trmm", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?trmm takes A's order from side, not as an argument
 
             // CBLAS ?trmm works in place, so the operand has to arrive in C.

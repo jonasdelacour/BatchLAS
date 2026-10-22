@@ -54,7 +54,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
 
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+            throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
         }
 
         auto [m, k] = get_effective_dims(A, transA);
@@ -139,7 +139,7 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("SYMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
         static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
 
         // The two complex slots have no callee because symm is instantiated
@@ -192,7 +192,7 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("HEMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
 
         // The loop beats the expansion on a launch-bound call, so the shape must earn the extra kernel.
         // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
@@ -354,7 +354,7 @@ namespace batchlas {
                       Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
 
         // The same single-tile Gram kernel as syrk, with the ^H conjugating
@@ -445,7 +445,7 @@ namespace batchlas {
                        Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
         const bool no_trans = transA == Transpose::NoTrans;
 
@@ -509,7 +509,7 @@ namespace batchlas {
                            Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because syrk is instantiated
         // only for float and double here; the complex rank-k update is herk,
@@ -556,7 +556,7 @@ namespace batchlas {
                             Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because syr2k is instantiated
         // only for float and double here; the complex rank-2k update is her2k,
@@ -605,7 +605,7 @@ namespace batchlas {
                            Diag diag) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("TRMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("trmm", A, B, C, side);
         (void)k;
 
         // The per-batch cublas?trmm loop only: the expansion plus gemm is trmm's own

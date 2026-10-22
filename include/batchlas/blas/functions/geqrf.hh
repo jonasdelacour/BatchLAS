@@ -58,7 +58,7 @@ template <typename T>
 inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GEQRF: Matrix dimensions cannot be negative (rows=" +
+            "geqrf: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }

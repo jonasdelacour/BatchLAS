@@ -245,7 +245,7 @@ TEST(ErrorModelHierarchy, OutOfRangeIsCaughtThreeWays) {
 
 TEST(ErrorModelHierarchy, ErrorIsCaughtThreeWays) {
     ExpectThreeWayCatch<batchlas::error>(
-        [] { throw batchlas::error("ILU(k): symbolic phase produced a row without diagonal"); },
+        [] { throw batchlas::error("iluk: symbolic phase produced a row without diagonal"); },
         "symbolic phase");
 }
 

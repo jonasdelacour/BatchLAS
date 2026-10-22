@@ -126,7 +126,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, RealScalar T>
 Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
-    backend::shape::validate_product<batchlas::invalid_argument>("SYMM", A, B, C, side);
+    backend::shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
     // An empty problem is a no-op under any pin, as syrk's and trmm's are (the cuBLAS loop faults on one).
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: C's extents and A's order.

@@ -100,7 +100,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 template <Backend Back, RealScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
-    (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+    (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

@@ -27,7 +27,7 @@ namespace batchlas {
                Transpose transB,
                ComputePrecision precision) {
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+            throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
@@ -168,7 +168,7 @@ namespace batchlas {
                Transpose transA) {
         static LinalgHandle<B> handle;
 
-        const auto [n, k] = backend::shape::validate_rank_k<batchlas::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+        const auto [n, k] = backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because this overload is
         // constrained to a real T; the complex rank-k update is herk.
@@ -204,7 +204,7 @@ namespace batchlas {
                 Transpose transA) {
         static LinalgHandle<B> handle;
 
-        const auto [n, k] = backend::shape::validate_rank_2k<batchlas::invalid_argument>("SYR2K", A, Bmat, C, transA, /*hermitian=*/false);
+        const auto [n, k] = backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, Bmat, C, transA, /*hermitian=*/false);
 
         // The two complex slots have no callee because this overload is
         // constrained to a real T; the complex rank-2k update is her2k.
@@ -242,7 +242,7 @@ namespace batchlas {
                Diag diag) {
         static LinalgHandle<B> handle;
 
-        const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("TRMM", A, Bmat, C, side);
+        const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, Bmat, C, side);
         static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
 
         // ROCm >= 6.3 14-arg out-of-place form: ..., A, lda, B, ldb, C, ldc (B input, C output).

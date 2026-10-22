@@ -50,7 +50,7 @@ void validate(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Tran
     const auto [kb, n] = get_effective_dims(B, tb);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size() || k != kb || C.rows() != m ||
         C.cols() != n || m < 0 || n < 0 || k < 0)
-        throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+        throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
 }
 
 template <typename T>

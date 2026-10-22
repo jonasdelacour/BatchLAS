@@ -58,7 +58,7 @@ template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GETRI: Matrix dimensions cannot be negative (A: rows=" +
+            "getri: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }
@@ -73,11 +73,11 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
     getri_validate_params<T>(A);
     if (C.rows() < 0 || C.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GETRI: Matrix dimensions cannot be negative (C: rows=" +
+            "getri: Matrix dimensions cannot be negative (C: rows=" +
             std::to_string(C.rows()) + ", cols=" + std::to_string(C.cols()) + ")");
     }
     if (A.rows() > 0 && A.batch_size() > 0 && C.data_ptr() == A.data_ptr()) {
-        throw batchlas::invalid_argument("GETRI: C aliases A; getri is out of place");
+        throw batchlas::invalid_argument("getri: C aliases A; getri is out of place");
     }
 }
 
