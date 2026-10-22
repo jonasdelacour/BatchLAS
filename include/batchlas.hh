@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-#ifndef BATCHLAS_HH
-#define BATCHLAS_HH
+#pragma once
 
 /// @file
 /// @brief The umbrella header: `#include <batchlas.hh>` gives the whole public API.
@@ -13,5 +12,3 @@
 /// @ingroup api_reference
 
 #include <batchlas/blas/linalg.hh>
-
-#endif
