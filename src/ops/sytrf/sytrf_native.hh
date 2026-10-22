@@ -15,12 +15,10 @@
 
 namespace batchlas::sycl_sytrf {
 
-// One sub-group per matrix, the matrix resident in local memory: the sub-group width is the ceiling.
-inline constexpr int kSytrfCtaMaxN = 32;
+inline constexpr int kSytrfCtaMaxN = 32;  // one sub-group per matrix: the sub-group width is the ceiling
 inline constexpr int kSytrfCtaWg = 32;
 
-// The work-group the global-memory kernels launch: the largest multiple of 32 up to 256 the device takes.
-inline constexpr int kSytrfWgMax = 256;
+inline constexpr int kSytrfWgMax = 256;  // the widest work-group of the global-memory kernels
 
 // The per-item status fallback when the caller's `info` span is short; zero bytes are never returned.
 template <typename T>

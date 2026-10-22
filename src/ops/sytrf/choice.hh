@@ -20,7 +20,6 @@ using SytrfChoice = std::variant<Cta, Wg, Vendor>;  ///< natives: GPU, sub-group
 template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SytrfChoice>(); }
 
-/// Last resort (§5.5): the native that serves every order, then the vendor.
 inline constexpr std::array<std::string_view, 2> kLastResort{"wg", "vendor"};
 
 inline constexpr select::OpSpec spec{Op::sytrf, select::Lib::solver, select::Rules{kLastResort}};
