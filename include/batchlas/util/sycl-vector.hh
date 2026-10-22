@@ -105,12 +105,12 @@ struct BATCHLAS_API UnifiedVector
     inline constexpr const T &at(size_t index) const { assert(index < size_); return data_[index]; }
 
     /// @brief Element-wise comparison with Span::operator== semantics.
-    inline constexpr bool operator==(const UnifiedVector<T> &other) const {
+    inline bool operator==(const UnifiedVector<T> &other) const {
         return Span<T>(*this) == Span<T>(other);
     }
 
     /// @brief Appends @p value, doubling the capacity when full (which invalidates earlier Spans).
-    inline constexpr void push_back(const T &value) {
+    inline void push_back(const T &value) {
         if(size_ == capacity_){
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
             reserve(new_capacity);
@@ -119,7 +119,7 @@ struct BATCHLAS_API UnifiedVector
     }
 
     /// @brief Appends @p value by move; growth as for the copying overload.
-    inline constexpr void push_back(T &&value) {
+    inline void push_back(T &&value) {
         if(size_ == capacity_){
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
             reserve(new_capacity);

@@ -94,6 +94,11 @@ __attribute__((always_inline)) inline bool on_metal() {
     return r;
 }
 
+// The device passes where AdaptiveCpp's work-group floating reduce is replaced: generic (SSCP)
+// and multipass CUDA/HIP (--acpp-targets=cuda:sm_XX). The host pass keeps sycl::.
+inline constexpr bool kExactWgReducePass = ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP ||
+                                           ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP;
+
 // One scratch per T per kernel, shared by every op and call site, as AdaptiveCpp's own is.
 template <typename T>
 __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
@@ -101,6 +106,8 @@ __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
     __acpp_if_target_sscp(static __attribute__((loader_uninitialized))
                           __attribute__((address_space(3))) T buf[32];
                           p = &buf[0];)
+    __acpp_if_target_hiplike(__shared__ alignas(T) unsigned char raw[32 * sizeof(T)];
+                             p = (local_ptr<T>)reinterpret_cast<T*>(&raw[0]);)
     return p;
 }
 
@@ -108,6 +115,8 @@ __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
 // or ~42 (double) mantissa bits. wg_reduce bit-casts the result to an integer and broadcasts
 // it through its FLOAT scratch, a value conversion (sscp/builtins/detail/reduction.hpp:101,
 // detail/broadcast.hpp:29). Same algorithm with a typed final broadcast; sub-group reduces are exact.
+// TRAP (multipass CUDA/HIP): its reduce (generic/hiplike/group_functions.hpp:36-71) has no barrier
+// after the read of its static scratch, so the next reduce of the same T and op can overwrite it.
 template <typename Group, typename T, typename Op>
 inline T wg_reduce_floating(Group g, T x, Op op) {
     // Host-compiled kernels (omp.library-only) have no wg_scratch.
@@ -209,11 +218,9 @@ inline T reduce_over_group(Group g, T x, Op op) {
         using R = typename T::value_type;
         return T(portable::reduce_over_group(g, x.real(), sycl::plus<R>()),
                  portable::reduce_over_group(g, x.imag(), sycl::plus<R>()));
-    } else if constexpr (ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP && detail::kWorkGroup<Group> &&
-                         detail::kFloating<T>) {
+    } else if constexpr (detail::kExactWgReducePass && detail::kWorkGroup<Group> && detail::kFloating<T>) {
         return detail::wg_reduce_floating(g, x, op);
-    } else if constexpr (ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP && detail::kWorkGroup<Group> &&
-                         detail::sycl_vec<T>::value) {
+    } else if constexpr (detail::kExactWgReducePass && detail::kWorkGroup<Group> && detail::sycl_vec<T>::value) {
         using R = typename detail::sycl_vec<T>::elem;
         using ElemOp = typename detail::rebind_op<Op, R>::type;
         T out;

@@ -2,7 +2,8 @@
 // The target device code is lowered to, as a value. DPC++ runs one device pass per target, so
 // these are compile-time constants. AdaptiveCpp generic (SSCP) compiles one IR for every target
 // and defines neither __SYCL_DEVICE_ONLY__ nor __NVPTX__; there they are JIT-reflection constants,
-// and the JIT deletes the dead branch before lowering.
+// and the JIT deletes the dead branch before lowering. AdaptiveCpp multipass CUDA
+// (--acpp-targets=cuda:sm_XX) has a real device pass: there they are constants of that pass.
 // TRAP (SSCP): a target intrinsic or inline asm must also sit inside __acpp_if_target_sscp(...);
 // on_ptx() alone does not keep it out of the x86 host object, where isel rejects it.
 
@@ -18,6 +19,7 @@ __attribute__((always_inline)) inline bool on_ptx() {
     bool r = false;
     __acpp_if_target_sscp(
         r = sycl::AdaptiveCpp_jit::reflect<sycl::AdaptiveCpp_jit::reflection_query::compiler_backend>() == sycl::AdaptiveCpp_jit::compiler_backend::ptx;)
+    __acpp_if_target_cuda(r = true;)
     return r;
 }
 
@@ -35,6 +37,7 @@ __attribute__((always_inline)) inline bool on_metal() {
 __attribute__((always_inline)) inline int target_arch() {
     int r = 0;
     __acpp_if_target_sscp(r = sycl::AdaptiveCpp_jit::reflect<sycl::AdaptiveCpp_jit::reflection_query::target_arch>();)
+    __acpp_if_target_cuda(r = __CUDA_ARCH__ / 10;)
     return r;
 }
 
