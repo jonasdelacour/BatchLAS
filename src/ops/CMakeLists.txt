@@ -140,6 +140,8 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     getrs/kernels/getrs_fused.cc
     getri/kernels/getri_blocked.cc
     lascl/lascl.cc
+    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol.
+    sytrf/kernels/sytrf_kernels.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:
