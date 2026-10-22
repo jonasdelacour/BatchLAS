@@ -491,12 +491,15 @@ The swap is `gemm`'s. For the symmetric routines, flip `uplo`. For everything el
 
 **Symmetric `syev` needs no copy.** A row-major symmetric `A` is its own transpose, so the
 column-major view `MatrixView(p, n, n, n, stride, batch)` over the same bytes solves the same
-matrix. After `syev`, the column-major `V` has eigenvectors as columns, and read row-major from the
-same bytes they are the rows. General operands use the `transA`/`transB` flags of `GemmOptions`
-on the transposed views: with `At(pa, k, m, k)`, `Bt(pb, k, n, k)` and `Ct(pc, n, m, n)`,
-`gemm(ctx, Bt, At, Ct, {.transA = Transpose::Trans})` computes `C = A Bᵀ` for row-major `A` (m x k)
-and `B` (n x k). `examples/row_major_interop.cc` runs both
-on row-major batches and checks them with `batchlas::verify`.
+matrix. The row-major upper triangle is the column-major lower triangle, so `Uplo::Lower`
+(the `SyevOptions` default) reads the triangle a row-major caller filled, and a row-major lower
+triangle needs `Uplo::Upper`. After `syev`, the column-major `V` has eigenvectors as
+columns, and read row-major from the same bytes they are the rows. General operands use the
+`transA`/`transB` flags of `GemmOptions` on the transposed views: with `At(pa, k, m, k)`,
+`Bt(pb, k, n, k)` and `Ct(pc, n, m, n)`, `gemm(ctx, Bt, At, Ct, {.transA = Transpose::Trans})`
+computes `C = A Bᵀ` for row-major `A` (m x k) and `B` (n x k).
+`examples/row_major_interop.cc` runs both on padded row-major batches and checks them with
+`batchlas::verify`.
 
 ### The CSR non-zero count has its own type {#the-csr-non-zero-count-has-its-own-type}
 
