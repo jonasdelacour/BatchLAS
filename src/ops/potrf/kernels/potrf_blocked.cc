@@ -23,6 +23,7 @@
 
 #include <sycl/sycl.hpp>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 namespace sycl_potrf {
@@ -95,6 +96,20 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     return {nb, W, leaf_min_blocks};
 }
 
+// Items per pass: the trailing update hands A22 between kernels through L2, and the children
+// are routed at this batch. An item is its lower triangle; one block has no hand-off, so it
+// never splits. The query and the call must agree, so both use it.
+// evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
+template <typename T>
+int potrf_blocked_chunk(Queue& ctx, int n, int nb, int batch) {
+    if (n <= nb) return batch;
+    const auto dev = ctx.device();
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, static_cast<int64_t>(n) * (n + 1) / 2 * static_cast<int64_t>(sizeof(T)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
 template <typename T>
 struct PotrfBlockedWs {
     Span<int32_t> info;       // driver-owned info fallback
@@ -146,10 +161,13 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
 
     const auto p = potrf_blocked_params<T>(ctx, n);
 
-    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(ctx, A);
+    const int chunk = potrf_blocked_chunk<T>(ctx, n, p.nb, batch);
+    const int part = chunk + batch % chunk;
+    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
+        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
 
     return workspace_bytes([&](BumpAllocator& pool) {
-        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, batch, p.W, leaf_bytes);
+        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, part, p.W, leaf_bytes);
     });
 }
 
@@ -261,100 +279,110 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int nb = p.nb;
     const int W = p.W;
 
-    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(ctx, A);
+    // Chunk by chunk: each pass factors its items completely, so the passes are independent,
+    // and the workspace is one chunk's. evidence: docs/perf/potrf.md#potrf-l2-batch-chunking
+    const int chunk = potrf_blocked_chunk<T>(ctx, n, nb, batch);
+    const int part = chunk + batch % chunk;   // the largest part: the last takes the remainder
+    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(
+        ctx, MatrixView<T, MatrixFormat::Dense>(A.data_ptr(), n, n, A.ld(), A.stride(), part));
     BumpAllocator pool(workspace);
-    auto ws = potrf_blocked_layout<T>(ctx, pool, n, nb, batch, W, leaf_bytes);
+    auto ws = potrf_blocked_layout<T>(ctx, pool, n, nb, part, W, leaf_bytes);
 
     // An empty OR SHORT caller span means "not requested"; zero THIS span, not info_out.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : ws.info;
-
-    // Not optional: the merge reads info[b] for an earlier panel's failure; info_out is dirty.
-    ctx->fill(info.data(), int32_t(0), static_cast<std::size_t>(batch));
-
-    if (!ctx.in_order()) ctx.wait();
+    const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
 
     const int ld = A.ld();
     const int stride = A.stride();
-    T* const a_ptr = A.data_ptr();
-
-    // The explicit 6-arg constructor, never operator()(Slice, Slice): the constructor defaults
-    // stride to ld*cols when 0 is passed, so a sub-view would read the wrong matrix past item 0.
-    auto sub = [&](int r0, int nr, int c0, int nc, T** ptrs) {
-        return MatrixView<T, MatrixFormat::Dense>(
-            a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-            nr, nc, ld, stride, batch, ptrs);
-    };
-
     T* const prod_ptr = ws.product.data();
 
     const int fixup_wg = std::min<int>(
         128, std::max<int>(32, static_cast<int>(
                                    dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE))));
 
-    for (int j = 0; j < n; j += nb) {
-        // ib < nb implies m2 == 0, so a short final block issues no panel solve or trailing update.
-        const int ib = std::min(nb, n - j);
-        const int m2 = n - j - ib;
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
+        T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
+        int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
 
-        const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
-        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-        // is already ordered after this one and the Event carries nothing the caller needs.
-        // The SAME occupancy target nb was clamped against: the leaf's gate and the block
-        // width are one decision, and a mismatch makes the leaf throw on a legal block.
-        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
-                                    p.leaf_min_blocks);
+        // Out of order, the previous part's last fixup may still write the shared ws.info (and
+        // read leaf_info): a late info[b] != 0 quenches this part's item b to identity.
+        if (b0 > 0 && !ctx.in_order()) ctx.wait();
 
-        // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
+        // Not optional: the merge reads info[b] for an earlier panel's failure; info_out is dirty.
+        ctx->fill(info_ptr, int32_t(0), static_cast<std::size_t>(cb));
         if (!ctx.in_order()) ctx.wait();
 
-        (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
-                                     info.data(), ws.leaf_info.data(), fixup_wg);
+        // The explicit 6-arg constructor, never operator()(Slice, Slice): the constructor defaults
+        // stride to ld*cols when 0 is passed, so a sub-view would read the wrong matrix past item 0.
+        auto sub = [&](int r0, int nr, int c0, int nc, T** ptrs) {
+            return MatrixView<T, MatrixFormat::Dense>(
+                a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
+                nr, nc, ld, stride, cb, ptrs);
+        };
 
-        if (m2 == 0) break;
+        for (int j = 0; j < n; j += nb) {
+            // ib < nb implies m2 == 0, so a short final block issues no panel solve or trailing update.
+            const int ib = std::min(nb, n - j);
+            const int m2 = n - j - ib;
 
-        if (!ctx.in_order()) ctx.wait();
+            const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            // The SAME occupancy target nb was clamped against: the leaf's gate and the block
+            // width are one decision, and a mismatch makes the leaf throw on a legal block.
+            (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
+                                        p.leaf_min_blocks);
 
-        const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
-        (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
-                    Transpose::ConjTrans, Diag::NonUnit);
-
-        if (!ctx.in_order()) ctx.wait();
-
-        // A plain square gemm over A22 would write the upper triangle, which potrf(Lower) must leave
-        // untouched; the W x W block is folded in instead. Only a poisoned-upper test sees a lost fold.
-        for (int c = 0; c < m2; c += W) {
-            const int w = std::min(W, m2 - c);
-
-            const auto Lrow = sub(j + ib + c, w, j, ib, nullptr);
-            const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
-            const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, batch);
-
-            (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
-                          Transpose::NoTrans, kTrailingTransB<T>,
-                          ComputePrecision::Default);
-
-            // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
+            // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
             if (!ctx.in_order()) ctx.wait();
 
-            (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
-                ctx, Cd, Sc, T(1), Uplo::Lower);
+            (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, cb,
+                                               info_ptr, ws.leaf_info.data(), fixup_wg);
 
-            const int mr = m2 - c - w;
-            if (mr > 0) {
-                const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
-                const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
-                (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
-                              Transpose::NoTrans, kTrailingTransB<T>,
-                              ComputePrecision::Default);
+            if (m2 == 0) break;
+
+            if (!ctx.in_order()) ctx.wait();
+
+            const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
+            (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
+                              Transpose::ConjTrans, Diag::NonUnit);
+
+            if (!ctx.in_order()) ctx.wait();
+
+            // A plain square gemm over A22 would write the upper triangle, which potrf(Lower) must leave
+            // untouched; the W x W block is folded in instead. Only a poisoned-upper test sees a lost fold.
+            for (int c = 0; c < m2; c += W) {
+                const int w = std::min(W, m2 - c);
+
+                const auto Lrow = sub(j + ib + c, w, j, ib, nullptr);
+                const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
+                const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, cb);
+
+                (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
+                                    Transpose::NoTrans, kTrailingTransB<T>,
+                                    ComputePrecision::Default);
+
+                // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
+                if (!ctx.in_order()) ctx.wait();
+
+                (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
+                    ctx, Cd, Sc, T(1), Uplo::Lower);
+
+                const int mr = m2 - c - w;
+                if (mr > 0) {
+                    const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
+                    const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
+                    (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
+                                        Transpose::NoTrans, kTrailingTransB<T>,
+                                        ComputePrecision::Default);
+                }
+
+                // WAR: the next panel's gemm overwrites the scratch this fold still reads.
+                if (!ctx.in_order()) ctx.wait();
             }
 
-            // WAR: the next panel's gemm overwrites the scratch this fold still reads.
             if (!ctx.in_order()) ctx.wait();
         }
-
-        if (!ctx.in_order()) ctx.wait();
     }
 
     return ctx.get_event();

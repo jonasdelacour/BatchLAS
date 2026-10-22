@@ -19,6 +19,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 #include <tests/test_utils.hh>
 
@@ -3685,3 +3686,98 @@ TEST(GetrfTinySource, OnlySubGroupBarriersAndNoGroupCollective) {
 
 // The break record for every guarded property, including the breaks that turned
 // nothing red: docs/perf/lu.md#blind-guards-and-what-made-them-blind
+
+// ---- L2 batch chunking (docs/perf/lu.md#lu-l2-batch-chunking) ----------------------------
+
+// The chunk arithmetic, hand-computed for a 128 MiB, 188-CU device: each threshold is taken
+// at its edge and one past it, so a < for <= or a lost round-up moves a number here.
+TEST(BlockedChunkItems, StraddlesEveryThreshold) {
+    const ScopedEnvVar forced("BATCHLAS_TUNE_L2_CHUNK_ITEMS", nullptr);
+    const ScopedEnvVar pct("BATCHLAS_TUNE_L2_CHUNK_PERCENT", "100");
+    const int64_t l2 = int64_t(128) << 20, cu = 188;
+    const int64_t f128 = 128 * 128 * 4;   // 2047 items fill L2; rounded up to 11 CUs, 2068
+    EXPECT_EQ(tuning::blocked_chunk_items(4135, f128, l2, cu), 4135) << "under two chunks: one pass";
+    EXPECT_EQ(tuning::blocked_chunk_items(4136, f128, l2, cu), 2068);
+    EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 2068) << "the last part takes the remainder";
+    const int64_t f512 = 512 * 512 * 4;   // 127 items fill L2: rounded up to one CU multiple
+    EXPECT_EQ(tuning::blocked_chunk_items(375, f512, l2, cu), 375);
+    EXPECT_EQ(tuning::blocked_chunk_items(376, f512, l2, cu), 188);
+    EXPECT_EQ(tuning::blocked_chunk_items(1000, f128, int64_t(1) << 20, cu), 188) << "15 items: the one-CU-multiple floor";
+    EXPECT_EQ(tuning::blocked_chunk_items(9000, 0, l2, cu), 9000) << "no item size: one chunk";
+    EXPECT_EQ(tuning::blocked_chunk_items(9000, f128, 0, cu), 9000) << "no cache reported: one chunk";
+    {
+        const ScopedEnvVar half("BATCHLAS_TUNE_L2_CHUNK_PERCENT", "50");
+        EXPECT_EQ(tuning::blocked_chunk_items(32768, f128, l2, cu), 1128) << "1023 items rounded up to 6 CUs";
+    }
+    {
+        const ScopedEnvVar seven("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        EXPECT_EQ(tuning::blocked_chunk_items(13, f128, l2, cu), 13);
+        EXPECT_EQ(tuning::blocked_chunk_items(14, f128, l2, cu), 7) << "a forced chunk is used as given";
+    }
+    const ScopedEnvVar unset("BATCHLAS_TUNE_L2_CHUNK_PERCENT", nullptr);
+    const int64_t want = std::max<int64_t>((l2 / 100 * tuning::BLOCKED_L2_CHUNK_PERCENT / f128 + cu - 1) / cu * cu,
+                                           cu * tuning::BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE);
+    EXPECT_EQ(tuning::blocked_chunk_items(2 * want - 1, f128, l2, cu), 2 * want - 1);
+    EXPECT_EQ(tuning::blocked_chunk_items(2 * want, f128, l2, cu), want);
+}
+
+// A chunk forced to 7 over 23 items (7 + 7 + 9: the last part takes the remainder) at a padded ld
+// and odd stride: every item's residual, its ipiv range and the cabs1 ratio, with info both
+// requested and not. Items 6, 7, 13 and 22 sit on either side of a boundary and in the last part,
+// each with its own zero column: a pivot or info sub-range at the wrong offset moves only these.
+TYPED_TEST(LuTest, BlockedChunksKeepPivotsAndInfoPerItem) {
+    using T = typename TestFixture::T;
+    const int nbw = this->nb(256);
+    const int n = 2 * nbw + 5, batch = 23;
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+    ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+
+    for (bool pass_info : {true, false}) {
+        auto p = make_random<T>(n, batch, 9100u + (pass_info ? 0u : 1u));
+        this->run_blocked(p, pass_info);
+        check_factor<T>(*this->ctx, p, pass_info ? "chunk 7, info" : "chunk 7, no info");
+    }
+
+    auto p = make_dominant_permuted<T>(n, batch, 9177u);
+    const std::vector<int> bad = {6, 7, 13, 22};
+    const std::vector<int> col = {3, nbw + 3, 2 * nbw + 1, n - 1};
+    for (size_t k = 0; k < bad.size(); ++k)
+        for (int i = 0; i < n; ++i)
+            p.a0[size_t(bad[k]) * p.stride + size_t(col[k]) * p.ld + i] = MVof<T>::make(0.0, 0.0);
+    poison(p);
+    this->run_blocked(p);
+    for (int b = 0; b < batch; ++b) {
+        const auto it = std::find(bad.begin(), bad.end(), b);
+        const int want = it == bad.end() ? 0 : col[size_t(it - bad.begin())] + 1;
+        EXPECT_EQ(p.info[b], want) << "item " << b << " (part " << std::min(b / 7, 2) << ")";
+        if (it != bad.end()) continue;
+        const int* ip = piv_item(p, b);
+        for (int k = 0; k < n; ++k) ASSERT_EQ(ip[k], p.expect_piv[k]) << "item " << b << " ipiv[" << k << "]";
+    }
+}
+
+// SATURATING: 1024 copies of one matrix in four chunks of 256; every item's factor and
+// pivots must be bit-identical to item 0's, so chunks that overlap or skip items show.
+TYPED_TEST(LuTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
+    using T = typename TestFixture::T;
+    const int n = this->nb(256) + 5, batch = 1024;
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
+    auto p = make_random<T>(n, batch, 4242u);
+    for (int b = 1; b < batch; ++b)
+        std::copy_n(p.a0.begin(), size_t(p.stride), p.a0.begin() + size_t(b) * p.stride);
+    poison(p);
+    this->run_blocked(p);
+    const T* f0 = p.buf.data();
+    const int* ip0 = piv_item(p, 0);
+    EXPECT_EQ(p.info[0], 0);
+    int wrong = 0, first = -1;
+    for (int b = 1; b < batch; ++b) {
+        const T* F = p.buf.data() + size_t(b) * p.stride;
+        bool same = p.info[b] == p.info[0] && std::equal(ip0, ip0 + n, piv_item(p, b));
+        for (int j = 0; j < n && same; ++j)
+            same = std::memcmp(F + size_t(j) * p.ld, f0 + size_t(j) * p.ld, sizeof(T) * size_t(n)) == 0;
+        if (!same && wrong++ == 0) first = b;
+    }
+    EXPECT_EQ(wrong, 0) << "items differing from item 0; first at " << first;
+    EXPECT_VERIFY(T, Check::factorization, n, factor_residual<T>(*this->ctx, p.a0.data(), f0, ip0, n, n, p.ld));
+}
