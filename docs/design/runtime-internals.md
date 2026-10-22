@@ -1,416 +1,396 @@
 # Runtime internals {#design_runtime_internals}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · checked 2026-10-06
+> **Status:** current · checked 2026-10-21
 
-This page covers the private runtime under `src/` that every entry point runs through: the `Queue`
-implementation, the workspace arena, the settings loader, the per-item `info` span, matrix layout
-checks, explicit-instantiation macros, symbol visibility, the build-time object-library cut and the
-embedded tuned tables. Caller-facing contracts are in `<batchlas/settings.hh>`,
-`<batchlas/util/workspace.hh>` and `<batchlas/util/sycl-device-queue.hh>`.
+The private runtime under `src/` that every entry point runs through: the `Queue` implementation,
+the workspace arena, the settings loader, the per-item `info` span, matrix layout checks,
+explicit-instantiation macros, symbol visibility, the object-library cut and the embedded tuned
+tables. Caller-facing contracts are in `<batchlas/settings.hh>`, `<batchlas/util/workspace.hh>` and
+`<batchlas/util/sycl-device-queue.hh>`.
 
 ## Symbol visibility for private headers {#runtime-internals-symbol-visibility-for-private-headers}
 
-Under `BATCHLAS_MONOLITHIC_LIBRARY` the object libraries build with `-fvisibility=hidden`.
-`BATCHLAS_API` (from the generated `<batchlas/export.hh>`) restores default visibility on public
-declarations (@ref design_symbol_visibility). Private headers follow the additional rules below.
+With `BATCHLAS_MONOLITHIC_LIBRARY` and `BATCHLAS_HIDDEN_VISIBILITY` (default ON, OFF when the tree
+builds tests) the object libraries build with `-fvisibility=hidden`. `BATCHLAS_API` (from the
+generated `<batchlas/export.hh>`) restores default visibility on public declarations
+(@ref design_symbol_visibility). Private headers follow these extra rules.
 
-- **`BATCHLAS_INTERNAL_API`** (`src/util/internal-api.hh`, never installed). 199 of the 1,083 symbols
-  that the 63 test binaries resolve from `libbatchlas*.so` belong to 55 entities declared in no
-  public header. The tests reach them by including private headers (`<src/...>`). The macro
-  gives them default visibility on ELF, so the links work, without promising them to consumers: a
-  consumer cannot name a symbol it cannot reach. When the tests stop including private headers,
-  delete the macro, or link the tests against the object libraries instead.
-- **Process-wide state in private headers.** Inline variables and statics such as `g_enabled` in
-  `src/util/kernel-trace.hh` and `QueueImpl::device_arrays` in `src/queue.hh` must fold to one
-  instance per process. Hidden library copies do not fold with a test TU's default-visibility copy,
-  so the process silently gets two copies (traces invisible to the test's flush, two SYCL device
-  caches). Mark such declarations `BATCHLAS_INTERNAL_API`.
-- **`BATCHLAS_QUEUE_EXPORTED_INLINE`** (`src/queue.hh`) expands to `[[gnu::used]]`. The out-of-line
-  `Queue`/`Event` members must be emitted into `libbatchlas` for consumers. Plain `inline` drops them
-  when nothing in the tree calls them. It is not applied in the SYCL device pass.
+- **`BATCHLAS_INTERNAL_API`** (`src/util/internal-api.hh`, never installed) gives default ELF
+  visibility to entities declared in no public header that the tests reach through private headers
+  (`<src/...>`), without promising them to consumers. At introduction: 199 of the 1,083 symbols the
+  63 test binaries resolved from `libbatchlas*.so`, 55 entities. When the tests stop including
+  private headers, delete the macro or link the tests against the object libraries.
+- **Process-wide state in private headers.** Inline variables and statics (`g_enabled` in
+  `src/util/kernel-trace.hh`, `QueueImpl::device_arrays` in `src/queue.hh`) must fold to one instance
+  per process. A hidden library copy does not fold with a test TU's default-visibility copy, so the
+  process silently gets two (traces invisible to the test's flush, two SYCL device caches). Mark
+  them `BATCHLAS_INTERNAL_API`.
+- **`BATCHLAS_QUEUE_EXPORTED_INLINE`** (`src/queue.hh`) is `[[gnu::used]] inline`, so the out-of-line
+  `Queue`/`Event` members are emitted into `libbatchlas` for consumers; plain `inline` drops them
+  when nothing in the tree calls them. Plain `inline` in the SYCL device pass.
 - **`template struct BATCHLAS_API UnifiedVector<std::byte>;`** (`src/util/sycl-util-impl.cc`). An
-  instantiation takes the minimum visibility of the template and its arguments. libstdc++ gives
-  `std::byte` no visibility attribute, so this specialisation would be hidden. Do not remove the
-  attribute: `resize`, both constructors and the destructor silently stop being exported, and the
-  only symptom is a consumer link error.
+  instantiation takes the minimum visibility of the template and its arguments, and libstdc++ gives
+  `std::byte` none. Without the attribute `resize`, both constructors and the destructor silently
+  stop being exported; the only symptom is a consumer link error.
 - **Include spelling.** `src/` is private and never installed. In-tree code includes it root-based,
-  `<src/util/...>`, through the repository root, which `batchlas_add_source_root`
-  (`cmake/BatchLASTargetHelpers.cmake`) puts on in-tree targets' PRIVATE `-I` line only. Public
-  util headers live in `include/batchlas/util/` and are spelled `<batchlas/util/...>`. Never add
-  `-I${PROJECT_SOURCE_DIR}/src`: `<util/...>` would then name a private header with the spelling
-  `check_no_unprefixed_includes.py` reserves. A public header that spells `<src/...>` fails
-  `check_public_headers.py`.
+  `<src/util/...>`; `batchlas_add_source_root` (`cmake/BatchLASTargetHelpers.cmake`) puts the
+  repository root on in-tree targets' PRIVATE `-I` line only. Public util headers are
+  `<batchlas/util/...>` (`include/batchlas/util/`). Never add `-I${PROJECT_SOURCE_DIR}/src`: `<util/...>`
+  would then name a private header with the spelling `check_no_unprefixed_includes.py` reserves. A
+  public header that spells `<src/...>` fails `check_public_headers.py`.
 
 ## Namespace placement of out-of-line definitions {#runtime-internals-namespace-placement-of-out-of-line-definitions}
 
-`src/util/queue-impl.cc`, `src/util/sycl-util-impl.cc` and `src/queue.hh` place their definitions in
-`namespace batchlas` until the end of the file. `Queue`, `Event`, `Device`, `QueueImpl`, `EventImpl`,
-`UnifiedVector` and `Span` are declared there. The global-namespace shim in
+`src/util/queue-impl.cc`, `src/util/sycl-util-impl.cc` and `src/queue.hh` stay in `namespace
+batchlas` to the end of the file, where `Queue`, `Event`, `Device`, `QueueImpl`, `EventImpl`,
+`UnifiedVector` and `Span` are declared. The global-namespace shim in
 `<batchlas/util/sycl-device-queue.hh>` only introduces the names.
 
-- Out-of-line members must be defined in their class's namespace. At global scope, `QueueImpl`
-  would define an unrelated type and leave `Queue::impl_` pointing at an incomplete one. This is the
-  only one of the three rules that fails loudly.
-- Explicit instantiations that name a template by unqualified-id must be in the same namespace.
-- The `operator<<` for `UnifiedVector` and `Span` exists only as in-class friend
-  templates, so it belongs to the enclosing namespace. At global scope the explicit instantiations
-  would instantiate the wrong template. Consumers then get an undefined reference, and the library
-  build does not fail.
+| Rule | Failure at global scope |
+| --- | --- |
+| Out-of-line members are defined in their class's namespace | `QueueImpl` defines an unrelated type and `Queue::impl_` points at an incomplete one; the only loud failure |
+| Explicit instantiations naming a template by unqualified-id sit in its namespace | the wrong template is instantiated |
+| The `UnifiedVector`/`Span` `operator<<` exists only as in-class friend templates, so it belongs to the enclosing namespace | the instantiations hit the wrong template; consumers get an undefined reference, the library build passes |
 
 The `std::array` `operator<<` in `sycl-util-impl.cc` is found only by ordinary lookup inside that
-file. It is not reachable by ADL, so do not rely on it from another TU.
+file, not by ADL; do not rely on it from another TU.
 
-Two definitions stay at global scope on purpose. The anonymous namespace in `queue-impl.cc` holds
-SYCL kernel-name tags, and moving it would rename every kernel mangled from them.
-`batchlas_throw_queue_wrong_thread` in `src/queue.hh` already carries its prefix.
+Two definitions stay global on purpose: the anonymous namespace at the top of `queue-impl.cc`
+(SYCL kernel-name tags; moving it renames every kernel mangled from them) and
+`batchlas_throw_queue_wrong_thread` in `src/queue.hh`, which carries its own prefix.
 
 ## Explicit instantiation macros {#runtime-internals-explicit-instantiation-macros}
 
-`src/util/template-instantiations.hh` defines the macros that backend and entry-point TUs use to
-emit their symbols.
+`src/util/template-instantiations.hh` defines the macros backend and entry-point TUs use to emit
+their symbols.
 
-- **`BATCHLAS_INSTANTIATE(SIG, FN, ...)`** expands to `template SIG FN<...>;`. `SIG` is a function
-  type from the `sig` namespace beside each declaration in `include/batchlas/blas/functions/`. Each
-  public entry point is an overload set (a `MatrixView` primary plus an inline `Matrix` forwarder),
-  so `template decltype(FN<Args...>) FN<Args...>;` is ill-formed. A signature change is one header
-  edit. Function types cannot carry default arguments, so spell out every parameter.
-  `BATCHLAS_COMMA` passes a second template argument through macro splitting, as in
-  `sig::spmm<fp BATCHLAS_COMMA F>`.
-- **`BATCHLAS_INSTANTIATE_OP(Backend::CUDA, (float), potrf)`** gives
-  `template sig::potrf<float> potrf<Backend::CUDA, float>;`. The type is parenthesised so it composes
-  with the `BATCHLAS_FOR_EACH_*_TYPE_1` drivers.
-  - `_BACKEND_OP` is for the `backend::`-qualified vendor entry points (`syev_vendor`,
-    `gesvd_vendor`, `ormqr_vendor`), whose aliases live in `sig`.
-  - `_FORMAT_OP` carries the second template argument of the sparse ops. There is no
-    `_BACKEND_FORMAT_OP`; the sparse vendor TUs use a local shim or a raw `BATCHLAS_INSTANTIATE`.
-- Scalar domains differ per op: `symm`, `syrk` and `syr2k` are real-only; `hemm`, `herk` and
-  `her2k` are complex-only. Each domain has its own driver.
-- **`BATCHLAS_FOR_EACH_ENABLED_BACKEND_1`** instantiates an entry point once per backend the build
-  compiled. Its arms are pre-guarded (`BATCHLAS_IF_CUDA`, `BATCHLAS_IF_ROCM`, `BATCHLAS_IF_HOST`), so
-  a backend that was not compiled expands to nothing. `BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS` and
-  `_SCALAR_ALL_BACKENDS` combine the backend and type loops.
-- MKL is deliberately absent from these drivers. `ritz_values.cc`, `symm.cc`, `syrk.cc`, `syr2k.cc`,
-  `trmm.cc` and `steqr_legacy.cc` instantiate different sets. Folding them in would silently add or
-  drop exported symbols, so they keep hand-written blocks.
+| Macro | Expands to / does |
+| --- | --- |
+| `BATCHLAS_INSTANTIATE(SIG, FN, ...)` | `template SIG FN<...>;`. `SIG` is a function type from the `sig` namespace beside each declaration in `include/batchlas/blas/functions/` |
+| `BATCHLAS_COMMA` | a comma that survives macro splitting: `sig::spmm<fp BATCHLAS_COMMA F>` |
+| `BATCHLAS_INSTANTIATE_OP(Backend::CUDA, (float), potrf)` | `template sig::potrf<float> potrf<Backend::CUDA, float>;`; the type is parenthesised to compose with the `_TYPE_1` drivers |
+| `BATCHLAS_INSTANTIATE_BACKEND_OP` | the `backend::`-qualified vendor entry points (`syev_vendor`, `gesvd_vendor`, `ormqr_vendor`), aliases in `sig` |
+| `BATCHLAS_INSTANTIATE_FORMAT_OP` | the sparse ops' second template argument; there is no `_BACKEND_FORMAT_OP` (sparse vendor TUs use a local shim or raw `BATCHLAS_INSTANTIATE`) |
+| `BATCHLAS_FOR_EACH_{REAL,COMPLEX,SCALAR}_TYPE_1` | the type loops; `symm`, `syrk`, `syr2k` are real-only, `hemm`, `herk`, `her2k` complex-only |
+| `BATCHLAS_FOR_EACH_DEVICE_*_TYPE_1` | the `Backend::SYCL` type loops: float and `complex<float>`, the double pair only under `BATCHLAS_IF_DEVICE_FP64` |
+| `BATCHLAS_FOR_EACH_ENABLED_BACKEND_1` | once per compiled backend; arms pre-guarded by `BATCHLAS_IF_CUDA`, `_ROCM`, `_SYCL`, `_HOST`, so an absent backend expands to nothing |
+| `BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS`, `_SCALAR_ALL_BACKENDS` | backend loop times type loop (device type loop on the SYCL arm) |
 
-**No `BATCHLAS_API` inside the macro.** The emitted definitions need default visibility, but the
-annotation belongs on the primary declaration in the public header
-(`template <Backend Back, typename T> BATCHLAS_API Event gemm(...)`):
+- Each public entry point is an overload set, so `template decltype(FN<Args...>) FN<Args...>;` is
+  ill-formed; the `sig` alias makes a signature change one header edit. Function types carry no
+  default arguments: spell out every parameter.
+- No MKL arm: `Backend::MKL` is reserved and never available (`include/batchlas/blas/enums.hh`).
+
+**No `BATCHLAS_API` inside the macro.** The annotation belongs on the primary declaration in the
+public header (`template <Backend Back, typename T> BATCHLAS_API Event gemm(...)`):
 
 1. An attribute on an explicit instantiation is not portable. g++ 13 with `-std=c++20` rejects
    `template class __attribute__((visibility("default"))) F<double,1>;`, and the
    decl-specifier-seq is a type alias, not a return type.
 2. It is unnecessary. An instantiation takes the minimum of the template's and its arguments'
-   visibility, so `Backend` and `MatrixFormat` carry `BATCHLAS_API` themselves. With that, the
-   declaration annotation covers the definition.
-3. Only the declaration reaches consumers, and on ELF `BATCHLAS_API` is default visibility on both
-   the build and the consume side. Annotating the instantiation would export the definition and
-   leave the consumer's reference hidden.
+   visibility; `Backend` and `MatrixFormat` carry `BATCHLAS_API`, so the declaration's annotation
+   covers the definition.
+3. Only the declaration reaches consumers. On ELF `BATCHLAS_API` is default visibility on both sides;
+   annotating the instantiation would export the definition and leave the consumer's reference
+   hidden.
 
-The `sig::` aliases are types, so they need no annotation.
+The `sig::` aliases are types and need no annotation.
 
 ## Vendor TUs instantiate only vendor symbols {#runtime-internals-vendor-tus-instantiate-only-vendor-symbols}
 
-The explicit-instantiation tables in vendor TUs (`cusolver.cc`, `rocblas.cc`, `rocsolver.cc`,
-`rocsparse.cc`, `netlib_lapack.cc`, and the cuBLAS and cuSPARSE TUs) name only `backend::`-qualified
+The instantiation tables in vendor TUs (`src/backends/`: `cublas.cc`, `cusolver.cc`, `cusparse.cc`,
+`rocblas.cc`, `rocsolver.cc`, `rocsparse.cc`, `netlib_lapack.cc`) name only `backend::`-qualified
 `*_vendor` symbols. Public entry points and their `*_buffer_size()` queries are instantiated in
-`src/ops/<op>/<op>.cc` (the level-3 family shares one TU under `src/ops/`). Those files compile into
-`batchlas_selection_obj` in every build, keyed on device family. The vendor call inside is
-`if constexpr`-gated, so the public symbol exists even without the library. A public-op row in a
-vendor TU would be a duplicate symbol, and a vendor-free build would lose the op. The rule is per op:
-a new op under `src/ops/` follows it with no change here. Design record:
-[flat kernel selection](flat-kernel-selection.md).
+`src/ops/<op>/<op>.cc` (`src/ops/level3/level3.cc` for hemm/herk/her2k), compiled into
+`batchlas_selection_obj` in every build. The vendor call inside is `if constexpr`-gated, so the public
+symbol exists without the library. A public-op row in a vendor TU would be a duplicate symbol, and a
+vendor-free build would lose the op. Design record: @ref design_flat_selection.
 
-- `sig::trsm_vendor` is not an alias of `sig::trsm`. The vendor order puts `alpha` last, as cuBLAS
-  defines it; the public `trsm` takes it third. The vendor forms must agree with each other.
-- `gesvd_vendor` is declared in `functions/gesvd.hh` and defined only by backends that have one.
-  `rocsolver.cc` defines a throwing stub, so a ROCM build fails at the call, not at link time.
-- The netlib `gemm` lives in `backend` under its vendor name, because its public `gemm` is the CBLAS
-  call. Its `gesvd_vendor` keeps the synchronous `ctx.wait()`: LAPACKE `?gesvd` needs `A` on the host.
-- `rocblas.cc` has no `symm`, `hemm`, `herk` or `her2k` wrapper. The ROCM arm of the level-3 TU
-  under `src/ops/` mirrors that and instantiates only the ops rocBLAS implements.
+- `sig::trsm_vendor` is not an alias of `sig::trsm`: the vendor order puts `alpha` last, as cuBLAS
+  does; the public `trsm` takes it third. The vendor forms agree with each other.
+- `gesvd_vendor` is declared in `functions/gesvd.hh` and defined by backends that have one;
+  `rocsolver.cc` defines a stub that throws `batchlas::unsupported`, so a ROCm build fails at the
+  call, not at link time.
+- The netlib `gemm_vendor` is the CBLAS call. Netlib `gesvd_vendor` keeps a synchronous
+  `ctx.wait()`: LAPACKE `?gesvd` needs `A` on the host.
+- `rocblas.cc` has no `symm`, `hemm`, `herk` or `her2k` wrapper; the ROCm arm of the level-3 TU
+  instantiates only what rocBLAS implements.
 - ROCm 6.3 changed `rocblas_[sdcz]trmm` to the 14-argument out-of-place form (`..., A, lda, B, ldb,
-  C, ldc`, with `B` input and `C` output). All four complex and real arms are one call.
+  C, ldc`, `B` input, `C` output); all four type arms are one call.
 
 **Unbatched vendor level-3 loop (`src/backends/batch_launch.hh`).** cuBLAS and rocBLAS `symm`,
-`hemm`, `syrk`, `herk`, `syr2k`, `her2k` and `trmm` handle one matrix per call, so
-`for_each_batch_item` issues one launch per batch member. A batch of one launches against the
-caller's view, not `view[0]`. The loop tests `<= 1`, not `== 1`: an empty view still issues one
-launch, and changing that would change what an empty batch does. The callable comes first because
-the trailing pack varies (two views for `syrk`/`herk`, three otherwise). The count comes from the
-first view.
+`hemm`, `syrk`, `herk`, `syr2k`, `her2k` and `trmm` take one matrix per call, so
+`for_each_batch_item` issues one launch per item. A batch of one launches against the caller's view,
+not `view[0]`. The test is `<= 1`, not `== 1`: an empty view still issues one launch. The callable
+comes first because the trailing pack varies (two views for `syrk`/`herk`, three otherwise); the
+count comes from the first view.
 
 ## Per-queue workspace arena {#runtime-internals-the-per-queue-workspace-arena}
 
-`WorkspaceArena` (`src/queue.hh`) is the scratch memory behind `Queue::workspace()` and
-`WorkspaceLease`. Caller rules are in `<batchlas/util/workspace.hh>`. The lease design (nesting,
-reassignment, out-of-order queues, sizing) is in @ref design_workspace "the workspace design page".
+`WorkspaceArena` (`src/queue.hh`) is the scratch behind `Queue::workspace()` and `WorkspaceLease`.
+Caller rules: `<batchlas/util/workspace.hh>`; lease design: @ref design_workspace.
 
-- **Append-only blocks.** Blocks are never moved, because a live lease keeps its pointer. A borrow
-  that does not fit in the current block opens a new one. Released bytes are rewound, not freed, so
-  the steady state is one allocation per high-water mark.
-- **Release order is enforced.** Only the innermost outstanding loan can move the cursor. An
-  out-of-order return is recorded, and its bytes are reclaimed when the loans stacked above it come
-  back. The cost is held memory, not correctness.
+- **Append-only blocks.** A live lease keeps its pointer, so blocks never move. A borrow that does not
+  fit opens a new USM-shared block of `max(request, 2 x last block, 64 KiB)`. Released bytes are
+  rewound, not freed: the steady state is one allocation per high-water mark.
+- **Release order is enforced.** Only the innermost outstanding loan moves the cursor. An
+  out-of-order return is marked, and its bytes are reclaimed when the loans above it come back. The
+  cost is held memory, not correctness.
 - **Live-loan stack.** One entry per outstanding loan, innermost last, in a `std::vector` that keeps
   its capacity. A returned entry stays only while something above it is live, so a non-empty stack
-  means at least one lease is outstanding. A sequence number cannot answer that once loans return
-  out of order.
-- **`diagnose_out_of_order`** is false for exactly one caller: `WorkspaceLease` move-assignment,
-  which acquires the right-hand lease before releasing the left (`ws = q.workspace(n);`). The assert
+  means a lease is outstanding; a sequence number alone cannot answer that once loans return out of
+  order. Sequence numbers are never reused, even after `free_all`.
+- **`diagnose_out_of_order`** is false for exactly one caller: `WorkspaceLease` move-assignment, which
+  acquires the right-hand lease before releasing the left (`ws = q.workspace(n);`). The debug assert
   holds everywhere else.
-- **Drain on out-of-order queues** (`WorkspaceLease::release` in `queue-impl.cc`). Reclaimed bytes can
-  go to a borrow whose kernels would run beside kernels still reading the old bytes. The release
-  waits only on an out-of-order queue and only when it reclaims (`release_reclaims`). A return under
-  a live lease only sets a flag; the release that pops it drains. `release()` cannot throw, because
-  `~WorkspaceLease` calls it and move-assignment is `noexcept`. A runtime error surfaces at the
-  caller's next `wait`.
-- **Not covered by the drain:** work on a derived in-order queue, as `gesvd` and `iluk` build from
-  `ctx`. Waiting on `ctx` does not wait for it; the derived queue's destructor does. See `release()`
-  in `<batchlas/util/workspace.hh>`.
-- **Freeing.** `trim()` refuses while any lease is outstanding and reports it. `trim()` and
-  `~QueueImpl` drain the queue before freeing, because a released lease means only that the caller
-  is done with the bytes, not that the kernels over them have finished. `~QueueImpl` asserts that no
-  lease is live. A `WorkspaceLease` holds a `Queue*`, so releasing it after the arena is gone would
-  hand a stale block to a later arena. Moving a `Queue` out from under a live lease is a caller bug,
-  and draining would hide it.
-- **`Queue::operator=(Queue&&)` is written out.** Move-assignment destroys the destination's
-  `QueueImpl` without running `~Queue`, so per-queue teardown must run on that path. Per-queue state
-  belongs in `QueueImpl`. A side table keyed on `impl_` would inherit stale entries when the address
-  is reused.
+- **Drain on out-of-order queues** (`WorkspaceLease::release_` in `queue-impl.cc`). Reclaimed bytes can
+  go to a borrow whose kernels run beside kernels still reading them, so a release waits, only on an
+  out-of-order queue and only when it reclaims (`release_reclaims`). A return under a live lease only
+  marks it; the release that pops it drains. `release()` cannot throw (`~WorkspaceLease` calls it,
+  move-assignment is `noexcept`); a runtime error surfaces at the caller's next `wait`.
+- **Not covered by the drain:** work on a derived in-order queue (`Queue(base, true)`). The drivers
+  that build one (`select::on_in_order_queue`: syev, gesvd, ormqr, posv, the `linalg` wrappers) make
+  `base` wait on its last event when they return; `iluk` waits on its derived queue. A lease on
+  `base` released while the derived queue still runs is not covered. See `release()` in
+  `<batchlas/util/workspace.hh>`.
+- **Freeing.** `trim()` refuses while any lease is outstanding. `trim()` and `~QueueImpl` drain the
+  queue before freeing (a released lease means the caller is done, not the kernels). `~QueueImpl`
+  asserts that no lease is live and drains only when it has blocks, except on Metal, where it always
+  drains: coarse events leave the command buffer open, so a derived queue's work outlived the
+  caller's wait. A `WorkspaceLease` holds a `Queue*`; releasing it after the arena is gone would hand
+  a stale block to a later arena. Moving a `Queue` from under a live lease is a caller bug, and
+  draining would hide it.
+- **`Queue::operator=(Queue&&)` is written out.** It destroys the destination's `QueueImpl` without
+  running `~Queue`, so per-queue state belongs in `QueueImpl`; a side table keyed on `impl_` inherits
+  stale entries when the address is reused.
 
 ## Queue thread ownership and the last-event holder {#runtime-internals-queue-thread-ownership-and-the-last-event-holder}
 
-A `Queue` is single-threaded by contract (see `struct Queue` in `<batchlas/util/sycl-device-queue.hh>`).
-`QueueThreadOwner` records the building thread and compares it on paths that mutate shared state: a
-TLS load and a word compare. It is deliberately not a mutex. The arena is a bump allocator whose
-cursor rewinds, so serialised calls would still interleave leases within a block. A lock would hide
-the constraint.
+A `Queue` is single-threaded by contract (`struct Queue` in `<batchlas/util/sycl-device-queue.hh>`).
+`QueueThreadOwner` (`src/queue.hh`) records the building thread and compares it on the paths that
+mutate shared state, a TLS load and a word compare; a mismatch throws `batchlas::api_misuse`. It is
+deliberately not a mutex: the arena's cursor rewinds, so serialised calls from two threads would still
+interleave their leases.
 
-The check sits where bytes are handed out and blocks are freed (`acquire()`, `trim()`), not in
-`release()`. Every release comes from an acquire that was checked, and `~WorkspaceLease` is
-`noexcept`, so a throw there would terminate.
-
-**`LastEvent`** holds the last event submitted through the queue's wrappers, which gives a cheap
-`get_event()` on an in-order queue. It is a guarded holder rather than a bare
-`std::optional<sycl::event>`. Two threads submitting on one `Queue` tear an unsynchronised optional
-and abort with `UR_RESULT_ERROR_INVALID_EVENT`, even when each supplies its own workspace. The check
-on the member covers every reader and writer. Its interface is the subset of `std::optional` in use.
-
-**Profiling** is opt-in. Kernel trace implies profiling. `settings().diagnostics.profiling` is the OR
-of `BATCHLAS_QUEUE_PROFILING` and `BATCHLAS_BENCH_PROFILING`, folded in `settings.cc`. Reading the
-field, not the environment, keeps both knobs under `configure()` and `ScopedEnvVar`.
-
-**`BATCHLAS_LAUNCH_BOUNDS`** expands to SYCL kernel attributes on NVPTX only. On SPIR-V the
-attributes emit `KernelAttributesINTEL`, which icpx 2026.0's CPU AOT compiler rejects ("unsupported
-capability 5892"). That fails any `spir64_x86_64` link.
+- The check sits where bytes are handed out and blocks freed (`acquire()`, `trim()`), not in
+  `release()`: every release comes from a checked acquire, and `~WorkspaceLease` is `noexcept`.
+- `Queue::attach_to_current_thread()` moves ownership (arena and last event) to the calling thread.
+  It throws `batchlas::api_misuse` while a lease is outstanding.
+- **`LastEvent`** holds the last event submitted through the queue's wrappers, for a cheap
+  `get_event()` on an in-order queue. It is a guarded holder, not a bare `std::optional<sycl::event>`:
+  two threads submitting on one `Queue` tear an unsynchronised optional and abort with
+  `UR_RESULT_ERROR_INVALID_EVENT`, even when each supplies its own workspace. Its interface is the
+  subset of `std::optional` in use.
+- **Profiling** is opt-in; kernel trace implies it. `settings().diagnostics.profiling` is the OR of
+  `BATCHLAS_QUEUE_PROFILING` and `BATCHLAS_BENCH_PROFILING`, folded in `settings.cc`; reading the
+  field keeps both under `configure()` and `ScopedEnvVar`.
+- **`BATCHLAS_LAUNCH_BOUNDS`** (`src/sycl/kernel_attrs.hh`) expands to kernel attributes on DPC++ NVPTX
+  only, and to nothing under AdaptiveCpp. On SPIR-V the attributes emit `KernelAttributesINTEL`, which
+  icpx 2026.0's CPU AOT compiler rejects ("unsupported capability 5892"), failing any `spir64_x86_64`
+  link.
 
 ## Settings loader {#runtime-internals-the-settings-loader}
 
-`src/util/settings.cc` is the one place BatchLAS calls `std::getenv` for its own knobs. The reason the
-`Settings` snapshot exists is documented on `<batchlas/settings.hh>`.
+`src/util/settings.cc` is the one place BatchLAS calls `std::getenv` for its own knobs (exceptions:
+@ref design_environment). Why the `Settings` snapshot exists is documented on `<batchlas/settings.hh>`.
 
-- **Same parser as the call site.** Each field uses the parser its call site used before the
-  snapshot existed, so the loader changed where a string comes from, not what it means. Sites with
-  a bespoke parser keep it: the field is an `EnvValue`, and the loader only captures the string.
+- **Same parser as the call site.** Each field uses the parser its call site used, so the loader
+  changes where a string comes from, not what it means. A site with a bespoke parser keeps it: the
+  field is an `EnvValue` and the loader only captures the string.
 - **Preserved quirks.**
   - `env_positive_int_or` and the bare `atoi` form differ only for an integer literal too large for
     `int`.
-  - The syevx and LOBPCG knobs keep `atoi`, because they accept `0` as a meaningful value.
+  - The syevx and LOBPCG knobs keep `atoi`: they accept `0` as a meaningful value.
   - `BATCHLAS_KERNEL_TRACE_PATH`, then `BATCHLAS_TRACE_PATH`: the first **non-empty** value wins.
   - `BATCHLAS_DUMP_BANDR1_DIR=` (set but empty) yields an empty root, not the default.
-- **Synthesised route variables.** The names are built as `"BATCHLAS_" + upper(op) + "_ROUTE"` for
-  each op in `RoutingSettings::ops`, so grepping for string literals misses them. The selection layer
-  reads them as pins (`pin_text` in `src/select/select.cc`). An op that reads a pin must be in that
-  list, or it silently has no environment pin. The meaning of each value is in
-  [flat kernel selection](flat-kernel-selection.md) and on `RoutingSettings`.
-- **Initialisation.** The snapshot and the last `configure()` value are function-local statics. Selection
-  coverage reads its variable from a namespace-scope initialiser (`src/select/coverage.cc`), which runs
-  before `main`. The only flag that can race is "a Queue has been constructed"; it is atomic because
-  a Queue may be built on another thread.
-- **`configure()` closes at the first Queue.** It is accepted only until the first `Queue` exists.
-  The three root `Queue` constructors enforce this; the delegating and defaulted move constructors are
-  covered by them. `*_buffer_size()` queries read routing and geometry, so a later change would let
-  two calls in one process disagree on scratch size. `note_queue_constructed()` is idempotent and
-  `noexcept`.
-- **Unsafe gate.** It warns once per variable per process, not per load, because `reload_settings()`
-  runs on every `ScopedEnvVar` construction and destruction. Each field is read as its call site read
-  it, then gated, so a warning names a variable that was set. The gate refuses the unsafe direction,
-  not every non-default: `BlasHealth::Error` is stricter and passes. The pointer-check skip treats any
-  non-empty value not starting with `0` as skip, including `false`, `off` and `no`; it is not
-  `env_truthy`. The gate is compiled out when `BATCHLAS_ALLOW_UNSAFE_ENV` is ON. That option is set in
-  `cmake/backend_config.h.in`, and `settings.cc` defaults it to the safe reading.
-- **Reload.** A reload reads the environment on top of what `configure()` last set (the defaults when
-  it was never called), not on top of the defaults. Each loader assigns a field only when its variable
-  is exported (`set_if_present`), so an unset variable keeps the base value; the unsafe gate likewise
-  refuses only a move the environment made. Starting from the defaults would discard `configure()` on
-  any unrelated `ScopedEnvVar` (`ConfigureSurvivesUnrelatedReload` guards this).
-  Ignoring the environment after `configure()` would make every `ScopedEnvVar` a no-op, so an A/B test
-  would compare an arm with itself (`tests/settings_tests.cc`, case (c), guards this). An explicitly
-  set variable still wins over `configure()`. To pin a knob against the environment, set it in the
-  `Settings` and do not export it.
+- **Synthesised route variables.** `"BATCHLAS_" + upper(op) + "_ROUTE"` for each op in
+  `RoutingSettings::ops`, so a grep for string literals misses them. Selection reads them as pins
+  (`pin_text` in `src/select/select.cc`). An op that reads a pin must be in that list, or it silently
+  has no environment pin. Value meanings: @ref design_flat_selection and `RoutingSettings`.
+- **Initialisation.** The snapshot and the last `configure()` value are function-local statics.
+  Selection coverage reads its variable from a namespace-scope initialiser (`src/select/coverage.cc`)
+  that runs before `main`. The only flag that can race is "a Queue has been constructed"; it is atomic
+  because a Queue may be built on another thread.
+- **`configure()` closes at the first Queue.** The three root `Queue` constructors call
+  `note_queue_constructed()` (idempotent, `noexcept`); the delegating and move constructors are
+  covered by them. `*_buffer_size()` queries read routing and geometry, so a later change would let two
+  calls in one process disagree on scratch size.
+- **Unsafe gate.** Warns once per variable per process, not per load, because `reload_settings()` runs
+  on every `ScopedEnvVar` construction and destruction. Each field is read as its call site read it,
+  then gated, so a warning names a variable that was set. It refuses the unsafe direction only:
+  `BlasHealth::Error` is stricter and passes. The pointer-check skip treats any non-empty value not
+  starting with `0` as skip (`false`, `off`, `no` included); it is not `env_truthy`. The gate is
+  compiled out with `-DBATCHLAS_ALLOW_UNSAFE_ENV=ON` (`cmake/BatchLASOptions.cmake`, written to
+  `cmake/backend_config.h.in`); `settings.cc` defaults it to the safe reading.
+- **Reload.** A reload reads the environment on top of what `configure()` last set (the defaults if it
+  was never called). Each loader assigns a field only when its variable is exported
+  (`set_if_present`); the unsafe gate likewise refuses only a move the environment made. Starting from
+  the defaults would discard `configure()` on any unrelated `ScopedEnvVar`
+  (`SettingsConfigure.ConfigureSurvivesUnrelatedReload`). Ignoring the environment after
+  `configure()` would make every `ScopedEnvVar` a no-op and an A/B test compare an arm with itself
+  (`tests/settings_tests.cc`, case (c)). An exported variable wins over `configure()`; to pin a knob,
+  set it in `Settings` and do not export it.
 
 ## Per-item info span contract {#runtime-internals-the-per-item-info-span-contract}
 
-`src/kernels/common/info_span.hh` implements the per-item status span. The public declarations in
-`blas/extensions.hh` point to it. The caller-facing convention is in
-[the API conventions](api-conventions.md#api-conventions-per-item-info-spans).
+`src/kernels/common/info_span.hh` implements the per-item status span. Caller convention:
+[API conventions](api-conventions.md#api-conventions-per-item-info-spans).
 
-- `info` is one `int32` per batch item, in the caller's USM memory, written in place. It needs no
-  copy back, no workspace, and does not change any `*_buffer_size()` result. An empty span costs nothing.
-- `0` means converged. A value `> 0` is LAPACK-like: the number of off-diagonal elements that failed
-  to converge, or `1` where a tier tracks only "did not converge".
-- An **empty** span means "not requested": `info_ptr()` yields `nullptr` and every helper is a no-op.
-  A too-short span is ignored. The deducing overloads reject short spans up front
-  (`detail::require_info_span` in `blas/options.hh`).
-- **It is an accumulator.** Producers only raise a value (`info_report` uses `fetch_max`). The entry
-  point the caller invoked zeroes the span once, through `info_clear`.
+- `info` is one `int32` per batch item in the caller's USM, written in place: no copy back, no
+  workspace, no change to any `*_buffer_size()`. An empty span costs nothing.
+- `0` means converged. `> 0` is LAPACK-like: the number of off-diagonal elements that failed to
+  converge, or `1` where a tier tracks only "did not converge".
+- **Empty** means "not requested": `info_ptr()` yields `nullptr` and every helper is a no-op. A
+  too-short span is ignored here; the deducing overloads reject it first (`detail::require_info_span`,
+  `blas/options.hh`).
+- **It is an accumulator.** Producers only raise (`info_report`, `fetch_max`). The entry point the
+  caller invoked zeroes the span once (`info_clear`).
 
-The last rule is load-bearing. Nested clears are harmless (`syev -> syev_blocked -> stedc` clears the
-same span three times) because no producer runs between them. Two clears with a producer between them
-is the bug the rule prevents. That is why `stedc`'s merge kernels accumulate with `fetch_max`, and why
-`stedc` does not pass `info` to its leaf `steqr` calls: both drivers would clear it again. The
-level-synchronous driver solves `leaves * batch` problems in one `steqr` call. `info_item()` maps the
-finer index back to the caller's item, which keeps `info` a plain span of length `batch`.
+The last rule is load-bearing: two clears with a producer between them lose a failure. Nested clears
+with no producer between them are harmless. `stedc` therefore calls its leaves through
+`steqr_dispatch`, which raises without clearing (`steqr` would clear). The level-synchronous driver
+solves `leaves * batch` problems in one call, so the leaves get their own per-leaf status array, folded
+into the caller's span with `info_item()` (leaf \f$j\f$ belongs to item \f$j / 2^L\f$) and
+`info_report`; `info` stays a plain span of length `batch`.
 
-- **Single-writer stores.** `info_store` and `info_from_flags` store rather than raise. They are for
-  tiers that are the only writer of each item (`bdsqr`, `syevx_lobpcg`, `syevx_filtered`). A store sets
-  a converged item to `0` without a separate clear. A clear plus a raising kernel is two submissions
-  that can race. Never use these where several producers share the span.
-- **`one_means_converged`** in `info_from_flags` is needed because `syevx_lobpcg` and `syevx_filtered`
-  write `1` for converged, the opposite of LAPACK. The caller keeps `flags` alive until the kernel has run.
+- **Single-writer stores.** `info_store` and `info_from_flags` store rather than raise, for tiers that
+  are the only writer of each item: `bdsqr`, `syevx_lobpcg`, `syevx_filtered`, `syev_cta_fused`,
+  `syev_jacobi_cta`, `gesvdj_cta`. A store sets a converged item to `0` without a separate clear; a
+  clear plus a raising kernel is two submissions that can race. Never use them where several
+  producers share the span.
+- **`one_means_converged`** in `info_from_flags`: `syevx_lobpcg` and `syevx_filtered` flag `1` for
+  converged, the opposite of LAPACK. The caller keeps `flags` alive until the kernel has run.
 
 **Vendor status arrays.** `detail::info_target` (`src/linalg-impl.hh`) routes the caller's span in when
-one is supplied, and otherwise falls back to pool scratch. Supplying a span only removes a pool draw.
-Every `*_vendor_buffer_size` therefore keeps its unconditional `int` term and stays correct in both
-modes. The netlib `potrf`, `getrf`, `getri` and `syev` report their LAPACKE status through the span.
-`call_backend_nh_r` sits beside `call_backend_nh`. The `_nh` form discards the return value and also
-serves `void` CBLAS calls. An `auto` deduced from branches where one is `void` is ill-formed once the
-result is used, so the two stay separate.
+one is supplied and otherwise falls back to pool scratch, so a span only removes a pool draw and every
+`*_vendor_buffer_size` keeps its unconditional `int` term. The netlib `potrf`, `getrf`, `getri` and
+`syev` report their LAPACKE status through it via `call_backend_nh_r`, beside `call_backend_nh`. The
+`_nh` form discards the return value and also serves `void` CBLAS calls; an `auto` deduced from
+branches where one is `void` is ill-formed once the result is used, so the two stay separate.
 
 ## Matrix layout checks {#runtime-internals-matrix-layout-checks}
 
-`src/matrix.cc` validates layout metadata in constructors and conversions.
+`src/matrix.cc` validates layout metadata in constructors and conversions; every failure is
+`batchlas::invalid_argument`. Caller view: @ref design_matrix_model.
 
-- **`Matrix` allocating constructor: `ld >= rows`.** `ld` is the distance between columns, and batch
-  items must not overlap. Before the check, an `ld < rows` matrix read into the next column.
-- **`MatrixView(data, rows, cols, ld, stride, batch_size)`** checks `ld >= rows`. Its argument order
-  differs from `Matrix(rows, cols, batch_size, ld, stride)`. Writing `MatrixView<float> V(p, n, n, batch)`
-  yields `ld = batch`, `stride = batch*n` and `batch_size = 1` with no error. The check fires when
-  `batch < n` and names the intended spelling. Deliberately not checked:
-  - null `data`, or zero `rows` or `cols`. About 37 in-repo sites build shape-only stand-ins for
+- **`Matrix` allocating constructor: `ld >= rows`, `stride >= ld*cols`.** `ld` is the column
+  distance; items must not overlap. An `ld < rows` matrix reads into the next column.
+- **`MatrixView(data, rows, cols, ld, stride, batch_size)`** checks `ld >= rows`. Its order differs from
+  `Matrix(rows, cols, batch_size, ld, stride)`: `MatrixView<float> V(p, n, n, batch)` means
+  `ld = batch`, `stride = batch*n`, `batch_size = 1`. The check fires when `batch < n` and the message
+  names the intended spelling. Deliberately not checked:
+  - null `data`, or zero `rows` or `cols`: about 37 in-repo sites build shape-only stand-ins for
     workspace queries, such as `(nullptr, 0, 0, 1, 1, batch)`.
-  - `stride >= ld*cols`. Two live sites violate it: the transposed CGS view in `src/ops/ortho/ortho.cc`
-    ([known defect 1](known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
-    and the `syevx_lobpcg` sizing dummy. A throw would break `ortho` and `syevx_lobpcg_buffer_size`.
-- **Row-major pitch is a parameter.** `to_column_major` takes the row pitch explicitly. It is not
-  inferred from `ld`, which is the column distance. For `rows > cols`, a legal pitch in `(cols, rows]`
-  looks packed. The default (pitch `cols`) is accepted only when packed is the only layout the matrix
-  can hold: `ld == rows` and `stride == rows*cols`. Otherwise the default refuses. Guessing read a
-  padded buffer (`rows=8, cols=6, ld=8, stride=64`) at the wrong pitch and returned 42 of 48 elements
-  wrong, all in bounds. `to_row_major` produces packed data, and its pitch is not recoverable from
-  column-major metadata. The helper also checks that reads stay inside the buffer and do not straddle
-  the next item.
+  - `stride >= ld*cols`: the recorded violators were the transposed CGS view in `ortho` (fixed,
+    [known defect 1](known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
+    and a `syevx_lobpcg` sizing dummy. Whether any live site still violates it is not re-checked
+    (open); the comment in `src/matrix.cc` still cites both.
+- **Row-major pitch is a parameter.** `to_column_major` takes the row pitch explicitly; it is not
+  inferred from `ld` (the column distance). For `rows > cols` a legal pitch in `(cols, rows]` looks
+  packed, so the default (pitch `cols`) is accepted only when packed is the only layout the matrix can
+  hold (`ld == rows`, `stride == rows*cols`, or one row). Guessing read a padded buffer
+  (`rows=8, cols=6, ld=8, stride=64`) at the wrong pitch: 42 of 48 elements wrong, all in bounds.
+  `to_row_major` writes packed data, whose pitch is not recoverable from column-major metadata. Both
+  check that reads stay inside the buffer and do not straddle the next item.
 - **`triangularize`: `uplo` names the triangle to keep.** `Uplo::Upper` zeroes the strict lower
-  triangle. Storage is column-major (`data_[b*stride_ + j*ld_ + i]`). The element count is
-  `batch*rows*cols`, not the span extent, which is wrong for sliced or strided views. `n` is taken from
-  both dimensions. Extracting `R` from a `geqrf` result therefore needs `Upper`.
-- **CSR from a dense matrix.** The offset scan writes offsets `1..rows` of each item and never element
-  0. The whole offsets array is zeroed, so `row_offsets()[b*(rows+1)]` is defined. The value and index
+  triangle (column-major, `data_[b*stride_ + j*ld_ + i]`). The element count is `batch*rows*cols`, not
+  the span extent (wrong for sliced or strided views). Extracting `R` from a `geqrf` result needs
+  `Upper`.
+- **CSR from a dense matrix.** The offset scan writes offsets `1..rows` of each item, never element 0;
+  the whole offsets array is zeroed first, so `row_offsets()[b*(rows+1)]` is defined. Value and index
   padding above each item's count is deterministic. `max_nnz` is the batch maximum.
 
 ## Host BLAS dgemm health check {#runtime-internals-the-host-blas-dgemm-health-check}
 
-Some OpenBLAS CPU-dispatch kernels compute `dgemm` wrongly on the machine that auto-detection picks.
-The known case is OpenBLAS 0.3.20's Cooperlake kernel on recent Intel parts. It is off by O(1) to
-O(100) at some sizes, while `sgemm` is correct. Known Pitfalls in `docs/developer/agent-guide.md`
-cover the symptom.
+Some OpenBLAS CPU-dispatch kernels compute `dgemm` wrongly on the machine auto-detection picks: the
+known case is OpenBLAS 0.3.20's Cooperlake kernel on recent Intel parts, off by O(1) to O(100) at some
+sizes while `sgemm` is correct (Known Pitfalls in @ref dev_agent_guide).
 
-- `cmake/BatchLASBlasHealthCheck.cmake` detects the defect at configure time and records the
-  `OPENBLAS_CORETYPE` that repairs it. An install can be consumed on another machine, so the value is
-  compiled in as `BATCHLAS_REQUIRED_OPENBLAS_CORETYPE`. `src/backends/netlib_lapack.cc` reruns a cheap
-  version of the probe once, on first double-precision use.
-- The probe evaluates the naive reference on a strided sample of `C`, at most 32x32 entries per size,
-  which costs milliseconds. The sizes are chosen to expose the defect: `n = 64` and `n = 256` happen to
-  be correct, so one small size proves nothing.
+- `cmake/BatchLASBlasHealthCheck.cmake` detects it at configure time and records the
+  `OPENBLAS_CORETYPE` that repairs it, compiled in as `BATCHLAS_REQUIRED_OPENBLAS_CORETYPE` because an
+  install can run on another machine.
+- `src/backends/host_blas_health.hh` holds the run-time port, shared by the NETLIB backend
+  (`netlib_lapack.cc`, once, on first double use) and the `batchlas::verify` references. It checks a
+  strided sample of `C` (step \f$\max(1, n/32)\f$, at most about 32 x 32 entries) at
+  \f$n \in \{128, 200, 512\}\f$, in milliseconds. `n = 64` and `n = 256` happen to be correct, so one
+  small size proves nothing.
 - Single precision is skipped. Paths that call LAPACKE directly, such as netlib `gesvd`, run the guard
   themselves.
-- The probe does not call `setenv()`. OpenBLAS reads `OPENBLAS_CORETYPE` in a library constructor that
-  runs before any BatchLAS code. Only the environment at process start can fix it. The diagnostic reads
-  `OPENBLAS_CORETYPE` directly and does not capture it into `Settings`.
-- `BATCHLAS_BLAS_HEALTH` (`off | warn | error`) is a parsed enum on `settings().unsafe`. `off` disables
-  the only detection of a wrong host `dgemm`, so the unsafe gate refuses it. `error` is stricter and
-  passes.
+- The probe never calls `setenv()`: OpenBLAS reads `OPENBLAS_CORETYPE` in a library constructor before
+  any BatchLAS code, so only the environment at process start fixes it. The diagnostic reads
+  `OPENBLAS_CORETYPE` directly, not through `Settings`.
+- `BATCHLAS_BLAS_HEALTH` (`off | warn | error`, default `warn`) is a parsed enum on
+  `settings().unsafe`. `off` disables the only detection of a wrong host `dgemm`, so the unsafe gate
+  refuses it; `error` (throws `batchlas::device_error`) is stricter and passes.
 
 ## Build-time structure of the library {#runtime-internals-build-time-structure}
 
-`src/CMakeLists.txt` cuts the library into OBJECT libraries, one per area, so an edit recompiles only
-that area's objects.
+`src/CMakeLists.txt` cuts the library into OBJECT libraries, so an edit recompiles only its area.
 
 | Object library | Holds |
 | --- | --- |
 | `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; the target `generate_export_header()` is keyed on (@ref design_symbol_visibility) |
-| `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU |
-| `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | vendor wrapper TUs; the CUDA and ROCm libraries exist only when a vendor library of that family is enabled |
-| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
+| `batchlas_selection_obj` | flat selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, the generated tuned-tables TU |
+| `batchlas_backends_obj`, `_cuda_obj`, `_rocm_obj` | vendor wrapper TUs (`src/backends/`) |
+| `batchlas_extensions_{eigen,factorization,tridiag,sytrd,latrd,stedc,cta}_obj` | native drivers and kernels under `src/ops/` and `src/kernels/common/`; lists in `src/ops/CMakeLists.txt` group by device-link cluster, not folder |
 | `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,trsm,gemv,spmm}/kernels/` |
-| `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities) and `EXTRA_SOURCES` (norms, cond, transpose, random matrices) |
+| `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities); `EXTRA_SOURCES` (norm, cond, random cond, transpose, elementwise, the verification checks `matrix_checks.cc`) |
 
-- **Selection is compiled unconditionally.** `batchlas_selection_obj` has no vendor condition. Its
-  vendor calls are `if constexpr`-gated on the `BATCHLAS_HAS_*` macros. This makes
-  `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` a complete library rather than a link error.
-- **An empty vendor object library is a CMake error.** "A CUDA device is present" is not enough to
-  create the CUDA backend library. It requires at least one enabled CUDA math library.
-- **`batchlas_extensions_cta_obj` is the only object library built with `NO_CPU_TARGETS`.** Its kernels
-  are GPU-only (32-lane CTA and tiny tiers). Nothing warns if a source is moved out of that list; it
-  silently gains a CPU image. `batchlas_sycl_obj` keeps the CPU target, because the native-CPU image is
-  what makes a vendor-free CPU build complete.
+- **Selection is compiled unconditionally.** Its vendor calls are `if constexpr`-gated on
+  `BATCHLAS_HAS_*`, so `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is a complete library, not a link error.
+- **An empty OBJECT library is a CMake error.** The CUDA vendor TUs each call all three libraries, so
+  the CUDA set is all-or-nothing (`BATCHLAS_HAS_CUDA_VENDOR_TUS`, `cmake/BatchLASDependencies.cmake`):
+  a partial cuBLAS/cuSOLVER/cuSPARSE set is a configure error. The ROCm library exists when at least
+  one ROCm math library is enabled.
+- **`batchlas_extensions_cta_obj` is the only `NO_CPU_TARGETS` library.** Its kernels are GPU-only
+  (32-lane CTA and tiny tiers). Nothing warns if a source moves out of it; it silently gains a CPU
+  image. `batchlas_sycl_obj` keeps the CPU target: its native-CPU image completes a vendor-free CPU
+  build.
 - **A source sits with the sources whose device symbols it calls.** The shared library is the
-  device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body`, so they must be in
-  the same object library. Splitting them links today only because the helpers are inline templates.
-  Once one is marked `SYCL_EXTERNAL`, the split fails with `ptxas fatal: Unresolved extern function`.
-  The rationale for each placement is in the comments of `src/ops/CMakeLists.txt`.
+  device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body` and must stay in one
+  object library; split, they link only while the helpers are inline templates, and fail with
+  `ptxas fatal: Unresolved extern function` once one is `SYCL_EXTERNAL`. Placement rationale: comments
+  in `src/ops/CMakeLists.txt`.
 - **Tiny-kernel TUs** (`getrf_tiny.cc`, `gesv_tiny.cc`, `posv_tiny.cc`, `trsm_sg_left.cc`) build with
-  `-mllvm -pragma-unroll-threshold=262144`. Without it LLVM silently declines `#pragma unroll`, and
-  the register arrays go to the stack.
+  `-mllvm -pragma-unroll-threshold=262144` under DPC++; without it LLVM silently declines
+  `#pragma unroll` and the register arrays go to the stack. AdaptiveCpp's JIT never sees stage-1
+  `-mllvm` options; `BATCHLAS_UNROLL_FULL` covers it there.
 - **Split by default, monolithic for release.** The default build makes each object library its own
-  shared library. `BATCHLAS_MONOLITHIC_LIBRARY` links them into one `libbatchlas.so`. The device link
-  runs per shared library, so the split keeps a one-file edit's relink small. The merged link took
-  575 s for a 273 MiB `.so` on the RTX 4090 box, out of 11 m 38 s for a `-j16` build. Hidden visibility
-  applies only to the monolithic build. In split mode, process-wide inline state would split into one
-  copy per `.so` (see [symbol visibility](#runtime-internals-symbol-visibility-for-private-headers)).
+  shared library (14 components); `BATCHLAS_MONOLITHIC_LIBRARY` (default ON on macOS, where split
+  dylibs are rejected) links one `libbatchlas`. The device link runs per shared library, so the split
+  keeps a one-file relink small: the merged link took 575 s for a 273 MiB `.so` on the RTX 4090 box,
+  out of 11 m 38 s for a `-j16` build. Hidden visibility applies only to the monolithic build; in split
+  mode process-wide inline state would split into one copy per `.so`
+  ([symbol visibility](#runtime-internals-symbol-visibility-for-private-headers)).
 
 ## Embedded tuned tables {#embedded-tuned-tables}
 
-The tuned selection tables (`tuned/<op>.<device>.txt`; format in `tuned/README.md` and
-[flat kernel selection](flat-kernel-selection.md)) are compiled into the library. An installed
-BatchLAS therefore needs no data files at run time.
+The selection tables (`tuned/<op>.<device>.txt`; format in `tuned/README.md` and
+@ref design_tuning_data) are compiled into the library, so an install needs no data files at run time.
 
-- **Generation.** `src/CMakeLists.txt` globs `tuned/*.txt` with `CONFIGURE_DEPENDS`, so adding or
-  removing a table reconfigures. It runs `cmake/BatchLASEmbedTables.cmake` as a custom command that
-  depends on the tables. The script writes `<build>/generated/select/tuned_tables.cc`, which defines
-  `select::embedded_tables()` (declared in `src/select/select.hh`) as a sorted array of
-  `{file name, text}` pairs. The TU is compiled into `batchlas_selection_obj`.
-- A file not named `<op>.<device>.txt` is a configure error. The loader would otherwise skip
-  it silently. At run time `select::parse_tables` splits each file into one table per dtype (its
-  first key, `dtype:exact`; @ref design_tuning_data).
-- Each table is embedded as `R"batchlas_tbl(...)batchlas_tbl"`. A table that contains the delimiter is
-  a configure error.
-- Each table is one `char` array whose length comes from `sizeof`. A `string_view` built from a bare
-  literal runs a constexpr `strlen`, and the tables (about 33 MB over 39 files, 2026-10-12) exceed
-  clang's constexpr step limit.
-  C++23 `#embed` is not available in DPC++.
-- Zero tables is valid. The array keeps a sentinel entry, and the span is empty.
-- An unchanged table set leaves the generated file untouched, so its timestamp holds and the TU is not
-  recompiled.
+- **Generation.** `src/CMakeLists.txt` globs `tuned/*.txt` with `CONFIGURE_DEPENDS` (adding or removing
+  a table reconfigures) and runs `cmake/BatchLASEmbedTables.cmake` as a custom command on them. It
+  writes `<build>/generated/select/tuned_tables.cc`, defining `select::embedded_tables()` (declared in
+  `src/select/select.hh`) as a sorted array of `{file name, text}`, compiled into
+  `batchlas_selection_obj`.
+- A file not named `<op>.<device>.txt` is a configure error (the loader would skip it silently). At
+  run time `select::parse_tables` splits each file into one table per dtype (first key
+  `dtype:exact`).
+- Each table is embedded as `R"batchlas_tbl(...)batchlas_tbl"`; a table containing the delimiter is a
+  configure error.
+- Each table is one `char` array sized by `sizeof`. A `string_view` built from a bare literal runs a
+  constexpr `strlen`, and the tables (about 50 MB over 39 files on 2026-10-21) exceed clang's
+  constexpr step limit. C++23 `#embed` is not available in DPC++.
+- Zero tables is valid: the array keeps a sentinel and the span is empty.
+- An unchanged table set leaves the generated file untouched, so the TU is not recompiled.
 
 **Staleness:** @ref design_tuning_data. A stale table stays in use.
 
-**Run time.** Tables are parsed lazily per `(op, dtype)`, on the first selection that needs them, and
-cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in
-`BATCHLAS_TUNED_DIR` with the same name replaces the embedded one dtype by dtype (a dtype the file
-lacks keeps the embedded rows), and the trace tag then reads `override`. A non-table file there is skipped with a one-time warning. The cache, its mutex and the
-parsed tables are deliberately leaked. `choose()` can run from static destructors, and the coverage
-writer runs from `atexit`, so neither may find the tables already destroyed. Tests swap the embedded
-set with `select::testing::set_builtin_tables` and restore it with `use_embedded_tables`. Each call
-bumps the generation, so no cached parse survives.
+**Run time.** Tables are parsed lazily per `(op, dtype)` on the first selection that needs them, and
+cached with the `BATCHLAS_TUNED_DIR` value and a generation counter. A same-named file in
+`BATCHLAS_TUNED_DIR` replaces the embedded one dtype by dtype (a dtype the file lacks keeps the
+embedded rows); the trace tag then reads `override`. A non-table file there is skipped with a one-time
+warning. The cache, its mutex and the parsed tables are deliberately leaked: `choose()` can run from
+static destructors and the coverage writer from `atexit`. Tests swap the embedded set with
+`select::testing::set_builtin_tables` and restore it with `use_embedded_tables`; each call bumps the
+generation, so no cached parse survives.

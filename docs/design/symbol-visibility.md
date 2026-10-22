@@ -1,26 +1,38 @@
 # Symbol visibility {#design_symbol_visibility}
 
-> **Status:** current.
+> **Status:** current · checked 2026-10-21
 
 `BATCHLAS_API` is generated into `<build>/include/batchlas/export.hh` by `generate_export_header()`
-against `batchlas_core_obj`. The entities below carry it where it looks arbitrary. That placement is
-required.
+against `batchlas_core_obj` (`src/CMakeLists.txt:103-107`). The entities below carry it where it
+looks arbitrary. That placement is required.
 
 ## symbol visibility: build modes
 
 - On ELF both arms expand to `__attribute__((visibility("default")))`, so one header serves split,
-  monolithic and external builds.
-- Only `-DBATCHLAS_MONOLITHIC_LIBRARY=ON` uses `-fvisibility=hidden -fvisibility-inlines-hidden`. The
-  split build keeps default visibility: four weak data objects are defined in all 14 component
-  libraries and merge only under default visibility.
-- A missing annotation is invisible in the split build. It breaks the monolithic build or a consumer's
-  link. No in-tree test links a monolithic install.
+  monolithic and external builds. `batchlas_core_obj` is the target that exists in every mode; the
+  split-mode `batchlas` facade is INTERFACE, for which `generate_export_header()` produces nothing.
+- `-fvisibility=hidden -fvisibility-inlines-hidden` (`CXX_VISIBILITY_PRESET hidden`,
+  `VISIBILITY_INLINES_HIDDEN`) applies only when `BATCHLAS_MONOLITHIC_LIBRARY=ON` and
+  `BATCHLAS_HIDDEN_VISIBILITY=ON` (`src/CMakeLists.txt:123-128`).
+- `BATCHLAS_HIDDEN_VISIBILITY` exists only in a monolithic tree and defaults to `ON` there unless
+  tests are built: the in-tree tests reach about 1,000 unannotated internal symbols
+  (`cmake/BatchLASOptions.cmake:231-239`). The macOS presets set it `OFF`.
+- The split build keeps default visibility: four weak data objects
+  (`batchlas_kernel_trace::g_records`, `batchlas::QueueImpl::device_arrays` and both guard
+  variables) are defined in every component library and merge only under default visibility.
+  Hidden, each `.so` would get its own kernel-trace vector and per-device array cache, with no
+  undefined reference to point at it. The measurement (14 split libraries, 879 symbol references
+  crossing a component boundary) predates `batchlas_blas` and `batchlas_extensions_symmetric`
+  becoming INTERFACE.
+- A missing annotation is invisible in the split build and in any tree that builds tests. It breaks
+  a hidden-visibility monolithic build or a consumer's link. No in-tree test or CI job links a
+  hidden-visibility monolithic install (the `release` preset is not built in CI).
 
 ## symbol visibility: enums used as template arguments
 
 GCC and Clang give an instantiation the minimum visibility of its template and its arguments.
-`Backend` and `MatrixFormat` are template parameters across the public surface (207 `template <Backend ...>`
-declarations). An unannotated enum hides those instantiations, and `BATCHLAS_API` on the function does
+`Backend` and `MatrixFormat` are template parameters across the public surface (214
+`template <Backend ...>` declarations in `include/`, 2026-10-21). An unannotated enum hides those instantiations, and `BATCHLAS_API` on the function does
 nothing.
 
 - Without the enum annotation, `batchlas::gemm<Backend::CUDA, float>` is a local `t` symbol. With it,
@@ -28,7 +40,8 @@ nothing.
 - 688 of the 1,083 symbols a consumer links (63%) were affected.
 - The failure is an undefined reference at the consumer's link, with no compiler diagnostic.
 
-Annotate every enum in `include/batchlas/blas/enums.hh` that becomes a template argument.
+Annotate every enum in `include/batchlas/blas/enums.hh` that becomes a template argument
+(`MatrixFormat` and `Backend` today, lines 72 and 111).
 
 ## symbol visibility: BinaryOp is a template-argument enum too
 
@@ -37,17 +50,20 @@ Without it, all four `elementwise_into<float, BinaryOp::*>` specialisations stay
 
 ## symbol visibility: the export attribute on the Matrix class template
 
-`BATCHLAS_API` is on the class templates `Matrix`, `MatrixView` and `VectorView`, not on the 313 explicit
-instantiations in `src/matrix.cc`. Only 22 of those lines are `template class ...;`. The other 291
-instantiate member templates (factories, `convert_to`, `to_row_major` / `to_column_major`, `MatrixView`
-members), which a whole-class instantiation does not reach. A class-level attribute covers all 313.
+`BATCHLAS_API` is on the class templates `Matrix`, `MatrixView` and `VectorView`
+(`include/batchlas/blas/matrix.hh`), not on the explicit instantiations in `src/matrix.cc` (313 when
+counted; 205 lines start `template ` on 2026-10-21). Only 22 of them are `template class ...;`. The
+rest instantiate member templates (factories, `convert_to`, `to_row_major` / `to_column_major`,
+`MatrixView` members), which a whole-class instantiation does not reach. A class-level attribute
+covers them all.
 
 Do not put the attribute on an explicit instantiation. g++ 13 rejects
 `template class __attribute__((visibility("default"))) F<double,1>;`; clang accepts it.
 
 ## symbol visibility: exception typeinfo must be exported
 
-Every class in `include/batchlas/error.hh` carries `BATCHLAS_API`, including `detail::exception_bridge`.
+Every class in `include/batchlas/error.hh` carries `BATCHLAS_API`, including `detail::exception_bridge`,
+and so does `NoRouteError` (`include/batchlas/no_route.hh`).
 None has an out-of-line member, so vtables and typeinfo have vague linkage. Catch-by-type works only
 because every copy has default visibility and the linker merges them. Under `-fvisibility=hidden` a
 consumer's `catch (const batchlas::error&)` stops matching a throw from the library, and the exception
@@ -67,7 +83,8 @@ private `release_(bool)`. Without the class annotation a consumer gets an unreso
 
 ## symbol visibility: Event carries per-member exports
 
-`Event` is `struct [[nodiscard]] Event`, with `BATCHLAS_API` on each of its ten out-of-line members.
+`Event` is `struct [[nodiscard]] Event` (`include/batchlas/util/sycl-device-queue.hh:279`), with
+`BATCHLAS_API` on each of its ten out-of-line members.
 g++ 13 rejects a class-key with both a C++11 and a GNU attribute, in either order (`-std=c++20`), so the
 class-level form does not compile there. Clang accepts both. `Event` has no virtual member, so
 per-member annotation is equivalent.
@@ -81,5 +98,6 @@ raw SYCL. In-tree discards are written `(void)`.
 
 `Queue::attach_to_current_thread()` and `Queue::native_handle()` carry `BATCHLAS_API` on the member, even
 though the class is annotated. Both are `[[gnu::used]] inline` in `src/queue.hh`
-(`BATCHLAS_QUEUE_EXPORTED_INLINE`). `used` keeps the symbol but does not set visibility, and
+(`BATCHLAS_QUEUE_EXPORTED_INLINE`, plain `inline` in the device pass), as are the `sycl_queue`,
+`sycl_event` and `event_from_sycl` helpers there. `used` keeps the symbol but does not set visibility, and
 `-fvisibility-inlines-hidden` hides inline members whatever the class says.

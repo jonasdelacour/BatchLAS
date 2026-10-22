@@ -1,25 +1,37 @@
 # syevx: design of the partial symmetric eigensolver {#design_syevx}
 
-> **Status:** current · written 2026-08-01, corrected in place where measurement disagreed.
+> **Status:** current · checked 2026-10-21
 
 `syevx` returns \f$k\f$ eigenpairs of a symmetric or Hermitian matrix, by extreme end or by an
-index or value range. It dispatches to one of four algorithms. This page gives the algorithms,
-the routing rule, the cost model, the verdict on each candidate, and the rules the dispatcher
-enforces. Measured crossovers are on @ref perf_syevx. Range semantics are on @ref design_syevx_range.
+index or value range. It dispatches to one of four algorithms by a hand-written rule (it has no
+`tuned/` table). This page gives the algorithms, the routing rule, the cost model, the verdict on
+each candidate, and the rules the dispatcher enforces. Measured crossovers are on
+@ref perf_syevx. Range semantics are on @ref design_syevx_range.
+
+| Piece | Source |
+|---|---|
+| entry points, validation, `syevx_select_algorithm`, thresholds | `src/ops/syevx/syevx.cc` |
+| `Direct` | `src/ops/syevx/kernels/syevx_direct.cc` |
+| `DirectSubset` | `src/ops/syevx/kernels/syevx_direct_subset.cc` |
+| `Filtered` | `src/ops/syevx/kernels/syevx_filtered.cc` |
+| `LOBPCG` | `src/ops/syevx/kernels/syevx_lobpcg.cc` |
+| `SyevxParams`, public declarations | `include/batchlas/blas/extensions.hh` |
 
 ## syevx algorithms
 
 | Algorithm | Input | Method | Chosen by Auto when |
 |---|---|---|---|
-| `Direct` | dense; all types, ranges and `jobz` | `syev`, then select | \f$n \le 64\f$, or eigenvalues only |
-| `DirectSubset` | dense | band reduction, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
+| `Direct` | dense; all types, ranges and `jobz` | the public `syev` (table-selected), then select | \f$n \le 64\f$, eigenvalues only, complex, or below the `DirectSubset` gates |
+| `DirectSubset` | dense, real scalars only (`syevx_direct_subset_supported`, `extensions.hh:558`); in-order Queue | band reduction, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
 | `LOBPCG` | CSR (dense on explicit request) | batched LOBPCG, optional ILU(k) or Jacobi preconditioner | sparse input, extremal ranges only |
 | `Filtered` | CSR or dense | scaled Chebyshev filter with Rayleigh-Ritz | never; explicit request only |
 
-On dense input with eigenvectors, Auto picks `DirectSubset` when \f$n \ge 1024\f$ and
+On dense real input with eigenvectors, Auto picks `DirectSubset` when \f$n \ge 1024\f$ and
 \f$n \cdot \mathrm{batch} \ge 128 \cdot 1024\f$, and `Direct` otherwise. The gates are
-`kSyevxSubsetMinN` and `kSyevxSubsetMinWork` in `src/ops/syevx/syevx.cc`. The rule has no
-\f$k/n\f$ term: the `DirectSubset` advantage is flat in \f$k\f$ from 0.8 % to 25 % of the spectrum.
+`kSyevxSubsetMinN` and `kSyevxSubsetMinWork` (`src/ops/syevx/syevx.cc:41-42`, applied at `:314`);
+`kSyevxSmallN = 64` is at `:38`. The rule has no \f$k/n\f$ term: the `DirectSubset` advantage is
+flat in \f$k\f$ from 0.8 % to 25 % of the spectrum. An explicit `DirectSubset` request on complex
+input runs `Direct`.
 
 Routing gave most of the practical gain (3.0x to 3.7x geometric mean). `DirectSubset` adds up to
 2.4x, at large \f$n\f$ and batch only.
@@ -68,7 +80,7 @@ This is where `DirectSubset` applies: \f$n\f$ from about 128 to 4096, batch 8 to
 | subset eigenvalues | `stebz` |
 | subset eigenvectors | `stein` |
 | back-transform through Q2 | `unmqr_hb2st`, on \f$k\f$ columns |
-| back-transform through Q1 | `ormqr_blocked`, on \f$k\f$ columns |
+| back-transform through Q1 | `ormqr_blocked` on \f$k\f$ columns; the host LAPACKE `ormqr` on `Backend::NETLIB` |
 
 - The tridiagonal subset stage is off the critical path: at \f$n = 1024\f$, \f$k = 64\f$, bisection
   costs about 2.6 MFlop against 1.4 GFlop for `sy2sb`. It must be correct and batched, not fast.
@@ -133,18 +145,21 @@ direct route for batched dense input. The `syevr` and generalized `sygvx` non-go
 
 ### syevx dispatcher: problem arguments are validated before dispatch
 
-`validate_syevx_preconditioner_params` and `validate_syevx_range_params` run in `syevx` and
-`syevx_buffer_size` before `syevx_select_algorithm`. They check the problem, not the algorithm.
-Otherwise an illegal combination on dense input would reach `Direct` or `DirectSubset`, which ignore
-preconditioners.
+`validate_syevx_preconditioner_params` (`src/ops/syevx/syevx.cc:62`) and
+`validate_syevx_range_params` (`:110`) run in `syevx` and `syevx_buffer_size` before
+`syevx_select_algorithm` (`:235`). They check the problem, not the algorithm. Otherwise an illegal
+combination on dense input would reach `Direct` or `DirectSubset`, which ignore preconditioners.
+Every rejection is a `batchlas::invalid_argument`.
 
 `value_range_reportable` is false only for solve overloads without an `m` output. A short `m` span is
 rejected on the host, because the device write it would cause is unchecked in release builds.
 
 ### syevx dispatcher: which preconditioner is legal at which end
 
+- An ILU(k) factor comes from the caller (`SyevxParams::preconditioner`) or is built inside `syevx`
+  from its workspace (`build_preconditioner`, CSR only). Both at once throw.
 - ILU(k) approximates \f$A^{-1}\f$, so it helps only the smallest eigenpairs. `find_largest` with an
-  ILU(k) factor throws.
+  ILU(k) factor, supplied or requested, throws.
 - `Jacobi`, \f$\mathrm{diag}(A)^{-1}\f$, inherits that restriction. With `find_largest` it turned 21 to
   47 iterations into 127 to 300, which is non-convergence at the cap.
 - `JacobiShifted`, \f$(\mathrm{diag}(A) - \lambda I)^{-1}\f$ with the current Ritz value as \f$\lambda\f$, is
@@ -163,9 +178,10 @@ diagnosis.
   warning. An explicit request for the same combination throws.
 - Trap: the variable wins whenever it is set. An unrecognised value parses to `Auto`, which ignores
   `params.method`. This is preserved on purpose.
-- `BATCHLAS_SYEVX_PRECONDITIONER` supplies only the default. A configured ILU(k) factor always wins.
-  `ILUK` from the environment is dropped, since there is no factor and `syevx` does not build one.
-  `Jacobi` from the environment is dropped for `find_largest` calls.
+- `BATCHLAS_SYEVX_PRECONDITIONER` supplies only the default (`syevx_select_preconditioner`,
+  `syevx.cc:324`). A configured ILU(k) factor always wins. `ILUK` from the environment is dropped:
+  without `preconditioner` or `build_preconditioner` there is no factor. `Jacobi` from the
+  environment is dropped for `find_largest` calls.
 
 ### syevx: why the preconditioner environment variable is only a default
 
@@ -192,7 +208,9 @@ ranges, so `syevx` fills `m` with the resolved block size before the solve, on t
 
 `syevx_direct` and `syevx_direct_subset` are public, so they re-check Index and Value ranges. An
 out-of-range block would index past the \f$n\f$-entry eigenvalue array. The check throws
-`std::invalid_argument`; `syevx_resolve_range` clamps as a second defence. `DirectSubset` validates
+`batchlas::invalid_argument` (`syevx_direct.cc:94-104`, `syevx_direct_subset.cc:96-102`);
+`syevx_resolve_range` clamps as a second defence. `syevx_direct_subset` also throws on an
+out-of-order Queue (`:107-108`) and `batchlas::unsupported` on complex or CSR input (`:68-72`). `DirectSubset` validates
 before the reduction, since `stebz` would otherwise reject the range after \f$O(n^3)\f$ work.
 
 `neigs` above \f$n\f$ is accepted and clamped. `neigs = 0` is rejected by `DirectSubset`, because
@@ -200,9 +218,10 @@ before the reduction, since `stebz` would otherwise reject the range after \f$O(
 
 ### syevx DirectSubset: reported as converged, with a caveat
 
-`info` is 0 for every item. That is a caveat, not a check: `stebz` gives no exit status, and `stein` runs
-a fixed number of inverse iterations with no convergence test. A real flag needs a residual check, which
-is not implemented. Writing 0 is deliberate, so that an untouched span cannot be read as "converged".
+`info` is 0 for every item (`detail::info_clear`, `syevx_direct_subset.cc:84`). That is a caveat, not a
+check: `stebz` gives no exit status, and `stein` runs a fixed number of inverse iterations with no
+convergence test. A real flag needs a residual check, which is not implemented. Writing 0 is
+deliberate, so that an untouched span cannot be read as "converged".
 
 ### syevx Filtered: the scaled Chebyshev filter
 
@@ -230,8 +249,8 @@ Y_{j+1} = \frac{2\sigma'}{e}(A - cI)Y_j - \sigma\sigma' Y_{j-1}.
 Unscaled \f$T_m\f$ overflows: \f$T_{25}(3) \approx 10^{38}\f$, which is float infinity. The \f$\sigma\f$ factors
 keep intermediates near unit magnitude. The block is orthonormalized afterwards.
 
-Guard directions (`extra_directions`, default `max(2, k/4)`) keep the last wanted pair from converging
-slowly. The start block is a hash of the index, so it is reproducible across runs and backends.
+Guard directions (`extra_directions`; 0, the default, means `max(2, k/4)`, `syevx_filtered.cc:104-105`)
+keep the last wanted pair from converging slowly. The start block is a hash of the index, so it is reproducible across runs and backends.
 
 ### syevx Filtered: normalising the filter and capping its degree
 
@@ -266,14 +285,16 @@ d_{need} = \frac{\log(\text{worst residual} / \text{target})}{r}, \qquad r = \ma
 \f]
 
 in the units of the convergence test. Each item's \f$d_{need}\f$ is clamped to `[kAutoDegreeMin, kAutoDegreeMax]`
-= `[10, 40]`, reduced by **max** across the batch, then trimmed by the batch-minimum cap. The lower bound is
-the old constant, so enabling the derivation never makes a step less selective.
+= `[10, 40]` (`syevx_filtered.cc:59-60`), reduced by **max** across the batch, then trimmed by the
+batch-minimum cap. The lower bound equals `kDefaultFilterDegree` (10, `:55`), so enabling the
+derivation never makes a step less selective.
 
-Precedence: `BATCHLAS_SYEVX_FILTER_DEGREE` > `params.filter_degree` > derived > `kDefaultFilterDegree`. An
-explicit value turns the derivation off. `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0` restores the constant exactly.
+Precedence (`syevx_filtered.cc:108-111`): `BATCHLAS_SYEVX_FILTER_DEGREE` > `params.filter_degree` >
+derived > `kDefaultFilterDegree`. An explicit value turns the derivation off.
+`BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0` restores the constant exactly.
 
-**Trap:** `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` is parsed with `atoi`, not `env_truthy`, so `true` and `on`
-read as false. This is kept, so existing spellings keep their meaning.
+**Trap:** `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` is parsed with `atoi` (`syevx_filtered.cc:120`), not
+`env_truthy`, so `true` and `on` read as false. This is kept, so existing spellings keep their meaning.
 
 ## syevx validation
 
@@ -283,6 +304,8 @@ read as false. This is kept, so existing spellings keep their meaning.
   \f$\lambda \approx 0\f$.
 - Performance sweep: \f$n\f$ in 32 to 4096, \f$k/n\f$ in {0.01 … 0.5}, batch in {1, 8, 64, 512}, both `JobType`s.
   Baselines: `syev`, every `syevx` algorithm, and the vendor non-batched subset routine looped over the batch.
+- Tests check with `EXPECT_VERIFY` (`Check::eigen_residual`, `Check::orthogonality_rotations`,
+  `Check::values`; @ref design_verification).
 
 fp64 CPU failures on the primary machine are usually the broken OpenBLAS Cooperlake `dgemm`. Check a
 known-good BLAS first.

@@ -1,17 +1,16 @@
 # Vendor independence {#design_vendor_independence}
 
-> **Status:** current. The [History](#history-the-routetable-layer) section describes deleted code.
+> **Status:** current · checked 2026-10-21. The [History](#history-the-routetable-layer) section describes deleted code.
 
 BatchLAS configures, builds, loads and runs with no vendor math library. This page describes the
-mechanisms that keep that property: the two axes that decide vendor use, the per-library gate, the
+mechanisms that keep that property: the axes that decide vendor use, the per-library gate, the
 contracts every public entry point keeps, the coverage instrument and the verification scripts. It
-has no performance numbers. Measured windows and per-op debts are in [docs/perf/](../perf/README.md),
-starting at [docs/perf/dispatch.md](../perf/dispatch.md). Current vendor-free status is in
-[vendor-free-status.md](vendor-free-status.md).
+has no performance numbers: measured windows are in [docs/perf/](../perf/README.md), current
+vendor-free status in [vendor-free-status.md](vendor-free-status.md).
 
-A vendor-free CUDA build is the ordinary build with one library axis off:
+A vendor-free CUDA build is the ordinary build with the library axis off:
 `cmake -B build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON` yields
-`BATCHLAS_HAS_CUDA_BACKEND 1` with every CUDA math library at `0`.
+`BATCHLAS_HAS_CUDA_BACKEND 1` with every vendor library flag at `0`.
 
 ## Vendor independence today
 
@@ -19,120 +18,131 @@ Two independent questions decide whether a call can reach a vendor library:
 
 | axis | type | question it answers | where |
 |---|---|---|---|
-| device family | `Backend` | which SYCL runtime family is this call compiled for | `include/batchlas/blas/enums.hh` |
-| library present | `BATCHLAS_HAS_<LIB>` | which third-party math library exists in this build | `cmake/BatchLASOptions.cmake` → `batchlas/backend_config.h` |
+| device family | `Backend` | which SYCL runtime family the call is compiled for | `include/batchlas/blas/enums.hh` |
+| library present | `BATCHLAS_HAS_<LIB>` | which third-party math library exists in this build | `cmake/BatchLASDependencies.cmake` → `batchlas/backend_config.h` |
 
-"NVIDIA GPU with no cuBLAS" is `Backend::CUDA` with `BATCHLAS_HAS_CUBLAS == 0`, not a new device
-family. The third question, whose code runs for a call, is the op's **choice**: a value of the op's
-family variant. The vendor library is the family `vendor`.
+- "NVIDIA GPU with no cuBLAS" is `Backend::CUDA` with `BATCHLAS_HAS_CUBLAS == 0`, not a new family.
+- `Backend::SYCL` is a GPU with no vendor library at all (AdaptiveCpp Metal): every vendor predicate
+  is false there (`src/select/vendor.hh`), so the Apple GPU build is vendor-free by construction.
+- `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the one switch over every vendor library (cuBLAS, cuSOLVER,
+  cuSPARSE, rocBLAS, rocSOLVER, rocSPARSE, LAPACKE, CBLAS; `cmake/BatchLASOptions.cmake:317-326`).
+  There are no per-library options. The three CUDA libraries are all-or-nothing: a partial set fails
+  configure (`cmake/BatchLASDependencies.cmake:214-232`).
 
-* **Public definitions** live in `src/ops/<op>/<op>.cc`, compiled into `batchlas_selection_obj` and
-  instantiated on the device family. The vendor TUs (`cublas.cc`, `cusolver.cc`, `rocblas.cc`,
-  `netlib_lapack.cc`, ...) define and instantiate only `backend::<op>_vendor<B, T>`. The public symbol
-  therefore exists in every build that has the device.
-* **The `vendor` family's `can_run`** is `d.has_vendor`, filled by `select::device_of` from
-  `select::has_library<B>(spec.vendor)`. Without the library, every vendor entry is unrunnable and the
-  first runnable native entry of the row runs. `can_run` is correctness only; table order is speed.
-* **Nothing runnable** is reported by `select::pick` as `NoRouteError`.
-* **Ops without `choice.hh`** select by hand: `hemm`, `herk` and `her2k` (entry points in
+The third question, whose code runs for a call, is the op's **choice**: a value of the op's family
+variant (@ref design_flat_selection). The vendor library is the family `vendor`.
+
+- **Public definitions** live in `src/ops/<op>/<op>.cc`, compiled into `batchlas_selection_obj` and
+  instantiated on the device family. The vendor TUs (`cublas.cc`, `cusolver.cc`, `cusparse.cc`,
+  `rocblas.cc`, `netlib_lapack.cc`, ...) define and instantiate only `backend::<op>_vendor<B, T>`. The
+  public symbol therefore exists in every build that has the device.
+- **The `vendor` family's `can_run`** is `d.has_vendor`, filled by `select::device_of` from
+  `select::has_library<B>(spec.vendor)`. Without the library every vendor entry is unrunnable and
+  the first runnable native entry of the row runs. `can_run` is correctness only; table order is speed.
+- **Nothing runnable** is reported by `select::pick` as `NoRouteError` (`include/batchlas/no_route.hh`,
+  a `batchlas::unsupported`).
+- **Ops without `choice.hh`** select by hand: `hemm`, `herk` and `her2k` (entry points in
   `src/ops/level3/level3.cc`; the expand-or-vendor choice is in `src/backends/cublas.cc`, see
-  [docs/perf/level3.md](../perf/level3.md)). `BATCHLAS_EXPAND_ROUTE=expand|loop` pins that decision. @ref selection_tables lists the ops that select from
-  tables.
+  [docs/perf/level3.md](../perf/level3.md)). `BATCHLAS_EXPAND_ROUTE=expand|loop` pins that decision.
+  @ref selection_tables lists the ops that select from tables.
 
-The MathDx device libraries (cuBLASDx, cuSolverDx) counted as vendor, because their source is NVIDIA's
-and ships only for NVIDIA. Flat selection (#147) deleted every cuBLASDx path. The rule still applies to
-any header-only vendor library added later.
+The MathDx device libraries (cuBLASDx, cuSolverDx) count as vendor, because their source is
+NVIDIA's and ships only for NVIDIA. Every cuBLASDx path is deleted; the rule applies to any
+header-only vendor library added later.
 
 ## The vendor gate
 
-`src/select/vendor.hh` asks per **library**, not per device family, because the map is not uniform.
-On NVIDIA, `getrf` and `getri` come from cuBLAS, while `geqrf`, `orgqr`, `ormqr`, `getrs`, `potrf`
-and `syev` come from cuSOLVER. An op names its group once in `OpSpec::vendor` (`select::Lib`).
+`src/select/vendor.hh` asks per **library group**, not per device family. An op names its group once
+in `OpSpec::vendor` (`select::Lib`).
 
-| predicate | `select::Lib` | ops | CUDA | ROCM | NETLIB |
-|---|---|---|---|---|---|
-| `level3_vendor_available<B>` | `level3` | `gemm` `gemv` `trsm` `trmm` `symm` `hemm` `syrk` `herk` `syr2k` `her2k` | `BATCHLAS_HAS_CUBLAS` | `ROCBLAS` | `kHasNetlib` |
-| `factorization_vendor_available<B>` | `factorization` | `geqrf` `orgqr` `getrf` `getrs` `getri` `ormqr` | `CUBLAS` **and** `CUSOLVER` | `ROCSOLVER` | `kHasNetlib` |
-| `solver_vendor_available<B>` | `solver` | `potrf` `syev` `gesvd` | `CUSOLVER` | `ROCSOLVER` | `kHasNetlib` |
-| `sparse_vendor_available<B>` | `sparse` | `spmm` | `CUSPARSE` | `ROCSPARSE` | `kHasNetlib` |
-| — | `none` | `gesv`, `posv` (no vendor family) | — | — | — |
+| predicate | `select::Lib` | ops | CUDA | ROCM | SYCL | NETLIB |
+|---|---|---|---|---|---|---|
+| `level3_vendor_available<B>` | `level3` | `gemm` `gemv` `trsm` `trmm` `symm` `hemm` `syrk` `herk` `syr2k` `her2k` | `kHasCudaVendor` | `ROCBLAS` | false | `kHasNetlib` |
+| `factorization_vendor_available<B>` | `factorization` | `geqrf` `orgqr` `getrf` `getrs` `getri` `ormqr` | `kHasCudaVendor` | `ROCSOLVER` | false | `kHasNetlib` |
+| `solver_vendor_available<B>` | `solver` | `potrf` `syev` `gesvd` | `kHasCudaVendor` | `ROCSOLVER` | false | `kHasNetlib` |
+| `sparse_vendor_available<B>` | `sparse` | `spmm` | `kHasCudaVendor` | `ROCSPARSE` | false | `kHasNetlib` |
+| — | `none` | `gesv`, `posv` (no vendor family) | — | — | — | — |
 
-`kHasNetlib` is `BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`, because `netlib_lapack.cc` needs both.
-`select::library_name<B>(lib)` gives the name a diagnostic should quote.
+- `kHasCudaVendor` is `BATCHLAS_HAS_CUBLAS && BATCHLAS_HAS_CUSOLVER && BATCHLAS_HAS_CUSPARSE`: the
+  CUDA vendor TUs each call all three, and configure rejects a partial set. On NVIDIA the
+  factorization group spans cuBLAS (`getrf`, `getri`) and cuSOLVER (`geqrf`, `orgqr`, `ormqr`, `getrs`).
+- `kHasNetlib` is `BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`, because `netlib_lapack.cc` needs both.
+- rocBLAS has no `hemm`, `herk`, `her2k` or batched `symm` wrapper: ROCm throws `NoRouteError` for the
+  first three and runs symm's `vendor` arm as symmetrize plus the public gemm.
+- `select::library_name<B>(lib)` gives the name a diagnostic quotes.
 
-The vendor arm is an `if constexpr` on the same predicate. When the library is absent the vendor call is
-not compiled, so there is no symbol to satisfy. Its `else` is `select::no_vendor<B, T>(spec)`, which
-records a coverage `miss` and throws `NoRouteError`. The message names the op, the scalar type and the
-switch that restores it.
+The vendor arm is an `if constexpr` on the same predicate. When the library is absent the vendor call
+is not compiled, so there is no symbol to satisfy. Its `else` is `select::no_vendor<B, T>(spec)`,
+which records a coverage `miss` and throws `NoRouteError`. The message names the op, the scalar type
+and the switch that restores it.
 
-Rejected: a stub TU per absent library that defines a throwing `backend::<op>_vendor`. It restates all
-26 vendor signatures, and signature divergence between restated copies is a defect class this tree has
-already shipped. Header and non-op callers use `*_vendor_or_throw` shims instead, for example
-`syev_vendor_or_throw` in `src/ops/syev/vendor.hh`.
+| Alternative | Result | Verdict |
+|---|---|---|
+| A stub TU per absent library defining a throwing `backend::<op>_vendor` | Restates every vendor signature (30 today: 20 ops plus 10 `*_buffer_size` queries); divergence between restated copies is a defect class this tree has shipped | Rejected |
+
+Header and non-op callers use `*_vendor_or_throw` shims instead (`src/ops/syev/vendor.hh`,
+`src/ops/ormqr/vendor.hh`).
 
 Whether `sytrd_blocked`, `ortho` and `ormqr_blocked` swap a gemm for a level-3 **tile kernel** is a
-separate question, answered by `select::level3_tile_substitution_enabled<B, T>`:
-`B == Backend::CUDA && (T is float || BATCHLAS_HAS_CUBLAS)`. Do not test `B == Backend::CUDA` alone:
-the backend is still `CUDA` in a vendor-free build. The gate is narrower than where those kernels now
-run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
+separate question, answered by `select::level3_tile_substitution_enabled<B, T>`
+(`src/select/vendor.hh:104-105`): `native_gpu_backend<B> && (T is float || (B == Backend::CUDA &&
+BATCHLAS_HAS_CUBLAS))`, with `native_gpu_backend` = CUDA or SYCL. Do not test `B == Backend::CUDA`
+alone: the backend is still `CUDA` in a vendor-free build. The gate is narrower than where those
+kernels run vendor-free; widening it changes ortho's and ormqr's choices, which are unmeasured.
 
 ### The vendor gate: why the tile route predicate is per backend and scalar
 
 The predicate takes the scalar because a bare `true` is wrong in two directions:
 
-* **Too wide in type.** Double and complex tile routes are not linked everywhere: `syr2k` has no
+- **Too wide in type.** Double and complex tile routes are not linked everywhere: `syr2k` has no
   non-float tile route, and `ortho.cc`'s `gram_via_syrk` admits double. A vendor-free call would throw.
-* **Too wide in backend.** The entry-point gate is guarded on `Backend::CUDA`, so claiming ROCM or
-  NETLIB would repeat the defect of using the `Backend` enum to answer a library question.
+- **Too wide in backend.** The native level-3 kernels are wired only for CUDA and SYCL, so claiming
+  ROCM or NETLIB would repeat the defect of using the `Backend` enum to answer a library question.
 
-With `BATCHLAS_HAS_CUBLAS` on, the answer is `true` for every type on CUDA, so vendor-present behaviour
-is unchanged. The internal callers that check before calling a tile kernel are `ortho.cc`,
-`ormqr_blocked.cc`, `sytrd_blocked.cc` and `src/select/coverage.cc`. The level-3 four launch from
-`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`; each native `can_run` has a `kWired = B == Backend::CUDA`
-term (for example `src/ops/trmm/trmm.cc:54`). Code site: `src/select/vendor.hh`.
+With `BATCHLAS_HAS_CUBLAS` on, the answer is `true` for every type on CUDA, so vendor-present
+behaviour is unchanged. The internal callers that check it are `ortho.cc`, `ormqr_blocked.cc`,
+`sytrd_blocked.cc` and `src/select/coverage.cc`. The level-3 four launch from
+`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`; each native `can_run` has a
+`kWired = select::native_gpu_backend<B>` term (for example `src/ops/trmm/trmm.cc:54`; symm adds ROCm).
 
-### The vendor gate: history of the per-library predicates
-
-Until WP0 the public entry points were defined inside the vendor TUs, so "no vendor" and "no entry point"
-were the same condition, and the answer was always yes.
-
-`factorization_vendor_available` requires both cuBLAS and cuSOLVER. On NVIDIA the group spans both, so
-keying it on cuBLAS alone claimed a `geqrf` vendor route whenever cuBLAS was on. A vendor-free user
-could not recover it by re-enabling cuBLAS. Before flat-selection phase 5 the predicates lived in
-`include/batchlas/blas/dispatch/vendor_available.hh`, behind two `select::Device` flags. `OpSpec::vendor`
-and the single `Device::has_vendor` replaced them. A per-op split of the six-op factorization group is
-open debt (see [What is still open](#what-is-still-open-architecturally)).
+`factorization_vendor_available` covers six ops over two NVIDIA libraries; a per-op split is open
+debt (see [What is still open](#what-is-still-open-architecturally)). It is moot on CUDA while the
+three libraries are all-or-nothing.
 
 ## Vendor independence: headers keyed on the library axis
 
-The vendor includes in the private `src/linalg-impl.hh` (`<cublas_v2.h>`, `<cusolverDn.h>`,
-`<cusparse.h>` and the ROCm equivalents) are guarded by `BATCHLAS_HAS_<LIB>`, not by the family flag.
-A CUDA device with no math libraries is a valid configuration, and the family guard still tried to
-include `<cublas_v2.h>` in it.
+The math-library includes in the private `src/linalg-impl.hh` (`<cublas_v2.h>`, `<cusparse.h>`,
+`<cusolverDn.h>`, `<lapacke.h>`, `<cblas.h>`) are guarded by `BATCHLAS_HAS_<LIB>`, not by the family
+flag, because a CUDA device with no math libraries is a valid configuration.
 
-* `cuda_runtime.h` stays on the family flag. It is the CUDA runtime, needed for streams and device queries.
-* `<cuComplex.h>` is included explicitly on the family flag. The pointer-cast helpers need it, and it
-  used to arrive only through `cublas_v2.h`.
-* The CUDA handle types (`cublasComputeType_t`, the cuBLAS, cuSPARSE and cuSOLVER handle triple) sit under
-  the library flags. Naming them under `BATCHLAS_HAS_CUDA_BACKEND` alone does not compile when a library is absent.
-* A CUDA device with some libraries absent still gets a `LinalgHandle<Backend::CUDA>` specialisation with
-  no vendor handles. The type must be complete, because native TUs declare one (`src/ops/ortho/ortho.cc`).
+- `cuda_runtime.h` stays on the family flag: streams and device queries need it.
+- `<cuComplex.h>` is included explicitly on the family flag. The pointer-cast helpers need it; it
+  must not arrive only through `cublas_v2.h`.
+- The CUDA handle types (`cublasComputeType_t`, the cuBLAS, cuSPARSE and cuSOLVER handle triple) sit
+  under the library flags. Naming them under `BATCHLAS_HAS_CUDA_BACKEND` alone does not compile when
+  a library is absent.
+- A CUDA device without the math libraries still gets a `LinalgHandle<Backend::CUDA>` specialisation
+  with no vendor handles. The type must be complete, because native TUs declare one
+  (`src/ops/ortho/ortho.cc`).
+- The ROCm headers (`hip_runtime.h`, `rocblas`, `rocsparse`, `rocsolver`) are still included on the
+  family flag `BATCHLAS_HAS_ROCM_BACKEND` (`src/linalg-impl.hh:37-43`). Unverified: no AMD GPU here.
 
-Symbols follow the same split. Public instantiations are keyed on the device family, and the vendor TUs
+Symbols follow the same split: public instantiations are keyed on the device family, the vendor TUs
 instantiate only their `backend::*_vendor` symbols. See
 [the runtime-internals note](runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols).
 
 ## Positional validators: reject only what no route can serve
 
-Each positional (workspace-taking) entry point of `geqrf`, `orgqr`, `getrf`, `getrs`, `getri` and `potrf`
-has an `<op>_validate_params` in its public header. It runs before the table key is built, because the key
-reads `A.rows()` and `A.cols()`. `trsm_validate_params` follows the same order.
+Each positional (workspace-taking) entry point of `geqrf`, `orgqr`, `getrf`, `getrs`, `getri` and
+`potrf` has an `<op>_validate_params` in its public header. It runs before the table key is built,
+because the key reads `A.rows()` and `A.cols()`. `trsm_validate_params` follows the same order. They
+throw `batchlas::invalid_argument`.
 
-**Rule: validate only what no kernel could serve.** A native `can_run` that rejects a shape steers the
-choice to another family, usually `vendor`. It does not make the call invalid. A validator that threw on
-such a shape would change behaviour for a working call, which belongs in its own commit with its own test.
-The stricter checks (`require_square`, `require_span_at_least`, `require_info_span`) live in the option
-and arena overloads in `include/batchlas/blas/options.hh`.
+**Rule: validate only what no kernel could serve.** A native `can_run` that rejects a shape steers
+the choice to another family, usually `vendor`. It does not make the call invalid. A validator that
+threw on such a shape would change behaviour for a working call, which belongs in its own commit with
+its own test. The stricter checks (`require_square`, `require_span_at_least`, `require_info_span`)
+live in the option and arena overloads in `include/batchlas/blas/options.hh`.
 
 What the positional path deliberately does not check:
 
@@ -149,24 +159,25 @@ What the positional path deliberately does not check:
 `ops::getri::key_of` is a function of A alone. The query must validate the same view its choice is
 computed from. The second arity also checks C's extents.
 
-`gesv` and `posv` reject more, because they have no vendor family (`Lib::none`). A bad pair would reach
-"nothing runnable" and report the wrong cause. They check squareness, `B.rows() == A.rows()` and equal
-batch, and `posv` also checks `uplo`.
+`gesv` and `posv` reject more, because they have no vendor family (`Lib::none`): a bad pair would
+reach "nothing runnable" and report the wrong cause. They check squareness, `B.rows() == A.rows()`
+and equal batch, and `posv` also checks `uplo`.
 
 ## Per-item info spans for potrf, getrf and getri
 
-`info` on `potrf`, `getrf` and `getri` (and through them `posv` and `gesv`) is the LAPACK per-item status:
-one `int32` per batch item, 0 on success. A value above 0 names the leading minor that is not positive
-definite (`potrf`), the column where U is exactly singular (`getrf`), or the zero diagonal of U that
-leaves the item without an inverse (`getri`).
+`info` on `potrf`, `getrf` and `getri` (and through them `posv` and `gesv`) is the LAPACK per-item
+status: one `int32` per batch item, 0 on success. A value above 0 names the leading minor that is
+not positive definite (`potrf`), the column where U is exactly singular (`getrf`), or the zero
+diagonal of U that leaves the item without an inverse (`getri`).
 
-* An **empty** span means "not requested". The backend then uses its own scratch.
-* The **workspace size is the same either way**, so `*_buffer_size` is correct whether or not the caller asks.
-* A **short non-empty** span is treated as "not requested" on the positional path. The option overloads
-  reject it with `require_info_span`. See the potrf row of the table above.
-* `info` cannot be a defaulted trailing parameter. The `sig::` aliases used by `BATCHLAS_INSTANTIATE`
-  (`src/util/template-instantiations.hh`) are function types, and they cannot carry defaults. A separate
-  inline overload keeps the old arity compiling. `gesv` and `posv` do the same.
+- An **empty** span means "not requested". The backend then uses its own scratch.
+- The **workspace size is the same either way**, so `*_buffer_size` is correct whether or not the
+  caller asks.
+- A **short non-empty** span is treated as "not requested" on the positional path. The option
+  overloads reject it with `require_info_span`. See the potrf row of the table above.
+- `info` cannot be a defaulted trailing parameter. The `sig::` aliases used by `BATCHLAS_INSTANTIATE`
+  (`src/util/template-instantiations.hh`) are function types, and they cannot carry defaults. A
+  separate inline overload keeps the old arity compiling. `gesv` and `posv` do the same.
 
 ## Info spans on syev, gesvd and steqr: forwarder or default
 
@@ -174,49 +185,49 @@ Five routines (`syev`, `syevx`, `gesvd`, `steqr`, `stedc`) and every tier below 
 `Span<int32_t> info`. Two declaration shapes carry it. The user-facing contract is in
 [the C++ API page](../cpp-api.md#convergence-status-syev-syevx-gesvd-steqr-stedc).
 
-* **Public `syev` and `gesvd`**: an old-arity inline forwarder. The `sig::` alias used for explicit
-  instantiation is a function type and cannot carry the default. The declaration and the alias keep the
-  same parameters. For `gesvd`, arity plus the `Uplo`/`Span` type at parameter 8 keeps the four overloads
-  unambiguous.
-* **`backend::syev_vendor` and `backend::gesvd_vendor`**: a defaulted `info_out`. A default is a property
-  of the declaration, so the `sig::` aliases and the vendor TUs still match. The default keeps the internal
-  six-argument callers compiling (`src/util/norm.cc`, `src/util/cond.cc`, `src/ops/syevx/kernels/syevx_lobpcg.cc`,
-  through `syev_vendor_or_throw`).
-* **`steqr`, `steqr_cta`, `stedc`, `syevx*`, the `syev_*` tiers and the SVD tiers** (`extensions.hh`): a
-  defaulted trailing parameter. They are instantiated from macros, not `sig::` aliases, and they already
-  default `jobz`, `params` and `eigvects`. A forwarder would be ambiguous with the primary.
+- **Public `syev` and `gesvd`**: an old-arity inline forwarder. The `sig::` alias used for explicit
+  instantiation is a function type and cannot carry the default. The declaration and the alias keep
+  the same parameters. For `gesvd`, arity plus the `Uplo`/`Span` type at parameter 8 keeps the four
+  overloads unambiguous.
+- **`backend::syev_vendor` and `backend::gesvd_vendor`**: a defaulted `info_out`. A default is a
+  property of the declaration, so the `sig::` aliases and the vendor TUs still match. The default
+  keeps the internal six-argument callers compiling (`src/util/norm.cc`, `src/util/cond.cc`,
+  `src/ops/syevx/kernels/syevx_lobpcg.cc`, through `syev_vendor_or_throw`).
+- **`steqr`, `steqr_cta`, `stedc`, `syevx*`, the `syev_*` tiers and the SVD tiers** (`extensions.hh`):
+  a defaulted trailing parameter. They are instantiated from macros, not `sig::` aliases, and they
+  already default `jobz`, `params` and `eigvects`. A forwarder would be ambiguous with the primary.
 
 `gesvd` details are in [the gesvd design page](gesvd.md#gesvd-design-vendor-binding-and-dispatch).
 
 ## Vendor independence: the coverage instrument
 
-`src/select/coverage.hh` writes three kinds of row. Do not read one as another: a symbol that is present
-is not a kernel that runs.
+`src/select/coverage.hh` writes three kinds of row to `$BATCHLAS_COVERAGE_OUT.<pid>`. Do not read one
+as another: a symbol that is present is not a kernel that runs.
 
 | row kind | question | how produced | cost |
 |---|---|---|---|
-| `linked` | is the kernel in this build (planning) | `coverage::static_table()`: per `(op, backend)`, the vendor gate and a native-linked flag | exact, no GPU needed |
-| `reached` | did a call get there (burn-down) | one row per `(op, scalar, backend, shape_class, variant, choice)`, from `select::TraceScope` and the hand-selected ops | one predicted branch per op invocation |
-| `miss` | nothing served the call | `throw_no_vendor_route` | rare by construction |
+| `linked` | is the kernel in this build (planning) | `coverage::static_table()`: per `(op, backend)` for every compiled backend (CUDA, ROCM, SYCL, NETLIB), the vendor gate and a native-linked flag | exact, no GPU needed |
+| `reached` | did a call get there (burn-down) | `coverage::record_choice` from `select::run` (via `TraceScope`), one row per `(op, scalar, backend, shape_class, variant, origin, choice)` | one predicted branch per op invocation |
+| `miss` | nothing served the call | `select::throw_no_vendor_route` (also behind `select::no_vendor`) | rare by construction |
 
-* The `linked` column is reported for `float`, because the level-3 tile routes are float-only outside a
-  cuBLAS build.
-* `native_route_supported` on a `reached` row is tri-state: `1` yes, `0` no, `-1` the call site cannot tell.
-  The `-1` value matters for the hand-selected level-3 ops. A declining gate never reaches the tile
-  dispatcher, so it cannot separate "nothing native serves this shape" from "the heuristic chose the vendor".
-* `uplo`, `side`, `diag`, `transA` and `transB` are part of the row key (`variant_key` in
+- The `linked` column is reported for `float`, because tile-route availability is per (backend,
+  scalar) and the level-3 tile routes are float-only outside a cuBLAS build.
+- hemm, herk and her2k write no `reached` row (no `select::run`); only a `miss` when no vendor exists.
+- `native_route_supported` on a `reached` row is tri-state: `1` yes, `0` no, `-1` the call site cannot
+  tell. `select::run` always fills `0` or `1`; `-1` remains only for a `TraceScope` built without
+  facts (tests).
+- `uplo`, `side`, `diag`, `transA` and `transB` are part of the row key (`variant_key` in
   `src/select/coverage.cc`). They change which triangle or operand is touched.
-* `shape_class` buckets `max(m,n,k)` and `batch` by power of two.
-* Rows are **first-writer-wins**. The `m`, `n`, `k` and `batch` columns can show another call's shape, so
-  a row cannot prove a particular shape ran. Prove that with a deliberate break that fails only for it.
-* `select::run` fills `shape.backend` from its template parameter.
-* The instrument is gated at runtime on `BATCHLAS_COVERAGE_OUT`. The tables are deliberately leaked so
+- `shape_class` buckets `max(m,n,k)` and `batch` by power of two.
+- Rows are **first-writer-wins**. The `m`, `n`, `k` and `batch` columns can show another call's shape,
+  so a row cannot prove a particular shape ran. Prove that with a deliberate break that fails only
+  for it.
+- The instrument is gated at runtime on `BATCHLAS_COVERAGE_OUT`. The tables are deliberately leaked so
   an `atexit` handler does not walk destroyed containers, and `emit()` writes one file per pid.
 
-A compile-time gate (`-DBATCHLAS_ENABLE_COVERAGE`) was rejected. An inline header function is sound only
-if every TU in the process agrees, and a library cannot enforce that on its consumers. A test binary that
-carried its own weak copy of the resolver produced a valid header and zero `reached` rows.
-`cmake/BatchLASOptions.cmake` records that the option was never added.
+| Alternative | Result | Verdict |
+|---|---|---|
+| A compile-time gate (`-DBATCHLAS_ENABLE_COVERAGE`) | An inline header function is sound only if every TU in the process agrees, which a library cannot enforce; a test binary carrying its own weak copy of the resolver produced a valid header and zero `reached` rows | Rejected; `cmake/BatchLASOptions.cmake:172-178` records that the option does not exist |
 
 ## Verification tooling
 
@@ -225,14 +236,15 @@ carried its own weak copy of the resolver produced a valid header and zero `reac
 | `scripts/route_diff.sh capture\|compare` | prove a change moved no selection decision | a capture with zero `reached` rows is a hard error, not "no change". Its key is `(kind, op, scalar, backend, shape_class, origin, algo, native flags, uplo, side, diag, transA, transB)`. It drops `m`, `n`, `k`, `batch` and the call count, and applies no `backend != AUTO` filter. |
 | `scripts/coverage_merge.sh` | merge the per-pid shards of a ctest run | sums `calls`, de-duplicates the identical `linked` block |
 | `scripts/facade_symbol_check.sh` | prove public entry points are not defined in a vendor component | matches Itanium mangling directly; `nm -C` fails to demangle concept-constrained templates |
-| `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs | exactly one expected error (a `get_native<ext_oneapi_hip>` overload this DPC++ lacks); anything else is real. The ROCm headers are under `/opt/rocm/include/roc*/`. |
-| `scripts/register_probe.sh` | register and spill residency of the device link | replays the target's `link.txt`, and fails if there is none. Gate on `0 bytes spill stores/loads` and `Used N registers × work-group size <= 65536`, not on stack frame == 0 (220 of 376 healthy entry functions have a frame). Take the max over `<name>` and `<name>_with_offset`. |
+| `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs with the CUDA macros off | only one kind of error is expected (any count): `sycl::get_native<ext_oneapi_hip>` has no overload in this CUDA-only DPC++. Anything else is real. The ROCm headers are under `/opt/rocm/include/roc*/`. |
+| `scripts/register_probe.sh` | register and spill residency of the device link | replays the target's `link.txt`, and fails if there is none. Gate on `0 bytes spill stores/loads` and `Used N registers` against `resident::sm89_fits(regs, wg)`: \f$\lceil \mathrm{warps}/4\rceil \cdot 32 \cdot \mathrm{roundup}_8(\mathrm{regs}) \le 16384\f$, not `regs × wg <= 65536`. Not on stack frame == 0 (2026-09-11: `batchlas_sycl` 114 of 288 distinct kernels, `batchlas_extensions_cta` 96 of 487 have a healthy non-zero frame). Take the max over `<name>` and `<name>_with_offset`. |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op |
 
-`route_diff.sh` is the only tool that sees a vendor-to-vendor change. The kernel trace cannot, and timing
-cannot, because an unsaturated ratio measures overhead and a perf gate cannot flag a wrong choice.
+`route_diff.sh` is the only tool that sees a vendor-to-vendor change. The kernel trace cannot, and
+timing cannot, because an unsaturated ratio measures overhead and a perf gate cannot flag a wrong
+choice.
 
-Adding an op is described in [Adding entry points](../extending.md) and the @ref api_selection group. The
+Adding an op: [Adding entry points](../extending.md) and the @ref api_selection group. The
 vendor-specific part is one `OpSpec::vendor` value and the `if constexpr` arm above.
 
 ## What is still open, architecturally
@@ -240,26 +252,29 @@ vendor-specific part is one `OpSpec::vendor` value and the `if constexpr` arm ab
 Per-op performance debts are on the `docs/perf/` pages. These belong to the vendor seam:
 
 1. `route_diff.sh compare` applies no backend filter, so `AUTO` rows from pure-layer tests inflate diffs.
-2. `Backend::INTEL` is hard-wired false, and oneMKL cannot be tested here. ROCm is reachable only through
-   `rocm_syntax_check.sh`, so statements about it are unverified.
-3. The runtime `BATCHLAS_NO_VENDOR=1` enforcement knob was never built. Call sites that reach
-   `backend::*_vendor` or a `*_vendor_or_throw` shim directly (`src/util/cond.cc`, `src/util/norm.cc`,
-   `src/ops/syevx/kernels/syevx_lobpcg.cc`) bypass public selection and throw vendor-free by construction. The
-   build switch `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the enforcement today.
-4. `factorization_vendor_available` covers six ops over two NVIDIA libraries. A per-op split would move every call site.
-5. Ops without `choice.hh` still select by hand and keep their windows in code. See
-   [docs/perf/dispatch.md](../perf/dispatch.md) and @ref selection_tables.
+2. There is no Intel or oneMKL backend (`Backend::MKL` and `Backend::MAGMA` are reserved, never
+   available). ROCm is reachable only through `rocm_syntax_check.sh`, so statements about it are
+   unverified.
+3. No runtime `BATCHLAS_NO_VENDOR=1` enforcement knob exists. Call sites that reach a
+   `*_vendor_or_throw` shim directly bypass public selection and throw vendor-free: `src/util/cond.cc`
+   and `src/util/norm.cc` (except on `Backend::SYCL`, known-defects #2), and
+   `src/ops/syevx/kernels/syevx_lobpcg.cc` only under the opt-in `BATCHLAS_SYEVX_PROJECTED_VENDOR`.
+   The build switch `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the enforcement.
+4. `factorization_vendor_available` covers six ops over two NVIDIA libraries. A per-op split would
+   move every call site.
+5. hemm, herk and her2k still select by hand and keep their windows in code. See
+   [docs/perf/dispatch.md](../perf/dispatch.md) and @ref design_flat_selection §11.
 6. The vendor-free suite is not green, and no selection mechanism can make it so. The gap is missing
-   kernels, not routing. The failing set is tracked in [vendor-free-status.md](vendor-free-status.md).
+   kernels, not routing. Status: [vendor-free-status.md](vendor-free-status.md).
 
 ## History: the RouteTable layer
 
-This section describes code that no longer exists: `include/batchlas/blas/dispatch/`, the
-`src/backends/<op>_route.hh` shape builders and `src/dispatch/entry_points/`. Flat kernel selection
-phase 5 deleted them (@ref design_flat_selection, section 12). The reasoning carried over, so it is kept here.
+Deleted code: `include/batchlas/blas/dispatch/`, the `src/backends/<op>_route.hh` shape builders and
+`src/dispatch/entry_points/`, replaced by flat kernel selection (@ref design_flat_selection). The
+rules carried over.
 
-The old design answered three questions with `Route{Origin, Algorithm}`: whose code runs, and which
-strategy. Each `RouteTable<Op, T>` supplied:
+The old design answered three questions with `Route{Origin, Algorithm}`. Each `RouteTable<Op, T>`
+supplied:
 
 | predicate | question | `false` means | today |
 |---|---|---|---|
@@ -267,49 +282,47 @@ strategy. Each `RouteTable<Op, T>` supplied:
 | `preferred(r, s)` | is `r` the best route, vendor included | merely slower | the table ranking |
 | `native_tier_preferred(r, s)` | among native routes, is `r` the better one | another native tier is better | the vendor-free order (the table with the vendor entry skipped) |
 
-Rules that held, and what each cost:
+Rules that held, and what breaking each cost:
 
-* **No speed threshold in `supports()`.** A pinned route that failed a speed cutoff fell back to the
+- **No speed threshold in `supports()`.** A pinned route that failed a speed cutoff fell back to the
   automatic choice silently, so the test measured something else.
-* **No vendor-free tier choice in `preferred()`.** Such a window also moved vendor-present traffic onto
-  that tier. That is why `native_tier_preferred` existed.
-* **Tables are pure.** No `getenv`, SYCL query or operand data. Sizing and running then reach the same
-  choice, which is what prevents the `ormqr` sizing mismatch (a query returned 2560 bytes and the call
-  needed 276480).
+- **No vendor-free tier choice in `preferred()`.** Such a window also moved vendor-present traffic onto
+  that tier.
+- **Tables are pure.** No `getenv`, SYCL query or operand data. Sizing and running then reach the same
+  choice, which prevents the `ormqr` sizing mismatch (a query returned 2560 bytes and the call needed
+  276480).
 
-An unparsable, uncompiled or non-runnable pin fell back to the automatic choice, which in a vendor build
-is the vendor. Flat selection throws instead (rule R6). Legacy spellings and aliases were removed, and
-the old spellings now throw.
+An unparsable, uncompiled or non-runnable pin fell back to the automatic choice, which in a vendor
+build is the vendor. Flat selection throws instead (rule R6); legacy spellings throw.
 
 ### The entry-point facade
 
-The original obstacle was definition ownership, not routing. `gemm<Backend::CUDA, float>` was defined in
-`cublas.cc`, so building without cuBLAS removed `batchlas::gemm` entirely. The fix moved each public
-definition out of the vendor TUs:
+The original obstacle was definition ownership, not routing: `gemm<Backend::CUDA, float>` was defined
+in `cublas.cc`, so building without cuBLAS removed `batchlas::gemm` entirely. Each public definition
+moved out of the vendor TUs:
 
 ```
 vendor TU (cublas.cc, ...)  defines and instantiates  backend::<op>_vendor<B, T>
 src/ops/<op>/<op>.cc        defines and instantiates  <op><B, T>, which selects and may call it
 ```
 
-Until flat selection the public definitions were in `src/dispatch/entry_points/`. They now live in `src/ops/<op>/<op>.cc`.
+- **Instantiation is keyed on the device family.** The bodies compile to a throw without the library,
+  so the public symbol exists in every build that has the device.
+- **An instantiation binds as hard as a definition.** `syev` and `ormqr` were defined in headers, but
+  their instantiations lived in vendor TUs, so they vanished without those libraries.
+- **Selection runs before the vendor-available test.** Each op chooses first and throws second.
+- **An op moves together with its `*_buffer_size` query.** Splitting them lets the two choose
+  differently (the `ormqr` sizing defect).
+- **Backend asymmetries are preserved.** rocBLAS has no `hemm`, `herk`, `her2k` or `symm` wrapper, so
+  ROCm instantiates only what it implements.
 
-* **Instantiation is keyed on the device family.** The bodies compile to a throw without the library, so
-  the public symbol exists in every build that has the device.
-* **An instantiation binds as hard as a definition.** `syev` and `ormqr` were defined in headers, but their
-  instantiations lived in vendor TUs, so they vanished without those libraries.
-* **Selection runs before the vendor-available test.** Each op chooses first and throws second.
-* **An op moves together with its `*_buffer_size` query.** Splitting them lets the two choose differently
-  (the `ormqr` sizing defect).
-* **Backend asymmetries are preserved.** rocBLAS has no `hemm`, `herk`, `her2k` or `symm` wrapper, so ROCm
-  instantiates only what it implements.
+A native driver has no `Backend` parameter, so it cannot name `gemm<B, T>`. The op file passes the
+public `gemm`, `trsm` or `ormqr` in as a lambda. Calling a native GEMM directly (the deleted
+`sycl_gemm::gemm_custom`) bypassed gemm's selection and pinned the native GEMM on shapes it loses; see
+[docs/perf/trsm.md](../perf/trsm.md) and [docs/perf/gemm.md](../perf/gemm.md).
 
-A native driver has no `Backend` parameter, so it cannot name `gemm<B, T>`. The op file passes the public
-`gemm`, `trsm` or `ormqr` in as a lambda. Calling `sycl_gemm::gemm_custom` directly bypassed gemm's
-selection and pinned the native GEMM on shapes it loses; see [docs/perf/trsm.md](../perf/trsm.md) and
-[docs/perf/gemm.md](../perf/gemm.md).
-
-`scripts/facade_symbol_check.sh` verifies the move by symbol. A forwarder left behind still compiles and links.
+`scripts/facade_symbol_check.sh` verifies the move by symbol: a forwarder left behind still compiles
+and links.
 
 ### Adding an op in the route era
 
