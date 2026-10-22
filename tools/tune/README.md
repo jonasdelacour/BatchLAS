@@ -12,7 +12,7 @@ results to the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl`, an
 
 ## Build and launch
 
-    cmake --build build --target batchlas_tune     # needs -DBATCHLAS_BUILD_BENCHMARKS=ON
+    cmake --build build --target batchlas_tune     # needs -DBATCHLAS_BUILD_BENCHMARKS=ON and a CUDA or ROCm backend
 
 The build produces two binaries:
 
