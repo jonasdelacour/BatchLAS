@@ -1328,6 +1328,28 @@ size_t gesvd_native_hermitian_buffer_size(Queue& ctx,
     return bytes;
 }
 
+// Items per pass of the general blocked path: gebrd, bdsdc and both ormbr hand A, U and V^H
+// between kernels through L2, and the children size and route at this batch. An item is A
+// plus the factors it asks for. The query and the call must agree, so both use it.
+// evidence: docs/perf/gesvd.md#gesvd-l2-batch-chunking
+template <typename T>
+int gesvd_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, SvdVectors jobu,
+                        SvdVectors jobvh) {
+    const int batch = static_cast<int>(a.batch_size());
+    const auto dev = ctx.device();
+    if constexpr (internal::is_complex<T>::value) return batch;
+    if (dev.type != DeviceType::GPU) return batch;
+    const int64_t m = a.rows(), n = a.cols(), k = std::min(m, n);
+    jobu = canonical_jobu(jobu, m, k);
+    jobvh = canonical_jobvh(jobvh, n, k);
+    const int64_t elems = m * n + (jobu != SvdVectors::None ? m * svd_u_cols(jobu, m, k) : 0) +
+                          (jobvh != SvdVectors::None ? svd_vh_rows(jobvh, n, k) * n : 0);
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, elems * static_cast<int64_t>(sizeof(T)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
 } // namespace
 
 template <Backend B, typename T>
@@ -1340,17 +1362,31 @@ Event gesvd_blocked(Queue& ctx,
                     SvdVectors jobvh,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
-    return gesvd_native_impl<B, T>(ctx,
-                                   a_in,
-                                   singular_values,
-                                   u_out,
-                                   vh_out,
-                                   jobu,
-                                   jobvh,
-                                   ws,
-                                   GesvdNativeMode::Blocked,
-                                   "gesvd_blocked",
-                                   info);
+    validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_blocked");
+    const int batch = static_cast<int>(a_in.batch_size());
+    const int chunk = gesvd_blocked_chunk<T>(ctx, a_in, jobu, jobvh);
+    if (chunk >= batch) {
+        return gesvd_native_impl<B, T>(ctx, a_in, singular_values, u_out, vh_out, jobu, jobvh, ws,
+                                       GesvdNativeMode::Blocked, "gesvd_blocked", info);
+    }
+    // Each part is a complete SVD of its items on the one in-order queue (gesvd_native_impl
+    // refuses any other), so parts reuse one part's workspace. An unwanted factor's view is
+    // never read and may have any batch, so only wanted ones are sliced.
+    const int64_t k = std::min(a_in.rows(), a_in.cols());
+    const bool want_u = canonical_jobu(jobu, a_in.rows(), k) != SvdVectors::None;
+    const bool want_vh = canonical_jobvh(jobvh, a_in.cols(), k) != SvdVectors::None;
+    const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
+        (void)gesvd_native_impl<B, T>(
+            ctx, a_in.batch_range(b0, cb),
+            singular_values.subspan(static_cast<std::size_t>(b0 * k), static_cast<std::size_t>(cb * k)),
+            want_u ? u_out.batch_range(b0, cb) : u_out, want_vh ? vh_out.batch_range(b0, cb) : vh_out, jobu, jobvh,
+            ws, GesvdNativeMode::Blocked, "gesvd_blocked",
+            info_requested ? info.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb))
+                           : Span<int32_t>{});
+    }
+    return ctx.get_event();
 }
 
 template <Backend B, typename T>
@@ -1386,11 +1422,19 @@ size_t gesvd_blocked_buffer_size(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& vh_out,
                                  SvdVectors jobu,
                                  SvdVectors jobvh) {
+    validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_blocked_buffer_size");
+    // One part's workspace, the largest part (chunk + batch % chunk), as gesvd_blocked runs it.
+    const int batch = static_cast<int>(a.batch_size());
+    const int chunk = gesvd_blocked_chunk<T>(ctx, a, jobu, jobvh);
+    const int part = chunk >= batch ? batch : chunk + batch % chunk;
+    const int64_t k = std::min(a.rows(), a.cols());
+    const bool want_u = canonical_jobu(jobu, a.rows(), k) != SvdVectors::None;
+    const bool want_vh = canonical_jobvh(jobvh, a.cols(), k) != SvdVectors::None;
     return gesvd_native_buffer_size<B, T>(ctx,
-                                          a,
+                                          a.batch_range(0, part),
                                           singular_values,
-                                          u_out,
-                                          vh_out,
+                                          want_u ? u_out.batch_range(0, part) : u_out,
+                                          want_vh ? vh_out.batch_range(0, part) : vh_out,
                                           jobu,
                                           jobvh,
                                           GesvdNativeMode::Blocked,
