@@ -956,7 +956,7 @@ TEST(GesvdTranscribedTable, RowsHoldTheTranscribedPreference) {
         {"float", "N", "all", 32, 32, "jacobi|cta|blocked|vendor"}, {"float", "N", "all", 33, 33, "blocked|vendor|jacobi"},
         {"float", "N", "all", 65, 65, "blocked|vendor"},           {"double", "N", "thin", 32, 8, "jacobi|blocked|vendor"},
         {"double", "L", "all", 32, 32, "cta|blocked|vendor"},      {"double", "U", "all", 32, 32, "cta|blocked|vendor"},
-        {"double", "U", "all", 33, 33, "blocked|vendor"},          {"cfloat", "N", "all", 64, 64, "jacobi|blocked|vendor"},
+        {"double", "U", "all", 33, 33, "blocked|vendor"},          {"cfloat", "N", "all", 64, 64, "blocked|jacobi|vendor"},
         {"cfloat", "N", "all", 65, 65, "blocked|vendor"},          {"cdouble", "N", "all", 33, 33, "blocked|vendor"},
         {"cdouble", "N", "none", 64, 64, "jacobi|blocked|vendor"}, {"cdouble", "L", "none", 48, 48, "blocked|vendor"}};
     for (const char* dev : {"sm_89"})

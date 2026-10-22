@@ -290,8 +290,10 @@ mirror the named triangle on their copy first (`MatrixView::hermitize`), so they
   (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
   (`tests/syev_candidates_tests.cc`). Both are skipped for exactly these drivers.
 - **Fix needs:** mirror or read only the named triangle in each driver, then remove the skip list.
-  gesvd's `can_run` also refuses blocked Hermitian Upper, which the driver could run by mirroring.
-- **Status:** open.
+- **gesvd blocked fixed 2026-10-22:** the Hermitian arm mirrors Lower into Upper before
+  `syev_blocked` (Upper is mirrored the other way inside it), and `can_run` admits Upper.
+  `PinnedCandidatesStraddleTheirLimits` now poisons blocked at every n, both triangles.
+- **Status:** open for `gesvd_cta` Upper and the syev drivers.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
@@ -299,8 +301,12 @@ mirror the named triangle on their copy first (`MatrixView::hermitize`), so they
   `CUDA_ERROR_ILLEGAL_ADDRESS`.
 - **Cause:** gesvd's vendor `can_run` is `has_vendor` alone. Other cuSOLVER refusals
   (`max(m, n) > 32`, non-packed batches, thin factors) arrive as launch-time throws.
-- **Workaround:** Auto never sends this shape to the vendor, because a native family runs first.
-- **Status:** open, pinned vendor only.
+- **Fix (2026-10-22):** on CUDA `can_run(vendor)` is now the binding's envelope:
+  \f$\max(m,n) \le 32\f$, packed A and U, no thin factor, and not values-only non-square. On ROCm
+  (a "not implemented" stub) it is false. A refused pin throws `cannot run this shape`; Auto falls to
+  the next entry or the last resort (`blocked`). `GesvdCandidates.VendorPinRunsInsideItsEnvelope`
+  straddles every term.
+- **Status:** fixed.
 
 ## Defect 16: `ormqr` blocked throws at batch > 65535
 

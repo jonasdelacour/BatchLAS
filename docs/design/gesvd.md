@@ -4,7 +4,10 @@
 
 Batched SVD uses one-sided Jacobi (`gesvdj_cta`) up to n = 64 (complex\<double\> with vectors up
 to 32). Above that it bidiagonalises with `gebrd`, solves the bidiagonal problem with `bdsdc` on
-the batched `stedc`, and back-transforms with `ormbr`. This page gives the design rules, the
+the batched `stedc`, and back-transforms with `ormbr`. Complex input takes the same path: `gebrd`
+follows LAPACK `zlabrd`/`zgebd2` with a real-beta `zlarfg`, so the bidiagonal is real and the real
+`bdsdc` solves it; its real vectors are widened into U and \f$V^H\f$ before the complex `unmbr`
+back-transforms (rows hold \f$\bar u\f$, as `unmbr 'P'` expects). This page gives the design rules, the
 kernel's local-memory and scaling rules, and the traps. Measurements are in @ref perf_gesvd "the GESVD performance page".
 
 ## gesvd design: why one-sided Jacobi
