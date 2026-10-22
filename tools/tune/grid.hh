@@ -131,6 +131,9 @@ inline const std::vector<double>& default_batch_classes() {
 std::vector<double> without_latency_class(const std::vector<double>& classes);  // the classes >= 1 (one CU or more)
 std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& classes, const std::vector<int>& extra = {});
 std::vector<std::string> batch_strings(const std::vector<std::int64_t>& batches);
+// `batches` plus 65536 and 131072: level-3 runs past the grid-y cap as slices, so its ladder extras and
+// choice.hh axes take rows there. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+std::vector<int> with_slice_batches(std::vector<int> batches);
 
 // `grid` with each line's (the cell less `batch`) batch values replaced by `batches`, in first-seen line order.
 // A line the grid declares at one batch only (syrk's trans=C at batch 1) keeps it.

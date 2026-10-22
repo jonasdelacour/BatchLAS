@@ -323,15 +323,48 @@ TEST(TuneRaceGpu, FreshChildAgreesWithAWorkerAfterALargerLaunch) {
 TEST(TuneSpecLadder, RealSpecHooksGiveTheDocumentedLadders) {
     using B = std::vector<std::int64_t>;
     const std::vector<std::pair<std::string, B>> want{
-        {"gemm", {376, 3008, 24064}},           {"ormqr", {376, 3008, 24064}},
-        {"syrk", {1, 2, 4, 8, 47, 376, 3008, 24064}}, {"symm", {1, 2, 4, 8, 47, 376, 3008, 24064}},
-        {"syr2k", {1, 2, 3, 47, 376, 3008, 24064}},   {"trmm", {1, 47, 376, 3008, 24064}},
-        {"potrf", {47, 376, 3008, 24064}},      {"trsm", {47, 376, 3008, 24064}},
+        {"gemm", {376, 3008, 24064, 65536, 131072}},
+        {"ormqr", {376, 3008, 24064}},
+        {"syrk", {1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072}},
+        {"symm", {1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072}},
+        {"syr2k", {1, 2, 3, 47, 376, 3008, 24064, 65536, 131072}},
+        {"trmm", {1, 47, 376, 3008, 24064, 65536, 131072}},
+        {"potrf", {47, 376, 3008, 24064}},
+        {"trsm", {47, 376, 3008, 24064}},
         {"posv", {47, 376, 3008, 24064}}};
     for (const auto& [op, ladder] : want) {
         const OpSpec* s = find_spec(op);
         ASSERT_NE(s, nullptr) << op;
         EXPECT_EQ(batch_ladder(188, s->ladder_classes(default_batch_classes()), s->ladder_extra_batches()), ladder) << op;
+    }
+}
+
+// The choice.hh-axis grids: every multi-batch level-3 line also takes 65536 and 131072 (sliced past grid-y);
+// the other ops stop at 32768. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneSpecLadder, Level3OldAxisGridsReachPastTheGridYCap) {
+    const std::set<std::string> tail{"65536", "131072"};
+    for (const std::string op : {"gemm", "syrk", "symm", "syr2k", "trmm", "ormqr", "potrf", "trsm"}) {
+        const OpSpec* s = find_spec(op);
+        ASSERT_NE(s, nullptr) << op;
+        const bool level3 = op != "ormqr" && op != "potrf" && op != "trsm";
+        std::vector<std::string> axis;
+        for (const auto& [name, values] : s->axes())
+            if (name == "batch") axis = values;
+        ASSERT_GE(axis.size(), 2u) << op;
+        const std::set<std::string> axis_tail(axis.end() - 2, axis.end());
+        EXPECT_EQ(axis_tail == tail, level3) << op << " batch axis ends " << axis[axis.size() - 2] << "," << axis.back();
+        std::map<CellKey, std::set<std::string>> lines;
+        for (const CellKey& k : s->grid("float", {})) {
+            CellKey rest;
+            for (const KV& kv : k)
+                if (kv.name != "batch") rest.push_back(kv);
+            lines[rest].insert(*key_get(k, "batch"));
+        }
+        std::size_t multi = 0, reach = 0;
+        for (const auto& [rest, b] : lines)
+            if (b.size() > 1) ++multi, reach += b.count("65536") && b.count("131072");
+        EXPECT_GT(multi, 0u) << op;
+        EXPECT_EQ(reach, level3 ? multi : 0u) << op << ": multi-batch lines holding 65536 and 131072";
     }
 }
 

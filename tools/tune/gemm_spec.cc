@@ -148,7 +148,7 @@ public:
         kk.insert(G::grid_large_skinny_k.begin(), G::grid_large_skinny_k.end());
         return {{"ta", {"N", "T", "C"}}, {"tb", {"N", "T", "C"}}, {"layout", {"packed", "strided"}},
                 {"m", ints(mn)},         {"n", ints(mn)},         {"k", ints(kk)},
-                {"batch", ints(G::grid_batch)}};
+                {"batch", ints(batches())}};
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
@@ -193,7 +193,7 @@ public:
         };
         std::vector<CellKey> out;
         for (const auto& [f, packed, m, n, k] : shapes)
-            for (int b : G::grid_batch) {
+            for (int b : batches()) {
                 CellKey key{{"ta", f.substr(0, 1)}, {"tb", f.substr(1, 1)}, {"layout", packed ? "packed" : "strided"},
                             {"m", std::to_string(m)}, {"n", std::to_string(n)}, {"k", std::to_string(k)},
                             {"batch", std::to_string(b)}};
@@ -214,6 +214,8 @@ public:
     std::vector<double> ladder_classes(const std::vector<double>& run) const override {
         return without_latency_class(run);
     }
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({}); }
+    static std::vector<int> batches() { return with_slice_batches({G::grid_batch.begin(), G::grid_batch.end()}); }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

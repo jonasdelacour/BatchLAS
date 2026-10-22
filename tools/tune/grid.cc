@@ -327,6 +327,11 @@ std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& class
     return {b.begin(), b.end()};
 }
 
+std::vector<int> with_slice_batches(std::vector<int> batches) {
+    batches.insert(batches.end(), {65536, 131072});
+    return batches;
+}
+
 std::vector<double> without_latency_class(const std::vector<double>& classes) {
     std::vector<double> out;
     for (double c : classes)

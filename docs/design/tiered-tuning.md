@@ -762,13 +762,16 @@ records the ladder as its lattice.
 
 | Op | Hook | Batches on sm_120 | Reason |
 | --- | --- | --- | --- |
-| gemm, ormqr | `ladder_classes`: no latency class | 376, 3008, 24064 | their axes start at 128; gemm is half of all round-0 cells and a fourth class adds a third to it |
-| syrk, symm | extras 1, 2, 4, 8 | 1, 2, 4, 8, 47, 376, 3008, 24064 | the vendor-loop/native crossovers lie at batch 1-8 |
-| syr2k | extras 1, 2, 3 | 1, 2, 3, 47, ... | the vendor loop wins batch 1 only; the ledger holds 1, 2, 3 |
-| trmm | extra 1 | 1, 47, ... | below 128 the ledger holds batch 1 only |
+| gemm | `ladder_classes`: no latency class; extras 65536, 131072 | 376, 3008, 24064, 65536, 131072 | its axis starts at 128; gemm is half of all round-0 cells and a fourth class adds a third to it; sliced past 65535 |
+| ormqr | `ladder_classes`: no latency class | 376, 3008, 24064 | as gemm's |
+| syrk, symm | extras 1, 2, 4, 8, 65536, 131072 | 1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072 | the vendor-loop/native crossovers lie at batch 1-8; sliced past 65535 |
+| syr2k | extras 1, 2, 3, 65536, 131072 | 1, 2, 3, 47, ..., 24064, 65536, 131072 | the vendor loop wins batch 1 only; the ledger holds 1, 2, 3 |
+| trmm | extras 1, 65536, 131072 | 1, 47, ..., 24064, 65536, 131072 | below 128 the ledger holds batch 1 only |
 | the rest | none | 47, 376, 3008, 24064 | batch < 128 is out of scope (agent guide §10); the losses it costs are below |
 
-`TuneSpecLadder.RealSpecHooksGiveTheDocumentedLadders` (`tune_race_gpu_tests`) pins this table.
+`TuneSpecLadder.RealSpecHooksGiveTheDocumentedLadders` (`tune_race_gpu_tests`) pins this table, and
+`TuneSpecLadder.Level3OldAxisGridsReachPastTheGridYCap` the `choice.hh`-axis grids (every multi-batch level-3
+line holds 65536 and 131072; ormqr, potrf and trsm none).
 
 **Cost.** Empty ledger (`batchlas_tune all --tier deep --dtype float,double,cfloat,cdouble --plan
 --ledger <empty>`, sm_120): round-0 cells 27061 → 24120, frontier estimate 51963 → 39834 cells, 20.1
@@ -870,10 +873,15 @@ up to 3.7x (getri double n=2 b=32768). The five-class ladder reproduces today's 
 plans more cells than today. The three-class ladder is the cheap option: 34% fewer round-0 cells and
 27% fewer GPU-h than today, at 0.4-2.0% geomean on these ops (`--batch-ladder 0.25,4,64`).
 
-**No b=65536 sentinel.** Every level-3 native gates on batch ≤ `max_groups_yz` (65535), so the cell
-has one runnable arm and costs only a probe. But a row at 65536 would be the nearest row from batch
-39712 (the log midpoint of 24064 and 65536) upward, where the natives still run and the per-item
-vendor loop is up to 79x slower (syrk n=k=64). Add it once the grid-y cap is lifted.
+**Batches past the grid-y cap.** Level-3 (gemm, syrk, symm, syr2k, trmm) runs a batch past
+`max_groups_yz` (65535) as slices ([the batch slices](../perf/level3.md#level-3-the-65535-batch-slices)),
+so every native competes there and a table without a row past 32768 extends its 32768 (or lower) row
+to any batch. `with_slice_batches` (`tools/tune/grid.cc`) adds 65536 and 131072 to these specs'
+`ladder_extra_batches()` and to their `choice.hh` axes (the specs' `axes()` and `grid()`; `choice.hh`
+itself is unchanged, so no kernel hash moves). herk has no spec. A cell still passes the 4 GiB byte cap
+(`--cap-gib`): at 65536 that admits at most 64 KiB of operands per item (float gemm 64^3 NN packed, not
+128^3), so the large shapes need `--cap-gib 32` (96 GB parts) to get their rows. Plan totals of the
+change: [past-cap plan cost](#tune-past-cap-plan-cost).
 
 **Re-tune** (sm_120, GPUs 0, 2, 3; not run). A fresh ledger root, so no old-axis row survives into
 the tables; the committed ledger stays in git history:
