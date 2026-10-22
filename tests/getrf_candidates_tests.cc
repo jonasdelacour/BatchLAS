@@ -5,6 +5,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/getrf.hh>
+#include <batchlas/blas/options.hh>
 #include <batchlas/blas/functions/trsm.hh>
 #include <src/select/coverage.hh>
 #include <batchlas/no_route.hh>
@@ -148,17 +149,15 @@ Rect<T> make_rect(int m, int n, int batch, unsigned seed, int period = 0, int ze
     p.ptrs = UnifiedVector<T*>(std::size_t(batch), nullptr);
     p.piv = UnifiedVector<int64_t>(std::size_t(p.mn()) * batch + 8, int64_t(0x0BADBEEF0BADBEEFLL));
     p.info = UnifiedVector<int32_t>(std::size_t(batch), int32_t(-12345));
-    for (int b = 0; b < batch; ++b) {
-        const unsigned src = unsigned(period > 0 ? b % period : b);
+    // Continuous random entries: a lattice of values ties magnitudes exactly, and rounding then
+    // breaks those ties differently from LAPACKE, which makes the pivot oracle meaningless.
+    const int reps = period > 0 ? std::min(period, batch) : batch;
+    const auto R = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, reps, seed);
+    for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
-            for (int i = 0; i < m; ++i) {
-                const unsigned e = seed * 7919u + src * 104729u + unsigned(j) * 1009u + unsigned(i);
-                const double re = double(int((e * 2654435761u) % 1999u) - 999) / 500.0;
-                const double im = double(int((e * 40503u) % 13u) - 6) / 4.0;
+            for (int i = 0; i < m; ++i)
                 p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + i] =
-                    j == zero_col ? MVof<T>::make(0.0, 0.0) : MVof<T>::make(re, im);
-            }
-    }
+                    j == zero_col ? MVof<T>::make(0.0, 0.0) : R(i, j, period > 0 ? b % period : b);
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
 }
@@ -566,6 +565,13 @@ TYPED_TEST(GetrfCandidates, NonSquareFactorsWholeMatrixNatively) {
                 if (::testing::Test::HasFatalFailure()) return;
             }
     EXPECT_GE(ran, 60);
+    // The arena spelling takes m x n too, with a min(m, n) * batch pivot span.
+    for (auto [m, n] : {std::pair{40, 24}, std::pair{24, 40}}) {
+        auto p = make_rect<T>(m, n, 3, 5u + unsigned(m));
+        (void)batchlas::getrf(*this->ctx, p.A(), p.pivots(), p.info.to_span());
+        this->ctx->wait();
+        expect_rect_factored(*this->ctx, p, "arena " + std::to_string(m) + "x" + std::to_string(n), -1);
+    }
 }
 
 // The packed SLM leaf (Cta) and the blocked driver's SLM gathers, saturated: 2048 / 1024 identical

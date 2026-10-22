@@ -655,9 +655,8 @@ Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>)
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> info = {}) {
     using V = BATCHLAS_DENSE_VIEW(T);
-    detail::require_square("getrf", "A", A);
     detail::require_span_at_least("getrf", "pivots", pivots.size(),
-                                  static_cast<size_t>(A.rows()) * A.batch_size());
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     detail::require_info_span("getrf", info.size(), static_cast<size_t>(A.batch_size()));
     auto lease = ctx.workspace(getrf_buffer_size<B, T>(ctx, V(A)));
     return getrf<B, T>(ctx, V(A), pivots, lease.span(), info);
@@ -668,20 +667,19 @@ inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> 
 /// Workspace is leased from the queue's arena. `L` (unit diagonal, implicit) and
 /// `U` overwrite `A`.
 /// @param ctx     queue; supplies the backend and the arena
-/// @param A       n x n per item
-/// @param pivots  at least `n * batch_size` entries; pass it unchanged to getrs() or
+/// @param A       m x n per item (getrs() and getri() need m == n)
+/// @param pivots  at least `min(m, n) * batch_size` entries; pass it unchanged to getrs() or
 ///                getri() (see the pivot format note on the positional getrf)
 /// @param info    optional per-item status: 0 = success, > 0 = index of the first
 ///                exactly-zero pivot; empty reports nothing
 /// @return        event of the last enqueued kernel
-/// @throws batchlas::invalid_argument if `A` is not square or a span is too short
+/// @throws batchlas::invalid_argument if a span is too short
 /// @throws std::invalid_argument if a pointer is not reachable from the queue's device
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> info = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "getrf", A, pivots, info);
-    detail::require_square("getrf", "A", A);
     detail::require_span_at_least("getrf", "pivots", pivots.size(),
-                                  static_cast<size_t>(A.rows()) * A.batch_size());
+                                  static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
     detail::require_info_span("getrf", info.size(), static_cast<size_t>(A.batch_size()));
     return with_backend_for<T>(ctx, "getrf",
                                [&](auto Back) { return getrf<Back.value>(ctx, A, pivots, info); });

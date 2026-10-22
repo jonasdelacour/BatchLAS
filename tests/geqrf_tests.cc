@@ -1010,7 +1010,7 @@ TYPED_TEST(GeqrfTest, WideFactorsTheWholeMatrix) {
             cta_ran += cta;
             const std::size_t ws = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
             UnifiedVector<std::byte> w(std::max<std::size_t>(ws, 1));
-            ASSERT_NO_THROW((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>(w.data(), ws)))
+            ASSERT_NO_THROW(((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>(w.data(), ws))))
                 << select::to_string(c) << " " << what;
             this->ctx->wait();
             check_one(*this->ctx, p, (select::to_string(c) + " wide " + what).c_str());
