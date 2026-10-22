@@ -344,7 +344,7 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
                     std::optional<select::ScopedPin<PotriChoice>> pin;
                     if (route == 1) pin.emplace("potri", PotriChoice{Fused{}});
                     if (route == 2) pin.emplace("potri", PotriChoice{Blocked{}});
-                    this->run_potri(p, false, &pinfo);
+                    (void)this->run_potri(p, false, &pinfo);
                 }
                 for (int it = 0; it < p.batch; ++it) ASSERT_EQ(pinfo[it], 0);
                 std::vector<std::vector<T>> inv;
@@ -368,7 +368,7 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
             UnifiedVector<int32_t> info;
             this->factor(p, info);
             const UnifiedVector<T> before = p.a;
-            this->run_potri(p, true);
+            (void)this->run_potri(p, true);
             std::vector<std::vector<T>> inv;
             for (int it = 0; it < p.batch; ++it) {
                 std::vector<T> whole(static_cast<size_t>(n) * n);
@@ -377,7 +377,9 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
                 for (int j = 0; j < n; ++j)
                     for (int i = 0; i < n; ++i) {
                         const T a = whole[i + static_cast<size_t>(j) * n], b = whole[j + static_cast<size_t>(i) * n];
-                        ASSERT_TRUE(same_bits(a, MV<T>::make(double(std::real(b)), -double(std::imag(b))))) << "(" << i << "," << j << ")";
+                        // Diagonals: a real value (a bitwise +0 against -0 is not a defect).
+                        if (i == j) ASSERT_EQ(std::imag(a), 0) << "(" << i << "," << j << ")";
+                        else ASSERT_TRUE(same_bits(a, MV<T>::make(double(std::real(b)), -double(std::imag(b))))) << "(" << i << "," << j << ")";
                     }
                 inv.push_back(whole);
             }
@@ -402,8 +404,8 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
             dirty.a = clean.a;
             dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(zero_at) * dirty.lda + zero_at] = MV<T>::make(0.0, 0.0);
             UnifiedVector<int32_t> ic(batch, -1), id(batch, -1);
-            this->run_potri(clean, false, &ic);
-            this->run_potri(dirty, false, &id);
+            (void)this->run_potri(clean, false, &ic);
+            (void)this->run_potri(dirty, false, &id);
             for (int it = 0; it < batch; ++it) {
                 EXPECT_EQ(ic[it], 0);
                 EXPECT_EQ(id[it], it == bad ? zero_at + 1 : 0) << "item " << it;
@@ -425,16 +427,15 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     const size_t need = potri_buffer_size<TestFixture::BK, T>(this->q(), p.A(), p.uplo);
     EXPECT_GE(need, sizeof(T) * 12 * 12 * 3);
     UnifiedVector<std::byte> small(need / 2);
-    EXPECT_THROW((void)potri<TestFixture::BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}),
-                 batchlas::workspace_error);
+    EXPECT_THROW(([&] { (void)potri<TestFixture::BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}); }()), batchlas::workspace_error);
     UnifiedVector<std::byte> ws(need);
     MV<T> empty_batch(p.a.data(), 12, 12, p.lda, p.stra, 0, nullptr);
-    EXPECT_NO_THROW((void)potri<TestFixture::BK, T>(this->q(), empty_batch, p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait());
+    EXPECT_NO_THROW(([&] { (void)potri<TestFixture::BK, T>(this->q(), empty_batch, p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait(); }()));
     EXPECT_EQ((potri_buffer_size<TestFixture::BK, T>(this->q(), empty_batch, p.uplo)), 0u);
     MV<T> nonsquare(p.a.data(), 12, 11, p.lda, p.stra, 3, nullptr);
-    EXPECT_THROW((void)potri_buffer_size<TestFixture::BK, T>(this->q(), nonsquare, p.uplo), batchlas::invalid_argument);
+    EXPECT_THROW(([&] { (void)potri_buffer_size<TestFixture::BK, T>(this->q(), nonsquare, p.uplo); }()), batchlas::invalid_argument);
     MV<T> zero_n(p.a.data(), 0, 0, 1, 1, 3, nullptr);
-    EXPECT_THROW((void)potri_buffer_size<TestFixture::BK, T>(this->q(), zero_n, p.uplo), batchlas::internal_error);
+    EXPECT_THROW(([&] { (void)potri_buffer_size<TestFixture::BK, T>(this->q(), zero_n, p.uplo); }()), batchlas::internal_error);
 }
 
 // The route straddle: the fused pin runs at n = 8 and is refused at n = 9, Auto serves both sides,
@@ -476,7 +477,7 @@ TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
         auto s = make_sys<T>(n, 3, 1024, Uplo::Lower, 13u + n, true);
         s.a = p.a;
         (void)potrs<TestFixture::BK, T>(this->q(), s.A(), s.B(), Uplo::Lower).wait();
-        this->run_potri(p, true);
+        (void)this->run_potri(p, true);
         this->q().wait();
         for (int it = 1; it < p.batch; ++it) {
             for (size_t o = 0; o < static_cast<size_t>(p.stra); ++o)

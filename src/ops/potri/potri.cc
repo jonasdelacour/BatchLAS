@@ -49,6 +49,7 @@ template <class T>
 std::size_t workspace(Queue& q, const MV<T>& A) {
     auto pool = BumpAllocator::measuring();
     (void)pool.allocate<T>(q, static_cast<std::size_t>(A.rows()) * A.rows() * A.batch_size());
+    (void)pool.allocate<T*>(q, static_cast<std::size_t>(A.batch_size()));
     return pool.required_bytes();
 }
 
@@ -59,7 +60,9 @@ Event launch(Queue& q, const PotriChoice& c, const MV<T>& A, Uplo uplo, bool ful
     const int batch = static_cast<int>(A.batch_size());
     BumpAllocator pool(ws);
     const Span<T> buf = pool.allocate<T>(q, static_cast<std::size_t>(n) * n * batch);
-    const MV<T> X(buf.data(), n, n, n, n * n, batch);
+    // The vendor trsm loops read the batch's pointer array: X owns one in the same workspace.
+    const Span<T*> xptr = pool.allocate<T*>(q, static_cast<std::size_t>(batch));
+    const MV<T> X(buf.data(), n, n, n, n * n, batch, xptr.data());
     // info reads the factor before the store overwrites it, so it is enqueued first.
     if (info.size() >= static_cast<std::size_t>(batch)) (void)sycl_potri::potri_diag_info<T>(q, A, info);
     (void)X.fill_identity(q);

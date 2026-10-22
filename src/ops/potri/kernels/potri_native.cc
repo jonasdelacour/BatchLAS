@@ -68,7 +68,9 @@ Event potri_store(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& X,
             const D* const Xb = xp + b * sx;
             D* const Ab = ap + b * sa;
             if (owned) {
-                Ab[static_cast<std::ptrdiff_t>(c) * lda + r] = Xb[static_cast<std::ptrdiff_t>(c) * ldx + r];
+                const D v = Xb[static_cast<std::ptrdiff_t>(c) * ldx + r];
+                // The inverse of a Hermitian matrix has a real diagonal: drop the rounding noise in its imaginary part.
+                Ab[static_cast<std::ptrdiff_t>(c) * lda + r] = r == c ? sycl_device::dev_from_real<D>(sycl_device::dev_real(v)) : v;
             } else if (full) {
                 Ab[static_cast<std::ptrdiff_t>(c) * lda + r] =
                     sycl_device::dev_conj(Xb[static_cast<std::ptrdiff_t>(r) * ldx + c]);
