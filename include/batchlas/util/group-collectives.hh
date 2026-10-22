@@ -99,6 +99,15 @@ __attribute__((always_inline)) inline bool on_metal() {
 inline constexpr bool kExactWgReducePass = ACPP_LIBKERNEL_IS_DEVICE_PASS_SSCP ||
                                            ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP;
 
+#if ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP
+// __device__ only: a __shared__ variable cannot sit in the implicitly __host__ __device__ caller.
+template <typename T>
+__device__ __attribute__((always_inline)) inline local_ptr<T> wg_scratch_hiplike() {
+    __shared__ std::aligned_storage_t<32 * sizeof(T), alignof(T)> raw;
+    return (local_ptr<T>)reinterpret_cast<T*>(&raw);
+}
+#endif
+
 // One scratch per T per kernel, shared by every op and call site, as AdaptiveCpp's own is.
 template <typename T>
 ACPP_UNIVERSAL_TARGET __attribute__((always_inline)) inline local_ptr<T> wg_scratch() {
@@ -106,8 +115,7 @@ ACPP_UNIVERSAL_TARGET __attribute__((always_inline)) inline local_ptr<T> wg_scra
     __acpp_if_target_sscp(static __attribute__((loader_uninitialized))
                           __attribute__((address_space(3))) T buf[32];
                           p = &buf[0];)
-    __acpp_if_target_hiplike(__shared__ std::aligned_storage_t<32 * sizeof(T), alignof(T)> raw;
-                             p = (local_ptr<T>)reinterpret_cast<T*>(&raw);)
+    __acpp_if_target_hiplike(p = wg_scratch_hiplike<T>();)
     return p;
 }
 
