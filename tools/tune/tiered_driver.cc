@@ -132,6 +132,7 @@ struct Job {
     Ledger ledger;  // read once; plan_round's `stored` pointers point into it
     std::vector<AxisSpec> axes;
     std::unique_ptr<Region> region;
+    bool ladder = false;  // the batch axis is the CU-aligned ladder
     std::vector<CellKey> next;
     std::map<CellKey, CellRecord> mine;
     std::map<CellKey, std::vector<std::string>> runnable;
@@ -255,8 +256,23 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     for (const auto& [name, values] : o_.grid)
         for (auto& a : ax)
             if (a.first == name) a.second = values;
+    const std::vector<CellKey> declared = s.grid(dtype, o_.grid);
+    std::vector<CellKey> grid = declared;
+    // A sample (custom, --only-named) measures named keys only: no ladder. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    for (auto& a : ax)
+        if (a.first == "batch" && !o_.batch_classes.empty() && !named_only()) {
+            const auto ladder = batch_strings(batch_ladder(o_.cus > 0 ? o_.cus : id_.cus,
+                                                           s.ladder_classes(o_.batch_classes), s.ladder_extra_batches()));
+            if (o_.ladder_auto && !ladder_applies(j->ledger.runs, ladder)) {
+                std::printf("== %s %s: batch ladder off, the ledger holds only choice.hh-axis runs (--batch-ladder "
+                            "default forces it: a re-tune of every cell)\n", op.c_str(), dtype.c_str());
+                continue;
+            }
+            j->ladder = true;
+            a.second = ladder;
+            grid = rebatch(grid, a.second);
+        }
     j->axes = axis_specs(s.key_names(), ax);
-    const std::vector<CellKey> grid = s.grid(dtype, o_.grid);
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
@@ -280,11 +296,17 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (named_only()) j->next.clear();
     else if (j->frontier) j->next = frontier_start(grid, j->axes, j->fp.stride);
     else if (!calibrate()) j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // The Region spans the declared grid too, so old-axis rows (batch 32768, level-3's 1..27) stay refinement cells.
+    std::vector<CellKey> span = grid;
+    if (j->ladder) span.insert(span.end(), declared.begin(), declared.end());
+    j->region = std::make_unique<Region>(span);
     if (j->frontier || calibrate()) {
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
         const std::set<CellKey> r0(j->next.begin(), j->next.end());
+        // Under the ladder a partly stale old-axis row inside the Region is re-raced too, not left with stale times.
         for (const auto& [k, r] : best_records(j->ledger, j->fh))
-            if (j->on_grid.count(k) && !r0.count(k) && tier_rank(r->tier) >= tier_rank(o_.tier) &&
+            if ((j->on_grid.count(k) || (j->ladder && j->region->contains(k))) && !r0.count(k) &&
+                tier_rank(r->tier) >= tier_rank(o_.tier) &&
                 freshness(*r, j->fh) == Freshness::partly_stale)
                 j->next.push_back(k);
     }
@@ -304,7 +326,6 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
             if (std::find(j->next.begin(), j->next.end(), k) == j->next.end()) j->next.push_back(k);
         }
     }
-    j->region = std::make_unique<Region>(grid);
     jobs_.push_back(std::move(j));
 }
 
@@ -1040,6 +1061,13 @@ std::string git_head(const std::string& repo) {
 }
 
 int run_tiered(const TieredOpts& o, const RunIdentity& id, CellMeasurer* m) { return TieredRun(o, id, m).go(); }
+
+bool ladder_applies(const std::vector<RunMeta>& runs, const std::vector<std::string>& ladder) {
+    const std::string want = "batch=" + join(ladder, ",");
+    return runs.empty() || std::any_of(runs.begin(), runs.end(), [&](const RunMeta& r) {
+               return (" " + r.grid + " ").find(" " + want + " ") != std::string::npos;
+           });
+}
 
 int status_main(const std::string& repo, const std::string& ledger_root, const std::string& tuned_dir) {
     std::map<std::tuple<std::string, std::string, std::string>, StatusRow> rows;

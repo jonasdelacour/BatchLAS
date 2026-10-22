@@ -30,6 +30,7 @@
 
 #include <src/select/select.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 #include <tools/tune/nvml_guard.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tiered_driver.hh>
@@ -99,6 +100,8 @@ struct Opts {
     std::string ledger, import_raw, device_key, remeasure_keys;
     std::string prior;     // --tier calibrate: --prior <device>
     int probe_stride = 0;  // --tier calibrate: --probe-stride
+    int cus = 0;           // --cus: the batch ladder's compute units; 0 = the device's (--plan: its name)
+    std::string batch_ladder = "auto";  // --batch-ladder auto|default|off|c,c,...
     std::vector<std::string> dtypes{"float"};
     std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
@@ -308,7 +311,9 @@ int worker_main(const std::vector<std::string>& a) {
 int info_main(const std::string& result) {
     batchlas::Queue q(batchlas::Device("gpu"), kBackend);
     const auto& d = batchlas::select::device_of<kBackend>(q);
-    std::ofstream(result) << Json().str("kind", "info").str("device", d.key).str("name", q.device().get_name()).line();
+    const auto cus = q.device().get_property(batchlas::DeviceProperty::MAX_COMPUTE_UNITS);
+    std::ofstream(result) << Json().str("kind", "info").str("device", d.key).str("name", q.device().get_name())
+                                 .integer("cus", std::int64_t(cus)).line();
     return 0;
 }
 
@@ -510,7 +515,7 @@ public:
         return route->second;
     }
 
-    std::string device_key(int gpu, std::string* name) {
+    std::string device_key(int gpu, std::string* name, int* cus) {
         const std::string res = tmp_ + "/info" + std::to_string(gpu) + ".jsonl", log = res + ".log";
         const Spawned s = spawn_wait({self_, "--info", "--result", res},
                                      {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}},
@@ -518,14 +523,17 @@ public:
         if (s.status != 0) die("device query on GPU " + std::to_string(gpu) + " failed: " + tail(log));
         const auto r = read_records(res).at(0);
         *name = r.get("name");
+        const std::string c = r.get("cus");
+        *cus = c.empty() ? 0 : std::stoi(c);
         return r.get("device");
     }
 
     int tune();
     int gate();
-    std::string start(std::string* device) {
+    std::string start(std::string* device, int* cus) {
         const std::string name = preflight();
         *device = device_;
+        *cus = cus_;
         return name;
     }
     ArmBatch race_fresh(const CellJob& j);
@@ -538,6 +546,7 @@ private:
     const Opts& o_;
     const OpSpec& spec_;
     std::string tmp_, self_, dtype_, device_;
+    int cus_ = 0;  // the first --devices GPU's compute units (--info): the batch ladder's unit
     std::atomic<int> counter_{0};
     std::mutex out_mu_;
     std::ofstream raw_;
@@ -670,10 +679,14 @@ std::string Driver::preflight() {
                              "measuring beside this run (docs/developer/agent-guide.md §10)\n");
     for (int gpu : o_.devices) {
         std::string n;
-        const std::string k = device_key(gpu, &n);
-        if (device_.empty()) device_ = k, name = n;
+        int cus = 0;
+        const std::string k = device_key(gpu, &n, &cus);
+        if (device_.empty()) device_ = k, name = n, cus_ = cus;
         else if (k != device_)
             die("--devices mixes " + device_ + " and " + k + " (GPU " + std::to_string(gpu) + "): one device per run");
+        else if (cus != cus_)
+            std::fprintf(stderr, "batchlas_tune: warning: GPU %d has %d compute units, the batch ladder uses %d\n", gpu,
+                         cus, cus_);
         const std::string q = "nvidia-smi --id=" + std::to_string(gpu);
         if (g_nvml) {
             const std::string smi = capture(q + " --query-gpu=uuid --format=csv,noheader 2>/dev/null");
@@ -1247,6 +1260,28 @@ std::string plan_device_key(const Opts& o) {
     return "sm_" + cc.substr(0, dot) + cc.substr(dot + 1);
 }
 
+// --plan has no CUDA context to ask: the batch ladder's compute units come from --cus or the GPU's name.
+int plan_cus(const Opts& o) {
+    if (o.cus > 0) return o.cus;
+#ifdef __APPLE__
+    const std::string info = capture("'" + self_exe() + "' --info --result /dev/stdout 2>/dev/null");
+    if (const auto at = info.find("\"cus\": "); at != std::string::npos) return std::atoi(info.c_str() + at + 7);
+#endif
+    const std::string gpu = std::to_string(o.devices.empty() ? 0 : o.devices[0]);
+    const std::string name = capture("nvidia-smi --id=" + gpu + " --query-gpu=name --format=csv,noheader 2>/dev/null");
+    for (const auto& [part, cus] : {std::pair<const char*, int>{"RTX PRO 6000 Blackwell", 188}, {"RTX 4090", 128}})
+        if (name.find(part) != std::string::npos) return cus;
+    die("--plan: no compute-unit count for GPU " + gpu + " ('" + name + "'): pass --cus N or --batch-ladder off");
+}
+
+std::vector<double> ladder_classes(const Opts& o) {
+    if (o.batch_ladder == "off" || o.grid.count("batch")) return {};
+    if (o.batch_ladder == "default" || o.batch_ladder == "auto") return default_batch_classes();
+    std::vector<double> c;
+    for (const std::string& v : split(o.batch_ladder, ',')) c.push_back(std::stod(v));
+    return c;
+}
+
 void usage() {
     std::puts(
         "usage: batchlas_tune <op>[,<op>..|all] --tier preview|coarse|deep|calibrate --devices N[,M..] [options]   ledger + tables\n"
@@ -1262,6 +1297,8 @@ void usage() {
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
         "         --util-ceiling 5 --allow-idle-foreign --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
+        "         --batch-ladder auto|default|off|c,c,.. (batch = c x compute units; auto: not on an old-axis ledger;\n"
+        "         --batches turns it off) --cus N\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
 }
@@ -1339,6 +1376,9 @@ TieredOpts tiered_opts(const Opts& o) {
     t.only_named = o.only_named;
     t.prior = o.prior;
     t.probe_stride = o.probe_stride;
+    t.cus = o.cus;
+    t.batch_classes = ladder_classes(o);
+    t.ladder_auto = o.batch_ladder == "auto";
     t.guard = guard_backend_now;
     if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
@@ -1401,6 +1441,8 @@ int main(int argc, char** argv) {
         else if (f == "--prior") o.prior = val();
         else if (f == "--probe-stride") o.probe_stride = std::stoi(val());
         else if (f == "--device-key") o.device_key = val();
+        else if (f == "--cus") o.cus = std::stoi(val());
+        else if (f == "--batch-ladder") o.batch_ladder = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
         else if (f == "--no-worker") o.worker = false;
         else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
@@ -1490,7 +1532,10 @@ int main(int argc, char** argv) {
     if (const GuardChoice spelled = choose_guard_backend(o.guard_backend, ""); !spelled.error.empty()) die(spelled.error);
     if (o.plan) {
         try {
-            return run_tiered(tiered_opts(o), {plan_device_key(o), ""}, nullptr);
+            const TieredOpts t = tiered_opts(o);
+            RunIdentity id{plan_device_key(o), ""};
+            if (!t.batch_classes.empty()) id.cus = plan_cus(o);
+            return run_tiered(t, id, nullptr);
         } catch (const std::exception& e) {
             die(e.what());
         }
@@ -1516,7 +1561,7 @@ int main(int argc, char** argv) {
     if (tiered) {
         TieredMeasurer m(o, o.ops);
         RunIdentity id;
-        id.device_name = m.first().start(&id.device);
+        id.device_name = m.first().start(&id.device, &id.cus);
         try {
             return run_tiered(tiered_opts(o), id, &m);
         } catch (const std::exception& e) {

@@ -5763,3 +5763,240 @@ TEST(TuneCalibrate, ReplayRefinesOnlyWhereTheDeviceDisagrees) {
     EXPECT_EQ(calibrate_replay(universe({40, {}, 0.96}), prior, scheme("calibrate")).disagreed, 0u) << "4%: agrees";
     EXPECT_GT(calibrate_replay(universe({40, {}, 0.94}), prior, scheme("calibrate")).disagreed, 0u) << "6%: disagrees";
 }
+
+// The CU-aligned batch ladder. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneGrid, BatchLadderIsRoundedCuMultiplesPlusExtras) {
+    EXPECT_EQ(batch_ladder(188, default_batch_classes()), (std::vector<std::int64_t>{47, 376, 3008, 24064}));
+    EXPECT_EQ(batch_ladder(128, default_batch_classes()), (std::vector<std::int64_t>{32, 256, 2048, 16384}));
+    EXPECT_EQ(batch_ladder(188, without_latency_class(default_batch_classes())),
+              (std::vector<std::int64_t>{376, 3008, 24064}))
+        << "gemm and ormqr";
+    EXPECT_EQ(without_latency_class({0.25, 0.5}), (std::vector<double>{0.25, 0.5})) << "never an empty ladder";
+    EXPECT_EQ(batch_ladder(190, {0.25}), (std::vector<std::int64_t>{48})) << "47.5 rounds up, not down";
+    EXPECT_EQ(batch_ladder(2, {0.25, 1}), (std::vector<std::int64_t>{1, 2})) << "never below batch 1";
+    EXPECT_EQ(batch_ladder(188, {1, 0.25}, {4, 1, 47}), (std::vector<std::int64_t>{1, 4, 47, 188})) << "sorted, unique";
+    EXPECT_THROW(batch_ladder(0, default_batch_classes()), std::invalid_argument);
+    EXPECT_THROW(batch_ladder(188, {0}), std::invalid_argument);
+    EXPECT_EQ(batch_strings({1, 47}), (std::vector<std::string>{"1", "47"}));
+}
+
+TEST(TuneGrid, RebatchReplacesEveryMultiBatchLineAndKeepsSingleBatchLines) {
+    auto key = [](const char* t, int n, int b) {
+        return CellKey{{"trans", t}, {"n", std::to_string(n)}, {"batch", std::to_string(b)}};
+    };
+    // trans=C is declared at batch 1 only (syrk's vendor-first line); N takes the ladder whatever its old batches.
+    const std::vector<CellKey> grid{key("N", 4, 1), key("N", 4, 128), key("N", 8, 1), key("N", 8, 3), key("C", 4, 1)};
+    EXPECT_EQ(rebatch(grid, {"2", "64"}),
+              (std::vector<CellKey>{key("N", 4, 2), key("N", 4, 64), key("N", 8, 2), key("N", 8, 64), key("C", 4, 1)}));
+    const std::vector<CellKey> no_batch{{{"n", "4"}}, {{"n", "8"}}};
+    EXPECT_EQ(rebatch(no_batch, {"2"}), no_batch) << "an op without a batch key (geqrf) is untouched";
+}
+
+namespace {
+
+class FakeBatchSpec : public OpSpec {
+public:
+    std::string op() const override { return "fakebatch"; }
+    std::vector<std::string> key_names() const override { return {"n:log:3", "batch:log"}; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"n", {"1", "16"}}, {"batch", {"1", "3", "128"}}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "batch")) * 1e3; }
+    std::vector<int> ladder_extra_batches() const override { return {1}; }
+    std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
+    std::string spec_file() const override { return "fake_spec.cc"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
+};
+
+const FakeBatchSpec kFakeBatch;
+
+class FakeGemmLikeSpec final : public FakeBatchSpec {  // gemm's and ormqr's hook: no latency class
+public:
+    std::string op() const override { return "fakebatch2"; }
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override { return without_latency_class(run); }
+};
+
+const FakeGemmLikeSpec kFakeGemmLike;
+
+std::set<std::string> measured_batches(const std::vector<std::string>& keys) {
+    std::set<std::string> b;
+    for (const std::string& k : keys) b.insert(*key_get(*parse_key_arg(k), "batch"));
+    return b;
+}
+
+}  // namespace
+
+TEST(TuneTieredDriver, BatchLadderReplacesTheBatchAxisWithCuMultiples) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakebatch")) register_spec(&kFakeBatch);
+    o.ops = {"fakebatch"};
+    o.batch_classes = {0.25, 1, 8};
+    FakeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &m), 0);
+    // 8 CUs: 2, 8, 64, plus the spec's extra 1. Round 0 (stride 2) is 1, 8 and the end 64; the n flip adds 2.
+    ASSERT_GE(m.keys.size(), 6u);
+    EXPECT_EQ(measured_batches({m.keys.begin(), m.keys.begin() + 6}), (std::set<std::string>{"1", "8", "64"}));
+    EXPECT_EQ(measured_batches(m.keys), (std::set<std::string>{"1", "2", "8", "64"}));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakebatch", "sm_fake"), "float");
+    ASSERT_EQ(l.runs.size(), 1u);
+    EXPECT_EQ(l.runs[0].grid, "n=1,16 batch=1,2,8,64") << "the run records the ladder as its lattice";
+
+    TempDir ledger2;
+    o.ledger_root = ledger2.str();
+    o.cus = 4;  // --cus beats the device's count
+    FakeMeasurer pinned;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &pinned), 0);
+    EXPECT_EQ(read_ledger(ledger_file(ledger2.str(), "fakebatch", "sm_fake"), "float").runs.at(0).grid,
+              "n=1,16 batch=1,4,32");
+
+    TempDir ledger3;
+    o.ledger_root = ledger3.str();
+    o.cus = 0;
+    o.batch_classes.clear();  // off (--batch-ladder off, or --batches): the choice.hh axis
+    FakeMeasurer off;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &off), 0);
+    EXPECT_EQ(measured_batches(off.keys), (std::set<std::string>{"1", "3", "128"}));
+    EXPECT_EQ(read_ledger(ledger_file(ledger3.str(), "fakebatch", "sm_fake"), "float").runs.at(0).grid, "n=1,16 batch=1,3,128");
+
+    TempDir ledger4;
+    o.ledger_root = ledger4.str();
+    if (!find_spec("fakebatch2")) register_spec(&kFakeGemmLike);
+    o.ops = {"fakebatch2"};
+    o.batch_classes = {0.25, 1, 8};
+    FakeMeasurer gemm_like;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &gemm_like), 0);
+    EXPECT_EQ(read_ledger(ledger_file(ledger4.str(), "fakebatch2", "sm_fake"), "float").runs.at(0).grid,
+              "n=1,16 batch=1,8,64")
+        << "the spec's ladder_classes drops the 0.25 class (2); the extra 1 stays";
+
+    o.batch_classes = default_batch_classes();
+    FakeMeasurer none;
+    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake", 0}, &none), std::invalid_argument) << "no CU count: refuse, not guess";
+}
+
+namespace {
+
+// dtype x n x batch: a (the per-item loop) wins batch 1 and 2, b from batch 4.
+OracleSet ladder_oracle() {
+    OracleSet o;
+    o.label = "syn";
+    const std::vector<std::string> ns{"1", "8"}, bs{"1", "2", "4", "8", "64", "512", "4096"};
+    for (const std::string& n : ns)
+        for (const std::string& b : bs) {
+            const double items = std::stod(b), loop = 0.01 * items, wide = 0.03 + 1e-5 * items;
+            o.cells[{{"dtype", "float"}, {"n", n}, {"batch", b}}].ms = {{"a", loop}, {"b", wide}};
+        }
+    o.axes = axis_specs({"dtype:exact", "n:log:3", "batch:log"}, {{"dtype", {"float"}}, {"n", ns}, {"batch", bs}});
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneReplay, LadderMeasuresOnlyTheNearestBatchesAndScoresTheRest) {
+    const OracleSet o = ladder_oracle();
+    std::string text;
+    // 70 is nearest 64, 500 nearest 512; 1 is the extra the group holds; 3 is an extra it lacks.
+    const auto keep = nearest_batches(o, {70, 500}, {1, 3}, &text);
+    EXPECT_EQ(keep, (std::set<std::string>{"float |1", "float |64", "float |512"}));
+    EXPECT_EQ(text, "1,64,512");
+    Scheme s{"ladder", 0, false, 0};
+    s.batch_keep = keep;
+    const SlowdownReport r = slowdown_replay(o, s);
+    EXPECT_EQ(r.cells, 14u);
+    EXPECT_EQ(r.measured, 6u);
+    ASSERT_EQ(r.ratio.size(), 14u);
+    // Batch 2 and 4 read the batch-1 row (a: right at 2, 1.33x at 4). Batch 8 is 3 octaves from both 1 and 64: the tie
+    // goes to the smaller batch, so it takes a, 0.08 vs 0.03008 ms. 4096 reads 512 (b: right).
+    EXPECT_NEAR(r.worst, 0.08 / (0.03 + 8e-5), 1e-9) << r.worst_key;
+    EXPECT_NE(r.worst_key.find("batch=8 picked a"), std::string::npos) << r.worst_key;
+    Scheme with2 = s;
+    with2.batch_keep.insert("float |8");
+    EXPECT_EQ(slowdown_replay(o, with2).worst, 1.0) << "8 kept: 4 reads it (one octave) and is right";
+}
+
+TEST(TuneReplay, NonMonotoneBatchCellsAreDropped) {
+    OracleSet o = ladder_oracle();
+    const CellKey hot{{"dtype", "float"}, {"n", "8"}, {"batch", "64"}}, spike{{"dtype", "float"}, {"n", "1"}, {"batch", "2"}};
+    o.cells.at(hot).ms = {{"a", 3.0}, {"b", 2.0}};    // the fastest arm 2.0 > 5 x b's 0.0351 at batch 512: dropped
+    o.cells.at(spike).ms = {{"a", 0.02}, {"b", 1.0}};  // a is fine, b spikes > 5 x its 0.03004 at batch 4: dropped
+    const CellKey mild{{"dtype", "float"}, {"n", "1"}, {"batch", "4"}};
+    o.cells.at(mild).ms.at("b") = 0.12;  // 4x b at batch 8 (0.03008): kept, under the factor
+    EXPECT_EQ(drop_nonmonotone_batch(o, 5), 2u);
+    EXPECT_FALSE(o.cells.count(hot));
+    EXPECT_FALSE(o.cells.count(spike));
+    EXPECT_TRUE(o.cells.count(mild));
+    EXPECT_EQ(o.cells.size(), 12u);
+    EXPECT_EQ(drop_nonmonotone_batch(o, 5), 0u) << "idempotent";
+}
+
+TEST(TuneTieredDriver, LadderAppliesOnlyToAnEmptyLedgerOrOneWithALadderRun) {
+    RunMeta old_axis, ladder_run, other_ladder;
+    old_axis.grid = "n=1,16 batch=1,3,128";
+    ladder_run.grid = "n=1,16 batch=1,2,8,64";
+    other_ladder.grid = "n=1,16 batch=1,2,8,640";
+    const std::vector<std::string> ladder{"1", "2", "8", "64"};
+    EXPECT_TRUE(ladder_applies({}, ladder)) << "a new ledger";
+    EXPECT_FALSE(ladder_applies({old_axis}, ladder)) << "an old-axis ledger is not re-tuned by default";
+    EXPECT_TRUE(ladder_applies({old_axis, ladder_run}, ladder)) << "a ladder run happened: keep going";
+    EXPECT_FALSE(ladder_applies({other_ladder}, ladder)) << "batch=1,2,8,64 is not a prefix match of 1,2,8,640";
+}
+
+// --batch-ladder auto on an old-axis ledger keeps the choice.hh axis; a forced ladder re-races partly stale
+// old-axis rows inside the Region; a sample (--only-named) never takes the ladder.
+TEST(TuneTieredDriver, AutoLadderLeavesAnOldLedgerAloneAndAForcedOneReRacesItsStaleRows) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakebatch")) register_spec(&kFakeBatch);
+    o.ops = {"fakebatch"};
+    o.run_id = "20261021T000001-box-1";
+    FakeMeasurer old_axis;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &old_axis), 0);
+    EXPECT_EQ(measured_batches(old_axis.keys), (std::set<std::string>{"1", "3", "128"}));
+    const std::string file = ledger_file(ledger.str(), "fakebatch", "sm_fake");
+
+    o.batch_classes = {0.25, 1, 8};
+    o.ladder_auto = true;
+    o.run_id = "20261021T000002-box-1";
+    FakeMeasurer autom;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &autom), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_TRUE(autom.keys.empty()) << "auto: the old axis, every cell current\n" << out;
+    EXPECT_NE(out.find("batch ladder off"), std::string::npos) << out;
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128");
+
+    std::ofstream(repo.path / "b.cc") << "b changed";  // a still wins: every record partly stale
+    o.ladder_auto = false;  // --batch-ladder default
+    o.run_id = "20261021T000003-box-1";
+    FakeMeasurer forced;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &forced), 0);
+    const std::set<std::string> got = measured_batches(forced.keys);
+    EXPECT_TRUE(got.count("8") && got.count("64")) << "the ladder";
+    EXPECT_TRUE(got.count("3") && got.count("128")) << "partly stale old-axis rows inside the Region are re-raced";
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,2,8,64");
+
+    o.ladder_auto = true;  // a ladder run is in the ledger now: auto keeps the ladder
+    o.run_id = "20261021T000004-box-1";
+    FakeMeasurer resumed;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &resumed), 0);
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,2,8,64");
+
+    o.only_named = true;
+    o.remeasure = {{"fakebatch.float", {{{"n", "16"}, {"batch", "128"}}}}};
+    o.run_id = "20261021T000005-box-1";
+    FakeMeasurer named;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &named), 0);
+    EXPECT_EQ(named.keys, (std::vector<std::string>{"n=16,batch=128"}));
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128") << "a sample keeps the choice.hh axis";
+}
+
+TEST(TuneReplay, NearestBatchesBreaksALogTieTowardTheSmallerBatch) {
+    OracleSet o;
+    o.label = "tie";
+    for (const char* b : {"32", "128"}) o.cells[{{"dtype", "float"}, {"n", "4"}, {"batch", b}}].ms = {{"a", 1.0}};
+    o.axes = axis_specs({"dtype:exact", "n:log:3", "batch:log"}, {{"dtype", {"float"}}, {"n", {"4"}}, {"batch", {"32", "128"}}});
+    EXPECT_EQ(nearest_batches(o, {64}, {}), (std::set<std::string>{"float |32"})) << "64 is one octave from both";
+    EXPECT_EQ(nearest_batches(o, {65}, {}), (std::set<std::string>{"float |128"}));
+}

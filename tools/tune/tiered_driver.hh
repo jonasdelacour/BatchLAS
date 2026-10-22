@@ -37,11 +37,21 @@ struct TieredOpts {
     std::function<std::string()> guard;  // the guard backend now ("nvml->nvidia-smi" after a fallback); run meta
     std::string prior;     // calibrate: --prior <device>; "" = prior_table's default rule
     int probe_stride = 0;  // calibrate: --probe-stride; 0 = params(Tier::calibrate).stride
+    // The CU-aligned batch ladder: an op's batch axis becomes batch_ladder(cus, batch_classes, ladder_extra_batches())
+    // (grid.hh); empty = the choice.hh axis. cus <= 0: RunIdentity::cus. ladder_auto (--batch-ladder auto): only
+    // where the op's dtype ledger has no run or a ladder run (ladder_applies), so an old ledger is not re-tuned.
+    std::vector<double> batch_classes;
+    int cus = 0;
+    bool ladder_auto = false;
 };
 
 struct RunIdentity {
     std::string device, device_name;
+    int cus = 0;  // the measuring device's compute units (--info; --plan: plan_cus)
 };
+
+// --batch-ladder auto: true when `runs` (one op and dtype) is empty or one of them recorded `ladder` as its batch grid.
+bool ladder_applies(const std::vector<RunMeta>& runs, const std::vector<std::string>& ladder);
 
 // One cell to race. `arms` are in seed order: the nearest finished cell's winner first.
 struct CellJob {

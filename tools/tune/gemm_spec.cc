@@ -18,6 +18,7 @@
 
 #include <src/ops/gemm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <algorithm>
 #include <set>
@@ -209,6 +210,10 @@ public:
     std::string refine_key() const override { return "k"; }
     // No stricter frontier passes the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     FrontierPlan frontier() const override { return {1}; }
+    // No latency class: the grid starts at 128 and its full lattice dominates the run. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override {
+        return without_latency_class(run);
+    }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

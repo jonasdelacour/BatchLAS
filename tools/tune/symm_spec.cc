@@ -120,6 +120,7 @@ public:
     std::string refine_key() const override { return "m"; }
     // k = 8: the cheapest frontier passing the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     FrontierPlan frontier() const override { return {2, 8, 0.05}; }
+    std::vector<int> ladder_extra_batches() const override { return {1, 2, 4, 8}; }  // as syrk's
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {

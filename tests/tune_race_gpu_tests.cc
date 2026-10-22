@@ -3,6 +3,7 @@
 // agrees with a worker that ran a larger launch first).
 
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 #include <tools/tune/schedule.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tune_core.hh>
@@ -17,6 +18,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -315,3 +317,31 @@ TEST(TuneRaceGpu, FreshChildAgreesWithAWorkerAfterALargerLaunch) {
     GTEST_SKIP() << "needs batchlas_tune_impl: configure with -DBATCHLAS_BUILD_BENCHMARKS=ON";
 }
 #endif
+
+// The real specs' batch-ladder hooks, on sm_120's 188 SMs (host-only: no GPU is touched).
+// evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneSpecLadder, RealSpecHooksGiveTheDocumentedLadders) {
+    using B = std::vector<std::int64_t>;
+    const std::vector<std::pair<std::string, B>> want{
+        {"gemm", {376, 3008, 24064}},           {"ormqr", {376, 3008, 24064}},
+        {"syrk", {1, 2, 4, 8, 47, 376, 3008, 24064}}, {"symm", {1, 2, 4, 8, 47, 376, 3008, 24064}},
+        {"syr2k", {1, 2, 3, 47, 376, 3008, 24064}},   {"trmm", {1, 47, 376, 3008, 24064}},
+        {"potrf", {47, 376, 3008, 24064}},      {"trsm", {47, 376, 3008, 24064}},
+        {"posv", {47, 376, 3008, 24064}}};
+    for (const auto& [op, ladder] : want) {
+        const OpSpec* s = find_spec(op);
+        ASSERT_NE(s, nullptr) << op;
+        EXPECT_EQ(batch_ladder(188, s->ladder_classes(default_batch_classes()), s->ladder_extra_batches()), ladder) << op;
+    }
+}
+
+TEST(TuneSpecLadder, SyrkKeepsItsSingleBatchVendorLine) {
+    const OpSpec* s = find_spec("syrk");
+    ASSERT_NE(s, nullptr);
+    const auto ladder = batch_strings(batch_ladder(188, default_batch_classes(), s->ladder_extra_batches()));
+    std::set<std::string> c_batches, other;
+    for (const CellKey& k : rebatch(s->grid("float", {}), ladder))
+        (*key_get(k, "trans") == "C" ? c_batches : other).insert(*key_get(k, "batch"));
+    EXPECT_EQ(other, std::set<std::string>(ladder.begin(), ladder.end()));
+    if (!c_batches.empty()) EXPECT_EQ(c_batches, std::set<std::string>{"1"}) << "trans=C is declared at batch 1 only";
+}
