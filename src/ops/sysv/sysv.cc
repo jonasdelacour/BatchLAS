@@ -6,6 +6,7 @@
 
 #include <batchlas/blas/functions/sysv.hh>
 #include <batchlas/blas/functions/sytrf.hh>
+#include <batchlas/util/mempool.hh>
 
 #include <src/ops/sysv/choice.hh>
 #include <src/ops/sytrf/sytrf_native.hh>

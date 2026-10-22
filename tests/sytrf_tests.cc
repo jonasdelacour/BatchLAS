@@ -452,14 +452,14 @@ TYPED_TEST(SytrfTest, ArgumentChecks) {
     UnifiedVector<T> buf(64, T{});
     UnifiedVector<int64_t> piv(64, 0);
     const MV<T> rect(buf.data(), 4, 3, 4, 12, 1);
-    EXPECT_THROW((void)sytrf<TestFixture::Bk, T>(*this->ctx, rect, Uplo::Lower, piv.to_span(), Span<std::byte>{},
-                                                 Span<int32_t>{}),
+    EXPECT_THROW(((void)sytrf<TestFixture::Bk, T>(*this->ctx, rect, Uplo::Lower, piv.to_span(), Span<std::byte>{},
+                                                  Span<int32_t>{})),
                  batchlas::invalid_argument);
     const MV<T> sq(buf.data(), 4, 4, 4, 16, 1);
     const MV<T> b3(buf.data(), 3, 1, 3, 3, 1);
-    EXPECT_THROW((void)sytrs<TestFixture::Bk, T>(*this->ctx, sq, b3, Uplo::Lower, piv.to_span(), Span<std::byte>{}),
+    EXPECT_THROW(((void)sytrs<TestFixture::Bk, T>(*this->ctx, sq, b3, Uplo::Lower, piv.to_span(), Span<std::byte>{})),
                  batchlas::invalid_argument);
     const MV<T> empty(buf.data(), 4, 4, 4, 16, 0);
-    EXPECT_NO_THROW((void)sytrf<TestFixture::Bk, T>(*this->ctx, empty, Uplo::Upper, piv.to_span(), Span<std::byte>{},
-                                                    Span<int32_t>{}));
+    EXPECT_NO_THROW(((void)sytrf<TestFixture::Bk, T>(*this->ctx, empty, Uplo::Upper, piv.to_span(), Span<std::byte>{},
+                                                     Span<int32_t>{})));
 }
