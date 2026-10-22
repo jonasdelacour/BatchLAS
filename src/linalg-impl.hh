@@ -64,7 +64,7 @@ namespace batchlas{
     template<> struct is_linalg_enum<Layout> : std::true_type {};
     template<> struct is_linalg_enum<JobType> : std::true_type {};
 
-    template <class T>
+    template <typename T>
     struct is_complex_or_floating_point : std::bool_constant<FloatingOrComplexScalar<T>> {};
 
     template<auto>

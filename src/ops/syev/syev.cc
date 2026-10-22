@@ -27,16 +27,16 @@ namespace ops::syev {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
-template <class T>
+template <typename T>
 using Real = typename base_type<T>::type;
 
 // The sub-group solvers' own ceiling (syev_cta.cc, syev_cta_fused.cc, syev_jacobi_cta.cc all
 // throw above it): one matrix per 32-lane partition, the CTA invariant of docs/developer/agent-guide.md §11.
 inline constexpr std::int64_t kSmallMaxN = 32;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, JobType jobz) {
     return {{"jobz", jobz == JobType::EigenVectors ? "V" : "N"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -48,7 +48,7 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 // TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
 // runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
 // exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200).
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
     const bool homogeneous = !A.is_heterogeneous();
@@ -68,7 +68,7 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
 
 // Deliberately slower and more robust than the CTA STEQR defaults: syev runs inside syevx,
 // where an inaccurate Ritz solve stagnates the outer iteration.
-template <class T>
+template <typename T>
 SteqrParams<T> cta_steqr_params() {
     SteqrParams<T> params{};
     params.max_sweeps = 400;
@@ -77,7 +77,7 @@ SteqrParams<T> cta_steqr_params() {
 }
 
 // Exactly the chosen family's need (R5).
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo) {
     return std::visit(overloaded{
         [&](Cta) { return syev_cta_buffer_size<B, T>(q, A, jobz, cta_steqr_params<T>()); },
@@ -92,7 +92,7 @@ std::size_t workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T
 }
 
 // Every arm clears or stores `info` itself, so the launch adds no clear of its own.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -107,7 +107,7 @@ Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, Job
 
 // Every driver refuses a non-square A, and the vendor would read rows() as the order.
 // Thrown before choose() so neither Auto nor a pin can take it.
-template <class T>
+template <typename T>
 void validate(const MV<T>& A, const char* who) {
     if (A.rows() != A.cols())
         throw batchlas::invalid_argument(std::string(who) + ": A must be square, got " + std::to_string(A.rows()) +
@@ -116,7 +116,7 @@ void validate(const MV<T>& A, const char* who) {
 
 // Capability only (the Python binding, the LOBPCG accuracy pin): the same can_run, where the only
 // backend term is the ROCm exclusion.
-template <class T>
+template <typename T>
 bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
     const select::Device& d = select::describe(q.device(), Backend::AUTO, false);
     if (q.backend() == Backend::ROCM) return can_run<Backend::ROCM, T>(c, d, A);

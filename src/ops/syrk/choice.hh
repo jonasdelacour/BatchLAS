@@ -22,7 +22,7 @@ struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syrk_vendo
 
 using SyrkChoice = std::variant<Gram, Triangular, Vendor>;  ///< fieldless (tile, leg derived); natives: CUDA GPU
 
-template <class T>  /// Every compiled choice in tie-break order (§6.3); triangular is float only (R7).
+template <typename T>  /// Every compiled choice in tie-break order (§6.3); triangular is float only (R7).
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, float>) return std::array<SyrkChoice, 3>{Gram{}, Triangular{}, Vendor{}};
     else return std::array<SyrkChoice, 2>{Gram{}, Vendor{}};
@@ -66,7 +66,7 @@ inline constexpr int gram_threads(std::int64_t n) {  // the lanes meeting the tr
     const int lanes = gram_tile(n) / 4;
     return (lanes * (lanes + 1) / 2 + 31) / 32 * 32;
 }
-template <class T>
+template <typename T>
 constexpr std::int64_t gram_slm_bytes(std::int64_t n) {  // the staged [KC][tile] operand
     return std::int64_t(32) * gram_tile(n) * std::int64_t(sizeof(T));
 }

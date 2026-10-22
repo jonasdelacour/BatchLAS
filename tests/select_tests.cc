@@ -1063,12 +1063,12 @@ namespace {
 
 using batchlas::Backend;
 using batchlas::MatrixFormat;
-template <class T>
+template <typename T>
 using Dense = batchlas::MatrixView<T, MatrixFormat::Dense>;
-template <class T>
+template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-template <class T, Backend B>
+template <typename T, Backend B>
 struct PolicyConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
@@ -1086,14 +1086,14 @@ using PolicyTuple = decltype(std::tuple_cat(
     std::tuple<>{}));
 using PolicyTypes = test_utils::tuple_to_types<PolicyTuple>::type;
 
-template <class Config>
+template <typename Config>
 class BatchPolicy : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(BatchPolicy, PolicyTypes);
 
 // Every op once, by name, on `batch` items of order n at a padded ld, a stride that is not
 // ld * n and inc 2; with `het`, A, B and C carry active orders {n, n-3, n, n-5, ...}. Every
 // buffer starts as a large finite sentinel, so a write anywhere shows.
-template <class T, Backend B>
+template <typename T, Backend B>
 struct OpBattery {
     static constexpr int n = 8, ld = 11, stride = 11 * 8 + 5;
     batchlas::Queue& q;
@@ -1188,7 +1188,7 @@ struct OpBattery {
             {"spmm", [=, this] { return spmm_buffer_size<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, T(1), T(0.5), N, N); }},
         };
     }
-    template <class U>
+    template <typename U>
     static int changed(const batchlas::UnifiedVector<U>& v, U s) {
         return int(std::count_if(v.data(), v.data() + v.size(), [&](const U& x) { return !(x == s); }));
     }

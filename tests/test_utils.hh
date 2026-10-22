@@ -60,8 +60,8 @@ private:
                  << "transcribed tables"
 
 // Convert std::tuple<Ts...> to GoogleTest type list
-template <class Tuple> struct tuple_to_types;
-template <class... Ts>
+template <typename Tuple> struct tuple_to_types;
+template <typename... Ts>
 struct tuple_to_types<std::tuple<Ts...>> { using type = ::testing::Types<Ts...>; };
 
 // Backend name lookup for error messages. Forwards to the public printer in

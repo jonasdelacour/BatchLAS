@@ -30,7 +30,7 @@
 namespace batchlas::tune {
 namespace {
 
-template <class T>
+template <typename T>
 struct OrgqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -81,7 +81,7 @@ public:
         return {ops::orgqr::key_names.begin(), ops::orgqr::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::orgqr::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::orgqr::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"m", ints(ops::orgqr::grid)}, {"n", ints(ops::orgqr::grid)}};
@@ -122,7 +122,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             if (n > m) throw batchlas::invalid_argument("orgqr: n > m has no native family to tune");
             OrgqrProblem<T> p(q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);

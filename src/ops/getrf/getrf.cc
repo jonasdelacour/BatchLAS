@@ -27,10 +27,10 @@ namespace ops::getrf {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -39,7 +39,7 @@ select::Key key_of(const MV<T>& A) {
 // argument check at the top of that driver's *_dispatch. One launch covers the batch with a single
 // (n, ld, stride), so no family takes a heterogeneous batch: every vendor runs each item at the
 // top-level order (known-defects #12).
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() &&
@@ -60,7 +60,7 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivots, Span<std::byte> ws,
              Span<int32_t> info) {
     return std::visit(overloaded{
@@ -89,7 +89,7 @@ Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivot
 
 // Exactly the chosen family's need (R5); Blocked's gemm and trsm take no workspace. None of these
 // may read A.data_ptr(): inv.cc sizes getrf from a layout pass with a null data pointer.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_getrf::getrf_tiny_buffer_size<T>(q, A); },

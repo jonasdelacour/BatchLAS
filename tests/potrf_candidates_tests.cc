@@ -158,7 +158,7 @@ void expect_factored(Queue& ctx, const Prob<T>& p, const std::vector<int32_t>& i
 bool clobbers_other(const C& c, Uplo uplo) { return std::holds_alternative<pc::Vendor>(c) && uplo == Uplo::Upper; }
 
 // The spelling the outermost potrf trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();

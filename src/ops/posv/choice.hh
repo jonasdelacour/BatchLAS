@@ -19,7 +19,7 @@ struct Blocked : select::NoFields<"blocked"> {};  ///< public potrf + two public
 
 using PosvChoice = std::variant<Tiny, Cta, Blocked>;  ///< fieldless: buckets, nb and wg are derived in the driver
 
-template <class T>  /// Tie-break order (§6.3). No vendor family: a `vendor` pin warns and runs Auto.
+template <typename T>  /// Tie-break order (§6.3). No vendor family: a `vendor` pin warns and runs Auto.
 constexpr auto candidates() { return select::all_of<PosvChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::posv, select::Lib::none};  ///< no library; blocked's children report errors

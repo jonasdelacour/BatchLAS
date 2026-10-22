@@ -25,16 +25,16 @@ namespace ops::syrk {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the reduction length of C = op(A) op(A)^T.
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA);
     const char* trans = transA == Transpose::NoTrans ? "N" : (transA == Transpose::Trans ? "T" : "C");
@@ -48,7 +48,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
@@ -70,7 +70,7 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
 
 // The native arms compile only for CUDA and SYCL (native_gpu_backend), and
 // Triangular only for float; can_run never admits the other instantiations.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{

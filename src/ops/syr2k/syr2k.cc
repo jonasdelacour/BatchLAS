@@ -24,16 +24,16 @@ namespace ops::syr2k {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the k of C = alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C.
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     return {{"n", C.rows()}, {"k", inner<T>(A, transA)}, {"batch", C.batch_size()}};
 }
@@ -44,7 +44,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // grid terms are the launch's own limits (GridCeilingsAreCanRunTerms). Every vendor loop (cuBLAS,
 // rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
 // batch, so the vendor is refused one too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
              Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
@@ -60,7 +60,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Uplo uplo, Transpose transA) {
     return std::visit(overloaded{

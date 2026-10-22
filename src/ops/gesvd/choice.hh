@@ -19,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::gesvd_vendor; ne
 
 using GesvdChoice = std::variant<Jacobi, Cta, Blocked, Vendor>;  ///< natives need a GPU; cta, blocked: complex only if Hermitian
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3): native first, vendor last.
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<GesvdChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::gesvd, select::Lib::solver};  ///< last resort (§5.5): blocked, vendor

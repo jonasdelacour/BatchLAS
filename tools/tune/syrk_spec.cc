@@ -31,7 +31,7 @@ namespace {
 
 namespace K = ops::syrk;
 
-template <class T>
+template <typename T>
 struct SyrkProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -91,7 +91,7 @@ public:
     std::string op() const override { return "syrk"; }
     std::vector<std::string> key_names() const override { return {K::key_names.begin(), K::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_real_dtype("syrk", dtype, []<class T>() { return spellings(K::candidates<T>()); });
+        return with_real_dtype("syrk", dtype, []<typename T>() { return spellings(K::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         auto ints = [](const auto& xs) {
@@ -146,7 +146,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/syrk_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_real_dtype("syrk", req.dtype, [&]<class T>() {
+        return with_real_dtype("syrk", req.dtype, [&]<typename T>() {
             const std::string& t = *key_get(req.key, "trans");
             const Transpose trans = t == "N" ? Transpose::NoTrans : t == "T" ? Transpose::Trans : Transpose::ConjTrans;
             const int n = int(key_int(req.key, "n")), k = int(key_int(req.key, "k"));

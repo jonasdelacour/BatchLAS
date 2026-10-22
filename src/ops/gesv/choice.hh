@@ -17,7 +17,7 @@ struct Blocked : select::NoFields<"blocked"> {};  ///< public getrf + public get
 
 using GesvChoice = std::variant<Tiny, Blocked>;  ///< no vendor family: a `vendor` pin warns and runs Auto
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GesvChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::gesv};  ///< no vendor library; last resort (§5.5): blocked

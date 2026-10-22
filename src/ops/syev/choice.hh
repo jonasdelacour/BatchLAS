@@ -21,7 +21,7 @@ struct Vendor : select::NoFields<"vendor"> {};         ///< backend::syev_vendor
 
 using SyevChoice = std::variant<Cta, CtaFused, Jacobi, Blocked, TwoStage, Vendor>;  ///< GPU natives: square, no NETLIB
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
+template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<SyevChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::syev, select::Lib::solver};  ///< last resort (§5.5): blocked, vendor (CPU)

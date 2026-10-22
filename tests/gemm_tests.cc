@@ -118,7 +118,7 @@ constexpr double vendor_comparison_tolerance() {  // the old test_utils::toleran
     else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
 }
 
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 ::testing::AssertionResult GemmMatchesDefinition(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
                                                  const VC& C, T alpha, T beta, int k, double tol_scale = 100) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -132,7 +132,7 @@ template <typename T, class VA, class VB, class VC0, class VC>
 }
 
 // Small-integer data makes every product and sum exact, so the answer must be bit-exact.
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 void ExpectGemmExact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, T alpha,
                      T beta) {
     using MV = MatrixView<T, MatrixFormat::Dense>;

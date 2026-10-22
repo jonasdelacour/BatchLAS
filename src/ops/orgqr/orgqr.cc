@@ -25,10 +25,10 @@ namespace ops::orgqr {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     return {{"m", A.rows()}, {"n", A.cols()}};
 }
@@ -37,7 +37,7 @@ select::Key key_of(const MV<T>& A) {
 // orgqr_blocked_dispatch's own checks (one identity and one apply serve the whole batch, and
 // Q's columns live in C^m, so n <= m); its tau-length check is an argument error, left to the
 // driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
-template <class T>
+template <typename T>
 bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) {
@@ -50,18 +50,18 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
 
 // The apply seams: the public ormqr and its sizing, so the apply picks its own kernel and its
 // workspace comes from the same routed query as the call.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event apply_q(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
               Span<std::byte> ows, int32_t obs) {
     return ormqr<B, T>(c, oa, oc, os, ot, otau, ows, obs);
 }
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t apply_q_size(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
                          int32_t obs) {
     return ormqr_buffer_size<B, T>(c, oa, oc, os, ot, otau, obs);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
         [&](Blocked) {
@@ -78,7 +78,7 @@ Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<s
 // Exactly the chosen family's need (R5). The vendor's is batch-linear (a per-item loop), so a
 // native call must never be sized by it (gigabytes at saturating batch).
 // evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau) {
     return std::visit(overloaded{
         [&](Blocked) { return sycl_orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_q_size<B, T>); },

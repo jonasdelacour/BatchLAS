@@ -36,7 +36,7 @@ namespace S = ops::syev;
 
 constexpr double kPoison = 1e6;
 
-template <class T>
+template <typename T>
 struct SyevProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;
@@ -110,7 +110,7 @@ public:
     std::string op() const override { return "syev"; }
     std::vector<std::string> key_names() const override { return {S::key_names.begin(), S::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(S::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(S::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"jobz", {"N", "V"}}, {"n", ints(S::grid_n)}, {"batch", ints(S::grid_batch)}};
@@ -187,7 +187,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/syev_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const JobType jobz = *key_get(req.key, "jobz") == "V" ? JobType::EigenVectors : JobType::NoEigenVectors;
             const int n = int(key_int(req.key, "n"));
             SyevProblem<T> p(q, jobz, n, int(key_int(req.key, "batch")), req.ld_pad);

@@ -51,25 +51,25 @@ namespace detail {
 // Element type of a container argument (Matrix, MatrixView, Vector, VectorView, Span,
 // UnifiedVector); void for anything else. Scalars are deliberately not containers: a
 // float op may take a double knob (fill_graded_hermitian's condition number).
-template <class A> struct container_elem { using type = void; };
+template <typename A> struct container_elem { using type = void; };
 // A one-parameter class template over the scalar (StedcParams<T>, GemmOptions<T>) names the
 // op's type as well: stedc_buffer_size(ctx, n, batch, job, StedcParams<double>) has no container.
-template <template <class> class P, class T> struct container_elem<P<T>> { using type = T; };
-template <class T> struct container_elem<std::complex<T>> { using type = void; };
-template <class T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
-template <class T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
-template <class T> struct container_elem<Vector<T>> { using type = T; };
-template <class T> struct container_elem<VectorView<T>> { using type = T; };
-template <class T> struct container_elem<Span<T>> { using type = T; };
-template <class T> struct container_elem<UnifiedVector<T>> { using type = T; };
+template <template <typename> class P, typename T> struct container_elem<P<T>> { using type = T; };
+template <typename T> struct container_elem<std::complex<T>> { using type = void; };
+template <typename T, MatrixFormat F> struct container_elem<Matrix<T, F>> { using type = T; };
+template <typename T, MatrixFormat F> struct container_elem<MatrixView<T, F>> { using type = T; };
+template <typename T> struct container_elem<Vector<T>> { using type = T; };
+template <typename T> struct container_elem<VectorView<T>> { using type = T; };
+template <typename T> struct container_elem<Span<T>> { using type = T; };
+template <typename T> struct container_elem<UnifiedVector<T>> { using type = T; };
 
-template <class T>
+template <typename T>
 inline constexpr bool is_fp64_scalar_v =
     std::is_same_v<std::remove_cv_t<T>, double> || std::is_same_v<std::remove_cv_t<T>, std::complex<double>>;
 
 // True when any container argument holds double or complex<double>: Backend::SYCL
 // instantiates those types only when BATCHLAS_HAS_DEVICE_FP64.
-template <class... A>
+template <typename... A>
 inline constexpr bool needs_fp64_v =
     (is_fp64_scalar_v<typename container_elem<std::remove_cvref_t<A>>::type> || ...);
 
@@ -93,7 +93,7 @@ inline constexpr bool needs_fp64_v =
 /// Throws throw_no_device_fp64 for a double or complex<double> @p T on a GPU without fp64. For
 /// kernels that are not Backend-templated (or NETLIB ones that launch on the queue's device),
 /// whose double instantiations exist and would otherwise fail in the device JIT.
-template <class T>
+template <typename T>
 inline void require_device_fp64(const Queue& ctx, const char* op) {
     if constexpr (is_fp64_scalar_v<T> && !BATCHLAS_HAS_DEVICE_FP64) {
         if (ctx.device().type == DeviceType::GPU && !ctx.device().supports_fp64())

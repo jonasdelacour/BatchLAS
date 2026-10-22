@@ -149,7 +149,7 @@ static const char* op_text(OpKind k) {
 //
 // It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
 // snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
-template <class Choice>
+template <typename Choice>
 static bool select_pin_parsed(OpKind k) {
     const char* raw = settings().routing.route(op_text(k)).get();
     if (raw == nullptr) return false;

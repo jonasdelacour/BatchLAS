@@ -123,7 +123,7 @@ void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool i
 }
 
 // The choice the outermost getrf trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -140,7 +140,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("getrf ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no getrf trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");

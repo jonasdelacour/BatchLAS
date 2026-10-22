@@ -183,7 +183,7 @@ bool untouched(const Prob<T>& p) {
 }
 
 // The outermost syrk trace line for whatever `run` calls, and the choice it names.
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -200,7 +200,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("syrk ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no syrk trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");
@@ -231,7 +231,7 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
 // every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level extents. A
 // spelling pin throws invalid_argument (the vendor class word falls back to Auto), Auto throws
 // runtime_error, or NoRouteError without a vendor library, and C is left untouched.
-template <Backend B, class T>
+template <Backend B, typename T>
 void expect_heterogeneous_has_no_route(Queue& ctx) {
     const int n = 16, k = 8, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, k, batch), Cm(n, n, batch);

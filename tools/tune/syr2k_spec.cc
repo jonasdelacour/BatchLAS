@@ -25,7 +25,7 @@ namespace {
 
 namespace R2 = ops::syr2k;
 
-template <class T>
+template <typename T>
 struct Syr2kProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -83,7 +83,7 @@ public:
     std::string op() const override { return "syr2k"; }
     std::vector<std::string> key_names() const override { return {R2::key_names.begin(), R2::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_real_dtype("syr2k", dtype, []<class T>() { return spellings(R2::candidates<T>()); });
+        return with_real_dtype("syr2k", dtype, []<typename T>() { return spellings(R2::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, k, b;
@@ -115,7 +115,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/syr2k_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_real_dtype("syr2k", req.dtype, [&]<class T>() {
+        return with_real_dtype("syr2k", req.dtype, [&]<typename T>() {
             Syr2kProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "k")), int(key_int(req.key, "batch")),
                               req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, 2 * p.k);

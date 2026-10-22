@@ -19,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getrf_vendor (cu
 
 using GetrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;  ///< natives: GPU, sub-group 32, square, not NETLIB
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GetrfChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::getrf, select::Lib::factorization};  ///< §5.5: blocked, then vendor (CPU)

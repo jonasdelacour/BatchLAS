@@ -200,7 +200,7 @@ vocabulary in about four comment lines. A new op copies it and needs no page edi
 4. **The choice variant**: a trailing `///<` with the common native term (`GPU, sub-group 32,
    square, no NETLIB`) or, for an op with no vendor family, that a `vendor` pin warns and runs
    Auto.
-5. **`candidates<T>()`**: `template <class T>  /// Every compiled choice, in tie-break order (§6.3).`
+5. **`candidates<T>()`**: `template <typename T>  /// Every compiled choice, in tie-break order (§6.3).`
    A `///` after code on the `template` line attaches to the function and counts as code. A
    preceding `///` line (potrf, geqrf, gemm) is equivalent for Doxygen and costs one comment line.
 6. **`spec`, `last_resort`, `key_names`, `grid_*`**: a trailing `///<` (on the first or last line

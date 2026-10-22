@@ -26,7 +26,7 @@ namespace {
 
 namespace M = ops::trmm;
 
-template <class T>
+template <typename T>
 struct TrmmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -89,7 +89,7 @@ public:
     std::string op() const override { return "trmm"; }
     std::vector<std::string> key_names() const override { return {M::key_names.begin(), M::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(M::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(M::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> o, r, b;
@@ -128,7 +128,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/trmm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
             TrmmProblem<T> p(q, side, int(key_int(req.key, "order")), int(key_int(req.key, "q")),
                              int(key_int(req.key, "batch")), req.ld_pad);

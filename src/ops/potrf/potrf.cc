@@ -23,7 +23,7 @@ namespace ops::potrf {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     return {{"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -31,7 +31,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause
 // is the argument check at the top of that driver's *_dispatch. The vendor factors each item at
 // the storage order, so no family takes a heterogeneous batch (known-defects #12).
-template <class T>
+template <typename T>
 bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              Uplo uplo) {
     const int64_t n = A.rows();
@@ -58,7 +58,7 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
              Span<std::byte> ws, Span<int32_t> info) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -88,7 +88,7 @@ Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::D
 }
 
 // Exactly the chosen family's need (R5). Pure: no launch, no data read.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_potrf::potrf_tiny_buffer_size<T>(q, A); },

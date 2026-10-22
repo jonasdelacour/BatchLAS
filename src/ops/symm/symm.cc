@@ -29,10 +29,10 @@ namespace ops::symm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& C) {
     return {{"form", form_of(C.rows(), C.cols())}, {"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -42,7 +42,7 @@ select::Key key_of(const MV<T>& C) {
 // (cuBLAS, netlib) runs each item at the top-level (m, n). So no family takes a heterogeneous
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget), and its batch sits in grid z.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
@@ -63,7 +63,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
 // The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on
 // first touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while
 // the kernels reading it are only enqueued.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
                   Uplo uplo) {
     const int n = A.rows(), batch = A.batch_size();
@@ -88,7 +88,7 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
 
 // rocBLAS has no symm wrapper: ROCm's vendor arm symmetrizes a copy of A and calls the public
 // gemm, with none of expand's batch or scratch limits. The copy dies here, so the call waits.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
                       Uplo uplo) {
     Matrix<T, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
@@ -104,7 +104,7 @@ Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
     return q.create_event_after_external_work();
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{

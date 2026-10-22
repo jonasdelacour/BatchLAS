@@ -194,7 +194,7 @@ std::string label(const Spec& s) {
 }
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
 
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -211,7 +211,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("trmm ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no trmm trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");
@@ -228,7 +228,7 @@ struct TableGuard {
 // expansion's gemm throws), and every vendor loop runs each item at the top-level (m, n), so the
 // vendor is refused too. Every pin throws (the vendor class word falls back to Auto), and Auto
 // throws runtime_error, or NoRouteError without a vendor library.
-template <Backend B, class T>
+template <Backend B, typename T>
 void expect_heterogeneous_has_no_route(Queue& ctx) {
     using R = RealOf<T>;
     const int n = 16, q = 3, batch = 4;

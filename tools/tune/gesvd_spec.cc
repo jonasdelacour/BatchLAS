@@ -49,7 +49,7 @@ SvdVectors job_of(const std::string& vec) {
     return vec == "none" ? SvdVectors::None : vec == "thin" ? SvdVectors::Thin : SvdVectors::All;
 }
 
-template <class T>
+template <typename T>
 struct GesvdProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;
@@ -157,7 +157,7 @@ public:
     std::string op() const override { return "gesvd"; }
     std::vector<std::string> key_names() const override { return {G::key_names.begin(), G::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(G::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(G::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> herm(G::grid_herm.begin(), G::grid_herm.end()), vec(G::grid_vec.begin(), G::grid_vec.end());
@@ -223,7 +223,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const std::string h = *key_get(req.key, "herm");
             const std::optional<Uplo> herm =
                 h == "N" ? std::nullopt : std::optional<Uplo>(h == "U" ? Uplo::Upper : Uplo::Lower);

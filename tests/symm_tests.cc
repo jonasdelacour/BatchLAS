@@ -28,7 +28,7 @@ TYPED_TEST_SUITE(SymmTest, SymmTestTypes);
 
 // C against alpha A B + beta C0 (Side::Left) or alpha B A + beta C0, with A the symmetric matrix the `uplo`
 // triangle of its storage describes, in double on every item (Check::blas, k = the order of A).
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 void expect_symm_matches(Queue& ctx, const VA& A, const VB& B, const VC0& C0, const VC& C, Side side, Uplo uplo, T alpha, T beta,
                          int n) {
     using MV = MatrixView<T, MatrixFormat::Dense>;

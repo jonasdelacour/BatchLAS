@@ -17,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::ormqr_vendor; no
 
 using OrmqrChoice = std::variant<Blocked, Vendor>;  ///< fieldless: WY width and gemm/trmm spelling are derived
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<OrmqrChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::ormqr, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor

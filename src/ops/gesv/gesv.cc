@@ -25,10 +25,10 @@ namespace ops::gesv {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B) {
     return {{"n", A.rows()}, {"nrhs", B.cols()}};
 }
@@ -37,7 +37,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // checks of gesv_tiny_dispatch, plus a NETLIB refusal: the GPU kernel packs 1-based
 // int32 pivots into the int64 span's low half where netlib writes true int64. No family takes a
 // heterogeneous batch.
-template <Backend Bk, class T>
+template <Backend Bk, typename T>
 bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
@@ -53,7 +53,7 @@ bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const
 
 // Blocked cuts the caller's span at getrf's reported size: BumpAllocator's sizing results are
 // alignment multiples and a real pool's base is device-aligned, so the tail is aligned too.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -69,7 +69,7 @@ Event launch(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm, Spa
 }
 
 // Exactly the chosen family's need (R5). Blocked: a SUM, the two legs hold disjoint halves.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>& Bm) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_gesv::gesv_tiny_buffer_size<T>(q, A, Bm); },
@@ -81,7 +81,7 @@ std::size_t workspace(Queue& q, const GesvChoice& c, const MV<T>& A, const MV<T>
 
 // n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel, so
 // both throw before choose(): neither Auto nor a pin can take them.
-template <class T>
+template <typename T>
 void throw_if_unservable(const MV<T>& A, const MV<T>& Bm, const char* who) {
     if (A.is_heterogeneous() || Bm.is_heterogeneous())
         throw batchlas::internal_error(std::string(who) + ": a heterogeneous batch (per-item active dims on " +

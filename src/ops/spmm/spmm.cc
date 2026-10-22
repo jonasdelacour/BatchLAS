@@ -28,11 +28,11 @@ namespace ops::spmm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using Dense = MatrixView<T, MatrixFormat::Dense>;
 
 // ConjTrans folds to T on both operands: the bodies differ from Trans only by a conjugation.
-template <class T, MatrixFormat MF>
+template <typename T, MatrixFormat MF>
 select::Key key_of(const MatrixView<T, MF>& A, const Dense<T>& C, Transpose transA, Transpose transB) {
     return {{"transA", transA == Transpose::NoTrans ? "N" : "T"},
             {"transB", transB == Transpose::NoTrans ? "N" : "T"},
@@ -42,7 +42,7 @@ select::Key key_of(const MatrixView<T, MF>& A, const Dense<T>& C, Transpose tran
 // Do the views describe one C = alpha op(A) op(B) + beta C? Checks
 // (the only validation in the tree): extents agree, batch
 // sizes agree, positive lds, and a CSR offset stride of at least m + 1 (the bodies read ro[i + 1]).
-template <class T, MatrixFormat MF>
+template <typename T, MatrixFormat MF>
 bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C, Transpose transA,
               Transpose transB) {
     const std::int64_t m = A.rows(), ka = A.cols();
@@ -69,7 +69,7 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // defect 13's aligned scalars landed, so it is no longer refused (known-defects #17).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
 // falls to Direct. No vendor reads per-item dense extents: no heterogeneous B or C.
-template <Backend B, class T, MatrixFormat MF>
+template <Backend B, typename T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
     return std::visit(overloaded{
@@ -93,7 +93,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
     }, c);
 }
 
-template <Backend B, class T, MatrixFormat MF>
+template <Backend B, typename T, MatrixFormat MF>
 Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
              T alpha, T beta, Transpose transA, Transpose transB, Span<std::byte> ws) {
     return std::visit(overloaded{
@@ -113,7 +113,7 @@ Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const De
 
 // Exactly the chosen family's need (R5). Direct takes none. A Direct-routed call never asks the
 // vendor sizer: it builds a plan that walks the CSR row offsets from the host.
-template <Backend B, class T, MatrixFormat MF>
+template <Backend B, typename T, MatrixFormat MF>
 std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const Dense<T>& Bm,
                       const Dense<T>& C, T alpha, T beta, Transpose transA, Transpose transB) {
     return std::visit(overloaded{

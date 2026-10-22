@@ -19,12 +19,12 @@ namespace batchlas::ops::geqrf {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 /// Correctness only (R3): each clause is its driver's check. One (m, n, ld, stride) per launch and a wide view's
 /// off-panel update: natives take neither; the vendor (top-level (m, n) per item) takes no heterogeneous batch.
-template <class T>
+template <typename T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && A.batch_size() >= 1;

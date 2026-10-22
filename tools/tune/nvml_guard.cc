@@ -42,7 +42,7 @@ struct Lib {
     Ret (*uuid)(Device, char*, unsigned) = nullptr;
 };
 
-template <class F>
+template <typename F>
 bool sym(void* h, const char* name, F& f) {
     f = reinterpret_cast<F>(::dlsym(h, name));
     return f != nullptr;
@@ -79,7 +79,7 @@ std::optional<Device> device(int gpu) {
     return d;
 }
 
-template <class Info, class Fn>
+template <typename Info, typename Fn>
 std::optional<std::vector<std::string>> pids_with(Fn fn, Device d) {
     for (unsigned cap = 64; cap <= 65536; cap *= 4) {
         std::vector<Info> buf(cap);

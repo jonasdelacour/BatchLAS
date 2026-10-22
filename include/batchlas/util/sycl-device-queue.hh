@@ -441,7 +441,7 @@ namespace detail {
 /// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
 /// pending work (a multi-launch sequence needs one). q is then ordered after that queue's work,
 /// so q.wait() and q.get_event() cover it. @return whatever @p f returns.
-template <class F>
+template <typename F>
 auto on_in_order_queue(Queue& q, F&& f) {
     if (q.in_order()) return f(q);
     Queue in_order(q, true);

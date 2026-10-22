@@ -16,7 +16,7 @@ using namespace batchlas;
 namespace {
 
 // The default device may lack fp64 (Metal): double instances run on the CPU device instead.
-template <class T>
+template <typename T>
 sycl::queue queue_for() {
     sycl::queue q;
     if constexpr (std::is_same_v<typename philox::real_of<T>::type, double>)

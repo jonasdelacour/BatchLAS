@@ -21,7 +21,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::geqrf_vendor; ne
 using GeqrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;  ///< fieldless: buckets, packing, nb, leaf derived
 
 /// Every compiled choice, once, in tie-break order (§6.3): narrowest first, vendor last.
-template <class T>
+template <typename T>
 constexpr auto candidates() { return select::all_of<GeqrfChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::geqrf, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor
@@ -29,7 +29,7 @@ inline constexpr select::OpSpec spec{Op::geqrf, select::Lib::factorization};  //
 /// Keys: form sq | tall (m > n) | wide (m < n), exact; n log weight 3; aspect log. Work ~ n^3 * aspect.
 inline constexpr std::array<std::string_view, 3> key_names{"form:exact", "n:log:3", "aspect:log"};
 
-template <class Int>  /// The aspect key: max(m, n) / min(m, n), 1 for an empty view.
+template <typename Int>  /// The aspect key: max(m, n) / min(m, n), 1 for an empty view.
 constexpr std::int64_t aspect_of(Int m, Int n) {
     const std::int64_t lo = m < n ? m : n, hi = m < n ? n : m;
     return lo < 1 ? 1 : hi / lo;

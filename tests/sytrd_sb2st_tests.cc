@@ -134,7 +134,7 @@ struct SytrdSb2stConfig {
 // the tridiagonals (d, e). Both are independent of any BatchLAS operation.
 using Spectra = std::vector<std::vector<double>>;
 
-template <class View>
+template <typename View>
 bool dense_spectra(const View& A, Spectra& out) {
     out.assign(static_cast<std::size_t>(A.batch_size()), {});
     for (int b = 0; b < A.batch_size(); ++b) {
@@ -143,7 +143,7 @@ bool dense_spectra(const View& A, Spectra& out) {
     return true;
 }
 
-template <class Real>
+template <typename Real>
 bool tridiagonal_spectra(Vector<Real>& d, Vector<Real>& e, int n, int batch, Spectra& out) {
     out.assign(static_cast<std::size_t>(batch), {});
     for (int b = 0; b < batch; ++b) {
@@ -181,7 +181,7 @@ inline double spectra_error(const Spectra& got, const Spectra& ref, int* worst_i
 // bound. Double's old 1e-9 absolute is looser than the kind's bound, which it meets (need 0.017). @p steps
 // scales float's bound for that many accumulated chase steps, as the old tol0 * k, never above the kind's
 // bound; double stays at the kind's bound (multistep need <= 0.019 at every step, 2026-10-10).
-template <class T>
+template <typename T>
 batchlas::verify::Slack spectra_slack(int steps = 1) {
     if constexpr (std::is_same_v<typename base_type<T>::type, float>)
         return {std::min(1.0, 0.0625 * std::max(1, steps)),
@@ -190,7 +190,7 @@ batchlas::verify::Slack spectra_slack(int steps = 1) {
         return {1.0, "the library bound, tighter than the old 1e-9 absolute; measured need 0.019"};
 }
 
-template <class T>
+template <typename T>
 ::testing::AssertionResult spectra_match(const Spectra& got, const Spectra& ref, int n) {
     return test_utils::verify_pass<T>(batchlas::verify::Check::values, n, spectra_error(got, ref), spectra_slack<T>());
 }

@@ -30,16 +30,16 @@ namespace ops::trmm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // The extent of B the triangular order does not occupy.
-template <class T>
+template <typename T>
 std::int64_t rhs_count(const MV<T>& B, Side side) {
     return side == Side::Left ? B.cols() : B.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
     return {{"side", side == Side::Left ? "L" : "R"}, {"order", A.rows()}, {"q", rhs_count<T>(B, side)},
             {"batch", A.batch_size()}};
@@ -50,7 +50,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 // gemm throws on one), and both put the batch in grid z; triangular puts its tile list in grid y.
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
@@ -76,7 +76,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
 // op(A)'s triangle written densely into a workspace lease (zeros opposite it, ones on a Unit
 // diagonal), then one strided-batched gemm at beta = 0: the caller's A may hold anything in the
 // storage TRMM must not read, so the gemm cannot be pointed at it.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side, Uplo uplo,
                     Transpose transA, Diag diag) {
     const int k = A.rows(), batch = A.batch_size();
@@ -94,7 +94,7 @@ Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
     return gemm<B, T>(ctx, Bm, expanded, C, alpha, T(0), Transpose::NoTrans, transA, ComputePrecision::Default);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side,
              Uplo uplo, Transpose transA, Diag diag) {
     return std::visit(overloaded{

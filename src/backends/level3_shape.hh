@@ -29,7 +29,7 @@ struct RankShape {
 };
 
 // Batch checks. The message names every batch size: that is the whole diagnostic.
-template <class E>
+template <typename E>
 inline void check_batch(const char* op, int batch_a, int batch_c) {
     if (batch_a != batch_c) {
         throw E(std::string(op) + ": batch size mismatch (A=" + std::to_string(batch_a) +
@@ -37,7 +37,7 @@ inline void check_batch(const char* op, int batch_a, int batch_c) {
     }
 }
 
-template <class E>
+template <typename E>
 inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
     if (batch_a != batch_b || batch_a != batch_c) {
         throw E(std::string(op) + ": batch size mismatch (A=" + std::to_string(batch_a) +
@@ -48,7 +48,7 @@ inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
 
 // symm / hemm / trmm: C <- alpha * A * B or alpha * B * A, with A square and B
 // and C both m x n. Check order (square, batch, shapes) is part of the contract.
-template <class E, typename T>
+template <typename E, typename T>
 inline ProductShape validate_product(const char* op,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                      const MatrixView<T, MatrixFormat::Dense>& B,
@@ -72,7 +72,7 @@ inline ProductShape validate_product(const char* op,
 // syrk / herk: C <- alpha * op(A) * op(A)^T-or-^H + beta * C, C square.
 //
 // `hermitian` rejects Transpose::Trans: A * A^T would be complex-symmetric.
-template <class E, typename T>
+template <typename E, typename T>
 inline RankShape validate_rank_k(const char* op,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& C,
@@ -99,7 +99,7 @@ inline RankShape validate_rank_k(const char* op,
 
 // syr2k / her2k: as the rank-k form, with B carrying the second term and
 // required to have op(A)'s shape.
-template <class E, typename T>
+template <typename E, typename T>
 inline RankShape validate_rank_2k(const char* op,
                                   const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B,

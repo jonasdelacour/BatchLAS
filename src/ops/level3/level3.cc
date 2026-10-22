@@ -24,7 +24,7 @@ namespace batchlas {
 
 // rocBLAS is linked but src/backends/rocblas.cc wraps none of these three.
 // No build switch restores these on ROCm: rocblas.cc has no wrapper at all.
-template <class T>
+template <typename T>
 [[noreturn]] void throw_no_rocm_wrapper(Op op) {
     coverage::record_miss(op, scalar_kind_of<T>, Backend::ROCM, "rocBLAS");
     throw NoRouteError(op, Backend::ROCM, scalar_kind_of<T>,

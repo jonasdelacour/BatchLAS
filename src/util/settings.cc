@@ -78,7 +78,7 @@ const char* raw_or_null(const char* name) { return std::getenv(name); }
 
 // Assigns only an EXPORTED variable, so a reload keeps configure()'s value for every unset one.
 // `parse` takes the variable's name. evidence: docs/design/environment.md#environment-configure-sets-the-base-not-a-lock
-template <class T, class Parse>
+template <typename T, typename Parse>
 void set_if_present(T& field, const char* name, Parse parse) {
     if (std::getenv(name) != nullptr) field = parse(name);
 }

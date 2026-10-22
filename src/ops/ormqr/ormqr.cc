@@ -27,16 +27,16 @@ namespace ops::ormqr {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // C's extent that Q does not act on: its columns for Side::Left, its rows for Side::Right.
-template <class T>
+template <typename T>
 std::int64_t rhs_count(const MV<T>& C, Side side) {
     return side == Side::Left ? C.cols() : C.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
     const char* t = trans == Transpose::NoTrans ? "N" : (trans == Transpose::Trans ? "T" : "C");
     return {{"side", side == Side::Left ? "L" : "R"}, {"trans", t}, {"m", A.rows()},
@@ -48,7 +48,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // off non-GPU queues; dimension checks are left to the drivers. Both run
 // each item at the top-level extents (no heterogeneous A or C). No batch term: past 65535 the
 // sub-ops take the vendor, or vendor-free may throw NoRouteError themselves (known-defects #16).
-template <class T>
+template <typename T>
 bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
@@ -60,7 +60,7 @@ bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, cons
 
 // Complex Trans has no kernel anywhere, so it is an argument error, thrown before choose() so
 // that no pin and no vendor-free build reports it as a routing miss.
-template <class T>
+template <typename T>
 void throw_if_undefined(Transpose trans, const char* who) {
     if (is_std_complex_v<T> && trans == Transpose::Trans)
         throw batchlas::invalid_argument(std::string(who) + ": Transpose::Trans of a complex Q is not an ormqr "
@@ -70,7 +70,7 @@ void throw_if_undefined(Transpose trans, const char* who) {
 // Blocked's WY width: a positive hint (a caller that knows its reflector count) clamped to
 // [1, k], else the tuning table keyed on A.rows(). Derived from A alone, so sizing and the call
 // agree.
-template <class T>
+template <typename T>
 std::int32_t block_size(const MV<T>& A, std::int32_t hint) {
     const std::int32_t k = static_cast<std::int32_t>(std::min(A.rows(), A.cols()));
     if (hint > 0) return std::max<std::int32_t>(1, std::min<std::int32_t>(hint, std::max<std::int32_t>(1, k)));
@@ -79,13 +79,13 @@ std::int32_t block_size(const MV<T>& A, std::int32_t hint) {
 
 // The vendor's spelling: real ormqr takes N or T only (cuSOLVER status 3 on C), and for a real
 // Q, ConjTrans is Trans.
-template <class T>
+template <typename T>
 Transpose vendor_trans(Transpose trans) {
     return !is_std_complex_v<T> && trans == Transpose::ConjTrans ? Transpose::Trans : trans;
 }
 
 // Exactly the chosen family's need (R5).
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Side side, Transpose trans,
                       Span<T> tau, std::int32_t hint) {
     return std::visit(overloaded{
@@ -97,7 +97,7 @@ std::size_t workspace(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Side side, Transpose trans,
              Span<T> tau, Span<std::byte> ws, std::int32_t hint) {
     return std::visit(overloaded{

@@ -24,10 +24,10 @@ namespace ops::getrs {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B) {
     return {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
 }
@@ -36,7 +36,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // re-check exactly this at their entry. A non-conforming pair (A not square, rows or batch
 // disagreeing) is left to the vendor, as before. NETLIB writes true int64 pivots where the
 // natives read packed 1-based int32, a silent wrong answer, so no native runs under it.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
     const bool conforming = A.cols() == n && Bm.rows() == n && Bm.batch_size() == A.batch_size();
@@ -55,7 +55,7 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA,
              Span<std::int64_t> pivots, Span<std::byte> ws) {
     return std::visit(overloaded{
@@ -76,7 +76,7 @@ Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Tr
 
 // Exactly the chosen family's need (R5). Nothing here dereferences A or B: a measuring pass
 // hands null data pointers.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Transpose transA) {
     return std::visit(overloaded{
         [&](Cta) { return sycl_getrs::getrs_fused_buffer_size<T>(q, A, Bm, transA); },

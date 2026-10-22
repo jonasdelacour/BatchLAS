@@ -23,21 +23,21 @@ namespace ops::gemv {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // y's length (out) and x's length (red) swap with transA; A's extents are as stored.
-template <class T>
+template <typename T>
 std::int64_t out_len(const MV<T>& A, Transpose t) {
     return t == Transpose::NoTrans ? A.rows() : A.cols();
 }
-template <class T>
+template <typename T>
 std::int64_t red_len(const MV<T>& A, Transpose t) {
     return t == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
 // ConjTrans folds to T: the transposed bodies differ only in a conjugation.
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, Transpose transA) {
     return {{"trans", transA == Transpose::NoTrans ? "N" : "T"},
             {"out", out_len<T>(A, transA)},
@@ -52,7 +52,7 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 // call (defect 13 fixed). m == 0 or n == 0 is legal; the drivers quick-return.
 // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
 // evidence: docs/design/known-defects.md#defect-13-complexdouble-cublas-calls-segfault-inside-cublaslt
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const VectorView<T>& X,
              const VectorView<T>& Y, Transpose transA) {
     const bool native = !A.is_heterogeneous() && A.rows() >= 0 && A.cols() >= 0 && A.batch_size() >= 1 &&
@@ -66,7 +66,7 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
              T alpha, T beta, Transpose transA) {
     return std::visit(overloaded{

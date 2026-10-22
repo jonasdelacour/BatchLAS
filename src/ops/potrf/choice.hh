@@ -31,7 +31,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::potrf_vendor; ne
 using PotrfChoice = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;  ///< natives need a GPU, sub-group 32, n >= 1
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
-template <class T>
+template <typename T>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, float>)
         return std::array<PotrfChoice, 6>{Tiny{}, Cta{}, Lpanel{8}, Lpanel{16}, Blocked{}, Vendor{}};

@@ -53,8 +53,8 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 
-template <class T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
-template <class R> inline std::complex<R> scale(std::complex<R> v, double f) {
+template <typename T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
+template <typename R> inline std::complex<R> scale(std::complex<R> v, double f) {
     return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
 }
 
@@ -64,23 +64,23 @@ template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 
 // The fixtures hold raw pointers at padded ld and odd strides; these hand one item to the library.
-template <class T>
+template <typename T>
 VectorView<int32_t> pivots_of(const int* ipiv, int count) {
     return VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(ipiv)), count, 1);
 }
-template <class T>
+template <typename T>
 double factor_residual(Queue& ctx, const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
     return MVof<T>::getrf_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld), MVof<T>(const_cast<T*>(F), m, n, ld), pivots_of<T>(ipiv, std::min(m, n)));
 }
-template <class T>
+template <typename T>
 double solve_residual(Queue& ctx, const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
     return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb), MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
 }
-template <class T>
+template <typename T>
 double inverse_residual(Queue& ctx, const T* A0, const T* C, int n, int lda, int ldc) {
     return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), MVof<T>(const_cast<T*>(C), n, n, ldc), MVof<T>(nullptr, 0, 0, 1));
 }
-template <class T>
+template <typename T>
 double lu_solve_residual(Queue& ctx, const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf,
                          int ldb, Transpose op) {
     return MVof<T>::lu_solve_residual(ctx, MVof<T>(const_cast<T*>(F), n, n, ldf), pivots_of<T>(ipiv, n), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb),
@@ -3026,7 +3026,7 @@ void expect_pad_untouched(const Lu<T>& p, const char* what) {
 // residual and no pivot-growth bound can see: both candidates are equally good
 // pivots, so only the INDEX distinguishes LAPACK's answer from the other one.
 // Row 0 and row 2 of column 0 carry equal cabs1 and different values.
-template <class T>
+template <typename T>
 void tiny_tie_pair(T& a, T& b) {
     if constexpr (std::is_same_v<RealOf<T>, T>) {
         a = MVof<T>::make(3.0, 0.0);

@@ -41,7 +41,7 @@ std::optional<int> rows_of(const std::string& form, int n, int aspect) {
     return int(m);
 }
 
-template <class T>
+template <typename T>
 struct GeqrfProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -95,7 +95,7 @@ public:
         return {ops::geqrf::key_names.begin(), ops::geqrf::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::geqrf::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::geqrf::candidates<T>()); });
     }
     // grid_wide_n and grid_wide_aspect are subsets of grid_n and grid_aspect.
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -179,7 +179,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int n = int(key_int(req.key, "n"));
             const auto m = rows_of(*key_get(req.key, "form"), n, int(key_int(req.key, "aspect")));
             if (!m) throw batchlas::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));

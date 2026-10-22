@@ -19,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syr2k_vend
 
 using Syr2kChoice = std::variant<Triangular, Vendor>;  ///< fieldless: the aligned/predicated leg is derived
 
-template <class T>  /// Every compiled choice, in tie-break order: triangular (float only, R7), vendor.
+template <typename T>  /// Every compiled choice, in tie-break order: triangular (float only, R7), vendor.
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, float>)
         return std::array<Syr2kChoice, 2>{Triangular{}, Vendor{}};

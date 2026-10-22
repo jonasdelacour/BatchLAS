@@ -34,7 +34,7 @@ Transpose trans_of(const std::string& w) {
     return w == "N" ? Transpose::NoTrans : (w == "T" ? Transpose::Trans : Transpose::ConjTrans);
 }
 
-template <class T>
+template <typename T>
 struct OrmqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -100,7 +100,7 @@ public:
         return {ops::ormqr::key_names.begin(), ops::ormqr::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::ormqr::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::ormqr::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"side", {"L", "R"}},         {"trans", {"N", "T", "C"}},
@@ -148,7 +148,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/ormqr_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int m = int(key_int(req.key, "m")), k = int(key_int(req.key, "k"));
             if (k > m) throw batchlas::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;

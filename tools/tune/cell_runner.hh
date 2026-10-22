@@ -55,7 +55,7 @@ inline constexpr Backend kBackend = Backend::SYCL;
 #define BATCHLAS_TUNE_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
-template <class F>
+template <typename F>
 decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
     if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
@@ -70,7 +70,7 @@ decltype(auto) with_dtype(const std::string& dtype, F&& f) {
 }
 
 // symm, syrk and syr2k are real-only (RealScalar): no complex instantiation and no complex table.
-template <class F>
+template <typename F>
 decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
 #if BATCHLAS_TUNE_FP64
@@ -100,7 +100,7 @@ inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> c
     return out;
 }
 
-template <class Choice, std::size_t N>
+template <typename Choice, std::size_t N>
 std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
     std::vector<std::string> out;
     for (const Choice& c : candidates) out.push_back(select::to_string(c));
@@ -109,7 +109,7 @@ std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
 
 // The arms of one cell in one process: probe, warm-up, timed runs and verification, shared by
 // the fixed-rep protocol (run_arms) and the race (run_race).
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 class ArmBench {
 public:
     using clock = std::chrono::steady_clock;
@@ -224,7 +224,7 @@ private:
     }
     // Every call goes through here: a refused pin is "skipped", anything else "error". The pin is
     // strict: `vendor` is also a class word, which would otherwise time Auto under vendor's name.
-    template <class F>
+    template <typename F>
     bool guarded(ArmOutcome& a, F&& f) {
         if (a.status != "ok") return false;
         try {
@@ -241,7 +241,7 @@ private:
     }
 };
 
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     ArmBench<Choice, Problem> b(op, p, req.arms);
     auto& arms = b.arms;
@@ -270,7 +270,7 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
 // lean_max_reps cap. Then only the arms that can rank first (verify_next) and req.verify are
 // verified: one that fails is "bad" and leaves the row, the rest keep their medians (a gross loser:
 // of its two cut rounds), unverified arms flagged so.
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     std::vector<std::string> names;
     for (const std::string& s : req.seed_order)

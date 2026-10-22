@@ -42,7 +42,7 @@ Transpose trans_of(const std::string& w, bool complex) {
     return Transpose::Trans;  // a real scalar's C is its T (the key folds it)
 }
 
-template <class T>
+template <typename T>
 struct GemmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -134,7 +134,7 @@ public:
     std::string op() const override { return "gemm"; }
     std::vector<std::string> key_names() const override { return {G::key_names.begin(), G::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(G::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(G::candidates<T>()); });
     }
     // Every value a grid cell may take, per axis (the --grid filter's vocabulary).
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -257,7 +257,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/gemm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             auto get = [&](std::string_view name, const char* dflt) {
                 const std::string* v = key_get(req.key, name);
                 return v ? *v : std::string(dflt);

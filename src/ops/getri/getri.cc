@@ -28,10 +28,10 @@ namespace ops::getri {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -43,7 +43,7 @@ select::Key key_of(const MV<T>& A) {
 // netlib's pivots wrongly. evidence: docs/perf/lu.md#lu-correctness-findings
 // Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) {
@@ -54,7 +54,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -73,7 +73,7 @@ Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Spa
 }
 
 // Exactly the chosen family's need (R5); Blocked's trsm calls take no workspace.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) { return sycl_getri::getri_blocked_buffer_size<T>(q, A); },

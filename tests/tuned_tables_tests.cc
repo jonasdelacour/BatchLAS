@@ -46,7 +46,7 @@ using batchlas::ScopedEnvVar;
 
 namespace {
 
-template <class Array>
+template <typename Array>
 std::vector<std::string> spellings(const Array& cands) {
     std::vector<std::string> out;
     for (const auto& c : cands) out.push_back(sel::to_string(c));

@@ -166,7 +166,7 @@ void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info
 }
 
 // The choice the outermost posv trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
