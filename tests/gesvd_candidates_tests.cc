@@ -519,9 +519,12 @@ TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
                     refused = e.what();
                 }
             });
-            // cuSOLVER may refuse the empty call in its sizing step, before any trace line.
+            // cuSOLVER may refuse the empty call in its sizing step, before any trace line; on CUDA
+            // can_run already refuses a values-only non-square vendor call, so nothing runs.
             if (got.rfind("<no gesvd", 0) == 0 && !refused.empty())
-                EXPECT_NE(refused.find("CUSOLVER"), std::string::npos) << label(s) << ": " << refused;
+                EXPECT_TRUE(refused.find("CUSOLVER") != std::string::npos ||
+                            refused.find("no runnable kernel") != std::string::npos)
+                    << label(s) << ": " << refused;
             else
                 EXPECT_EQ(got, "vendor") << label(s) << " " << refused;
         }

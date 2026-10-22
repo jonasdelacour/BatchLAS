@@ -1516,6 +1516,8 @@ Event gesvd_cta(Queue& ctx,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
+    // Its normal-equations branch is real-only; complex general is the blocked family's.
+    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
@@ -1599,6 +1601,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobu,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
+    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
