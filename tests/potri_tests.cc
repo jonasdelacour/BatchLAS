@@ -24,8 +24,12 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <random>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
 #include <vector>
 
 using namespace batchlas;
