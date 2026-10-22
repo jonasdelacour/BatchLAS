@@ -67,8 +67,8 @@ def test_bad_route_pin_raises_invalid_argument_and_is_restored():
 
 
 def test_route_rejects_an_op_without_a_route_variable():
-    with pytest.raises(bl.InvalidArgumentError, match="BATCHLAS_EXPAND_ROUTE"):
-        bl.set_route("herk", "native")
+    with pytest.raises(bl.InvalidArgumentError, match="BATCHLAS_<OP>_ROUTE"):
+        bl.set_route("not_an_op", "native")
     with pytest.raises(bl.InvalidArgumentError):
         bl.route_pin("not_an_op")
 

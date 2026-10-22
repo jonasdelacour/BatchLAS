@@ -12,10 +12,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
-#include <string_view>
 
-// Sizing, fit ceiling and her2k route predicate of the scratch expansions, outside src/backends/ so
-// sytrd_blocked.cc asks the very predicate her2k_vendor answers. One definition: a copy drifts silently.
+// Sizing and fit ceilings of the level-3 scratch expansions (symm, hemm, trmm expand; herk and her2k
+// fold), shared so the chunk a launch leases and the can_run that admits it cannot drift.
 // evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 namespace batchlas::backend::detail {
 
@@ -35,10 +34,18 @@ std::size_t expanded_workspace_bytes(Queue& ctx, int n, int batch) {
     return sizer.required_bytes();
 }
 
-// Three hard ceilings, not tuned: the batch in grid z (expand_mirrored, accumulate_hermitian), the
-// int-linearised SYCL range (2^31 elements of the PADDED expanded_ld x n x batch scratch) and a quarter
-// of global memory (BATCHLAS_EXPAND_MAX_BYTES lowers it). Past any, the caller takes its no-scratch route.
-// max_grid_z is the device's grid z (select::Device::max_groups_yz; CUDA's 65535 by default, unbounded on Metal).
+// A quarter of global memory; BATCHLAS_EXPAND_MAX_BYTES lowers it.
+inline std::size_t expansion_budget_bytes(const Queue& ctx) {
+    std::size_t budget = ctx.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
+    if (const char* capped = batchlas::settings().geometry.expand_max_bytes.get()) {
+        budget = std::min(budget, static_cast<std::size_t>(std::strtoull(capped, nullptr, 10)));
+    }
+    return budget;
+}
+
+// Three hard ceilings, not tuned: the batch in grid z (expand_mirrored, the folds), the
+// int-linearised SYCL range (2^31 elements of the PADDED expanded_ld x n x batch scratch) and
+// expansion_budget_bytes. max_grid_z is select::Device::max_groups_yz (CUDA 65535, Metal unbounded).
 template <typename T>
 inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes,
                            std::int64_t max_grid_z = ::batchlas::ops::symm::kMaxGridBatch) {
@@ -51,36 +58,22 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
     if (elements > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         return false;
     }
-
-    std::size_t budget = ctx.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
-    if (const char* capped = batchlas::settings().geometry.expand_max_bytes.get()) {
-        budget = std::min(budget, static_cast<std::size_t>(std::strtoull(capped, nullptr, 10)));
-    }
-    return bytes <= budget;
+    return bytes <= expansion_budget_bytes(ctx);
 }
 
-// BATCHLAS_EXPAND_ROUTE: 1 = expand, 0 = loop, -1 = unset; herk and her2k read it here. Not in the
-// backend, because a sytrd guard that modelled half of her2k's predicate shipped as a bug.
-inline int expansion_route_pin() {
-    if (const char* route = batchlas::settings().selection.expand_route.get()) {
-        if (std::string_view(route) == "expand") return 1;
-        if (std::string_view(route) == "loop") return 0;
-    }
-    return -1;
-}
-
-// her2k's GEMM-plus-fold vs the per-item cublas?her2k loop.
-// evidence: docs/perf/level3.md#herk-and-her2k-the-gemm-plus-fold-crossovers
-inline bool her2k_gemm_preferred(int n, int batch) {
-    const int pin = expansion_route_pin();
-    if (pin >= 0) return pin != 0;
-    return batch >= 2 || n >= 128;
-}
-
-// The whole of her2k_vendor's batched-GEMM condition, never half of it.
+// Items per launch of a chunked expansion: the most (at most batch) whose scratch passes
+// expansion_fits; 0 only when a single item does not, the one shape a chunked family refuses.
 template <typename T>
-inline bool her2k_takes_gemm_route(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    return her2k_gemm_preferred(n, batch) && expansion_fits<T>(ctx, n, batch, bytes);
+inline int expansion_chunk(Queue& ctx, int n, int batch, std::int64_t max_grid_z) {
+    const std::size_t per_item = static_cast<std::size_t>(expanded_ld<T>(n)) * static_cast<std::size_t>(n);
+    if (per_item == 0 || batch <= 0) return std::max(batch, 0);
+    const std::size_t by_bytes = expansion_budget_bytes(ctx) / (per_item * sizeof(T));
+    const std::size_t by_range = static_cast<std::size_t>(std::numeric_limits<int>::max()) / per_item;
+    std::size_t c = std::min({static_cast<std::size_t>(batch), static_cast<std::size_t>(std::max<std::int64_t>(
+                                  max_grid_z, 0)), by_bytes, by_range});
+    // The allocator's alignment padding can push the last item over: back off until it fits.
+    while (c > 0 && !expansion_fits<T>(ctx, n, int(c), expanded_workspace_bytes<T>(ctx, n, int(c)), max_grid_z)) --c;
+    return static_cast<int>(c);
 }
 
 }  // namespace batchlas::backend::detail

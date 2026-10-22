@@ -79,6 +79,16 @@ decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, 
     throw std::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
 }
 
+// hemm, herk and her2k are complex-only (ComplexScalar): no real instantiation and no real table.
+template <class F>
+decltype(auto) with_complex_dtype(const std::string& op, const std::string& dtype, F&& f) {
+    if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
+#if BATCHLAS_TUNE_FP64
+    if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
+#endif
+    throw std::invalid_argument(op + " is complex-only: no '" + dtype + "' (cfloat, cdouble)");
+}
+
 // A non-lattice grid() (form derived from the extents) under `--grid name=v1:v2`: the overrides
 // FILTER the declared cells, as gemm's do.
 inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> cells,
