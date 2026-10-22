@@ -4,6 +4,10 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/sycl_interop.hh>
+#include <batchlas/blas/linalg.hh>
+#include <batchlas/blas/matrix.hh>
+#include <tests/test_utils.hh>
+#include <complex>
 #include <src/queue.hh>
 
 #include <algorithm>
@@ -474,4 +478,72 @@ TEST(QueueTest, EmptyNdRangeEventFollowsEarlierWork) {
     q->wait();
     sycl::free(src, sq);
     sycl::free(dst, sq);
+}
+
+// queue_from_sycl: a root Queue inside the caller's context, so the caller's malloc_shared USM is
+// used in place. Non-natural ld and batch stride, complex data, beta != 0.
+TEST(SyclInterop, QueueFromSyclSharesContext) {
+    std::vector<sycl::device> gpus = sycl::device::get_devices(sycl::info::device_type::gpu);
+    if (gpus.empty()) GTEST_SKIP() << "no gpu device";
+    sycl::device dev = gpus.front();
+    sycl::context ctx(dev);
+    Queue q = batchlas::queue_from_sycl(ctx, dev);
+    EXPECT_TRUE(batchlas::sycl_queue(q).get_context() == ctx);
+    EXPECT_TRUE(batchlas::sycl_queue(q).get_device() == dev);
+    EXPECT_EQ(q.device().type, DeviceType::GPU);
+    EXPECT_TRUE(q.in_order());
+
+    using T = std::complex<float>;
+    using MV = batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>;
+    constexpr int m = 13, n = 9, k = 11, batch = 3;
+    constexpr int lda = m + 3, ldb = k + 2, ldc = m + 5;
+    constexpr int sa = lda * k + 7, sb = ldb * n + 5, sc = ldc * n + 11;
+    sycl::queue plain(ctx, dev);
+    T* a = sycl::malloc_shared<T>(size_t(sa) * batch, plain);
+    T* b = sycl::malloc_shared<T>(size_t(sb) * batch, plain);
+    T* c = sycl::malloc_shared<T>(size_t(sc) * batch, plain);
+    T* c0 = sycl::malloc_shared<T>(size_t(sc) * batch, plain);
+    ASSERT_TRUE(a && b && c && c0);
+    auto fill = [](T* p, size_t len, int seed) {
+        for (size_t i = 0; i < len; ++i)
+            p[i] = T(float((i * 7 + seed) % 13) / 13.0f - 0.4f, float((i * 5 + 2 * seed) % 11) / 11.0f - 0.3f);
+    };
+    fill(a, size_t(sa) * batch, 1);
+    fill(b, size_t(sb) * batch, 2);
+    fill(c, size_t(sc) * batch, 3);
+    std::copy(c, c + size_t(sc) * batch, c0);
+
+    MV A(a, m, k, lda, sa, batch), B(b, k, n, ldb, sb, batch), C(c, m, n, ldc, sc, batch), C0(c0, m, n, ldc, sc, batch);
+    const T alpha(1.5f, -0.5f), beta(0.25f, 0.75f);
+    batchlas::gemm(q, A, B, C, {.alpha = alpha, .beta = beta});
+    q.wait();
+    const double err = MV::gemm_backward_error(q, A, batchlas::Transpose::NoTrans, B, batchlas::Transpose::NoTrans, C0, C, MV::up(alpha),
+                                               MV::up(beta), C.all_items());
+    EXPECT_VERIFY(T, batchlas::verify::Check::blas, k, err);
+
+    sycl::free(a, plain);
+    sycl::free(b, plain);
+    sycl::free(c, plain);
+    sycl::free(c0, plain);
+}
+
+TEST(SyclInterop, QueueFromSyclRejectsForeignDevice) {
+    std::vector<sycl::device> gpus = sycl::device::get_devices(sycl::info::device_type::gpu);
+    if (gpus.empty()) GTEST_SKIP() << "no gpu device";
+    // A sub-device is the documented failure, where the device can be partitioned.
+    bool partitioned = false;
+    try {
+        auto subs = gpus.front().create_sub_devices<sycl::info::partition_property::partition_equally>(1);
+        sycl::context sub_ctx(subs.front());
+        EXPECT_THROW(batchlas::queue_from_sycl(sub_ctx, subs.front()), batchlas::device_error);
+        partitioned = true;
+    } catch (const sycl::exception&) {
+    }
+    // A device that is not in the context is rejected as a device_error, not an out_of_range.
+    if (gpus.size() >= 2) {
+        sycl::context ctx0(gpus[0]);
+        EXPECT_THROW(batchlas::queue_from_sycl(ctx0, gpus[1]), batchlas::device_error);
+    } else if (!partitioned) {
+        GTEST_SKIP() << "no sub-device partition and a single gpu: nothing foreign to construct";
+    }
 }
