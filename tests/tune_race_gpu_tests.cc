@@ -114,7 +114,8 @@ TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
     batchlas::Queue& q = gpu_queue();
     constexpr int kN = 32, kBatch = 4096, kReps = 15;
     CellRequest r = request("gemm", "float", "ta=N,tb=N,layout=packed,m=32,n=32,k=32,batch=4096", "time");
-    r.arms = {"vendor"};
+    const std::string arm = "wide:m=32:n=32:k=16";  // the table's choice there (vendor is less L2-sensitive)
+    r.arms = {arm};
     r.reps = kReps;
     const auto got = find_spec("gemm")->run_cell(r, q);
     ASSERT_EQ(got.size(), 1u);
@@ -124,7 +125,7 @@ TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
 
     auto A = Matrix<float>::Random(kN, kN, false, kBatch, 1), B = Matrix<float>::Random(kN, kN, false, kBatch, 2);
     auto C = Matrix<float>::Random(kN, kN, false, kBatch, 3);
-    batchlas::select::ScopedPin<batchlas::ops::gemm::GemmChoice> pin("gemm", "vendor", batchlas::select::StrictPin{});
+    batchlas::select::ScopedPin<batchlas::ops::gemm::GemmChoice> pin("gemm", arm, batchlas::select::StrictPin{});
     std::vector<double> warm;
     for (int i = 0; i < 3 + kReps; ++i) {
         const auto t0 = std::chrono::steady_clock::now();
@@ -133,9 +134,9 @@ TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
         q.wait();
         if (i >= 3) warm.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
     }
-    std::printf("gemm 32^3 x 4096 vendor: tuner %.4g ms, back-to-back %.4g ms (%.2fx)\n", cold, median(warm),
+    std::printf("gemm 32^3 x 4096 wide 32: tuner %.4g ms, back-to-back %.4g ms (%.2fx)\n", cold, median(warm),
                 cold / median(warm));
-    EXPECT_GT(cold, 1.3 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
+    EXPECT_GT(cold, 1.5 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
 }
 
 // An arm raced alone (a benched arm's fresh child) has no rival to beat: race_step calls it the
