@@ -431,7 +431,7 @@ n = 256, batch 1024: cfloat 66.628 to **63.899 (1.043×)**; float unchanged. The
 predicted and the change kept (real 1.04× at no runtime cost; it forced a single-definition route prediction in
 `expansion_budget.hh`). The gate should read 1.04×, not "met".
 
-- **Fallback.** Forcing the host loop (`BATCHLAS_EXPAND_ROUTE=loop`) at \f$n_2\f$ = 480, k = 32, batch 512 gave
+- **Fallback.** Forcing the host loop (then `BATCHLAS_EXPAND_ROUTE=loop`, now `BATCHLAS_HER2K_ROUTE=vendor`) at \f$n_2\f$ = 480, k = 32, batch 512 gave
   5.3924 ms, 1.23× slower than the GEMM pair. The 7.8× warned about in the `sytrd_blocked.cc` comment was measured
   in double.
 - **Fit guard.** When the expansion does not fit, `her2k_vendor` silently drops to a per-item host loop. Budget
