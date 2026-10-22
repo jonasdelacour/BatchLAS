@@ -394,6 +394,14 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Status:** open for the tiny solvers. The 128x128 gemm functors declare
   `reqd_work_group_size`, u1 since WP-U (u4 since WP-N2): 0 ignored bounds in `batchlas_sycl`, u1 capped at 128 registers
   ([gemm.md](../perf/gemm.md#gemm-wp-u-the-u1-128x128-launch-bound-enforced)).
+- **Compiler-dependent (2026-10-22, 2x4090 box):** the intel/llvm build there (`e79d489d`, Jan 2026)
+  has the opposite behaviour. `max_work_group_size` emits `.maxntid 256, 1, 1` + `.minnctapersm`,
+  while `reqd_work_group_size(1, 1, 256)` lowers to `reqntidx=256, reqntidx=1` and no `reqntidz`:
+  ptxas then rejects `.maxntid` next to `.reqntid` ("Conflicting directives"), and with the bound
+  dropped the `.reqntid 1, 1` kernels fail every launch with `CUDA_ERROR_INVALID_VALUE`. A configure
+  probe of the device IR (`BATCHLAS_NVPTX_REQD_WG_OK`, `cmake/BatchLASDetectSYCL.cmake`) keeps the
+  `reqd_work_group_size` spelling only where it lowers correctly; elsewhere the launch bound alone
+  applies, which that compiler honours.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
