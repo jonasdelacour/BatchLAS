@@ -126,8 +126,8 @@ Event syevx_direct_subset(Queue& ctx,
         // Stage-2 reflector schedule. Depends only on (n, kd) -- never on the matrix
         // values -- so it is identical for every batch item and replayable on the host.
         const auto sb2st_sched = use_givens
-                                     ? std::vector<internal::Sb2stHhRefl>{}
-                                     : internal::build_sb2st_hh_schedule(n, kd);
+                                     ? std::vector<detail::Sb2stHhRefl>{}
+                                     : detail::build_sb2st_hh_schedule(n, kd);
         const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
         // Only the Q2 back-transform reads the schedule on the device, so an
         // eigenvalues-only run uploads nothing.
@@ -139,7 +139,7 @@ Event syevx_direct_subset(Queue& ctx,
             sb2st_lens[i] = sb2st_sched[i].len;
         }
         const auto sb2st_wave_host = want_eigenvectors
-                                         ? internal::build_sb2st_hh_wave_offsets(sb2st_sched, n)
+                                         ? detail::build_sb2st_hh_wave_offsets(sb2st_sched, n)
                                          : std::vector<int32_t>{};
         UnifiedVector<int32_t> sb2st_waves(sb2st_wave_host.size());
         for (size_t i = 0; i < sb2st_wave_host.size(); ++i) {
@@ -201,9 +201,9 @@ Event syevx_direct_subset(Queue& ctx,
             MatrixView<T, MatrixFormat::Dense> ab_tri_view(
                 ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch);
 
-            const size_t bytes = internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
+            const size_t bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             auto hh_ws = pool.allocate<std::byte>(ctx, bytes);
-            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
+            (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
                                            v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd,
                                            hh_ws);
 
@@ -271,7 +271,7 @@ Event syevx_direct_subset(Queue& ctx,
                 // columns hold stein's zeros and an orthogonal transform maps zero to
                 // zero. Shaping the call per item would cost a device->host sync.
                 if (nrefl > 0) {
-                    (void)internal::unmqr_hb2st<B, T>(
+                    (void)detail::unmqr_hb2st<B, T>(
                         ctx, v_sb2st_view, tau_sb2st_hh_view, V_sub, n, kd,
                         Span<const int32_t>(sb2st_starts.data(), sb2st_starts.size()),
                         Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()),
@@ -412,7 +412,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         // Must mirror the runtime chase selection exactly, env-var override included.
         const bool use_givens =
             !want_eigenvectors && two_stage_use_givens_chase_for_values();
-        const int32_t nrefl = use_givens ? 0 : internal::sb2st_hh_num_reflectors(n, kd);
+        const int32_t nrefl = use_givens ? 0 : detail::sb2st_hh_num_reflectors(n, kd);
 
         size_t bytes = 0;
         bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(n) * n * batch);
@@ -445,7 +445,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
             bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nr) * batch);
             bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(2) * n * batch);
             bytes += BumpAllocator::allocation_size<std::byte>(
-                ctx, internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
+                ctx, detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
         } else {
             bytes += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
             bytes += BumpAllocator::allocation_size<std::byte>(

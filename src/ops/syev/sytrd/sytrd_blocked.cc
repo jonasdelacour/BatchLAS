@@ -158,7 +158,7 @@ Event update_vw_lower_small_legacy(Queue& q,
 
                 A[r + c * lda] -= acc;
 
-                if constexpr (internal::is_complex<T>::value) {
+                if constexpr (detail::is_complex<T>::value) {
                     if (r == c) {
                         const T x = A[r + c * lda];
                         A[r + c * lda] = T(x.real(), typename T::value_type(0));
@@ -273,7 +273,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                     Real sumsq = Real(0);
                     if (lane >= x0 && lane < n) {
-                        sumsq = internal::abs2_if_complex(Al(lane, k));
+                        sumsq = detail::abs2_if_complex(Al(lane, k));
                     }
                     sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
 
@@ -289,7 +289,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
 
                     if (lane == alpha_row) {
                         const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             if (xnorm == Real(0) && alpha.imag() == Real(0)) {
                                 tau_k = T(0);
                                 beta = alpha;
@@ -308,7 +308,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_k = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -367,7 +367,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                             Al(lane, c) = a_rc;
                             if (lane != c) {
                                 Al(c, lane) = batchlas::device::detail::conj(a_rc);
-                            } else if constexpr (internal::is_complex<T>::value) {
+                            } else if constexpr (detail::is_complex<T>::value) {
                                 Al(lane, c) = T(a_rc.real(), typename T::value_type(0));
                             }
                         }
@@ -459,7 +459,7 @@ Event sytrd_lower_local_small_device(Queue& q,
                     const int tail = n - alpha_row;
                     const bool lane_in_tail = (lane >= alpha_row && lane < n);
                     T alpha = Al(alpha_row, k);
-                    const T tau_k = internal::larfg(g, alpha,
+                    const T tau_k = detail::larfg(g, alpha,
                         VectorView<T>(Al_ptr + x0 + k * ld_loc, n - x0));
                     if (lane == 0) {
                         Al(alpha_row, k) = T(1);
@@ -489,7 +489,7 @@ Event sytrd_lower_local_small_device(Queue& q,
                     batchlas::device::her2k<batchlas::device::DeviceBlasPolicy::Auto,
                                             Uplo::Lower, Transpose::NoTrans>(
                         g, v_matrix, w_matrix, trailing_view, T(-1), T(1), workspace_ptr);
-                    if constexpr (internal::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<T>::value) {
                         it.barrier(sycl::access::fence_space::local_space);
                         if (lane_in_tail) {
                             for (int c = alpha_row; c < lane; ++c) {
@@ -757,7 +757,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                 bool rank2k_issued = false;
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             // her2k's fast route needs an n2 x n2 x batch scratch;
                             // when it does not fit, it drops to a host loop that
                             // inverts the win. Ask the backend's own predicate and

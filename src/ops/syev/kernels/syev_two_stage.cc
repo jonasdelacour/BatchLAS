@@ -171,8 +171,8 @@ Event syev_two_stage(Queue& ctx,
     // Only the *phase* chain stays eigenvector-only: it maps eigenvectors of the
     // |e| tridiagonal back to the signed one, whose eigenvalues are identical.
     const bool use_givens = !want_eigvecs && two_stage_use_givens_chase_for_values();
-    const auto sb2st_sched = use_givens ? std::vector<internal::Sb2stHhRefl>{}
-                                        : internal::build_sb2st_hh_schedule(n, kd);
+    const auto sb2st_sched = use_givens ? std::vector<detail::Sb2stHhRefl>{}
+                                        : detail::build_sb2st_hh_schedule(n, kd);
     const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
 
     UnifiedVector<int32_t> sb2st_starts(static_cast<std::size_t>(nrefl));
@@ -187,7 +187,7 @@ Event syev_two_stage(Queue& ctx,
     // Wave offsets are only consumed by the back-transform, which exists only in
     // eigenvector mode.
     const auto sb2st_wave_host = want_eigvecs
-                                     ? internal::build_sb2st_hh_wave_offsets(sb2st_sched, n)
+                                     ? detail::build_sb2st_hh_wave_offsets(sb2st_sched, n)
                                      : std::vector<int32_t>{};
     UnifiedVector<int32_t> sb2st_waves(sb2st_wave_host.size());
     for (std::size_t k = 0; k < sb2st_wave_host.size(); ++k) {
@@ -229,9 +229,9 @@ Event syev_two_stage(Queue& ctx,
             ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch);
 
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st_hh");
-        const size_t ws_bytes = internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
+        const size_t ws_bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
         auto hh_ws = pool.allocate<std::byte>(ctx, ws_bytes);
-        (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
+        (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
                                        v_sb2st_view, tau_sb2st_hh_view, uplo, kd,
                                        hh_ws);
 
@@ -326,7 +326,7 @@ Event syev_two_stage(Queue& ctx,
     // Z := Q2 Z
     if (nrefl > 0) {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q2");
-        (void)internal::unmqr_hb2st<B, T>(ctx,
+        (void)detail::unmqr_hb2st<B, T>(ctx,
                                     v_sb2st_view,
                                     tau_sb2st_hh_view,
                                     z_view,
@@ -433,8 +433,8 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
     // also runs the Householder chase (see the note at its call site), and simply
     // discards V/tau. Only the phase chain and Z stay eigenvector-only.
     {
-        const int32_t nr = std::max<int32_t>(1, internal::sb2st_hh_num_reflectors(n, kd));
-        const int32_t kdw = internal::sb2st_hh_work_bandwidth(n, kd);
+        const int32_t nr = std::max<int32_t>(1, detail::sb2st_hh_num_reflectors(n, kd));
+        const int32_t kdw = detail::sb2st_hh_work_bandwidth(n, kd);
         bytes += BumpAllocator::allocation_size<T>(ctx,
                                                    static_cast<std::size_t>(kd) *
                                                        static_cast<std::size_t>(nr) *

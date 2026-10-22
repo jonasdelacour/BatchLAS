@@ -58,7 +58,7 @@ inline bool wy_trmm_applicable(int ib) {
     // Ask whether the tile substitution is enabled for (B, T), not what the
     // backend is: a vendor-free build is still Backend::CUDA.
     constexpr bool tile_kernel_enabled = select::level3_tile_substitution_enabled<B, T>;
-    constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
+    constexpr bool type_beats_gemm_at_this_m = !detail::is_complex<T>::value;
     return tile_kernel_enabled && type_beats_gemm_at_this_m && ib <= 64;
 }
 
@@ -288,7 +288,7 @@ Event ormqr_blocked(Queue& ctx,
         throw batchlas::invalid_argument("ormqr_blocked: requires an in-order Queue");
     }
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormqr_blocked: Trans not supported for complex; use ConjTrans");
         }

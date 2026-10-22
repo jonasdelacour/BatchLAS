@@ -393,7 +393,7 @@ Event ormbr(Queue& ctx,
         return ormqr_blocked<B, T>(ctx, a, c, side, trans, tau_span, ws_mut, block_size);
     }
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormbr: Trans not supported for complex 'P'; use ConjTrans");
         }
@@ -439,7 +439,7 @@ size_t ormbr_buffer_size(Queue& ctx,
         return ormqr_blocked_buffer_size<B, T>(ctx, a, c, side, trans, tau_span, block_size);
     }
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
             throw batchlas::unsupported("ormbr_buffer_size: Trans not supported for complex 'P'; use ConjTrans");
         }

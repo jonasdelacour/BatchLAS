@@ -19,7 +19,7 @@
 
 namespace batchlas {
 
-    // Givens rotation for the real bulge chase: in range, algebraically internal::lartg()
+    // Givens rotation for the real bulge chase: in range, algebraically detail::lartg()
     // but with rsqrt + one Newton step instead of sqrt and two divisions. Out-of-range
     // inputs fall back to the fully scaled reference implementation.
     // evidence: docs/perf/steqr.md#cta-steqr-chase-micro-structure-decisions
@@ -41,8 +41,8 @@ namespace batchlas {
             const T f_abs = sycl::fabs(f);
             const T g_abs = sycl::fabs(g);
 
-            const T rtmin = sycl::sqrt(internal::safmin<T>());
-            const T rtmax = sycl::sqrt(internal::safmax<T>() / T(2));
+            const T rtmin = sycl::sqrt(detail::safmin<T>());
+            const T rtmax = sycl::sqrt(detail::safmax<T>() / T(2));
 
             T c = T(1), s = T(0), r = f;
             if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
@@ -56,14 +56,14 @@ namespace batchlas {
                 s = g * signed_inv;
                 r = sycl::copysign(d, f);
             } else if (!gz) {
-                const auto res = internal::lartg(f, g);
+                const auto res = detail::lartg(f, g);
                 c = res.c;
                 s = res.s;
                 r = res.r;
             }
             return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
         } else {
-            const auto res = internal::lartg(f, g);
+            const auto res = detail::lartg(f, g);
             return {res.c, res.s, res.r};
         }
     }
@@ -217,7 +217,7 @@ namespace batchlas {
             if (e != T(0)) {
                 // LAPACK-style relative deflation test:
                 // |e|^2 <= eps2 * |d_i| * |d_{i+1}| + safmin
-                const T rhs = internal::eps2<T>() * sycl::fabs(d) * sycl::fabs(d_ip1) + internal::safmin<T>();
+                const T rhs = detail::eps2<T>() * sycl::fabs(d) * sycl::fabs(d_ip1) + detail::safmin<T>();
                 if (sycl::fabs(e) * sycl::fabs(e) <= rhs) {
                     e = T(0);
                 }
@@ -279,7 +279,7 @@ BATCHLAS_UNROLL_FULL
 
         // Every input is already partition-uniform, so evaluate laev2 redundantly on
         // all lanes instead of computing on the leader and broadcasting four values.
-        const auto [rt1, rt2, cs, sn] = internal::laev2(a, b, c2);
+        const auto [rt1, rt2, cs, sn] = detail::laev2(a, b, c2);
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         if (pred && lane == l0) {
             diag = rt1;
@@ -335,7 +335,7 @@ BATCHLAS_UNROLL_FULL
             if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
                 // For QL, the shift is formed from the leading 2x2 of the physical block (l,l+1).
                 // wilkinson_shift picks the eigenvalue closest to its 3rd argument; we want closest to D(l).
-                mu = internal::wilkinson_shift(dlp1, e0, p0);
+                mu = detail::wilkinson_shift(dlp1, e0, p0);
             } else {
                 const T gg = (dlp1 - p0) / (T(2) * e0);
                 const T rr = sycl::hypot(gg, T(1));
@@ -474,7 +474,7 @@ BATCHLAS_UNROLL_FULL
             T mu = T(0);
             if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
                 // Want eigenvalue closest to D(l); wilkinson_shift picks closest to its third arg.
-                mu = internal::wilkinson_shift(dlp1, e0, p0);
+                mu = detail::wilkinson_shift(dlp1, e0, p0);
             } else {
                 // LAPACK-style stable implicit shift.
                 const T gg = (dlp1 - p0) / (T(2) * e0);
@@ -597,10 +597,10 @@ BATCHLAS_UNROLL_FULL
             const T anorm = partition_reduce_fmax<P>(partition, anorm_cand);
 
             T scale = T(1);
-            if (anorm > internal::ssfmax<T>()) {
-                scale = internal::ssfmax<T>() / anorm;
-            } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                scale = internal::ssfmin<T>() / anorm;
+            if (anorm > detail::ssfmax<T>()) {
+                scale = detail::ssfmax<T>() / anorm;
+            } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                scale = detail::ssfmin<T>() / anorm;
             }
             const T inv_scale = T(1) / scale;
 
@@ -743,10 +743,10 @@ BATCHLAS_UNROLL_FULL
                     }
                     const T anorm = partition_reduce_fmax<P>(partition, anorm_cand);
                     scale = T(1);
-                    if (anorm > internal::ssfmax<T>()) {
-                        scale = internal::ssfmax<T>() / anorm;
-                    } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                        scale = internal::ssfmin<T>() / anorm;
+                    if (anorm > detail::ssfmax<T>()) {
+                        scale = detail::ssfmax<T>() / anorm;
+                    } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                        scale = detail::ssfmin<T>() / anorm;
                     }
                     inv_scale = T(1) / scale;
                     if (scale != T(1)) {
@@ -874,10 +874,10 @@ BATCHLAS_UNROLL_FULL
                     }
                     const T anorm = partition_reduce_fmax<P>(partition, anorm_cand);
                     T sc = T(1);
-                    if (anorm > internal::ssfmax<T>()) {
-                        sc = internal::ssfmax<T>() / anorm;
-                    } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                        sc = internal::ssfmin<T>() / anorm;
+                    if (anorm > detail::ssfmax<T>()) {
+                        sc = detail::ssfmax<T>() / anorm;
+                    } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                        sc = detail::ssfmin<T>() / anorm;
                     }
                     if (opened && sc != T(1)) {
                         if (lane >= bb && lane <= be) {

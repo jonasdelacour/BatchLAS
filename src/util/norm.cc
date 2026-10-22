@@ -142,7 +142,7 @@ namespace batchlas
                     for (int j = local_idx; j < rows * cols; j += local_size) {
                         auto col = j / rows;
                         auto row = j % rows;
-                        temp += internal::norm_squared(data_span[col * ld + row]);
+                        temp += detail::norm_squared(data_span[col * ld + row]);
                     }
                     result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
@@ -150,7 +150,7 @@ namespace batchlas
                     if (sycl_impl::on_metal()) {
                         for (int k = local_idx; k < cols; k += local_size) {
                             float_t<T> s = 0;
-                            for (int i = 0; i < rows; ++i) s += internal::abs(data_span[k * ld + i]);
+                            for (int i = 0; i < rows; ++i) s += detail::abs(data_span[k * ld + i]);
                             local_mem[k] = s;
                         }
                     } else {
@@ -167,7 +167,7 @@ namespace batchlas
                             sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
                                             sycl::memory_scope::work_group>
                                 atomic_local_mem(local_mem[col]);
-                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                            atomic_local_mem += detail::abs(data_span[col * ld + row]);
                         }
                     }
                     sycl::group_barrier(cta);
@@ -178,7 +178,7 @@ namespace batchlas
                     if (sycl_impl::on_metal()) {
                         for (int k = local_idx; k < rows; k += local_size) {
                             float_t<T> s = 0;
-                            for (int i = 0; i < cols; ++i) s += internal::abs(data_span[i * ld + k]);
+                            for (int i = 0; i < cols; ++i) s += detail::abs(data_span[i * ld + k]);
                             local_mem[k] = s;
                         }
                     } else {
@@ -195,7 +195,7 @@ namespace batchlas
                             sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
                                             sycl::memory_scope::work_group>
                                 atomic_local_mem(local_mem[row]);
-                            atomic_local_mem += internal::abs(data_span[col * ld + row]);
+                            atomic_local_mem += detail::abs(data_span[col * ld + row]);
                         }
                     }
                     sycl::group_barrier(cta);
@@ -207,7 +207,7 @@ namespace batchlas
                     for (int j = local_idx; j < rows * cols; j += local_size) {
                         auto col = j / rows;
                         auto row = j % rows;
-                        temp = std::max(internal::abs(data_span[col * ld + row]), temp);
+                        temp = std::max(detail::abs(data_span[col * ld + row]), temp);
                     }
                     result = batchlas::portable::reduce_over_group(cta, temp, sycl::maximum<float_t<T>>());
                 }

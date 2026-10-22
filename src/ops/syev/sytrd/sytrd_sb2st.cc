@@ -87,7 +87,7 @@ Event kd0_extract(Queue& q,
             auto Taub = tauv.batch_item(b);
 
             for (int i = 0; i < n; ++i) {
-                Db[i] = internal::real_part(AB(0, i));
+                Db[i] = detail::real_part(AB(0, i));
                 if (i < n - 1) {
                     Eb[i] = Real(0);
                     Taub[i] = T(0);
@@ -129,17 +129,17 @@ Event kd1_extract_lower(Queue& q,
             auto Taub = tauv.batch_item(b);
 
             for (int i = 0; i < n; ++i) {
-                Db[i] = internal::real_part(AB(0, i));
+                Db[i] = detail::real_part(AB(0, i));
             }
 
             // Make off-diagonal real via chained phase, as in LAPACK KD=1 special-case.
             T phase = T(1);
             for (int i = 0; i < n - 1; ++i) {
                 const T t = AB(1, i);
-                const Real a = internal::abs(t);
+                const Real a = detail::abs(t);
                 Eb[i] = a;
                 Taub[i] = T(0);
-                if constexpr (internal::is_complex<T>::value) {
+                if constexpr (detail::is_complex<T>::value) {
                     if (a != Real(0)) {
                         const T u = t / T(a);
                         phase *= u;
@@ -179,7 +179,7 @@ Event btrd_lower_inplace(Queue& q,
                                                             sycl::range<1>(static_cast<size_t>(kWorkGroupSize))),
                                            [=](sycl::nd_item<1> it) {
             using Real = typename base_type<T>::type;
-            using Ops = internal::btrd_givens_ops<T>;
+            using Ops = detail::btrd_givens_ops<T>;
 
             const int b = static_cast<int>(it.get_group(0));
             const int lid = static_cast<int>(it.get_local_id(0));
@@ -227,10 +227,10 @@ Event btrd_lower_inplace(Queue& q,
             sycl::group_barrier(it.get_group());
 
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
-            if constexpr (internal::is_complex<T>::value) {
+            if constexpr (detail::is_complex<T>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
                 for (int j = lid; j < n; j += lsize) {
-                    diag[j] = internal::real_as_T(diag[j]);
+                    diag[j] = detail::real_as_T(diag[j]);
                 }
                 sycl::group_barrier(it.get_group());
             }
@@ -290,8 +290,8 @@ Event btrd_lower_inplace(Queue& q,
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
                                         Ops::rot(kdm1,
-                                                 internal::make_strided(AB + idx(kd - 1, jinc - kd), incx),
-                                                 internal::make_strided(AB + idx(kd, jinc - kd), incx),
+                                                 detail::make_strided(AB + idx(kd - 1, jinc - kd), incx),
+                                                 detail::make_strided(AB + idx(kd, jinc - kd), incx),
                                                  C[jinc],
                                                  WORK[jinc]);
                                     }
@@ -318,8 +318,8 @@ Event btrd_lower_inplace(Queue& q,
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
                                     Ops::rot(k - 2,
-                                             internal::make_strided(AB + idx(k - 2, i + 1), ldab - 1),
-                                             internal::make_strided(AB + idx(k - 1, i + 1), ldab - 1),
+                                             detail::make_strided(AB + idx(k - 2, i + 1), ldab - 1),
+                                             detail::make_strided(AB + idx(k - 1, i + 1), ldab - 1),
                                              ct,
                                              st);
                                 }
@@ -342,16 +342,16 @@ Event btrd_lower_inplace(Queue& q,
                         for (int t = lid; t < nr; t += lsize) {
                             const int j = j1 + t * kd1;
                             Ops::lar2v(1,
-                                       internal::make_strided(AB + idx(0, j - 1), inca),
-                                       internal::make_strided(AB + idx(0, j), inca),
-                                       internal::make_strided(AB + idx(1, j - 1), inca),
-                                       internal::make_const_strided(C.data_ptr() + j, kd1),
-                                       internal::make_const_strided(WORK.data_ptr() + j, kd1));
+                                       detail::make_strided(AB + idx(0, j - 1), inca),
+                                       detail::make_strided(AB + idx(0, j), inca),
+                                       detail::make_strided(AB + idx(1, j - 1), inca),
+                                       detail::make_const_strided(C.data_ptr() + j, kd1),
+                                       detail::make_const_strided(WORK.data_ptr() + j, kd1));
                         }
                         sycl::group_barrier(it.get_group());
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             for (int t = lid; t < nr; t += lsize) {
                                 const int j = j1 + t * kd1;
                                 WORK[j] = batchlas::device::detail::conj(WORK[j]);
@@ -383,8 +383,8 @@ Event btrd_lower_inplace(Queue& q,
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
                                             Ops::rot(kdm1,
-                                                     internal::make_strided(AB + idx(2, j1inc - 1), 1),
-                                                     internal::make_strided(AB + idx(1, j1inc), 1),
+                                                     detail::make_strided(AB + idx(2, j1inc - 1), 1),
+                                                     detail::make_strided(AB + idx(1, j1inc), 1),
                                                      C[j1inc],
                                                      WORK[j1inc]);
                                         }
@@ -394,8 +394,8 @@ Event btrd_lower_inplace(Queue& q,
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
                                     Ops::rot(lend,
-                                             internal::make_strided(AB + idx(2, last - 1), 1),
-                                             internal::make_strided(AB + idx(1, last), 1),
+                                             detail::make_strided(AB + idx(2, last - 1), 1),
+                                             detail::make_strided(AB + idx(1, last), 1),
                                              C[last],
                                              WORK[last]);
                                 }
@@ -588,7 +588,7 @@ Event sytrd_sb2st(Queue& ctx,
     }
 
     if (can_use_subgroup) {
-        (void)internal::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+        (void)detail::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
     } else {
         (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
     }

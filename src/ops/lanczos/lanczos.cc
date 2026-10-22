@@ -51,7 +51,7 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         auto n = A.rows();
 
-        auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
+        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
         auto Vmem = pool.allocate<T>(ctx, (1+n)*n*batch_size);
         auto V_vectormem = pool.allocate<T>(ctx, n*2*batch_size);
         auto alphas = pool.allocate<T>(ctx, n*batch_size);

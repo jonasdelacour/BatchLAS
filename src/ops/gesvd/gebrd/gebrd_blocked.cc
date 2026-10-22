@@ -108,7 +108,7 @@ Event gebrd_blocked_real(Queue& ctx,
                          const VectorView<T>& taup_out,
                          const Span<std::byte>& ws,
                          int32_t block_size) {
-    static_assert(!internal::is_complex<T>::value, "gebrd_blocked_real expects real scalar type");
+    static_assert(!detail::is_complex<T>::value, "gebrd_blocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
 
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
@@ -196,7 +196,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        const auto scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - gi);
+                        const auto scalars = detail::larfg(alpha, sycl::sqrt(sigma), m - gi);
                         beta_q = scalars.beta;
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
@@ -283,7 +283,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        const auto scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        const auto scalars = detail::larfg(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
                         beta_p = scalars.beta;
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;
@@ -376,7 +376,7 @@ Event gebrd_blocked(Queue& ctx,
                     const VectorView<T>& taup_out,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("gebrd_blocked: complex types are not implemented");
     } else {
         return gebrd_blocked_real<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);

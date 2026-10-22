@@ -721,7 +721,7 @@ Event gesvd_native_impl(Queue& ctx,
         throw batchlas::invalid_argument(std::string(where) + ": requires an in-order Queue");
     }
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
     } else {
         const int32_t m = static_cast<int32_t>(a_in.rows());
@@ -1140,7 +1140,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
                                 const char* where) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
     } else {
         const size_t m = static_cast<size_t>(a.rows());

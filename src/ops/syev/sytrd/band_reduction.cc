@@ -35,7 +35,7 @@ namespace {
 
 template <typename T>
 inline void enforce_real_diagonal(T& x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
         x = T(static_cast<Real>(x.real()), Real(0));
     }
@@ -117,7 +117,7 @@ inline void dump_dense_matrix_csv(Queue& ctx,
     for (int j = 0; j < cols; ++j) {
         for (int i = 0; i < rows; ++i) {
             const T v = host_view(i, j, 0);
-            if constexpr (internal::is_complex<T>::value) {
+            if constexpr (detail::is_complex<T>::value) {
                 os << i << "," << j << "," << std::real(v) << "," << std::imag(v) << "\n";
             } else {
                 os << i << "," << j << "," << v << "," << 0 << "\n";
@@ -515,7 +515,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
     }
     const int dump_batch = dump.batch;
 
-    const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
     const int m = i2 - i1 + 1;
     const int r = j2 - j1 + 1;
@@ -1001,7 +1001,7 @@ inline void bandr1_extract_tridiagonal_output(
                          [=](sycl::id<2> idx) {
                              const int b = static_cast<int>(idx[0]);
                              const int j = static_cast<int>(idx[1]);
-                             dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                             dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
                          });
     });
 
@@ -1011,7 +1011,7 @@ inline void bandr1_extract_tridiagonal_output(
                              [=](sycl::id<2> idx) {
                                  const int b = static_cast<int>(idx[0]);
                                  const int j = static_cast<int>(idx[1]);
-                                 eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
+                                 eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
                                  tauptr[b * tau_stride + j * tau_inc] = T(0);
                              });
         });
@@ -1251,7 +1251,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
             });
         });
 
@@ -1286,7 +1286,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
             });
         });
 
@@ -1295,7 +1295,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                 cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
                     const int b = static_cast<int>(idx[0]);
                     const int j = static_cast<int>(idx[1]);
-                    eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
+                    eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
                     tauptr[b * tau_stride + j * tau_inc] = T(0);
                 });
             });

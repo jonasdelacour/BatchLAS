@@ -56,7 +56,7 @@ namespace batchlas {
         // Compute Ritz values as (v_j^T * (A*v_j)) / (v_j^T * v_j) for each column j
         // using work-group parallelism with SYCL reductions for better performance
         auto real_part = [](T value) {
-            if constexpr (internal::is_complex<T>::value) return value.real();
+            if constexpr (detail::is_complex<T>::value) return value.real();
             else return value;
         };
 
@@ -99,7 +99,7 @@ namespace batchlas {
                     for (int i = tid; i < n; i += wg) {
                         T v_i = V_view(i, j, b);
                         T av_i = AV_view(i, j, b);
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             numerator_partial += std::conj(v_i) * av_i;
                         } else {
                             numerator_partial += v_i * av_i;
@@ -118,7 +118,7 @@ namespace batchlas {
                     T denominator_partial = T(0);
                     for (int i = tid; i < n; i += wg) {
                         T v_i = V_view(i, j, b);
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             denominator_partial += std::conj(v_i) * v_i;
                         } else {
                             denominator_partial += v_i * v_i;

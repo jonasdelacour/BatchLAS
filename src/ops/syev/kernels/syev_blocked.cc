@@ -59,7 +59,7 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
 template <typename T>
 inline int32_t sytrd_block_size_default(int32_t n) {
     const int32_t harness = tuning::sytrd_block_size_for_n(n);
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if (n > 256 && n <= 512) return 32;
     }
     return harness;
@@ -131,7 +131,7 @@ Event syev_blocked(Queue& ctx,
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
 
         // Allocate SYTRD outputs (complex Hermitian tridiagonal).
@@ -491,7 +491,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
     // that is merely generous is not correct.
     const bool want_vectors = (jobz == JobType::EigenVectors);
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
 
         const int32_t p = std::max<int32_t>(0, n - 1);

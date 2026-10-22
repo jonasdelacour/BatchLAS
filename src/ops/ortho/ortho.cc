@@ -165,7 +165,7 @@ namespace batchlas {
         // syrk writes only the lower triangle; potrf/trsm/shift read only that.
         // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
         // BATCHLAS_ORTHO_GRAM=gemm.
-        constexpr bool gram_is_real = !internal::is_complex<T>::value;
+        constexpr bool gram_is_real = !detail::is_complex<T>::value;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
@@ -185,8 +185,8 @@ namespace batchlas {
         };
 
 
-        auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
-        auto square = [](T value) { if constexpr (internal::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
+        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
+        auto square = [](T value) { if constexpr (detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
 
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
@@ -205,7 +205,7 @@ namespace batchlas {
         };
 
         auto conj_vector = [&](const VectorView<T>& v) {
-            if constexpr (internal::is_complex<T>::value) {
+            if constexpr (detail::is_complex<T>::value) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
                     auto& e = x(int(id[1]), int(id[0]));
@@ -387,7 +387,7 @@ namespace batchlas {
                     auto j = linear_ix / m;
                     const T v = output_basis[batch_idx * m * k + j*m + i];
                     if (is_A_trans) {
-                        if constexpr (internal::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
+                        if constexpr (detail::is_complex<T>::value) Adata[batch_idx * A_stride + i * A_ld + j] = std::conj(v);
                         else Adata[batch_idx * A_stride + i * A_ld + j] = v;
                     } else {
                         Adata[batch_idx * A_stride + j * A_ld + i] = v;
@@ -480,7 +480,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-        auto trans = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         auto no_trans = Transpose::NoTrans;
         auto inv_transA = transA == trans ? no_trans : trans;
         auto inv_transM = transM == trans ? no_trans : trans;

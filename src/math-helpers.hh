@@ -15,7 +15,7 @@
 
 
 namespace batchlas {
-    namespace internal {
+    namespace detail {
         template <typename T>
         using base_float_t = typename base_type<T>::type;
 
@@ -155,7 +155,7 @@ namespace batchlas {
 
             for (int i = tid; i < N; i += bdim) {
                 const T xi = v(i, bid);
-                const R ax = sycl::fabs(static_cast<R>(internal::abs(xi)));
+                const R ax = sycl::fabs(static_cast<R>(detail::abs(xi)));
                 if (ax > tbig) {
                     const R t = ax * sbig;
                     part[0] += t * t;
@@ -335,8 +335,8 @@ namespace batchlas {
         {
             using R = base_float_t<T>;
 
-            const R f_abs = internal::abs(f);
-            const R g_abs = internal::abs(g);
+            const R f_abs = detail::abs(f);
+            const R g_abs = detail::abs(g);
 
             // G=0 => C=1, S=0, R=F.
             if (g_abs == R(0)) {
@@ -389,7 +389,7 @@ namespace batchlas {
                 const R fs = f_r / u;
                 const R gs = g_r / u;
                 const R d = sycl::sqrt(fs * fs + gs * gs);
-                const R c = internal::abs(fs) / d;
+                const R c = detail::abs(fs) / d;
                 const R r_unscaled = sycl::copysign(d, f_r);
                 const R s = gs / r_unscaled;
                 const R r = r_unscaled * u;

@@ -19,7 +19,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                            const VectorView<typename base_type<T>::type>& e,
                            const VectorView<T>& tauq,
                            const VectorView<T>& taup) {
-    static_assert(!internal::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
+    static_assert(!detail::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
 
     const int32_t m = static_cast<int32_t>(a.rows());
@@ -45,7 +45,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha = A(i, i, b);
-                const auto left_scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - i);
+                const auto left_scalars = detail::larfg(alpha, sycl::sqrt(sigma), m - i);
                 const Real tau_l = left_scalars.tau;
                 const Real beta_l = left_scalars.beta;
                 if (tau_l != Real(0)) {
@@ -85,7 +85,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha_r = A(i, i + 1, b);
-                const auto right_scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
+                const auto right_scalars = detail::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
                 const Real tau_r = right_scalars.tau;
                 const Real beta_r = right_scalars.beta;
                 if (tau_r != Real(0)) {
@@ -140,7 +140,7 @@ Event gebrd_unblocked(Queue& ctx,
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("gebrd_unblocked: complex types are not implemented yet");
     } else {
         return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);

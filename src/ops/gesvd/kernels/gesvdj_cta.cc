@@ -39,7 +39,7 @@ namespace {
 
 template <typename U>
 inline typename base_type<U>::type abs_if_complex_g(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return sycl::hypot(x.real(), x.imag());
     } else {
         return sycl::fabs(x);
@@ -49,7 +49,7 @@ inline typename base_type<U>::type abs_if_complex_g(const U& x) {
 template <typename U>
 inline typename base_type<U>::type norm2_g(const U& x) {
     using Real = typename base_type<U>::type;
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return x.real() * x.real() + x.imag() * x.imag();
     } else {
         return static_cast<Real>(x * x);
@@ -60,7 +60,7 @@ inline typename base_type<U>::type norm2_g(const U& x) {
 // two real halves.
 template <typename Group, typename U>
 inline U xor_shuffle_g(const Group& g, const U& v, uint32_t mask) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return U(permute_group_by_xor(g, v.real(), mask),
                  permute_group_by_xor(g, v.imag(), mask));
     } else {
@@ -157,7 +157,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         constexpr size_t kGramChunk = (kRotSlots < P / 2) ? kRotSlots : (P / 2 > 0 ? P / 2 : 1);
         constexpr size_t kChunks = kRotSlots / kGramChunk;
         static_assert(kChunks * kGramChunk == kRotSlots, "round must split evenly into Gram chunks");
-        constexpr bool kNeedPhase = internal::is_complex<T>::value;
+        constexpr bool kNeedPhase = detail::is_complex<T>::value;
 
         // Clamp probs_per_wg DIRECTLY, not a multiplier: a clamp in problems
         // under-counts it by 32/P, a launch failure with two tiles.
@@ -482,7 +482,7 @@ BATCHLAS_UNROLL_FULL
 
                             if (g_abs > thresh && g_abs > tiny) {
                                 Real gv;
-                                if constexpr (internal::is_complex<T>::value) {
+                                if constexpr (detail::is_complex<T>::value) {
                                     gv = g_abs;
                                     d_rot = T(apq.real() / g_abs, -apq.imag() / g_abs);
                                 } else {

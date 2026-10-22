@@ -81,7 +81,7 @@ Event steqr_wg_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_scan");
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+        (void)detail::scan_inclusive_inplace<int32_t>(ctx, scan_view);
     }
 
     {
@@ -118,14 +118,14 @@ Event steqr_wg_impl(Queue& ctx,
                     if (n_local == 1) continue;
                     if (n_local == 2) {
                         if (store_givens) {
-                            auto [rt1, rt2, c, s] = internal::laev2(d_(0), e_(0), d_(1));
+                            auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
                             d_(0) = rt1;
                             d_(1) = rt2;
                             e_(0) = T(0);
                             rotations_view(0, 0, gid) = {c, -s};
                             order_view[gid] = ApplyOrder::Forward;
                         } else {
-                            auto [rt1, rt2] = internal::eigenvalues_2x2(d_(0), e_(0), d_(1));
+                            auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
                             d_(0) = rt1;
                             d_(1) = rt2;
                             e_(0) = T(0);
@@ -143,12 +143,12 @@ Event steqr_wg_impl(Queue& ctx,
                             anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
                         }
 
-                        if (anorm > internal::ssfmax<T>()) {
-                            auto alpha = internal::ssfmax<T>() / anorm;
+                        if (anorm > detail::ssfmax<T>()) {
+                            auto alpha = detail::ssfmax<T>() / anorm;
                             for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
                             for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = internal::ssfmin<T>() / anorm;
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            auto alpha = detail::ssfmin<T>() / anorm;
                             for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
                             for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
                         }
@@ -160,39 +160,39 @@ Event steqr_wg_impl(Queue& ctx,
                             return QR ? e_(idx) : e_(n_local - 2 - idx);
                         };
 
-                        const auto shift = internal::wilkinson_shift(d_get(n_local - 2),
+                        const auto shift = detail::wilkinson_shift(d_get(n_local - 2),
                                                            e_get(n_local - 2),
                                                            d_get(n_local - 1));
 
-                        auto [c0, s0] = internal::givens_rotation(d_get(0) - shift, e_get(0));
+                        auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
                         if (store_givens) {
                             rotations_view(0, k, gid) = {c0, s0};
                         }
-                        auto bulge = internal::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+                        auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
 
                         for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = internal::givens_rotation(e_get(j - 1), bulge);
+                            auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
                             if (store_givens) {
                                 rotations_view(j, k, gid) = {cj, sj};
                             }
-                            bulge = internal::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                            bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
                         }
 
                         bool deflatable = false;
                         for (size_t j = 0; j < n_local - 1; ++j) {
-                            if (std::abs(e_(j)) * std::abs(e_(j)) <= internal::eps2<T>() * std::abs(d_(j)) * std::abs(d_(j + 1)) +
-                                                                   internal::safmin<T>()) {
+                            if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j)) * std::abs(d_(j + 1)) +
+                                                                   detail::safmin<T>()) {
                                 e_(j) = T(0);
                                 deflatable = true;
                             }
                         }
 
-                        if (anorm > internal::ssfmax<T>()) {
-                            auto alpha = anorm / internal::ssfmax<T>();
+                        if (anorm > detail::ssfmax<T>()) {
+                            auto alpha = anorm / detail::ssfmax<T>();
                             for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
                             for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = anorm / internal::ssfmin<T>();
+                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                            auto alpha = anorm / detail::ssfmin<T>();
                             for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
                             for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
                         }

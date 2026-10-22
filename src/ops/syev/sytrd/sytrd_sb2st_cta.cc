@@ -25,7 +25,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace batchlas::internal {
+namespace batchlas::detail {
 
 namespace {
 
@@ -184,7 +184,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                     int j2 = 0;
 
                     // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
-                    if constexpr (internal::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<T>::value) {
                         for (int j = lane; j < n; j += P) {
                             AB_at(0, j) = real_as_T(AB_at(0, j));
                         }
@@ -289,7 +289,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                 group_barrier(partition);
 
                                 // ZHBTRD requirement: conjugate WORK(J1) before right-application.
-                                if constexpr (internal::is_complex<T>::value) {
+                                if constexpr (detail::is_complex<T>::value) {
                                     for (int t = lane; t < nr; t += P) {
                                         const int j = j1 + t * kd1;
                                         WORK[j] = batchlas::device::detail::conj(WORK[j]);
@@ -452,4 +452,4 @@ BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISP
 
 #undef BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE
 
-} // namespace batchlas::internal
+} // namespace batchlas::detail

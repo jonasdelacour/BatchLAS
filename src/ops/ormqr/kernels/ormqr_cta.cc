@@ -49,7 +49,7 @@ struct PlainVec {
     const T& operator[](int i) const { return v[i]; }
 };
 template <typename T, int N>
-using ColVec = std::conditional_t<internal::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
+using ColVec = std::conditional_t<detail::is_complex<T>::value, PlainVec<T, N>, sycl::vec<T, N>>;
 
 // Reduce sum over a group.
 // NOTE: For non-uniform chunked partitions on CUDA, reduce_over_group may be
@@ -60,7 +60,7 @@ inline T group_sum(const Group& g, T v) {
     const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
     (void)lanes;
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
         Real re = v.real();
         Real im = v.imag();
@@ -126,7 +126,7 @@ inline void apply_reflector_small(const Partition& part,
 
         auto gamma_view = VectorView<T>(Work_local, n);
         auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset, len, n, P_i, P_i * n);
-        if constexpr (internal::is_complex<T>::value) {
+        if constexpr (detail::is_complex<T>::value) {
             batchlas::device::geru(part, v_view, gamma_view, c_sub, T(-1));
         } else {
             batchlas::device::ger(part, v_view, gamma_view, c_sub, T(-1));
@@ -221,7 +221,7 @@ inline void ormqx_cta_impl(Queue& ctx,
             // the request count - and the resulting L2 traffic - by a factor of VW.
             constexpr int32_t VW = static_cast<int32_t>(16 / sizeof(T));
             const bool vec_ok =
-                !internal::is_complex<T>::value && VW > 1 && (n % VW) == 0 &&
+                !detail::is_complex<T>::value && VW > 1 && (n % VW) == 0 &&
                 ((static_cast<std::size_t>(c.ld()) * sizeof(T)) % 16u) == 0 &&
                 ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
                 (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;

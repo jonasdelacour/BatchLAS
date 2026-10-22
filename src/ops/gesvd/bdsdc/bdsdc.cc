@@ -365,7 +365,7 @@ Event bdsdc(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {
         const int32_t n = static_cast<int32_t>(d.size());

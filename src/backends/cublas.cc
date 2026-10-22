@@ -305,8 +305,8 @@ namespace batchlas {
 
         const auto shape = detail::expand_group_shape(n);
         const sycl::range<3> global(static_cast<std::size_t>(batch),
-                                    static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.cols) * shape.cols),
-                                    static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.rows) * shape.rows));
+                                    static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.cols) * shape.cols),
+                                    static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.rows) * shape.rows));
         const sycl::range<3> local(1,
                                    static_cast<std::size_t>(shape.cols),
                                    static_cast<std::size_t>(shape.rows));

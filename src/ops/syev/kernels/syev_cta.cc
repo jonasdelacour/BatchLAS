@@ -147,7 +147,7 @@ Event syev_cta(Queue& ctx,
                 if (row < col) {
                     A(row, col, b) = batchlas::device::detail::conj(A(col, row, b));
                 } else if (row == col) {
-                    if constexpr (internal::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<T>::value) {
                         A(row, col, b) = T(A(row, col, b).real(), typename base_type<T>::type(0));
                     }
                 }
@@ -158,7 +158,7 @@ Event syev_cta(Queue& ctx,
     // Workspace is treated as mutable storage by the implementation.
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
 
         // CTA STEQR defaults are speed-oriented; for correctness (especially in large batches)
@@ -546,7 +546,7 @@ size_t syev_cta_buffer_size(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& a,
                             JobType jobz,
                             SteqrParams<T> steqr_params) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
 
         // Apply the same robustness bump that syev_cta applies at computation time.

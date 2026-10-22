@@ -21,7 +21,7 @@ namespace batchlas {
         const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
         (void)lanes;
 
-        if constexpr (internal::is_complex<T>::value) {
+        if constexpr (detail::is_complex<T>::value) {
             using Real = typename base_type<T>::type;
             Real re = v.real();
             Real im = v.imag();
@@ -50,7 +50,7 @@ namespace batchlas {
                          bool x_active) {
         using Real = typename base_type<T>::type;
 
-        const Real xsq = x_active ? internal::abs2_if_complex(x) : Real(0);
+        const Real xsq = x_active ? detail::abs2_if_complex(x) : Real(0);
         const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
         // sumsq is replicated, so every lane computes the scalars instead of serialising on a leader.
         const Real xnorm = sycl::sqrt(sumsq);
@@ -63,7 +63,7 @@ namespace batchlas {
         T tau_b = T(0);
         T scale_b = T(0);
         if (len > 1) {
-            const auto scalars = internal::larfg(alpha_leader, xnorm, len);
+            const auto scalars = detail::larfg(alpha_leader, xnorm, len);
             beta_b = scalars.beta;
             tau_b = scalars.tau;
             scale_b = scalars.scale;

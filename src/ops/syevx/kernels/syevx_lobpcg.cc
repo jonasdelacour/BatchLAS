@@ -469,7 +469,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             // Real part only: a Hermitian A has a real diagonal, and its
                             // sign decides whether diag(A)^{-1} is positive definite.
                             float_type dr;
-                            if constexpr (internal::is_complex<T>::value) dr = d.real();
+                            if constexpr (detail::is_complex<T>::value) dr = d.real();
                             else                                          dr = d;
                             local_max = sycl::max(local_max, sycl::fabs(dr));
                             local_min = sycl::min(local_min, dr);
@@ -678,9 +678,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                 cur_col = slot;
                                 acc_r = acc_x = acc_ax = float_type(0);
                             }
-                            acc_r  += internal::norm_squared(rval);
-                            acc_x  += internal::norm_squared(blockX[i]);
-                            acc_ax += internal::norm_squared(blockAX[i]);
+                            acc_r  += detail::norm_squared(rval);
+                            acc_x  += detail::norm_squared(blockX[i]);
+                            acc_ax += detail::norm_squared(blockAX[i]);
                         }
                         flush();
                     }
@@ -892,7 +892,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                 const auto* col = block + j * R_ld;
                                 float_type acc = 0;
                                 for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
-                                    acc += internal::norm_squared(col[i]);
+                                    acc += detail::norm_squared(col[i]);
                                 const float_type s = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
                                 if (tid == 0) colnorm[j] = sycl::sqrt(s);
                             }
@@ -970,11 +970,11 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                             : float_type(0);
                                 const T d = blockD[row];
                                 const T denom = d - T(lam);
-                                const float_type denom2 = internal::norm_squared(denom);
-                                const float_type scale = sycl::max(sycl::fabs(lam), internal::abs(d));
+                                const float_type denom2 = detail::norm_squared(denom);
+                                const float_type scale = sycl::max(sycl::fabs(lam), detail::abs(d));
                                 const float_type floor_sq = (scale * sing_tol) * (scale * sing_tol);
                                 if (denom2 <= floor_sq || !(denom2 > float_type(0))) continue;
-                                if constexpr (internal::is_complex<T>::value) {
+                                if constexpr (detail::is_complex<T>::value) {
                                     const T inv = T(denom.real(), -denom.imag()) *
                                                   (float_type(1) / denom2);
                                     blockR[idx] = blockR[idx] * inv;
@@ -1088,14 +1088,14 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             for (int64_t linear = int64_t(tid); linear < nv * nv; linear += int64_t(local_size)) {
                                 const int64_t row = linear % nv;
                                 const int64_t col = linear / nv;
-                                acc += internal::norm_squared(mat[row + col * StAS_ld]);
+                                acc += detail::norm_squared(mat[row + col * StAS_ld]);
                             }
                             const float_type total = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
                             const float_type sentinel = sycl::sqrt(total) + float_type(1);
                             for (int64_t c = first; c < nv; ++c) {
                                 float_type part = 0;
                                 for (int64_t i = int64_t(tid); i < nrows; i += int64_t(local_size))
-                                    part += internal::norm_squared(basis[i + c * S_ld]);
+                                    part += detail::norm_squared(basis[i + c * S_ld]);
                                 const float_type norm2 = batchlas::portable::reduce_over_group(cta, part, sycl::plus<float_type>());
                                 if (tid == 0 && norm2 <= null_tol) mat[c + c * StAS_ld] = T(largest ? -sentinel : sentinel);
                             }

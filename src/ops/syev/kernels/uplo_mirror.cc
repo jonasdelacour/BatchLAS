@@ -37,7 +37,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 if (c <= r) return;
                 T* A = ptr + b * stride;
                 const T v = A[r + c * ld];          // (r, c) with r < c: upper triangle
-                if constexpr (internal::is_complex<T>::value) {
+                if constexpr (detail::is_complex<T>::value) {
                     A[c + r * ld] = T(v.real(), -v.imag());
                 } else {
                     A[c + r * ld] = v;

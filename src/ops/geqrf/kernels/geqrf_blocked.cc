@@ -36,7 +36,7 @@ namespace {
 // GEMM gates its float transposed-register kernel on Transpose::Trans.
 template <typename T>
 inline constexpr Transpose kConjT =
-    batchlas::internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    batchlas::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
 // Keep a multiple of 16, and never below 32 for complex: the wide-scalar GEMM gates on
 // min_dim >= 32, and min_dim of the trailing NN update IS the block width.

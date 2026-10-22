@@ -24,7 +24,7 @@ namespace batchlas::backend::detail {
 template <typename T>
 int expanded_ld(int n) {
     constexpr int elements_per_packet = std::max<int>(1, 16 / sizeof(T));
-    return ::batchlas::internal::ceil_div(n, elements_per_packet) * elements_per_packet;
+    return ::batchlas::detail::ceil_div(n, elements_per_packet) * elements_per_packet;
 }
 
 template <typename T>

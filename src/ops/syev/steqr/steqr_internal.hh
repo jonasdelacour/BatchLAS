@@ -9,12 +9,12 @@
 
 namespace batchlas {
 
-namespace internal {
+namespace detail {
 
 // {c, -s} of LAPACK lartg(a, b): the rotation convention of the work-group bulge chase.
 template <typename T>
 inline std::array<T, 2> givens_rotation(const T& a, const T& b) {
-    auto [c_l, s_l, r] = internal::lartg(a, b);
+    auto [c_l, s_l, r] = detail::lartg(a, b);
     (void)r;
     return std::array<T, 2>{c_l, -s_l};
 }
@@ -82,7 +82,7 @@ inline T apply_givens_rotation(const VectorView<T>& d,
     return -ej * s;
 }
 
-} // namespace internal
+} // namespace detail
 
 template <Backend B, typename T>
 Event steqr_legacy(Queue& ctx,

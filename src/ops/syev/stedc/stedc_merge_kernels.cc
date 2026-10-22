@@ -98,7 +98,7 @@ void stedc_merge_fused(Queue& ctx,
                         Q_bid(i, eig) = v(i, bid) / Q_bid(i, eig);
                     }
 
-                    auto nrm2 = internal::nrm2(cta, Qview(Slice{0, dd}, eig));
+                    auto nrm2 = detail::nrm2(cta, Qview(Slice{0, dd}, eig));
                     for (int i = tid; i < dd; i += static_cast<int>(bdim)) {
                         Q_bid(i, eig) /= nrm2;
                     }

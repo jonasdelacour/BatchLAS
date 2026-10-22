@@ -82,8 +82,8 @@ Event expand_triangular(Queue& ctx,
 
     const auto shape = expand_group_shape(n);
     const sycl::range<3> global(static_cast<std::size_t>(batch),
-                                static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.cols) * shape.cols),
-                                static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.rows) * shape.rows));
+                                static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.cols) * shape.cols),
+                                static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.rows) * shape.rows));
     const sycl::range<3> local(1,
                                static_cast<std::size_t>(shape.cols),
                                static_cast<std::size_t>(shape.rows));
@@ -140,7 +140,7 @@ Event expand_mirrored(Queue& ctx,
                       Uplo uplo) {
     const int n = A.rows();
     const int batch = A.batch_size();
-    const int tiles = ::batchlas::internal::ceil_div(n, kMirrorTile);
+    const int tiles = ::batchlas::detail::ceil_div(n, kMirrorTile);
     const bool lower = uplo == Uplo::Lower;
 
     const T* src = A.data_ptr();

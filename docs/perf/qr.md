@@ -171,7 +171,7 @@ The fix adopts potrf's band and pad (`kGeqrfHoleLo = 47104`, `kGeqrfHoleHi = 496
 
 ### A residual test cannot guard a convention
 
-Break K3 replaced LAPACK's real-beta `larfg` sign convention with `internal::larfg`'s phase-preserving one. **Every residual stayed green for every type**, because a phase-preserving factorisation is still a valid QR, just not the one `ormqr`, `orgqr`, `ormbr`, `sy2sb`, netlib and cuSOLVER use. Only the elementwise columns caught it (`dimag` 0.94-0.97, `dF` 1.4-1.8, `dtau` 0.19-0.71). `ConventionMatchesReferenceLapackWithoutAVendor` (independent host `xGEQR2`) makes the break red for all four types vendor-free; `NativeFactorMatchesTheVendorElementwise` skips there.
+Break K3 replaced LAPACK's real-beta `larfg` sign convention with `detail::larfg`'s phase-preserving one. **Every residual stayed green for every type**, because a phase-preserving factorisation is still a valid QR, just not the one `ormqr`, `orgqr`, `ormbr`, `sy2sb`, netlib and cuSOLVER use. Only the elementwise columns caught it (`dimag` 0.94-0.97, `dF` 1.4-1.8, `dtau` 0.19-0.71). `ConventionMatchesReferenceLapackWithoutAVendor` (independent host `xGEQR2`) makes the break red for all four types vendor-free; `NativeFactorMatchesTheVendorElementwise` skips there.
 
 - `zgeqr2` applies `conj(tau)`, not `tau` (a host reference using `tau` disagreed by 1-4% for cfloat and cdouble); for real types the conjugate is the identity, so this class is invisible to half the type list.
 - Control over 10 shapes x 4 types: `dF` 3.2e-06 / 8.2e-15 / 2.0e-06 / 3.8e-15 (float / double / cfloat / cdouble) against the vendor `geqrf`; `dtau` is 3-6x looser. Quote `dtau` separately from `dF`; order-of-magnitude only (`kernels/run_v.txt` disagrees with its own summary).
