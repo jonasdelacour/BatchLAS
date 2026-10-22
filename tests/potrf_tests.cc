@@ -1383,6 +1383,129 @@ TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
                  std::invalid_argument);
 }
 
+// UPPER through the blocked driver: the vendor-free route for n above the CTA ceiling. Straddles
+// every CTA cap (32, 33, 54, 55, 77, 78), the blocking boundaries (128, 256), pads ld and stride, poisons
+// the LOWER triangle with large finite values (so a read corrupts the factor and a write shows), and
+// factors one matrix batch-wide so any cross-item race breaks bit-identity with item 0.
+TYPED_TEST(PotrfBlockedTest, BlockedUpperPaddedPoisonedSaturatingBatch) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    std::vector<int> sizes = {33, 54, 55, 77, 78, 128, 256};
+    const auto bp = this->blocking(1 << 20);
+    sizes.push_back(2 * bp.nb + bp.nb / 2);        // short final block
+    sizes.push_back(bp.nb + 2 * bp.W + 6);         // short final trailing panel
+    std::sort(sizes.begin(), sizes.end());
+    sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
+
+    const T poison = MV<T>::make(R(-777), R(555));
+    for (int n : sizes) {
+        const int batch = (n <= 128) ? 1024 : 128;
+        const int ld = n + 5;
+        const int stride = ld * n + 9;
+        UnifiedVector<T> buf(static_cast<size_t>(stride) * batch, MV<T>::make(R(0), R(0)));
+        const auto ref = make_spd<T>(n, 9100u + static_cast<unsigned>(n));
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld] =
+                        (i <= j) ? ref[i + static_cast<size_t>(j) * n] : poison;
+                }
+            }
+        }
+        MatrixView<T, MatrixFormat::Dense> V(buf.data(), n, n, ld, stride, batch);
+        const auto info = this->run_blocked(V, Uplo::Upper);
+        for (int b = 0; b < batch; ++b) ASSERT_EQ(info[b], 0) << "n=" << n << " b=" << b;
+
+        const T* b0 = buf.data();
+        for (int b : {0, batch - 1}) {
+            const T* Fb = buf.data() + static_cast<size_t>(b) * stride;
+            EXPECT_VERIFY(T, verify::Check::factorization, n,
+                          (potrf_error<T>(*this->ctx, ref, Fb, ld, n, Uplo::Upper)))
+                << "n=" << n << " b=" << b;
+        }
+        size_t lower_changed = 0, differs = 0;
+        for (int b = 0; b < batch; ++b) {
+            const T* Fb = buf.data() + static_cast<size_t>(b) * stride;
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    const T v = Fb[i + static_cast<size_t>(j) * ld];
+                    if (i > j) {
+                        if (std::real(v) != std::real(poison) || std::imag(v) != std::imag(poison))
+                            ++lower_changed;
+                    } else {
+                        const T w = b0[i + static_cast<size_t>(j) * ld];
+                        if (std::real(v) != std::real(w) || std::imag(v) != std::imag(w)) ++differs;
+                    }
+                }
+            }
+            // The padding rows between ld and n are not ours either.
+            for (int j = 0; j < n; ++j) {
+                for (int i = n; i < ld; ++i) {
+                    const T v = Fb[i + static_cast<size_t>(j) * ld];
+                    if (std::real(v) != R(0) || std::imag(v) != R(0)) ++lower_changed;
+                }
+            }
+        }
+        ASSERT_EQ(lower_changed, 0u) << "words outside the upper triangle were written, n=" << n;
+        ASSERT_EQ(differs, 0u) << "batch items are not bit-identical to item 0, n=" << n;
+    }
+}
+
+// Upper `info` is the 1-based GLOBAL column, first failure wins, and a failed item is quenched
+// without poisoning the rest of the batch (items are independent).
+TYPED_TEST(PotrfBlockedTest, BlockedUpperInfoIsTheGlobalColumn) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+
+    const int nb = this->blocking(1 << 20).nb;
+    const int n = 2 * nb + 8;
+    const std::vector<std::vector<int>> plants = {{0}, {nb - 1}, {nb}, {nb + 3}, {2 * nb + 2}, {n - 1},
+                                                  {5, nb + 9}, {nb + 3, 2 * nb + 2}};
+    for (const auto& cols : plants) {
+        const int expect = cols.front() + 1;
+        Matrix<T, MatrixFormat::Dense> A(n, n, 2);
+        const auto bad = make_planted_ldl<T>(n, cols, 5150u + static_cast<unsigned>(expect));
+        const auto good = make_spd<T>(n, 6001u);
+        this->load_triangle(A, 0, n, bad, Uplo::Upper, MV<T>::make(R(0), R(0)));
+        this->load_triangle(A, 1, n, good, Uplo::Upper, MV<T>::make(R(0), R(0)));
+        const auto info = this->run_blocked(A, Uplo::Upper);
+        EXPECT_EQ(info[0], expect) << "first planted column " << cols.front();
+        ASSERT_EQ(info[1], 0);
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(*this->ctx, good, A, 1, Uplo::Upper)));
+    }
+}
+
+// The public facade, pinned to blocked, reaches the Upper driver (not the vendor, whose Upper
+// potrf clobbers the lower triangle) and leaves the lower triangle alone.
+TYPED_TEST(PotrfBlockedTest, FacadeBlockedUpper) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::Blocked{});
+
+    const int n = 200, batch = 6;
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    const T poison = MV<T>::make(R(-777), R(555));
+    std::vector<std::vector<T>> ref(batch);
+    for (int b = 0; b < batch; ++b) {
+        ref[b] = make_spd<T>(n, 321u + b);
+        this->load_triangle(A, b, n, ref[b], Uplo::Upper, poison);
+    }
+    UnifiedVector<std::byte> ws(potrf_buffer_size<TestFixture::BackendType, T>(*this->ctx, A, Uplo::Upper));
+    UnifiedVector<int32_t> info(batch, int32_t(-7));
+    potrf<TestFixture::BackendType, T>(*this->ctx, A, Uplo::Upper, ws.to_span(), info.to_span());
+    this->ctx->wait();
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_EQ(info[b], 0);
+        for (int j = 0; j < n; ++j)
+            for (int i = j + 1; i < n; ++i) {
+                ASSERT_EQ(std::real(A(i, j, b)), std::real(poison)) << "lower triangle written (" << i << "," << j << ")";
+                ASSERT_EQ(std::imag(A(i, j, b)), std::imag(poison));
+            }
+        EXPECT_VERIFY(T, verify::Check::factorization, n, (potrf_error<T>(*this->ctx, ref[b], A, b, Uplo::Upper)));
+    }
+}
+
 
 // The TINY tier's cases, in their own file only for length; they are inside this
 // anonymous namespace so make_spd, make_planted_ldl and potrf_error
