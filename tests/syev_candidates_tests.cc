@@ -123,11 +123,13 @@ Eig<T> make_eig(const Spec& s) {
         auto q = [&](int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * v[i] * std::conj(v[j]) / vv; };
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
-                if (!p.stored(i, j) && s.poison_other) continue;
+                if (!p.stored(i, j)) continue;
                 cd a = 0;
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
                 p.mem[p.at(it, i, j)] = MVof<T>::make(a.real(), a.imag());
+                // The mirror is the stored entry's exact conjugate, as the entry's hermitize writes it.
+                if (!s.poison_other && i != j) p.mem[p.at(it, j, i)] = MVof<T>::make(a.real(), -a.imag());
             }
         std::sort(lam.begin(), lam.end());
         p.lambda.push_back(lam);

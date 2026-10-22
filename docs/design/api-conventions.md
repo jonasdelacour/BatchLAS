@@ -185,3 +185,24 @@ The `random_*_with_log10_cond_metric` generators in `blas/extra.hh` have no
 `BATCHLAS_DISPATCH_ON_QUEUE`. Their `T` is non-deduced, so the macro would create an overload that
 can never be selected. Call them as
 `f<Backend, T>(...)`; see [which spelling each entry point takes](../cpp-api.md#which-spelling-each-entry-point-takes).
+
+## api conventions: bitwise repeatability under a pinned route
+
+Two calls with identical arguments (the same input bits, `ld`, batch `stride`, batch size, `uplo`
+and jobz) return the same bits when they run on the same device, under the same route and from the
+same build. The route is the same under a pin (`BATCHLAS_<OP>_ROUTE`, `select::ScopedPin`), or under
+Auto with the same tables and settings: a retune, `BATCHLAS_TUNED_DIR` or a different device can
+change the route, and a different route gives different rounding. Nothing is promised across
+devices, builds, compilers or vendor-library versions.
+
+- **Tested:** `SyevTest.PinnedRouteIsBitwiseRepeatable` (`tests/syev_tests.cc`) pins `cta`
+  (n = 17, 32; batch 1024 at n = 32), `blocked` (n = 32, 400) and `two_stage` (n = 40, 400), both
+  `uplo`, both jobz, four dtypes, and compares the eigenvalues and the whole matrix buffer with
+  `memcmp`. The vendor family is not covered: its repeatability is the vendor library's.
+- **Why it holds for syev:** its kernels use no floating-point atomics; the only atomics are
+  integer (the `info` `fetch_max` and the grid-barrier word in `latrd_lower_panel.cc`), and every
+  reduction has a fixed order for a given work-group size, which the route and device fix.
+- **Other ops:** untested. Floating-point atomic sums break the property and exist in the native
+  `spmm` scatter (`src/ops/spmm/kernels/spmm_native.cc`), the LOBPCG projections
+  (`src/ops/syevx/kernels/syevx_lobpcg.cc`) and the column sums of `norm`
+  (`src/util/norm.cc`, work-group local): those results may differ in the last bits between runs.
