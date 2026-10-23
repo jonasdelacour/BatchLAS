@@ -257,20 +257,32 @@ is needed in both directions (right inside the block, left at the bottom). Handl
 
 ## gesvd: L2 batch chunking {#gesvd-l2-batch-chunking}
 
-> **Status:** implemented and tested, the derived chunk loses in some cells (work stopped 2026-10-23).
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
 
 The general blocked path runs the batch in parts; an item is A plus the requested U and V^H. Singular
-values offset by `b0*k`, U/V^H only when wanted, info only when requested; workspace for one part.
-Complex input has no native general path and is not chunked; the Hermitian arm and cta/jacobi are untouched.
+values offset by `b0*k`, U/V^H only when wanted, info only when requested; workspace for one part. The
+Hermitian arm and cta/jacobi are untouched.
 
-Cold A/B (sm_120, float): n=128 with vectors saturates at batch 1024 (13.4 us/item, 14.07 at 16384); the
-derived chunk of 564 is below saturation and loses 3.9-5.0% at batch >= 2048. n=128 values only: chunk
-1692 wins 3.8-6.8% at batch >= 4096 (16384: 11.29 -> 10.52 us/item). n=64: neutral within 1%. Warm and
-cold agree.
+**Rule:** `GESVD_BLOCKED_L2_CHUNK_PERCENT` = 150 for real scalars. Complex general (native since the
+complex gebrd) is not L2-chunked (unmeasured), but every type's parts are capped at `max_groups_yz / 2`:
+without the cap ormbr's `PackPPanelKernel` aborted from batch 65505 at n = 40
+([defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
 
-**Missing:** the item-size rule (A alone, or a floor at the saturation batch), n=256/512, Auto arms, the
-info/V^H/unwanted-factor deliberate breaks, full gesvd and gesvd_candidates runs against base,
-`tune_tests` hash pins and spec dependency lists.
+Cold A/B, float, pinned blocked, ns per item, median of 2 retained alternating passes:
+
+| n | vectors | batch | off | 75 % | 150 % | 300 % |
+|---:|---|---:|---:|---:|---:|---:|
+| 64 | all | 4096 | 4732 | 1.041 | 0.999 | 1.002 |
+| 64 | all | 16384 | 4594 | 1.087 | 1.010 | 1.016 |
+| 128 | all | 1024 | 18207 | 1.009 | 1.001 | 1.000 |
+| 128 | all | 4096 | 18323 | 1.061 | 0.966 | 0.991 |
+| 128 | all | 8192 | 18076 | 1.093 | 0.975 | 0.996 |
+| 128 | none | 4096 | 13846 | 0.998 | 0.998 | 0.999 |
+| 128 | none | 16384 | 13681 | 1.017 | 1.021 | 1.004 |
+| 256 | all | 1024 | 147119 | 0.878 | 0.712 | 0.874 |
+
+75 % (the sm_120 rule) sets parts below saturation with vectors; 150 % is within 2.1% everywhere and
+0.71 at n=256. Re-measured with the shipped rule: n=128 b8192 0.975, n=256 b1024 0.709.
 
 ## gesvd: the unblocked-gebrd cliff {#gesvd-the-unblocked-gebrd-cliff}
 

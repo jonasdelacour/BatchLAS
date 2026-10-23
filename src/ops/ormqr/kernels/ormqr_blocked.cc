@@ -116,7 +116,8 @@ int ormqr_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
     // pack_v puts the batch in grid z: no part may exceed it.
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         a.batch_size(), item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), a.batch_size());
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::ORMQR_BLOCKED_L2_CHUNK_PERCENT)), a.batch_size());
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.

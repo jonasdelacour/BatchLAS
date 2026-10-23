@@ -1,5 +1,6 @@
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/uplo_mirror.hh>
+#include <src/select/grid_chunk.hh>
 #include <src/kernels/common/info_span.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -596,10 +597,11 @@ size_t syev_blocked_part_buffer_size(Queue& ctx,
 template <typename T>
 int syev_blocked_chunk(Queue& ctx, int n, int batch) {
     const auto dev = ctx.device();
-    return static_cast<int>(tuning::blocked_chunk_items(
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, 3 * static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::SYEV_BLOCKED_L2_CHUNK_PERCENT)), batch);
 }
 
 } // namespace

@@ -1436,7 +1436,8 @@ int gesvd_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, elems * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::GESVD_BLOCKED_L2_CHUNK_PERCENT)), batch);
 }
 
 } // namespace

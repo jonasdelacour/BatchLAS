@@ -215,27 +215,40 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 
 ## QR: L2 batch chunking {#qr-l2-batch-chunking}
 
-> **Status:** implemented and tested, timings unusable so far (work stopped 2026-10-23).
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
 
-The blocked geqrf, orgqr and ormqr drivers run the batch in parts of `tuning::blocked_chunk_items`
-items. Item sizes: geqrf A + V + W1 + W2 (never split when k <= nb, so n=32 is never chunked); orgqr
-2mn + m nb + 2 nb n; ormqr nq k + C + V + 2W (one block is still chunked). tau and C are offset per part;
-parts wait on out-of-order queues. sytrd and band_reduction size once at their largest operands, so each
-driver halves its chunk until a part fits the workspace given; the ormqr facade therefore skips its
-insufficient-workspace check for the Blocked family (the driver still throws if one item does not fit).
+The blocked geqrf, orgqr and ormqr drivers can run the batch in parts of `tuning::blocked_chunk_items`
+items. Item sizes: geqrf A + V + W1 + W2 (never split when k <= nb); orgqr 2mn + m nb + 2 nb n; ormqr
+nq k + C + V + 2W. tau and C are offset per part; parts wait on out-of-order queues. sytrd and
+band_reduction size once at their largest operands, so each driver halves its chunk until a part fits the
+workspace given; the ormqr facade therefore skips its insufficient-workspace check for the Blocked
+family (the driver still throws if one item does not fit).
 
-Screens (sm_120, pinned blocked, off -> on per item, noisy): ormqr Left/ConjTrans n=64 b8192 0.95,
-b16384 0.89, b32768 0.72 cold / 0.87 warm; orgqr mixed (n=64 b16384 0.875, b8192/b32768 1.06-1.07);
-geqrf n=64 1.05-1.07, n=128 about +22% (parts of ~1128 items may be under-saturated: 2.13 us/item at b1024,
-1.63 at b2048). Samples flipped between modes up to 2.7x apart; an off-only process was steady, so time
-on and off in separate processes.
+**Rule:** `GEQRF_`, `ORGQR_` and `ORMQR_BLOCKED_L2_CHUNK_PERCENT` = 0: no L2 chunking. Every part is
+capped at `max_groups_yz / 2` items (`select::grid_capped_chunk`, `src/select/grid_chunk.hh`): before
+the cap a batch past the grid left items unfactored with no error
+([defect 16](../design/known-defects.md#defect-16-blocked-qr-past-the-grid)).
 
-**Missing:** a clean grid (float, cfloat, n=32-512, tall shapes, ormqr all four side/trans, Auto), a
-per-op rule for geqrf (larger percent or a saturation floor, or no chunking), the ormqr C-offset and orgqr
-tau-offset deliberate breaks, the consumer test binaries (orgqr, ormqr, candidates, ormqr_cta, sytrd,
-band_reduction, ortho, gesvd), `tune_tests` hash pins. Separate defect: unchunked blocked geqrf, orgqr and
-ormqr fail at batch >= 65536 (`pack_v` and orgqr's identity/copy-back kernels put batch on a 65535-capped
-grid dimension); a part can still exceed it for very small items.
+Cold A/B, pinned blocked, ns per item, median of 2 retained alternating passes x 5 reps:
+
+| op | type | n | batch | off | 75 % | 150 % | 300 % |
+|---|---|---:|---:|---:|---:|---:|---:|
+| geqrf | float | 64 | 16384 | 632 | 1.128 | 1.052 | 1.014 |
+| geqrf | float | 128 | 16384 | 2097 | 1.222 | 1.100 | 1.068 |
+| geqrf | float | 256 | 2048 | 7939 | 1.427 | 1.200 | 1.031 |
+| geqrf | cfloat | 128 | 4096 | 3862 | 1.572 | 1.261 | 1.077 |
+| orgqr | float | 128 | 16384 | 2456 | 1.242 | 1.023 | 1.003 |
+| orgqr | cfloat | 128 | 4096 | 4862 | 1.866 | 1.473 | 1.241 |
+| ormqr L C | float | 64 | 16384 | 485 | 0.989 | 0.946 | 0.974 |
+| ormqr L C | float | 128 | 4096 | 1857 | 1.053 | 0.827 | 0.971 |
+| ormqr L C | cfloat | 64 | 16384 | 781 | 1.137 | 0.847 | 0.955 |
+
+- geqrf and orgqr lose at every percent; the parts under-fill the trailing gemms.
+- ormqr alone wins at 150 % (0.83-0.95; re-checked n=64 b4096 1.002, b8192 0.961), but orgqr applies the
+  routed ormqr, and with ormqr chunked inside it orgqr lost 1.017-1.484x (cfloat n=128 b4096: 4863 ->
+  7215 ns); syev blocked n=256 lost 2.8% the same way. A per-caller rule (chunk only a top-level ormqr)
+  is open.
+- Re-measured with the shipped rule against `off`: orgqr cfloat n=128 b4096 1.000, float n=64 b16384 0.999.
 
 ## Open debts
 

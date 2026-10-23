@@ -110,19 +110,17 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
     return ws;
 }
 
-// Items per pass: the panel, V, W1 and W2 pass between kernels through L2, and the trailing
-// gemms are routed at this batch. One panel has no hand-off, so it never splits.
-// evidence: docs/perf/qr.md#qr-l2-batch-chunking
+// Items per pass (panel, V, W1, W2 through L2). evidence: docs/perf/qr.md#qr-l2-batch-chunking
 template <typename T>
 int geqrf_blocked_chunk(Queue& ctx, int m, int n, int nb, int batch) {
-    // pack_v and the panel kernels put the batch in grid z: no part may exceed it.
     if (std::min(m, n) <= nb) return select::grid_capped_chunk(ctx, batch, batch);
     const auto dev = ctx.device();
     const int64_t item = (static_cast<int64_t>(m) * (n + nb) +
                           2 * static_cast<int64_t>(nb) * (n - nb)) * static_cast<int64_t>(sizeof(T));
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::GEQRF_BLOCKED_L2_CHUNK_PERCENT)), batch);
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.
@@ -222,9 +220,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     const int n2max = std::max(0, n - nb);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
-    // Chunk by chunk: each pass factors its items completely, and the workspace is one part's.
-    // A caller that sized a larger shape (sytrd's sub-views) may hold less than this shape's
-    // part needs, so the chunk halves until it fits. evidence: docs/perf/qr.md#qr-l2-batch-chunking
+    // A caller that sized a larger shape (sytrd's sub-views) may hold less than this shape's part
+    // needs, so the chunk halves until it fits. evidence: docs/perf/qr.md#qr-l2-batch-chunking
     int chunk = geqrf_blocked_chunk<T>(ctx, m, n, nb, batch);
     auto part_bytes = [&](int c) {
         return workspace_bytes([&](BumpAllocator& p) {

@@ -108,7 +108,8 @@ int orgqr_blocked_chunk(Queue& ctx, int m, int n, int batch) {
     // The identity and copy-back kernels put the batch in grid z: no part may exceed it.
     return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::ORGQR_BLOCKED_L2_CHUNK_PERCENT)), batch);
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.

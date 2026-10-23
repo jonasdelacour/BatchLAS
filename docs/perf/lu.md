@@ -270,7 +270,7 @@ The `blocked` driver runs four kernels per 32-column panel (panel leaf, right `l
 `gemm`) and a deferred left `laswp`; each hands the trailing matrix to the next through L2. Once
 `batch x n^2 x sizeof(T)` passes L2 those hand-offs go to DRAM, and the children are routed at the full batch.
 `getrf_blocked_dispatch` therefore factors the batch in parts (`src/ops/getrf/kernels/getrf_blocked.cc`,
-`getrf_blocked_chunk`); each part is a complete factorisation of its items, with the pivot (`b0 * n` int32) and
+`getrf_blocked_chunk`); each part is a complete factorisation of its items, with the pivot (`b0 * min(m, n)` int32) and
 `info` (`b0`) sub-ranges offset to match.
 
 * **Part size**: `tuning::blocked_chunk_items(batch, n^2 sizeof(T), L2, CUs)` (`include/batchlas/tuning_params.hh`).
@@ -288,6 +288,11 @@ The `blocked` driver runs four kernels per 32-column panel (panel leaf, right `l
   `tuned/getrf.sm_120.txt` were timed before it (the blocked family hash moved; retune pending).
 
 Chunk at sm_120, float: n=64 6204 items, n=128 1692, n=256 564, n=512 188.
+
+**sm_89 (RTX 4090, 72 MB L2, 2026-10-23, cold, pinned blocked):** 75 % holds. float n=64 b16384 0.907,
+n=128 b4096 0.852, b16384 0.787 (re-measured 0.788), n=256 b2048 0.785; cfloat n=128 b4096 0.858; 150 % is
+worse in every cell (0.825-0.982). getrf is m x n since the merge with main: an item is m n elements and
+the pivot offset is `b0 * min(m, n)`.
 
 **Grid** (float, `BATCHLAS_GETRF_ROUTE=blocked`, ns per item, median of 3 alternating process rounds x 5 reps;
 `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000`, the pre-chunking code path; cold = L2 scrubbed by a 1 GiB read before

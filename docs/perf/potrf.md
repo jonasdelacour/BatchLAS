@@ -286,6 +286,10 @@ n=256 1.000; n=512 b=16384 0.999); the `blocked` rows were timed before chunking
 
 Chunk at sm_120, float: n=128 3196 items, n=256 940, n=512 376.
 
+**sm_89 (RTX 4090, 2026-10-23, cold, pinned blocked):** 75 % holds. float n=64 b16384 1.000, n=128 b4096
+0.981, b16384 0.969, n=256 b2048 0.912 (re-measured 0.913); cfloat n=128 b4096 0.876. The chunk loop also
+serves `Uplo::Upper` since the merge with main (the Upper schedule runs inside each part).
+
 Float, `BATCHLAS_POTRF_ROUTE=blocked`, ns per item, protocol as in the LU grid:
 
 | n | batch | off cold | on cold | on/off cold | on/off warm |

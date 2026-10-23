@@ -1,6 +1,6 @@
 # Batch-size sensitivity {#perf_batch_sensitivity}
 
-> **Status:** current · RTX PRO 6000 Blackwell Max-Q (sm_120, 188 SMs, 128 MiB L2, 300 W), threadripper02 GPU 2, CUDA 13.2 · measured 2026-10-20 to 2026-10-21
+> **Status:** current · RTX PRO 6000 Blackwell Max-Q (sm_120, 188 SMs, 128 MiB L2, 300 W), threadripper02 GPU 2, CUDA 13.2 · measured 2026-10-20 to 2026-10-21; per-op chunk rules and the cold-protocol A/B on RTX 4090 (sm_89), 2026-10-23
 
 Why per-item time in the tables and benchmarks depends on batch, ranked by size, and what was done
 about it. Most of the "degrades past saturation" signal is the timing harness, not the kernels; the
@@ -202,7 +202,32 @@ Offline, over every `tuned/*.txt` with a batch key, batches >= 128, in-sample be
 | --- | --- | --- |
 | F3 ladder | the tuner samples batch at CU multiples (0.25, 2, 16, 128 x CUs: 47, 376, 3008, 24064 on sm_120); key stays `batch:log` | [Engine: the CU-aligned batch ladder](../design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder) |
 | F4a L2 chunking | blocked getrf and potrf factor the batch in parts of 75% of L2, rounded up to a CU multiple: getrf n=128 b32768 459.6 -> 383.0 ns (0.833), geomean 0.932 over 31 cells; potrf geomean 0.948 over 21 | [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking), [potrf: L2 batch chunking](potrf.md#potrf-l2-batch-chunking) |
+| F4c per-op rules | sm_89 cold A/B per driver: getrf/potrf keep 75 %, syev cta and gesvd take 150 %, syev blocked, geqrf, orgqr and ormqr do not L2-chunk; every part loop caps parts at `max_groups_yz / 2` | [per-op chunk rules](#batch-sensitivity-per-op-chunk-rules) |
 | F4b slices | level-3 and gemm natives run batch > 65535 as slices: syrk n=k=64 b65536 3481 -> 46.0 ns (76x), measured on F4b's `select::over_batch_slices`. On merge with main that helper was dropped for main's equivalent chunking (`level3::for_each_chunk`, gemm's `launch`), which cuts the batch at the same `max_groups_yz` | [gemm batch chunking](gemm.md#gemm-batch-chunking) |
+
+## Batch sensitivity: per-op chunk rules {#batch-sensitivity-per-op-chunk-rules}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2, GPU 0 (GPU 1 ran another user's job) · measured 2026-10-23
+
+One rule for every multi-kernel driver does not hold. `tuning::blocked_chunk_items` takes the op's
+percent (`*_L2_CHUNK_PERCENT` in `include/batchlas/tuning_params.hh`; 0 = no L2 chunking);
+`BATCHLAS_TUNE_L2_CHUNK_PERCENT` and `_ITEMS` still override every op. The ship criterion was
+\f$\le 2\%\f$ loss in every measured cell, including nested calls.
+
+| driver | percent | best cell | worst cell at the shipped rule | page |
+|---|---:|---|---|---|
+| getrf blocked | 75 | float n=128 b16384 0.787 | n=64 b16384 0.907 | [LU](lu.md#lu-l2-batch-chunking) |
+| potrf blocked | 75 | cfloat n=128 b4096 0.876 | float n=64 b16384 1.000 | [potrf](potrf.md#potrf-l2-batch-chunking) |
+| syev cta | 150 | float n=16 b16384 0.911 | float n=16 b65536 1.026 (before the grid cap) | [syev](syev.md#syev-l2-batch-chunking) |
+| gesvd blocked (real) | 150 | n=256 b1024 0.712 | n=128 values b16384 1.021 | [gesvd](gesvd.md#gesvd-l2-batch-chunking) |
+| syev blocked | 0 | (75 %: up to 1.70x slower) | | [syev](syev.md#syev-l2-batch-chunking) |
+| geqrf, orgqr blocked | 0 | (75 %: up to 1.87x slower) | | [QR](qr.md#qr-l2-batch-chunking) |
+| ormqr blocked | 0 | (150 % alone: 0.83; inside orgqr: 1.48x) | | [QR](qr.md#qr-l2-batch-chunking) |
+
+Harness: a standalone process per (cell, arm) linked against the build, `malloc_device`-backed
+`Matrix` operands restored before each rep, `bench::scrub_l2`, one synchronous call timed, 5-7 reps,
+median; 3-5 passes with the arm order reversed on odd passes, pass 0 dropped. Spreads were under 1% in
+most cells and up to 9% in a few small ones. Not in the repository (no raw data committed).
 
 ## Batch sensitivity: measured dead ends
 
@@ -213,7 +238,7 @@ Offline, over every `tuned/*.txt` with a batch key, batches >= 128, in-sample be
 
 ## Batch sensitivity: the cold protocol
 
-> **Status:** implemented, not yet measured end to end (work stopped 2026-10-23, threadripper02 under diagnostics).
+> **Status:** current · implemented; the scrub's effect measured on sm_89 (2026-10-23); no retune run under it
 
 `reset_and_run` (`tools/tune/cell_runner.hh`) runs reset, `bench::scrub_l2`, then the clock. The scrub is a
 read-only scan of min(4 x L2, memory / 16) bytes leased from the Queue's arena (512 MiB, 0.338 ms per run on
@@ -226,9 +251,30 @@ are not scrubbed yet.
 `TuneRaceGpu.TimedRunsStartWithTheirOperandsOutOfL2` (gemm 32^3, batch 4096, `wide:m=32:n=32:k=16`): tuner
 time 1.91-2.23x the back-to-back time; 1.00x with the scrub removed.
 
-**Missing:** the old-vs-new tuner A/B (gemm 32^3 b1024-65536, gemm 128^3 b128-4096, gemv 256x1024
-b32-1024) showing per-item time flat past saturation; `--plan` totals with the scrub priced in; the
-cold retune (about 29 GPU-h with refinement, float + cfloat, gemm at `--cap-gib 32`).
+Warm (back-to-back, the old protocol) against cold (scrubbed) on sm_89, Auto, float, ns per item,
+median of 3 retained passes x 9 reps (the tuner itself cannot run on that box: see
+[timing hygiene](#batch-sensitivity-timing-hygiene)):
+
+| op | batch | warm | cold | cold/warm |
+|---|---:|---:|---:|---:|
+| gemm 32^3 | 1024 | 18.4 | 26.3 | 1.43 |
+| gemm 32^3 | 4096 | 10.7 | 16.7 | 1.56 |
+| gemm 32^3 | 16384 | 15.2 | 14.1 | 0.93 |
+| gemm 32^3 | 65536 | 14.1 | 13.8 | 0.98 |
+| gemm 128^3 | 128 | 201.5 | 263.4 | 1.31 |
+| gemm 128^3 | 512 | 227.2 | 183.9 | 0.81 |
+| gemm 128^3 | 4096 | 216.7 | 208.1 | 0.96 |
+| gemv 256x256 | 32 | 346.9 | 584.5 | 1.69 |
+| gemv 256x256 | 128 | 129.5 | 353.1 | 2.73 |
+| gemv 256x256 | 1024 | 291.5 | 289.0 | 0.99 |
+
+Warm timing is fastest where the operands fit L2 (gemm 32^3 b4096 at 10.7, gemv b128 at 129.5 against a
+cold 289-353) and "degrades" past it (gemm 32^3 10.7 -> 15.2 between b4096 and b16384); cold falls
+monotonically to a flat floor (gemm 32^3 14.1 -> 13.8, gemv 297.6 -> 289.0). gemm 128^3 cold rises 13%
+from b512 to b4096 and warm is slower than cold at b512 (unexplained; under 3% spread).
+
+**Missing:** `--plan` totals with the scrub priced in from a real cold run; the cold retune (about 29
+GPU-h with refinement on sm_120, float + cfloat, gemm at `--cap-gib 32`; commands in `tools/tune/README.md`).
 
 ## Batch sensitivity: timing hygiene
 
@@ -242,13 +288,16 @@ cold retune (about 29 GPU-h with refinement, float + cfloat, gemm at `--cap-gib 
   keys (`--check`, table writes; `--remeasure-out` writes a `--remeasure-keys` file).
 - Not done, by decision: pipelined vs synchronous dual timing (it changes table semantics).
 
-**Missing:** confirm `clk_*` fields in a real ledger.
+**Missing:** confirm `clk_*` fields in a real ledger. Not possible on the 2x4090 box: GPU 0 drives the
+desktop, and its terminal and PDF viewer hold compute contexts, so the guard refuses it as it refuses the
+other user's job on GPU 1. With `--allow-idle-foreign` gone, the tuner runs only on a headless GPU.
 
 ## Batch sensitivity: open debts
 
-- **Unfinished work (2026-10-23):** cold protocol and hygiene (above), and L2 chunking in syev
-  ([syev](syev.md#syev-l2-batch-chunking)), geqrf/orgqr/ormqr ([qr](qr.md#qr-l2-batch-chunking)) and
-  gesvd ([gesvd](gesvd.md#gesvd-l2-batch-chunking)): code and tests in, chunk rules unmeasured.
+- **Chunk rules are sm_89 measurements** (sm_120 only for getrf/potrf). A per-caller ormqr rule (chunk
+  only a top-level call) would keep its 0.83-0.95 without orgqr's 1.48x; complex gesvd chunking is unmeasured.
+- **Range rounding past the grid** ([defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)):
+  the part loops are capped; syev two_stage, band_reduction and `transpose` are not.
 - **stedc deflation scan read device memory on the host** at merge order >= 512 (gesvd n=256 via bdsdc,
   syev n=512) and segfaulted on a `malloc_device` workspace; it now copies the kept widths to the host
   (`StedcTest.DeviceWorkspaceAtTheDeflationScanOrder`). The scan is still batch-global and syncs per merge level.
