@@ -9,8 +9,10 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
+#include <batchlas/tuning_params.hh>
 #include <src/select/vendor.hh>
 #include <algorithm>
+#include <cstring>
 #include <complex>
 #include <string>
 #include <iostream>
@@ -390,6 +392,235 @@ TYPED_TEST(SyevTest, VendorRouteHonoursLdSubViewsAndBatchStride) {
                     << where;
                 EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, s.n,
                               MV::orthogonality(*this->ctx, A, A0.all_items()))
+                    << where;
+            }
+        }
+    }
+}
+
+// ---- L2 batch chunking (docs/perf/syev.md#syev-l2-batch-chunking) ------------------------
+//
+// cta at n = 12 and blocked at n = 40, each pinned, with the chunk forced to 7 over 23 items
+// (7 + 7 + 9: the last part takes the remainder), a padded ld and an odd stride. Item b is
+// (1 + b/8) times a graded Householder similarity, so every item has its own spectrum and an
+// output sub-range at the wrong offset moves only the items from the second part on.
+
+namespace {
+
+struct ChunkRoute {
+    const char* route;
+    int n;
+};
+constexpr ChunkRoute kChunkRoutes[] = {{"cta", 12}, {"blocked", 40}};
+
+double chunk_item_scale(int b) { return 1.0 + 0.125 * b; }
+
+// Writes item b of the chunk batch into buf (ld, stride) and into the natural-layout A0.
+template <typename T>
+void chunk_fill(UnifiedVector<T>& buf, Matrix<T, MatrixFormat::Dense>& A0, int n, int ld, int stride, int b, int src) {
+    const auto ref = vendor_syev_item<T>(n, src);
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i) {
+            const T v = vendor_syev_cast<T>(ref[i + size_t(j) * n] * chunk_item_scale(src));
+            buf[size_t(b) * stride + i + size_t(j) * ld] = v;
+            A0.view()(i, j, b) = v;
+        }
+}
+
+}  // namespace
+
+TYPED_TEST(SyevTest, ChunksKeepEigenpairsPerItem) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "cta and blocked are GPU drivers";
+    } else {
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        const int batch = 23;
+        ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+        const T poison = vendor_syev_cast<T>({777.0, is_std_complex_v<T> ? 333.0 : 0.0});
+        for (const auto& r : kChunkRoutes) {
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
+            const int n = r.n, ld = n + 5, stride = ld * n + 11;
+            for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+                for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    const std::string where = std::string(r.route) + (uplo == Uplo::Lower ? " L" : " U") +
+                                              (jobz == JobType::EigenVectors ? " V" : " N");
+                    UnifiedVector<T> buf(size_t(stride) * batch, poison);
+                    Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                    for (int b = 0; b < batch; ++b) chunk_fill<T>(buf, A0, n, ld, stride, b, b);
+                    MV A(buf.data(), n, n, ld, stride, batch);
+                    UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                    UnifiedVector<int32_t> info(batch, int32_t(-1));
+                    UnifiedVector<std::byte> ws(syev_buffer_size<TestFixture::BackendType, T>(*this->ctx, A, W.to_span(), jobz, uplo));
+                    (void)syev<TestFixture::BackendType, T>(*this->ctx, A, W.to_span(), jobz, uplo, ws.to_span(),
+                                                            info.to_span());
+                    this->ctx->wait();
+
+                    const VectorView<Real> w(W.data(), n, batch);
+                    double worst = 0;
+                    for (int b = 0; b < batch; ++b) {
+                        EXPECT_EQ(info[b], 0) << where << ": item " << b << " (part " << std::min(b / 7, 2) << ")";
+                        std::vector<std::vector<double>> want(batch);
+                        for (int i = 0; i < n; ++i) want[b].push_back(vendor_syev_lambda(i, n) * chunk_item_scale(b));
+                        std::sort(want[b].begin(), want[b].end());
+                        const int item[] = {b};
+                        worst = verify::nanmax(worst, MV::values_error(w, want, 1e3 * chunk_item_scale(b), item));
+                    }
+                    EXPECT_VERIFY(T, verify::Check::values, n, worst) << where;
+                    if (jobz != JobType::EigenVectors) continue;
+                    EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
+                        << where;
+                    EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(*this->ctx, A, A0.all_items()))
+                        << where;
+                    for (int b = 0; b < batch; ++b)
+                        for (int o = 0; o < stride; ++o)
+                            if (!(o % ld < n && o / ld < n))
+                                ASSERT_EQ(buf[size_t(b) * stride + o], poison) << where << ": item " << b << " padding " << o;
+                }
+            }
+        }
+    }
+}
+
+// info through the parts: syev_cta with a one-sweep budget (see InfoReportsItemsThatExhaustTheSweepBudget)
+// on the mixed batch, chunked (7) against one pass. Per item, info, W and the vectors must be bit-identical
+// to the one-pass run; info both requested and not.
+TYPED_TEST(SyevTest, ChunksKeepCtaInfoPerItem) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "syev_cta requires sub-group 32";
+    } else {
+        const int n = 32, batch = 23, ld = n + 3, stride = ld * n + 7;
+        SteqrParams<T> params;
+        params.max_sweeps = 1;
+        auto run = [&](const char* chunk_items, bool pass_info, std::vector<int32_t>& info_out, std::vector<Real>& w_out,
+                       std::vector<T>& a_out) {
+            const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", chunk_items);
+            Matrix<T, MatrixFormat::Dense> M(n, n, batch);
+            fill_mixed_convergence_matrices<T>(M);
+            UnifiedVector<T> buf(size_t(stride) * batch, T(-3));
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) buf[size_t(b) * stride + i + size_t(j) * ld] = M.view()(i, j, b);
+            MatrixView<T, MatrixFormat::Dense> A(buf.data(), n, n, ld, stride, batch);
+            UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+            UnifiedVector<int32_t> info(batch, int32_t(-1));
+            UnifiedVector<std::byte> ws(syev_cta_buffer_size<B, T>(*this->ctx, A, JobType::EigenVectors, params));
+            (void)syev_cta<B, T>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower, ws.to_span(), params, 1,
+                                 pass_info ? info.to_span() : Span<int32_t>());
+            this->ctx->wait();
+            info_out.assign(info.begin(), info.end());
+            w_out.assign(W.begin(), W.end());
+            a_out.assign(buf.begin(), buf.end());
+        };
+        std::vector<int32_t> info1, infoc;
+        std::vector<Real> w1, wc;
+        std::vector<T> a1, ac;
+        run("100000000", true, info1, w1, a1);
+        int reported = 0;
+        for (int b = 0; b < batch; ++b) reported += info1[b] != 0;
+        ASSERT_GT(reported, 0) << "the one-sweep budget reported universal convergence: nothing to carry";
+        for (bool pass_info : {true, false}) {
+            run("7", pass_info, infoc, wc, ac);
+            for (int b = 0; b < batch; ++b) {
+                const std::string where = "item " + std::to_string(b) + " (part " + std::to_string(std::min(b / 7, 2)) +
+                                          (pass_info ? ")" : ", info not requested)");
+                if (pass_info) EXPECT_EQ(infoc[b], info1[b]) << where;
+                else EXPECT_EQ(infoc[b], -1) << where << ": an unrequested info was written";
+                EXPECT_EQ(std::memcmp(wc.data() + size_t(b) * n, w1.data() + size_t(b) * n, sizeof(Real) * n), 0) << where;
+                EXPECT_EQ(std::memcmp(ac.data() + size_t(b) * stride, a1.data() + size_t(b) * stride, sizeof(T) * stride), 0)
+                    << where;
+            }
+        }
+    }
+}
+
+// SATURATING: 1024 copies of one matrix in four chunks of 256, per route; every item's eigenvalues
+// and vectors must be bit-identical to item 0's, so parts that overlap or skip items show.
+TYPED_TEST(SyevTest, ChunksAtSaturatingBatchAreBitIdentical) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "cta and blocked are GPU drivers";
+    } else {
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
+        const int batch = 1024;
+        for (const auto& r : kChunkRoutes) {
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
+            const int n = r.n, ld = n + 3, stride = ld * n + 5;
+            UnifiedVector<T> buf(size_t(stride) * batch, T(-11));
+            Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+            for (int b = 0; b < batch; ++b) chunk_fill<T>(buf, A0, n, ld, stride, b, 5);
+            MV A(buf.data(), n, n, ld, stride, batch);
+            UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+            UnifiedVector<std::byte> ws(syev_buffer_size(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower));
+            (void)syev(*this->ctx, A, W.to_span(), SyevOptions{}, ws.to_span());
+            this->ctx->wait();
+            int wrong = 0, first = -1;
+            for (int b = 1; b < batch; ++b) {
+                bool same = std::memcmp(W.data() + size_t(b) * n, W.data(), sizeof(Real) * n) == 0;
+                for (int j = 0; j < n && same; ++j)
+                    same = std::memcmp(buf.data() + size_t(b) * stride + size_t(j) * ld, buf.data() + size_t(j) * ld,
+                                       sizeof(T) * n) == 0;
+                if (!same && wrong++ == 0) first = b;
+            }
+            EXPECT_EQ(wrong, 0) << r.route << ": items differing from item 0; first at " << first;
+            std::vector<std::vector<double>> want(1);
+            for (int i = 0; i < n; ++i) want[0].push_back(vendor_syev_lambda(i, n) * chunk_item_scale(5));
+            std::sort(want[0].begin(), want[0].end());
+            const int item0[] = {0};
+            EXPECT_VERIFY(T, verify::Check::values, n,
+                          MV::values_error(VectorView<Real>(W.data(), n, batch), want, 1e3 * chunk_item_scale(5), item0))
+                << r.route;
+            EXPECT_VERIFY(T, verify::Check::eigen_residual, n,
+                          MV::eigen_residual(*this->ctx, A0, A, VectorView<Real>(W.data(), n, batch), item0))
+                << r.route;
+        }
+    }
+}
+
+// The public entry point on an out-of-order Queue: every part shares the one part-sized workspace,
+// so a part that starts before the previous one finishes overwrites its scratch. Eight reps per route.
+TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "cta and blocked are GPU drivers";
+    } else {
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        const int batch = 23;
+        Queue ooo(*this->ctx, /*in_order=*/false);
+        ASSERT_FALSE(ooo.in_order());
+        for (const auto& r : kChunkRoutes) {
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
+            const int n = r.n, ld = n + 2, stride = ld * n + 3;
+            for (int rep = 0; rep < 8; ++rep) {
+                UnifiedVector<T> buf(size_t(stride) * batch, T(-7));
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                for (int b = 0; b < batch; ++b) chunk_fill<T>(buf, A0, n, ld, stride, b, b);
+                MV A(buf.data(), n, n, ld, stride, batch);
+                UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                UnifiedVector<std::byte> ws(syev_buffer_size(ooo, A, W.to_span(), JobType::EigenVectors, Uplo::Lower));
+                (void)syev(ooo, A, W.to_span(), SyevOptions{}, ws.to_span());
+                ooo.wait();
+                const VectorView<Real> w(W.data(), n, batch);
+                double worst = 0;
+                for (int b = 0; b < batch; ++b) {
+                    std::vector<std::vector<double>> want(batch);
+                    for (int i = 0; i < n; ++i) want[b].push_back(vendor_syev_lambda(i, n) * chunk_item_scale(b));
+                    std::sort(want[b].begin(), want[b].end());
+                    const int item[] = {b};
+                    worst = verify::nanmax(worst, MV::values_error(w, want, 1e3 * chunk_item_scale(b), item));
+                }
+                const std::string where = std::string(r.route) + " rep " + std::to_string(rep);
+                EXPECT_VERIFY(T, verify::Check::values, n, worst) << where;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
                     << where;
             }
         }
