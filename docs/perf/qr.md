@@ -213,6 +213,30 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 
 > **Warning:** The label selection in the gate must be one `-L "blas|ortho"` flag. Repeated `-L` flags AND together, select zero tests, and exit 0.
 
+## QR: L2 batch chunking {#qr-l2-batch-chunking}
+
+> **Status:** implemented and tested, timings unusable so far (work stopped 2026-10-23).
+
+The blocked geqrf, orgqr and ormqr drivers run the batch in parts of `tuning::blocked_chunk_items`
+items. Item sizes: geqrf A + V + W1 + W2 (never split when k <= nb, so n=32 is never chunked); orgqr
+2mn + m nb + 2 nb n; ormqr nq k + C + V + 2W (one block is still chunked). tau and C are offset per part;
+parts wait on out-of-order queues. sytrd and band_reduction size once at their largest operands, so each
+driver halves its chunk until a part fits the workspace given; the ormqr facade therefore skips its
+insufficient-workspace check for the Blocked family (the driver still throws if one item does not fit).
+
+Screens (sm_120, pinned blocked, off -> on per item, noisy): ormqr Left/ConjTrans n=64 b8192 0.95,
+b16384 0.89, b32768 0.72 cold / 0.87 warm; orgqr mixed (n=64 b16384 0.875, b8192/b32768 1.06-1.07);
+geqrf n=64 1.05-1.07, n=128 about +22% (parts of ~1128 items may be under-saturated: 2.13 us/item at b1024,
+1.63 at b2048). Samples flipped between modes up to 2.7x apart; an off-only process was steady, so time
+on and off in separate processes.
+
+**Missing:** a clean grid (float, cfloat, n=32-512, tall shapes, ormqr all four side/trans, Auto), a
+per-op rule for geqrf (larger percent or a saturation floor, or no chunking), the ormqr C-offset and orgqr
+tau-offset deliberate breaks, the consumer test binaries (orgqr, ormqr, candidates, ormqr_cta, sytrd,
+band_reduction, ortho, gesvd), `tune_tests` hash pins. Separate defect: unchunked blocked geqrf, orgqr and
+ormqr fail at batch >= 65536 (`pack_v` and orgqr's identity/copy-back kernels put batch on a 65535-capped
+grid dimension); a part can still exceed it for very small items.
+
 ## Open debts
 
 1. **No window is a timed table row, and only the in-window part of the native wins is realised.** Widening one needs an end-to-end gate (a 2.16x kernel win once became an 11% `gesvd` loss). Fix: a `tools/tune/batchlas_tune` retune of `geqrf`, `orgqr`, `ormqr`.

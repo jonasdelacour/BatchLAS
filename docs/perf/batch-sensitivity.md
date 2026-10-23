@@ -211,15 +211,49 @@ Offline, over every `tuned/*.txt` with a batch key, batches >= 128, in-sample be
 | Grid-stride / persistent grids (synthetic one-sub-group-per-item latency chain, persistent 188 x 12 work-groups) | equal to one-WG-per-item within 3% at B <= 2048 (18.7-19.3 vs 19.1-19.5 us); 15% slower at saturation (443 vs 386 us at B=65536), the tail fixed at the grid's granularity. Two sub-groups per item: 1.74x at B <= 1024 (19.1 -> 11.0 us), converging once B >= C | rejected as a general fix: it changes neither under-fill nor wave quantisation. Right only past the 65535 cap (done by slicing) and, untested, for the undersized `steqr_wg` grid |
 | Batch-aware k-split leg for potrf `lpanel` (S = 2, 4 slices of the k loop per matrix; branch `bi-f5-lpanel-fix`, not merged) | against the route the table picks (`lpanel:panel=16` at n = 96, 128), best 1.14-1.18x at b128 (n=128 96.5 -> 82.5 us); 1.29-1.30x only against `panel=8` at n=128; n=48/64 3-12%; every split leg loses from B >= 752 (0.19-0.79x), S = 4 from 256-512 | fails the 1.3x gate. The column barrier chain (~29 of 36 us at n=64, three work-group barriers per column) is the lever, at every batch, so it belongs in the kernel; getrf / getrs / geqrf / latrd have the same chain |
 
+## Batch sensitivity: the cold protocol
+
+> **Status:** implemented, not yet measured end to end (work stopped 2026-10-23, threadripper02 under diagnostics).
+
+`reset_and_run` (`tools/tune/cell_runner.hh`) runs reset, `bench::scrub_l2`, then the clock. The scrub is a
+read-only scan of min(4 x L2, memory / 16) bytes leased from the Queue's arena (512 MiB, 0.338 ms per run on
+sm_120), with a one-word sink. Warm-up, cut and verify runs go through the same path. Ledger records carry
+`protocol=lean-cold`; a record of another protocol ranks below a cold one at any tier and is re-measured
+(`plan_round`, reason `protocol`). Kernel hashes are untouched. `minibench.hh` structured mode and
+`factor_bench` time one synchronous cold run per sample; legacy-mode minibench benchmarks (no `SetKernel`)
+are not scrubbed yet.
+
+`TuneRaceGpu.TimedRunsStartWithTheirOperandsOutOfL2` (gemm 32^3, batch 4096, `wide:m=32:n=32:k=16`): tuner
+time 1.91-2.23x the back-to-back time; 1.00x with the scrub removed.
+
+**Missing:** the old-vs-new tuner A/B (gemm 32^3 b1024-65536, gemm 128^3 b128-4096, gemv 256x1024
+b32-1024) showing per-item time flat past saturation; `--plan` totals with the scrub priced in; the
+cold retune (about 29 GPU-h with refinement, float + cfloat, gemm at `--cap-gib 32`).
+
+## Batch sensitivity: timing hygiene
+
+> **Status:** implemented and unit-tested; never run against real NVML in a worker.
+
+- `--allow-idle-foreign` is gone: every GPU in `--devices` must hold zero foreign compute contexts.
+- One SM-clock and clock-event-reason sample per timed run; ledger fields `clk_n`, `clk_capped`,
+  `clk_mhz`, `throttled`, `throttle_reraces`. A cell with the SW power cap (0x4) active in more than 25%
+  of samples is re-raced once.
+- `sweep_to_table.py` flags cells whose whole-cell time drops more than 5x as batch grows at fixed other
+  keys (`--check`, table writes; `--remeasure-out` writes a `--remeasure-keys` file).
+- Not done, by decision: pipelined vs synchronous dual timing (it changes table semantics).
+
+**Missing:** confirm `clk_*` fields in a real ledger.
+
 ## Batch sensitivity: open debts
 
-- **F1, cold-L2 tuner protocol: not implemented.** Every sm_120 row is L2-warm, below the L2 edge it
-  over-ranks L2-friendly families. Needs a scrub (or buffer rotation) in `reset_and_run` and in
-  `minibench.hh`, a new `kProtocol` value (`tools/tune/ledger.hh:36`), not a hash bump, and a re-race of
-  gemm, gemv, trsm, symm, syrk, trmm, getrs, posv, ormqr, spmm. A/B blocked drivers with cold vs warm gemm
-  tables first: their panel gemms are L2-warm callers.
-- **F2, timing hygiene: not implemented.** Pipelined samples for floor-bound cells, clock and throttle
-  logging, no `--allow-idle-foreign`, a monotonicity gate feeding `--remeasure-keys`.
+- **Unfinished work (2026-10-23):** cold protocol and hygiene (above), and L2 chunking in syev
+  ([syev](syev.md#syev-l2-batch-chunking)), geqrf/orgqr/ormqr ([qr](qr.md#qr-l2-batch-chunking)) and
+  gesvd ([gesvd](gesvd.md#gesvd-l2-batch-chunking)): code and tests in, chunk rules unmeasured.
+- **stedc deflation scan read device memory on the host** at merge order >= 512 (gesvd n=256 via bdsdc,
+  syev n=512) and segfaulted on a `malloc_device` workspace; it now copies the kept widths to the host
+  (`StedcTest.DeviceWorkspaceAtTheDeflationScanOrder`). The scan is still batch-global and syncs per merge level.
+- **syev two_stage and stedc chunking:** not assessed by measurement. two_stage sizes every per-item array
+  for the whole batch; `sytrd_sy2sb` buffer sizing calls `malloc_shared`/`free` per query.
 - **The ~220 contaminated cells** (C5) need re-measurement before any batch-axis collapse is fitted.
 - **sm_89 tables are untimed transcriptions.** Its 72 MB L2 moves the warm/cold edge to about half the
   sm_120 batch; no sm_120 batch window carries over.

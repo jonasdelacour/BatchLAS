@@ -499,6 +499,26 @@ batch 1048576 gives 0.0071809 (4.7% better) in 24083 MiB (the run that caused th
 the knee, where a 4× batch step buys less than 5%. The bake-off driver enforces about 1.5 GB estimated footprint, a
 3 GB hard abort per invocation and a 120 s timeout, and reports a cell that does not reach its knee within them.
 
+## syev: L2 batch chunking {#syev-l2-batch-chunking}
+
+> **Status:** implemented and tested, chunk rule unmeasured (work stopped 2026-10-23).
+
+`syev_cta` and `syev_blocked` run the batch in parts of `tuning::blocked_chunk_items` items, an item
+counted as three n x n matrices (A, Z and the reflector pack or stedc merge matrix), not the part
+workspace: the cta workspace is 435 KB per item at float n=16 (mostly `steqr_wg`'s rotation store, which
+the CTA path never uses), and sizing by it shrank parts to 188 items and ran about 10x slower. Eigenvalues
+offset by `b0*n`, info by `b0`; workspace for one part (`chunk + batch % chunk`); `syev_cta` waits between
+parts on an out-of-order queue. `cta_fused` is one kernel and is not chunked.
+
+Screens (sm_120, float cta n=16, 3 reps, not verdicts): b131072 default chunk 32900, cold 27.47 -> 24.09 ns
+per item, warm 27.59 -> 24.11 (-12.5%); b16384 (one part) unchanged. Forced chunks at b131072: 8272
+items 0.991, 16544 items 0.901. Chunking also cuts the cta n=16 b131072 workspace from 57 GB to 261 MB.
+
+**Missing:** the forced-chunk sweep that picks the percent (float n=8/16/32 cta, n=64/128/256 blocked,
+cfloat n=16 cta and n=128 blocked), the full cold/warm grid with Auto arms, cfloat timing. If 75% is not
+best, add a per-op percent with a `BATCHLAS_TUNE_*` override in `tuning_params.hh`. `steqr_buffer_size`
+reserves the `steqr_wg` rotation store on the CTA path (open, separate).
+
 ## syev: open debts and unmeasured items
 
 ### syev: open debt, the single-read panel symv

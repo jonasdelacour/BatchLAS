@@ -470,8 +470,6 @@ void stedc_merge_step(Queue& ctx,
 
     int64_t dd_max = n;
     if (n >= stedc_deflation_gemm_min_n) {
-        // A copy, never a host read of the span: it lives in the caller's workspace, which may be
-        // device memory (a direct read segfaulted gesvd n=256 and syev n=512 on malloc_device ws).
         ctx.wait();
         std::vector<int32_t> host_reduced(static_cast<size_t>(batch_size));
         ctx->memcpy(host_reduced.data(), n_reduced.data(), sizeof(int32_t) * host_reduced.size()).wait();
