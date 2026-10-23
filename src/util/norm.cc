@@ -7,7 +7,6 @@
 #include <src/linalg-impl.hh>
 #include <src/queue.hh>
 #include <src/math-helpers.hh>
-#include <src/ops/syev/vendor.hh>
 #include <src/sycl/sscp_target.hh>
 
 namespace batchlas
@@ -39,26 +38,10 @@ namespace batchlas
         UnifiedVector<Real> eigenvalues(static_cast<size_t>(batch_size) * n);
         auto eigen_span = eigenvalues.to_span();
 
-        Event e;
-        if constexpr (B == Backend::SYCL) {
-            // No vendor solver: the public syev's native kernels on the queue's device.
-            auto workspace = ctx.workspace(
-                syev_buffer_size<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower));
-            e = syev<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower, workspace.span());
-        } else {
-            const size_t ws_bytes = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
-                                                                            A_copy,
-                                                                            eigen_span,
-                                                                            JobType::NoEigenVectors,
-                                                                            Uplo::Lower);
-            auto workspace = ctx.workspace(ws_bytes);
-            e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx,
-                                                 A_copy,
-                                                 eigen_span,
-                                                 JobType::NoEigenVectors,
-                                                 Uplo::Lower,
-                                                 workspace.span());
-        }
+        // The public syev, so selection decides vendor vs native (a vendor-free build has no vendor).
+        auto workspace = ctx.workspace(
+            syev_buffer_size<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower));
+        Event e = syev<B, T>(ctx, A_copy, eigen_span, JobType::NoEigenVectors, Uplo::Lower, workspace.span());
         ctx.enqueue(e);
 
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {

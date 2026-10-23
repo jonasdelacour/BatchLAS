@@ -81,6 +81,7 @@ set(TEST_TARGETS
     hemm_tests
     herk_tests
     her2k_tests
+    hermitian_candidates_tests
     syrk_tests
     syr2k_tests
     syr2k_candidates_tests
@@ -180,7 +181,7 @@ set(BATCHLAS_TEST_LABELS_util
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
+    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
@@ -452,6 +453,9 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     syrk_tests   "BATCHLAS_SYRK_ROUTE=native"
     syr2k_tests  "BATCHLAS_SYR2K_ROUTE=native"
     trmm_tests   "BATCHLAS_TRMM_ROUTE=native"
+    hemm_tests   "BATCHLAS_HEMM_ROUTE=native"
+    herk_tests   "BATCHLAS_HERK_ROUTE=native"
+    her2k_tests  "BATCHLAS_HER2K_ROUTE=native"
 )
 
 function(batchlas_add_route_pinned_test test_name env)

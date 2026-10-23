@@ -191,10 +191,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
     }
-    if (m != n) {
-        throw batchlas::invalid_argument(
-            "getrf_blocked: A must be square (getrf.cc's can_run refuses m != n)");
-    }
+    // m x n is ?GETRF's own loop: min(m, n) panels of full remaining height, every
+    // interchange and update spanning all n columns. The pivot list's stride is min(m, n).
+    const int mn = std::min(m, n);
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
     }
@@ -207,8 +206,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
             "getrf_blocked: device does not offer sub-group size 32, which the panel leaf "
             "requires");
     }
-    if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw batchlas::invalid_argument("getrf_blocked: pivot span is shorter than n * batch");
+    if (pivots.size() < static_cast<std::size_t>(mn) * static_cast<std::size_t>(batch)) {
+        throw batchlas::invalid_argument(
+            "getrf_blocked: pivot span is shorter than min(m, n) * batch");
     }
     {
         // min_blocks_per_sm = 1: the question is whether the panel leaf's argmax slots can
@@ -236,8 +236,12 @@ Event getrf_blocked_dispatch(Queue& ctx,
             "file, chooses the trsm candidate.");
     }
 
-    const int nb = getrf_blocked_nb<T>(n);
-    const LeftLaswp mode = getrf_left_laswp_mode();
+    const int nb = getrf_blocked_nb<T>(mn);
+    // The deferred gather stages R = n - k0 rows for n - k0 transpositions: a tall item moves
+    // rows below min(m, n), so it takes the walk.
+    const LeftLaswp mode = (m > n && getrf_left_laswp_mode() == LeftLaswp::DeferGather)
+                               ? LeftLaswp::DeferWalk
+                               : getrf_left_laswp_mode();
     const PanelLeaf leaf_mode = getrf_panel_leaf_mode();
     const std::size_t local_mem_all = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
@@ -274,23 +278,23 @@ Event getrf_blocked_dispatch(Queue& ctx,
             nr, nc, ld, stride, batch, ptrs.data());
     };
 
-    for (int j0 = 0; j0 < n; j0 += nb) {
-        const int ib = std::min(nb, n - j0);   // THE SHORT FINAL PANEL, here only
-        const int mp = n - j0;                 // panel height, and A22's height + ib
+    for (int j0 = 0; j0 < mn; j0 += nb) {
+        const int ib = std::min(nb, mn - j0);  // THE SHORT FINAL PANEL, here only
+        const int mp = m - j0;                 // panel height, and A22's height + ib
         const int j2 = j0 + ib;
         const int n2 = n - j2;                 // trailing columns; ZERO on the last panel
         const int m2 = mp - ib;                // trailing rows;    ZERO on the last panel
 
-        // (P) piv_stride is n and piv_base is j0, which is what makes ipiv global
+        // (P) piv_stride is min(m, n) and piv_base is j0, which is what makes ipiv global
         // 1-based and info a global column index with no fix-up. The two leaves answer the
         // SAME contract: nothing below this line depends on which one ran.
         T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
         if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
             (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
-                                               piv_ptr, n, j0, info.data());
+                                               piv_ptr, mn, j0, info.data());
         } else {
             (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
-                                           piv_ptr, n, j0, info.data(), nullptr);
+                                           piv_ptr, mn, j0, info.data(), nullptr);
         }
 
         // A caller may build an out-of-order queue, so every dependent edge guards itself.
@@ -301,7 +305,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         if (mode == LeftLaswp::InLoop && j0 > 0) {
             (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                 ctx, a_ptr, ld, stride, /*ncols=*/j0, batch,
-                piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+                piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
             if (!ctx.in_order()) ctx.wait();
         }
 
@@ -310,14 +314,14 @@ Event getrf_blocked_dispatch(Queue& ctx,
         // (S-right) The same interchanges on the trailing columns, before (T) reads them.
         const bool gathered = getrf_right_gather<T>(mp) &&
             lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
+                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/mn,
                 /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
                 slm_budget, max_wg);
         if (!gathered) {
             (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                 ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
                 /*ncols=*/n2, batch,
-                piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+                piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
         }
         if (!ctx.in_order()) ctx.wait();
 
@@ -341,27 +345,27 @@ Event getrf_blocked_dispatch(Queue& ctx,
         }
     }
 
-    // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, n) in increasing k.
+    // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, mn) in increasing k.
     // Extents come from ib and j0, never nb: a loop written from the block COUNT
     // reads past the pivot list at n = 129.
     if (mode != LeftLaswp::InLoop) {
         bool done = false;
         if (mode == LeftLaswp::DeferGather) {
             done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
-                n, nb, slm_budget, max_wg);
+                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/mn,
+                mn, nb, slm_budget, max_wg);
             if (done && !ctx.in_order()) ctx.wait();
         }
         if (!done) {
             // Fallback, never a throw: taken when the staging tile will not fit SLM.
-            for (int c0 = 0; c0 < n; c0 += nb) {
-                const int ib = std::min(nb, n - c0);
+            for (int c0 = 0; c0 < mn; c0 += nb) {
+                const int ib = std::min(nb, mn - c0);
                 const int k0 = c0 + ib;
-                if (k0 >= n) break;              // the last block: nothing deferred
+                if (k0 >= mn) break;             // the last block: nothing deferred
                 (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                     ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
                     /*ncols=*/ib, batch,
-                    piv_ptr, /*piv_stride=*/n, /*k0=*/k0, /*k1=*/n, /*forward=*/true);
+                    piv_ptr, /*piv_stride=*/mn, /*k0=*/k0, /*k1=*/mn, /*forward=*/true);
                 if (!ctx.in_order()) ctx.wait();
             }
         }

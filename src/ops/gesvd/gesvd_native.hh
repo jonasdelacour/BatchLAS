@@ -32,7 +32,8 @@ constexpr std::int64_t gesvd_jacobi_max_dim(bool want_vectors, std::size_t slm_b
     return 0;
 }
 
-// Largest max(m, n) gesvd_cta accepts: one sub-group per matrix.
+// Largest max(m, n) of gesvd_cta (one sub-group per matrix) and of cuSOLVER's gesvdjBatched.
 inline constexpr std::int64_t kGesvdCtaMaxDim = 32;
+inline constexpr std::int64_t kGesvdVendorCudaMaxDim = 32;
 
 }  // namespace batchlas::sycl_gesvd

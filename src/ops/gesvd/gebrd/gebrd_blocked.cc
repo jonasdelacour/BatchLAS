@@ -5,6 +5,7 @@
 #include <batchlas/util/group-collectives.hh>
 
 #include <src/math-helpers.hh>
+#include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -98,8 +99,11 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
     return ctx.get_event();
 }
 
+// LAPACK ?labrd + the trailing gemm. Complex follows zlabrd: rows hold conj(u) on exit (unmbr 'P'
+// order), d and e are real, and between generating and storing a right reflector its row is
+// conjugated. For real T every conj() below is the identity.
 template <Backend B, typename T>
-Event gebrd_blocked_real(Queue& ctx,
+Event gebrd_blocked_impl(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& a_in,
                          const VectorView<typename base_type<T>::type>& d_out,
                          const VectorView<typename base_type<T>::type>& e_out,
@@ -107,8 +111,9 @@ Event gebrd_blocked_real(Queue& ctx,
                          const VectorView<T>& taup_out,
                          const Span<std::byte>& ws,
                          int32_t block_size) {
-    static_assert(!internal::is_complex<T>::value, "gebrd_blocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
+    using gebrd_detail::conj;
+    constexpr bool kComplex = internal::is_complex<T>::value;
 
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
 
@@ -172,7 +177,7 @@ Event gebrd_blocked_real(Queue& ctx,
                         T val = A(r, gi, b);
                         for (int32_t k = 0; k < ii; ++k) {
                             const int32_t gk = j0 + k;
-                            val -= A(r, gk, b) * Y(gi, k, b);
+                            val -= A(r, gk, b) * conj(Y(gi, k, b));
                             val -= X(r, k, b) * A(gk, gi, b);
                         }
                         A(r, gi, b) = val;
@@ -182,7 +187,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     Real sigma_partial = Real(0);
                     for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
                         const T ari = A(r, gi, b);
-                        sigma_partial += ari * ari;
+                        sigma_partial += internal::norm_squared(ari);
                     }
                     const Real sigma = batchlas::portable::reduce_over_group(g, sigma_partial, sycl::plus<Real>());
 
@@ -195,7 +200,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_q = alpha;
                     T scale_q = T(0);
                     if (lid == 0) {
-                        const auto scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - gi);
+                        const auto scalars = gebrd_detail::larfg_real_beta(alpha, sycl::sqrt(sigma), m - gi);
                         beta_q = scalars.beta;
                         tau_q = scalars.tau;
                         scale_q = scalars.scale;
@@ -205,7 +210,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     scale_q = batchlas::portable::group_broadcast(g, scale_q);
 
                     if (lid == 0) {
-                        D(gi, b) = static_cast<Real>(beta_q);
+                        D(gi, b) = internal::real_part(beta_q);
                         TAUQ(gi, b) = tau_q;
                     }
 
@@ -229,8 +234,8 @@ Event gebrd_blocked_real(Queue& ctx,
                         T sum_x_partial = T(0);
                         for (int32_t r = gi + lid; r < m; r += local_size) {
                             const T argi = A(r, gi, b);
-                            sum_a_partial += A(r, gk, b) * argi;
-                            sum_x_partial += X(r, k, b) * argi;
+                            sum_a_partial += conj(A(r, gk, b)) * argi;
+                            sum_x_partial += conj(X(r, k, b)) * argi;
                         }
                         const T sum_a = batchlas::portable::reduce_over_group(g, sum_a_partial, sycl::plus<T>());
                         const T sum_x = batchlas::portable::reduce_over_group(g, sum_x_partial, sycl::plus<T>());
@@ -244,23 +249,24 @@ Event gebrd_blocked_real(Queue& ctx,
                     for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
                         T y = T(0);
                         for (int32_t r = gi; r < m; ++r) {
-                            y += A(r, c, b) * A(r, gi, b);
+                            y += conj(A(r, c, b)) * A(r, gi, b);
                         }
                         for (int32_t k = 0; k < ii; ++k) {
                             y -= Y(c, k, b) * work_local[k];
-                            y -= A(j0 + k, c, b) * work_local[nb + k];
+                            y -= conj(A(j0 + k, c, b)) * work_local[nb + k];
                         }
                         Y(c, ii, b) = tau_q * y;
                     }
                     item.barrier(sycl::access::fence_space::global_space);
 
                     for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                        T val = A(gi, c, b);
+                        // The conjugated row: zlabrd's lacgv before the right reflector.
+                        T val = conj(A(gi, c, b));
                         for (int32_t k = 0; k <= ii; ++k) {
-                            val -= Y(c, k, b) * A(gi, j0 + k, b);
+                            val -= Y(c, k, b) * conj(A(gi, j0 + k, b));
                         }
                         for (int32_t k = 0; k < ii; ++k) {
-                            val -= A(j0 + k, c, b) * X(gi, k, b);
+                            val -= conj(A(j0 + k, c, b)) * conj(X(gi, k, b));
                         }
                         A(gi, c, b) = val;
                     }
@@ -269,7 +275,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     Real sigma_r_partial = Real(0);
                     for (int32_t c = gi + 2 + lid; c < n; c += local_size) {
                         const T aic = A(gi, c, b);
-                        sigma_r_partial += aic * aic;
+                        sigma_r_partial += internal::norm_squared(aic);
                     }
                     const Real sigma_r = batchlas::portable::reduce_over_group(g, sigma_r_partial, sycl::plus<Real>());
 
@@ -282,7 +288,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     T beta_p = alpha_r;
                     T scale_p = T(0);
                     if (lid == 0) {
-                        const auto scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
+                        const auto scalars = gebrd_detail::larfg_real_beta(alpha_r, sycl::sqrt(sigma_r), n - (gi + 1));
                         beta_p = scalars.beta;
                         tau_p = scalars.tau;
                         scale_p = scalars.scale;
@@ -292,7 +298,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     scale_p = batchlas::portable::group_broadcast(g, scale_p);
 
                     if (lid == 0) {
-                        E(gi, b) = static_cast<Real>(beta_p);
+                        E(gi, b) = internal::real_part(beta_p);
                         TAUP(gi, b) = tau_p;
                         A(gi, gi + 1, b) = T(1);
                     }
@@ -306,7 +312,7 @@ Event gebrd_blocked_real(Queue& ctx,
                     for (int32_t k = 0; k <= ii; ++k) {
                         T sum_y_partial = T(0);
                         for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
-                            sum_y_partial += Y(c, k, b) * A(gi, c, b);
+                            sum_y_partial += conj(Y(c, k, b)) * A(gi, c, b);
                         }
                         const T sum_y = batchlas::portable::reduce_over_group(g, sum_y_partial, sycl::plus<T>());
                         if (lid == 0) {
@@ -339,6 +345,12 @@ Event gebrd_blocked_real(Queue& ctx,
                         X(r, ii, b) = tau_p * x;
                     }
                     item.barrier(sycl::access::fence_space::global_space);
+                    if constexpr (kComplex) {
+                        for (int32_t c = gi + 1 + lid; c < n; c += local_size) {
+                            A(gi, c, b) = conj(A(gi, c, b));
+                        }
+                        item.barrier(sycl::access::fence_space::global_space);
+                    }
                 }
 
                 if (lid == 0 && n > 0) {
@@ -355,7 +367,7 @@ Event gebrd_blocked_real(Queue& ctx,
             auto x2 = x_mat({j2, SliceEnd()}, {0, ib});
             auto u2 = a({j0, j2}, {j2, SliceEnd()});
 
-            (void)gemm<B>(ctx, v2, y2, a22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::Trans});
+            (void)gemm<B>(ctx, v2, y2, a22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
             (void)gemm<B>(ctx, x2, u2, a22, {.alpha = T(-1), .beta = T(1)});
         }
     }
@@ -375,11 +387,7 @@ Event gebrd_blocked(Queue& ctx,
                     const VectorView<T>& taup_out,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
-    if constexpr (internal::is_complex<T>::value) {
-        throw batchlas::unsupported("gebrd_blocked: complex types are not implemented");
-    } else {
-        return gebrd_blocked_real<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);
-    }
+    return gebrd_blocked_impl<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);
 }
 
 template <Backend B, typename T>

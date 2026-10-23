@@ -81,9 +81,10 @@ private:
 /// @ingroup api_config
 struct RoutingSettings {
     /// @brief The ops that read a route variable, by their `<op>` spelling.
-    static constexpr std::array<std::string_view, 19> ops{
+    static constexpr std::array<std::string_view, 22> ops{
         "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
-        "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm"};
+        "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm",
+        "hemm", "herk", "her2k"};
 
     /// @brief `BATCHLAS_<OP>_ROUTE`, in `ops` order.
     std::array<EnvValue, ops.size()> values{};
@@ -117,14 +118,6 @@ private:
 /// @ingroup api_config
 // evidence: docs/design/environment.md#environment-knobs-that-override-an-explicit-argument
 struct SelectionSettings {
-    /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route of hemm, herk
-    /// and her2k, so a test can reach the arm the shape would not have picked (symm and trmm pin
-    /// `expand` through their `BATCHLAS_<OP>_ROUTE`). Not op-keyed, so RoutingSettings does not
-    /// hold it.
-    // Read at two sites (src/expansion_budget.hh, src/kernels/common/triangular_expand.hh) by two
-    // independent parsers that currently agree; both read this one field.
-    EnvValue expand_route{};
-
     /// `BATCHLAS_GEMV_SEGT` = `off` | `auto` | `2` | `4` | `8`: segmented-tail width of the
     /// native gemv.
     // Never latch it in a static: a later setenv goes unseen and tests pass on the default arm.

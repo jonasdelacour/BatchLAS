@@ -14,7 +14,7 @@ namespace batchlas::ops::geqrf {
 
 struct Tiny : select::NoFields<"tiny"> {};        ///< geqrf_tiny_dispatch: square, registers, n <= the tiny ceiling
 struct Cta : select::NoFields<"cta"> {};          ///< geqrf_cta_dispatch: the whole panel in SLM (geqrf_cta_fits)
-struct Blocked : select::NoFields<"blocked"> {};  ///< geqrf_blocked_dispatch + the public gemm, any m >= n
+struct Blocked : select::NoFields<"blocked"> {};  ///< geqrf_blocked_dispatch + the public gemm, any m x n
 struct Vendor : select::NoFields<"vendor"> {};    ///< backend::geqrf_vendor; needs the factorization library
 
 using GeqrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;  ///< fieldless: buckets, packing, nb, leaf derived

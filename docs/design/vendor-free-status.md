@@ -65,21 +65,21 @@ selected in `src/ops/<op>/<op>.cc`). "Transcribed" means the rows reproduce the 
 | `trsm` | `cta`, `sg_left`, `blocked`. Transcribed: native from `batch >= 8`; `float`/`Side::Right` also need `batch >= 128 \|\| order <= 32`. | Census 32, all host rows. |
 | `potrf` | `tiny`, `cta`, `lpanel`, `blocked`. Measured per cell. | `Uplo::Upper` refused by the blocked driver (`src/ops/potrf/potrf.cc`). Complex (0.311–0.509×) and `n <= 256` are vendor-first ([potrf.md](../perf/potrf.md)). |
 | `posv` | `tiny`, `cta`, `blocked`. No vendor family. | None recorded. |
-| `geqrf` | `tiny`, `cta`, `blocked`. Transcribed: above a per-type order floor (`float` 64, `cfloat` 48, `double` 76, `cdouble` 256); tall panels `n >= 32 && aspect >= 4` (8 for 64-bit types). | Census 44, host rows. Below the floor the vendor wins, to 0.02× at `double` n = 8. Tall clause `rows >= 128` is not a bracketed edge; `double` 128x32 is 0.68× ([small-n-baseline.md](../perf/small-n-baseline.md#geqrf)). |
+| `geqrf` | `tiny`, `cta`, `blocked`. Transcribed: above a per-type order floor (`float` 64, `cfloat` 48, `double` 76, `cdouble` 256); tall panels `n >= 32 && aspect >= 4` (8 for 64-bit types). Wide (m < n): `cta`/`blocked` on every shape, 2.2-132x over cuSOLVER where measured; the wide rows still rank the vendor first until a ledger retune ([qr.md](../perf/qr.md#geqrf-wide-shapes-m-less-than-n)). | Census 44, host rows. Below the floor the vendor wins, to 0.02× at `double` n = 8. Tall clause `rows >= 128` is not a bracketed edge; `double` 128x32 is 0.68× ([small-n-baseline.md](../perf/small-n-baseline.md#geqrf)). |
 | `orgqr` | `blocked`. Transcribed: `rows <= 512 && cols <= 512`. | Vendor wins above n = 512. Host rows refused. |
 | `ormqr` | `blocked`, then `vendor` on every row. | Census 24, host rows. |
-| `getrf` | `tiny`, `cta`, `blocked`. Transcribed: `float` order >= 256; `cfloat` order >= 512 (>= 256 at `batch >= 256`). | `double` and `complex<double>` earn nothing at any order ([lu.md](../perf/lu.md)). |
+| `getrf` | `tiny`, `cta`, `blocked`. Transcribed: `float` order >= 256; `cfloat` order >= 512 (>= 256 at `batch >= 256`). Non-square m x n: `cta`/`blocked` only, since cuBLAS is square-only ([lu.md](../perf/lu.md#getrf-non-square-m-x-n)). | `double` and `complex<double>` earn nothing at any order ([lu.md](../perf/lu.md)). |
 | `getrs` | `cta`, `blocked`. Transcribed: `cta` at `nrhs <= 2` (all types), `nrhs <= 4` (`float`); `blocked` at `batch >= 128` with `float` `nrhs >= 64` or `double` `nrhs >= 128`. | Clauses A and B hand 84 winning cells to the vendor (largest 3.944×). |
 | `getri` | `blocked`. Transcribed: `float` order >= 128, `cfloat` order >= 256. | Census 16, host rows. Unrouted win at `batch <= 32`, every type (see levers below). |
 | `gesv` | `tiny`, `blocked`. No vendor family. | None recorded. |
 | `spmm` | `direct`. Transcribed: CSR, `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans`. | Census 0. Transposed scatter is vendor-first: 169 of 458 saturated cells lose, worst 3.011, and no clause recovers a window ([spmm.md](../perf/spmm.md)). |
 | `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`. Transcribed from the old CUDA grid. | Census 87. Four call sites demand the vendor `syev_vendor_or_throw` and throw vendor-free: `src/util/cond.cc:54`, `src/util/norm.cc:47`, `src/ops/syevx/kernels/syevx_lobpcg.cc:546` and `:1076`. Fix: call the public `syev` ([known-defects #2](known-defects.md)). |
-| `gesvd` | `jacobi`, `cta`, `blocked`. Transcribed: real 33..64 is `blocked\|vendor\|jacobi` ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)). | Host rows refused. |
-| `symm` | Hand-rolled `if` chain. `expand` (mirrored expansion + public `gemm`; needs `expansion_fits`). No tile kernel. | Census 8. At the snapshot, `double` had no expansion route; the flat-selection spec lists `expand` for both types. Reconcile before relying on either. |
-| `syrk` | Hand-rolled. `gram` (`n <= 128`, float and double), `triangular` (float). | Census 12. Non-float tiles are reachable only from `cublas.cc`. |
-| `syr2k` | `triangular` (float only). A real ConjTrans runs as Trans. | Census 10. No non-float tile route; `syr2k_triangular_tiles` has one call site, in the float-only dispatcher. |
-| `trmm` | `triangular` (`Side::Left`), `expand`. | Census 16. The `double`/complex tile branch is reachable only from `cublas.cc`. |
-| `hemm`, `herk`, `her2k` | None: vendor or `NoRouteError`. | Census 12, 16, 12. No native arm in the facade (`src/ops/level3/level3.cc:23-70`). |
+| `gesvd` | `jacobi`, `cta`, `blocked`. Transcribed: real 33..64 is `blocked\|vendor\|jacobi` ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)). `blocked` serves complex general and Hermitian Upper at every size since 2026-10-22 ([evidence](../perf/gesvd.md#gesvd-complex-general-on-the-blocked-path)). | Host rows refused. |
+| `symm` | `expand` (mirrored expansion + public `gemm`, chunked to the scratch budget and grid z) for every dtype (complex is complex-symmetric since 2026-10-22). | Census 8 at the snapshot; none on a GPU since 2026-10-22 except an item whose own scratch does not fit. |
+| `syrk` | `gram` (`n <= 128`), `triangular` (float, double, complex<float>), batch chunked. | Census 12 at the snapshot; none on a GPU since 2026-10-22 (complex<double> above n = 128 is vendor-only). |
+| `syr2k` | `triangular` (float, double, complex<float>), batch chunked. A real ConjTrans runs as Trans. | Census 10 at the snapshot; none on a GPU since 2026-10-22 except complex<double> (vendor-only). |
+| `trmm` | `triangular` (`Side::Left`, every dtype), `expand` (either side), both batch-chunked. | Census 16 at the snapshot (host rows). |
+| `hemm`, `herk`, `her2k` | Table-selected since 2026-10-22: hemm `expand`; herk `gram`, `triangular` (cfloat), `fold`; her2k `triangular` (cfloat), `fold`. | Census 12, 16, 12 at the snapshot; none on a GPU since (ROCm too, through `expand`/`fold`). |
 
 Rows that stay vendor-first by measurement are the vendor's wins; kernel work will not change them.
 
@@ -93,11 +93,12 @@ Blockers, by census:
 1. **Host (`Backend::NETLIB`) path (WP9).** Most of the residue. Covers all 32 vendor-free `trsm`
    failures, all 12 `sytrd_blocked`, 8 `ortho_tests` and 20 `cond_tests`.
 2. **`syev`, 87.** Partly a routing-vocabulary defect (see the table).
-3. **`hemm`, `herk`, `her2k`, 40.** No native arm.
-4. **Level-3 non-float.** `trmm` 16, `syrk` 12, `syr2k` 10, `symm` 8.
+3. **`hemm`, `herk`, `her2k`, 40.** Closed on GPU queues 2026-10-22 (native families); host rows remain.
+4. **Level-3 non-float.** `trmm` 16, `syrk` 12, `syr2k` 10, `symm` 8 at the snapshot; the GPU rows closed
+   2026-10-22 (double tiles, chunked batches); host rows remain.
 5. **`geqrf` 44, `ormqr` 24, `getri` 16.** Host rows and refused shapes.
-6. **`potrf` `Uplo::Upper`.** A correctness refusal. Fix by mirroring the upper triangle and running
-   the Lower pipeline, as `syev` does.
+6. **`potrf` `Uplo::Upper`.** Closed 2026-10-22: the blocked driver has an Upper schedule
+   ([evidence](../perf/potrf.md#the-blocked-upper-driver)); posv Upper inherits it.
 
 ## M2: vendor-free by default, cell by cell
 

@@ -512,6 +512,70 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
     });
 }
 
+// dst's leading rows(src) x cols(src) block := src, widened to T; the rest of dst is untouched.
+template <typename T>
+void expand_real_block(Queue& ctx, const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& src,
+                       const MatrixView<T, MatrixFormat::Dense>& dst) {
+    auto& dst_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(dst);
+    const int32_t rows = static_cast<int32_t>(src.rows());
+    const int32_t cols = static_cast<int32_t>(src.cols());
+    ctx->submit([&](sycl::handler& h) {
+        auto S = src.kernel_view();
+        auto D = dst_mut.kernel_view();
+        h.parallel_for(sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
+                       [=](sycl::id<2> id) {
+            const int32_t b = static_cast<int32_t>(id[0]);
+            const int32_t lin = static_cast<int32_t>(id[1]);
+            const int32_t c = lin / rows;
+            const int32_t r = lin - c * rows;
+            D(r, c, b) = T(S(r, c, b));
+        });
+    });
+}
+
+// A := its lower triangle mirrored into the upper (conjugated), in place: syev_blocked's small-n
+// sytrd reads both triangles, and the Upper input is already mirrored the other way inside it.
+template <typename T>
+void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a) {
+    auto& a_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a);
+    const int32_t n = static_cast<int32_t>(a.rows());
+    ctx->submit([&](sycl::handler& h) {
+        auto A = a_mut.kernel_view();
+        h.parallel_for(sycl::range<2>(static_cast<size_t>(a.batch_size()), static_cast<size_t>(n) * n),
+                       [=](sycl::id<2> id) {
+            const int32_t b = static_cast<int32_t>(id[0]);
+            const int32_t lin = static_cast<int32_t>(id[1]);
+            const int32_t c = lin / n;
+            const int32_t r = lin - c * n;
+            if (r > c) A(c, r, b) = batchlas::device::detail::conj(A(r, c, b));
+        });
+    });
+}
+
+// dst := src^H (src^T for real T, which keeps the existing transpose kernel).
+template <typename T>
+void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst) {
+    if constexpr (!internal::is_complex<T>::value) {
+        (void)transpose(ctx, src, dst);
+    } else {
+        auto& dst_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(dst);
+        const int32_t rows = static_cast<int32_t>(src.rows());
+        const int32_t cols = static_cast<int32_t>(src.cols());
+        ctx->submit([&](sycl::handler& h) {
+            auto S = src.kernel_view();
+            auto D = dst_mut.kernel_view();
+            h.parallel_for(sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
+                           [=](sycl::id<2> id) {
+                const int32_t b = static_cast<int32_t>(id[0]);
+                const int32_t lin = static_cast<int32_t>(id[1]);
+                const int32_t c = lin / rows;
+                const int32_t r = lin - c * rows;
+                D(c, r, b) = batchlas::device::detail::conj(S(r, c, b));
+            });
+        });
+    }
+}
+
 template <typename T>
 void build_bidiag_vectors(Queue& ctx,
                           const VectorView<T>& bidiag_d,
@@ -720,9 +784,11 @@ Event gesvd_native_impl(Queue& ctx,
         throw batchlas::invalid_argument(std::string(where) + ": requires an in-order Queue");
     }
 
-    if constexpr (internal::is_complex<T>::value) {
-        throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
-    } else {
+    // Complex: gebrd reduces to a REAL bidiagonal, so the real bdsdc/bdsqr solve it into real
+    // scratch that expand_real_block widens; the normal-equations branch is real-only.
+    using Real = typename base_type<T>::type;
+    constexpr bool kComplex = internal::is_complex<T>::value;
+    {
         const int32_t m = static_cast<int32_t>(a_in.rows());
         const int32_t n = static_cast<int32_t>(a_in.cols());
         const int32_t k = std::min(m, n);
@@ -793,8 +859,9 @@ Event gesvd_native_impl(Queue& ctx,
                 vht_view = MatrixView<T, MatrixFormat::Dense>(vht_dummy.data(), 1, 1, 1, 1, batch);
             }
 
+            // Complex: A^H = U' S V'^H gives A = V' S U'^H, so every transpose here is an adjoint.
             profiler.run("gesvd.transpose_input", [&] {
-                (void)transpose(ctx, a_in, at_view);
+                adjoint_into<T>(ctx, a_in, at_view);
             });
 
             // trans_jobu / trans_jobvh are computed above, next to ut_view's
@@ -828,12 +895,12 @@ Event gesvd_native_impl(Queue& ctx,
 
             if (want_u) {
                 profiler.run("gesvd.transpose_u", [&] {
-                    (void)transpose(ctx, vht_view, u_out);
+                    adjoint_into<T>(ctx, vht_view, u_out);
                 });
             }
             if (want_vh) {
                 profiler.run("gesvd.transpose_vh", [&] {
-                    (void)transpose(ctx, ut_view, vh_out);
+                    adjoint_into<T>(ctx, ut_view, vh_out);
                 });
             }
 
@@ -845,7 +912,7 @@ Event gesvd_native_impl(Queue& ctx,
         const bool use_blocked_gebrd = gesvd_use_blocked_gebrd(k, mode);
         const int32_t gebrd_block_size = tuning::gebrd_block_size_for_n(k);
         const bool thin_tall_u = want_u && u_cols < m;
-        const bool direct_bidiag = gesvd_direct_bidiag(mode, thin_tall_u);
+        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(mode, thin_tall_u);
         // Only a FULL U needs order-m tridiagonal buffers; a thin U cannot reach
         // the normal-equations branch, so they shrink to k (else the m x m cost
         // of a 10000 x 32 problem just moves into the workspace).
@@ -855,8 +922,8 @@ Event gesvd_native_impl(Queue& ctx,
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
         BumpAllocator pool(ws_mut);
 
-        auto d_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(batch));
-        auto e_span = pool.allocate<T>(ctx, static_cast<size_t>(std::max(0, k - 1)) * static_cast<size_t>(batch));
+        auto d_span = pool.allocate<Real>(ctx, static_cast<size_t>(k) * static_cast<size_t>(batch));
+        auto e_span = pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, k - 1)) * static_cast<size_t>(batch));
         auto tauq_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(batch));
         auto taup_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(batch));
         auto tri_d_span = pool.allocate<T>(ctx, static_cast<size_t>(max_order) * static_cast<size_t>(batch));
@@ -864,8 +931,8 @@ Event gesvd_native_impl(Queue& ctx,
         auto evals_span = pool.allocate<T>(ctx, static_cast<size_t>(max_order) * static_cast<size_t>(batch));
         auto sign_span = pool.allocate<T>(ctx, static_cast<size_t>(max_order) * static_cast<size_t>(batch));
 
-        VectorView<T> d_view(d_span, k, batch, 1, k);
-        VectorView<T> e_view(e_span, std::max(0, k - 1), batch, 1, std::max(1, k - 1));
+        VectorView<Real> d_view(d_span, k, batch, 1, k);
+        VectorView<Real> e_view(e_span, std::max(0, k - 1), batch, 1, std::max(1, k - 1));
         VectorView<T> tauq_view(tauq_span, k, batch, 1, k);
         VectorView<T> taup_view(taup_span, k, batch, 1, k);
         VectorView<T> tri_d_right(tri_d_span, k, batch, 1, max_order);
@@ -886,7 +953,7 @@ Event gesvd_native_impl(Queue& ctx,
         // nor its buffers (at n=512 the largest allocation here), so skip them.
         // The sizing function is an upper bound covering both shapes.
         Span<std::byte> solver_ws;
-        if (!direct_bidiag) {
+        if constexpr (!kComplex) if (!direct_bidiag) {
             size_t solver_ws_bytes = gesvd_solver_workspace_size<B, T>(ctx, k, batch, tridiag_job, mode);
             if (want_u) {
                 solver_ws_bytes = std::max(solver_ws_bytes,
@@ -922,16 +989,16 @@ Event gesvd_native_impl(Queue& ctx,
         if (direct_bidiag) {
             const bool use_bdsdc = gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsdc;
             const size_t bidiag_ws_bytes =
-                use_bdsdc ? bdsdc_buffer_size<B, T>(ctx, d_view, e_view, singular_values, need_vecs)
-                          : bdsqr_buffer_size<T>(ctx, d_view, e_view, singular_values);
+                use_bdsdc ? bdsdc_buffer_size<B, Real>(ctx, d_view, e_view, singular_values, need_vecs)
+                          : bdsqr_buffer_size<Real>(ctx, d_view, e_view, singular_values);
             auto bidiag_ws = pool.allocate<std::byte>(ctx, bidiag_ws_bytes);
 
             if (!need_vecs) {
                 profiler.run("gesvd.bidiag_values", [&] {
                     if (use_bdsdc) {
-                        (void)bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
+                        (void)bdsdc<B, Real>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
                     } else {
-                        (void)bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
+                        (void)bdsqr<B, Real>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
                     }
                 });
                 return ctx.get_event();
@@ -944,21 +1011,36 @@ Event gesvd_native_impl(Queue& ctx,
                 profiler.run("gesvd.bidiag.seed_vh", [&] { set_identity<T>(ctx, vh_out); });
             }
 
-            const MatrixView<T, MatrixFormat::Dense> u_sub =
-                want_u ? MatrixView<T, MatrixFormat::Dense>(u_out.data_ptr(), m, k, u_out.ld(), u_out.stride(), batch)
-                       : MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, batch);
-            const MatrixView<T, MatrixFormat::Dense> vh_sub =
-                want_vh ? MatrixView<T, MatrixFormat::Dense>(vh_out.data_ptr(), k, n, vh_out.ld(), vh_out.stride(), batch)
-                        : MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, batch);
+            using RMV = MatrixView<Real, MatrixFormat::Dense>;
+            RMV u_sub(nullptr, 0, 0, 1, 1, batch);
+            RMV vh_sub(nullptr, 0, 0, 1, 1, batch);
+            if constexpr (kComplex) {
+                const auto kk = static_cast<int64_t>(k) * k;
+                if (want_u) {
+                    u_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch);
+                    set_identity<Real>(ctx, u_sub);
+                }
+                if (want_vh) {
+                    vh_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch);
+                    set_identity<Real>(ctx, vh_sub);
+                }
+            } else {
+                if (want_u) u_sub = RMV(u_out.data_ptr(), m, k, u_out.ld(), u_out.stride(), batch);
+                if (want_vh) vh_sub = RMV(vh_out.data_ptr(), k, n, vh_out.ld(), vh_out.stride(), batch);
+            }
 
             profiler.run("gesvd.bidiag_vectors", [&] {
                 if (use_bdsdc) {
-                    (void)bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
+                    (void)bdsdc<B, Real>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
                 } else {
-                    (void)bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
+                    (void)bdsqr<B, Real>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
                 }
             });
-        } else {
+            if constexpr (kComplex) {
+                if (want_u) expand_real_block<T>(ctx, u_sub, u_out);
+                if (want_vh) expand_real_block<T>(ctx, vh_sub, vh_out);
+            }
+        } else if constexpr (!kComplex) {
 
         profiler.run("gesvd.form_right_tridiag", [&] {
             form_right_tridiagonal(ctx, d_view, e_view, tri_d_right, tri_e_right);
@@ -1107,6 +1189,7 @@ Event gesvd_native_hermitian_impl(Queue& ctx,
             (void)syev_cta<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws,
                                  SteqrParams<T>(), /*cta_wg_size_multiplier=*/1, info);
         } else {
+            if (hermitian_uplo == Uplo::Lower) mirror_lower_to_upper<T>(ctx, a);
             (void)syev_blocked<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws,
                                      StedcParams<Real>(), info);
         }
@@ -1139,9 +1222,9 @@ size_t gesvd_native_buffer_size(Queue& ctx,
                                 const char* where) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
 
-    if constexpr (internal::is_complex<T>::value) {
-        throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
-    } else {
+    using Real = typename base_type<T>::type;
+    constexpr bool kComplex = internal::is_complex<T>::value;
+    {
         const size_t m = static_cast<size_t>(a.rows());
         const size_t n = static_cast<size_t>(a.cols());
         const size_t k = std::min(m, n);
@@ -1212,10 +1295,10 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         // Mirrors gesvd_native_impl: thin tall U forces the direct bidiagonal
         // solve, which makes the order-m buffers unreachable.
         const bool thin_tall_u = want_u && u_cols < m;
-        const bool direct_bidiag = gesvd_direct_bidiag(mode, thin_tall_u);
+        const bool direct_bidiag = kComplex || gesvd_direct_bidiag(mode, thin_tall_u);
         const size_t max_order = (want_u && u_cols == m) ? std::max(m, k) : k;
-        bytes += BumpAllocator::allocation_size<T>(ctx, k * batch);                                // d
-        bytes += BumpAllocator::allocation_size<T>(ctx, (k > 0 ? k - 1 : 0) * batch);             // e
+        bytes += BumpAllocator::allocation_size<Real>(ctx, k * batch);                             // d
+        bytes += BumpAllocator::allocation_size<Real>(ctx, (k > 0 ? k - 1 : 0) * batch);          // e
         bytes += BumpAllocator::allocation_size<T>(ctx, k * batch);                                // tauq
         bytes += BumpAllocator::allocation_size<T>(ctx, k * batch);                                // taup
         bytes += BumpAllocator::allocation_size<T>(ctx, max_order * batch);                        // tri_d
@@ -1232,15 +1315,19 @@ size_t gesvd_native_buffer_size(Queue& ctx,
         // plus stedc at order 2k) it dominates, and only this branch keeps
         // buffer_size an upper bound.
         if (direct_bidiag) {
-            VectorView<T> d_dummy(nullptr, k_i32, static_cast<int32_t>(batch), 1, k_i32);
+            VectorView<Real> d_dummy(nullptr, k_i32, static_cast<int32_t>(batch), 1, k_i32);
             const int32_t e_size = static_cast<int32_t>(k > 0 ? k - 1 : 0);
-            VectorView<T> e_dummy(nullptr, e_size, static_cast<int32_t>(batch), 1, std::max<int32_t>(1, e_size));
+            VectorView<Real> e_dummy(nullptr, e_size, static_cast<int32_t>(batch), 1, std::max<int32_t>(1, e_size));
             const size_t bidiag_bytes =
                 (gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsdc)
-                    ? bdsdc_buffer_size<B, T>(ctx, d_dummy, e_dummy, singular_values, need_vecs)
-                    : bdsqr_buffer_size<T>(ctx, d_dummy, e_dummy, singular_values);
+                    ? bdsdc_buffer_size<B, Real>(ctx, d_dummy, e_dummy, singular_values, need_vecs)
+                    : bdsqr_buffer_size<Real>(ctx, d_dummy, e_dummy, singular_values);
             bytes += BumpAllocator::allocation_size<std::byte>(ctx, bidiag_bytes);
-        } else {
+            if constexpr (kComplex) {  // the real k x k U_B / V_B^T scratch
+                if (want_u) bytes += BumpAllocator::allocation_size<Real>(ctx, k * k * batch);
+                if (want_vh) bytes += BumpAllocator::allocation_size<Real>(ctx, k * k * batch);
+            }
+        } else if constexpr (!kComplex) {
             if (tridiag_returns_vectors) {
                 bytes += BumpAllocator::allocation_size<T>(ctx, k * k * batch);          // right singular vectors
             }
@@ -1261,10 +1348,10 @@ size_t gesvd_native_buffer_size(Queue& ctx,
             bytes += BumpAllocator::allocation_size<std::byte>(ctx, solver_bytes);
         }
         if (use_blocked_gebrd) {
-            VectorView<T> d_dummy(nullptr, static_cast<int32_t>(k), static_cast<int32_t>(batch), 1, static_cast<int32_t>(k));
+            VectorView<Real> d_dummy(nullptr, static_cast<int32_t>(k), static_cast<int32_t>(batch), 1, static_cast<int32_t>(k));
             const int32_t e_size = static_cast<int32_t>(k > 0 ? k - 1 : 0);
             const int32_t e_stride = std::max<int32_t>(1, e_size);
-            VectorView<T> e_dummy(nullptr, e_size, static_cast<int32_t>(batch), 1, e_stride);
+            VectorView<Real> e_dummy(nullptr, e_size, static_cast<int32_t>(batch), 1, e_stride);
             VectorView<T> tauq_dummy(nullptr, static_cast<int32_t>(k), static_cast<int32_t>(batch), 1, static_cast<int32_t>(k));
             VectorView<T> taup_dummy(nullptr, static_cast<int32_t>(k), static_cast<int32_t>(batch), 1, static_cast<int32_t>(k));
             bytes += BumpAllocator::allocation_size<std::byte>(ctx,
@@ -1429,6 +1516,8 @@ Event gesvd_cta(Queue& ctx,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
+    // Its normal-equations branch is real-only; complex general is the blocked family's.
+    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
@@ -1512,6 +1601,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobu,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
+    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }

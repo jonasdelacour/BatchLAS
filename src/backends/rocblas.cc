@@ -274,9 +274,9 @@ namespace batchlas {
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor)
 
-    // syrk/syr2k are constrained to RealScalar T -- only instantiate for real types.
+    // syrk/syr2k: real only (no complex-symmetric wrapper; that dtype has no ROCm route).
     // There is no complex-only table here: rocBLAS carries no symm/hemm/herk/her2k
-    // wrapper at all, which is the omission level3.cc's ROCM arm mirrors exactly.
+    // wrapper at all, which is why hemm/herk/her2k's vendor can_run refuses ROCm.
     #define ROCBLAS_REAL_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)

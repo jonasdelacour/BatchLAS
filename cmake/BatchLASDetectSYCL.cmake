@@ -669,6 +669,42 @@ if(BATCHLAS_SYCL_RUNTIME_DIR AND NOT BATCHLAS_SYCL_RUNTIME_DIR IN_LIST CMAKE_PLA
     list(APPEND CMAKE_INSTALL_RPATH "${BATCHLAS_SYCL_RUNTIME_DIR}")
 endif()
 
+# Some intel/llvm builds (e79d489d, Jan 2026) lower reqd_work_group_size(1, 1, N) on NVPTX to
+# reqntidx=N then reqntidx=1 and no reqntidz: ptxas sees `.reqntid 1, 1` and every launch fails
+# with CUDA_ERROR_INVALID_VALUE. The same builds emit .maxntid for max_work_group_size, which
+# ptxas rejects next to .reqntid. Newer builds have the opposite behaviour (known defect #20),
+# so the gemm register functors pick their spelling from this probe of the device IR.
+set(BATCHLAS_NVPTX_REQD_WG_OK OFF)
+set(_reqd_probe_target "")
+foreach(_t IN LISTS BATCHLAS_SYCL_TARGETS)
+    if(_t MATCHES "^nvidia_gpu_sm_" AND NOT _reqd_probe_target)
+        set(_reqd_probe_target "${_t}")
+    endif()
+endforeach()
+if(_reqd_probe_target)
+    set(_reqd_dir "${PROJECT_BINARY_DIR}/CMakeFiles/batchlas_reqd_wg_probe")
+    file(MAKE_DIRECTORY "${_reqd_dir}")
+    file(WRITE "${_reqd_dir}/probe.cc"
+        "#include <sycl/sycl.hpp>\n"
+        "struct K { int* p; [[sycl::reqd_work_group_size(1, 1, 256)]] void operator()(sycl::nd_item<3> it) const"
+        " { p[it.get_global_linear_id()] = 1; } };\n"
+        "void f(sycl::queue& q, int* p) { q.parallel_for(sycl::nd_range<3>({1, 1, 256}, {1, 1, 256}), K{p}); }\n")
+    set(_reqd_args -fsycl -fsycl-targets=${_reqd_probe_target} -fsycl-device-only -S)
+    if(BATCHLAS_CUDA_PATH)
+        list(APPEND _reqd_args "--cuda-path=${BATCHLAS_CUDA_PATH}")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" ${_reqd_args} -o "${_reqd_dir}/probe.ll" "${_reqd_dir}/probe.cc"
+        RESULT_VARIABLE _reqd_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_reqd_rc EQUAL 0 AND EXISTS "${_reqd_dir}/probe.ll")
+        file(READ "${_reqd_dir}/probe.ll" _reqd_ir)
+        if(_reqd_ir MATCHES "\"reqntidx\", i32 256" AND _reqd_ir MATCHES "\"reqntidz\", i32 1")
+            set(BATCHLAS_NVPTX_REQD_WG_OK ON)
+        endif()
+    endif()
+    message(STATUS "NVPTX reqd_work_group_size lowering: ${BATCHLAS_NVPTX_REQD_WG_OK} (${_reqd_probe_target})")
+endif()
+
 # What a consumer's own SYCL translation units need (BatchLAS_SYCL_COMPILE_OPTIONS).
 set(BATCHLAS_SYCL_CONSUMER_OPTIONS -fsycl)
 

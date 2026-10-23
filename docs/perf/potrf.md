@@ -344,8 +344,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 3. **Small `n` (<= 256) loses for every type.** No blocked-driver tuning addresses it.
 4. **The strided-`ld` cost of the trailing gemm is not isolated.** The cheap probe (pack `L21` contiguous per panel,
    about 0.5 ms at n = 1024) was never run.
-5. **`Uplo::Upper` is unimplemented in the blocked driver** (`can_run` refuses it, `potrf.cc:50-53`). Ways out: mirror as
-   syev does, or use a transposed schedule.
+5. **`Uplo::Upper` in the blocked driver:** done, see [the blocked Upper driver](#the-blocked-upper-driver).
 6. **The trsm windows** were measured on the racing kernel above `q*batch ~ 65k` and not re-run. They survive as
    untimed rows of `tuned/trsm.sm_89.txt`.
 7. **The out-of-order-queue defect cannot be made to fail on this box.** Five dependent edges are guarded by
@@ -356,13 +355,58 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
     and `PotrfCandidates.CanRunEqualsLaunch` compares them with the drivers.
 11. **The accuracy test is loose.** The residual bound `4*n*eps` is looser than the true worst case `(0.2, 1] * n * eps`;
     a defect that costs less than about 4x in accuracy passes.
-12. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower.** 112 of 216 cases skip (host backends of a GPU kernel).
+12. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower** outside the blocked driver (`BlockedUpper*` cases, below). 112 of 216 cases skip (host backends of a GPU kernel).
 13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
     (`src/ops/potrf/kernels/potrf_lpanel_device.hh:159-168`) measured green at batch 1024 to 16384, because the eight dependent
     prefetch loads cover the window on this card. Record it as *unfalsifiable*, never *covered*. Closing it needs a probe
     that widens the hazard window on purpose. See [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel).
+
+## The blocked Upper driver {#the-blocked-upper-driver}
+
+`Uplo::Upper` above the tiny and CTA ceilings used to have no native route (known-defects #19): `lpanel` and `blocked`
+required Lower. `can_run` for `blocked` no longer reads `uplo` (`lpanel` stays Lower-only: its left-looking update reads
+the factored lower triangle). Upper is the same right-looking schedule on the transposed block rows, with no copies:
+
+| step (panel j, block ib) | Lower | Upper |
+|---|---|---|
+| leaf | CTA potrf Lower on A11 | CTA potrf Upper on A11 (a load/store transform of the same kernel) |
+| panel solve | trsm Right/Lower/ConjTrans on A21 | trsm Left/Upper/ConjTrans on A12 (ib x m2) |
+| diagonal tile | product = -L L^H, folded into the lower triangle | product = -U^H U (gemm ConjTrans, NoTrans), folded into the upper |
+| rest of the block | C = C - Lr L^H | C = C - U^H Ur (a block row of the upper triangle) |
+| failure quench | identity diagonal, zero panel column | the same on the panel row |
+
+The unreferenced lower triangle is neither read nor written (the fold is the only writer to A22), so a native Upper
+`potrf` keeps the caller's lower triangle, unlike cuSOLVER's. `posv` Upper inherits the route through the public `potrf`.
+
+Tests (`potrf_tests`, `PotrfBlockedTest`): `BlockedUpperPaddedPoisonedSaturatingBatch` (n = 33, 54, 55, 77, 78, 128, 256 and
+the nb/W structures, ld = n + 5, stride = ld n + 9, lower triangle and padding poisoned with large finite values, batch
+1024 for n <= 128 and 128 above, every item bit-identical to item 0), `BlockedUpperInfoIsTheGlobalColumn` (planted failures
+in and across blocks, a healthy neighbour in the batch), `FacadeBlockedUpper` (pinned `blocked`, lower triangle untouched).
+Deliberate breaks, each red in all 12 `BlockedUpper*` and `FacadeBlockedUpper` cases and nothing else: the fold told Lower
+instead of Upper; the rest-of-block-row gemm skipped.
+
+**Measurements** (sm_89, device 1, `factor_bench --arms=vendor,blocked,native`, 12 reps, median ms; the `native` arm is the
+CTA kernel at n <= 77 and `blocked` above, so it equals `blocked` there):
+
+| type | n | batch | cuSOLVER Upper | blocked Upper | blocked Lower |
+|---|---|---|---|---|---|
+| float | 128 | 128 / 512 | 0.101 / 0.175 | 0.140 / 0.237 | 0.135 / 0.188 |
+| float | 256 | 128 / 512 | 0.254 / 0.916 | 0.417 / 1.058 | 0.397 / 0.977 |
+| float | 384 | 128 / 512 | 0.611 / 2.901 | 0.728 / 2.540 | 0.663 / 2.513 |
+| float | 512 | 128 / 512 | 1.229 / 6.293 | 1.261 / 4.691 | 1.137 / 4.430 |
+| cfloat | 128 | 128 / 512 | 0.117 / 0.266 | 0.264 / 0.514 | 0.249 / 0.329 |
+| cfloat | 256 | 128 / 512 | 0.368 / 1.674 | 0.953 / 2.420 | 0.801 / 1.627 |
+| cfloat | 512 | 128 / 512 | 2.195 / 10.48 | 2.821 / 11.10 | 1.980 / 8.194 |
+
+Upper costs 0-10% more than Lower for float (the fold and the gemm run on transposed operands); cfloat Upper is up to 1.5x
+Lower at batch 512. cuSOLVER's Upper is much slower than its Lower from batch 512 (float n = 512: 6.29 against 4.84 ms), so
+blocked Upper wins float n = 384 and 512 at batch 512 (1.14x, 1.34x) and ties at batch 128; it loses elsewhere and for cfloat
+everywhere (0.35-0.94x). `tuned/potrf.sm_89.txt` therefore carries 12 `# custom` rows (ledger run `custom-5dc7f884`) for float Upper (n = 96..512, batch 128
+and 512), ranking `blocked` first only at n = 384 and 512, batch 512; every other Upper cell stays on the vendor. Vendor-free
+builds and `Backend::SYCL` have only `blocked` above the CTA ceiling, at the speeds above. Single sweep, 12 reps; the 1.14x cell is
+a screen, not a verdict.
 
 ## Raw evidence
 
