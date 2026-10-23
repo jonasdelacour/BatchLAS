@@ -110,6 +110,7 @@ set(TEST_TARGETS
     syev_two_stage_tests
     syev_candidates_tests
     syrk_candidates_tests
+    sytrf_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -187,7 +188,8 @@ set(BATCHLAS_TEST_LABELS_blas
     geqrf_candidates_tests
     gesv_tests posv_tests potri_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests)
+    transpose_tests norm_tests cond_tests inverse_tests
+    sytrf_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)

@@ -174,6 +174,8 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `getrf(ctx, A, pivots)` | LU with partial pivoting | `A` and `pivots` |
 | `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors | `B` |
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |
+| `sytrf(ctx, A, uplo, pivots, ws)` | Bunch-Kaufman `A = L·D·Lᵀ` or `U·D·Uᵀ`, `A` symmetric (complex: not Hermitian) | `uplo` triangle of `A`, `pivots` (LAPACK `ipiv`, @ref perf_sytrf) |
+| `sytrs(ctx, A, B, uplo, pivots, ws)` / `sysv(ctx, A, B, uplo, pivots, ws)` | solves `A·X = B` from `sytrf`'s factors / `sytrf` then `sytrs` | `B` (and `A`, `pivots` for `sysv`) |
 | `geqrf(ctx, A, tau)` / `orgqr(ctx, A, tau)` | QR with Householder reflectors / expand to explicit `Q` | `A`, `tau` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
 
@@ -588,9 +590,9 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Eight routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
-LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri` report factorisation
-status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status. It is a field on
+Ten routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `sytrf`, `sysv` report
+factorisation status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status. It is a field on
 `PotrfOptions` and a trailing parameter elsewhere:
 
 ```cpp

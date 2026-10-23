@@ -170,6 +170,7 @@ target_sources(batchlas_selection_obj PRIVATE ops/level3/level3.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sytrf/sytrf.cc ops/sysv/sysv.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 

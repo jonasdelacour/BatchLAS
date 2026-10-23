@@ -142,6 +142,8 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # potri: two element-wise kernels (info scan, triangle store); no device symbol shared with any other TU.
     potri/kernels/potri_native.cc
     lascl/lascl.cc
+    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol.
+    sytrf/kernels/sytrf_kernels.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:

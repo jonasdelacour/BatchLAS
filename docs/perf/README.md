@@ -116,6 +116,8 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 
 @subpage perf_lu "LU (getrf, getrs, getri, gesv)"
 
+@subpage perf_sytrf "LDL^T (sytrf, sytrs, sysv)"
+
 @subpage perf_qr "QR (geqrf, orgqr, ormqr)"
 
 @subpage perf_spmm "SpMM"

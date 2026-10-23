@@ -25,6 +25,8 @@
 #include <src/ops/syrk/choice.hh>
 #include <src/ops/syr2k/choice.hh>
 #include <src/ops/trmm/choice.hh>
+#include <src/ops/sytrf/choice.hh>
+#include <src/ops/sysv/choice.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -189,6 +191,9 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
+    // sytrf and sysv compile one candidate list for every dtype.
+    if (op == "sytrf") return spellings(batchlas::ops::sytrf::candidates<float>());
+    if (op == "sysv") return spellings(batchlas::ops::sysv::candidates<float>());
     return {};
 }
 
@@ -292,6 +297,8 @@ std::string key_spec(const std::string& op) {
     if (op == "syrk") join(batchlas::ops::syrk::key_names);
     if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    if (op == "sytrf") join(batchlas::ops::sytrf::key_names);
+    if (op == "sysv") join(batchlas::ops::sysv::key_names);
     return out;
 }
 
@@ -439,7 +446,8 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
+                           "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "sytrf",
+                           "sysv"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
