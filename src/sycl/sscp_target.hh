@@ -2,8 +2,7 @@
 // The target device code is lowered to, as a value. DPC++ runs one device pass per target, so
 // these are compile-time constants. AdaptiveCpp generic (SSCP) compiles one IR for every target
 // and defines neither __SYCL_DEVICE_ONLY__ nor __NVPTX__; there they are JIT-reflection constants,
-// and the JIT deletes the dead branch before lowering. AdaptiveCpp multipass CUDA
-// (--acpp-targets=cuda:sm_XX) has a real device pass: there they are constants of that pass.
+// and the JIT deletes the dead branch before lowering. Multipass CUDA (cuda:sm_XX): pass constants.
 // TRAP (SSCP): a target intrinsic or inline asm must also sit inside __acpp_if_target_sscp(...);
 // on_ptx() alone does not keep it out of the x86 host object, where isel rejects it.
 
