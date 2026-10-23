@@ -42,7 +42,7 @@ syr2k, trmm `ff340fc6`. Later rule changes are their own transcribed runs: gesvd
 cfloat 33..64 puts `blocked` first, docs/perf/gesvd.md); the complex rows of symm, syrk and syr2k
 and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, docs/perf/level3.md).
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
-(docs/perf/potrf.md#the-blocked-upper-driver). The transcribers' sources are in git history, for example
+([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
 ledgers is in the commit that added them (`git log -- scripts/migrate_tuning_data.py`).
 

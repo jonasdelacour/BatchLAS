@@ -579,7 +579,7 @@ The header holds `ormqr_blocked.cc`'s bodies (moved verbatim); a third private c
 
 `sycl::id<3>` makes dim 2 the fastest-varying index and both operands are column-major, so with the column in dim 2 a warp read and wrote 32 sectors instead of 4. Before the swap `pack_v` on a 17.3 MB job (float m = n = 1024, batch 128, nb = 32) took 63.7 us median per instance, 3.4x the DRAM floor (the 72 MB L2 hid most of the amplification; about 8x at larger m or batch). The same fix covers `OrgqrIdentityKernel` and `OrgqrCopyBackKernel`.
 
-## geqrf wide shapes, m less than n
+## geqrf wide shapes, m less than n {#geqrf-wide-shapes-m-less-than-n}
 
 **2026-10-23, RTX 4090 (sm_89), GPU 1.** A wide `geqrf` (m < n) writes the k = m reflectors below the diagonal, and their \f$Q^H\f$ applied to every column above it, so R is upper trapezoidal m x n. Tau holds `min(m, n)` entries per item, as before.
 

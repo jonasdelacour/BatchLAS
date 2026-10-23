@@ -67,8 +67,11 @@ const bool native = device && native_serves_precision<T>(precision, d.has_vendor
 const bool grid = native;  // no batch term: launch() chunks the batch
 ```
 
-`device` keeps a CPU queue on the host BLAS vendor (maintainer decision). {#gemm-batch-chunking}
-**Batch above the grid-z cap.** The batch goes in SYCL dimension 0 = CUDA grid z (65535, `kMaxGridBatch` in
+`device` keeps a CPU queue on the host BLAS vendor (maintainer decision).
+
+#### Batch above the grid-z cap {#gemm-batch-chunking}
+
+The batch goes in SYCL dimension 0 = CUDA grid z (65535, `kMaxGridBatch` in
 `src/ops/gemm/choice.hh`), which used to make every 3-D family refuse a larger batch (only `small`, 1-D, and the
 vendor served it). `launch()` now runs `direct`, `tiled`, `reg` and `wide` on consecutive chunks of at most
 `device.max_groups_yz` items, and `splitk` on chunks of `max_groups_yz / s` (its grid is batch x s). The chunk views are

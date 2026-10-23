@@ -21,8 +21,8 @@ using select::overloaded;
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-/// Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
-/// Blocked take any m x n, Tiny only square. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
+// Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
+// Blocked take any m x n, Tiny only square. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
 template <class T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
