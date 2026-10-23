@@ -220,7 +220,9 @@ Event syev_align(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V_old,
     syev_align_validate_params<T>(V_old, eigenvalues, V);
     if (!(tol >= 0)) throw batchlas::invalid_argument("SYEV_ALIGN: tol must be >= 0, got " + std::to_string(tol));
     if (V.batch_size() == 0 || V.cols() == 0) return ctx.create_event_after_external_work();
-    return ops::syev_align::launch<B, T>(ctx, V_old, eigenvalues, V, tol, workspace);
+    // gemm, rotation, copy and apply chain through ws.m / ws.vcopy, so they need an in-order queue.
+    return detail::on_in_order_queue(
+        ctx, [&](Queue& q) { return ops::syev_align::launch<B, T>(q, V_old, eigenvalues, V, tol, workspace); });
 }
 
 template <Backend B, typename T>

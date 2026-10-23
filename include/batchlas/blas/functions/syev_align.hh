@@ -6,6 +6,8 @@
 
 #include <batchlas/export.hh>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 #include <batchlas/util/sycl-device-queue.hh>
@@ -37,7 +39,8 @@ using syev_align_buffer_size = size_t(Queue&,
 /// @brief Validates the arguments of syev_align() and syev_align_buffer_size().
 ///
 /// Checks that @p V_old and @p V share their shape and batch size, that `V.cols() <= V.rows()`,
-/// that neither is heterogeneous, and that @p eigenvalues holds `V.cols() * batch` values.
+/// that neither is heterogeneous, that `V.rows() * V.cols()` fits in an int, and that
+/// @p eigenvalues holds `V.cols() * batch` values.
 /// @throws batchlas::invalid_argument if any check fails
 /// @ingroup api_eigen_lowlevel
 template <typename T>
@@ -57,6 +60,11 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
     }
     if (V_old.is_heterogeneous() || V.is_heterogeneous()) {
         throw batchlas::invalid_argument("SYEV_ALIGN: heterogeneous batches are not supported");
+    }
+    if (int64_t(V.rows()) * int64_t(V.cols()) > int64_t(std::numeric_limits<int>::max())) {
+        throw batchlas::invalid_argument("SYEV_ALIGN: V.rows() * V.cols() = " +
+                                         std::to_string(int64_t(V.rows()) * int64_t(V.cols())) +
+                                         " exceeds the int range of the workspace views");
     }
     const size_t need = size_t(V.cols()) * size_t(V.batch_size());
     if (eigenvalues.size() < need) {
@@ -90,7 +98,9 @@ inline void syev_align_validate_params(const MatrixView<T, MatrixFormat::Dense>&
 /// @param eigenvalues m real eigenvalues per item, packed (`V.cols() * batch` values)
 /// @param V           batch of n x m new eigenvectors; overwritten with the aligned ones
 /// @param tol         cluster tolerance relative to \f$ \max|\lambda| \f$ of the item; 0 clusters
-///                    only exactly equal values
+///                    only exactly equal values. Relative only, with no absolute floor: an item
+///                    whose eigenvalues are all tiny gets a tiny threshold, and a spectrum shifted
+///                    by a large constant a loose one; shift or scale such spectra before the call
 /// @param workspace   at least syev_align_buffer_size() bytes
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if syev_align_validate_params() rejects the call or @p tol < 0
