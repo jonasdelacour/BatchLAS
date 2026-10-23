@@ -73,12 +73,12 @@ using namespace batchlas;
 
 Queue ctx(Device::default_device());                 // backend comes from the device
 Matrix<float> A(n, n, batch), B(n, n, batch), C(n, n, batch), S(n, n, batch);
-A.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
-B.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
-S.fill_random_spd(ctx);
+(void)A.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+(void)B.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+(void)S.fill_random_spd(ctx);
 
-gemm(ctx, A, B, C, {.alpha = 2.0f});                 // C := 2 A B
-potrf(ctx, S, PotrfOptions{.uplo = Uplo::Lower});    // S := its Cholesky factor
+(void)gemm(ctx, A, B, C, {.alpha = 2.0f});           // C := 2 A B
+(void)potrf(ctx, S, PotrfOptions{.uplo = Uplo::Lower}); // S := its Cholesky factor
 ctx.wait();                                          // nothing is readable before this
 ```
 

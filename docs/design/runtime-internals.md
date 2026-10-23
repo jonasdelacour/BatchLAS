@@ -222,6 +222,10 @@ interleave their leases.
   starting with `0` as skip (`false`, `off`, `no` included); it is not `env_truthy`. The gate is
   compiled out with `-DBATCHLAS_ALLOW_UNSAFE_ENV=ON` (`cmake/BatchLASOptions.cmake`, written to
   `cmake/backend_config.h.in`); `settings.cc` defaults it to the safe reading.
+- **Warnings.** Every user-facing warning is one stderr line `batchlas: <text>` from
+  `batchlas::detail::warn` (`src/util/internal-api.hh`). `warn_once(tag, text)` prints a tag once per
+  process (`unsafe:<variable>`, `borrow:<op>`, `native:<op>`/`vendor:<op>`, `tuned_dir:`, `tuned_name:`,
+  `syevx_degrade:`); `reset_warnings()` clears the tags for tests.
 - **Reload.** A reload reads the environment on top of what `configure()` last set (the defaults if it
   was never called). Each loader assigns a field only when its variable is exported
   (`set_if_present`); the unsafe gate likewise refuses only a move the environment made. Starting from
@@ -284,7 +288,7 @@ branches where one is `void` is ill-formed once the result is used, so the two s
   - `stride >= ld*cols`: the recorded violators were the transposed CGS view in `ortho` (fixed,
     [known defect 1](known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
     and a `syevx_lobpcg` sizing dummy. Whether any live site still violates it is not re-checked
-    (open); the comment in `src/matrix.cc` still cites both.
+    (open); the comment in `src/matrix.cc` cites the `syevx_lobpcg` one.
 - **Row-major pitch is a parameter.** `to_column_major` takes the row pitch explicitly; it is not
   inferred from `ld` (the column distance). For `rows > cols` a legal pitch in `(cols, rows]` looks
   packed, so the default (pitch `cols`) is accepted only when packed is the only layout the matrix can

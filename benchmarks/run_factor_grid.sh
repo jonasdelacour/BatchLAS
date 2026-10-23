@@ -62,7 +62,7 @@ fi
 
 # The order ladder. Powers of two AND their +1 neighbours, because a kernel that
 # is tuned on 2^k and falls off a cliff at 2^k+1 is this repository's recurring
-# small-n defect (docs/design/small-n-factorization-plan.md, section 1.3).
+# small-n defect (docs/perf/small-n-baseline.md, potrf: "The 2^k rungs read high").
 ORDERS="${ORDERS:-4 8 9 16 17 24 32 33 48 64 65 96 128 129 192 256 384 512}"
 
 # SAT_LADDER from docs/perf/lu.md: the batch at which the order saturates the

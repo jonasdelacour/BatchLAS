@@ -1951,7 +1951,7 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                 ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
     // TRAP: MatrixView(p, n, n, batch) (Matrix's argument order) gives ld = batch; `ld_ < rows`
     // catches it. Deliberately NOT checked: null data / zero extents (shape-only sizing views) and
-    // stride >= ld*cols (two live violators, ortho.cc and syevx_lobpcg sizing, would throw).
+    // stride >= ld*cols (the recorded violator left is a syevx_lobpcg sizing view; ortho's was fixed).
     // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     const std::string prefix = "MatrixView(data, rows, cols, ld, stride, batch_size): ";
     if (rows < 0 || cols < 0) {

@@ -647,6 +647,9 @@ is the open 2.7x.
   cluster, not folder, and keep the old `batchlas_extensions_*` names. In-tree includes are
   root-based, `#include <src/ops/potrf/potrf_native.hh>`, `<tests/test_utils.hh>`; never quoted or
   relative (`check_no_unprefixed_includes.py` fails on `#include "..."`).
+- **Throw `batchlas::` types** (`include/batchlas/error.hh`) in all code, library, tools and
+  benchmarks alike; never a `std::` exception (`std::bad_alloc` excepted). Messages open with the
+  lowercase op name (`gesv: ...`). User-facing warnings go through `batchlas::detail::warn`.
 - **Comment density <=18% per file** (`.github/ci/check_comment_density.py`). A code line with a
   trailing comment counts as code. The repo-wide average hides per-file violations: check per file.
   - A comment is for invariants, "looks wrong but is deliberate" notes and traps, plus an

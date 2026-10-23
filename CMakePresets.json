@@ -53,7 +53,7 @@
     {
       "name": "cuda",
       "displayName": "CUDA",
-      "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs. BATCHLAS_MONOLITHIC_LIBRARY is deliberately NOT set here - see the note in the release preset. A monolithic gate would put the 575 s single-threaded device link in front of every pre-push run and every re-run after a one-line fix; the nightly CI job builds the release preset instead, which is where an export regression gets caught without taxing the iteration loop.",
+      "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs. BATCHLAS_MONOLITHIC_LIBRARY is deliberately NOT set here - see the note in the release preset. A monolithic gate would put the 575 s single-threaded device link in front of every pre-push run and every re-run after a one-line fix. No CI job builds the release preset, so a monolithic export regression shows up only when that preset is built.",
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/presets/cuda",
       "cacheVariables": {

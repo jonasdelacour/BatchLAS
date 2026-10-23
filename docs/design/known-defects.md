@@ -507,13 +507,12 @@ refuted.
   guard. The result is benign at `beta == 0` and wrong at `beta != 0` or for an in-place `trmm`.
   Read from the code; not reproduced. See
   [the 3-D launch generic fallback](device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback).
-- **Kernel selection throws outside the error hierarchy.** Fixed for `src/select/select.hh`
-  (commit 58dd7c0a: a bad pin is `batchlas::invalid_argument` at `:415-436`, nothing runnable is
-  `batchlas::unsupported` at `:399`). Still open: `gesv` and `posv` throw `internal_error` for an
-  empty or heterogeneous batch (`src/ops/gesv/gesv.cc:87,90`, `src/ops/posv/posv.cc:107,110`),
-  where `invalid_argument` or `unsupported` would fit. Reclassifying changes behaviour for callers
-  that catch the current type. See
-  [kernel selection throws outside the hierarchy](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
+- **`gesv` and `posv` throw `internal_error` for a caller error.** An empty or heterogeneous batch
+  (`src/ops/gesv/gesv.cc:87,90`, `src/ops/posv/posv.cc:107,110`) is `internal_error` where
+  `invalid_argument` or `unsupported` would fit. Reclassifying changes behaviour for callers that
+  catch the current type. Kernel selection itself throws only `batchlas::` types (fixed in
+  58dd7c0a). See
+  [kernel selection throws](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
 
 ## Fixed while documenting
 

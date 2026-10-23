@@ -229,7 +229,7 @@ inline void require_arg_accessible(const Queue& ctx, const A& arg, const std::st
         if (addresses_no_elements(arg)) return;
         ctx.require_device_accessible(static_cast<const void*>(arg.data_ptr()), what.c_str());
     } else if constexpr (HasData<std::remove_cvref_t<A>>) {
-        // BumpAllocator sizing passes hand out empty spans by design.
+        // An empty span (an omitted optional output, a zero-byte workspace) addresses nothing.
         if (arg.size() != 0) {
             ctx.require_device_accessible(static_cast<const void*>(arg.data()), what.c_str());
         }

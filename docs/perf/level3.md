@@ -420,8 +420,8 @@ Each item is a decision a future edit could undo by accident.
 ### Level-3: one set of shape validators
 
 `src/backends/level3_shape.hh` holds the shape contracts once: squareness first, then batch, then shapes. Only
-the exception type differs by backend (template parameter `E`): cuBLAS and rocBLAS throw `std::invalid_argument`,
-netlib's host tasks throw `std::runtime_error`.
+the exception type differs by backend (template parameter `E`): cuBLAS, rocBLAS and the public entries throw
+`batchlas::invalid_argument`; netlib's host tasks throw `batchlas::internal_error`.
 
 - **Namespace trap.** The validators live in `batchlas::backend::shape`, not `batchlas::backend::detail`. In
   `netlib_lapack.cc` a `backend::detail` makes the unqualified `detail::` resolve wrongly and `submit_host_task`

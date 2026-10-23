@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-// Quoted on purpose: src/util/ is private and on no -I line. Never convert to <> or add -I src.
+// Private headers, never installed; internal-api.hh exports what in-tree tests reach.
 // evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 #include <src/util/internal-api.hh>
 #include <src/util/kernel-trace.hh>

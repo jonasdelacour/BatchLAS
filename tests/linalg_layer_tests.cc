@@ -379,6 +379,19 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     }
 }
 
+// Compile guard for the C++ block of .github/README.md, written exactly as there; same rules as above.
+[[maybe_unused]] void readme_example(int n, int batch) {
+    Queue ctx(Device::default_device());                 // backend comes from the device
+    Matrix<float> A(n, n, batch), B(n, n, batch), C(n, n, batch), S(n, n, batch);
+    (void)A.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+    (void)B.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+    (void)S.fill_random_spd(ctx);
+
+    (void)gemm(ctx, A, B, C, {.alpha = 2.0f});           // C := 2 A B
+    (void)potrf(ctx, S, PotrfOptions{.uplo = Uplo::Lower}); // S := its Cholesky factor
+    ctx.wait();                                          // nothing is readable before this
+}
+
 // What the layer must NOT accept. Each of these is spelled as a concept rather
 // than a bare `!requires(...)` in the static_assert: a requires-expression only
 // swallows errors that come from template substitution, so an ill-formed call
