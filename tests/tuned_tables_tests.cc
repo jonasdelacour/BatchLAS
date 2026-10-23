@@ -620,8 +620,13 @@ TEST(TunedTables, GeqrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
                 if (std::string(dev) == "sm_89") rows_89[key] = ranked;
                 else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
             }
-            EXPECT_EQ(got, want) << dt << " " << dev;
-            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            // The deep wide cells (float, cfloat) drop the transcribed row they bracket: wide 8192 x 1
+            // was not measured (cuSOLVER exceeds the cell timeout) and resolves to its deep neighbours.
+            const bool deep = std::string(dt) == "float" || std::string(dt) == "cfloat";
+            std::set<std::string> want_dt = want;
+            if (deep) want_dt.erase("wide 8192 1");
+            EXPECT_EQ(got, want_dt) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want_dt.size()) << dt << " " << dev;
         }
     }
 }

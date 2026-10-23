@@ -754,10 +754,14 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     if constexpr (TestFixture::kVendor) {
         ASSERT_TRUE(rows.count("8 20 8")) << "no wide row";
         const auto& w = rows["8 20 8"];
-        EXPECT_EQ(w[9], "vendor");
-        EXPECT_EQ(w[10], "vendor");
+        // float/cfloat wide rows are measured (deep, 2026-10-23): cta wins near n=64; the FP64 rows
+        // are untimed and still rank the vendor first.
+        using T = typename TestFixture::T;
+        const bool measured = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+        EXPECT_EQ(w[9], measured ? "native" : "vendor");
+        EXPECT_EQ(w[10], measured ? "cta" : "vendor");
         EXPECT_EQ(w[12], "1");
-        EXPECT_EQ(w[13], "1") << "cta and blocked run a wide view; the table still ranks the vendor first";
+        EXPECT_EQ(w[13], "1") << "cta and blocked run a wide view";
     }
 }
 

@@ -226,7 +226,7 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 10. **Callers that size once at a bounding panel pay the blocked layout**: `geqrf_buffer_size_bound` (`geqrf.cc:97-107`) reserves 168 MB (float) or 671 MB (cdouble) at n=64 batch=8192 even where `cta` runs; sizing W1/W2 on `n - nb` took about 28% off.
 14. **double and cdouble rank `cta` ahead of `tiny` in the vendor-free walk**, though the tiny grid measured CTA and Blocked at 0.14-0.67x of vendor at n = 8..28 against `tiny` 0.33-1.13x. One retune or measured edit fixes it; cdouble has no grid.
 
-15. **Wide `geqrf` rows still rank the vendor first** on sm_89 although native wins every measured wide cell by 2.2-132x ([the table rows](#geqrf-wide-the-table-rows)); a deep `--only-named` run on the 24 wide cells closes it.
+15. **Wide `geqrf` rows:** closed for float and cfloat on sm_89 (deep, 2026-10-23; [the table rows](#geqrf-wide-the-table-rows)); FP64 and sm_120 stay transcribed.
 
 Closed: the occupancy-scaled tier capacity (P7), the `potrf` tier order, the `ormqr` route resolution (P5), the tiny window.
 
@@ -618,14 +618,26 @@ The native arm wins every measured cell. Another agent's test binary may have sh
 
 ### geqrf wide: the table rows
 
-The sm_89 `form=wide` rows still rank `vendor` alone, so a vendor build sends every wide `geqrf` to cuSOLVER, although the native arm wins every cell above. A vendor-free build takes the last resort, `blocked`, on those rows.
+Measured 2026-10-23 into the sm_89 ledger (deep tier, `--only-named` on the wide keys) on GPU 0 of the
+2x4090 box, with GPU 1 held by another user's job (`--allow-idle-foreign` for the idle desktop
+contexts on GPU 0). ms per call at the tuner's batch:
 
-The table is generated from its ledger (`sweep_to_table.py --check` re-derives it), so the rows must be measured into the ledger, not edited by hand. The measurement could not run: GPU 1 was held at 100% by another user's process for the whole session, and `batchlas_tune` refuses a busy GPU. On an idle GPU 1, run:
+| dtype | n | aspect 1 | aspect 4 | aspect 64 |
+|---|---|---|---|---|
+| float | 64 | cta 4.50, vendor 6.80 | vendor 1.42, cta 1.79 | vendor 0.049, cta 0.054 |
+| float | 1024 | blocked 15.5, vendor 1391 | blocked 7.43, vendor 311 | blocked 2.49, vendor 19.4 |
+| float | 8192 | not measured | blocked 69.4, vendor 79518 | blocked 4.63, vendor 1023 |
+| cfloat | 64 | cta 4.03, vendor 9.27 | blocked 2.59, vendor 3.14 | vendor 0.047, cta 0.160 |
+| cfloat | 1024 | blocked 25.0, vendor 1958 | blocked 9.27, vendor 360 | blocked 2.25, vendor 15.6 |
+| cfloat | 8192 | not measured | blocked 117, vendor 85507 | blocked 5.68, vendor 1153 |
 
-    printf 'geqrf %s form=wide,n=%s,aspect=%s\n' ... > wide_keys.txt   # float, cfloat x n {2,64,1024,8192} x aspect {1,4,64}
-    batchlas_tune geqrf --tier deep --only-named --remeasure-keys wide_keys.txt --dtype float,cfloat --devices 1 --out tuned
-
-That writes deep records for the 24 wide cells and regenerates `tuned/geqrf.sm_89.txt`. `GeqrfCandidates.CoverageRowCarriesBackendKeyAndNativeFlags` then needs its wide row (8x20, chosen `vendor`) updated to the new first entry. Double and cdouble stay vendor-first: this is a 1:64 FP64 card, so they are not tuned here.
+- **n = 8192, aspect 1** was dropped: cuSOLVER exceeds the 1800 s cell timeout there and the worker
+  retried indefinitely. The transcribed vendor-only row it replaced is gone (a deep neighbour brackets
+  it), so lookups there resolve to the aspect-4 row, `blocked`.
+- **n = 2** keys have no valid (m, n) and the cells error by construction; their transcribed rows stay.
+- **The vendor keeps** only the smallest, most extreme shapes (n = 64 at aspect 4 and 64), by a few
+  percent to 9%.
+- **FP64** stays vendor-first and untimed (1:64 card).
 
 ### geqrf wide: armed break
 

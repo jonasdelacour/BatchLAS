@@ -1,5 +1,5 @@
-# op=geqrf device=sm_89 batchlas=424a45bc kernels=e2ab9f00 family_kernels=tiny:b39d5968,cta:fac77784,blocked:127bf8cd,vendor:e3360dd7 date=2026-10-05
-# source=ledger:benchmarks/results/tuning/ledger/geqrf.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2544
+# op=geqrf device=sm_89 batchlas=1f042c50 kernels=f2c5aaee family_kernels=tiny:a296ce56,cta:3c5718d3,blocked:668bef6d,vendor:be64bb1d date=2026-10-23
+# source=ledger:benchmarks/results/tuning/ledger/geqrf.sm_89.jsonl tiers=deep:16,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2526
 # keys: dtype:exact form:exact n:log:3 aspect:log
 dtype=float form=sq n=1 aspect=1 | vendor - | tiny - | cta - | blocked - # transcribed
 dtype=float form=sq n=2 aspect=1 | vendor - | tiny - | cta - | blocked - # transcribed
@@ -628,15 +628,14 @@ dtype=float form=tall n=8192 aspect=256 | blocked - | cta - | vendor - # transcr
 dtype=float form=wide n=2 aspect=1 | vendor - # transcribed
 dtype=float form=wide n=2 aspect=4 | vendor - # transcribed
 dtype=float form=wide n=2 aspect=64 | vendor - # transcribed
-dtype=float form=wide n=64 aspect=1 | vendor - # transcribed
-dtype=float form=wide n=64 aspect=4 | vendor - # transcribed
-dtype=float form=wide n=64 aspect=64 | vendor - # transcribed
-dtype=float form=wide n=1024 aspect=1 | vendor - # transcribed
-dtype=float form=wide n=1024 aspect=4 | vendor - # transcribed
-dtype=float form=wide n=1024 aspect=64 | vendor - # transcribed
-dtype=float form=wide n=8192 aspect=1 | vendor - # transcribed
-dtype=float form=wide n=8192 aspect=4 | vendor - # transcribed
-dtype=float form=wide n=8192 aspect=64 | vendor - # transcribed
+dtype=float form=wide n=64 aspect=1 | cta 4.496 | vendor 6.803 | blocked 9.557 # deep
+dtype=float form=wide n=64 aspect=4 | vendor 1.422 | cta 1.792 | blocked 2.010 # deep
+dtype=float form=wide n=64 aspect=64 | vendor 0.04946 | cta 0.05402 | blocked 0.3545 # deep
+dtype=float form=wide n=1024 aspect=1 | blocked 15.50 | vendor 1391 # deep
+dtype=float form=wide n=1024 aspect=4 | blocked 7.428 | vendor 310.9 # deep
+dtype=float form=wide n=1024 aspect=64 | blocked 2.485 | vendor 19.43 # deep
+dtype=float form=wide n=8192 aspect=4 | blocked 69.36 | vendor 79518 # deep
+dtype=float form=wide n=8192 aspect=64 | blocked 4.627 | vendor 1023 # deep
 dtype=double form=sq n=1 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
 dtype=double form=sq n=2 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
 dtype=double form=sq n=3 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
@@ -1900,15 +1899,14 @@ dtype=cfloat form=tall n=8192 aspect=256 | cta - | blocked - | vendor - # transc
 dtype=cfloat form=wide n=2 aspect=1 | vendor - # transcribed
 dtype=cfloat form=wide n=2 aspect=4 | vendor - # transcribed
 dtype=cfloat form=wide n=2 aspect=64 | vendor - # transcribed
-dtype=cfloat form=wide n=64 aspect=1 | vendor - # transcribed
-dtype=cfloat form=wide n=64 aspect=4 | vendor - # transcribed
-dtype=cfloat form=wide n=64 aspect=64 | vendor - # transcribed
-dtype=cfloat form=wide n=1024 aspect=1 | vendor - # transcribed
-dtype=cfloat form=wide n=1024 aspect=4 | vendor - # transcribed
-dtype=cfloat form=wide n=1024 aspect=64 | vendor - # transcribed
-dtype=cfloat form=wide n=8192 aspect=1 | vendor - # transcribed
-dtype=cfloat form=wide n=8192 aspect=4 | vendor - # transcribed
-dtype=cfloat form=wide n=8192 aspect=64 | vendor - # transcribed
+dtype=cfloat form=wide n=64 aspect=1 | cta 4.033 | blocked 8.687 | vendor 9.274 # deep
+dtype=cfloat form=wide n=64 aspect=4 | blocked 2.586 | cta 2.962 | vendor 3.136 # deep
+dtype=cfloat form=wide n=64 aspect=64 | vendor 0.04748 | cta 0.1602 | blocked 0.1760 # deep
+dtype=cfloat form=wide n=1024 aspect=1 | blocked 24.97 | vendor 1958 # deep
+dtype=cfloat form=wide n=1024 aspect=4 | blocked 9.270 | vendor 360.0 # deep
+dtype=cfloat form=wide n=1024 aspect=64 | blocked 2.253 | vendor 15.62 # deep
+dtype=cfloat form=wide n=8192 aspect=4 | blocked 117.1 | vendor 85507 # deep
+dtype=cfloat form=wide n=8192 aspect=64 | blocked 5.676 | vendor 1153 # deep
 dtype=cdouble form=sq n=1 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
 dtype=cdouble form=sq n=2 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
 dtype=cdouble form=sq n=3 aspect=1 | vendor - | cta - | tiny - | blocked - # transcribed
