@@ -12,6 +12,7 @@
 #include <src/ops/gesvd/gesvd_native.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/ops/syev/stedc/stedc_internal.hh>
+#include <src/select/grid_chunk.hh>
 
 #include <algorithm>
 #include <chrono>
@@ -1424,17 +1425,18 @@ int gesvd_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
                         SvdVectors jobvh) {
     const int batch = static_cast<int>(a.batch_size());
     const auto dev = ctx.device();
-    if constexpr (internal::is_complex<T>::value) return batch;
-    if (dev.type != DeviceType::GPU) return batch;
+    // Every type and device: ormbr's pack kernels put the batch in grid z.
+    if constexpr (internal::is_complex<T>::value) return select::grid_capped_chunk(ctx, batch, batch);
+    if (dev.type != DeviceType::GPU) return select::grid_capped_chunk(ctx, batch, batch);
     const int64_t m = a.rows(), n = a.cols(), k = std::min(m, n);
     jobu = canonical_jobu(jobu, m, k);
     jobvh = canonical_jobvh(jobvh, n, k);
     const int64_t elems = m * n + (jobu != SvdVectors::None ? m * svd_u_cols(jobu, m, k) : 0) +
                           (jobvh != SvdVectors::None ? svd_vh_rows(jobvh, n, k) * n : 0);
-    return static_cast<int>(tuning::blocked_chunk_items(
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, elems * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
 }
 
 } // namespace

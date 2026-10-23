@@ -8,6 +8,7 @@
 #include <src/ops/orgqr/orgqr_native.hh>
 
 #include <src/queue.hh>
+#include <src/select/grid_chunk.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -104,9 +105,10 @@ int orgqr_blocked_chunk(Queue& ctx, int m, int n, int batch) {
     const int64_t nb = orgqr_nb<T>(m, n);
     const int64_t item = (2 * int64_t(m) * n + int64_t(m) * nb + 2 * nb * n) * static_cast<int64_t>(sizeof(T));
     const auto dev = ctx.device();
-    return static_cast<int>(tuning::blocked_chunk_items(
+    // The identity and copy-back kernels put the batch in grid z: no part may exceed it.
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.

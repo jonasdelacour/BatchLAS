@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <src/select/grid_chunk.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -112,9 +113,10 @@ int ormqr_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
     const int64_t item = (nq * k + int64_t(c.rows()) * c.cols() + nq * nb + 2 * w) *
                          static_cast<int64_t>(sizeof(T));
     const auto dev = ctx.device();
-    return static_cast<int>(tuning::blocked_chunk_items(
+    // pack_v puts the batch in grid z: no part may exceed it.
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         a.batch_size(), item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), a.batch_size());
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.

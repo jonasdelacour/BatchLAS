@@ -2439,4 +2439,60 @@ TYPED_TEST(GeqrfTest, OrgqrBlockedChunksAtSaturatingBatchAreBitIdentical) {
                         residual_slack<T>(m, n));
 }
 
+// Past the grid: one part of 65537 items puts 65537 work-groups in grid z of pack_v, the panel
+// kernels and orgqr's identity/copy-back (65535 on CUDA). The chunk is forced above the batch, so only
+// select::grid_capped_chunk splits it. A single-panel shape (no L2 chunking at all) and a two-panel one;
+// every item is a copy of item 0 and must come out bit-identical to it.
+TYPED_TEST(GeqrfTest, BlockedPastTheGridLimitIsBitIdentical) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::BackendType;
+    if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the grid-z ceiling is a GPU limit";
+    const int batch = 65537;
+    const int nbw = this->nb(256, 256);
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "70000");
+    const select::ScopedPin<ops::orgqr::OrgqrChoice> opin("orgqr", ops::orgqr::Blocked{});
+    for (const auto [m, n] : {std::pair{7, 5}, std::pair{nbw + 3, nbw + 1}}) {
+        auto p = make_problem<T>(m, n, 1, 9091u);
+        Problem<T> q = make_problem<T>(m, n, 0, 0u);
+        q.batch = batch;
+        q.buf = UnifiedVector<T>(size_t(p.stride) * batch);
+        q.tau = UnifiedVector<T>(size_t(p.k) * batch, MVof<T>::make(-12345.0, -12345.0));
+        q.ptrs = UnifiedVector<T*>(size_t(batch), nullptr);
+        for (int b = 0; b < batch; ++b) std::copy_n(p.buf.begin(), size_t(p.stride), q.buf.begin() + size_t(b) * p.stride);
+        q.a0.assign(q.buf.begin(), q.buf.begin() + p.stride);
+        auto V = view_of(q);
+        UnifiedVector<std::byte> gws(std::max<std::size_t>(1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, q.tau.to_span(), gws.to_span(),
+                                                                    this->gemm_seam()))
+            << m << "x" << n;
+        this->ctx->wait();
+        const auto differing = [&](const char* what) {
+            int wrong = 0, first = -1;
+            for (int b = 1; b < batch; ++b) {
+                bool same = std::memcmp(q.buf.data() + size_t(b) * q.stride, q.buf.data(), sizeof(T) * size_t(q.stride)) == 0;
+                if (!same && wrong++ == 0) first = b;
+            }
+            EXPECT_EQ(wrong, 0) << what << " " << m << "x" << n << ": items differing from item 0; first at " << first;
+        };
+        differing("geqrf");
+        for (int b = 1; b < batch; ++b)
+            ASSERT_EQ(std::memcmp(q.tau.data() + size_t(b) * q.k, q.tau.data(), sizeof(T) * size_t(q.k)), 0)
+                << m << "x" << n << ": tau of item " << b;
+        const int item0[] = {0};
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m,
+                            qr_error<T>(*this->ctx, q.buf.data(), q.a0.data(), q.tau.data(), m, n, q.ld, q.stride, 1, item0),
+                            residual_slack<T>(m, q.k));
+        const std::vector<T> F(q.buf.begin(), q.buf.begin() + q.stride);
+        UnifiedVector<std::byte> ows(std::max<std::size_t>(1, orgqr_buffer_size<B, T>(*this->ctx, V, q.tau.to_span())));
+        ASSERT_NO_THROW(((void)orgqr<B, T>(*this->ctx, V, q.tau.to_span(), ows.to_span()))) << m << "x" << n;
+        this->ctx->wait();
+        differing("orgqr");
+        EXPECT_VERIFY_SLACK(T, verify::Check::factorization, m,
+                            product_error<T>(*this->ctx, q.buf.data(), q.ld, q.stride, F.data(), q.a0.data(), m, n, q.ld,
+                                             q.stride, 1),
+                            residual_slack<T>(m, n));
+        if (this->HasFailure()) return;
+    }
+}
+
 // Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps

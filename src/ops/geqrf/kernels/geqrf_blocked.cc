@@ -8,6 +8,7 @@
 #include <src/kernels/common/larft_wy.hh>
 
 #include <src/queue.hh>
+#include <src/select/grid_chunk.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -114,13 +115,14 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 // evidence: docs/perf/qr.md#qr-l2-batch-chunking
 template <typename T>
 int geqrf_blocked_chunk(Queue& ctx, int m, int n, int nb, int batch) {
-    if (std::min(m, n) <= nb) return batch;
+    // pack_v and the panel kernels put the batch in grid z: no part may exceed it.
+    if (std::min(m, n) <= nb) return select::grid_capped_chunk(ctx, batch, batch);
     const auto dev = ctx.device();
     const int64_t item = (static_cast<int64_t>(m) * (n + nb) +
                           2 * static_cast<int64_t>(nb) * (n - nb)) * static_cast<int64_t>(sizeof(T));
-    return static_cast<int>(tuning::blocked_chunk_items(
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)))), batch);
 }
 
 // The largest pass: the last part takes the remainder, and under two chunks there is one.

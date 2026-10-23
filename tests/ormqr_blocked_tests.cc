@@ -467,6 +467,54 @@ TYPED_TEST(OrmqrBlockedTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
     }
 }
 
+// Past the grid: one part of 65537 items puts 65537 work-groups in pack_v's grid z (65535 on CUDA).
+// The chunk is forced above the batch, so only select::grid_capped_chunk splits it. Every item is a
+// copy of item 0 (reflectors of order 17, k = 17, C 17 x 3 or 3 x 17) and must be bit-identical to it.
+TYPED_TEST(OrmqrBlockedTest, BlockedPastTheGridLimitIsBitIdentical) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the grid-z ceiling is a GPU limit";
+    const int batch = 65537, nq = 17, k = 17, q = 3, lda = nq + 2, sa = lda * k + 3;
+    UnifiedVector<T> a(size_t(sa) * batch), tau(size_t(k) * batch);
+    {
+        const auto R = Matrix<T, MatrixFormat::Dense>::Random(nq, k, false, 1, 8121u);
+        for (int j = 0; j < k; ++j)
+            for (int i = 0; i < nq; ++i) a[size_t(j) * lda + i] = R(i, j, 0);
+        MatrixView<T, MatrixFormat::Dense> A1(a.data(), nq, k, lda, sa, 1);
+        UnifiedVector<std::byte> ws(std::max<size_t>(1, geqrf_buffer_size(*this->ctx, A1, tau.to_span())));
+        (void)geqrf(*this->ctx, A1, tau.to_span(), ws.to_span());
+        this->ctx->wait();
+    }
+    for (int b = 1; b < batch; ++b) {
+        std::copy_n(a.begin(), size_t(sa), a.begin() + size_t(b) * sa);
+        std::copy_n(tau.begin(), size_t(k), tau.begin() + size_t(b) * k);
+    }
+    const MatrixView<T, MatrixFormat::Dense> A(a.data(), nq, k, lda, sa, batch);
+    const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "70000");
+    for (Side side : {Side::Left, Side::Right}) {
+        const int rows = side == Side::Left ? nq : q, cols = side == Side::Left ? q : nq;
+        auto [c, C] = make_chunk_c<T>(rows, cols, batch, 331u, true);
+        UnifiedVector<T> c0(size_t(C.stride()));
+        std::copy_n(c.begin(), size_t(C.stride()), c0.begin());
+        UnifiedVector<std::byte> ws(std::max<size_t>(
+            1, ormqr_blocked_buffer_size<B, T>(*this->ctx, A, C, side, this->trans_h(), tau.to_span(), 32)));
+        ASSERT_NO_THROW(((void)ormqr_blocked<B, T>(*this->ctx, A, C, side, this->trans_h(), tau.to_span(), ws.to_span(), 32)))
+            << (side == Side::Left ? "Left" : "Right");
+        this->ctx->wait();
+        int wrong = 0, first = -1;
+        for (int b = 1; b < batch; ++b) {
+            const bool same = std::memcmp(c.data() + size_t(b) * C.stride(), c.data(), sizeof(T) * size_t(C.stride())) == 0;
+            if (!same && wrong++ == 0) first = b;
+        }
+        EXPECT_EQ(wrong, 0) << (side == Side::Left ? "Left" : "Right") << ": items differing from item 0; first at " << first;
+        const MatrixView<T, MatrixFormat::Dense> C0(const_cast<T*>(c0.data()), rows, cols, C.ld(), C.stride(), 1);
+        const VectorView<T> t0(tau.data(), k, 1, 1, k);
+        EXPECT_VERIFY(T, batchlas::verify::Check::blas, nq,
+                      test_utils::ormqr_apply_error<T>(*this->ctx, A.batch_range(0, 1), t0, C0, C.batch_range(0, 1), side,
+                                                       this->trans_h()));
+    }
+}
+
 // sytrd sizes ormqr once at its largest operands and calls smaller sub-views on that workspace: the
 // larger shape's chunked part holds less than this shape's one pass, so the facade must let the
 // driver fit its part to what it holds instead of refusing the call.
