@@ -36,6 +36,7 @@
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/functions/sytrf.hh>
 #include <batchlas/blas/functions/sysv.hh>
+#include <batchlas/blas/functions/syev_align.hh>
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/functions/trsm.hh>
 

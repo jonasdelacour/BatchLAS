@@ -178,6 +178,7 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `sytrs(ctx, A, B, uplo, pivots, ws)` / `sysv(ctx, A, B, uplo, pivots, ws)` | solves `A·X = B` from `sytrf`'s factors / `sytrf` then `sytrs` | `B` (and `A`, `pivots` for `sysv`) |
 | `geqrf(ctx, A, tau)` / `orgqr(ctx, A, tau)` | QR with Householder reflectors / expand to explicit `Q` | `A`, `tau` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
+| `syev_align(ctx, V_old, W, V, tol, ws)` | per cluster of `W` (gap ≤ `tol`·max\|W\|): `V_c := V_c·R`, the Procrustes rotation onto `V_old`; then every `(V_oldᴴV)ᵢᵢ ≥ 0` | `V` |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` is the **real** counterpart
 of `T` (n·batch).
