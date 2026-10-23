@@ -256,7 +256,7 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
-    static constexpr bool kFloat = std::is_same_v<T, float>;
+    static constexpr bool kNative = true;  // the triangular kernel serves every real T
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -271,8 +271,8 @@ protected:
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<s2::Vendor>(c)) return kVendor;
         const long t = (s.n + 127) / 128;
-        return kFloat && (B == Backend::CUDA || B == Backend::SYCL) && s.n >= 1 && s.k >= 1 &&
-               s.batch >= 1 && t * (t + 1) / 2 <= grid_yz;
+        return (B == Backend::CUDA || B == Backend::SYCL) && s.n >= 1 && s.k >= 1 && s.batch >= 1 &&
+               t * (t + 1) / 2 <= grid_yz;
     }
     // `vendor` is a class word: with no vendor it falls back to Auto (with a warning), §5.3.
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<s2::Vendor>(c) && !kVendor; }
@@ -374,7 +374,7 @@ TYPED_TEST(Syr2kCandidates, PinnedChoiceRunsItsOwnKernel) {
         for (std::size_t e = 0; e < p.mem.size(); ++e)
             ASSERT_TRUE(same_bits(p.mem[e], q.mem[e])) << "pinned vendor != syr2k_vendor at element " << e;
     }
-    if constexpr (!TestFixture::kFloat) return;
+    if constexpr (!TestFixture::kNative) return;
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string path = ::testing::TempDir() + "syr2k_ktrace.json";
     std::filesystem::remove(path);
@@ -407,7 +407,7 @@ TYPED_TEST(Syr2kCandidates, PinnedChoiceRunsItsOwnKernel) {
 // for bit.
 TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat) GTEST_SKIP() << "no native family for this dtype";
+    if constexpr (!TestFixture::kNative) GTEST_SKIP() << "no native family for this dtype";
     for (const Spec& s : {Spec{Uplo::Lower, Transpose::NoTrans, 256, 64, 1024, 3, true, 5u},
                           Spec{Uplo::Upper, Transpose::Trans, 200, 53, 1024, 3, false, 6u}}) {
         auto p = make_prob<T>(s);
@@ -416,34 +416,47 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
     }
 }
 
-// The grid terms (R3, AGENTS §8.9). The batch is grid z, capped at 65535 on CUDA: syr2k's launch
-// runs a batch past it as slices, so the pin launches the tile kernel at 65535, 65536, 2 * 65535
-// and 2 * 65535 + 1 (one, two, two and three slices), every item bit-identical to item it % 7 (out of phase with every slice) at padded
-// lds and strides, beta != 0. The tile list is grid y, a term: a launch at n = 46208 (361 tiles a
-// side, 65341 tiles), a refusal at 46209 (65703 tiles). Metal has neither cap: the launches one
-// past CUDA's ceilings run too.
+// The grid terms (R3, AGENTS §8.9): the batch is grid z, which the launch chunks, so a pin runs
+// at 65535 and at 65536 and writes the last item. The tile list is grid y, which no chunking
+// shrinks: a launch at n = 46208 (361 tiles a side, 65341 tiles), a refusal at 46209 (65703
+// tiles; float only, the C it needs is 9 GB). Metal has no cap: one past CUDA's ceiling runs too.
 TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat) GTEST_SKIP() << "no native family for this dtype";
-    else {
+    {
         Queue& q = *this->ctx;
         const select::Device& dev = select::device_of<TestFixture::B>(q);
         ASSERT_EQ(dev.max_groups_yz, TestFixture::grid_yz) << dev.key;
         const int ceiling = int(test_utils::kCudaGridYZ);
-        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
-            const bool odd = batch % 2;
-            const Spec s{odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::Trans : Transpose::NoTrans, 5, 3, batch, 7,
-                         false, unsigned(batch)};
-            auto p = make_prob<T>(s);
-            const C tri{s2::Triangular{}};
-            const std::string got = [&] {
-                const Pin pin("syr2k", tri);
-                return traced_choice([&] { this->run(p); });
-            }();
-            EXPECT_EQ(got, "triangular") << name(tri, s);
-            expect_syr2k(q, p, name(tri, s));
+        for (int batch : {ceiling, ceiling + 1}) {
+            UnifiedVector<T> a(std::size_t(batch) * 2, T(0.5)), c(std::size_t(batch) * 4, T(1));
+            const MVof<T> A(a.data(), 2, 1, 2, 2, batch), Cm(c.data(), 2, 2, 2, 4, batch);
+            const bool fits = true;  // the batch is chunked
+            {
+                const Pin pin("syr2k", C{s2::Triangular{}});
+                if (fits) {
+                    (void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
+                    q.wait();
+                    EXPECT_EQ(c[0], T(0.5)) << "batch " << batch;
+                    EXPECT_EQ(c[std::size_t(batch) * 4 - 1], T(0.5)) << "batch " << batch;
+                    EXPECT_EQ(c[std::size_t(batch) * 4 - 2], T(1)) << "the upper element was written";
+                } else {
+                    EXPECT_THROW(((void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower,
+                                                                 Transpose::NoTrans)),
+                                 std::invalid_argument);
+                }
+            }
+            if (fits) continue;
+            EXPECT_EQ(c[0], T(1)) << "a refused pin wrote C";
+            const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
+            auto call = [&] {
+                (void)syr2k<TestFixture::B, T>(q, A, A, Cm, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
+                q.wait();
+            };
+            if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor");
+            else EXPECT_THROW(call(), batchlas::NoRouteError);
         }
         const auto mem = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE);
+        if (!std::is_same_v<T, float>) GTEST_SKIP() << "the tile ceiling's C is float-sized here";
         if (mem < (std::size_t(16) << 30)) GTEST_SKIP() << "the tile ceiling needs ~9 GB for C";
         const int n_fit = 46208, n_past = 46209;
         sycl::queue& sq = batchlas::sycl_queue(q);
@@ -502,23 +515,11 @@ TYPED_TEST(Syr2kCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false pins, each with its message: a heterogeneous operand,
-// and a double triangular (not a compiled candidate: the kernel is float only).
+// The named can_run-false pins, each with its message: a heterogeneous operand.
 TYPED_TEST(Syr2kCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const C tri{s2::Triangular{}};
-    if constexpr (!TestFixture::kFloat) {
-        auto p = make_prob<T>(Spec{});
-        const Pin pin("syr2k", tri);
-        try {
-            this->run(p);
-            ADD_FAILURE() << "double triangular was accepted";
-        } catch (const std::invalid_argument& e) {
-            EXPECT_NE(std::string(e.what()).find("is not a compiled syr2k double candidate"), std::string::npos) << e.what();
-        }
-        return;
-    }
     const int n = 16, k = 3, batch = 4;
     Matrix<T, MatrixFormat::Dense> A(n, k, batch), Bm(n, k, batch), Cm(n, n, batch);
     A.fill(T(0.5));
@@ -602,16 +603,16 @@ TYPED_TEST(Syr2kCandidates, InvalidShapesThrowBeforeChoosing) {
 TYPED_TEST(Syr2kCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const Spec s{Uplo::Lower, Transpose::NoTrans, 40, 9, 1};  // batch 1: the vendor's row
-    const bool routed = TestFixture::kFloat || TestFixture::kVendor;
+    const bool routed = TestFixture::kNative || TestFixture::kVendor;
     const std::string auto_pick = !routed ? "<no route>" : (TestFixture::kVendor ? "vendor" : "triangular");
-    const std::string native_pick = TestFixture::kFloat ? "triangular" : auto_pick;
+    const std::string native_pick = TestFixture::kNative ? "triangular" : auto_pick;
     struct Want { const char* word; bool env; std::string pick; bool warns; };
     std::vector<Want> wants{{"auto", false, auto_pick, false},         {"auto", true, auto_pick, false},
                             {" Auto ", true, auto_pick, false},        {"vendor", false, auto_pick, !TestFixture::kVendor},
                             {"VENDOR", true, auto_pick, !TestFixture::kVendor},
-                            {"native", false, native_pick, !TestFixture::kFloat},
-                            {"native", true, native_pick, !TestFixture::kFloat}};
-    if constexpr (TestFixture::kFloat) {
+                            {"native", false, native_pick, !TestFixture::kNative},
+                            {"native", true, native_pick, !TestFixture::kNative}};
+    if constexpr (TestFixture::kNative) {
         wants.push_back({"triangular", false, "triangular", false});
         wants.push_back({" Triangular", true, "triangular", false});
     }
@@ -639,7 +640,7 @@ TYPED_TEST(Syr2kCandidates, ClassWordsAndSpellings) {
 // §5.3: a ScopedPin wins over BATCHLAS_SYR2K_ROUTE, and nested pins restore the outer one.
 TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat || !TestFixture::kVendor) GTEST_SKIP() << "needs two runnable candidates";
+    if constexpr (!TestFixture::kNative || !TestFixture::kVendor) GTEST_SKIP() << "needs two runnable candidates";
     const Spec s{Uplo::Upper, Transpose::Trans, 33, 6, 2};
     const ScopedEnvVar env("BATCHLAS_SYR2K_ROUTE", "vendor");
     {
@@ -665,7 +666,7 @@ TYPED_TEST(Syr2kCandidates, ScopedPinBeatsTheEnvironment) {
 
 // Auto against the shipped table of this device (shipped_table_pick.hh) on either side of the old
 // transcription's only threshold (batch 1|2, the old prefer_triangular_tiles), at grid and
-// off-grid n, k and batch. Vendor-free, double has no route.
+// off-grid n, k and batch. Vendor-free, double's vendor-only rows fall to the last resort.
 TYPED_TEST(Syr2kCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     struct Cell { int n, k, batch; Transpose t; };
@@ -679,8 +680,9 @@ TYPED_TEST(Syr2kCandidates, AutoReadsTheShippedTable) {
         std::string want = test_utils::shipped_table_pick<C>(
             "syr2k", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx),
             select::Key{{"n", c.n}, {"k", c.k}, {"batch", c.batch}}, [&] { (void)this->auto_choice(s); });
-        if (want == test_utils::kNoTableEntryRuns) want = "<no route>";
-        if constexpr (!TestFixture::kVendor) EXPECT_EQ(want, TestFixture::kFloat ? "triangular" : "<no route>") << label(s);
+        // A vendor-only row vendor-free (double): the last resort, triangular, serves the shape.
+        if (want == test_utils::kNoTableEntryRuns) want = "triangular";
+        if constexpr (!TestFixture::kVendor) EXPECT_EQ(want, "triangular") << label(s);
         std::string got;
         try {
             got = this->auto_choice(s);
@@ -696,14 +698,15 @@ TYPED_TEST(Syr2kCandidates, AutoReadsTheShippedTable) {
 // taking k from the wrong extent, turns exactly its probe red. Needs both float candidates.
 TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat || !TestFixture::kVendor) GTEST_SKIP() << "needs two runnable candidates";
+    if constexpr (!TestFixture::kNative || !TestFixture::kVendor) GTEST_SKIP() << "needs two runnable candidates";
     const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     std::vector<std::pair<std::string, std::string>> files;
     for (const auto& t : select::embedded_tables())
         if (t.name.rfind("syr2k.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
-    files.emplace_back("syr2k.float." + dev + ".txt",
-                       "# op=syr2k dtype=float device=" + dev + " kernels=unknown\n"
+    const std::string dt(select::dtype_name<T>());
+    files.emplace_back("syr2k." + dt + "." + dev + ".txt",
+                       "# op=syr2k dtype=" + dt + " device=" + dev + " kernels=unknown\n"
                        "# keys: n:log:2 k:log batch:log\n"
                        "n=16 k=4 batch=4 | triangular 1 | vendor 2\n"
                        "n=256 k=4 batch=4 | vendor 1 | triangular 2\n"
@@ -729,7 +732,7 @@ TYPED_TEST(Syr2kCandidates, AutoReadsEveryKeyField) {
 // The trace key: n is C's order and k op(A)'s inner extent, on both transposes.
 TYPED_TEST(Syr2kCandidates, TraceKeyKFollowsTrans) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat && !TestFixture::kVendor) GTEST_SKIP() << "no route";
+    if constexpr (!TestFixture::kNative && !TestFixture::kVendor) GTEST_SKIP() << "no route";
     for (Transpose t : {Transpose::NoTrans, Transpose::Trans}) {
         const Spec s{Uplo::Upper, t, 12, 37, 5};
         auto p = make_prob<T>(s);
@@ -743,13 +746,14 @@ TYPED_TEST(Syr2kCandidates, TraceKeyKFollowsTrans) {
 // triangular; with the vendor present the row's vendor runs.
 TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
     using T = typename TestFixture::T;
-    if constexpr (!TestFixture::kFloat) GTEST_SKIP() << "no native family for this dtype";
+    if constexpr (!TestFixture::kNative) GTEST_SKIP() << "no native family for this dtype";
     const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     std::vector<std::pair<std::string, std::string>> files;
     for (const auto& t : select::embedded_tables())
         if (t.name.rfind("syr2k.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
-    files.emplace_back("syr2k.float." + dev + ".txt", "# op=syr2k dtype=float device=" + dev +
+    const std::string dt(select::dtype_name<T>());
+    files.emplace_back("syr2k." + dt + "." + dev + ".txt", "# op=syr2k dtype=" + dt + " device=" + dev +
                                                           " kernels=unknown\n# keys: n:log:2 k:log batch:log\n"
                                                           "n=64 k=8 batch=128 | vendor 1\n");
     const TableGuard restore;
@@ -767,7 +771,7 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
 // threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
 TYPED_TEST(Syr2kCandidates, NoRouteRecordsAMissRow) {
     using T = typename TestFixture::T;
-    if constexpr (TestFixture::kVendor || TestFixture::kFloat) GTEST_SKIP() << "a route exists";
+    if constexpr (TestFixture::kVendor || TestFixture::kNative) GTEST_SKIP() << "a route exists";
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "syr2k_miss";
     std::filesystem::remove_all(dir);
@@ -801,7 +805,7 @@ TYPED_TEST(Syr2kCandidates, NoRouteRecordsAMissRow) {
 TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    if constexpr (!TestFixture::kFloat && !TestFixture::kVendor) GTEST_SKIP() << "no route";
+    if constexpr (!TestFixture::kNative && !TestFixture::kVendor) GTEST_SKIP() << "no route";
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dt(select::dtype_name<T>());
     const std::string dir = ::testing::TempDir() + "syr2k_cov." + dt;
@@ -840,8 +844,8 @@ TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
                                 : B == Backend::SYCL ? "SYCL"
                                                      : "?";
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
-    const bool f = TestFixture::kFloat;
-    const std::string algo_lo = f ? "triangular" : "vendor";
+    const bool f = TestFixture::kNative;
+    const std::string algo_lo = std::is_same_v<T, float> || !TestFixture::kVendor ? "triangular" : "vendor";
     const std::string algo_hi = f && !TestFixture::kVendor ? "triangular" : "vendor";
     for (const auto& [key, s, algo] : {std::tuple{std::string("20 20 7"), lo, algo_lo},
                                        std::tuple{std::string("48 48 3"), hi, algo_hi}}) {

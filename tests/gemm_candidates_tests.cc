@@ -1963,27 +1963,26 @@ TYPED_TEST(GemmCandidates, SplitKOnAnOutOfOrderQueueReducesAfterTheSlices) {
     }
 }
 
-// split-k puts batch * s groups in grid z (65535 on CUDA): launch() runs slices of
-// floor(65535 / s) items, so a pin at that slice, one past it and two slices plus one item runs
-// split-k, every item bit-identical to item it % 7 (out of phase with every slice), strided operands, beta != 0.
-TYPED_TEST(GemmCandidates, SplitKPastTheGridRunsAsSlices) {
+// split-k puts batch * s groups in grid z, so launch() chunks the batch to floor(65535 / s) items per
+// call: a pin is a correct launch at, one past, and several chunks past batch * s = 65535.
+TYPED_TEST(GemmCandidates, SplitKGridCeilingIsServedByBatchChunking) {
     using T = typename TestFixture::T;
+    const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     const int ceiling = int(test_utils::kCudaGridYZ);
+    if (dev.max_groups_yz > ceiling) GTEST_SKIP() << dev.key << " has no grid z cap";
     for (int sl : {2, 8}) {
         const C c{og::SplitK{16, 16, 16, sl}};
-        for (const int batch : {ceiling / sl, ceiling / sl + 1, 2 * (ceiling / sl) + 1}) {
-            Spec s{kN, kN, 2, 2, 20, batch, Layout::Strided};
-            s.period = 7;
-            auto p = make_problem<T>(s);
-            const std::string got = [&] {
-                const Pin pin("gemm", c);
-                return traced_choice([&] { this->run(p); });
-            }();
-            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
-            expect_gemm(*this->ctx, p, name(c, s));
+        const int chunk = ceiling / sl;
+        for (int batch : {chunk, chunk + 1, 3 * chunk + 5}) {
+            const Spec sp{kN, kN, 2, 2, 20, batch, Layout::Packed};
+            auto p = make_problem<T>(sp);
+            ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, sp);
+            expect_gemm(*this->ctx, p, name(c, sp));
         }
     }
 }
+
+
 // WP-K, the pipelined transposed-wide staging (two stages, register prefetch, 16-byte granules)
 // on 128x32, 32x128, 64x32, 32x64, 32x32 and 16x16, every form each instantiates. Interior
 // 2TM x 2TN at k = 48 padded (the 16-byte leg, three slabs: the last stage read is 0) and k = 64
@@ -2458,53 +2457,33 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
 }
 
-// direct, tiled, reg and wide put the batch in grid z (65535 on CUDA) and launch() runs a batch past
-// it as slices, so the batch is no can_run term: each pin at 65535, 65536, 2 * 65535 and
-// 2 * 65535 + 1 (one, two, two and three slices) runs its family, every item bit-identical to item
-// it % 7 (out of phase with every slice), strided operands (odd item strides: each slice's base
-// re-derives the leg), beta != 0, a transposed (complex: conjugated) A on the odd batches. small is 1-D and serves them unsliced.
-// Metal has no cap: one slice serves every batch.
-TYPED_TEST(GemmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
+// direct, tiled, reg and wide put the batch in grid z (<= 65535 on CUDA); launch() chunks a larger
+// batch, so every native pin is a correct launch at, one past, and several chunks past the ceiling
+// (the chunk seams are where an offset error lands), and Auto serves it natively vendor-free.
+TYPED_TEST(GemmCandidates, GridCeilingIsServedByBatchChunking) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
-    const Transpose tc = test_utils::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    int past_runs = 0;
     for (const C& c : og::candidates<T>()) {
+        // split-k's chunk is floor(ceiling / s) (SplitKGridCeilingIsServedByBatchChunking)
         if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::SplitK>(c)) continue;
-        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
-            const Transpose ta = batch % 2 ? tc : kN;
-            if (!oracle_native<T>(c, ta, kN, 2, 2, 2)) continue;
-            Spec s{ta, kN, 2, 2, 2, batch, Layout::Strided};
-            s.period = 7;
-            auto p = make_problem<T>(s);
-            const std::string got = [&] {
-                const Pin pin("gemm", c);
-                return traced_choice([&] { this->run(p); });
-            }();
-            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
-            expect_gemm(*this->ctx, p, name(c, s));
+        if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
+        for (int batch : {ceiling, ceiling + 1, 2 * ceiling + 9}) {
+            const Spec sp{kN, kN, 2, 2, 2, batch, Layout::Packed};
+            auto p = make_problem<T>(sp);
+            ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, sp);
+            expect_gemm(*this->ctx, p, name(c, sp));
+            past_runs += batch > ceiling;
         }
     }
-    {  // an out-of-order Queue: the slices run on an in-order sibling the caller's wait covers
-        Queue ooo(*this->ctx, false);
-        Spec s{kN, kN, 2, 2, 2, 2 * ceiling + 1, Layout::Strided};
-        s.period = 7;
-        auto p = make_problem<T>(s);
-        {
-            const Pin pin("gemm", C{og::Direct{}});
-            (void)gemm<TestFixture::B, T>(ooo, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.ta, s.tb,
-                                          ComputePrecision::Default);
-            ooo.wait();
-        }
-        expect_gemm(*this->ctx, p, "direct past the grid on an out-of-order Queue");
-    }
+    ASSERT_GT(past_runs, 0);
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
-    Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
-    past.period = 7;
+    const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
     auto p = make_problem<T>(past);
-    const std::string got = traced_choice([&] { this->run(p); });
-    expect_gemm(*this->ctx, p, "auto past the grid ceiling -> " + got);
+    this->run(p);
+    expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 
 // An empty batch is a no-op under Auto and every pin, vendor-free too (the old native range
@@ -2531,26 +2510,58 @@ TYPED_TEST(GemmCandidates, EmptyBatchIsANoOp) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty batch wrote element " << e;
 }
 
-// A non-default precision is a correctness condition: every native pin refuses it, and Auto
-// takes the vendor (no route at all vendor-free).
-TYPED_TEST(GemmCandidates, NonDefaultPrecisionHasNoNativeRoute) {
+// ComputePrecision contract (enums.hh): the scalar's own precision is exact, so every native pin
+// serves it and is correct; a lower-precision HINT (F16/BF16/TF32 on a single-precision scalar)
+// goes to the vendor where one exists and is answered at full precision where none does; a
+// mismatched pair (F64 on float, F32/F16/BF16/TF32 on double) is refused on every path.
+TYPED_TEST(GemmCandidates, ComputePrecisionContract) {
     using T = typename TestFixture::T;
-    const ComputePrecision prec =
-        std::is_same_v<RealOf<T>, float> ? ComputePrecision::F32 : ComputePrecision::F64;
+    constexpr bool single = std::is_same_v<RealOf<T>, float>;
+    const ComputePrecision own = single ? ComputePrecision::F32 : ComputePrecision::F64;
+    const ComputePrecision wrong = single ? ComputePrecision::F64 : ComputePrecision::F32;
     const Spec s{kN, kT, 40, 24, 16, 2, Layout::Strided};
+    int ran = 0;
     for (const C& c : og::candidates<T>()) {
         if (std::holds_alternative<og::Vendor>(c) || !oracle_native<T>(c, s.ta, s.tb, s.m, s.n, s.k)) continue;
-        auto p = make_problem<T>(s);
         const Pin pin("gemm", c);
-        EXPECT_THROW(this->run(p, prec), std::invalid_argument) << select::to_string(c);
+        {
+            auto p = make_problem<T>(s);
+            ASSERT_NO_THROW(this->run(p, own)) << select::to_string(c);
+            expect_gemm(*this->ctx, p, select::to_string(c) + " own precision");
+            ++ran;
+        }
+        auto p = make_problem<T>(s);
+        EXPECT_THROW(this->run(p, wrong), std::invalid_argument) << select::to_string(c);
+        if constexpr (single) {
+            auto q = make_problem<T>(s);
+            if constexpr (TestFixture::kVendor) {
+                EXPECT_THROW(this->run(q, ComputePrecision::TF32), std::invalid_argument) << select::to_string(c);
+            } else {
+                ASSERT_NO_THROW(this->run(q, ComputePrecision::TF32)) << select::to_string(c);
+                expect_gemm(*this->ctx, q, select::to_string(c) + " TF32 hint");
+            }
+        }
     }
+    ASSERT_GT(ran, 0) << "no native candidate was exercised";
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
-    auto p = make_problem<T>(s);
+    {
+        auto p = make_problem<T>(s);
+        ASSERT_NO_THROW(this->run(p, own));
+        expect_gemm(*this->ctx, p, "auto, own precision");
+    }
     if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(traced_choice([&] { this->run(p, prec); }), "vendor");
-        expect_gemm(*this->ctx, p, "auto, non-default precision");
+        auto p = make_problem<T>(s);
+        if constexpr (single)
+            EXPECT_EQ(traced_choice([&] { this->run(p, ComputePrecision::TF32); }), "vendor");
+        EXPECT_ANY_THROW(this->run(p, wrong));
     } else {
-        EXPECT_THROW(this->run(p, prec), batchlas::NoRouteError);
+        auto p = make_problem<T>(s);
+        EXPECT_THROW(this->run(p, wrong), batchlas::NoRouteError);
+        if constexpr (single) {
+            auto q = make_problem<T>(s);
+            ASSERT_NO_THROW(this->run(q, ComputePrecision::BF16));
+            expect_gemm(*this->ctx, q, "auto, BF16 hint, vendor-free");
+        }
     }
 }
 

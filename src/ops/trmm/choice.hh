@@ -22,8 +22,10 @@ template <class T>  /// Every compiled choice, in tie-break order (§6.3): trian
 constexpr auto candidates() { return select::all_of<TrmmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"expand", "triangular", "vendor"};  ///< nothing runs
-inline constexpr select::OpSpec spec{Op::trmm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules; §5.5: Expand both sides, Triangular Left
+// §5.5: Expand serves both sides, Triangular Left only.
+inline constexpr select::OpSpec spec{Op::trmm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
+inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< both natives: batch in grid z; 65536 throws
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular: row x column tiles in grid y
 inline constexpr int kNativeWg = 256;  ///< widest native work-group: the 128-row tile, the expansion
 

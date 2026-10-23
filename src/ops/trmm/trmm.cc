@@ -9,6 +9,7 @@
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/util/mempool.hh>
 
+#include <src/ops/level3/batched.hh>
 #include <src/ops/trmm/choice.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/kernels/common/triangular_expand.hh>
@@ -45,8 +46,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 
 // Correctness only (R3); shapes were validated at entry. Both native launches address every item
 // as base + b * stride at one (order, q), so neither takes a heterogeneous batch (the expansion's
-// gemm throws on one). Both put the batch in grid z and run a batch past it as slices; triangular
-// puts its tile list in grid y, a term.
+// gemm throws on one). Both put the batch in grid z and chunk it, expand also to its scratch
+// budget; triangular puts its tile list in grid y, which no chunking shrinks.
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
 template <Backend B, class T>
@@ -61,12 +62,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
             return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
                    backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= d.max_groups_yz;
         },
-        [&](Expand) {
-            if (!native) return false;
-            const int k = A.rows(), batch = A.batch_size();
-            return backend::detail::expansion_fits<T>(q, k, batch,
-                                                   backend::detail::expanded_workspace_bytes<T>(q, k, batch));
-        },
+        [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
         [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
 }
@@ -79,17 +75,23 @@ Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
                     Transpose transA, Diag diag) {
     const int k = A.rows(), batch = A.batch_size();
     const int ld = backend::detail::expanded_ld<T>(k);
-    auto ws = ctx.workspace(backend::detail::expanded_workspace_bytes<T>(ctx, k, batch));
+    const int chunk = backend::detail::expansion_chunk<T>(ctx, k, batch, level3::grid_chunk<B>(ctx));
+    auto ws = ctx.workspace(backend::detail::expanded_workspace_bytes<T>(ctx, k, chunk));
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) * static_cast<std::size_t>(k) *
-                                             static_cast<std::size_t>(batch));
-    MV<T> expanded(storage.data(), k, k, ld, ld * k, batch);
-    Event expansion = backend::detail::expand_triangular<T>(ctx, expanded, A, uplo, diag);
-    // An out-of-order queue orders nothing across the SYCL / vendor-stream boundary.
-    if (!ctx.in_order()) expansion.wait();
-    if (side == Side::Left)
-        return gemm<B, T>(ctx, expanded, Bm, C, alpha, T(0), transA, Transpose::NoTrans, ComputePrecision::Default);
-    return gemm<B, T>(ctx, Bm, expanded, C, alpha, T(0), Transpose::NoTrans, transA, ComputePrecision::Default);
+                                             static_cast<std::size_t>(chunk));
+    return level3::for_each_chunk(ctx, batch, chunk, [&](int first, int count) {
+        const MV<T> expanded(storage.data(), k, k, ld, ld * k, count);
+        Event expansion =
+            backend::detail::expand_triangular<T>(ctx, expanded, level3::batch_range(A, first, count), uplo, diag);
+        // An out-of-order queue orders nothing across the SYCL / vendor-stream boundary.
+        if (!ctx.in_order()) expansion.wait();
+        const MV<T> Bc = level3::batch_range(Bm, first, count), Cc = level3::batch_range(C, first, count);
+        if (side == Side::Left)
+            return gemm<B, T>(ctx, expanded, Bc, Cc, alpha, T(0), transA, Transpose::NoTrans,
+                              ComputePrecision::Default);
+        return gemm<B, T>(ctx, Bc, expanded, Cc, alpha, T(0), Transpose::NoTrans, transA, ComputePrecision::Default);
+    });
 }
 
 template <Backend B, class T>
@@ -98,10 +100,10 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
     return std::visit(overloaded{
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B>)
-                return select::over_batch_slices(q, A.batch_size(), [&](Queue& sq, int first, int count) {
-                    return backend::detail::trmm_triangular_tiles<T>(sq, A.batch_range(first, count),
-                                                                     Bm.batch_range(first, count),
-                                                                     C.batch_range(first, count), alpha, uplo,
+                return level3::for_each_chunk(q, A.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
+                    return backend::detail::trmm_triangular_tiles<T>(q, level3::batch_range(A, f, n),
+                                                                     level3::batch_range(Bm, f, n),
+                                                                     level3::batch_range(C, f, n), alpha, uplo,
                                                                      transA, diag);
                 });
             else

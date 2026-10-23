@@ -1,11 +1,12 @@
 // syrk (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/syrk.<device>.txt row that can_run() admits. Gram puts all of C in one tile sized to n
-// (n <= 128) and stages A once; Triangular walks 128-wide tiles of the requested triangle only (float).
+// (n <= 128) and stages A once; Triangular walks 128-wide tiles of the requested triangle only.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syrk.hh>
 
+#include <src/ops/level3/batched.hh>
 #include <src/ops/syrk/choice.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
@@ -13,6 +14,7 @@
 #include <src/select/select.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <complex>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -40,10 +42,10 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 }
 
 // Correctness only (R3): false means the kernel would throw or answer wrongly. The tile kernels
-// are portable SYCL wired only for CUDA, take one (n, k, ld, stride) per launch
-// (no heterogeneous batch) and put the batch, and triangular its tile count, in grid dimensions
-// capped at 65535: a batch past it runs as slices (launch), the tile count is a term. syrk is
-// real-only, so ConjTrans is Trans to both kernels (the table, not can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
+// are portable SYCL wired for CUDA and SYCL, take one (n, k, ld, stride) per launch
+// (no heterogeneous batch) and put the batch (chunked by the launch) and triangular's tile count
+// (not chunkable) in grid dimensions capped at 65535 on CUDA. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
+// can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
 template <Backend B, class T>
@@ -58,41 +60,41 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
                    d.max_wg >= gram_threads(n) && d.slm_budget >= gram_slm_bytes<T>(n);
         },
         [&](Triangular) {
-            return native && std::is_same_v<T, float> && d.max_wg >= kTriangularWg &&
+            return native && d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<T>() &&
                    triangular_groups(n, backend::detail::kTriangularTile) <= d.max_groups_yz;
         },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous; },
     }, c);
 }
 
-// The native arms compile only for CUDA and SYCL (native_gpu_backend), and
-// Triangular only for float; can_run never admits the other instantiations.
+// The native arms compile only for CUDA and SYCL (native_gpu_backend); can_run never admits the
+// other instantiations.
 template <Backend B, class T>
 Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{
         [&](Gram) -> Event {
             if constexpr (select::native_gpu_backend<B>)
-                return select::over_batch_slices(q, C.batch_size(), [&](Queue& sq, int first, int count) {
-                    return backend::detail::syrk_gram_tiles<T, false>(sq, A.batch_range(first, count),
-                                                                      C.batch_range(first, count), alpha, beta,
+                return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
+                    return backend::detail::syrk_gram_tiles<T, false>(q, level3::batch_range(A, f, n),
+                                                                      level3::batch_range(C, f, n), alpha, beta,
                                                                       uplo, transA);
                 });
             else
                 throw std::logic_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
-            if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, float>)
-                return select::over_batch_slices(q, C.batch_size(), [&](Queue& sq, int first, int count) {
-                    return backend::detail::syrk_triangular_tiles<float>(sq, A.batch_range(first, count),
-                                                                         C.batch_range(first, count), alpha,
+            if constexpr (select::native_gpu_backend<B> && !std::is_same_v<T, std::complex<double>>)
+                return level3::for_each_chunk(q, C.batch_size(), level3::grid_chunk<B>(q), [&](int f, int n) {
+                    return backend::detail::syrk_triangular_tiles<T>(q, level3::batch_range(A, f, n),
+                                                                         level3::batch_range(C, f, n), alpha,
                                                                          beta, uplo, transA);
                 });
             else
-                throw std::logic_error("syrk: triangular is a float native-GPU kernel");
+                throw std::logic_error("syrk: triangular is wired for native GPU backends only");
         },
         [&](Vendor) -> Event {
-            if constexpr (select::has_library<B>(spec.vendor))
+            if constexpr (vendor_wired<B, T>)
                 return backend::syrk_vendor<B, T>(q, A, C, alpha, beta, uplo, transA);
             else select::no_vendor<B, T>(spec);
         },
@@ -102,10 +104,12 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 }  // namespace ops::syrk
 
 // syrk takes no workspace (no syrk_buffer_size), so R5 has nothing to size.
-template <Backend Back, RealScalar T>
+template <Backend Back, FloatingOrComplexScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
     (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+    if (ComplexScalar<T> && transA == Transpose::ConjTrans)
+        throw std::invalid_argument("SYRK: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.
@@ -119,7 +123,7 @@ Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
 }
 
 #define SYRK_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, syrk)
-BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(SYRK_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYRK_INSTANTIATE)
 #undef SYRK_INSTANTIATE
 
 }  // namespace batchlas

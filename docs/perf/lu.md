@@ -19,14 +19,14 @@ Machine: 2x RTX 4090 (sm_89, 128 SMs, 97,280 B usable local memory per work-grou
 
 ### LU: families and their limits
 
-The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`), and `n, batch >= 1` (`getrf.cc:43-44`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
+The common native term is `B != Backend::NETLIB && d.is_gpu && d.has_sg32`, a homogeneous batch, a square A (getrs: a conforming pair with `B.rows == n`; getrf: any m x n, see [getrf non-square](#getrf-non-square-m-x-n)), and `n, batch >= 1` (`getrf.cc`, `getrs.cc:41-43`, `getri.cc:49-50`, `gesv.cc:45`). Beyond it:
 
 | op | family | driver | `can_run` beyond the common term |
 |---|---|---|---|
-| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` (`getrf.cc:48`) |
-| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | `n <= getrf_cta_max_n_for_slm<T>(budget)`, occupancy-scaled (`getrf.cc:50`) |
-| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1` (`getrf.cc:53-54`) |
-| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only (`getrf.cc:58`). The only family for a non-square A on NETLIB and ROCm; a heterogeneous A has no route |
+| `getrf` | `tiny` | `getrf_tiny.cc`, register-resident, one matrix per sub-group partition | square, `n <= getrf_tiny_max_n<T>()` (32; cdouble 16), `max_wg >= 64` |
+| `getrf` | `cta` | `getrf_cta.cc`, local-memory ?GETF2 | square: `n <= getrf_cta_max_n_for_slm<T>(budget)`; m x n: `getrf_cta_fits_rect<T>(m, n, budget)`; both occupancy-scaled |
+| `getrf` | `blocked` | `getrf_blocked.cc`, right-looking, register panel leaf by default, public `trsm` and `gemm` | `getrf_blocked_available<T>()` and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`; any m x n |
+| `getrf` | `vendor` | `cublas?getrfBatched`, rocSOLVER, LAPACKE | `d.has_vendor && !A.is_heterogeneous()`, and on CUDA a square A: cuBLAS getrfBatched is square-only. The only family for a non-square A on NETLIB; a heterogeneous A has no route |
 | `getrs` | `cta` | `getrs_fused.cc`, fused narrow-RHS kernel | `nrhs <= kGetrsFusedMaxRhs` (8), `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, `max_wg >= 32` (`getrs.cc:47-50`) |
 | `getrs` | `blocked` | `getrs_native.cc`, permutation then two public `trsm` | `getrs_blocked_available<T>()` (`getrs.cc:52`) |
 | `getrs` | `vendor` | `cublas?getrsBatched`, rocSOLVER, LAPACKE | `d.has_vendor`, homogeneous A and B (`getrs.cc:53`); also takes a non-conforming pair |
@@ -415,6 +415,7 @@ Measured with a `PAD=` knob that moves only the declared byte count: **49,024 B 
 * **Recursive panel not attempted**; no float or cfloat phase split exists; residual tolerances `c*n*eps` with c in [200, 800] are not tightened against a measured distribution.
 * **Latent vendor gate** closes by reading (`src/select/vendor.hh:32-35`); no cuSOLVER-absent configure has been built.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`.** Pre-existing, not fixed.
+* **Tall non-square `getrf` that fits the CTA tile takes `cta`** (1.9-4.6x slower than blocked at batch 1024): the key cannot tell tall from wide ([the routing key](#getrf-non-square-the-routing-key-is-still-n--arows)). Needs a `form` key and a retune.
 
 ## Raw evidence
 
@@ -913,3 +914,66 @@ gesv cfloat with `tiny` against the composition reads 0.97-1.19x at n = 17..32, 
 Run against `getrf_tests`, `gesv_tests` and `posv_tests` on GPU 1, then reverted. The route-layer breaks are table rows checked by `GetrfTranscribedTable.RowsHoldTheTranscribedPreferenceOnSm89`. **Single buffer instead of the parity pair is green everywhere**: a blind guard, kept for the memory model. Other breaks went red in `T1`-`T11` (tiny), `G1` (gesv) and `P1`, `P7` (posv).
 
 The RHS pad-column fix is a speed change only; no functional test can see it.
+
+## getrf non-square (m x n)
+
+**2026-10-23, RTX 4090 (sm_89), GPU 1.** An m x n `getrf` is the whole LAPACK `?GETRF`: `min(m, n)` packed 1-based int32 pivots per item, at stride `min(m, n)` (rocSOLVER's and NETLIB's layout). Before this change the natives required `A.rows() == A.cols()` and cuBLAS `getrfBatched` is square-only, so a non-square `getrf` had no route on CUDA in any build, or on `Backend::SYCL`.
+
+What each family does:
+
+- **cta** (`getrf_cta.cc`). The device `?GETF2` already ran `kmax = min(m, n)` steps, and its swaps and rank-1 updates already spanned all n columns. The launcher now passes m, n and pivot stride `min(m, n)`. The admission test for a non-square shape is `getrf_cta_fits_rect<T>(m, n, budget)`, occupancy-scaled; a square shape keeps `n <= getrf_cta_max_n_for_slm`.
+- **blocked** (`getrf_blocked.cc`). This is `?GETRF`'s own loop: `min(m, n)` panels, each `m - j0` rows tall; the right-hand interchange, the `trsm` for `U12` and the trailing `gemm` span all n columns. A wide A needs no separate pass: the last panel's right-hand interchange and `trsm` produce `U(:, m:n)`.
+  - **Tall A:** the deferred left gather stages `n - k0` rows for `n - k0` transpositions, but a tall item moves rows below `min(m, n)`. So `m > n` takes the deferred walk (`lu_laswp_launch` per column block, `P - 1` launches, each over the whole batch).
+- **tiny** stays square-only.
+- **vendor:** cuBLAS stays refused for non-square, so CUDA Auto takes the first runnable native in the row, and the class word `vendor` falls back to Auto.
+
+`getrs` and `getri` remain square. The arena overload (`options.hh`) checks the pivot span against `min(m, n) * batch` and no longer requires a square A.
+
+### getrf non-square: efficiency against square
+
+`benchmarks/factor_bench` (now accepts m != n for getrf), median ms with arms interleaved, `ld = m + LD_PAD`. Auto runs blocked on every shape below (the cta arm is refused: it does not fit). GFLOP/s uses \f$mnk - (m+n)k^2/2 + k^3/3\f$, \f$k = \min(m, n)\f$ (x4 for complex).
+
+| type | batch | 256x128 | 128x256 | 512x64 | 64x512 | square 128 | square 256 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| float | 128 | 470 | 812 | 678 | 881 | 401 | 1197 |
+| float | 1024 | 998 | 1375 | 929 | 1132 | 1465 | 1391 |
+| cfloat | 128 | 1106 | 1728 | 1727 | 1327 | 1106 | 2584 |
+| cfloat | 1024 | 1729 | 1820 | 1662 | 1299 | 1798 | 2319 |
+
+The non-square rates sit between the square 128 and square 256 rates: no shape falls off a cliff. There is no vendor to compare against on CUDA. For scale, cuBLAS on the square shapes: float 256 at batch 1024 runs 332 GFLOP/s against the native 1391.
+
+### getrf non-square: the routing key is still `n = A.rows()`
+
+The table key is unchanged. Rows up to n = 192 rank `cta` before `blocked`, so a non-square shape that fits the CTA tile takes `cta`. Measured at batch 1024 (ms, cta / blocked):
+
+| shape | float | cfloat |
+|---|---:|---:|
+| 48x24 | 0.075 / 0.036 | 0.097 / 0.051 |
+| 64x32 | 0.109 / 0.048 | 0.146 / 0.070 |
+| 96x32 | 0.244 / 0.053 | (cta does not fit) |
+| 24x48 | 0.046 / 0.056 | 0.060 / 0.099 |
+| 32x64 | 0.070 / 0.063 | 0.110 / 0.142 |
+| 8x16 | 0.016 / 0.027 | 0.017 / 0.031 |
+
+- **Wide shapes:** cta is the right pick, except float 32x64 at 0.90x and 32x96 at 0.62x.
+- **Tall shapes that fit the tile:** at batch 1024 cta loses 1.9-4.6x to the register panel leaf the blocked driver uses. At batch 128 the two are within 10% except float 96x32 (cta 0.054, blocked 0.038, 1.4x).
+
+A key that tells tall from wide needs a `form` key column. That means regenerating both getrf tables and extending `tools/tune/getrf_spec.cc`'s grid; it is left as an open debt rather than hand-made rows on a ledger table.
+
+### getrf non-square: tests and armed breaks
+
+- `GetrfCandidates.NonSquareFactorsWholeMatrixNatively`: 16 shapes from 1x9 to 512x64 / 64x512, plus the CTA fit edges, under every pin and Auto, all four types, padded ld, stride not `ld * n`, poisoned pad, complex data with an imaginary part. It checks:
+  - LAPACKE's pivots exactly (`verify::getrf_pivots`);
+  - an exactly-zero column's `info`;
+  - the residual and the pad;
+  - the int32 pivot tail;
+  - the arena spelling.
+- `NonSquareSaturatingBatchIsBitIdentical`: cta at batch 2048, blocked at 1024, every item bit-identical to item 0.
+- `CanRunEqualsLaunch` now covers non-square views.
+
+The entries must be continuous random values. An integer lattice ties magnitudes exactly, rounding then breaks the ties differently from LAPACKE, and the pivot oracle fails on a correct kernel.
+
+Armed breaks, reverted:
+
+- **Right-hand gather at pivot stride `n` instead of `min(m, n)`, plus the gather left on for tall A:** only the two non-square tests went red, on all four types, wide and tall shapes both. The square suite stayed green.
+- **Deferred walk's pivot stride `n` instead of `min(m, n)`:** green, and blind by construction. The walk runs only for tall A, where `min(m, n) = n`.

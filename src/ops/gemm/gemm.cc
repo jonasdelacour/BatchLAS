@@ -85,6 +85,27 @@ inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
     return (!a && !b && c.forms.nn) || (!a && b && c.forms.nt) || (a && !b && c.forms.tn) || (a && b && c.forms.tt);
 }
 
+// Whether the native kernels answer `precision` (contract: ComputePrecision in enums.hh). They
+// compute in T throughout, so Default and the precision equal to T's own (F32 for float and
+// complex<float>, F64 for double and complex<double>) are exact. F16, BF16 and TF32 on a
+// single-precision T only PERMIT a less accurate product, which full precision satisfies; while a
+// vendor library exists it is the one that honours the hint (tensor cores), so the natives answer
+// it only when there is none. Any other pair (F64 on float, F32 on double, ...) is an error on
+// every path, as cuBLAS's enum_convert already makes it.
+template <class T>
+bool native_serves_precision(ComputePrecision p, bool has_vendor) {
+    constexpr bool single = std::is_same_v<typename base_type<T>::type, float>;
+    switch (p) {
+        case ComputePrecision::Default: return true;
+        case ComputePrecision::F32: return single;
+        case ComputePrecision::F64: return !single;
+        case ComputePrecision::F16:
+        case ComputePrecision::BF16:
+        case ComputePrecision::TF32: return single && !has_vendor;
+    }
+    return false;
+}
+
 // Correctness only (R3): false means the launcher would throw or answer wrongly. Every register
 // and wide tile hard-wires its transpose form, so a form it does not instantiate is refused
 // here (a silent wrong answer otherwise). evidence: docs/perf/gemm.md#choices-flat-selection-p34
@@ -95,13 +116,14 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
     // The kernels also run on a host SYCL device, but a CPU with a host BLAS keeps it (maintainer
     // decision, plan §13); without one (a vendor-free host queue) they are its only gemm, as before.
     const bool device = d.is_gpu || !d.has_vendor;
-    const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
+    const bool native = device && native_serves_precision<T>(precision, d.has_vendor) && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
-    // A batch past the grid runs as slices (launch), so the batch is no term of any family.
+    // The 3-D launches put the batch in grid z (65535 on CUDA); launch() chunks a larger batch.
+    const bool grid = native;
     return std::visit(overloaded{
-        [&](Direct) { return native && d.max_wg >= kDirectWg; },
-        [&](Tiled) { return native && d.max_wg >= kTiledWg; },
+        [&](Direct) { return grid && d.max_wg >= kDirectWg; },
+        [&](Tiled) { return grid && d.max_wg >= kTiledWg; },
         [&](Small) {
             const bool nn = ta == Transpose::NoTrans && tb == Transpose::NoTrans;
             return native && small_fits<T>(d, nn, std::max({s.m, s.n, s.k}));
@@ -111,48 +133,87 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
             const auto* cfg = std::find_if(reg_configs.begin(), reg_configs.end(), [&](const RegCfg& g) {
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
-            return native && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+            return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
                    d.slm_budget_for(cfg->threads()) >= cfg->slm_bytes();
         },
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return native && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
+            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads() &&
                    d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg);
         },
         [&](const SplitK& sk) {
-            // A launch slice puts slice * s in grid z (an int group id), slice = min(batch, max_groups_yz / s);
-            // one item's partials are int-indexed; each slice's partials lease must fit the scratch budget
-            // (past it the arena throws std::bad_alloc).
+            // The slices put batch * s in grid z (an int group id); one item's partials are int-indexed;
+            // the partials lease must fit the scratch budget (past it the arena throws std::bad_alloc).
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == sk.m && g.n == sk.n && g.k == sk.k; });
             const bool slices = std::find(kSplitKSlices.begin(), kSplitKSlices.end(), sk.s) != kSplitKSlices.end();
-            const std::int64_t slice = std::min<std::int64_t>(A.batch_size(), d.max_groups_yz / std::max(1, sk.s));
-            return native && slices && slice >= 1 && slice * sk.s <= std::numeric_limits<int>::max() &&
+            const std::int64_t batch = A.batch_size();
+            return grid && slices && sk.s <= d.max_groups_yz &&
                    cfg != wide_configs.end() && splitk_host(*cfg) && wide_form<T>(*cfg, ta, tb) &&
                    d.max_wg >= cfg->threads() && d.slm_budget_for(cfg->threads()) >= wide_slm_bytes<T>(*cfg) &&
                    splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
-                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / slice;
+                   splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
         },
         [&](Vendor) { return d.has_vendor; },
     }, c);
 }
 
+// Runs `fn` on consecutive batch chunks of at most `chunk` items, so a native kernel that puts the
+// batch in grid z serves any batch. The chunks are disjoint in C and the views are the strided
+// ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call.
+template <class T, class Fn>
+Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, std::int64_t chunk, Fn&& fn) {
+    const std::int64_t batch = A.batch_size();
+    if (batch <= chunk) return fn(A, Bm, C);
+    Event last;
+    for (std::int64_t off = 0; off < batch; off += chunk) {
+        const int n = static_cast<int>(std::min(chunk, batch - off));
+        auto sub = [&](const MV<T>& M) {
+            return MV<T>(M.data_ptr() + off * M.stride(), static_cast<int>(M.rows()), static_cast<int>(M.cols()),
+                         M.ld(), M.stride(), n);
+        };
+        last = fn(sub(A), sub(Bm), sub(C));
+    }
+    // The chunk Events are not chained: an out-of-order Queue is drained so `last` covers them all.
+    if (!q.in_order()) q.wait();
+    return last;
+}
+
 template <Backend B, class T>
-Event launch_slice(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
-                   Transpose ta, Transpose tb, ComputePrecision precision) {
+Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
+             Transpose ta, Transpose tb, ComputePrecision precision) {
+    const std::int64_t grid = select::device_of<B>(q).max_groups_yz;
     return std::visit(overloaded{
-        [&](Direct) { return sycl_gemm::gemm_direct<T>(q, A, Bm, C, alpha, beta, ta, tb); },
-        [&](Tiled) { return sycl_gemm::gemm_tiled<T>(q, A, Bm, C, alpha, beta, ta, tb); },
+        [&](Direct) {
+            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+                return sycl_gemm::gemm_direct<T>(q, a, b, cc, alpha, beta, ta, tb);
+            });
+        },
+        [&](Tiled) {
+            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+                return sycl_gemm::gemm_tiled<T>(q, a, b, cc, alpha, beta, ta, tb);
+            });
+        },
         [&](Small) { return sycl_gemm::gemm_small<T>(q, A, Bm, C, alpha, beta, ta, tb); },
         [&](const Reg& r) -> Event {
             if constexpr (std::is_same_v<T, float>)
-                return sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, A, Bm, C, alpha, beta, ta, tb);
+                return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+                    return sycl_gemm::gemm_reg(q, r.m, r.n, r.k, r.u, a, b, cc, alpha, beta, ta, tb);
+                });
             else throw batchlas::unsupported("gemm: reg is float only");
         },
-        [&](const Wide& w) { return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, C, alpha, beta, ta, tb); },
+        [&](const Wide& w) {
+            return for_batch_chunks<T>(q, A, Bm, C, grid, [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+                return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, a, b, cc, alpha, beta, ta, tb);
+            });
+        },
         [&](const SplitK& sk) {
-            return sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, A, Bm, C, alpha, beta, ta, tb);
+            // batch * s groups in grid z: the chunk is what keeps that product under the cap.
+            return for_batch_chunks<T>(q, A, Bm, C, std::max<std::int64_t>(1, grid / sk.s),
+                                       [&](const MV<T>& a, const MV<T>& b, const MV<T>& cc) {
+                return sycl_gemm::gemm_splitk<T>(q, sk.m, sk.n, sk.k, sk.s, a, b, cc, alpha, beta, ta, tb);
+            });
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -160,23 +221,6 @@ Event launch_slice(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& B
             else select::no_vendor<B, T>(spec);
         },
     }, c);
-}
-
-// direct, tiled, reg and wide put the batch in grid z, splitk batch * s: a batch past the grid
-// runs as slices. small is 1-D and the vendor loops itself, so both take the whole batch.
-template <Backend B, class T>
-Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
-             Transpose ta, Transpose tb, ComputePrecision precision) {
-    if (std::holds_alternative<Small>(c) || std::holds_alternative<Vendor>(c))
-        return launch_slice<B, T>(q, c, A, Bm, C, alpha, beta, ta, tb, precision);
-    const std::int64_t groups_per_item = std::holds_alternative<SplitK>(c) ? std::get<SplitK>(c).s : 1;
-    return select::over_batch_slices(
-        q, A.batch_size(),
-        [&](Queue& sq, int first, int count) {
-            return launch_slice<B, T>(sq, c, A.batch_range(first, count), Bm.batch_range(first, count),
-                                      C.batch_range(first, count), alpha, beta, ta, tb, precision);
-        },
-        groups_per_item);
 }
 
 }  // namespace ops::gemm

@@ -49,8 +49,8 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
                                                                   resident::kMinBlocksPerSm, l.panel);
         },
         [&](Blocked) {
-            // Lower-only; its leaf is the CTA kernel, so CTA must hold at least order 1.
-            return native && uplo == Uplo::Lower && sycl_potrf::potrf_blocked_available<T>() &&
+            // Either triangle; its leaf is the CTA kernel, so CTA must hold at least order 1.
+            return native && sycl_potrf::potrf_blocked_available<T>() &&
                    sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
         [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },

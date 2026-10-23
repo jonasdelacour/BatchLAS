@@ -52,12 +52,14 @@ using gemm_vendor = gemm<T>;
 /// @param beta       scale of the input `C`
 /// @param transA     op() applied to `A`
 /// @param transB     op() applied to `B`
-/// @param precision  compute precision; `ComputePrecision::Default` computes in `T`.
-///                   Other values are honoured only by the vendor library path.
+/// @param precision  compute precision; `ComputePrecision::Default` computes in `T`. The scalar's
+///                   own precision (F32 for float, F64 for double) is always served; F16/BF16/TF32
+///                   on float are permissions, taken by the vendor library and answered at full
+///                   precision without one (see ComputePrecision); other pairs are refused.
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A`, `B` and `C` have the same batch size and conforming shapes per item.
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Back`
-///         when no native kernel can run the call (a non-Default `precision`).
+///         when no native kernel can run the call (a refused `precision` pair).
 ///         An empty batch, m or n is a no-op, and k = 0 computes `C = beta * C`;
 ///         neither reaches selection, so `precision` is not checked there.
 /// @see GemmOptions, @ref md_docs_2cpp-api

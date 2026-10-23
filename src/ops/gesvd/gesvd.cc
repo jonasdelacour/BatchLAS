@@ -54,18 +54,29 @@ select::Key key_of(const MV<T>& A, const Job& j) {
     return {{"herm", herm}, {"vec", vec}, {"m", A.rows()}, {"n", A.cols()}};
 }
 
-// Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
-// Hermitian form; Cta and Blocked run complex input only through the Hermitian shortcut
-// (gesvd_native_impl throws `unsupported` for complex general); Cta cannot write a genuinely thin
-// U; Blocked's Hermitian arm is Lower-only (Upper is unverified). Every
-// family, the vendor included, runs each item at the top-level (m, n): no heterogeneous batch.
+// A batch whose items sit ld * cols apart: gesvdjBatched takes no stride argument.
 template <class T>
-bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const Job& j) {
+bool packed(const MV<T>& M) {
+    return M.batch_size() == 1 || M.stride() == static_cast<std::int64_t>(M.ld()) * M.cols();
+}
+
+// Correctness only (R3): false means the driver throws or answers wrongly. Jacobi has no
+// Hermitian form; Cta runs complex input only through the Hermitian shortcut and cannot write a
+// genuinely thin U; Blocked takes complex general (complex gebrd to a real bidiagonal) and either
+// Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
+// runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
+// faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
+template <Backend B, class T>
+bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
     const bool homogeneous = !A.is_heterogeneous();
     const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
+    const bool vendor_binds = B == Backend::CUDA
+        ? md <= sycl_gesvd::kGesvdVendorCudaMaxDim && packed(A) && !j.thin() && (j.vectors() || square) &&
+              (j.jobu == SvdVectors::None || packed(U))
+        : B != Backend::ROCM;
     return std::visit(overloaded{
         [&](Jacobi) {
             const auto budget = static_cast<std::size_t>(std::max<std::int64_t>(0, d.slm_budget));
@@ -75,8 +86,8 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             const bool form = j.herm ? square : kReal;
             return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
-        [&](Blocked) { return native && (j.herm ? square && *j.herm == Uplo::Lower : kReal); },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Blocked) { return native && (!j.herm || square); },
+        [&](Vendor) { return d.has_vendor && homogeneous && vendor_binds; },
     }, c);
 }
 
@@ -137,7 +148,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
                                 .batch = A.batch_size(), .uplo = herm.value_or(Uplo::Lower)};
     const select::Key key = key_of<T>(A, j);
     return select::run<B, T>(
-        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<T>(c, d, A, j); },
+        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<B, T>(c, d, A, U, j); },
         shape, key, [&](const auto& c) {
             if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
                 throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
@@ -153,7 +164,7 @@ std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T
     if (A.batch_size() == 0) return 0;
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
-                                      [&](const auto& k, const auto& d) { return can_run<T>(k, d, A, j); });
+                                      [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, U, j); });
     return workspace<B, T>(ctx, c, A, s, U, Vh, j);
 }
 

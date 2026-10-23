@@ -409,19 +409,23 @@ Per-op choices:
 | trsm | `cta`, `sg_left`, `blocked`, `vendor` (a `cta` or `sg_left` pin above order 32 throws) |
 | posv | `tiny`/`cta`/`blocked`, no vendor family; its children select for themselves |
 | gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
-| syrk | `gram` (n <= 128; float and double), `triangular` (float), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
-| syr2k | `triangular` (float; a real ConjTrans runs as Trans), `vendor` |
-| symm | `expand` (mirrored expansion + public gemm, float and double, needs `expansion_fits`), `vendor`; key `form` = sq\|tall\|wide |
+| syrk | `gram` (n <= 128), `triangular` (float and double), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
+| syr2k | `triangular` (float and double; a real ConjTrans runs as Trans), `vendor` |
+| symm | `expand` (mirrored expansion + public gemm, float and double, one item's scratch must fit), `vendor`; key `form` = sq\|tall\|wide |
+| hemm | `expand` (conjugating mirror + public gemm), `vendor` |
+| herk | `gram` (n <= 128), `triangular` (cfloat), `fold` (public gemm of the n x n product + fold), `vendor`; key `trans` |
+| her2k | `triangular` (cfloat), `fold`, `vendor` |
 | trmm | `triangular` (Side::Left), `expand` (expansion + public gemm, either side), `vendor` (the `cublas?trmm` loop only; the old `vendor` pin meant expand+gemm, that is now `expand`) |
 
-Level-3 four (`docs/design/flat-kernel-selection.md` §12 "Level-3 four"): all `NoFields`, native
-families CUDA GPU only, homogeneous batch; a batch past the 65535 grid runs as slices
-(`select::over_batch_slices`), never a `can_run` term. Every level-3 vendor family refuses a
+Level-3 (`docs/design/flat-kernel-selection.md` §12.9): all `NoFields`, native families on CUDA and
+SYCL GPUs (gemm-based `expand`/`fold` on ROCm too), homogeneous batch; every native launch chunks the
+batch to grid z (65535) and the scratch families also to the scratch budget, so no `can_run` has a
+batch term. rocBLAS wraps no hemm/herk/her2k: their vendor family refuses ROCm. Every level-3 vendor family refuses a
 heterogeneous batch on every backend (the loops run each item at the top-level extents), so a
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.
 
-**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 19 ops) takes `auto`,
+**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 22 ops) takes `auto`,
 `native`, `vendor` or a spelling (`lpanel:panel=8`, `lpanel:8`), case-folded and trimmed.
 
 - **A bad pin THROWS** (unparsable, not a compiled candidate, or cannot run the shape). Only the class
@@ -434,11 +438,9 @@ heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list ar
   `detail::reload_settings()` (`ScopedEnvVar` does it;
   `docs/design/environment.md#environment-route-pins-are-raw-strings`).
 
-**hemm, herk and her2k** still choose by hand-written rule (`cublas.cc`, vendor builds only:
-expand/fold into the public gemm vs the per-item vendor loop; `BATCHLAS_EXPAND_ROUTE=expand|loop`
-pins it; herk's gram opt-in is `BATCHLAS_SYRK_ROUTE=gram`). They have no `BATCHLAS_<OP>_ROUTE` and
-throw `NoRouteError` vendor-free. Migration is a listed follow-up
-(`docs/design/flat-kernel-selection.md` §11).
+**hemm, herk and her2k** select from tables like every other op (their sm_89/sm_120 rows transcribe
+the deleted cuBLAS-backend rules). `BATCHLAS_EXPAND_ROUTE` and herk's `BATCHLAS_SYRK_ROUTE=gram` opt-in
+are gone: pin `BATCHLAS_HEMM_ROUTE`, `BATCHLAS_HERK_ROUTE`, `BATCHLAS_HER2K_ROUTE`.
 
 **cuBLASDx/MathDx is deleted** (code, MathDx probe, `BATCHLAS_ENABLE_CUBLASDX`,
 `BATCHLAS_HAS_CUBLASDX`, `BATCHLAS_GEMM_CUBLASDX_KERNEL`); it never ran, MathDx was absent on both
@@ -446,8 +448,7 @@ boxes.
 
 **Entry points and vendor-free builds**
 
-- Public entry points live in `src/ops/<op>/<op>.cc` (`src/ops/level3/level3.cc` for
-  hemm/herk/her2k). Vendor-availability constants and `throw_no_vendor_route` are in
+- Public entry points live in `src/ops/<op>/<op>.cc`. Vendor-availability constants and `throw_no_vendor_route` are in
   `src/select/vendor.hh`; `batchlas::NoRouteError` is in `<batchlas/no_route.hh>`.
 - `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` builds a vendor-free library; **that is the only valid
   vendor-free measurement**. With nothing runnable an op throws `NoRouteError` and records a coverage
@@ -466,7 +467,7 @@ boxes.
 - `tools/tune --gate` against a pre-P3.4 parent reads its gemm coverage as `native:register_tiled`,
   which now means "best native": gate gemm from a kernel-trace old-choice CSV.
 - Sub-ops count: a "native" syev, geqrf or getrf can still call cuBLAS gemm underneath. Every library
-  gemm call (blocked drivers' default seams, the hemm/herk/her2k expansions in `cublas.cc`, symm's and
+  gemm call (blocked drivers' default seams, hemm's `expand` and herk's/her2k's `fold`, symm's and
   trmm's `expand` families) goes through the public `gemm` and its table (`gemm_custom` and the
   `gemm_use_sycl_custom` re-route are deleted).
 
@@ -690,7 +691,7 @@ On a **new machine**, before trusting any result: `sycl-ls` shows your GPU; conf
 SYCL target; `nvidia-smi` (or equivalent) reports the architecture you think it does; record that
 architecture's FP32/FP64/DRAM ceilings as sanity anchors. **Every routing window and tuning constant
 in the tree was measured on sm_89** (some tables on sm_120). On a different GPU, an Apple GPU included, especially one with 1:2 FP64 where double
-GEMM verdicts invert, treat the tuned tables and hemm/herk/her2k's hand-written windows as
+GEMM verdicts invert, treat the tuned tables (hemm/herk/her2k's transcribe hand-written windows) as
 hypotheses. Re-measure at saturation before quoting any ratio, and record the machine alongside new
 data in `benchmarks/results/`.
 

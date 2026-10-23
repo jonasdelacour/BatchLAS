@@ -37,6 +37,7 @@ inline constexpr std::array<std::string_view, 3> grid_form{"sq", "tall", "wide"}
 inline constexpr std::array<int, 14> grid_mn{1, 2, 4, 8, 16, 32, 64, 128, 255, 256, 512, 1024, 2048, 4096};  ///< m, n
 inline constexpr std::array<int, 9> grid_batch{1, 2, 3, 4, 8, 128, 1024, 8192, 32768};  ///< batch axis of the grid
 
+inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< expand_mirrored puts the batch in SYCL dim 0 = CUDA grid z
 inline constexpr int kExpandWg = 256;  ///< expand_mirrored's work-group: kMirrorGroupCols x kMirrorTile
 
 }  // namespace batchlas::ops::symm

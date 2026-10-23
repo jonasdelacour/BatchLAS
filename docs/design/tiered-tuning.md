@@ -884,7 +884,7 @@ plans more cells than today. The three-class ladder is the cheap option: 34% few
 27% fewer GPU-h than today, at 0.4-2.0% geomean on these ops (`--batch-ladder 0.25,4,64`).
 
 **Batches past the grid-y cap.** Level-3 (gemm, syrk, symm, syr2k, trmm) runs a batch past
-`max_groups_yz` (65535) as slices ([the batch slices](../perf/level3.md#level-3-the-65535-batch-slices)),
+`max_groups_yz` (65535) in chunks ([gemm batch chunking](../perf/gemm.md#gemm-batch-chunking)),
 so every native competes there and a table without a row past 32768 extends its 32768 (or lower) row
 to any batch. `with_slice_batches` (`tools/tune/grid.cc`) adds 65536 and 131072 to these specs'
 `ladder_extra_batches()` and to their `choice.hh` axes (the specs' `axes()` and `grid()`; `choice.hh`

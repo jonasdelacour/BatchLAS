@@ -2333,15 +2333,19 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     auto A = view_of(p);
     UnifiedVector<std::byte> ws(4096);
 
-    // A non-square view.
+    // A non-square view is factored whole (min(m, n) pivots), so its pivot span is min(m, n) * batch:
+    // one short of that is refused by both tiers that take m x n.
     {
         UnifiedVector<T> w(size_t(24) * 32, MVof<T>::make(1.0, 0.0));
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
-        UnifiedVector<int64_t> pv(64, 0);
+        UnifiedVector<int64_t> pv(23, 0);
         EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, W, pv.to_span(),
                                                            ws.to_span(), Span<int32_t>{},
                                                            this->gemm_seam(), this->trsm_seam()),
+                     std::invalid_argument);
+        EXPECT_THROW((void)sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, W, pv.to_span(), ws.to_span(),
+                                                       Span<int32_t>{}),
                      std::invalid_argument);
     }
     // A pivot span shorter than n * batch.

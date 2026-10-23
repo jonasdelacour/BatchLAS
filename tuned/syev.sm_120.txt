@@ -1,4 +1,4 @@
-# op=syev device=sm_120 batchlas=7fe06ff6 kernels=49cb4c34 family_kernels=cta:c4e7686d,cta_fused:70b1f941,jacobi:5c11d9ef,blocked:f5e8938b,two_stage:d7dc4464,vendor:93a68a66 date=2026-10-11
+# op=syev device=sm_120 batchlas=8bded556 kernels=49cb4c34 family_kernels=cta:c4e7686d,cta_fused:70b1f941,jacobi:5c11d9ef,blocked:f5e8938b,two_stage:d7dc4464,vendor:93a68a66 date=2026-10-21
 # source=ledger:benchmarks/results/tuning/ledger/syev.sm_120.jsonl tiers=deep:1226,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:260
 # keys: dtype:exact jobz:exact n:log:3 batch:log
 dtype=float jobz=N n=1 batch=128 | cta_fused 0.008292 | jacobi 0.008442 | vendor 0.01193 | blocked 0.01465 | two_stage 0.02325 | cta 0.02952 # deep

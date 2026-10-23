@@ -202,7 +202,7 @@ Offline, over every `tuned/*.txt` with a batch key, batches >= 128, in-sample be
 | --- | --- | --- |
 | F3 ladder | the tuner samples batch at CU multiples (0.25, 2, 16, 128 x CUs: 47, 376, 3008, 24064 on sm_120); key stays `batch:log` | [Engine: the CU-aligned batch ladder](../design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder) |
 | F4a L2 chunking | blocked getrf and potrf factor the batch in parts of 75% of L2, rounded up to a CU multiple: getrf n=128 b32768 459.6 -> 383.0 ns (0.833), geomean 0.932 over 31 cells; potrf geomean 0.948 over 21 | [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking), [potrf: L2 batch chunking](potrf.md#potrf-l2-batch-chunking) |
-| F4b slices | level-3 and gemm natives run batch > 65535 as slices (`select::over_batch_slices`): syrk n=k=64 b65536 3481 -> 46.0 ns (76x) | [Level-3: the 65535 batch slices](level3.md#level-3-the-65535-batch-slices) |
+| F4b slices | level-3 and gemm natives run batch > 65535 as slices: syrk n=k=64 b65536 3481 -> 46.0 ns (76x), measured on F4b's `select::over_batch_slices`. On merge with main that helper was dropped for main's equivalent chunking (`level3::for_each_chunk`, gemm's `launch`), which cuts the batch at the same `max_groups_yz` | [gemm batch chunking](gemm.md#gemm-batch-chunking) |
 
 ## Batch sensitivity: measured dead ends
 

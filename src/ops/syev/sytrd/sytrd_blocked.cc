@@ -10,7 +10,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include <src/expansion_budget.hh>
+#include <src/ops/her2k/route.hh>
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -757,15 +757,11 @@ Event sytrd_blocked_impl(Queue& ctx,
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
                         if constexpr (internal::is_complex<T>::value) {
-                            // her2k's fast route needs an n2 x n2 x batch scratch;
-                            // when it does not fit, it drops to a host loop that
-                            // inverts the win. Ask the backend's own predicate and
-                            // keep the GEMM pair when it says no. Per panel, not
-                            // hoisted: n2 shrinks every iteration.
+                            // her2k's per-item vendor loop inverts the win. Ask her2k's
+                            // own selection and keep the GEMM pair when it picks that loop.
+                            // Per panel, not hoisted: n2 shrinks every iteration.
                             // evidence: docs/perf/sytrd.md#sytrd-her2k-scratch-fit-headroom
-                            const std::size_t her2k_scratch_bytes =
-                                backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
-                            if (backend::detail::her2k_takes_gemm_route<T>(ctx, n2, batch, her2k_scratch_bytes)) {
+                            if (ops::her2k::picks_batched_route<B, T>(ctx, V2, W2, A22, Transpose::NoTrans)) {
                                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_her2k");
                                 // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                                 // is already ordered after this one and the Event carries nothing the caller needs.

@@ -346,7 +346,8 @@ TYPED_TEST_SUITE(SymmCandidates, Types);
 
 // §8.1: each candidate on extents straddling the expansion's 32-wide mirror tile (31/32/33, a
 // ragged 77) and the old 255|256 threshold, both sides, both triangles, batch 1 and 5. Then the
-// scratch budget straddled: BATCHLAS_EXPAND_MAX_BYTES at exactly the lease, and one byte short.
+// scratch budget straddled: BATCHLAS_EXPAND_MAX_BYTES at exactly one item's lease (the batch then
+// runs one item per chunk) and one byte short (no chunk fits: refused).
 TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
     using T = typename TestFixture::T;
     int ran = 0;
@@ -373,7 +374,7 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(ran, 0);
     for (auto [k, batch] : {std::pair{33, 3}, std::pair{64, 2}}) {
         Spec s{Side::Left, Uplo::Lower, k, 5, batch};
-        const std::size_t bytes = backend::detail::expanded_workspace_bytes<T>(*this->ctx, k, batch);
+        const std::size_t bytes = backend::detail::expanded_workspace_bytes<T>(*this->ctx, k, 1);
         for (std::size_t cap : {bytes, bytes - 1}) {
             const ScopedEnvVar budget("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(cap).c_str());
             auto p = make_prob<T>(s);
@@ -447,7 +448,7 @@ TYPED_TEST(SymmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 }
 
 // §8.2 (R3): a pin is accepted exactly when the family's own code launches, over shapes, the
-// a heterogeneous B/C (the gemm under expand rejects it).
+// grid-z batch ceiling and a heterogeneous B/C (the gemm under expand rejects it).
 TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -481,34 +482,31 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// expand_mirrored and its gemm put the batch in grid z, capped at 65535 on CUDA: both run a batch
-// past it as slices. The expand pin at 65535, 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and
-// three slices) runs expand, every item bit-identical to item it % 7 (out of phase with every slice), at padded lds and strides,
-// beta != 0, both sides; the family's own code (the direct call) launches there too. Metal has no
-// cap: one slice serves every batch.
-TYPED_TEST(SymmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
+// expand_mirrored puts the batch in grid z: a direct expansion launches 65535 items and not 65536
+// on CUDA, and the op chunks the batch, so the pin runs both and every item is right. Metal has
+// no such cap: both launch directly too.
+TYPED_TEST(SymmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const select::Device& dev = select::device_of<B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
-    const C expand{sy::Expand{}};
-    for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
-        const bool odd = batch % 2;
-        Spec s{odd ? Side::Right : Side::Left, odd ? Uplo::Upper : Uplo::Lower, 5, 3, batch};
-        s.period = 7;
-        auto p = make_prob<T>(s);
-        const std::string got = [&] {
-            const Pin pin("symm", expand);
-            return traced_choice([&] { this->run(p); });
-        }();
-        EXPECT_EQ(got, "expand") << name(expand, s);
-        expect_symm(*this->ctx, p, name(expand, s));
+    for (int batch : {ceiling, ceiling + 1}) {
+        Matrix<T, MatrixFormat::Dense> A(1, 1, batch), Bm(1, 2, batch), Cm(1, 2, batch);
+        A.fill(T(2)), Bm.fill(T(3)), Cm.fill(T(1));
+        auto call = [&] {
+            (void)symm<B, T>(*this->ctx, A, Bm, Cm, T(1), T(1), Side::Left, Uplo::Lower);
+            this->ctx->wait();
+        };
+        std::string why;
+        Matrix<T, MatrixFormat::Dense> Cd(1, 2, batch);
+        Cd.fill(T(1));
+        const bool launches = this->direct(C{sy::Expand{}}, A, Bm, Cd, T(1), T(1), Side::Left, Uplo::Lower, &why);
+        EXPECT_EQ(launches, batch <= dev.max_groups_yz) << "direct expand at batch " << batch << ": " << why;
+        const Pin pin("symm", C{sy::Expand{}});
+        call();
+        for (int it : {0, batch / 2, batch - 1}) EXPECT_EQ(double(Cm(0, 1, it)), 7.0) << "item " << it;
     }
-    Spec past{Side::Left, Uplo::Lower, 5, 3, ceiling + 1};
-    auto d = make_prob<T>(past);
-    std::string why;
-    EXPECT_TRUE(this->direct(expand, d, &why)) << name(expand, past) << ": " << why;
 }
 
 // Shape and batch errors throw invalid_argument before choose(), under Auto and every pin, and

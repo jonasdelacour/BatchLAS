@@ -285,14 +285,13 @@ protected:
         return backend::detail::expanded_workspace_bytes<T>(*this->ctx, order, batch);
     }
 
-    // The limit oracle: the tile kernel's own predicate (Left, homogeneous), the expansion's fit
-    // (BATCHLAS_EXPAND_MAX_BYTES included), the vendor's presence. The batch is no term: past the
-    // grid both natives run as slices.
+    // The limit oracle: the tile kernel's own predicate (Left, homogeneous), the grid-z ceiling,
+    // the expansion's fit (BATCHLAS_EXPAND_MAX_BYTES included), the vendor's presence.
     std::int64_t grid_yz() const { return test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family); }
     bool expect_runs(const C& c, const Spec& s) {
-        if (std::holds_alternative<tm::Triangular>(c)) return s.side == Side::Left;
-        if (std::holds_alternative<tm::Expand>(c))
-            return backend::detail::expansion_fits<T>(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch));
+        if (std::holds_alternative<tm::Triangular>(c)) return s.side == Side::Left;  // the batch is chunked
+        if (std::holds_alternative<tm::Expand>(c))  // chunked: one item's scratch must fit
+            return backend::detail::expansion_fits<T>(*this->ctx, s.n, 1, expand_bytes(s.n, 1), grid_yz());
         return kVendor;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<tm::Vendor>(c) && !kVendor; }
@@ -418,16 +417,16 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(refused, 0);
 }
 
-// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: the exact scratch
-// size runs, one byte less is refused, and Auto, under a table ranking expand first, then takes the
-// next route (triangular on the Left, the vendor on the Right).
+// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: one item's exact
+// scratch runs (one item per chunk), one byte less is refused, and Auto, under a table ranking
+// expand first, then takes the next route (triangular on the Left, the vendor on the Right).
 TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
     using T = typename TestFixture::T;
     const TableGuard restore;
     this->rank_trmm("expand 1 | triangular 2 | vendor 3", "expand 1 | vendor 2");
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Upper, Transpose::Trans, Diag::Unit, 37, 6, 4};
-        const std::size_t bytes = this->expand_bytes(s.n, s.batch);
+        const std::size_t bytes = this->expand_bytes(s.n, 1);
         {
             const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes).c_str());
             auto p = make_prob<T>(s);
@@ -538,39 +537,29 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// Both native launches put the batch in grid z, capped at 65535 on CUDA: trmm's launch runs the
-// tile kernel, and the expansion its expand_triangular, as slices past it. Each pin at 65535,
-// 65536, 2 * 65535 and 2 * 65535 + 1 (one, two, two and three slices) runs its native family, every
-// item bit-identical to item it % 7 (out of phase with every slice), at padded lds and strides, complex alpha and data with nonzero
-// imaginary parts, ConjTrans and a Unit diagonal on the odd batches. The unsliced tile kernel
-// still throws past the ceiling. Metal has no cap: one slice serves every batch.
-TYPED_TEST(TrmmCandidates, GridBatchPastTheCeilingRunsAsSlices) {
+// Both native launches put the batch in grid z: the direct launch runs at 65535 and throws at
+// 65536 on CUDA; the op chunks the batch, so a pin runs both and is right. Metal has no such cap:
+// one past it launches directly too.
+TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, this->grid_yz()) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
     const bool capped = this->grid_yz() <= ceiling;
     for (const C& c : {C{tm::Triangular{}}, C{tm::Expand{}}}) {
-        for (const int batch : {ceiling, ceiling + 1, 2 * ceiling, 2 * ceiling + 1}) {
-            const bool odd = batch % 2;
-            Spec s{Side::Left, odd ? Uplo::Upper : Uplo::Lower, odd ? Transpose::ConjTrans : Transpose::NoTrans,
-                   odd ? Diag::Unit : Diag::NonUnit, 5, 3, batch};
-            if (std::holds_alternative<tm::Expand>(c) && odd) s.side = Side::Right;
-            s.period = 7;
-            if (!this->expect_runs(c, s)) continue;
-            auto p = make_prob<T>(s);
-            const std::string got = [&] {
-                const Pin pin("trmm", c);
-                return traced_choice([&] { this->run(p); });
-            }();
-            EXPECT_EQ(got, select::to_string(c)) << name(c, s);
-            expect_trmm(*this->ctx, p, name(c, s));
-        }
-        if (!std::holds_alternative<tm::Triangular>(c)) continue;
-        Spec past{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 5, 3, ceiling + 1};
+        Spec at{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling};
+        auto p = make_prob<T>(at);
+        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
+        expect_trmm(*this->ctx, p, name(c, at));
+        Spec past = at;
+        past.batch = ceiling + 1;
+        auto r = make_prob<T>(past);
+        EXPECT_TRUE(this->pin_accepted(c, r)) << name(c, past);
+        expect_trmm(*this->ctx, r, name(c, past));
+        if (!capped) continue;
         auto d = make_prob<T>(past);
         std::string why;
-        EXPECT_EQ(this->direct(c, d, &why), !capped) << name(c, past) << ": the unsliced tile kernel launch";
+        EXPECT_FALSE(this->direct(c, d, &why)) << name(c, past) << ": the launch ran past the grid ceiling";
     }
 }
 

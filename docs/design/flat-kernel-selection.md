@@ -299,19 +299,17 @@ tables, the borrow order of §5.5 holds and the warning prints once.
   rows the deep lattice measured nothing near) and the converted sm_89 potrf rows are to be replaced
   with tuner output. Until then, transcribed rows encode the old router's choices, untimed.
 - **sm_89 live gate** for potrf and for the other ops with transcribed sm_89 tables.
-- **hemm, herk and her2k** still select by hand in `src/backends/cublas.cc` (vendor builds only). They
-  expand or fold into the public gemm when `expansion_preferred`, `herk_gemm_preferred`
-  (batch ≥ 4 and n ≤ 768) or `her2k_gemm_preferred` (batch ≥ 2 or n ≥ 128) hold, and otherwise use the per-item vendor loop.
-  They honour `BATCHLAS_EXPAND_ROUTE=expand|loop`, and herk's gram opt-in is `BATCHLAS_SYRK_ROUTE=gram`.
-  They have no `BATCHLAS_<OP>_ROUTE` and throw `NoRouteError` in a vendor-free build. The planned families are hemm
-  `{expand, vendor}`, herk `{gram, fold, vendor}` and her2k `{fold, vendor}`.
-- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/ops/potrf/kernels/potrf_blocked.cc:333`). `Blocked`
+- **hemm, herk and her2k: done (2026-10-22).** They select from `tuned/<op>.<device>.txt` like the
+  other level-3 ops (§12.9). Their sm_89 and sm_120 tables are transcribed from the deleted cuBLAS-backend
+  rules, so vendor builds route as before; retuning them with `tools/tune` (specs `hemm_spec.cc`,
+  `herk_spec.cc`, `her2k_spec.cc`) is open. `BATCHLAS_EXPAND_ROUTE` is gone.
+- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch` (`src/ops/potrf/kernels/potrf_blocked.cc:309`). `Blocked`
   has no fields: `nb` and `W` come from `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`.
   `lpanel:panel=16` is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
 - **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
   batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** gemm (`direct`, `tiled`, `reg`, `wide`, `splitk`), syrk, syr2k, trmm, symm and the hemm,
-  herk and her2k expansions run a batch past 65535 as slices (`select::over_batch_slices`). Other ops that put the
+  herk and her2k natives chunk a batch past 65535 (`src/ops/level3/batched.hh`, gemm's `launch`). Other ops that put the
   batch in dimension 0 of a 3-D range abort above 65535 work-groups; the phase-5 kernels were not audited for it.
   ormqr's blocked driver was reported to hit it (known-defects #16), but that did not reproduce on sm_120.
 - **`select::level3_tile_substitution_enabled`** is conservative (float, or any type with cuBLAS). Widening
@@ -553,23 +551,38 @@ unless a line says otherwise.
 - **Keys:** `herm:exact vec:exact m:log:1.5 n:log:1.5`. Grid 32|33 and 64|65. 2,025 rows.
 - Known defects #14 and #15.
 
-### 12.9 Level-3 four (symm, syrk, syr2k, trmm) {#level-3-four-symm-syrk-syr2k-trmm}
+### 12.9 Level-3 (symm, syrk, syr2k, trmm, hemm, herk, her2k) {#level-3-four-symm-syrk-syr2k-trmm}
 
-The four level-3 ops use the same structure as the op files above, with `NoFields` families. The
+The seven level-3 ops use the same structure as the op files above, with `NoFields` families. The
 vendor family calls `backend::<op>_vendor` under `has_library<B>(spec.vendor)`, not the public entry,
-so there is no recursion. Float-only kernels are instantiated only in `if constexpr` arms.
+so there is no recursion. Dtype-limited kernels are instantiated only in `if constexpr` arms. Shared
+pieces (batch chunking, the mirrored expansion into gemm, the gemm-plus-fold) are in
+`src/ops/level3/batched.hh`.
 
 | op | candidates | keys (rows) | Auto (sm_89 transcription) | last resort |
 |---|---|---|---|---|
-| syrk | float `gram, triangular, vendor`; double `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` (18,450) | n ≤ 128 `gram`; above, `triangular` when squareish or (n ≥ 257, k ≥ 8, batch·T(T+1)/2 ≥ 160, T = ceil(n/128)), else `vendor`; ConjTrans `vendor` first; double above 128 `vendor` | `triangular, gram, vendor` |
-| syr2k | float `triangular, vendor`; double `vendor` | `n:log:2 k:log batch:log` (455) | float batch ≥ 2 `triangular`; batch 1 `vendor`; double `vendor` | `triangular, vendor` |
-| symm | `expand, vendor` (float, double) | `form:exact m:log n:log batch:log` (5,292) | float `expand` iff sq and (batch ≥ 4 or max(m, n) ≥ 256); double `vendor` | `expand, vendor` |
+| syrk | real and cfloat `gram, triangular, vendor`; cdouble `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` | n ≤ 128 `gram`; above, `triangular` when squareish or (n ≥ 257, k ≥ 8, batch·T(T+1)/2 ≥ 160, T = ceil(n/128)), else `vendor`; ConjTrans `vendor` first; double above 128 `vendor`; cfloat (complex-symmetric) `gram` at n ≤ 64, `triangular` to n = 768, from batch 4 | `triangular, gram, vendor` |
+| syr2k | real and cfloat `triangular, vendor`; cdouble `vendor` | `n:log:2 k:log batch:log` | float and cfloat batch ≥ 2 `triangular`; batch 1 `vendor`; double `vendor` | `triangular, vendor` |
+| symm | `expand, vendor` (all four dtypes; complex is complex-symmetric) | `form:exact m:log n:log batch:log` | float `expand` iff sq and (batch ≥ 4 or max(m, n) ≥ 256); double `vendor`; complex as hemm | `expand, vendor` |
 | trmm | `triangular, expand, vendor` (all four dtypes) | `side:exact order:log:2 q:log batch:log` (360) | Left `triangular`; Right `expand` | `expand, triangular, vendor` |
+| hemm | `expand, vendor` (cfloat, cdouble) | `m:log n:log batch:log` (2,025) | `expand` iff batch ≥ 4 or max(m, n) ≥ 256 | `expand, vendor` |
+| herk | cfloat `gram, triangular, fold, vendor`; cdouble `gram, fold, vendor` | `trans:exact n:log:2 k:log batch:log` (1,350) | `fold` iff batch ≥ 4 and n ≤ 768, else `vendor`; cfloat `triangular` first at 256 ≤ n ≤ 768 (not n = 256 with k ≥ 512) and at n ≤ 128, k ≤ 8, batch ≥ 1024 (measured, docs/perf/level3.md) | `fold, triangular, gram, vendor` |
+| her2k | cfloat `triangular, fold, vendor`; cdouble `fold, vendor` | `n:log:2 k:log batch:log` (490) | `fold` iff batch ≥ 2 or n ≥ 128, else `vendor`; cfloat `triangular` first at k ≤ 8 (n ≥ 256, or n ≥ 128 at batch ≥ 1024) and at n ≥ 1024 with k ≤ 64 | `fold, triangular, vendor` |
+
+Since 2026-10-22 syrk and syr2k `triangular` are templated over every scalar (complex<double> excluded:
+its accumulators fill the register file), and symm, syrk and syr2k take complex `T` as the
+complex-symmetric (unconjugated) update. The double rows still rank `vendor` first, so only a
+vendor-free build reaches double `triangular` by default.
 
 **Shared terms:**
-- Native families run only on CUDA (ROCm and the host stay on the vendor), on a GPU, with homogeneous
-  operands, and extents and batch ≥ 1. The batch is the grid z dimension, where one launch of 65536
-  throws, so a batch past it runs as slices of at most 65535 items (`select::over_batch_slices`).
+- Native families run on CUDA and Backend::SYCL (the gemm-based `expand` and `fold` of symm, hemm,
+  herk and her2k also on ROCm), on a GPU, with homogeneous operands and extents and batch ≥ 1. The
+  batch is the grid z dimension (65535 on CUDA), so every native launch chunks the batch into
+  sub-views of at most `Device::max_groups_yz` items: there is no batch term in `can_run`.
+- The scratch families (symm, hemm and trmm `expand`; herk and her2k `fold`) also chunk to the
+  scratch budget (`expansion_chunk`: `BATCHLAS_EXPAND_MAX_BYTES`, a quarter of memory, 2^31
+  elements). They refuse only a shape whose single item does not fit.
+- rocBLAS wraps no hemm, herk or her2k, so their vendor family refuses ROCm.
 - The vendor family needs `has_vendor` and refuses a heterogeneous operand on every backend.
 - syrk, syr2k, symm and trmm return a no-op event for an empty problem.
 - `form` (symm and syrk) is sq when `2·min ≥ max`. Otherwise it is tall when `a > 2b` and wide when it is not, with `a` and `b` as in `form_of`
@@ -578,13 +591,22 @@ so there is no recursion. Float-only kernels are instantiated only in `if conste
 **Per op:**
 - **syrk.** `gram` is `syrk_gram_tiles`, for n ≤ 128 and float and double. Above 128 a pin throws,
   because the kernel would answer wrongly. It also needs `max_wg >= gram_threads(n)`. `triangular`
-  is float only, and needs `max_wg >= 256` and `T(T+1)/2 <= 65535` tiles. ConjTrans is passed as
+  serves every dtype but complex<double>, and needs `max_wg >= 256` and `T(T+1)/2 <= 65535` tiles. ConjTrans is passed as
   Trans, and the `trans` key keeps real ConjTrans on the vendor.
-- **syr2k.** `triangular` is float only, with the same `max_wg` and tile terms. The launch folds a
+- **syr2k.** `triangular` serves every dtype but complex<double>, with the same `max_wg` and tile terms. The launch folds a
   real ConjTrans to Trans, and the key has no `trans`, so it follows the Trans rows.
 - **symm.** `expand` is the mirrored expansion into a queue workspace, then the public gemm. It needs
-  `max_wg >= 256` and `expansion_fits(q, k, batch, bytes)`. `BATCHLAS_EXPAND_MAX_BYTES` lowers the
-  limit. symm does not read `BATCHLAS_EXPAND_ROUTE`.
+  `max_wg >= 256` and one item's scratch to fit (`expansion_chunk >= 1`).
+- **hemm.** `expand` is symm's with the conjugating mirror (a real diagonal). Same terms.
+- **herk.** `gram` is syrk's tile kernel with `Conjugate = true` (n ≤ 128); `triangular` is syrk's
+  128-wide tile kernel with `Conjugate = true`, complex<float> only (complex<double>'s 64 accumulators
+  fill the register file); `fold` is one gemm of the whole n x n product into scratch and
+  `fold_hermitian` into the triangle.
+- **her2k.** `fold` is one gemm of alpha op(A) op(B)^H and a two-sided fold (the second term is the
+  product's conjugate transpose). `triangular` is syr2k's kernel with `Conjugate = true`, staging A
+  scaled by alpha (conj(alpha) for ConjTrans) so both products share the epilogue; complex<float>
+  only. `src/ops/her2k/route.hh` holds can_run so `sytrd_blocked` asks the same selection
+  (`picks_batched_route`).
 - **trmm.** `triangular` is Side::Left only, with `max_wg >= 256` and `ceil(m/tile_m) * ceil(q/128) <= 65535`
   tiles in grid y. `expand` is the expansion plus the public gemm at beta 0, and it needs
   `max_wg >= 256` and `expansion_fits`. `BATCHLAS_TRMM_ROUTE=vendor` means the `cublas?trmm` loop,
