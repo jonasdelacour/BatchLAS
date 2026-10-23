@@ -169,11 +169,16 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `trmm(ctx, A, B, C, opts)` | `C := α·op(A)·B` or `α·B·op(A)` | **`C`**; `B` untouched |
 | `trsm(ctx, A, B, opts)` | solves `op(A)·X = α·B` or `X·op(A) = α·B` | **`B`**, overwritten with `X` |
 | `potrf(ctx, A, opts)` | Cholesky, `A = L·Lᴴ` or `Uᴴ·U` | `A` in place, `uplo` triangle |
+| `potrs(ctx, A, B, uplo)` | solves `A·X = B` from `potrf`'s factor | `B`; `A` read-only |
+| `potri(ctx, A, uplo, full, ws, info)` | `A⁻¹` from `potrf`'s factor (LAPACK `?potri`) | `A` in place, `uplo` triangle (both with `full`) |
 | `getrf(ctx, A, pivots)` | LU with partial pivoting | `A` and `pivots` |
 | `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors | `B` |
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |
+| `sytrf(ctx, A, uplo, pivots, ws)` | Bunch-Kaufman `A = L·D·Lᵀ` or `U·D·Uᵀ`, `A` symmetric (complex: not Hermitian) | `uplo` triangle of `A`, `pivots` (LAPACK `ipiv`, @ref perf_sytrf) |
+| `sytrs(ctx, A, B, uplo, pivots, ws)` / `sysv(ctx, A, B, uplo, pivots, ws)` | solves `A·X = B` from `sytrf`'s factors / `sytrf` then `sytrs` | `B` (and `A`, `pivots` for `sysv`) |
 | `geqrf(ctx, A, tau)` / `orgqr(ctx, A, tau)` | QR with Householder reflectors / expand to explicit `Q` | `A`, `tau` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
+| `syev_align(ctx, V_old, W, V, tol, ws)` | per cluster of `W` (gap ≤ `tol`·max\|W\|): `V_c := V_c·R`, the Procrustes rotation onto `V_old`; then every `(V_oldᴴV)ᵢᵢ ≥ 0` | `V` |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` is the **real** counterpart
 of `T` (n·batch).
@@ -487,7 +492,19 @@ gemm(ctx, Bt, At, Ct, GemmOptions<float>{});  // C = A B, row-major
 ```
 
 The swap is `gemm`'s. For the symmetric routines, flip `uplo`. For everything else, including
-`potrf`, `getrf` and `syev`, convert first ([Row-major source data](#row-major-source-data)).
+`potrf` and `getrf`, convert first ([Row-major source data](#row-major-source-data)).
+
+**Symmetric `syev` needs no copy.** A row-major symmetric `A` is its own transpose, so the
+column-major view `MatrixView(p, n, n, n, stride, batch)` over the same bytes solves the same
+matrix. The row-major upper triangle is the column-major lower triangle, so `Uplo::Lower`
+(the `SyevOptions` default) reads the triangle a row-major caller filled, and a row-major lower
+triangle needs `Uplo::Upper`. After `syev`, the column-major `V` has eigenvectors as
+columns, and read row-major from the same bytes they are the rows. General operands use the
+`transA`/`transB` flags of `GemmOptions` on the transposed views: with `At(pa, k, m, k)`,
+`Bt(pb, k, n, k)` and `Ct(pc, n, m, n)`, `gemm(ctx, Bt, At, Ct, {.transA = Transpose::Trans})`
+computes `C = A Bᵀ` for row-major `A` (m x k) and `B` (n x k).
+`examples/row_major_interop.cc` runs both on padded row-major batches and checks them with
+`batchlas::verify`.
 
 ### The CSR non-zero count has its own type {#the-csr-non-zero-count-has-its-own-type}
 
@@ -574,9 +591,9 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Eight routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
-LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri` report factorisation
-status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status. It is a field on
+Ten routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `sytrf`, `sysv` report
+factorisation status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status. It is a field on
 `PotrfOptions` and a trailing parameter elsewhere:
 
 ```cpp

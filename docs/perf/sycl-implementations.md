@@ -508,3 +508,17 @@ k, batch, uplo, side, diag, trans).
 - **Not measured:** complex types outside A10, the vendor-free acpp tree, coarse-grained events,
   sm_89, and saturation of the cells the table above flags (geqrf float n = 512, potrf float
   `blocked` n = 512, syev float n = 1024).
+
+## AdaptiveCpp CUDA against DPC++ {#sycl-impl-ab-acpp-cuda-aot}
+
+**Pending measurement.** The table below is empty until a quiet-box run. It compares acpp 25.10
+multipass CUDA (`BATCHLAS_ACPP_TARGETS=cuda:sm_120`, HPC SDK CUDA 12.9; [design](../design/sycl-implementations.md#sycl-impl-cuda-aot))
+with DPC++ (full targets), both RelWithDebInfo, from the same commit, on `syev` (vectors, tuned
+`nb` and fuse) and `gemm` (NN, beta = 1) under Auto. float and complex<float> only, at saturating
+batch, `--warmup=3 --min_iters=8`, a throwaway pass, then 6 reps with alternating order. The rows
+above this section are `generic` (SSCP), not multipass.
+
+| op | type | n | batch | acpp-CUDA / DPC++ (per matrix) |
+| --- | --- | --- | --- | --- |
+| gemm | float, complex<float> | 16, 32, 64, 128, 256, 512 | 16384, 8192, 4096, 2048, 512, 128 | pending |
+| syev | float, complex<float> | 32, 64, 128, 256, 512 | 8192, 4096, 2048, 1024, 256 | pending |

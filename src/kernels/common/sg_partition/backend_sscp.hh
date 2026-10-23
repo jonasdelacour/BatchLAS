@@ -18,6 +18,8 @@
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/sscp_target.hh>
 
+// Multipass CUDA (cuda:sm_XX) compiles a real NVPTX device pass, where the __nvvm_* builtins exist.
+#if !ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA
 // Asm labels bind these to the LLVM intrinsics, so LLVM attaches the intrinsic's own attributes
 // (convergent, inaccessiblemem). A plain __nvvm_* declaration is left unresolved at ptxas.
 extern "C" {
@@ -74,6 +76,7 @@ BATCHLAS_SSCP_NVVM void __nvvm_bar_warp_sync(unsigned m) {
     __acpp_if_target_sscp(batchlas_sscp_nvvm_bar_warp_sync(m);)
 }
 #undef BATCHLAS_SSCP_NVVM
+#endif
 
 #include <src/kernels/common/sg_partition/backend_generic.hh>
 #include <src/kernels/common/sg_partition/backend_nvptx.hh>
@@ -97,6 +100,7 @@ __attribute__((always_inline, convergent)) inline T redux(T v, Op) {
         else if constexpr (is_op_v<Op, sycl::bit_and<T>> || is_op_v<Op, sycl::bit_and<>>) r = batchlas_sscp_nvvm_redux_and(x, ~0u);
         else if constexpr (is_op_v<Op, sycl::bit_or<T>> || is_op_v<Op, sycl::bit_or<>>) r = batchlas_sscp_nvvm_redux_or(x, ~0u);
         else r = batchlas_sscp_nvvm_redux_xor(x, ~0u);)
+    __acpp_if_target_cuda(return nvptx_detail::redux_full(v, Op{});)
     return static_cast<T>(r);
 }
 } // namespace sscp_detail

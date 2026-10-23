@@ -26,7 +26,10 @@
 #   * No hosted DPC++ compile job. See the HOSTED COMPILE JOB block at the end of
 #     this file for why, and for what would have to change. The hosted
 #     acpp-compile job compiles every target with AdaptiveCpp's generic target,
-#     CUDA off: it catches DPC++-only spellings, not CUDA-backend code.
+#     CUDA off: it catches DPC++-only spellings, not CUDA-backend code. The
+#     hosted acpp-cuda-consumer job compiles the library (vendor-free) for
+#     acpp's multipass cuda:sm_89 on CUDA 12.8 and builds examples/consumer as
+#     C++23 against the install; it runs nothing.
 #   * A green ctest can still be vacuous. GTEST_SKIP inside the shared fixture
 #     exits 0, so a run in which every case skipped looks identical, at the
 #     ctest level, to a run with full coverage. That is why the GPU job exports
@@ -420,6 +423,128 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
           path: build/acpp-ci/acpp-configure.log
+
+  # ---------------------------------------------------------------------------
+  # ADAPTIVECPP MULTIPASS CUDA CONSUMER. Hosted, no GPU: compile and link only.
+  # ---------------------------------------------------------------------------
+  acpp-cuda-consumer:
+    name: AdaptiveCpp 25.10 cuda:sm_89, vendor-free install, C++23 consumer (hosted)
+    runs-on: ubuntu-24.04
+    # The fullerenes toolchain: acpp -std=c++23 --acpp-targets=cuda:sm_89 (multipass CUDA, not
+    # generic) on CUDA 12.x. acpp 25.10's clang (LLVM 20) compiles device code in CUDA mode and
+    # rejects CUDA 13 headers, so the toolkit is 12.8, the newest LLVM 20 knows (no
+    # -Wno-unknown-cuda-version). The library is built vendor-free and installed; then
+    # examples/consumer is configured against the prefix, as an outside project would.
+    # Nothing runs (hosted CI has no GPU); a self-hosted GPU runner would be needed for that.
+    # The NEEDED check depends on P0.3 (no LAPACKE/CBLAS link when vendor BLAS is off).
+    # Design: docs/design/sycl-implementations.md#sycl-impl-cuda-aot.
+    timeout-minutes: 120
+    env:
+      ACPP_TAG: v25.10.0
+      ACPP_SHA: 9f842c701a599107cc6d117d3539f971036363a1
+      CUDA_PKG: "12-8"
+      CUDA_ROOT: /usr/local/cuda-12.8
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 20, OpenMP, netlib LAPACKE/CBLAS, ccache and CUDA 12.8
+        # NVIDIA's apt network repo, only what acpp's CUDA backend and clang's CUDA mode read:
+        # nvcc (ptxas, fatbinary, libdevice), cudart, the driver stub and curand's headers (clang's
+        # CUDA wrapper includes them). LAPACKE is installed so the vendor-free switch, not its
+        # absence, is what keeps it off the link line.
+        run: |
+          set -eu
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends \
+            clang-20 lld-20 llvm-20-dev libclang-20-dev libomp-20-dev \
+            libzstd-dev zlib1g-dev libcurl4-openssl-dev \
+            liblapacke-dev liblapack-dev libblas-dev ccache \
+            cuda-nvcc-$CUDA_PKG cuda-cudart-dev-$CUDA_PKG cuda-driver-dev-$CUDA_PKG \
+            cuda-cccl-$CUDA_PKG libcurand-dev-$CUDA_PKG
+          "$CUDA_ROOT/bin/nvcc" --version | tail -n 2
+          echo "LLVM_PKG=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_ENV"
+          echo "CUDA_DEB=$(dpkg-query -W -f='${Version}' cuda-nvcc-$CUDA_PKG)" >> "$GITHUB_ENV"
+          echo "ACPP_PREFIX=$HOME/acpp-cuda-$ACPP_TAG" >> "$GITHUB_ENV"
+          echo "CCACHE_DIR=$HOME/.ccache-acpp-cuda" >> "$GITHUB_ENV"
+
+      - name: Restore the AdaptiveCpp install (CUDA backend)
+        id: acpp-cuda-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/acpp-cuda-${{ env.ACPP_TAG }}
+          # acpp-cuda.json records the toolkit path, so the CUDA package version is in the key.
+          key: acpp-cuda-${{ env.ACPP_TAG }}-${{ env.ACPP_SHA }}-llvm-${{ env.LLVM_PKG }}-cuda-${{ env.CUDA_DEB }}-${{ runner.os }}-${{ hashFiles('.github/ci/build_adaptivecpp.sh') }}
+
+      - name: Build AdaptiveCpp ${{ env.ACPP_TAG }} with the CUDA backend (cache miss only)
+        if: steps.acpp-cuda-cache.outputs.cache-hit != 'true'
+        run: ACPP_CUDA_PATH="$CUDA_ROOT" .github/ci/build_adaptivecpp.sh "$ACPP_PREFIX" "$RUNNER_TEMP/acpp-build"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache-acpp-cuda
+          key: acpp-cuda-ccache-${{ env.ACPP_TAG }}-llvm-${{ env.LLVM_PKG }}-cuda-${{ env.CUDA_DEB }}-${{ github.sha }}
+          restore-keys: acpp-cuda-ccache-${{ env.ACPP_TAG }}-llvm-${{ env.LLVM_PKG }}-cuda-${{ env.CUDA_DEB }}-
+
+      - name: Build and install a vendor-free BatchLAS for cuda:sm_89
+        # The tells are lines the acpp module prints: a configure that fell back to generic, or to
+        # acpp's own CUDA 13 default, compiles something else and would stay green.
+        run: |
+          set -eu
+          ccache -z
+          log=build/acpp-cuda/configure.log
+          mkdir -p build/acpp-cuda
+          cmake -S . -B build/acpp-cuda \
+            -DCMAKE_CXX_COMPILER="$ACPP_PREFIX/bin/acpp" -DBATCHLAS_SYCL_IMPL=ACPP \
+            -DCMAKE_BUILD_TYPE=Release -DBATCHLAS_ACPP_TARGETS=cuda:sm_89 \
+            -DBATCHLAS_ACPP_CUDA_PATH="$CUDA_ROOT" -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF \
+            -DBATCHLAS_BUILD_TESTS=OFF -DBATCHLAS_BUILD_BENCHMARKS=OFF \
+            -DBATCHLAS_CCACHE_MAXSIZE=1G > "$log" 2>&1 || { cat "$log"; exit 1; }
+          cat "$log"
+          grep -q 'Using AdaptiveCpp targets: cuda:sm_89' "$log"
+          grep -q "AdaptiveCpp multipass CUDA sm_89: toolkit '$CUDA_ROOT'" "$log"
+          cmake --build build/acpp-cuda --target batchlas_components -j "$(nproc)"
+          cmake --install build/acpp-cuda --prefix "$RUNNER_TEMP/batchlas-prefix"
+          ccache -s
+
+      - name: No vendor library on the installed link line (needs P0.3)
+        run: |
+          set -eu
+          bad=0
+          for lib in "$RUNNER_TEMP"/batchlas-prefix/lib*/libbatchlas*.so*; do
+            [ -L "$lib" ] && continue
+            needed=$(readelf -d "$lib" | grep NEEDED || true)
+            echo "$lib"; echo "$needed"
+            if echo "$needed" | grep -Eq 'lib(lapacke|cblas|blas|lapack|openblas|cublas|cusolver|cusparse)'; then
+              echo "::error::$lib links a vendor library in a vendor-free build"; bad=1
+            fi
+          done
+          exit "$bad"
+
+      - name: Build examples/consumer as C++23 against the install (no run)
+        run: |
+          set -eu
+          cmake -S examples/consumer -B build/consumer \
+            -DCMAKE_CXX_COMPILER="$ACPP_PREFIX/bin/acpp" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/batchlas-prefix" \
+            -DCMAKE_CXX_STANDARD=23 -DCMAKE_CXX_EXTENSIONS=OFF
+          cmake --build build/consumer --verbose 2>&1 | tee build/consumer/build.log
+          grep -q -- '-std=c++23' build/consumer/build.log
+          grep -q -- '--acpp-targets=cuda:sm_89' build/consumer/build.log
+          test -x build/consumer/hello_batched_gemm
+
+      - name: Upload the logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acpp-cuda-consumer-logs
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/acpp-cuda/configure.log
+            build/consumer/build.log
 
   # ---------------------------------------------------------------------------
   # THE PRIMARY GATE. Everything above this line is text scanning, plus the

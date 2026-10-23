@@ -21,6 +21,7 @@
 
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/sytrf.hh>
 
 #include <src/backends/gemm_heterogeneous.hh>
 #include <src/backends/host_blas_health.hh>
@@ -779,6 +780,62 @@ namespace batchlas{
             }
         });
     }
+
+    } // namespace backend
+
+    namespace backend {
+
+    // LAPACKE ?sytrf / ?sytrs per item. The pivots are written as int32 straight into the packed
+    // first half of the int64 span (lapack_int is int32 in this build; a mismatch fails to compile),
+    // the format the native kernels read. evidence: docs/perf/sytrf.md
+    template <Backend B, typename T>
+    Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+                       Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
+        auto A_view = A;
+        auto piv = pivots.as_span<int>();
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrf", [=] {
+            const int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssytrf, LAPACKE_dsytrf, LAPACKE_csytrf, LAPACKE_zsytrf, Layout::ColMajor, uplo, n,
+                    A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n);
+                if (want_info) info[i] = static_cast<int32_t>(st);
+            }
+        });
+    }
+
+    template <Backend B, typename T>
+    size_t sytrf_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/, Uplo /*uplo*/) {
+        return 0;
+    }
+
+    template <Backend B, typename T>
+    Event sytrs_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<int64_t> pivots,
+                       const int32_t* skip_info) {
+        auto A_view = A;
+        auto B_view = Bm;
+        auto piv = pivots.as_span<int>();
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrs", [=] {
+            const int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (skip_info != nullptr && skip_info[i] != 0) continue;
+                (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssytrs, LAPACKE_dsytrs, LAPACKE_csytrs, LAPACKE_zsytrs, Layout::ColMajor, uplo, n,
+                    B_view.cols(), A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n,
+                    B_view[i].data_ptr(), B_view.ld());
+            }
+        });
+    }
+
+    #define NETLIB_SYTRF_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrs_vendor)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYTRF_OPS, Backend::NETLIB)
+    #undef NETLIB_SYTRF_OPS
 
     } // namespace backend
 

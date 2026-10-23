@@ -109,6 +109,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     syev/kernels/syev_two_stage.cc
     lanczos/lanczos.cc
     ritz_values/ritz_values.cc
+    syev_align/syev_align.cc
 )
 
 set(EXTENSIONS_FACTORIZATION_SOURCES
@@ -139,7 +140,11 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # laswp -- so it shares no device symbol with getrs_native.cc either.
     getrs/kernels/getrs_fused.cc
     getri/kernels/getri_blocked.cc
+    # potri: two element-wise kernels (info scan, triangle store); no device symbol shared with any other TU.
+    potri/kernels/potri_native.cc
     lascl/lascl.cc
+    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol.
+    sytrf/kernels/sytrf_kernels.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:

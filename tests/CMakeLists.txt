@@ -63,6 +63,7 @@ set(TEST_TARGETS
     getrf_tests
     gesv_tests
     posv_tests
+    potri_tests
     ortho_tests
     inverse_tests
     norm_tests
@@ -109,6 +110,8 @@ set(TEST_TARGETS
     syev_two_stage_tests
     syev_candidates_tests
     syrk_candidates_tests
+    sytrf_tests
+    syev_align_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -184,9 +187,10 @@ set(BATCHLAS_TEST_LABELS_blas
     syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
-    gesv_tests posv_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
+    gesv_tests posv_tests potri_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests)
+    transpose_tests norm_tests cond_tests inverse_tests
+    sytrf_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
@@ -198,7 +202,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
-    gesvd_candidates_tests syev_candidates_tests)
+    gesvd_candidates_tests syev_candidates_tests syev_align_tests)
 set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests spmm_tests spmm_candidates_tests)
 
@@ -645,4 +649,17 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
     else()
         message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# row_major_interop_example: examples/row_major_interop.cc, built in-tree against the
+# library and run as a GPU test (docs/cpp-api.md, "Row-major data").
+# ---------------------------------------------------------------------------
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    add_executable(row_major_interop_example "${PROJECT_SOURCE_DIR}/examples/row_major_interop.cc")
+    batchlas_configure_binary_target(row_major_interop_example)
+    batchlas_gpu_test_command(_row_major_cmd row_major_interop_example)
+    add_test(NAME row_major_interop_example COMMAND ${_row_major_cmd})
+    batchlas_test_needs_gpu(row_major_interop_example)
+    set_tests_properties(row_major_interop_example PROPERTIES LABELS "blas")
 endif()

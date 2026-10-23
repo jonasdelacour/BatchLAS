@@ -2,7 +2,7 @@
 
 > **Status:** current · checked 2026-10-06
 
-Each op that reads `BATCHLAS_<OP>_ROUTE` (19 ops) chooses its kernel in one place: `select::choose()`
+Each op that reads `BATCHLAS_<OP>_ROUTE` (24 ops) chooses its kernel in one place: `select::choose()`
 in `src/select/`, called from the op's own file in `src/ops/<op>/`. A choice is a value from a
 `std::variant` of kernel families. `can_run` decides correctness, and per-device tables rank the
 candidates for speed. The old `RouteTable` layer is gone. The phase history is in

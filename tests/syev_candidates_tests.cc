@@ -123,11 +123,13 @@ Eig<T> make_eig(const Spec& s) {
         auto q = [&](int i, int j) { return (i == j ? 1.0 : 0.0) - 2.0 * v[i] * std::conj(v[j]) / vv; };
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) {
-                if (!p.stored(i, j) && s.poison_other) continue;
+                if (!p.stored(i, j)) continue;
                 cd a = 0;
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
                 p.mem[p.at(it, i, j)] = MVof<T>::make(a.real(), a.imag());
+                // The mirror is the stored entry's exact conjugate, as the entry's hermitize writes it.
+                if (!s.poison_other && i != j) p.mem[p.at(it, j, i)] = MVof<T>::make(a.real(), -a.imag());
             }
         std::sort(lam.begin(), lam.end());
         p.lambda.push_back(lam);
@@ -355,30 +357,24 @@ TYPED_TEST(SyevCandidates, PinnedCandidatesStraddleTheirLimits) {
                 }
 }
 
-// uplo's other triangle holds a large finite poison: every candidate must ignore it. Three
-// drivers read it (docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle); they are listed and
-// skipped here, the rest are held to it. The pins reach the drivers whatever Auto picks.
-bool reads_other_triangle(const C& c, int n, Uplo u) {
-    if (std::holds_alternative<sy::Cta>(c)) return u == Uplo::Upper;
-    if (std::holds_alternative<sy::Blocked>(c)) return u == Uplo::Lower && n <= 32;
-    if (std::holds_alternative<sy::TwoStage>(c)) return u == Uplo::Lower && n > 32;
-    return false;
-}
-
+// uplo's other triangle holds a large finite poison: every pinned family must ignore it. cta
+// (Upper), blocked (Lower, n <= 32) and two_stage (Lower, n > 32) read it when called directly;
+// the public entry mirrors the named triangle first, so no family is skipped here.
+// evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
 TYPED_TEST(SyevCandidates, OtherTriangleIsNeverRead) {
     using T = typename TestFixture::T;
     for (const C& c : sy::candidates<T>())
         for (int n : {5, 17, 32, 40})
-            for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
-                if (!this->expect_runs(c, n) || TestFixture::vendor_word_falls_back(c)) continue;
-                if (reads_other_triangle(c, n, u)) continue;
-                Spec s{n, 3, JobType::EigenVectors, u};
-                s.poison_other = true;
-                s.seed = 17u + n;
-                auto p = make_eig<T>(s);
-                this->run_pinned(c, p);
-                expect_solved(*this->ctx, p, "poisoned other triangle, " + name(c, s));
-            }
+            for (Uplo u : {Uplo::Lower, Uplo::Upper})
+                for (JobType j : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    if (!this->expect_runs(c, n) || TestFixture::vendor_word_falls_back(c)) continue;
+                    Spec s{n, 3, j, u};
+                    s.poison_other = true;
+                    s.seed = 17u + n;
+                    auto p = make_eig<T>(s);
+                    this->run_pinned(c, p);
+                    expect_solved(*this->ctx, p, "poisoned other triangle, " + name(c, s));
+                }
 }
 
 // The pinned public call is exactly the family's driver: same W (and V) bit for bit.

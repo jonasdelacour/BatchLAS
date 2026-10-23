@@ -298,6 +298,7 @@ struct [[nodiscard]] Event {
 };
 
 struct QueueImpl;
+namespace detail { struct SyclInteropAccess; }
 
 /// @brief Where BatchLAS work runs: a device, a backend, an ordered SYCL queue and a workspace
 /// arena.
@@ -429,6 +430,11 @@ struct BATCHLAS_API Queue{
     BATCHLAS_API void* native_handle() const;
 
     private:
+        friend struct detail::SyclInteropAccess;
+        /// Root Queue over a caller's SYCL context and device (queue_from_sycl); the two
+        /// pointers are `const sycl::context*` and `const sycl::device*`.
+        Queue(Device logical, bool in_order, const void* sycl_ctx, const void* sycl_dev);
+
         Device device_;
         bool in_order_;
         batchlas::Backend backend_ = batchlas::Backend::AUTO;
