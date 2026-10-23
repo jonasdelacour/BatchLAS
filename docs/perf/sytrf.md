@@ -94,5 +94,8 @@ unreferenced triangle poisoned with large finite values, complex with nonzero im
   uplo, n straddling 32 | 33 and 256 | 257, `info == 0`, untouched triangle and pads.
 * `SingularItemReportsInfoWithoutDisturbingTheOthers`: the zero matrix in slot 2 gives `info` 1
   (Lower) or n (Upper); every other item is bit-identical to a batch without it; sysv keeps its B.
+* `WgPivotsMatchVendor`: on random data (no near ties) the `wg` kernel's ipiv equals cuSOLVER's entry
+  for entry at n = 24, 100, 200; a residual cannot see a wrong pivot choice, and above n = 32 the
+  argmax spans several sub-groups.
 * `CtaAndWgAgreeBitForBit`, `SaturatingBatchIsBitIdenticalToItemZero` (batch 1024, identical KKT
   items), `VendorFactorSolvesWithNativeSytrs`, `CtaCeilingStraddled`, `ArgumentChecks`.
