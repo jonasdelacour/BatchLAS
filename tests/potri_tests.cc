@@ -8,6 +8,7 @@
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/potri.hh>
+#include <batchlas/no_route.hh>
 #include <batchlas/blas/functions/potrs.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -142,12 +143,18 @@ protected:
     Queue& q() { return *this->ctx; }
 
     // The Cholesky factor in A's triangle, through the public potrf; returns its info.
-    void factor(Sys<T>& p, UnifiedVector<int32_t>& info) {
+    // False when the build has no potrf route for the shape (vendor-free: the native potrf does not cover it).
+    bool factor(Sys<T>& p, UnifiedVector<int32_t>& info) {
         info = UnifiedVector<int32_t>(static_cast<size_t>(p.batch), int32_t(-12345));
         const size_t need = potrf_buffer_size<BK, T>(q(), p.A(), p.uplo);
         UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-        (void)potrf<BK, T>(q(), p.A(), p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
+        try {
+            (void)potrf<BK, T>(q(), p.A(), p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
+        } catch (const NoRouteError&) {
+            return false;
+        }
         q().wait();
+        return true;
     }
 
     Event run_potri(Sys<T>& p, bool full, UnifiedVector<int32_t>* info = nullptr) {
@@ -232,7 +239,7 @@ TYPED_TEST(PotriTest, PotrsSolvesAndReusesTheFactor) {
             for (int nrhs : {1, 3, 8, 9, 20}) {
                 auto p = make_sys<T>(n, nrhs, 5, uplo, 100u + n * 31 + nrhs);
                 UnifiedVector<int32_t> info;
-                this->factor(p, info);
+                if (!this->factor(p, info)) continue;
                 const UnifiedVector<T> factor_bits = p.a;
                 (void)potrs<TestFixture::BK, T>(this->q(), p.A(), p.B(), uplo).wait();
                 this->q().wait();
@@ -282,7 +289,7 @@ TYPED_TEST(PotriTest, PotrsIsBitIdenticalToPosvOnTheSameRoute) {
                 (void)posv<TestFixture::BK, T>(this->q(), p.A(), p.B(), uplo, Span<std::byte>(ws.data(), need), info.to_span()).wait();
             }
             UnifiedVector<int32_t> info2;
-            this->factor(q2, info2);
+            if (!this->factor(q2, info2)) continue;
             (void)potrs<TestFixture::BK, T>(this->q(), q2.A(), q2.B(), uplo).wait();
             this->q().wait();
             for (size_t i = 0; i < p.a.size(); ++i) ASSERT_TRUE(same_bits(p.a[i], q2.a[i])) << "factor differs at " << i;
@@ -337,7 +344,7 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
                 if (route == 1 && n > 8) continue;
                 auto p = make_sys<T>(n, 1, 4, uplo, 900u + n);
                 UnifiedVector<int32_t> info;
-                this->factor(p, info);
+                if (!this->factor(p, info)) continue;
                 const UnifiedVector<T> before = p.a;
                 UnifiedVector<int32_t> pinfo(p.batch, int32_t(-7));
                 {
@@ -366,7 +373,7 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
         for (int n : {3, 8, 17, 40}) {
             auto p = make_sys<T>(n, 1, 3, uplo, 31u + n);
             UnifiedVector<int32_t> info;
-            this->factor(p, info);
+            if (!this->factor(p, info)) continue;
             const UnifiedVector<T> before = p.a;
             (void)this->run_potri(p, true);
             std::vector<std::vector<T>> inv;
@@ -399,7 +406,7 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
             const int bad = 1, batch = 4;
             auto clean = make_sys<T>(n, 1, batch, Uplo::Lower, 5u + n);
             UnifiedVector<int32_t> info;
-            this->factor(clean, info);
+            if (!this->factor(clean, info)) continue;
             auto dirty = make_sys<T>(n, 1, batch, Uplo::Lower, 5u + n);
             dirty.a = clean.a;
             dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(zero_at) * dirty.lda + zero_at] = MV<T>::make(0.0, 0.0);
@@ -423,7 +430,7 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     using T = typename TestFixture::T;
     auto p = make_sys<T>(12, 1, 3, Uplo::Lower, 3u);
     UnifiedVector<int32_t> info;
-    this->factor(p, info);
+    if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
     const size_t need = potri_buffer_size<TestFixture::BK, T>(this->q(), p.A(), p.uplo);
     EXPECT_GE(need, sizeof(T) * 12 * 12 * 3);
     UnifiedVector<std::byte> small(need / 2);
@@ -446,7 +453,7 @@ TYPED_TEST(PotriTest, PotriFusedPinStraddlesItsCeiling) {
     for (int n : {8, 9}) {
         auto p = make_sys<T>(n, 1, 3, Uplo::Lower, 77u + n);
         UnifiedVector<int32_t> info;
-        this->factor(p, info);
+        if (!this->factor(p, info)) continue;
         const size_t need = potri_buffer_size<TestFixture::BK, T>(this->q(), p.A(), p.uplo);
         UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
         auto call = [&] { (void)potri<TestFixture::BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait(); };
@@ -473,7 +480,7 @@ TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     for (int n : {8, 16}) {
         auto p = make_sys<T>(n, 3, 1024, Uplo::Lower, 13u + n, /*identical=*/true);
         UnifiedVector<int32_t> info;
-        this->factor(p, info);
+        if (!this->factor(p, info)) continue;
         auto s = make_sys<T>(n, 3, 1024, Uplo::Lower, 13u + n, true);
         s.a = p.a;
         (void)potrs<TestFixture::BK, T>(this->q(), s.A(), s.B(), Uplo::Lower).wait();
