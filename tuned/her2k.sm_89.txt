@@ -1,5 +1,5 @@
-# op=her2k device=sm_89 batchlas=409c2fb4 date=2026-10-22
-# source=transcribed:409c2fb4 tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:980
+# op=her2k device=sm_89 batchlas=26168c21 kernels=6fa054cc family_kernels=triangular:88463057,fold:4bb22fc1,vendor:bc277522 date=2026-10-23
+# source=ledger:benchmarks/results/tuning/ledger/her2k.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:980
 # keys: dtype:exact n:log:2 k:log batch:log
 dtype=cfloat n=1 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
 dtype=cfloat n=1 k=1 batch=2 | fold - | triangular - | vendor - # transcribed

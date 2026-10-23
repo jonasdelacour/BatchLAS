@@ -1,5 +1,5 @@
-# op=hemm device=sm_89 batchlas=409c2fb4 date=2026-10-22
-# source=transcribed:409c2fb4 tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:4050
+# op=hemm device=sm_89 batchlas=26168c21 kernels=7f06d001 family_kernels=expand:71d7b7e4,vendor:b1ded111 date=2026-10-23
+# source=ledger:benchmarks/results/tuning/ledger/hemm.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:4050
 # keys: dtype:exact m:log n:log batch:log
 dtype=cfloat m=1 n=1 batch=1 | vendor - | expand - # transcribed
 dtype=cfloat m=1 n=1 batch=2 | vendor - | expand - # transcribed

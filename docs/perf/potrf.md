@@ -403,7 +403,7 @@ CTA kernel at n <= 77 and `blocked` above, so it equals `blocked` there):
 Upper costs 0-10% more than Lower for float (the fold and the gemm run on transposed operands); cfloat Upper is up to 1.5x
 Lower at batch 512. cuSOLVER's Upper is much slower than its Lower from batch 512 (float n = 512: 6.29 against 4.84 ms), so
 blocked Upper wins float n = 384 and 512 at batch 512 (1.14x, 1.34x) and ties at batch 128; it loses elsewhere and for cfloat
-everywhere (0.35-0.94x). `tuned/potrf.sm_89.txt` therefore carries 12 `# custom` rows for float Upper (n = 96..512, batch 128
+everywhere (0.35-0.94x). `tuned/potrf.sm_89.txt` therefore carries 12 `# custom` rows (ledger run `custom-5dc7f884`) for float Upper (n = 96..512, batch 128
 and 512), ranking `blocked` first only at n = 384 and 512, batch 512; every other Upper cell stays on the vendor. Vendor-free
 builds and `Backend::SYCL` have only `blocked` above the CTA ceiling, at the speeds above. Single sweep, 12 reps; the 1.14x cell is
 a screen, not a verdict.

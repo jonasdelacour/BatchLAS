@@ -315,12 +315,12 @@ RTX 4090 GPU 1, warmup 3, min 8 iterations, best of 2 passes (pass-to-pass sprea
 
 Values only at n = 128, 256, 512, batch 128: 4.67, 24.8, 325.1 ms. Blocked is not saturated at
 batch 128 for n ≤ 64 (33: 0.91 ms at 128, 3.43 ms at 2048); Jacobi is. The sm_89 table therefore
-puts `blocked` first for complex\<float\> in 33..64 (untimed hand edit, 153 rows), as the real rows
+puts `blocked` first for complex\<float\> in 33..64 (153 untimed rows, ledger run `transcribed-167a4eaf`), as the real rows
 already do ([the wide band](#gesvd-the-wide-band-33-to-64)): Jacobi keeps the better relative
 accuracy at \f$\kappa \gtrsim 10^4\f$ and stays reachable by pin. complex\<double\> was not timed
 (1:64 FP64); its rows put `blocked` after `jacobi`, which itself stops at 32 with vectors.
 
-The rest of the hand edit (both tables, untimed rows only): complex herm=N rows above 32 rank
+The rest of the change (both tables, untimed rows only, ledger run `transcribed-141d31db`): complex herm=N rows above 32 rank
 `blocked` before `vendor`, and Hermitian Upper square rows copy the Lower ranking. Vendor rows past
 the binding's envelope no longer throw at launch either way: `can_run(vendor)` refuses them.
 

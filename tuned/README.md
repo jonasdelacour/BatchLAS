@@ -1,6 +1,6 @@
 # Tuned selection tables {#tuned_tables_readme}
 
-> **Status:** current · inventory as of 2026-10-11 · the generated @ref selection_tables page is always current.
+> **Status:** current · inventory as of 2026-10-23 · the generated @ref selection_tables page is always current.
 
 One file per (op, device): `<op>.<device>.txt`, for example `potrf.sm_120.txt`. The first key is
 `dtype`; each row is one shape of one dtype and the ranked list of every candidate timed there,
@@ -20,24 +20,29 @@ Each table is generated from its ledger, never edited by hand; the rules and com
 
 ## Inventory
 
-Every op ships a table for each dtype it instantiates (float, double, cfloat, cdouble; symm, syrk
-and syr2k are real only) on sm_89 and sm_120. spmm also ships a CPU table. Any other device borrows
+Every op ships a table for each dtype it instantiates (float, double, cfloat, cdouble; hemm, herk
+and her2k are complex only) on sm_89 and sm_120. spmm also ships a CPU table. Any other device borrows
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
 checks this inventory.
 
-Counts: 39 files, 19 per GPU device plus `spmm.cpu.txt`.
+Counts: 45 files, 22 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
 | sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near | "The sm_120 deep tables" below |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `custom` float Upper rows; geqrf 16 `deep` wide rows | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not
 measurements, and a measured row near them replaces them. Their provenance (transcriber, commit)
 is the run line of the ledger, run id `transcribed-<sha>`: posv `7e71a6e0`, trsm `8b9adeb3`; gemm,
 gemv, getri, gesv, spmm, syev, geqrf, orgqr, ormqr, getrf, getrs, gesvd `424a45bc`; symm, syrk,
-syr2k, trmm `ff340fc6`. The transcribers' sources are in git history, for example
+syr2k, trmm `ff340fc6`. Later rule changes are their own transcribed runs: gesvd `141d31db`
+(complex general above 32 gains `blocked`, Hermitian Upper copies Lower) and `167a4eaf` (sm_89
+cfloat 33..64 puts `blocked` first, docs/perf/gesvd.md); the complex rows of symm, syrk and syr2k
+and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, docs/perf/level3.md).
+The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
+(docs/perf/potrf.md#the-blocked-upper-driver). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
 ledgers is in the commit that added them (`git log -- scripts/migrate_tuning_data.py`).
 
