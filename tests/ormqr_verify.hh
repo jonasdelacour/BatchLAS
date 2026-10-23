@@ -10,9 +10,9 @@ namespace test_utils {
 // Worst componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) over the batch, with Q
 // formed by MatrixView::form_q from the stored reflectors, independently of any ormqr.
 template <typename T>
-double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& A_fact,
-                         const batchlas::VectorView<T>& tau, const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& C0,
-                         const batchlas::Matrix<T, batchlas::MatrixFormat::Dense>& C, batchlas::Side side, batchlas::Transpose trans) {
+double ormqr_apply_error(batchlas::Queue& ctx, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& A_fact,
+                         const batchlas::VectorView<T>& tau, const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& C0,
+                         const batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>& C, batchlas::Side side, batchlas::Transpose trans) {
     using MV = batchlas::MatrixView<T, batchlas::MatrixFormat::Dense>;
     using D = typename MV::promoted_type;
     using DV = batchlas::MatrixView<D, batchlas::MatrixFormat::Dense>;

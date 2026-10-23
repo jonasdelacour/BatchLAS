@@ -123,7 +123,10 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
         ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, A, C, trans); }, shape, key,
         [&](const auto& c) {
-            if (workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
+            // Blocked fits its batch part to the workspace it holds (a caller sized at a larger shape
+            // may hold less than this shape's part) and throws workspace_error itself below one item.
+            if (std::holds_alternative<ops::ormqr::Vendor>(c) &&
+                workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
                 throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
             // Both families sequence several launches.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
