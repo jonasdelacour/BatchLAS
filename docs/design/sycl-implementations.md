@@ -20,7 +20,7 @@ the DPC++ tree's `-I`/`-D` flags. The patches were regex shims applied to the co
 | Library TUs, pristine source | 23 of 109 compile. |
 | Library TUs after shim layers L0+L1 | 107 of 109. Open: `ormqr_cta.cc` (`sycl::vec<std::complex>`) and `ritz_values.cc` (`joint_reduce` of `std::complex`). |
 | Test TUs | 82 of 86 compile. |
-| `cuda:sm_120` (SMCP) flow | Unusable: clang 20's CUDA wrapper rejects the CUDA 13.2 headers, even on an empty file. **Generic (SSCP) is the only flow on this install.** |
+| `cuda:sm_120` (SMCP) flow | Unusable: clang 20's CUDA wrapper rejects the CUDA 13.2 headers, even on an empty file. **Generic (SSCP) is the only flow on this install.** Since 2026-10-22 it builds against a CUDA 12.x toolkit ([multipass CUDA](#sycl-impl-cuda-aot)). |
 | Compile wall, -P32, no ccache | acpp 50 s vs DPC++ 62 s. The acpp `.so` link takes 1.1 s because there is no device link; kernels are JIT-compiled at first launch instead. |
 | `examples/consumer` gemm | Max error 0 under Auto and under every gemm pin (`tiled`, `direct`, `small`, `reg:m=128:n=128:k=8:u=1`, `vendor`). SSCP JIT and the cuBLAS stream interop both work. |
 | Test binaries | 39 of 77 fully green (29 before `-fcx-limited-range`). The failure causes are listed in [runtime differences](#sycl-impl-runtime-differences). |
@@ -168,6 +168,36 @@ algorithms). A few sites outside them still test `BATCHLAS_SYCL_IMPL_ACPP` direc
   sub-group size, so every `can_run` that requires `has_sg32` refuses any other device.
 - The `register_128x128` L2-prefetch load is reached through `on_ptx()` plus
   `__acpp_if_target_sscp`. Launch bounds stay an implementation difference (A10).
+
+### Multipass CUDA: --acpp-targets=cuda:sm_XX {#sycl-impl-cuda-aot}
+
+acpp's ahead-of-time CUDA flow (the fullerenes toolchain): a host pass plus a real NVPTX device
+pass compiled by acpp's clang (LLVM 20) in CUDA mode, kernels in the fat binary, no JIT.
+
+- **Toolkit.** Clang 20 rejects CUDA 13 headers, so the flow needs CUDA 12.x
+  (`BATCHLAS_ACPP_CUDA_PATH`, passed as `--acpp-cuda-path`; configure fails on a 13.x toolkit).
+  The same toolkit's cuBLAS/cuSOLVER/cuSPARSE are linked (`CUDAToolkit_ROOT`). Clang's CUDA wrapper
+  includes curand headers, which an HPC SDK keeps in `math_libs/<v>/.../include`: added as
+  `-isystem` when found. CUDA above 12.8 also gets `-Wno-unknown-cuda-version`. The flags go into
+  `BatchLAS_SYCL_COMPILE_OPTIONS`, so a consumer compiles with the same toolkit.
+- **No GPU at configure.** An explicit `cuda:sm_XX` names the device, so the CUDA backend is built
+  when the acpp install has `librt-backend-cuda` even if `acpp-info` sees no GPU (hosted CI).
+- **No `SYCL_EXTERNAL`.** The secular-equation root solvers are in `stedc_secular_roots.hh`,
+  `inline` where `SYCL_EXTERNAL` is undefined, so every caller compiles its own copy.
+- **Implicit host-device.** Device code that names a `__host__`-only function (a non-`constexpr`
+  member called from a `constexpr` one) is an error; `UnifiedVector::operator==` and `push_back`
+  lost a `constexpr` that never applied.
+- **Target dispatch.** `on_ptx()` is `true` and `target_arch()` is `__CUDA_ARCH__ / 10` in the
+  CUDA device pass (`__acpp_if_target_cuda`). `SscpBackend`'s asm-label `__nvvm_*` declarations are
+  skipped there (clang's own builtins exist), and `redux` uses `NvptxBackend::redux_full`, which
+  keys on `BATCHLAS_NVPTX_ARCH` (`__SYCL_CUDA_ARCH__` or `__CUDA_ARCH__`).
+- **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the
+  CUDA and HIP device passes too (`kExactWgReducePass`); its scratch is a `__shared__` array in a
+  `__device__` helper. acpp's own multipass reduce is a typed tree, so it does not have the SSCP
+  rounding defect, but it reads its static scratch after the last barrier, so a following reduce
+  of the same type can overwrite it before every item has read it.
+- **Contraction.** The driver default is `fast`; BatchLAS passes `BATCHLAS_FP_CONTRACT`
+  (default `on`), as for generic ([build guide](../guide/build.md#guide_build_fp_contract)).
 
 ### Local memory: the launch budget {#sycl-impl-slm-budget}
 

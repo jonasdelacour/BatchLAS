@@ -3,8 +3,14 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 
+#ifndef SYCL_EXTERNAL
+// AdaptiveCpp multipass (cuda:sm_XX) has no SYCL_EXTERNAL: every caller compiles the definitions.
+#include <src/ops/syev/stedc/stedc_secular_roots.hh>
+#endif
+
 namespace batchlas {
 
+#ifdef SYCL_EXTERNAL
 // `converged_out`: whether the root met its tolerance (a release-mode assert used to be
 // the only check). NOT defaulted: these are SYCL_EXTERNAL, and a default would let a
 // new call site drop the status silently.
@@ -23,6 +29,7 @@ SYCL_EXTERNAL T sec_solve_roc(int32_t dd,
                               const T& rho,
                               const int32_t k,
                               bool& converged_out);
+#endif
 
 template <typename T>
 Event secular_solver(Queue& ctx,
