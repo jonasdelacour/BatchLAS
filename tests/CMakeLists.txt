@@ -646,3 +646,16 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
         message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# row_major_interop_example: examples/row_major_interop.cc, built in-tree against the
+# library and run as a GPU test (docs/cpp-api.md, "Row-major data").
+# ---------------------------------------------------------------------------
+if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
+    add_executable(row_major_interop_example "${PROJECT_SOURCE_DIR}/examples/row_major_interop.cc")
+    batchlas_configure_binary_target(row_major_interop_example)
+    batchlas_gpu_test_command(_row_major_cmd row_major_interop_example)
+    add_test(NAME row_major_interop_example COMMAND ${_row_major_cmd})
+    batchlas_test_needs_gpu(row_major_interop_example)
+    set_tests_properties(row_major_interop_example PROPERTIES LABELS "blas")
+endif()
