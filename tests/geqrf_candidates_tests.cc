@@ -220,7 +220,7 @@ protected:
     // ---- the limit oracle: the drivers' own capacity queries, not geqrf.cc's can_run ----
     bool expect_runs(const C& c, int m, int n) const {
         if (std::holds_alternative<gq::Vendor>(c)) return kVendor;
-        if (m < n || n < 1) return false;
+        if (m < 1 || n < 1) return false;
         if (std::holds_alternative<gq::Tiny>(c)) return m == n && n <= tiny_max();
         if (std::holds_alternative<gq::Cta>(c)) return cta_fits(m, n);
         return sycl_geqrf::geqrf_blocked_available<T>() && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
@@ -306,15 +306,18 @@ protected:
     }
 
     // Square orders straddling tiny's buckets and ceiling and Cta's square fit, tall shapes
-    // straddling Cta's area, and a wide one.
+    // straddling Cta's area, and wide ones inside and past it.
     std::vector<Spec> straddles() const {
         const int t = tiny_max(), c = cta_max_square();
         std::vector<Spec> v;
         for (int n : {1, 2, 8, 9, 16, 17, t, t + 1, c, c + 1}) v.push_back({n, n, 3});
         int tall_m = 1;
         while (cta_fits(tall_m + 1, 24)) ++tall_m;
+        int wide_n = 1;
+        while (cta_fits(24, wide_n + 1)) ++wide_n;
         for (auto [m, n] : {std::pair{tall_m, 24}, std::pair{tall_m + 1, 24}, std::pair{40, 7}, std::pair{300, 70},
-                            std::pair{24, 40}})
+                            std::pair{24, 40}, std::pair{40, 300}, std::pair{24, wide_n},
+                            std::pair{24, wide_n + 1}})
             v.push_back({m, n, 3});
         for (std::size_t i = 0; i < v.size(); ++i) v[i].seed = 900u + unsigned(i);
         return v;
@@ -335,7 +338,6 @@ TYPED_TEST(GeqrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             auto p = make_qr<T>(s);
             const std::string what = name(c, s);
             if (TestFixture::vendor_word_falls_back(c)) {
-                if (s.m < s.n) continue;  // vendor-free wide: no route at all
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
                 expect_factored(*this->ctx, p, what + " (vendor-free: Auto)");
                 continue;
@@ -347,7 +349,7 @@ TYPED_TEST(GeqrfCandidates, PinnedCandidatesStraddleTheirLimits) {
             }
             ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
             this->run_pinned(c, p);
-            if (s.m >= s.n) expect_factored(*this->ctx, p, what);
+            expect_factored(*this->ctx, p, what);
             ++ran;
         }
     EXPECT_GT(ran, 0);
@@ -425,7 +427,8 @@ TYPED_TEST(GeqrfCandidates, ExactWorkspaceInAPoisonedArena) {
     constexpr std::size_t kGuard = 4096;
     for (const C& c : gq::candidates<T>())
         for (auto [m, n, batch] : {std::tuple{16, 16, 5}, std::tuple{40, 24, 3}, std::tuple{100, 70, 3},
-                                   std::tuple{1, 1, 2}, std::tuple{300, 33, 2}}) {
+                                   std::tuple{1, 1, 2}, std::tuple{300, 33, 2}, std::tuple{24, 40, 3},
+                                   std::tuple{70, 300, 2}}) {
             if (!this->expect_runs(c, m, n) || TestFixture::vendor_word_falls_back(c)) continue;
             const Spec s{m, n, batch, 0, 31u + unsigned(m)};
             auto p = make_qr<T>(s);
@@ -453,7 +456,6 @@ TYPED_TEST(GeqrfCandidates, BoundCoversEverySubViewChoice) {
             geqrf_buffer_size_bound<B, T>(*this->ctx, bound_view, Span<T>(nullptr, std::size_t(bn) * batch));
         for (int m = 1; m <= bm; m += std::max(1, bm / 9))
             for (int n = 1; n <= bn; n += std::max(1, bn / 7)) {
-                if (m < n && !TestFixture::kVendor) continue;  // vendor-free wide: no route at all
                 const MVof<T> sub(nullptr, m, n, m, m * n, batch);
                 const Span<T> tau(nullptr, std::size_t(std::min(m, n)) * batch);
                 EXPECT_LE((geqrf_buffer_size<B, T>(*this->ctx, sub, tau)), bound) << m << "x" << n << " under Auto";
@@ -480,15 +482,17 @@ TYPED_TEST(GeqrfCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases, each with its message: wide, empty, tiny on a tall panel and
+// The named can_run-false cases, each with its message: tiny on a wide or tall panel and
 // one order past its ceiling, cta one row past its area (an area and a height, not two extents).
 TYPED_TEST(GeqrfCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     const int t = this->tiny_max();
     int tall_m = 1;
     while (this->cta_fits(tall_m + 1, 24)) ++tall_m;
+    int wide_n = 1;
+    while (this->cta_fits(24, wide_n + 1)) ++wide_n;
     struct Case { C c; int m, n; };
-    const Case cases[] = {{gq::Tiny{}, 24, 40},       {gq::Cta{}, 24, 40},        {gq::Blocked{}, 24, 40},
+    const Case cases[] = {{gq::Tiny{}, 24, 40},       {gq::Cta{}, 24, wide_n + 1},
                           {gq::Tiny{}, 2 * t, t},     {gq::Tiny{}, t + 1, t + 1}, {gq::Cta{}, tall_m + 1, 24},
                           {gq::Blocked{}, 8, 0},      {gq::Cta{}, 0, 0},          {gq::Tiny{}, 0, 0}};
     for (const auto& k : cases) {
@@ -753,7 +757,7 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         EXPECT_EQ(w[9], "vendor");
         EXPECT_EQ(w[10], "vendor");
         EXPECT_EQ(w[12], "1");
-        EXPECT_EQ(w[13], "0") << "no native candidate runs a wide view";
+        EXPECT_EQ(w[13], "1") << "cta and blocked run a wide view; the table still ranks the vendor first";
     }
 }
 

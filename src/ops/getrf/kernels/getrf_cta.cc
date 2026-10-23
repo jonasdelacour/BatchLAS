@@ -289,8 +289,13 @@ bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
 // driver asks getrf_leaf_fits instead, at the whole budget -- a different question.
 template <typename T>
 bool getrf_cta_fits(int n, std::size_t slm_budget_bytes, int min_blocks_per_sm) {
+    return getrf_cta_fits_rect<T>(n, n, slm_budget_bytes, min_blocks_per_sm);
+}
+
+template <typename T>
+bool getrf_cta_fits_rect(int m, int n, std::size_t slm_budget_bytes, int min_blocks_per_sm) {
     return getrf_leaf_fits<T>(
-        n, n, resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm));
+        m, n, resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm));
 }
 
 // 0 spells "this tier is not in this build". The walk's `break` clause and why it is
@@ -400,13 +405,10 @@ Event getrf_cta_dispatch(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_cta: degenerate extents");
     }
-    if (m != n) {
-        // Contract, not fit: can_run refuses m != n and the two must agree.
-        throw batchlas::invalid_argument(
-            "getrf_cta: A must be square (getrf.cc's can_run refuses m != n)");
-    }
+    // m != n is the whole m x n ?GETF2: the device loop runs min(m, n) steps over all n columns.
+    const int mn = std::min(m, n);
     if (A.is_heterogeneous()) {
-        // One (n, ld, stride) tuple at CAPACITY extents covers the whole batch.
+        // One (m, n, ld, stride) tuple at CAPACITY extents covers the whole batch.
         throw batchlas::invalid_argument("getrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
@@ -422,19 +424,19 @@ Event getrf_cta_dispatch(Queue& ctx,
 
     // int64 ON THE WIRE, PACKED 1-BASED int32 IN THE BUFFER: cuBLAS and rocSOLVER
     // reinterpret_cast this span, so any other format is silent garbage downstream.
-    if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw batchlas::invalid_argument("getrf_cta: pivot span is shorter than n * batch");
+    if (pivots.size() < static_cast<std::size_t>(mn) * static_cast<std::size_t>(batch)) {
+        throw batchlas::invalid_argument("getrf_cta: pivot span is shorter than min(m, n) * batch");
     }
 
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     // The occupancy-scaled gate, matching can_run: an order this refuses is one the
     // selector never picks here, and one that would leave a single block resident per SM.
-    if (!getrf_cta_fits<T>(n, budget)) {
+    if (!getrf_cta_fits_rect<T>(m, n, budget)) {
         throw batchlas::invalid_argument(
-            "getrf_cta: order " + std::to_string(n) +
+            "getrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +
             " does not fit this device's per-work-group local-memory budget (needs " +
-            std::to_string(getrf_slm_bytes<T>(n, n)) + " B of " +
+            std::to_string(getrf_slm_bytes<T>(m, n)) + " B of " +
             std::to_string(resident::occupancy_budget(budget)) +
             " B); the ceiling for this type is " +
             std::to_string(getrf_cta_max_n_for_slm<T>(budget)));
@@ -455,8 +457,8 @@ Event getrf_cta_dispatch(Queue& ctx,
     auto piv_i32 = pivots.as_span<int>();
 
     bool resident = false;
-    Event e = getrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), n, n, batch,
-                                       piv_i32.data(), n, 0, info.data(), &resident);
+    Event e = getrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
+                                       piv_i32.data(), mn, 0, info.data(), &resident);
     if (!resident) {
         // Unreachable: same budget and same arithmetic as the check above. Asserted
         // because a tier silently becoming the other is what a pinned test misses.
@@ -471,6 +473,7 @@ Event getrf_cta_dispatch(Queue& ctx,
 #define BATCHLAS_GETRF_CTA_INSTANTIATE(T)                                                     \
     template int getrf_cta_max_n_for_slm<T>(std::size_t, int);                                \
     template bool getrf_cta_fits<T>(int, std::size_t, int);                                   \
+    template bool getrf_cta_fits_rect<T>(int, int, std::size_t, int);                         \
     template bool getrf_leaf_fits<T>(int, int, std::size_t);                                  \
     template unsigned getrf_cta_debug_launch<T>(Queue&, int, int);                            \
     template std::size_t getrf_cta_buffer_size<T>(Queue&,                                     \

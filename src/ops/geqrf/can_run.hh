@@ -21,12 +21,12 @@ using select::overloaded;
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-/// Correctness only (R3): each clause is its driver's check. One (m, n, ld, stride) per launch and a wide view's
-/// off-panel update: natives take neither; the vendor (top-level (m, n) per item) takes no heterogeneous batch.
+/// Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
+/// Blocked take any m x n, Tiny only square. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
 template <class T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
-    const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && A.batch_size() >= 1;
+    const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
         [&](Tiny) { return native && m == n && n <= sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget); },
