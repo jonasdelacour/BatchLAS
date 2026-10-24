@@ -92,7 +92,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             if constexpr (kExpandWired<B>)
                 return level3::expand_gemm<B, T, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw std::logic_error("symm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("symm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B == Backend::ROCM && kVendorWired<B, T>)

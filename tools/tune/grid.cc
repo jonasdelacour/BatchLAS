@@ -7,6 +7,7 @@
 #include <set>
 #include <stdexcept>
 #include <tuple>
+#include <batchlas/error.hh>
 
 namespace batchlas::tune {
 
@@ -319,10 +320,10 @@ std::set<std::string> CalibrateRound::winners(const CellKey& u) const {
 }
 
 std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& classes, const std::vector<int>& extra) {
-    if (cus < 1) throw std::invalid_argument("batch ladder: the device's compute-unit count is unknown (--cus N)");
+    if (cus < 1) throw batchlas::invalid_argument("batch ladder: the device's compute-unit count is unknown (--cus N)");
     std::set<std::int64_t> b(extra.begin(), extra.end());
     for (double c : classes) {
-        if (!(c > 0)) throw std::invalid_argument("batch ladder: a class multiplier must be positive");
+        if (!(c > 0)) throw batchlas::invalid_argument("batch ladder: a class multiplier must be positive");
         b.insert(std::max<std::int64_t>(1, std::llround(c * double(cus))));
     }
     return {b.begin(), b.end()};

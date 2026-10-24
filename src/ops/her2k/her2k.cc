@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/her2k.hh>
+#include <batchlas/error.hh>
 
 #include <src/backends/level3_shape.hh>
 #include <src/ops/her2k/route.hh>
@@ -35,13 +36,13 @@ Event launch(Queue& q, const Her2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
                         alpha, T(beta), uplo, transA);
                 });
             else
-                throw std::logic_error("her2k: triangular is a complex<float> native-GPU kernel");  // can_run refuses
+                throw batchlas::internal_error("her2k: triangular is a complex<float> native-GPU kernel");  // can_run refuses
         },
         [&](Fold) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
                 return level3::gemm_fold<B, T, /*TwoSided=*/true>(q, A, Bm, C, alpha, beta, uplo, transA);
             else
-                throw std::logic_error("her2k: fold is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("her2k: fold is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
@@ -57,7 +58,7 @@ Event launch(Queue& q, const Her2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, ComplexScalar T>
 Event her2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, float_t<T> beta, Uplo uplo, Transpose transA) {
-    backend::shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+    backend::shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::her2k::inner<T>(A, transA),
                                 .batch = C.batch_size(), .transA = transA, .uplo = uplo};

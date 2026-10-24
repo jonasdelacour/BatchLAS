@@ -90,7 +90,7 @@ decltype(auto) with_complex_dtype(const std::string& op, const std::string& dtyp
 #if BATCHLAS_TUNE_FP64
     if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
 #endif
-    throw std::invalid_argument(op + " is complex-only: no '" + dtype + "' (cfloat, cdouble)");
+    throw batchlas::invalid_argument(op + " is complex-only: no '" + dtype + "' (cfloat, cdouble)");
 }
 
 // A non-lattice grid() (form derived from the extents) under `--grid name=v1:v2`: the overrides

@@ -93,7 +93,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
                                                                          beta, uplo, transA);
                 });
             else
-                throw std::logic_error("syrk: triangular is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: triangular is wired for native GPU backends only");
         },
         [&](Vendor) -> Event {
             if constexpr (vendor_wired<B, T>)
@@ -109,9 +109,9 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 template <Backend Back, FloatingOrComplexScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
-    (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+    (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
-        throw std::invalid_argument("SYRK: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
+        throw batchlas::invalid_argument("syrk: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/hemm.hh>
+#include <batchlas/error.hh>
 
 #include <src/backends/level3_shape.hh>
 #include <src/expansion_budget.hh>
@@ -60,7 +61,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
                 return level3::expand_gemm<B, T, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw std::logic_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
@@ -76,7 +77,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
-    backend::shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+    backend::shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
     // An empty problem is a no-op in every build and under any pin, as symm's is.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = C.batch_size(), .uplo = uplo,

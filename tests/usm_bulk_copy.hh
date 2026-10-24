@@ -5,6 +5,7 @@
 // ~97% of the wall time of a batch-1024 case (gemm_candidates_tests, trmm_candidates_tests).
 #include <batchlas/sycl_interop.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/error.hh>
 
 #include <algorithm>
 #include <cstddef>
@@ -92,7 +93,7 @@ struct Pristine {
     Pristine(std::size_t total_, std::size_t batch_, std::size_t reps_, T fill_,
              std::initializer_list<std::pair<std::size_t, std::size_t>> segs_)
         : fill(fill_), total(total_), batch(batch_), reps(std::min(reps_, batch_)) {
-        if (batch > 0 && reps == 0) throw std::logic_error("a non-empty batch needs a representative");
+        if (batch > 0 && reps == 0) throw batchlas::internal_error("a non-empty batch needs a representative");
         for (const auto& [off, stride] : segs_) segs.push_back({off, stride, std::vector<T>(stride * reps, fill)});
     }
 
@@ -100,7 +101,7 @@ struct Pristine {
     T& at(std::size_t e) {
         for (auto g = segs.rbegin(); g != segs.rend(); ++g)
             if (g->off <= e) return g->rep.at(e - g->off);
-        throw std::logic_error("no segment holds element " + std::to_string(e));
+        throw batchlas::internal_error("no segment holds element " + std::to_string(e));
     }
 
     // Writes the buffer into `usm` (a UnifiedVector of `total`): the representatives from the

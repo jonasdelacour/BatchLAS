@@ -14,6 +14,7 @@
 #include <vector>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/error.hh>
 #include <complex>
 
 #include <src/backends/batch_launch.hh>
@@ -184,7 +185,7 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
         static_cast<void>(k);  // cublas?hemm takes A's order from side
         // The two real slots have no callee: BLAS has no real ?hemm, and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
@@ -217,7 +218,7 @@ namespace batchlas {
                       Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
         // The two real slots have no callee: BLAS has no real ?herk (that is syrk), and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -249,7 +250,7 @@ namespace batchlas {
                        Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
 
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);

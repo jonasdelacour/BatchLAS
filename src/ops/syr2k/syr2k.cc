@@ -94,9 +94,9 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, FloatingOrComplexScalar T>
 Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Uplo uplo, Transpose transA) {
-    backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+    backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
-        throw std::invalid_argument("SYR2K: ConjTrans with a complex T is her2k's, not a symmetric update");
+        throw batchlas::invalid_argument("syr2k: ConjTrans with a complex T is her2k's, not a symmetric update");
     // An empty batch launches nothing under any pin, as syrk's does (the cuBLAS loop faults on one).
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

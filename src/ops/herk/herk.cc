@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/herk.hh>
+#include <batchlas/error.hh>
 
 #include <src/backends/level3_shape.hh>
 #include <src/expansion_budget.hh>
@@ -84,7 +85,7 @@ Event launch(Queue& q, const HerkChoice& c, const MV<T>& A, const MV<T>& C, floa
                         T(beta), uplo, transA);
                 });
             else
-                throw std::logic_error("herk: gram is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("herk: gram is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B> && std::is_same_v<T, std::complex<float>>)
@@ -94,13 +95,13 @@ Event launch(Queue& q, const HerkChoice& c, const MV<T>& A, const MV<T>& C, floa
                         T(beta), uplo, transA);
                 });
             else
-                throw std::logic_error("herk: triangular is a complex<float> native-GPU kernel");  // can_run refuses
+                throw batchlas::internal_error("herk: triangular is a complex<float> native-GPU kernel");  // can_run refuses
         },
         [&](Fold) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
                 return level3::gemm_fold<B, T, /*TwoSided=*/false>(q, A, A, C, T(alpha), beta, uplo, transA);
             else
-                throw std::logic_error("herk: fold is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("herk: fold is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
@@ -116,7 +117,7 @@ Event launch(Queue& q, const HerkChoice& c, const MV<T>& A, const MV<T>& C, floa
 template <Backend Back, ComplexScalar T>
 Event herk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            float_t<T> alpha, float_t<T> beta, Uplo uplo, Transpose transA) {
-    backend::shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+    backend::shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::herk::inner<T>(A, transA),
                                 .batch = C.batch_size(), .transA = transA, .uplo = uplo};
