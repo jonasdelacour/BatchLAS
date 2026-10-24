@@ -490,31 +490,110 @@ std::vector<std::string> fastest_first(const std::map<std::string, double>& ms) 
     return v;
 }
 
+std::string group_text(const CellKey& key, const std::vector<AxisSpec>& axes) {  // the exact keys' values
+    std::string g;
+    for (std::size_t i = 0; i < key.size() && i < axes.size(); ++i)
+        if (!axes[i].log) g += key[i].value + " ";
+    return g;
+}
+
+bool kept(const Scheme& s, const CellKey& key, const std::vector<AxisSpec>& axes) {
+    const std::string* b = key_get(key, "batch");
+    return s.batch_keep.empty() || (b && s.batch_keep.count(group_text(key, axes) + "|" + *b));
+}
+
 }  // namespace
+
+std::size_t drop_nonmonotone_batch(OracleSet& o, double factor) {
+    std::map<CellKey, std::vector<std::pair<std::int64_t, CellKey>>> lines;
+    for (const auto& [key, c] : o.cells) {
+        if (!key_get(key, "batch")) return 0;
+        CellKey rest;
+        for (const KV& kv : key)
+            if (kv.name != "batch") rest.push_back(kv);
+        lines[rest].push_back({key_int(key, "batch"), key});
+    }
+    std::vector<CellKey> drop;
+    for (auto& [rest, pts] : lines) {
+        std::sort(pts.begin(), pts.end());
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            const auto& lo = o.cells.at(pts[i].second).ms;
+            const double lo_best = lo.at(fastest_first(lo).front());
+            bool bad = false;
+            for (std::size_t j = i + 1; j < pts.size() && !bad; ++j) {
+                const auto& hi = o.cells.at(pts[j].second).ms;
+                bad = lo_best > factor * hi.at(fastest_first(hi).front());
+                for (const auto& [arm, t] : lo)
+                    if (const auto h = hi.find(arm); h != hi.end() && t > factor * h->second) bad = true;
+            }
+            if (bad) drop.push_back(pts[i].second);
+        }
+    }
+    for (const CellKey& k : drop) o.cells.erase(k);
+    return drop.size();
+}
+
+std::set<std::string> nearest_batches(const OracleSet& o, const std::vector<std::int64_t>& want,
+                                      const std::vector<int>& extra, std::string* kept_text) {
+    std::map<std::string, std::set<std::int64_t>> have;
+    for (const auto& [key, c] : o.cells)
+        if (key_get(key, "batch")) have[group_text(key, o.axes)].insert(key_int(key, "batch"));
+    std::set<std::string> out;
+    std::set<std::int64_t> all;
+    for (const auto& [g, bs] : have) {
+        std::set<std::int64_t> pick;
+        for (std::int64_t w : want) {
+            std::int64_t best = *bs.begin();
+            for (std::int64_t b : bs)  // ties: the smaller batch, as NearestIndex
+                if (std::abs(std::log2(double(b) / double(w))) < std::abs(std::log2(double(best) / double(w))) - 1e-9) best = b;
+            pick.insert(best);
+        }
+        for (int e : extra)
+            if (bs.count(e)) pick.insert(e);
+        for (std::int64_t b : pick) out.insert(g + "|" + std::to_string(b)), all.insert(b);
+    }
+    if (kept_text) {
+        kept_text->clear();
+        for (std::int64_t b : all) *kept_text += (kept_text->empty() ? "" : ",") + std::to_string(b);
+    }
+    return out;
+}
 
 SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t k, double slower) {
     SlowdownReport rep;
-    std::vector<CellKey> universe;
-    for (const auto& [key, c] : o.cells) universe.push_back(key), rep.arm_total += double(c.ms.size());
+    std::vector<CellKey> universe, pool;  // pool: the cells the scheme may measure (s.batch_keep)
+    for (const auto& [key, c] : o.cells) {
+        universe.push_back(key), rep.arm_total += double(c.ms.size());
+        if (kept(s, key, o.axes)) pool.push_back(key);
+    }
     rep.cells = universe.size();
+    std::vector<AxisSpec> axes = o.axes;
+    if (!s.batch_keep.empty())
+        for (AxisSpec& a : axes)
+            if (a.name == "batch") {
+                std::set<std::int64_t> v;
+                for (const CellKey& key : pool) v.insert(key_int(key, "batch"));
+                a.values = batch_strings({v.begin(), v.end()});
+            }
     std::map<CellKey, RefineCell> m;
     std::set<CellKey> missed;  // bisection midpoints the universe lacks
     auto measure = [&](const CellKey& key, const std::set<std::string>* arms) { race_into(o, m, rep, key, arms); };
-    std::vector<std::set<std::string>> start_all;  // tier_lattice(o.axes, 1) per axis, without the product
-    for (const AxisSpec& a : o.axes) start_all.emplace_back(a.values.begin(), a.values.end());
+    std::vector<std::set<std::string>> start_all;  // tier_lattice(axes, 1) per axis, without the product
+    for (const AxisSpec& a : axes) start_all.emplace_back(a.values.begin(), a.values.end());
     // The driver's round 0 (frontier_start): the start lattice, own strides for exact-key groups it misses.
-    for (const CellKey& c : s.stride > 0 ? frontier_start(universe, o.axes, s.stride, o.lattice != "inferred") : universe)
+    for (const CellKey& c : s.stride > 0 ? frontier_start(pool, axes, s.stride, o.lattice != "inferred") : pool)
         measure(c, nullptr);
     // bisect: the driver's model. The frontier picks lattice cells only; midpoints off it come from bisection.
     std::vector<CellKey> lattice_cells;
     std::set<CellKey> on_lattice;
-    for (const CellKey& key : universe) {
+    for (const CellKey& key : pool) {
         bool on = true;
-        for (std::size_t i = 0; i < key.size() && on; ++i) on = !o.axes[i].log || start_all[i].count(key[i].value);
+        for (std::size_t i = 0; i < key.size() && on; ++i) on = !axes[i].log || start_all[i].count(key[i].value);
         if (on) lattice_cells.push_back(key), on_lattice.insert(key);
     }
+    const std::set<CellKey> in_pool(pool.begin(), pool.end());
     while (s.frontier || s.bisect) {
-        auto next = s.frontier ? flip_frontier(m, s.bisect ? lattice_cells : universe, o.axes, k, slower)
+        auto next = s.frontier ? flip_frontier(m, s.bisect ? lattice_cells : pool, axes, k, slower)
                                : std::vector<CellKey>{};
         if (s.bisect) {
             std::map<CellKey, std::vector<std::string>> ranked;
@@ -524,9 +603,9 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
             ro.mode = s.stride > 1 ? RefineMode::index : RefineMode::geometric;
             ro.cells = &m;
             const std::set<CellKey> picked(next.begin(), next.end());
-            for (const CellKey& mid : refine_all_axes(ranked, o.axes, params(Tier::deep).refine_ratio, ro).next) {
+            for (const CellKey& mid : refine_all_axes(ranked, axes, params(Tier::deep).refine_ratio, ro).next) {
                 if (on_lattice.count(mid) || picked.count(mid) || m.count(mid)) continue;
-                if (o.cells.count(mid)) next.push_back(mid);
+                if (in_pool.count(mid)) next.push_back(mid);
                 else rep.bisect_missing += missed.insert(mid).second;
             }
         }
@@ -537,7 +616,7 @@ SlowdownReport slowdown_replay(const OracleSet& o, const Scheme& s, std::size_t 
             std::vector<CellKey> rows;
             for (const auto& [key, c] : m)
                 if (!c.ms.empty()) rows.push_back(key);
-            const NearestIndex index(rows, o.axes);
+            const NearestIndex index(rows, axes);
             for (std::size_t i = 0; i < next.size(); ++i)
                 for (std::size_t r : index.k_nearest(next[i], k)) {
                     const auto& ms = m.at(rows[r]).ms;

@@ -362,7 +362,9 @@ struct GeometrySettings {
 
         EnvValue stedc_threads_per_root{};     ///< `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT`
         EnvValue stedc_wg_multiplier{};        ///< `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`
-    } tune{};  ///< The eleven `BATCHLAS_TUNE_*` overrides.
+        EnvValue l2_chunk_percent{};           ///< `BATCHLAS_TUNE_L2_CHUNK_PERCENT`
+        EnvValue l2_chunk_items{};             ///< `BATCHLAS_TUNE_L2_CHUNK_ITEMS`
+    } tune{};  ///< The thirteen `BATCHLAS_TUNE_*` overrides.
 };
 
 /// @brief Tracing, dumping, profiling and the opt-in checks. None changes a numeric result.

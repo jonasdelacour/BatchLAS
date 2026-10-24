@@ -209,6 +209,8 @@ void load_geometry(GeometrySettings& g) {
     set_if_present(g.tune.stedc_merge_variant, "BATCHLAS_TUNE_STEDC_MERGE_VARIANT");
     set_if_present(g.tune.stedc_threads_per_root, "BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT");
     set_if_present(g.tune.stedc_wg_multiplier, "BATCHLAS_TUNE_STEDC_WG_MULTIPLIER");
+    set_if_present(g.tune.l2_chunk_percent, "BATCHLAS_TUNE_L2_CHUNK_PERCENT");
+    set_if_present(g.tune.l2_chunk_items, "BATCHLAS_TUNE_L2_CHUNK_ITEMS");
 }
 
 void load_diagnostics(DiagnosticsSettings& d) {

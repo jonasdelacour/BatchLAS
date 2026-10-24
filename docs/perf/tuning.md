@@ -33,6 +33,12 @@ Each tunable quantity has five constants, one per size bucket of n, and a conste
 | `STEDC_RECURSION_THRESHOLD_*` | stedc leaf size | n/a; 32 is the CTA invariant, not a tuning result |
 | `STEDC_MERGE_VARIANT_*` | `StedcMergeVariant` (1 Fused, 2 FusedCta) | `Auto`, never returned (see below) |
 | `STEDC_THREADS_PER_ROOT_*`, `STEDC_WG_MULTIPLIER_*` | stedc secular-solve geometry | n/a |
+| `BLOCKED_L2_CHUNK_PERCENT`, `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` | batch chunk of the getrf and potrf blocked drivers (`blocked_chunk_items`); one value, not bucketed by n | n/a |
+
+Because of these two, `tools/tune/getrf_spec.cc` and `potrf_spec.cc` list the whole `tuning_params.hh` as a `blocked`
+kernel dependency: an edit to any constant in it (stedc, ormqr, sytrd included) marks the getrf and potrf `blocked` rows
+stale and moves the potrf op hash pinned in `tune_tests` (`TuneHash.OpLevelHashUnchangedByFamilyPrefixes`). Accepted:
+the alternative is a new header.
 
 Production code calls the runtime accessors `<knob>_for_n(n)`. Each consults its `BATCHLAS_TUNE_*`
 override first and falls back to the table. `latrd_lower_panel_wg_hint()` pins n to 256 for the
@@ -74,9 +80,10 @@ measured path (shadowing). See [knobs that shadow each other](#tuning-knobs-that
 
 Each runtime accessor passes its captured `settings().geometry.tune.<field>` and the table value to
 `detail::tuning_env_override`. One process can therefore A/B a retune without a rebuild. The
-eleven variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
+thirteen variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE,
 SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD,
-STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}`.
+STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER, L2_CHUNK_PERCENT, L2_CHUNK_ITEMS}`.
+`L2_CHUNK_ITEMS` overrides no constant: it forces the blocked drivers' chunk size as given.
 
 `BATCHLAS_SY2SB_ORMQR_NB` is not a `BATCHLAS_TUNE_*` variable. It is three-valued: `0` or `off`
 means never hint, and values above 1024 are ignored (`sy2sb_ormqr_nb_env` in
@@ -142,6 +149,7 @@ effect only when its constants are ported into the committed header by hand
 | `ORMQR_BLOCK_SIZE_*`, `SYTRD_BLOCK_SIZE_*`, `SY2SB_ORMQR_NB_*`, `SB2ST_BACK_*` | [syev: the 2026-08-07 constant retune](syev.md#syev-the-2026-08-07-constant-retune), [the 2026-08-03 block-size sweep](syev.md#syev-the-2026-08-03-block-size-sweep-in-the-syev-context) |
 | `GEBRD_BLOCK_SIZE_*` | [gesvd: the gebrd panel-width split from ORMQR](gesvd.md#gesvd-the-gebrd-panel-width-split-from-ormqr) |
 | `STEDC_MERGE_VARIANT_*`, `STEDC_THREADS_PER_ROOT_*`, `STEDC_WG_MULTIPLIER_*`, `STEDC_RECURSION_THRESHOLD_*` | [stedc: current tuning values](stedc.md#stedc-current-tuning-values) |
+| `BLOCKED_L2_CHUNK_PERCENT`, `BLOCKED_L2_CHUNK_MIN_CU_MULTIPLE` | [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking), [potrf: L2 batch chunking](potrf.md#potrf-l2-batch-chunking) |
 | `LATRD_LOWER_PANEL_WG_HINT_*`, `SYTRD_FUSE_PANEL_UPDATE_*` | none recorded; see [tuning: open debts](#tuning-open-debts) |
 
 ## tuning: open debts

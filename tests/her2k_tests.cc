@@ -250,3 +250,52 @@ TYPED_TEST(Her2kTest, OptionStructMatchesPositional) {
         }
     }
 }
+
+// The GEMM-plus-fold: its gemm and accumulate_hermitian put the batch in grid z (65535 on CUDA)
+// and run a batch past it as slices, where expansion_fits used to refuse it. With the expansion
+// pinned, 65535, 65536 and 2 * 65535 + 1 distinct items take it (its public gemm is in the select
+// trace at the full batch; the per-item loop calls no gemm), at padded lds and strides, complex
+// alpha, beta != 0, both triangles and transposes, C's input diagonal with a nonzero imaginary part
+// (not read; the output's is exactly 0), and every item is right.
+TYPED_TEST(Her2kTest, ExpandBatchPastTheGridRunsAsSlices) {
+    using T = typename TestFixture::ScalarType;
+    using real_t = typename base_type<T>::type;
+    constexpr Backend Ba = TestFixture::BackendType;
+    if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
+        GTEST_SKIP() << "the expansion is cuBLAS's her2k (no route vendor-free)";
+    } else {
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        Queue& q = *(this->ctx);
+        const ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+        const int n = 8, k = 5;
+        const T alpha = T(0.5, -1.25);
+        const real_t beta = real_t(0.75);
+        for (const int batch : {65535, 65536, 2 * 65535 + 1}) {
+            const bool odd = batch % 2;
+            const Transpose trans = odd ? Transpose::ConjTrans : Transpose::NoTrans;
+            const Uplo uplo = odd ? Uplo::Upper : Uplo::Lower;
+            const int ar = odd ? k : n, ac = odd ? n : k;
+            auto Ab = Matrix<T, MatrixFormat::Dense>::Random(ar + 3, ac + 1, false, batch, 41);
+            auto Bb = Matrix<T, MatrixFormat::Dense>::Random(ar + 2, ac + 2, false, batch, 43);
+            auto Cb = Matrix<T, MatrixFormat::Dense>::Random(n + 2, n + 1, false, batch, 47);
+            auto C0b = Cb.clone();
+            q.wait();
+            const MV A(Ab, ar, ac), B(Bb, ar, ac), C(Cb, n, n), C0(C0b, n, n);
+            const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+            ::testing::internal::CaptureStderr();
+            (void)her2k(q, A, B, C, {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = trans});
+            q.wait();
+            const std::string err = ::testing::internal::GetCapturedStderr();
+            EXPECT_NE(err.find("batch=" + std::to_string(batch) + " -> "), std::string::npos)
+                << "batch " << batch << ": no gemm at the full batch, so not the expansion: " << err;
+            int imaginary = 0;
+            for (int b = 0; b < batch; ++b)
+                for (int d = 0; d < n; ++d) imaginary += Cb(d, d, b).imag() != real_t(0);
+            EXPECT_EQ(imaginary, 0) << "batch " << batch << ": an output diagonal kept an imaginary part";
+            EXPECT_VERIFY(T, batchlas::verify::Check::blas, 2 * k,
+                          MV::rank2k_backward_error(q, A, B, trans, C0, C, uplo, MV::up(alpha), MV::up(T(beta)),
+                                                    true, C.all_items()))
+                << "batch " << batch;
+        }
+    }
+}

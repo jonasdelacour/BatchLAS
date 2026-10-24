@@ -499,6 +499,49 @@ batch 1048576 gives 0.0071809 (4.7% better) in 24083 MiB (the run that caused th
 the knee, where a 4× batch step buys less than 5%. The bake-off driver enforces about 1.5 GB estimated footprint, a
 3 GB hard abort per invocation and a 120 s timeout, and reports a cell that does not reach its knee within them.
 
+## syev: L2 batch chunking {#syev-l2-batch-chunking}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+
+`syev_cta` and `syev_blocked` run the batch in parts of `tuning::blocked_chunk_items` items, an item
+counted as three n x n matrices (A, Z and the reflector pack or stedc merge matrix), not the part
+workspace: the cta workspace is 435 KB per item at float n=16 (mostly `steqr_wg`'s rotation store, which
+the CTA path never uses), and sizing by it shrank parts to 188 items and ran about 10x slower. Eigenvalues
+offset by `b0*n`, info by `b0`; workspace for one part (`chunk + batch % chunk`); `syev_cta` waits between
+parts on an out-of-order queue. `cta_fused` is one kernel and is not chunked. Every part is also capped at
+`max_groups_yz / 2` items (`select::grid_capped_chunk`; [defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
+
+**Rule:** `SYEV_CTA_L2_CHUNK_PERCENT` = 150, `SYEV_BLOCKED_L2_CHUNK_PERCENT` = 0 (no L2 chunking; the
+grid cap still splits a batch past 32767).
+
+Cold A/B, pinned route, ns per item, median of 2 retained alternating process passes x 5-7 reps (pass 0
+dropped), `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000` before the grid cap existed:
+
+| route | type | n | batch | off | 75 % | 150 % |
+|---|---|---:|---:|---:|---:|---:|
+| cta | float | 8 | 262144 | 9.3 | 0.789 | 1.001 |
+| cta | float | 16 | 16384 | 31.8 | 0.910 | 0.911 |
+| cta | float | 16 | 65536 | 35.3 | 0.825 | 1.026 |
+| cta | float | 32 | 16384 | 174.0 | 0.931 | 0.972 |
+| cta | cfloat | 16 | 32768 | 60.7 | 1.046 | 1.000 |
+| cta | cfloat | 16 | 131072 | 62.3 | 1.037 | 0.963 |
+| blocked | float | 64 | 8192 | 1553 | 1.021 | 0.912 |
+| blocked | float | 128 | 4096 | 7021 | 1.052 | 0.919 |
+| blocked | float | 128 | 1024 | 6442 | 1.069 | 1.056 |
+| blocked | float | 256 | 2048 | 30232 | 1.674 | 1.209 |
+| blocked | cfloat | 128 | 16384 | 10854 | 1.330 | 1.116 |
+
+- The cta gains past batch 32767 now come from the grid cap, which splits those batches into parts of at
+  most 16384 whatever the percent (re-measured: float n=16 b65536 and b131072 0.999 against the capped
+  baseline; cfloat n=16 b131072 1.029 at 100 %, the reason for 150 %).
+- Blocked loses at every percent at n=256 (75 % is 1.67x: parts of 128-256 items under-fill sytrd and
+  stedc) and for cfloat; percents 25-100 coincide at n=256 because the CU-multiple floor sets the part.
+- Re-measured with the shipped rule against `off`: cta float n=16 b16384 1.001 (one pass at 150 %; the
+  sweep's 0.911 there was baseline noise, so read single-pass cells in the table with ~10% doubt), cfloat
+  n=16 b131072 0.999, blocked float n=256 b2048 1.000.
+- syev two_stage and stedc are not chunked and not measured.
+- `steqr_buffer_size` reserves the `steqr_wg` rotation store on the CTA path (open, separate).
+
 ## syev: open debts and unmeasured items
 
 ### syev: open debt, the single-read panel symv

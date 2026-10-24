@@ -110,6 +110,8 @@ public:
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/orgqr/orgqr.cc"
+        // blocked's batch chunk comes from tuning_params.hh (blocked_chunk_items).
+        // family: blocked "include/batchlas/tuning_params.hh"
         // orgqr blocked applies the public ormqr to an identity: ormqr's kernels and selection count, and
         // through ormqr blocked the public gemm and trmm too.
         // family: blocked "src/ops/ormqr/kernels/ormqr_blocked.cc" "include/batchlas/internal/ormqr_blocked.hh" "src/kernels/common/larft_wy.hh" "src/ops/ormqr/choice.hh" "src/ops/ormqr/ormqr.cc"

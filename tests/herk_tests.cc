@@ -30,7 +30,6 @@ TYPED_TEST_SUITE(HerkTest, HerkTestTypes);
 // result: it is neither read through beta nor written, and neither is the
 // imaginary part of the diagonal, because C = C^H forces that to zero whatever
 // the caller stored there.
-//
 // Checking only that the referenced triangle holds the right numbers would miss
 // both halves of that. This test poisons the storage HERK may not touch -- the
 // unreferenced triangle and the diagonal's imaginary part, each with a value
@@ -38,7 +37,6 @@ TYPED_TEST_SUITE(HerkTest, HerkTestTypes);
 // referenced triangle matches alpha A A^H + beta C0 in double (C0 clean, with a
 // real diagonal), the poison is still bit-for-bit intact afterwards, and the
 // diagonal came out real.
-//
 // The shapes are ragged on purpose: the GEMM route folds an n x n product into
 // C with a tiled elementwise kernel, so what matters is the sizes where the
 // tiling does not divide evenly and where the product's leading dimension is

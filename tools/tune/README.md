@@ -102,9 +102,10 @@ families changed are re-raced (`partial:<family>`).
 | `--cap-gib` | 4 | skip cells whose matrices exceed this |
 | `--max-dim` | 2048 tiered, off custom | `skip:dim`: no cell with a matrix dimension (m, n, k, order, q, nrhs, derived rows; never `batch`) above this; 0 = off |
 | `--ld-pad` | 0 | custom: ld = n + pad (non-natural leading dimension) |
-| `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
+| `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes (`--batches` or `--grid batch=` also turns the batch ladder off) |
+| `--batch-ladder` | `auto` | tiered: the batch axis is max(1, round(c x CUs)) per class c (0.25,2,16,128) plus the spec's extras; `auto` = only where the (op, dtype) ledger has no run or a ladder run; `default` = always; `off` = the `choice.hh` axis; `c,c,...` = other classes, always ([the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder)) |
+| `--cus N` | the first `--devices` GPU's compute units | the ladder's unit; `--plan` without it reads the GPU name (RTX PRO 6000 Blackwell 188, RTX 4090 128; nvidia-smi has no SM count) or refuses; a wrong name entry plans other batches than the measuring run uses |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | idle guard (see "Guard") |
-| `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts (see "Guard") |
 | `--guard-backend` | auto | `auto` (NVML, else nvidia-smi with a warning), `nvml`, `nvidia-smi` |
 | `--lock-dir` | `/tmp` | per-GPU flock files `batchlas_tune_gpu<N>.lock` |
 | `--cell-timeout` | 1800 s | a child running longer is killed and counts as a failed child |
@@ -124,6 +125,12 @@ and planning is in `schedule.cc`.
   2; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): preview's stride-2 lattice, coarse and deep's full
   lattice). Later rounds follow over each cell ranked inside the requested grid, until nothing is left,
   `--budget` is spent or, for those ops, the refinement cap is hit.
+- **Batch ladder.** A tiered run on a new ledger (or one whose runs used the ladder) measures batch at
+  CU multiples, not at the `choice.hh` batches: 47, 376, 3008, 24064 on 188 SMs (gemm and ormqr
+  without 47; syrk and symm also 1, 2, 4, 8; syr2k 1, 2, 3; trmm 1). On a ledger of `choice.hh`-axis
+  runs only, `auto` keeps the old axis: forcing the ladder there re-measures every cell, so a ladder
+  re-tune starts from a fresh `--ledger` root. Custom and `--only-named` samples never take it. See
+  "Engine: the CU-aligned batch ladder".
 - **Flip frontier (every tier).** Round 0 is the grid cells on every second value of each log axis
   (an exact-key group with none of them: its own values; ends kept), plus every partly stale cell.
   Each later round measures the grid cells whose 6 nearest measured cells (`OpSpec::frontier()`: symm
@@ -147,10 +154,17 @@ and planning is in `schedule.cc`.
   runner-up (`partial:<families>`). A candidate stored `skipped` is not compared, but one skipped
   `dominated:` by the removed carry-forward is stale. `<op>.cc` (where `can_run` lives) is a dependency
   of every family.
-  A stale record, or one where every candidate is `error`, counts as missing. A cell whose probe found
-  at most one runnable candidate is `skip:single` and is written as an untimed row.
+  A stale record, or one where every candidate is `error`, counts as missing. A measured record of a run
+  under another protocol (`lean` and older timed L2-warm operands) is re-measured in full at the running
+  tier (`protocol`), whatever its hashes and tier; frontier and lattice runs also re-race such rows off
+  their round 0. A cell whose probe found at most one runnable candidate is `skip:single` and is
+  written as an untimed row.
 - **Measuring.** Each cell is raced (`run_race` in `cell_runner.hh`, the lean protocol; ledger
-  `protocol=lean`): one untimed run per candidate; two timed rounds that cut gross losers (lower
+  `protocol=lean-cold`). Every run, timed or not, restores the inputs, scans a per-worker buffer of
+  min(4 x L2, device memory / 16) bytes (`bench::scrub_l2`, leased from the worker Queue's arena and
+  kept there), waits, and only then starts the clock, so read-only operands come from DRAM as in a
+  real call ([the cold protocol](../../docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol)).
+  The race: one untimed run per candidate; two timed rounds that cut gross losers (lower
   median paired ratio to the leader above 4.0, so both runs; they keep that median and get no
   warm-up); untimed warm rounds over the survivors until two round totals agree within 2% (at least
   2 rounds, at most 0.2 s per arm); then interleaved rounds of one timed run per candidate until a
@@ -159,6 +173,11 @@ and planning is in `schedule.cc`.
   the gross rule still applies; one stalled round never kills an arm. Eliminated candidates keep
   their median with status `eliminated` (ranked after the survivors). Rationale:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-the-lean-cell).
+- **Clocks.** After each timed run the worker samples the GPU through NVML: SM clock and whether
+  clock-event reason 0x4 (SW power cap) is active. A cell capped in more than 25% of its samples is
+  raced once more (event `throttled`); the record keeps the last race's `clk_n`, `clk_capped`,
+  `clk_mhz` (mean), `throttled: 1` when still capped, and `throttle_reraces`. Table generation ignores
+  them.
 - **Verification.** Only the candidates that can rank first (the 3% tie set) are verified, plus each
   candidate's first cell per (op, dtype, exact keys, size decade). A failing one is `bad` and left
   out; the others are kept unverified (ledger `v<i>: 0`). A failure is also `bad` in that bucket's
@@ -216,6 +235,7 @@ Progress events (`--progress-fd`), one JSON object per line; every event also ca
 | `eliminated` | op, dtype, key fields, `cand`, `round` |
 | `audit` | op, dtype, key fields, `verdict`, `fresh_ms`, `warm_ms`, `fresh`, `audit_s` |
 | `worker_restart` | op, dtype, key fields, `gpu`, `restarts`, `fallback` |
+| `throttled` | op, dtype, key fields, `gpu`, `capped`, `samples` (the race about to run again) |
 | `ld_audit` | op, dtype, key fields, `cand`, `verdict` (`fail`), `reason` |
 | `ld_audit_summary` | `op`, `dtype`, `passed`, `skipped`, `failed`, `failures` |
 | `schedule` | `switches`, `restarts`, `switch_restarts` |
@@ -273,10 +293,10 @@ and an entry nvidia-smi shows as `[N/A]` counts as foreign. The tuner warns at s
 drives a display, or when another GPU has compute processes. Without NVML or nvidia-smi the tuner
 stops; `--no-guard` skips the guard.
 
-`--allow-idle-foreign` tolerates other users' idle contexts. Each child remembers their pids; a new
-pid, or (NVML) a tolerated pid above `--util-ceiling`, discards its numbers. A busy GPU, or an `[N/A]` entry,
-still refuses. The raw files record `allow_idle_foreign` and `tolerated_foreign`
-(`gpu:pid(user),..;..`) in `meta`. Each `pass` and `rep` record carries the pids the child ran beside.
+The check is per GPU: every GPU in `--devices` must hold no other compute context, idle or not; other
+GPUs of the box are only warned about. An idle foreign context still time-slices with the measurement
+(a fixed 0.2 ms or 2.3 ms per synchronising call, [C5](../../docs/perf/batch-sensitivity.md#batch-sensitivity-c5-co-tenant)),
+so there is no tolerance mode: `--allow-idle-foreign` is refused with that reason.
 
 ## Raw JSONL (schema 1)
 
@@ -285,8 +305,8 @@ Times are milliseconds per call for the whole batch.
 
 | kind | fields |
 |---|---|
-| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign`, `guard_backend`, `argv` |
-| `rep` | `op`, `dtype`, `device`, key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `tolerated_foreign`, `cand`, `rep`, `slot` (position in the rotated order), `ms` |
+| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` if tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys`, `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `guard_backend`, `argv` |
+| `rep` | `op`, `dtype`, `device`, key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `cand`, `rep`, `slot` (position in the rotated order), `ms` |
 | `pass` | as `rep` without `rep`, `slot`, `ms`; plus `status` (`ok`, `skipped`, `bad`, `error`), `reason`, `median_ms`, `residual`, `info_nonzero`, `reps` |
 | `retry` | `op`, `dtype`, key fields, `mode`, `error` (a failed child that was run again) |
 | `cell` (last lines) | key fields, `round` (0 = coarse grid), `refined`, `status` (`ok`, `none`, `skipped` = over the cap), `reason`, `final_attempt` (-1 when none), `ranked` (`\|`-joined) |
@@ -318,6 +338,12 @@ Host-only, no GPU (`build/tools/tune/tune_replay`).
   `measured_slow10`, `measured_worst`, `failures`, `failure_list` (every failure), and `gate` (no
   failures, geomean ≤ 0.05% and p99.9 ≤ 1.10). Definitions and results:
   [tiered tuning](../../docs/design/tiered-tuning.md#engine-flip-frontier-and-the-slowdown-replay).
+- `--batch-ladder CUS` (with `--batch-classes c,c` and `--batch-extra b,b`) adds the schemes `ladder`
+  (only each exact-key group's batches nearest the ladder are measured, all of them) and
+  `ladder+frontier+bisect`, and prints each source's `kept_batches`. `--drop-nonmonotone F` first
+  drops cells whose fastest or any arm's median is more than F x the same at a larger batch of their
+  line (co-tenant contamination); `--min-batch B` drops cells below batch B before anything else.
+  Results: [the batch ladder](../../docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder).
 - `--prior tuned/<op>.<dev>.txt` (repeatable, matched to sources by op) adds the calibrate schemes
   `calibrate` (probe stride 4), `calibrate8`, `calibrate-probe` (no refinement) and `prior` (borrow
   blindly), scored by `calibrate_replay`, with `probes`, `disagreed` and `prior_rows` in the output.

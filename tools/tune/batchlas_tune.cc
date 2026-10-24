@@ -30,6 +30,7 @@
 
 #include <src/select/select.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 #include <tools/tune/nvml_guard.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tiered_driver.hh>
@@ -99,6 +100,8 @@ struct Opts {
     std::string ledger, import_raw, device_key, remeasure_keys;
     std::string prior;     // --tier calibrate: --prior <device>
     int probe_stride = 0;  // --tier calibrate: --probe-stride
+    int cus = 0;           // --cus: the batch ladder's compute units; 0 = the device's (--plan: its name)
+    std::string batch_ladder = "auto";  // --batch-ladder auto|default|off|c,c,...
     std::vector<std::string> dtypes{"float"};
     std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
@@ -108,7 +111,7 @@ struct Opts {
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     std::string guard_backend = "auto";
     bool jit = true, refine = true, guard = kHasGpuGuard, devices_given = false, dtype_given = false;
-    bool allow_idle_foreign = false, allow_dirty = false, only_named = false;
+    bool allow_dirty = false, only_named = false;
     bool worker = true;          // tiered: one persistent --worker per GPU (--no-worker: fresh children)
     double audit_fraction = -1;  // tiered: < 0 is the tier's
     std::string lock_dir = "/tmp";
@@ -308,7 +311,9 @@ int worker_main(const std::vector<std::string>& a) {
 int info_main(const std::string& result) {
     batchlas::Queue q(batchlas::Device("gpu"), kBackend);
     const auto& d = batchlas::select::device_of<kBackend>(q);
-    std::ofstream(result) << Json().str("kind", "info").str("device", d.key).str("name", q.device().get_name()).line();
+    const auto cus = q.device().get_property(batchlas::DeviceProperty::MAX_COMPUTE_UNITS);
+    std::ofstream(result) << Json().str("kind", "info").str("device", d.key).str("name", q.device().get_name())
+                                 .integer("cus", std::int64_t(cus)).line();
     return 0;
 }
 
@@ -380,7 +385,6 @@ struct ChildOut {
     bool ok = false;
     bool guard = false;  // child_once only: the after-check discarded it (child() re-runs it)
     std::string error;
-    std::vector<std::string> tolerated;  // idle foreign pids accepted before the child
     std::vector<Record> records;
     pid_t pid = -1;
     Phases phases;  // the child's, plus guard and spawn (process start, CUDA init, exit)
@@ -418,6 +422,7 @@ public:
             },
             [&] { return refuse_wait(gpu); }, o_.guard_wait);
         if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+        spent.clk = c.phases.clk;  // a discarded try's clock samples are not this result's
         c.phases = spent;
         return c;
     }
@@ -427,7 +432,7 @@ public:
                         const std::string& coverage, int reps, double warm, const std::vector<std::string>& extra) {
         ChildOut c;
         auto t = std::chrono::steady_clock::now();
-        const std::vector<std::string> tolerated = guard(gpu);
+        guard(gpu);
         c.phases.guard = seconds_since(t);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
@@ -448,14 +453,13 @@ public:
         c.phases.spawn = seconds_since(t);
         c.phases.mode = "fresh";
         c.pid = s.pid;
-        c.tolerated = tolerated;
         if (s.status != 0) {
             c.error = (s.timed_out ? "timeout" : "exit " + std::to_string(s.status)) + ": " + tail(log);
             return c;
         }
-        // gpu_guard.sh's after-check. Strict mode tolerated nothing, so any foreign entry is new.
+        // gpu_guard.sh's after-check: any foreign entry voids the child's numbers.
         t = std::chrono::steady_clock::now();
-        const auto fresh = after(gpu, tolerated, since);
+        const auto fresh = after(gpu, since);
         c.phases.add(&Phases::guard, seconds_since(t));
         if (!fresh.empty()) {
             c.guard = true;
@@ -510,7 +514,7 @@ public:
         return route->second;
     }
 
-    std::string device_key(int gpu, std::string* name) {
+    std::string device_key(int gpu, std::string* name, int* cus) {
         const std::string res = tmp_ + "/info" + std::to_string(gpu) + ".jsonl", log = res + ".log";
         const Spawned s = spawn_wait({self_, "--info", "--result", res},
                                      {{"CUDA_DEVICE_ORDER", "PCI_BUS_ID"}, {"CUDA_VISIBLE_DEVICES", std::to_string(gpu)}},
@@ -518,14 +522,17 @@ public:
         if (s.status != 0) die("device query on GPU " + std::to_string(gpu) + " failed: " + tail(log));
         const auto r = read_records(res).at(0);
         *name = r.get("name");
+        const std::string c = r.get("cus");
+        *cus = c.empty() ? 0 : std::stoi(c);
         return r.get("device");
     }
 
     int tune();
     int gate();
-    std::string start(std::string* device) {
+    std::string start(std::string* device, int* cus) {
         const std::string name = preflight();
         *device = device_;
+        *cus = cus_;
         return name;
     }
     ArmBatch race_fresh(const CellJob& j);
@@ -538,19 +545,19 @@ private:
     const Opts& o_;
     const OpSpec& spec_;
     std::string tmp_, self_, dtype_, device_;
+    int cus_ = 0;  // the first --devices GPU's compute units (--info): the batch ladder's unit
     std::atomic<int> counter_{0};
     std::mutex out_mu_;
     std::ofstream raw_;
     std::vector<std::string> cands_;
 
-    std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
     CellRequest race_request(const CellJob& j) const;
     AppScan apps(int gpu);
     double utilization(int gpu);
     std::vector<ProcUtil> activity(int gpu, unsigned long long since_us, bool device);
-    GuardCheck check(int gpu, bool device);
-    std::vector<std::string> after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us);
-    std::vector<std::string> guard(int gpu);
+    std::string check(int gpu, bool device);
+    std::vector<std::string> after(int gpu, unsigned long long since_us);
+    void guard(int gpu);
     std::string preflight();
     void write(const std::string& line) {
         std::lock_guard<std::mutex> lock(out_mu_);
@@ -625,20 +632,19 @@ std::vector<ProcUtil> Driver::activity(int gpu, unsigned long long since_us, boo
     return {{"", utilization(gpu)}};
 }
 
-// Before a run: no untolerated compute process, no foreign activity in the last second (README "Guard").
-GuardCheck Driver::check(int gpu, bool device) {
-    const GuardCheck g = guard_before(apps(gpu), o_.allow_idle_foreign);
-    if (!g.refuse.empty()) return g;
-    const auto active = foreign_active(activity(gpu, nvml::now_us() - 1000000, device), g.tolerated, o_.util_ceiling);
-    if (!active.empty()) return {"activity [" + join(active, ",") + "]", {}};
-    return g;
+// Before a run on `gpu` ("" = measure): no foreign compute context on that GPU, idle or not, and no
+// foreign activity in the last second (README "Guard"). Other GPUs of the box are not checked.
+std::string Driver::check(int gpu, bool device) {
+    if (std::string refuse = guard_refusal(apps(gpu)); !refuse.empty()) return refuse;
+    const auto active = foreign_active(activity(gpu, nvml::now_us() - 1000000, device), o_.util_ceiling);
+    return active.empty() ? std::string() : "activity [" + join(active, ",") + "]";
 }
 
 // After a run: a new compute process, or foreign activity since it started, voids its numbers.
-std::vector<std::string> Driver::after(int gpu, const std::vector<std::string>& tolerated, unsigned long long since_us) {
+std::vector<std::string> Driver::after(int gpu, unsigned long long since_us) {
     if (!o_.guard) return {};
-    std::vector<std::string> bad = guard_new_foreign(apps(gpu), tolerated);
-    for (std::string& a : foreign_active(activity(gpu, since_us, false), tolerated, o_.util_ceiling)) bad.push_back(std::move(a));
+    std::vector<std::string> bad = apps(gpu).foreign;
+    for (std::string& a : foreign_active(activity(gpu, since_us, false), o_.util_ceiling)) bad.push_back(std::move(a));
     return bad;
 }
 
@@ -650,14 +656,15 @@ double Driver::refuse_wait(int gpu) {
     return seconds_since(t);
 }
 
-// The foreign pids this child runs beside (always empty in strict mode).
-std::vector<std::string> Driver::guard(int gpu) {
-    if (!o_.guard) return {};
+// Waits up to --guard-wait for check() to pass on `gpu`, then dies naming what holds it.
+void Driver::guard(int gpu) {
+    if (!o_.guard) return;
     for (double waited = 0;; waited += 1) {
-        const GuardCheck g = check(gpu, true);
-        if (g.refuse.empty()) return g.tolerated;
+        const std::string refuse = check(gpu, true);
+        if (refuse.empty()) return;
         if (waited >= o_.guard_wait)
-            die("GPU " + std::to_string(gpu) + " is busy (" + g.refuse + "); refusing to measure");
+            die("GPU " + std::to_string(gpu) + " is busy (" + refuse + "); refusing to measure. Every GPU in --devices "
+                "must hold no other compute context, idle or not: pick a free GPU (nvidia-smi) or wait");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
@@ -670,10 +677,14 @@ std::string Driver::preflight() {
                              "measuring beside this run (docs/developer/agent-guide.md §10)\n");
     for (int gpu : o_.devices) {
         std::string n;
-        const std::string k = device_key(gpu, &n);
-        if (device_.empty()) device_ = k, name = n;
+        int cus = 0;
+        const std::string k = device_key(gpu, &n, &cus);
+        if (device_.empty()) device_ = k, name = n, cus_ = cus;
         else if (k != device_)
             die("--devices mixes " + device_ + " and " + k + " (GPU " + std::to_string(gpu) + "): one device per run");
+        else if (cus != cus_)
+            std::fprintf(stderr, "batchlas_tune: warning: GPU %d has %d compute units, the batch ladder uses %d\n", gpu,
+                         cus, cus_);
         const std::string q = "nvidia-smi --id=" + std::to_string(gpu);
         if (g_nvml) {
             const std::string smi = capture(q + " --query-gpu=uuid --format=csv,noheader 2>/dev/null");
@@ -685,16 +696,6 @@ std::string Driver::preflight() {
         if (capture(q + " --query-gpu=display_active --format=csv,noheader 2>/dev/null") == "Enabled")
             std::fprintf(stderr, "batchlas_tune: warning: GPU %d drives a display, which slows L2-resident cells "
                                  "(docs/developer/agent-guide.md §13); prefer a headless GPU\n", gpu);
-        if (!o_.allow_idle_foreign || !o_.guard) continue;
-        std::vector<std::string> who;
-        for (const std::string& pid : apps(gpu).foreign) {
-            const std::string user = pid.find_first_not_of("0123456789") == std::string::npos
-                                         ? capture("ps -o user= -p " + pid + " 2>/dev/null") : "";
-            who.push_back(pid + "(" + (user.empty() ? "?" : user) + ")");
-        }
-        std::fprintf(stderr, "batchlas_tune: warning: --allow-idle-foreign: GPU %d tolerates idle foreign compute "
-                             "processes [%s] while utilization <= %g%%\n", gpu, join(who, ",").c_str(), o_.util_ceiling);
-        tolerated_at_start_ += (tolerated_at_start_.empty() ? "" : ";") + std::to_string(gpu) + ":" + join(who, ",");
     }
     for (const std::string& idx : split(capture("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null"), '\n')) {
         if (idx.find_first_not_of("0123456789") != std::string::npos ||
@@ -730,7 +731,6 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
         Json j;
         j.str("kind", kind).str("op", spec_.op()).str("dtype", dtype_).str("device", device_).key(c.key)
             .integer("pass", pass + 1).integer("attempt", attempt).boolean("reverse", reverse).integer("gpu", c.gpu);
-        if (o_.allow_idle_foreign) j.str("tolerated_foreign", join(ch.tolerated, ","));
         return j;
     };
     for (const auto& cand : cands_) {
@@ -840,6 +840,7 @@ WorkerTry Driver::race_worker(WorkerProcess& w, const CellJob& j, bool full_guar
         },
         [&] { return refuse_wait(j.gpu); }, o_.guard_wait);
     if (!why.empty()) die(why + "; still after " + fmt(o_.guard_wait, "%.0f") + " s of waiting, refusing to measure");
+    spent.clk = r.phases.clk;  // a discarded try's clock samples are not this result's
     r.phases = spent;
     return r;
 }
@@ -851,19 +852,15 @@ WorkerTry Driver::race_worker_once(WorkerProcess& w, const CellJob& j, bool full
     WorkerTry r;
     r.phases.mode = "worker";
     auto t = std::chrono::steady_clock::now();
-    std::vector<std::string> tolerated;
     const bool device = full_guard && !g_nvml;
     if (device && o_.guard) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         t = std::chrono::steady_clock::now();  // the periodic idle second is no cell's guard cost
     }
     for (double waited = 0; o_.guard; waited += 1) {
-        const GuardCheck g = check(j.gpu, device);
-        if (g.refuse.empty()) {
-            tolerated = g.tolerated;
-            break;
-        }
-        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + g.refuse + "); refusing to measure");
+        const std::string refuse = check(j.gpu, device);
+        if (refuse.empty()) break;
+        if (waited >= o_.guard_wait) die("GPU " + std::to_string(j.gpu) + " is busy (" + refuse + "); refusing to measure");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
     r.phases.guard = seconds_since(t);
@@ -880,7 +877,7 @@ WorkerTry Driver::race_worker_once(WorkerProcess& w, const CellJob& j, bool full
         return r;
     }
     t = std::chrono::steady_clock::now();
-    const auto fresh = after(j.gpu, tolerated, since);
+    const auto fresh = after(j.gpu, since);
     r.phases.add(&Phases::guard, seconds_since(t));
     if (!fresh.empty()) {
         r.guard = true;
@@ -942,7 +939,6 @@ std::string Driver::meta_line(const std::string& name) const {
         .integer("reps", o_.reps).num("warm_s", o_.warm).integer("passes", o_.passes).num("tie", kTie)
         .num("remeasure", o_.remeasure).num("refine_ratio", o_.refine ? o_.refine_ratio : 0.0)
         .num("cap_gib", o_.cap_gib).integer("ld_pad", o_.ld_pad).str("devices", join(devs, ","))
-        .boolean("allow_idle_foreign", o_.allow_idle_foreign).str("tolerated_foreign", tolerated_at_start_)
         .str("guard_backend", guard_backend_now()).str("argv", join(o_.argv, " ")).line();
 }
 
@@ -1063,9 +1059,7 @@ int Driver::gate() {
         fs::create_directories(o_.raw);
         raw_.open(o_.raw + "/gate." + spec_.op() + "." + device_ + ".jsonl", std::ios::trunc);
         if (raw_.is_open())
-            write(Json().str("kind", "guard").boolean("guard", o_.guard).str("guard_backend", guard_backend_now())
-                      .boolean("allow_idle_foreign", o_.allow_idle_foreign)
-                      .str("tolerated_foreign", tolerated_at_start_).line());
+            write(Json().str("kind", "guard").boolean("guard", o_.guard).str("guard_backend", guard_backend_now()).line());
     }
     const double cap = o_.cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::string> rows(cells.size());
@@ -1247,6 +1241,28 @@ std::string plan_device_key(const Opts& o) {
     return "sm_" + cc.substr(0, dot) + cc.substr(dot + 1);
 }
 
+// --plan has no CUDA context to ask: the batch ladder's compute units come from --cus or the GPU's name.
+int plan_cus(const Opts& o) {
+    if (o.cus > 0) return o.cus;
+#ifdef __APPLE__
+    const std::string info = capture("'" + self_exe() + "' --info --result /dev/stdout 2>/dev/null");
+    if (const auto at = info.find("\"cus\": "); at != std::string::npos) return std::atoi(info.c_str() + at + 7);
+#endif
+    const std::string gpu = std::to_string(o.devices.empty() ? 0 : o.devices[0]);
+    const std::string name = capture("nvidia-smi --id=" + gpu + " --query-gpu=name --format=csv,noheader 2>/dev/null");
+    for (const auto& [part, cus] : {std::pair<const char*, int>{"RTX PRO 6000 Blackwell", 188}, {"RTX 4090", 128}})
+        if (name.find(part) != std::string::npos) return cus;
+    die("--plan: no compute-unit count for GPU " + gpu + " ('" + name + "'): pass --cus N or --batch-ladder off");
+}
+
+std::vector<double> ladder_classes(const Opts& o) {
+    if (o.batch_ladder == "off" || o.grid.count("batch")) return {};
+    if (o.batch_ladder == "default" || o.batch_ladder == "auto") return default_batch_classes();
+    std::vector<double> c;
+    for (const std::string& v : split(o.batch_ladder, ',')) c.push_back(std::stod(v));
+    return c;
+}
+
 void usage() {
     std::puts(
         "usage: batchlas_tune <op>[,<op>..|all] --tier preview|coarse|deep|calibrate --devices N[,M..] [options]   ledger + tables\n"
@@ -1260,8 +1276,10 @@ void usage() {
         "custom (expert protocol, the two-pass path, schema-1 raw): --reps 16 --warm 1.5 --passes 2\n"
         "         --remeasure 0.10 --refine-ratio 1.1 --no-refine --no-jit --ld-pad 0 --raw DIR\n"
         "options: --dtype float,double,cfloat,cdouble --cap-gib 4 --max-dim 2048 --cell-timeout 1800 --no-guard --guard-wait 300\n"
-        "         --util-ceiling 5 --allow-idle-foreign --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
+        "         --util-ceiling 5 --guard-backend auto|nvml|nvidia-smi --allow-dirty\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
+        "         --batch-ladder auto|default|off|c,c,.. (batch = c x compute units; auto: not on an old-axis ledger;\n"
+        "         --batches turns it off) --cus N\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
 }
@@ -1339,6 +1357,9 @@ TieredOpts tiered_opts(const Opts& o) {
     t.only_named = o.only_named;
     t.prior = o.prior;
     t.probe_stride = o.probe_stride;
+    t.cus = o.cus;
+    t.batch_classes = ladder_classes(o);
+    t.ladder_auto = o.batch_ladder == "auto";
     t.guard = guard_backend_now;
     if (!o.remeasure_keys.empty()) t.remeasure = read_remeasure_keys(o.remeasure_keys);
     return t;
@@ -1401,6 +1422,8 @@ int main(int argc, char** argv) {
         else if (f == "--prior") o.prior = val();
         else if (f == "--probe-stride") o.probe_stride = std::stoi(val());
         else if (f == "--device-key") o.device_key = val();
+        else if (f == "--cus") o.cus = std::stoi(val());
+        else if (f == "--batch-ladder") o.batch_ladder = val();
         else if (f == "--cell-overhead-s") o.overhead_s = std::stod(val());
         else if (f == "--no-worker") o.worker = false;
         else if (f == "--audit-fraction") o.audit_fraction = std::stod(val());
@@ -1410,7 +1433,9 @@ int main(int argc, char** argv) {
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
         else if (f == "--util-ceiling") o.util_ceiling = std::stod(val());
-        else if (f == "--allow-idle-foreign") o.allow_idle_foreign = true;
+        else if (f == "--allow-idle-foreign")
+            die("--allow-idle-foreign was removed: a GPU holding another compute context, even an idle one, time-slices "
+                "with it (docs/perf/batch-sensitivity.md); measure on a GPU nvidia-smi shows free");
         else if (f == "--guard-backend") o.guard_backend = val();
         else if (f == "--allow-dirty") o.allow_dirty = true;
         else if (f == "--lock-dir") o.lock_dir = val();
@@ -1490,7 +1515,10 @@ int main(int argc, char** argv) {
     if (const GuardChoice spelled = choose_guard_backend(o.guard_backend, ""); !spelled.error.empty()) die(spelled.error);
     if (o.plan) {
         try {
-            return run_tiered(tiered_opts(o), {plan_device_key(o), ""}, nullptr);
+            const TieredOpts t = tiered_opts(o);
+            RunIdentity id{plan_device_key(o), ""};
+            if (!t.batch_classes.empty()) id.cus = plan_cus(o);
+            return run_tiered(t, id, nullptr);
         } catch (const std::exception& e) {
             die(e.what());
         }
@@ -1516,7 +1544,7 @@ int main(int argc, char** argv) {
     if (tiered) {
         TieredMeasurer m(o, o.ops);
         RunIdentity id;
-        id.device_name = m.first().start(&id.device);
+        id.device_name = m.first().start(&id.device, &id.cus);
         try {
             return run_tiered(tiered_opts(o), id, &m);
         } catch (const std::exception& e) {

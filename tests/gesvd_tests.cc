@@ -6,6 +6,8 @@
 // directly, because ops::gesvd::launch hands it a default-constructed GesvdjParams
 // and so no sweep cap is reachable from the public entry point.
 #include <batchlas/blas/extensions.hh>
+#include <batchlas/sycl_interop.hh>
+#include <batchlas/tuning_params.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -1895,3 +1897,282 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     }
 }
 #endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+
+// ---- L2 batch chunking (docs/perf/gesvd.md#gesvd-l2-batch-chunking) -------------------------
+
+namespace {
+
+// A padded batch: ld = rows + 3, stride = ld * cols + 5 (odd), every element first set to kPad,
+// an in-range finite value the driver must neither read into a result nor overwrite.
+template <typename Scalar>
+struct ChunkPaddedBatch {
+    static constexpr double kPad = 1.0e3;
+    int rows, cols, batch, ld, stride;
+    UnifiedVector<Scalar> buf;
+    ChunkPaddedBatch(int r, int c, int b)
+        : rows(r), cols(c), batch(b), ld(r + 3), stride((r + 3) * c + 5),
+          buf(static_cast<size_t>((r + 3) * c + 5) * b, Scalar(kPad)) {}
+    MatrixView<Scalar, MatrixFormat::Dense> view() { return {buf.data(), rows, cols, ld, stride, batch}; }
+    Matrix<Scalar, MatrixFormat::Dense> packed(Queue& ctx) {
+        Matrix<Scalar, MatrixFormat::Dense> out(rows, cols, batch);
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(ctx, out, view()).wait();
+        return out;
+    }
+    int padding_overwritten() const {
+        int bad = 0;
+        for (int b = 0; b < batch; ++b)
+            for (int p = 0; p < stride; ++p) {
+                const bool inside = p < ld * cols && p % ld < rows;
+                if (!inside && buf[static_cast<size_t>(b) * stride + p] != Scalar(kPad)) ++bad;
+            }
+        return bad;
+    }
+};
+
+struct ChunkJob {
+    SvdVectors jobu, jobvh;
+    const char* name;
+};
+
+constexpr std::array<ChunkJob, 9> kChunkJobs{{
+    {SvdVectors::None, SvdVectors::None, "NN"}, {SvdVectors::All, SvdVectors::None, "AN"},
+    {SvdVectors::None, SvdVectors::All, "NA"},  {SvdVectors::All, SvdVectors::All, "AA"},
+    {SvdVectors::Thin, SvdVectors::Thin, "TT"}, {SvdVectors::Thin, SvdVectors::None, "TN"},
+    {SvdVectors::None, SvdVectors::Thin, "NT"}, {SvdVectors::All, SvdVectors::Thin, "AT"},
+    {SvdVectors::Thin, SvdVectors::All, "TA"},
+}};
+
+// Pinned blocked over padded A, U and V^H with info and singular values poisoned, then every
+// item checked: values against LAPACKE, orthonormal factors, the reconstruction, info == 0 and
+// untouched padding. An unwanted factor is a 1 x 1 x 1 view: a driver slicing it throws.
+// @p diag_items become diagonal (item-scaled, so items differ); those also in @p zero_items get
+// one zero entry (exactly rank-deficient).
+template <typename Scalar, Backend B>
+void check_blocked_chunked(Queue& ctx, Queue& run_q, int m, int n, int batch, const ChunkJob& job, unsigned seed,
+                           const std::vector<int>& diag_items = {}, const std::vector<int>& zero_items = {}) {
+    using Real = typename base_type<Scalar>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    const int k = std::min(m, n);
+    const SvdVectors ju = canonical_jobu(job.jobu, m, k), jv = canonical_jobvh(job.jobvh, n, k);
+    const bool want_u = ju != SvdVectors::None, want_vh = jv != SvdVectors::None;
+    const int ucols = want_u ? int(svd_u_cols(ju, m, k)) : 1, vrows = want_vh ? int(svd_vh_rows(jv, n, k)) : 1;
+
+    auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(m, n, false, batch, seed);
+    for (int b : diag_items) {
+        auto Ab = A0.batch_item(b);
+        const bool zero = std::find(zero_items.begin(), zero_items.end(), b) != zero_items.end();
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i)
+                Ab(i, j, 0) = i == j && !(zero && i == k / 2) ? Scalar(Real(k - i) * Real(1 + b % 5)) : Scalar(0);
+    }
+    ChunkPaddedBatch<Scalar> A(m, n, batch), U(want_u ? m : 1, ucols, want_u ? batch : 1),
+        Vh(want_vh ? vrows : 1, n, want_vh ? batch : 1);
+    MV::copy(ctx, A.view(), A0).wait();
+    UnifiedVector<Real> s(static_cast<size_t>(k) * batch, Real(0.5));
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    {
+        select::ScopedPin<ops::gesvd::GesvdChoice> pin("gesvd", "blocked");
+        const size_t bytes =
+            gesvd_buffer_size<B, Scalar>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh);
+        UnifiedVector<std::byte> ws(bytes);   // exactly the query: a part-size mismatch overruns it
+        (void)gesvd<B, Scalar>(run_q, A.view(), s.to_span(), U.view(), Vh.view(), job.jobu, job.jobvh, ws.to_span(),
+                               info.to_span());
+        run_q.wait();
+    }
+
+    test_utils::expect_singular_values_match_lapacke(MV(A0), s);
+    int info_bad = 0;
+    for (int b = 0; b < batch; ++b) info_bad += info[b] != 0;
+    EXPECT_EQ(info_bad, 0) << "items whose info is not 0 (poisoned -1)";
+    EXPECT_EQ(A.padding_overwritten(), 0) << "A padding written";
+    if (want_u) {
+        EXPECT_EQ(U.padding_overwritten(), 0) << "U padding written";
+        expect_orthonormal_columns(ctx, U.packed(ctx));
+    }
+    if (want_vh) {
+        EXPECT_EQ(Vh.padding_overwritten(), 0) << "Vh padding written";
+        expect_orthonormal_rows(ctx, Vh.packed(ctx));
+    }
+    if (want_u && want_vh) expect_reconstruction(ctx, A0, s, U.packed(ctx), Vh.packed(ctx));
+}
+
+}  // namespace
+
+// Chunk forced to 7 over 23 items (7 + 7 + 9) for every job pair the blocked family takes, on
+// tall, square and wide (the transposed path) input. Items 6, 7, 13 and 22 straddle the part
+// boundaries and sit in the last part; they are exactly rank-deficient diagonals.
+TYPED_TEST(GesvdTest, BlockedChunksKeepEveryItemAndJob) {
+    using Scalar = typename TestFixture::Scalar;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "the blocked native provider is GPU only";
+    } else {
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        ASSERT_EQ(tuning::blocked_chunk_items(23, 1, 1, 1), 7) << "the override did not reach the accessor";
+        const std::array<std::pair<int, int>, 3> shapes{{{44, 36}, {36, 36}, {36, 44}}};
+        unsigned seed = 7300u;
+        for (const auto& [m, n] : shapes)
+            for (const auto& job : kChunkJobs) {
+                SCOPED_TRACE(std::to_string(m) + "x" + std::to_string(n) + " " + job.name);
+                check_blocked_chunked<Scalar, B>(*this->ctx, *this->ctx, m, n, 23, job, seed++, {6, 7, 13, 22},
+                                                 {6, 7, 13, 22});
+            }
+    }
+}
+
+// The normal-equations bidiagonal path scans the singular values on the host for zeros; with
+// parts the scan is per part. Square input reaches the scan (tall input always solves the left
+// problem), and exactly diagonal items keep the squared kappa out of it: zeros in parts 0 and 2,
+// none in part 1. Random square input fails orthogonality here unchunked too (squared kappa).
+TYPED_TEST(GesvdTest, BlockedChunksUnderNormalEquationsBidiag) {
+    using Scalar = typename TestFixture::Scalar;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "the blocked native provider is GPU only";
+    } else {
+        const ScopedEnvVar bidiag("BATCHLAS_GESVD_BIDIAG", "normal");
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        std::vector<int> every(23);
+        for (int b = 0; b < 23; ++b) every[size_t(b)] = b;
+        for (const auto& job : {kChunkJobs[1], kChunkJobs[3]}) {
+            SCOPED_TRACE(job.name);
+            check_blocked_chunked<Scalar, B>(*this->ctx, *this->ctx, 36, 36, 23, job, 7400u, every, {2, 20});
+        }
+    }
+}
+
+// The public entry point on an out-of-order queue: the parts run on the in-order queue the
+// facade hands the driver, so they still share one part's workspace safely.
+TYPED_TEST(GesvdTest, BlockedChunksOnAnOutOfOrderQueue) {
+    using Scalar = typename TestFixture::Scalar;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "the blocked native provider is GPU only";
+    } else {
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        Queue ooo(*this->ctx, false);
+        check_blocked_chunked<Scalar, B>(*this->ctx, ooo, 40, 36, 23, kChunkJobs[3], 7500u, {7, 22}, {7, 22});
+        check_blocked_chunked<Scalar, B>(*this->ctx, ooo, 36, 40, 23, kChunkJobs[4], 7501u);
+    }
+}
+
+// The query is one part's: chunk 7 over 23 items needs what 9 items (7 + 23 % 7) need unchunked,
+// and less than all 23.
+TYPED_TEST(GesvdTest, BlockedChunksWorkspaceIsTheLargestPart) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "the blocked native provider is GPU only";
+    } else {
+        const int m = 44, n = 36, batch = 23;
+        Matrix<Scalar, MatrixFormat::Dense> A(m, n, batch), U(m, m, batch), Vh(n, n, batch);
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+        select::ScopedPin<ops::gesvd::GesvdChoice> pin("gesvd", "blocked");
+        auto query = [&](int items) {
+            return gesvd_buffer_size<B, Scalar>(*this->ctx, A.batch_range(0, items), s.to_span(),
+                                                U.batch_range(0, items), Vh.batch_range(0, items), SvdVectors::All,
+                                                SvdVectors::All);
+        };
+        size_t chunked = 0, nine = 0, whole = 0;
+        {
+            const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+            chunked = query(batch);
+        }
+        {
+            const ScopedEnvVar off("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "100000000");
+            nine = query(9);
+            whole = query(batch);
+        }
+        EXPECT_EQ(chunked, nine);
+        EXPECT_LT(chunked, whole);
+    }
+}
+
+// Past the grid: ormbr's pack kernels are plain range launches with the batch in dimension 0, and
+// DPC++ range rounding lifts 65505 items to 65536 there (n = 40; before the cap: CUDA_ERROR_INVALID_VALUE
+// and a SIGFPE). The chunk is forced above the batch, so only select::grid_capped_chunk splits it.
+// 32-bit scalars only: the rounding is type independent and 64-bit operands double the 2.5 GB.
+template <typename Scalar, Backend B>
+void blocked_past_the_grid_is_bit_identical(Queue& ctx) {
+    using Real = typename base_type<Scalar>::type;
+    using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+    if constexpr (B != Backend::CUDA || sizeof(Real) != 4) {
+        GTEST_SKIP() << "CUDA grid limit, 32-bit scalars";
+    } else {
+        const int n = 40, batch = 65505;
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "10000000");
+        const auto one = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, 1, 7601u);
+        Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
+        const size_t nn = static_cast<size_t>(n) * n;
+        Scalar* a = A.data_ptr();
+        const Scalar* o = one.data_ptr();
+        sycl_queue(ctx).parallel_for(sycl::range<1>(nn * batch), [=](sycl::id<1> i) { a[i[0]] = o[i[0] % nn]; });
+        ctx.wait();
+        const auto A0 = A.clone();
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch, Real(0.5));
+        const std::string err = run_gesvd_with_provider<Scalar, B>(ctx, A, s, U, Vh, SvdVectors::All, SvdVectors::All,
+                                                                   "blocked");
+        ASSERT_TRUE(err.empty()) << err;
+        ctx.wait();
+        int wrong = 0, first = -1;
+        for (int b = 1; b < batch; ++b) {
+            const bool same = std::memcmp(s.data() + size_t(b) * n, s.data(), sizeof(Real) * n) == 0 &&
+                              std::memcmp(U.data_ptr() + b * nn, U.data_ptr(), sizeof(Scalar) * nn) == 0 &&
+                              std::memcmp(Vh.data_ptr() + b * nn, Vh.data_ptr(), sizeof(Scalar) * nn) == 0;
+            if (!same && wrong++ == 0) first = b;
+        }
+        EXPECT_EQ(wrong, 0) << "items differing from item 0; first at " << first;
+        const VectorView<Real> s0(s.data(), n, 1);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
+                      MV::svd_residual(ctx, A0.batch_range(0, 1), U.batch_range(0, 1), s0, Vh.batch_range(0, 1)));
+    }
+}
+
+TYPED_TEST(GesvdTest, BlockedPastTheGridIsBitIdentical) {
+    blocked_past_the_grid_is_bit_identical<typename TestFixture::Scalar, TestFixture::B>(*this->ctx);
+}
+
+TYPED_TEST(GesvdGeneralComplexTest, BlockedPastTheGridIsBitIdentical) {
+    blocked_past_the_grid_is_bit_identical<typename TestFixture::Scalar, TestFixture::B>(*this->ctx);
+}
+
+// SATURATING: 1024 copies of one matrix in four parts of 256; every item's values and factors
+// must be bit-identical to item 0's, so parts that overlap or skip items show.
+TYPED_TEST(GesvdTest, BlockedChunksAtSaturatingBatchAreBitIdentical) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
+        GTEST_SKIP() << "the blocked native provider is GPU only";
+    } else {
+        using MV = MatrixView<Scalar, MatrixFormat::Dense>;
+        const int n = 36, batch = 1024;
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "256");
+        auto one = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, false, 1, 7600u);
+        Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch), U(n, n, batch), Vh(n, n, batch);
+        for (int b = 0; b < batch; ++b) MV::copy(*this->ctx, A.batch_item(b), one);
+        this->ctx->wait();
+        const auto A0 = A.clone();
+        U.fill(Scalar(ChunkPaddedBatch<Scalar>::kPad));
+        Vh.fill(Scalar(ChunkPaddedBatch<Scalar>::kPad));
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch, Real(0.5));
+        const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx, A, s, U, Vh, SvdVectors::All,
+                                                                   SvdVectors::All, "blocked");
+        ASSERT_TRUE(err.empty()) << err;
+        this->ctx->wait();
+        const size_t nn = static_cast<size_t>(n) * n;
+        int wrong = 0, first = -1;
+        for (int b = 1; b < batch; ++b) {
+            const bool same = std::memcmp(s.data() + size_t(b) * n, s.data(), sizeof(Real) * n) == 0 &&
+                              std::memcmp(U.data_ptr() + b * nn, U.data_ptr(), sizeof(Scalar) * nn) == 0 &&
+                              std::memcmp(Vh.data_ptr() + b * nn, Vh.data_ptr(), sizeof(Scalar) * nn) == 0;
+            if (!same && wrong++ == 0) first = b;
+        }
+        EXPECT_EQ(wrong, 0) << "items differing from item 0; first at " << first;
+        const VectorView<Real> s0(s.data(), n, 1);
+        EXPECT_VERIFY(Scalar, batchlas::verify::Check::factorization, n,
+                      MV::svd_residual(*this->ctx, A0.batch_range(0, 1), U.batch_range(0, 1), s0, Vh.batch_range(0, 1)));
+    }
+}

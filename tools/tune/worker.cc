@@ -115,14 +115,18 @@ std::string outcome_text(const std::vector<ArmOutcome>& arms, const Phases* ph) 
     j.str("kind", "phase");
     for (std::size_t i = 0; i < Phases::kWorkerFields; ++i)
         if (const auto& [name, f] = Phases::fields()[i]; !std::isnan(ph->*f)) j.num(name, ph->*f);
+    if (ph->clk.n > 0) j.integer("clk_n", ph->clk.n).integer("clk_capped", ph->clk.capped).num("clk_mhz_sum", ph->clk.mhz_sum);
     return out + j.line();
 }
 
 Phases phases_from_records(const std::vector<Record>& recs) {
     Phases p;
     for (const Record& r : recs)
-        if (r.get("kind") == "phase")
+        if (r.get("kind") == "phase") {
             for (const auto& [name, f] : Phases::fields()) p.add(f, r.number(name));
+            if (const double n = r.number("clk_n"); std::isfinite(n))
+                p.clk += {int(n), int(r.number("clk_capped")), r.number("clk_mhz_sum")};
+        }
     return p;
 }
 

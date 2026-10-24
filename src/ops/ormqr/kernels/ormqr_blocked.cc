@@ -1,4 +1,5 @@
 #include <batchlas/blas/device.hh>
+#include <src/select/grid_chunk.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -102,24 +103,30 @@ inline int resolved_nb(int32_t block_size) {
     return std::max<int>(1, block_size);
 }
 
-template <Backend B, typename T, int NB>
-size_t ormqr_blocked_buffer_size_impl(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& a,
-                                      const MatrixView<T, MatrixFormat::Dense>& c,
-                                      Side side,
-                                      Transpose trans,
-                                      Span<T> tau,
-                                      int32_t block_size) {
-    (void)trans;
-    (void)tau;
+// Items per pass: C, V, W1 and W2 pass between the three gemms of every block through L2,
+// and the gemms are routed at this batch. evidence: docs/perf/qr.md#qr-l2-batch-chunking
+template <typename T>
+int ormqr_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
+                        const MatrixView<T, MatrixFormat::Dense>& c, Side side, int nb) {
+    const int64_t nq = a.rows(), k = std::min(a.rows(), a.cols());
+    const int64_t w = (side == Side::Left) ? int64_t(nb) * c.cols() : int64_t(c.rows()) * nb;
+    const int64_t item = (nq * k + int64_t(c.rows()) * c.cols() + nq * nb + 2 * w) *
+                         static_cast<int64_t>(sizeof(T));
+    const auto dev = ctx.device();
+    // pack_v puts the batch in grid z: no part may exceed it.
+    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
+        a.batch_size(), item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
+        tuning::ORMQR_BLOCKED_L2_CHUNK_PERCENT)), a.batch_size());
+}
 
-    const int nq = a.rows();
-    const int m = c.rows();
-    const int n = c.cols();
-    const int batch = a.batch_size();
+// The largest pass: the last part takes the remainder, and under two chunks there is one.
+inline int ormqr_blocked_part(int chunk, int batch) {
+    return batch < 2 * chunk ? batch : chunk + batch % chunk;
+}
 
-    const int nb = resolved_nb<NB>(block_size);
-
+template <typename T>
+size_t ormqr_blocked_part_bytes(Queue& ctx, int nq, int m, int n, Side side, int nb, int batch) {
     size_t size = 0;
     size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
     size += BumpAllocator::allocation_size<T>(ctx, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
@@ -133,115 +140,146 @@ size_t ormqr_blocked_buffer_size_impl(Queue& ctx,
 }
 
 template <Backend B, typename T, int NB>
+size_t ormqr_blocked_buffer_size_impl(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& a,
+                                      const MatrixView<T, MatrixFormat::Dense>& c,
+                                      Side side,
+                                      Transpose trans,
+                                      Span<T> tau,
+                                      int32_t block_size) {
+    (void)trans;
+    (void)tau;
+    const int nb = resolved_nb<NB>(block_size);
+    const int part = ormqr_blocked_part(ormqr_blocked_chunk<T>(ctx, a, c, side, nb), a.batch_size());
+    return ormqr_blocked_part_bytes<T>(ctx, a.rows(), c.rows(), c.cols(), side, nb, part);
+}
+
+template <Backend B, typename T, int NB>
 Event ormqr_blocked_impl(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& a,
-                         const MatrixView<T, MatrixFormat::Dense>& c,
+                         const MatrixView<T, MatrixFormat::Dense>& a_all,
+                         const MatrixView<T, MatrixFormat::Dense>& c_all,
                          Side side,
                          Transpose trans,
-                         Span<T> tau,
+                         Span<T> tau_all,
                          Span<std::byte> workspace,
                          int32_t block_size) {
-    const int nq = a.rows();
-    const int mC = c.rows();
-    const int nC = c.cols();
-    const int k = std::min(a.rows(), a.cols());
-    const int batch = a.batch_size();
+    const int nq = a_all.rows();
+    const int mC = c_all.rows();
+    const int nC = c_all.cols();
+    const int k = std::min(a_all.rows(), a_all.cols());
+    const int batch_all = a_all.batch_size();
 
     const int nb = resolved_nb<NB>(block_size);
 
     Queue& q = ctx;
 
+    // Chunk by chunk (the queue is in order, so parts sharing the scratch serialise). A caller
+    // that sized a larger shape (sytrd's sub-views) may hold less than this shape's part needs,
+    // so the chunk halves until it fits. evidence: docs/perf/qr.md#qr-l2-batch-chunking
+    int chunk = ormqr_blocked_chunk<T>(ctx, a_all, c_all, side, nb);
+    while (chunk > 1 && ormqr_blocked_part_bytes<T>(ctx, nq, mC, nC, side, nb,
+                                                    ormqr_blocked_part(chunk, batch_all)) > workspace.size())
+        chunk = (chunk + 1) / 2;
+    const int part = ormqr_blocked_part(chunk, batch_all);
+
     BumpAllocator pool(workspace);
-    auto Vbuf = pool.allocate<T>(q, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
-    auto Tbuf = pool.allocate<T>(q, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(batch));
+    auto Vbuf = pool.allocate<T>(q, static_cast<size_t>(nq) * static_cast<size_t>(nb) * static_cast<size_t>(part));
+    auto Tbuf = pool.allocate<T>(q, static_cast<size_t>(nb) * static_cast<size_t>(nb) * static_cast<size_t>(part));
 
     const size_t w_elems = (side == Side::Left)
                                ? static_cast<size_t>(nb) * static_cast<size_t>(nC)
                                : static_cast<size_t>(mC) * static_cast<size_t>(nb);
-    auto W1buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(batch));
-    auto W2buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(batch));
-
-    MatrixView<T, MatrixFormat::Dense> Vmat(Vbuf.data(), nq, nb, nq, nq * nb, batch);
-    MatrixView<T, MatrixFormat::Dense> Tmat(Tbuf.data(), nb, nb, nb, nb * nb, batch);
+    auto W1buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(part));
+    auto W2buf = pool.allocate<T>(q, w_elems * static_cast<size_t>(part));
 
     const bool transpose_apply = (trans != Transpose::NoTrans);
 
-    auto apply_block = [&](int i0) {
-        const int ib = std::min(nb, k - i0);
+    for (int b0 = 0, batch = 0; b0 < batch_all; b0 += batch) {
+        batch = batch_all - b0 < 2 * chunk ? batch_all - b0 : chunk;   // the last part takes the remainder
+        const auto a = a_all.batch_range(b0, batch);
+        const auto c = c_all.batch_range(b0, batch);
+        const Span<T> tau = tau_all.subspan(static_cast<size_t>(b0) * k, static_cast<size_t>(batch) * k);
 
-        const int m = nq - i0;
-        {
-            BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.pack_v_panel");
-            (void)wy::pack_v_panel_batched<OrmqrWyTag, T>(
-                q, Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), a, i0, ib, nq);
-        }
+        MatrixView<T, MatrixFormat::Dense> Vmat(Vbuf.data(), nq, nb, nq, nq * nb, batch);
+        MatrixView<T, MatrixFormat::Dense> Tmat(Tbuf.data(), nb, nb, nb, nb * nb, batch);
 
-        {
-            BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.larft");
-            (void)wy::larft_forward_columnwise_batched<OrmqrWyTag, T>(
-                q, Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
-                Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), m, ib,
-                tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch,
-                /*use_device=*/use_device_ormqr());
-        }
+        auto apply_block = [&](int i0) {
+            const int ib = std::min(nb, k - i0);
 
-        if (side == Side::Left) {
-            auto Csub = c({i0, SliceEnd()}, Slice());
-            auto Vblk = Vmat({0, m}, {0, ib});
-            auto Tblk = Tmat({0, ib}, {0, ib});
-
-            MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), nb, nC, nb, nb * nC, batch);
-            MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), nb, nC, nb, nb * nC, batch);
-            auto W1 = W1full({0, ib}, Slice());
-            auto W2 = W2full({0, ib}, Slice());
-
-            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-            // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
-
-            const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            // W2 = op(T) W1. The trmm substitution is valid only because every
-            // trmm route ormqr can reach writes C with beta = 0, as this GEMM does.
-            if (wy_trmm_applicable<B, T>(ib)) {
-                (void)trmm<B, T>(q, Tblk, W1, W2, T(1),
-                           Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
-            } else {
-                (void)gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+            const int m = nq - i0;
+            {
+                BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.pack_v_panel");
+                (void)wy::pack_v_panel_batched<OrmqrWyTag, T>(
+                    q, Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), a, i0, ib, nq);
             }
 
-            (void)gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+            {
+                BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.larft");
+                (void)wy::larft_forward_columnwise_batched<OrmqrWyTag, T>(
+                    q, Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
+                    Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), m, ib,
+                    tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch,
+                    /*use_device=*/use_device_ormqr());
+            }
+
+            if (side == Side::Left) {
+                auto Csub = c({i0, SliceEnd()}, Slice());
+                auto Vblk = Vmat({0, m}, {0, ib});
+                auto Tblk = Tmat({0, ib}, {0, ib});
+
+                MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), nb, nC, nb, nb * nC, batch);
+                MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), nb, nC, nb, nb * nC, batch);
+                auto W1 = W1full({0, ib}, Slice());
+                auto W2 = W2full({0, ib}, Slice());
+
+                // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                // is already ordered after this one and the Event carries nothing the caller needs.
+                (void)gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
+
+                const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
+                // W2 = op(T) W1. The trmm substitution is valid only because every
+                // trmm route ormqr can reach writes C with beta = 0, as this GEMM does.
+                if (wy_trmm_applicable<B, T>(ib)) {
+                    (void)trmm<B, T>(q, Tblk, W1, W2, T(1),
+                               Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
+                } else {
+                    (void)gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+                }
+
+                (void)gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+            } else {
+                auto Csub = c(Slice(), {i0, SliceEnd()});
+                auto Vblk = Vmat({0, m}, {0, ib});
+                auto Tblk = Tmat({0, ib}, {0, ib});
+
+                MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, mC * nb, batch);
+                MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), mC, nb, mC, mC * nb, batch);
+                auto W1 = W1full(Slice(), {0, ib});
+                auto W2 = W2full(Slice(), {0, ib});
+
+                (void)gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
+
+                const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
+                (void)gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
+
+                (void)gemm<B>(q,
+                        W2,
+                        Vblk,
+                        Csub,
+                        {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+            }
+
+        };
+
+        const bool forward = (side == Side::Left) ? transpose_apply : !transpose_apply;
+        if (forward) {
+            for (int i0 = 0; i0 < k; i0 += nb) {
+                apply_block(i0);
+            }
         } else {
-            auto Csub = c(Slice(), {i0, SliceEnd()});
-            auto Vblk = Vmat({0, m}, {0, ib});
-            auto Tblk = Tmat({0, ib}, {0, ib});
-
-            MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, mC * nb, batch);
-            MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), mC, nb, mC, mC * nb, batch);
-            auto W1 = W1full(Slice(), {0, ib});
-            auto W2 = W2full(Slice(), {0, ib});
-
-            (void)gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
-
-            const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            (void)gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
-
-            (void)gemm<B>(q,
-                    W2,
-                    Vblk,
-                    Csub,
-                    {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
-        }
-
-    };
-
-    const bool forward = (side == Side::Left) ? transpose_apply : !transpose_apply;
-    if (forward) {
-        for (int i0 = 0; i0 < k; i0 += nb) {
-            apply_block(i0);
-        }
-    } else {
-        for (int i0 = ((k - 1) / nb) * nb; i0 >= 0; i0 -= nb) {
-            apply_block(i0);
+            for (int i0 = ((k - 1) / nb) * nb; i0 >= 0; i0 -= nb) {
+                apply_block(i0);
+            }
         }
     }
 

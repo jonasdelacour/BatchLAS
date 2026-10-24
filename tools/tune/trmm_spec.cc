@@ -15,6 +15,7 @@
 
 #include <src/ops/trmm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <string>
 #include <utility>
@@ -94,7 +95,7 @@ public:
         std::vector<std::string> o, r, b;
         for (int v : M::grid_order) o.push_back(std::to_string(v));
         for (int v : M::grid_q) r.push_back(std::to_string(v));
-        for (int v : M::grid_batch) b.push_back(std::to_string(v));
+        for (int v : with_slice_batches({M::grid_batch.begin(), M::grid_batch.end()})) b.push_back(std::to_string(v));
         return {{"side", {"L", "R"}}, {"order", o}, {"q", r}, {"batch", b}};
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {  // A, B, Cp, C
@@ -102,6 +103,7 @@ public:
         return (o * o + 3.0 * o * double(key_int(k, "q"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "order"; }
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1}); }  // evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
     FrontierPlan frontier() const override { return {2, 8, 0.05}; }  // k = 8 passes the per-op gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin

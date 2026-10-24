@@ -327,10 +327,13 @@ function(batchlas_add_test_target test_name)
     elseif(test_name STREQUAL "tune_race_gpu_tests")
         # The tuner's GPU side: the race and the worker against real kernels (potrf, posv, trsm specs).
         # The worker cases run batchlas_tune_impl, built with the benchmarks.
-        foreach(_src tune_core race grid ledger schedule spec worker potrf_spec posv_spec trsm_spec)
+        # gemm, ormqr and the level-3 four: their batch-ladder hooks (TuneSpecLadder).
+        foreach(_src tune_core race grid ledger schedule spec worker nvml_guard potrf_spec posv_spec trsm_spec gemm_spec ormqr_spec
+                     syrk_spec symm_spec syr2k_spec trmm_spec)
             target_sources(${test_name} PRIVATE "${PROJECT_SOURCE_DIR}/tools/tune/${_src}.cc")
         endforeach()
         batchlas_configure_binary_target(${test_name} LIBRARIES GTest::gtest GTest::gtest_main batchlas::verify)
+        target_link_libraries(${test_name} PRIVATE ${CMAKE_DL_LIBS})  # nvml_guard.cc dlopens libnvidia-ml
         if(BATCHLAS_BUILD_BENCHMARKS)
             target_compile_definitions(${test_name} PRIVATE BATCHLAS_TUNE_IMPL="$<TARGET_FILE:batchlas_tune_impl>")
             add_dependencies(${test_name} batchlas_tune_impl)

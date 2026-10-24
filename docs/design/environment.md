@@ -98,7 +98,8 @@ the call site; see [geometry defaults](#environment-geometry-defaults-stay-at-th
 | `BATCHLAS_SYEVX_FILTER_DEGREE` | int > 0 | auto | Disables the automatic degree. |
 | `BATCHLAS_SYEVX_INIT_POWER` | int | `4` | `0` means no power iterations. |
 | `BATCHLAS_SYEVX_LOCK_FACTOR` | float > 0 | `0.1` | Only non-integer knob. |
-| `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE`, `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE`, `BATCHLAS_TUNE_SB2ST_BACK_TILE`, `BATCHLAS_TUNE_SB2ST_BACK_SUBS`, `BATCHLAS_TUNE_SY2SB_ORMQR_NB`, `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`, `BATCHLAS_TUNE_LATRD_WG_HINT`, `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`, `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`, `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT`, `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER` | int | tuned | Read through `tuning_env_override`. See @ref perf_tuning. |
+| `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE`, `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE`, `BATCHLAS_TUNE_SB2ST_BACK_TILE`, `BATCHLAS_TUNE_SB2ST_BACK_SUBS`, `BATCHLAS_TUNE_SY2SB_ORMQR_NB`, `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`, `BATCHLAS_TUNE_LATRD_WG_HINT`, `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD`, `BATCHLAS_TUNE_STEDC_MERGE_VARIANT`, `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT`, `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER`, `BATCHLAS_TUNE_L2_CHUNK_PERCENT` | int | tuned | Read through `tuning_env_override`. See @ref perf_tuning. |
+| `BATCHLAS_TUNE_L2_CHUNK_ITEMS` | int > 0 | unset | Forces the getrf/potrf blocked drivers' batch chunk to this many items; unset derives it from L2 (`tuning::blocked_chunk_items`). |
 
 ## Diagnostic variables
 
