@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // ZLARFG: H^H [alpha; x] = [beta; 0] with beta REAL, H = I - tau v v^H, v(0) = 1. gebrd needs the

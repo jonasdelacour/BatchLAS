@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // her2k (flat-kernel-selection.md §4.3, §12): select::run takes the first entry of the nearest
 // tuned/her2k.<device>.txt row that can_run() admits (src/ops/her2k/route.hh). Fold is one gemm of
 // alpha op(A) op(B)^H over the whole n x n product, folded with its own conjugate transpose into the

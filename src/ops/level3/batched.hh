@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Shared pieces of the level-3 native families: batch chunking (a launch holds at most

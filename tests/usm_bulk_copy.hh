@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Bulk moves between a candidates harness's UnifiedVector buffers and the host. A host loop over
 // malloc_shared pages migrates them a fault at a time once a kernel has touched them: that was

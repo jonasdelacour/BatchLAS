@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // her2k for the tuner (complex only): C = alpha A B^H + conj(alpha) B A^H + beta C on the lower
 // triangle, A, B and C0 from MatrixView::fill_random, C0's diagonal made real and its strict upper
 // triangle poisoned with a large finite value, alpha = (1.25, -0.5), beta = 0.75 so C is read. uplo

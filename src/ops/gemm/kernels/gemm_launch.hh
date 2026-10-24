@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The gemm launchers and their kernels, shared by gemm_kernels.cc and the shard TUs that
 // instantiate them (gemm_rows.hh). Everything here is in an unnamed namespace: each TU that
 // includes it gets its own copy, and each kernel is instantiated by exactly one TU.

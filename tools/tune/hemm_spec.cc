@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // hemm for the tuner (complex only): C = alpha A B + beta C with A Hermitian m x m read from its
 // lower triangle (Side::Left), A, B and C0 from MatrixView::fill_random, A's strict upper triangle
 // poisoned with a large finite value and its diagonal given an imaginary part hemm must ignore,

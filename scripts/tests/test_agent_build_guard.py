@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Self-test for scripts/agent_build_guard.py: runs the hook as Claude Code does (JSON on stdin).
 
     python3 scripts/tests/test_agent_build_guard.py

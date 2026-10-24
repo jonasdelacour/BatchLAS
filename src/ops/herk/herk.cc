@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // herk (flat-kernel-selection.md §4.3, §12): select::run takes the first entry of the nearest
 // tuned/herk.<device>.txt row that can_run() admits. Gram is syrk's single-tile kernel with the ^H
 // conjugating whichever operand carries it (n <= 128); Fold is one gemm over the whole n x n product

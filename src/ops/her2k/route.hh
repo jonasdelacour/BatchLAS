@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // her2k's key and can_run, in a header so sytrd_blocked.cc asks the very selection her2k makes:

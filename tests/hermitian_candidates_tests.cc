@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every hemm, herk and her2k candidate, and the complex-symmetric symm/syrk/syr2k ones, pinned (docs/design/flat-kernel-selection.md §8, §12).
 // Operands sit in buffers of large finite poison with padded ld and batch stride, complex data has
 // nonzero imaginary parts, alpha is complex where the op allows it and beta != 0. Which family ran

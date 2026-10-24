@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // hemm (flat-kernel-selection.md §4.3, §12): select::run takes the first entry of the nearest
 // tuned/hemm.<device>.txt row that can_run() admits. Expand writes the Hermitian matrix that A's
 // referenced triangle stands for into scratch and hands it to the public gemm (one strided-batched

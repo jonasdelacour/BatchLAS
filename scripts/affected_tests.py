@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Map a diff to the test binaries it can break: build targets and an anchored ctest regex.
 
     scripts/affected_tests.py                      # summary for merge-base(HEAD, origin/main)
