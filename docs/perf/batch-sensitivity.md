@@ -138,7 +138,7 @@ MHz; sustained ones hit throttle reason 0x4 (SW power cap) at 862-1815 MHz.
 Measured inflation is 1.07-1.25x; the 1.3-1.6x from the table survey did not reproduce. It depends on
 the duty cycle and on what ran before, and does not carry over to the 4090.
 
-### Batch sensitivity: C5, co-tenant contamination of sm_120 cells
+### Batch sensitivity: C5, co-tenant contamination of sm_120 cells {#batch-sensitivity-c5-co-tenant}
 
 The sm_120 deep run used `--allow-idle-foreign` while another user's process held a context on every
 GPU. Time-slicing adds a fixed offset per synchronising call (~170-200 us, or ~2.27-2.29 ms), the same

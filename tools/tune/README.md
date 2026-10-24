@@ -295,7 +295,7 @@ stops; `--no-guard` skips the guard.
 
 The check is per GPU: every GPU in `--devices` must hold no other compute context, idle or not; other
 GPUs of the box are only warned about. An idle foreign context still time-slices with the measurement
-(a fixed 0.2 ms or 2.3 ms per synchronising call, [C5](../../docs/perf/batch-sensitivity.md#batch-sensitivity-c5-co-tenant-contamination-of-sm-120-cells)),
+(a fixed 0.2 ms or 2.3 ms per synchronising call, [C5](../../docs/perf/batch-sensitivity.md#batch-sensitivity-c5-co-tenant)),
 so there is no tolerance mode: `--allow-idle-foreign` is refused with that reason.
 
 ## Raw JSONL (schema 1)
