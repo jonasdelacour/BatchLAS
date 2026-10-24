@@ -91,7 +91,7 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 ///                    factored whole, min(m, n) pivots per item packed at stride min(m, n),
 ///                    by the native kernels on a GPU queue and by the NETLIB and ROCm vendors
 /// @param pivots      pivot output, at least `min(m, n) * batch` `int64_t` elements
-/// @param work_space  device-accessible scratch of at least getrf_buffer_size() bytes
+/// @param workspace   device-accessible scratch of at least getrf_buffer_size() bytes
 /// @param info        per-item LAPACK status, one int32 per batch item: 0 on
 ///                    success, i > 0 if U(i,i) is exactly zero (1-based; the
 ///                    factorization completed but U is singular). Empty span =
