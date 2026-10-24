@@ -10,7 +10,7 @@ types. The routing windows in `tuned/` for these ops and the gates in
 
 - **Box:** 2x RTX 4090 (sm_89, 128 SM, 24 GB, 72 MB L2), driver 595.84. GPU 1 throughout, one
   harness on the card at a time, each process run through `benchmarks/gpu_guard.sh 1`.
-- **Build:** `build/presets/dev-tests`, `RelWithDebInfo`, DPC++ at `/opt/dpcpp-cuda`,
+- **Build:** `build-dev-tests` (then `build/presets/dev-tests`), `RelWithDebInfo`, DPC++ at `/opt/dpcpp-cuda`,
   `-fsycl-targets=nvidia_gpu_sm_89`, CUDA 13.2 (V13.2.86), cuSOLVER 12.2.0.11.
 - **Harness:** `benchmarks/factor_bench.cc`, driven by `benchmarks/run_factor_grid.sh`. Scope: 20
   (op, type) grids, 2,784 timed rows, 1,392 paired cells. Every grid completed and no route threw.

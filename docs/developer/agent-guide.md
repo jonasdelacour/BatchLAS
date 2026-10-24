@@ -10,7 +10,7 @@ SYCL 2020 support **and a backend for your GPU vendor**; optionally netlib LAPAC
 NETLIB host backend and the LAPACKE test oracles). Runtime needs the same plus a GPU the SYCL
 runtime exposes. The exercised configuration is
 a self-built CUDA-enabled DPC++ (`/opt/dpcpp-cuda`) against CUDA 13.2 and an RTX 4090 (sm_89) on
-Ubuntu 22.04; see "Tested platforms" in `docs/guide/build.md`.
+Ubuntu 26.04; see "Tested platforms" in `docs/guide/build.md`.
 
 **Apple GPU (macOS):** a separate AdaptiveCpp Metal build (presets `acpp-metal` /
 `acpp-metal-tests`, toolchain from `scripts/macos/build_adaptivecpp_metal.sh`, M5 Max, macOS 27).
@@ -138,26 +138,41 @@ cmake -S . -B build -DLAPACKE_LIBRARY=/opt/lib/liblapacke.so -DCBLAS_LIBRARY=/op
 ## 6. Quick Smoke Test
 
 ```bash
-cmake -B build .
-# GPU-only iteration tree (nvptx64 only, 13-25% faster; never the gate, §7):
+# A new worktree: seed its tree from a built one BEFORE editing (§7), else configure.
+scripts/seed_build_tree.sh ~/BatchLAS/build build    # 9 s; first build is incremental
+cmake -B build .                                     # no seed: full build 5 min warm ccache, 21-23 cold
+# GPU-only iteration tree (nvptx64 only; never the gate, §7):
 #   cmake -B build-gpu . -DBATCHLAS_CPU_TARGET=none
 
-# Iterating on one algorithm: this builds the library and only this one test
-# binary. Do not build the default target while iterating — it also builds every
-# other test executable (`ctest -N` lists them), which you are not about to run.
-cmake --build build --target stedc_tests -j8
-ctest --test-dir build -R '^stedc_tests$' --output-on-failure
+# Iterate through scripts/b: named targets only (no target = exit 64), -j8 cap, a
+# box-wide build lock, a free-memory wait, exit 70 when a requested binary is
+# missing after a "successful" build. One target = the library plus one test binary.
+scripts/b stedc_tests
+ctest --test-dir build -R '^stedc_tests(_heavy)?$' --output-on-failure
+
+# Which binaries can my diff break? (vs merge-base with origin/main; shared code
+# falls back to the quick tier; --heavy adds the _heavy entries)
+scripts/affected_tests.py --print-build-cmd --print-ctest-cmd --build-dir build
+
+# Broadest iteration scope: the quick tier (no slow suites, no heavy case tiers).
+ctest --test-dir build -LE 'slow|heavy'
 
 # Before pushing, build and run everything with scripts/gate.sh, never on an
 # iteration tree such as build/. Its two persistent trees: build-gate (full targets,
 # full ctest, ledger diff) and build-gate-vf (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF,
 # -LE slow), both with BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF, so every executable is
 # relinked against the .so it tests (that option is ON, and executables are not
-# relinked, in every other tree). One test per GPU slot (--parallel, §8) only where
-# ctest_gpus.sh has been validated (threadripper02); on the 2x4090 box, and wherever
-# configure printed "GPU test resources: none", keep it serial (the default).
+# relinked, in every other tree). It holds the build lock through ctest. One test per
+# GPU slot (--parallel, §8) only where ctest_gpus.sh has been validated
+# (threadripper02); on the 2x4090 box, and wherever configure printed "GPU test
+# resources: none", keep it serial (the default). First run on the 4090 box: 67 min
+# (full: build 14 + ctest 21; vendor-free: build 13 + ctest 19); later runs rebuild
+# incrementally. Seed a missing gate tree only from a dev-tests-configured tree:
+# from plain build/ (BATCHLAS_ALLOW_UNSAFE_ENV differs, so backend_config.h does)
+# 221 of 243 objects recompile. The gate prints the option drift.
 scripts/gate.sh                  # 2x4090 box (OOM history, docs/ci.md)
 scripts/gate.sh --parallel       # threadripper02
+scripts/gate.sh --seed-from build-dev-tests   # first run only
 
 # Also before pushing, if you touched cmake/, include/ or the install rules:
 # the packaging gate. These are the same checks CI runs (.github/workflows/ci.yml).
@@ -264,9 +279,60 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
 
 The build is **SYCL device-link-bound**, not compile-bound. The unit of device linking is the
 shared library: changing one object re-runs `sycl-post-link` + ptxas + CPU-target AOT for every
-object in that `.so`, single-threaded, so `-j` cannot shorten it. Measured on threadripper02
-(64 cores, 4x RTX PRO 6000, default target = library + 82 test binaries, -j32, other builds
-sometimes running): fresh tree, no cache, 284-334 s.
+object in that `.so`, and `-j` cannot shorten it. Full build of a fresh tree: 4090 box (-j8,
+library + 90 test binaries) 312-314 s with a warm ccache, 1260-1370 s cold; threadripper02 (-j32)
+284-334 s cold. Findings and before/after tables: @ref design_build_performance.
+
+**The loop on the 4090 box** (2026-10-24; one-line append, then rebuild the library):
+
+| Edit | Rebuild | Edit | Rebuild |
+| --- | --- | --- | --- |
+| `stedc.cc` (a small .so) | 22 s | a cta TU (`steqr_cta.cc`) | 112 s (was 618) |
+| `gemm.cc` (backends) | 12 s | `posv_tiny.cc` (one-module .so) | 201 s (was 637) |
+| `trmm.cc`, `trsm_native.cc` | 66 s (was 520), 62 s | `gemm_kernels.cc` | 213 s (was 1024) |
+| `tuning_params.hh` | 11 compiles (was 128) | a header every gemm shard includes | 275 s |
+
+**Remaining critical path:** the `libbatchlas_sycl` relink (194 s, largest module 59 s, so more
+link jobs help only on bigger boxes), the posv/gesv single-module links (~169 s), headers that ~280
+of 318 objects include (`matrix.hh`, `settings`, `error`, `enums`, `workspace`), and in tests
+`gemm_candidates_tests_heavy` (351 s, the longest single entry).
+
+**Component libraries.** 16 `.so` (`ls build/src/*.so`); one changed object relinks only its own.
+GPU-only (`NO_CPU_TARGETS`, no CPU AOT image): `extensions_cta`, `extensions_posv`,
+`extensions_gesv` (one tiny-kernel TU each, the cta link's two big modules), `extensions_level3`
+(trsm kernels plus symm, hemm, herk, her2k, syrk, syr2k, trmm: every native arm needs `d.is_gpu`).
+A TU that a CPU queue can run (gemm, gemv, spmm, NETLIB paths) must keep its CPU image.
+
+**Fast-loop options** (all default to the fast setting; `docs/guide/build.md` "CMake options"):
+
+- `BATCHLAS_SYCL_GLOBAL_OFFSET=OFF` passes `-mllvm -enable-global-offset=false`: no `_with_offset`
+  twin per kernel (half of all kernel entries), about half of every NVPTX link. A kernel using a
+  SYCL 1.2.1 global offset would lose it; nothing in the tree does.
+- `BATCHLAS_PRIVATE_TMPDIR=ON`: every compile and link runs with `TMPDIR` under `<build>/.tmp`.
+  DPC++ device temporaries in a tmpfs `/tmp` are RAM; leaked ones reached 38-43 GiB (~12 GiB/day)
+  on a zero-swap box. `rm -rf <build>/.tmp` is safe while no build of that tree runs.
+- `BATCHLAS_LINK_DEPENDS_NO_SHARED=ON`: a `.so` change no longer relinks ~150 executables (full
+  build after a `stedc.cc` edit 71 -> 22 s). Executables link `-z now`, so a symbol removed from a
+  `.so` fails at load, not later. `scripts/gate.sh` turns it OFF.
+- `CMAKE_BUILD_RPATH_USE_ORIGIN=ON`: build-tree RUNPATHs are `$ORIGIN`-relative, so a copied
+  (seeded) tree loads its own `.so`, never the seed's.
+
+**New trees.**
+
+- `scripts/seed_build_tree.sh SRC_BUILD DST_BUILD` copies a built tree, rewrites its paths and
+  touches only files that differ from the seed's commit: 9 s, then the first one-line-edit
+  `scripts/b stedc_tests` is 20 s. Seed before editing, from a tree configured like the target
+  (same preset); a dirty seed checkout needs `--allow-dirty`. Targets with an absolute path in a
+  `-D` recompile.
+- `scripts/prewarm_cache.sh` keeps ccache warm for origin/main: builds it in
+  `~/.cache/batchlas-prewarm/main` at -j4, takes the build lock and skips (exit 0) when another
+  build holds it, memory is short or main is unchanged; that `build/` is also a clean seed. Cron it
+  from the main checkout (`--print-cron` prints the line):
+  `*/30 * * * * ~/BatchLAS/scripts/prewarm_cache.sh >> /tmp/batchlas-prewarm.log 2>&1`.
+- **A/B tuning constants with the `BATCHLAS_TUNE_*` env overrides, never by editing
+  `include/batchlas/tuning_params.hh` per trial** (§10). Edit the header once, to port the winner.
+
+**Build rules.**
 
 - **Cap build parallelism at `-j8`** unless you have measured headroom. Heavy SYCL TUs exceed 14 GB
   each, and wide builds (`-j20`, `-j28`, or two `-j` builds side by side) have been OOM-killed
@@ -280,6 +346,8 @@ sometimes running): fresh tree, no cache, 284-334 s.
     (another pair: 196/196, 176 s vs 329 s). Misses are TUs with an absolute path in a `-D`.
   - Plain `CMAKE_CXX_COMPILER_LAUNCHER=ccache` without those settings got 3/196.
   - Links are never cached: even an all-hits fresh tree pays every device and test link.
+  - Preset trees are `build-<preset>`, depth 1 like `build/`, so they share entries with it; the
+    old depth-3 `build/presets/<preset>` hashed different relative paths and never did.
 - **Never configure a fresh tree per stage** when an existing tree can be reused: reconfigure and
   rebuild it.
 - **Iterate GPU-only**: `-DBATCHLAS_CPU_TARGET=none` (or the `dev-gpu` / `dev-gpu-tests` presets)
@@ -288,25 +356,22 @@ sometimes running): fresh tree, no cache, 284-334 s.
   target, so a GPU-only tree is **not a gate**: the final pre-push run uses full targets
   (`dev-tests`/`cuda` or a default configure), and the vendor-free tree
   (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) is built **only at that final gate**.
-- Build only the target you work on (`--target stedc_tests`). Every test target is in the default
+- Build only the target you work on (`scripts/b stedc_tests`). Every test target is in the default
   target, so a plain build links them all.
 - **`BATCHLAS_SYCL_LINK_JOBS` matters for big links.** llvm-foreach runs batches of N modules and
   waits for each batch's slowest, so a link costs the sum of its batch maxima. Default `auto` = the
-  logical cores, 4..32 (20 on the 4090 box). A one-module .so gains nothing (`select.cc` relink of
-  the old backends: 17 s at 4 and 16).
-- **The CPU AOT pass (`opencl-aot`) was most of a full-target link**: 942 of 1,186 CPU-seconds in
-  `libbatchlas_sycl`, 590 of 713 in `libbatchlas_backends`. Kernels whose every native `can_run` arm
-  needs `d.is_gpu` belong in a `NO_CPU_TARGETS` library: trsm and the level-3 seven are in
-  `batchlas_extensions_level3`. gemm keeps its CPU image (a vendor-free CPU queue runs it), so its
-  reg/wide rows are generated shard TUs (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`): one gemm
-  TU was two ~400 s modules. Measured on the 4090 box, one-line append, `--target
-  batchlas_components`: gemm kernel TU 1024 s -> 213 s, a header all gemm shards include -> 275 s,
-  trmm 520 s -> 66 s, trsm -> 62 s, gemm.cc 12 s.
+  logical cores, 4..32 (20 on the 4090 box). One module cannot be split: a one-module .so gains
+  nothing, and that module is the library's floor.
+- **The CPU AOT pass (`opencl-aot`) was most of a full-target link** (942 of 1,186 CPU-seconds in
+  `libbatchlas_sycl`). A kernel whose every native `can_run` arm needs `d.is_gpu` belongs in a
+  `NO_CPU_TARGETS` library. gemm keeps its CPU image, so its reg/wide rows are generated shard TUs
+  (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`; a `static_assert` catches an unsharded row):
+  one gemm TU was two ~400 s modules.
 - To profile a device link per module, replay the driver's `-###` commands one stage at a time
   and run each llvm-foreach item yourself (`sycl-post-link -split=auto` writes a `.table` naming each
   module's `.sym`); per-module CPU AOT time is what to balance shards on.
-- `cmake --build --target A B C` with many targets can exit 0 and still skip some links. Check
-  `test -x build/tests/<name>`, not the exit code.
+- `cmake --build --target A B C` with many targets can exit 0 and still skip some links.
+  `scripts/b` checks each requested output (exit 70); by hand, `test -x build/tests/<name>`.
 - Measured and ruled out (do not retry): Ninja (the Makefile null build is already 0.07 s), lld, PCH
   (the driver cannot emit one), unity builds (kernel-name collisions), `-fno-sycl-rdc`, explicit
   `-fsycl-device-code-split`, cutting one edge of a header cycle (the umbrella header cuts both
@@ -315,8 +380,9 @@ sometimes running): fresh tree, no cache, 284-334 s.
   as the oracle.
 - To time a real rebuild, append a line rather than `touch`: with ccache a touched file is a cache
   hit and the timing measures only the link.
-- ROCm TUs can be syntax-checked without an AMD GPU: `scripts/rocm_syntax_check.sh` (headers are in
-  `/opt/rocm/include/roc*/`). Run it after touching `src/backends/roc*.cc` or any signature or
+- ROCm TUs can be syntax-checked without an AMD GPU: `scripts/rocm_syntax_check.sh` (headers in
+  `/opt/rocm/include/roc*/`; gone from the 4090 box since the 26.04 upgrade, so it skips every TU
+  there). Run it after touching `src/backends/roc*.cc` or any signature or
   instantiation the ROCm TUs also spell out.
 - Tiny-kernel TUs build with `-mllvm -pragma-unroll-threshold=262144`. Without it LLVM silently
   declines `#pragma unroll`, register arrays go to the stack, and tests stay green.
@@ -328,11 +394,18 @@ sometimes running): fresh tree, no cache, 284-334 s.
   regex, so anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> the quick tier
   `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
   (`Queue`, `Matrix`/`MatrixView`, the mempool, `sg_partition`, `include/batchlas/util`).
-  `scripts/affected_tests.py` maps a diff to the binaries and prints the `scripts/b` and ctest lines.
+  `scripts/affected_tests.py` maps a diff to the binaries (callers included: a gemm change runs
+  potrf, geqrf, syev...) and prints the `scripts/b` and ctest lines; shared code falls back to the
+  quick tier. It over-selects by design (grep-based caller graph); the gate still runs everything.
 - **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` (`tests/CMakeLists.txt`) is two ctest entries:
   `X` runs its quick cases and `X_heavy` (label `heavy`) its saturating-batch race guards and
   AutoReads table sweeps. `ctest -R '^X$'` is the quick half only; before claiming a binary green,
-  run `X_heavy` too. `-LE slow` includes every heavy entry.
+  run `X_heavy` too. `-LE slow` includes every heavy entry; the quick tier `-LE 'slow|heavy'` does
+  not. Serial on the 4090 box: quick tier 416 s (104 entries), full suite 1287 s (138);
+  `gemm_candidates_tests` 36 s + `_heavy` 353 s (was 1063 s in one entry).
+- **Full-target tree on the 4090 box:** run ctest with `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'`
+  and `CUDA_VISIBLE_DEVICES=0` (GPU 1 is usually the other user's). Without the selector the CPU
+  backends land on `native_cpu` and fail with "No kernel named".
 - **On threadripper02, run multi-test scopes through `scripts/ctest_gpus.sh`** (same arguments as
   ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`).
   - Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus`
@@ -547,8 +620,9 @@ boxes.
   node and one UVM driver produced 5.5x errors with stable rel_sd while `nvidia-smi` showed no
   foreign process. A display attached to a GPU also slows L2-resident vendor cells: measure on a
   headless GPU. Use `benchmarks/gpu_guard.sh`, plus a `flock` against your own duplicate jobs.
-- Warm up: idle clocks are ~210 MHz. Use `--warmup=3 --min_iters=8`. The first *process* to run a
-  kernel pays JIT (cache `~/.cache/batchlas_sycl`, shared): do a throwaway pass over every cell first.
+- Warm up: idle clocks are ~210 MHz. Use `--warmup=3 --min_iters=8` and discard a first pass over
+  every cell. CUDA device images are AOT SASS: no JIT, ~0.3 s module load per process. JIT applies
+  to `spir64`, AdaptiveCpp `generic` and Metal images, whose first process pays it.
 - Alternate the A/B order between reps and discard the first pass. Per-rep CV is ~3%, so an effect
   under 5% needs 14-16 reps; 6 reps is a screen, not a verdict.
 - The Google Benchmark `--name` filter is a *substring* match. Filter on the CSV name column, which is
@@ -689,13 +763,16 @@ is the open 2.7x.
 
 ## 13. Primary-Machine Facts (the RTX 4090 box; re-check on any other machine)
 
-- 2x RTX 4090 (128 SMs, 72 MB L2, 24 GB, FP64 1/64), Xeon w5-2445, Ubuntu 22.04, DPC++ at
-  `/opt/dpcpp-cuda`, CUDA 13.2, ROCm 6.2.4 headers (no AMD GPU), MAGMA 2.10 Release/sm_89 at
+- 2x RTX 4090 (128 SMs, 72 MB L2, 24 GB, FP64 1/64), Xeon w5-2445, 20 cores, 123 GB, zero swap,
+  Ubuntu 26.04 (upgraded 2026-10-20/21: GCC 15, gtest 1.17; a tree or ccache from before it fails
+  test links with an undefined `MakeAndRegisterTestInfo`, so rebuild it), DPC++ at
+  `/opt/dpcpp-cuda`, CUDA 13.2, no ROCm headers, MAGMA 2.10 Release/sm_89 at
   `~/magma/build-rel89`. Device 0 drives the display: measure on device 1.
 - The box is shared with another user who runs GPU sweeps. Check `nvidia-smi` before timing anything
   and coordinate before a reboot. `perf` and `gdb -p` do not work (perf_event_paranoid, ptrace): use
   the UR trace.
-- The system OpenBLAS 0.3.20 picks the broken Cooperlake dgemm (Known Pitfalls).
+- The system OpenBLAS is 0.3.32 since the upgrade and passes the configure-time dgemm check with no
+  coretype; 0.3.20 picked the broken Cooperlake dgemm (Known Pitfalls).
 - Unattended-upgrades is not blacklisted for `nvidia-*`, so driver mismatches recur.
 
 On a **new machine**, before trusting any result: `sycl-ls` shows your GPU; configure prints the right

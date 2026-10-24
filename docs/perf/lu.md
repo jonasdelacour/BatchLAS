@@ -524,7 +524,7 @@ Comparing a pivot sequence elementwise with another implementation is well posed
 
 This is the one site for the tiny tier's R7 figure. `docs/perf/potrf.md` and `docs/perf/qr.md` point here.
 
-`time cmake --build build/presets/dev-tests --target batchlas_extensions_cta --parallel 4` after touching `getrf_tiny.cc`: **167.4 s**, against a 117-125 s baseline: +34% to +43% for the library with all three tiers.
+`time cmake --build build-dev-tests --target batchlas_extensions_cta --parallel 4` after touching `getrf_tiny.cc`: **167.4 s**, against a 117-125 s baseline: +34% to +43% for the library with all three tiers.
 
 | tier | entry functions | ptxas | share of library |
 |---|---:|---:|---:|

@@ -568,7 +568,7 @@ on the composed arm, so it was reverted. Measure a flip against the arm it actua
 
 ### Register probe (tiny tier) {#register-probe-tiny-tier}
 
-Gate: **stack frame == 0 AND spill == 0 AND regs x 64 <= 65536**. Probe: `BATCHLAS_BUILD_DIR=$PWD/build/presets/dev-tests
+Gate: **stack frame == 0 AND spill == 0 AND regs x 64 <= 65536**. Probe: `BATCHLAS_BUILD_DIR=$PWD/build-dev-tests
 scripts/register_probe.sh out.log '' batchlas_extensions_cta` (sm_89). Every cell has frame 0 and spill 0:
 
 | type | N | regs | regs x wg (64) |
