@@ -3,7 +3,7 @@
 > **Status:** current · checked 2026-10-21
 
 `BATCHLAS_API` is generated into `<build>/include/batchlas/export.hh` by `generate_export_header()`
-against `batchlas_core_obj` (`src/CMakeLists.txt:103-107`). The entities below carry it where it
+against `batchlas_core_obj` (`src/CMakeLists.txt:121-125`). The entities below carry it where it
 looks arbitrary. That placement is required.
 
 ## symbol visibility: build modes
@@ -13,10 +13,10 @@ looks arbitrary. That placement is required.
   split-mode `batchlas` facade is INTERFACE, for which `generate_export_header()` produces nothing.
 - `-fvisibility=hidden -fvisibility-inlines-hidden` (`CXX_VISIBILITY_PRESET hidden`,
   `VISIBILITY_INLINES_HIDDEN`) applies only when `BATCHLAS_MONOLITHIC_LIBRARY=ON` and
-  `BATCHLAS_HIDDEN_VISIBILITY=ON` (`src/CMakeLists.txt:123-128`).
+  `BATCHLAS_HIDDEN_VISIBILITY=ON` (`src/CMakeLists.txt:141-146`).
 - `BATCHLAS_HIDDEN_VISIBILITY` exists only in a monolithic tree and defaults to `ON` there unless
   tests are built: the in-tree tests reach about 1,000 unannotated internal symbols
-  (`cmake/BatchLASOptions.cmake:231-239`). The macOS presets set it `OFF`.
+  (`cmake/BatchLASOptions.cmake:280-288`). The macOS presets set it `OFF`.
 - The split build keeps default visibility: four weak data objects
   (`batchlas_kernel_trace::g_records`, `batchlas::QueueImpl::device_arrays` and both guard
   variables) are defined in every component library and merge only under default visibility.

@@ -24,7 +24,7 @@ with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
   (`with_backend_for<T>`); the plain `with_backend` callable must not name those types for it.
 - Naming a backend never pins a kernel. Flat selection inside the entry point picks the kernel;
   `BATCHLAS_<OP>_ROUTE` pins it. See [flat kernel selection](flat-kernel-selection.md) and
-  @ref selection_tables. The level-3 ops hemm, herk and her2k still choose by hand.
+  @ref selection_tables.
 - Two spellings: `gemm(ctx, ...)` takes the backend from the queue, `gemm<B>(ctx, ...)` fixes it.
   Library code under `src/ops/` must use `<B>`, because the runtime spelling reads
   `ctx.backend()` instead of the `B` the algorithm was instantiated for.

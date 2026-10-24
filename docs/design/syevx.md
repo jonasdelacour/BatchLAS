@@ -22,7 +22,7 @@ each candidate, and the rules the dispatcher enforces. Measured crossovers are o
 | Algorithm | Input | Method | Chosen by Auto when |
 |---|---|---|---|
 | `Direct` | dense; all types, ranges and `jobz` | the public `syev` (table-selected), then select | \f$n \le 64\f$, eigenvalues only, complex, or below the `DirectSubset` gates |
-| `DirectSubset` | dense, real scalars only (`syevx_direct_subset_supported`, `extensions.hh:559`); in-order Queue | band reduction, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
+| `DirectSubset` | dense, real scalars only (`syevx_direct_subset_supported`, `extensions.hh:558`); in-order Queue | band reduction, `stebz`, `stein`, back-transforms on \f$k\f$ columns | eigenvectors at large \f$n\f$ and batch |
 | `LOBPCG` | CSR (dense on explicit request) | batched LOBPCG, optional ILU(k) or Jacobi preconditioner | sparse input, extremal ranges only |
 | `Filtered` | CSR or dense | scaled Chebyshev filter with Rayleigh-Ritz | never; explicit request only |
 

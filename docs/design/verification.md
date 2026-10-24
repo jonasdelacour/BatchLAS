@@ -16,7 +16,7 @@ Survey of 2026-10-09 (branch `tuning-deep-sm120`), before the library:
 | Concept | Copies | Differences between copies |
 | --- | --- | --- |
 | promotion and complex helpers (`up`, `ab`, `cj`, `mk`, `Prom`) | ~30 | some promote to double, some keep working precision |
-| NaN-propagating maximum | 2 | tests used `std::max`, which drops NaN: `syev_cta_tests.cc:70`, `syev_blocked_tests.cc:129,143`, `getrf_tests.cc:324,1690` passed a NaN residual |
+| NaN-propagating maximum | 2 | tests used `std::max`, which drops NaN: `syev_cta_tests.cc:70`, `syev_blocked_tests.cc:129,143`, `getrf_tests.cc:325,1691` passed a NaN residual |
 | seeded generator | 8, plus ~25 `std::mt19937` sites | |
 | SPD and permuted-LU inputs | 2 each, plus per-test variants | identical code, different buffer types |
 | factorization residuals (potrf, getrf) | 4 and 4+ | pivot layout, Upper/Lower support |

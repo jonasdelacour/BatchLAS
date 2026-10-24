@@ -129,7 +129,7 @@ Sites outside them that test `BATCHLAS_SYCL_IMPL_ACPP` directly:
   | Family | Largest launch | Term |
   | --- | --- | --- |
   | gemm `reg:m=128:n=64:k=32` (u=4, u=2) | 49,920 B | `RegCfg::slm_bytes()` in `can_run`; `gemm_reg` refuses too |
-  | herk on the gram tile (`BATCHLAS_SYRK_ROUTE=gram`) | 65,536 B (cdouble, n = 128) | `gram_slm_bytes` before the opt-in is honoured |
+  | herk `gram` | 65,536 B (cdouble, n = 128) | `gram_slm_bytes` in herk's `can_run` |
   | gesvd `jacobi` / `gesvdj_cta`, C = 64 | 71,752 B (double), 71,488 B (cfloat) | `gesvd_jacobi_max_dim(vectors, budget)` |
   | `syev_cta_fused` with an explicit multiplier | 54,272 B (cdouble, n = 16, x4) | multiplier clamp, below |
 
@@ -601,7 +601,7 @@ warning.
 
 - **One dylib.** ld64 rejects undefined symbols in a dylib, and the component libraries reference
   each other in cycles, so macOS requires `BATCHLAS_MONOLITHIC_LIBRARY=ON` (the default there; `OFF`
-  is a configure error, `cmake/BatchLASOptions.cmake:224-245`). `BATCHLAS_HIDDEN_VISIBILITY=OFF`
+  is a configure error, `cmake/BatchLASOptions.cmake:273-294`). `BATCHLAS_HIDDEN_VISIBILITY=OFF`
   (set by the presets, and the default whenever tests are built): the tests reach about 1,000
   unexported internal symbols.
 - **OpenBLAS as LAPACKE and CBLAS.** Homebrew's keg-only OpenBLAS has no `liblapacke`; LAPACKE and

@@ -87,7 +87,7 @@ factor of n. The rejected criteria are in the
 deficiency of multiplicity 1-5, and the all-zero matrix.
 
 `BATCHLAS_GESVD_BIDIAG` picks the `blocked` path's bidiagonal solver
-(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:56-64`):
+(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:57-65`):
 
 | Value | Solver | Note |
 |---|---|---|
@@ -148,7 +148,7 @@ Bytes per problem with V resident, plus the work-group pair table:
 The RTX 4090 reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
 launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim<T>(want_vectors, budget)`
 (`src/ops/gesvd/gesvd_native.hh:30`) returns the widest C whose smallest work-group fits the
-device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:73`) and the kernel guard
+device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:84`) and the kernel guard
 `gesvdj_cta_max_dim` (`gesvdj_cta.cc:802`) both read it, so a device with less local memory gets
 a lower cap. Other types drop to 1-2 work-groups per SM, against 10 at C=32. Occupancy, not the
 cap, is the binding limit.
@@ -259,7 +259,7 @@ column is still repaired.
 ## gesvdj_cta: traps and dead ends
 
 - **Build group.** `gesvd/kernels/gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES`
-  (`src/ops/CMakeLists.txt:94`), the one library configured `NO_CPU_TARGETS`. Moving it gives the
+  (`src/ops/CMakeLists.txt:88`), the one library configured `NO_CPU_TARGETS`. Moving it gives the
   32-lane kernel a CPU AOT image with no error.
 - **`GesvdjParams` is its own struct.** Reusing `JacobiParams` would bring its ascending
   `sort_order` default, which invites a silent reversal.
@@ -296,12 +296,12 @@ LAPACK 'O' is absent. If added, append an enumerator so existing ordinals stay s
 ## gesvd design: vendor binding and dispatch
 
 - **The header declares `backend::gesvd_vendor` only** (`include/batchlas/blas/functions/gesvd.hh:220`).
-  Each backend TU (`src/backends/cusolver.cc:417`, `rocsolver.cc:420`, `netlib_lapack.cc:881`)
+  Each backend TU (`src/backends/cusolver.cc:417`, `rocsolver.cc:420`, `netlib_lapack.cc:878`)
   defines and instantiates it for its own `Backend`. A throwing definition in the header would
   collide with `cusolver.cc`.
 - **One branch per family, checked by the compiler.** `launch` and `workspace` in
   `src/ops/gesvd/gesvd.cc` are `std::visit`s over `GesvdChoice`.
-- **`can_run` (`gesvd.cc:64-82`) is correctness only.** Every family needs a homogeneous batch.
+- **`can_run` (`gesvd.cc:71-93`) is correctness only.** Every family needs a homogeneous batch.
   `jacobi`: not Hermitian, sub-group 32, \f$\max(m,n) \le\f$ `gesvd_jacobi_max_dim`. `cta`:
   sub-group 32, \f$\max(m,n) \le 32\f$, not thin; real general or square Hermitian. `blocked`: real
   general or square Hermitian Lower. `vendor`: the solver library.

@@ -488,7 +488,7 @@ but V2 calls the direct entry on its diagonal blocks.
     non-`potrf` part is about 20x. `posv` and `gesv` have no vendor family of their own. Their `blocked`
     family composes sub-ops that select for themselves. The arm named `blocked` pins only the outer route, so
     both legs stay on Auto. The pins for the other arms are `{POTRF=vendor, TRSM=vendor}` and
-    `{POTRF=tiny, TRSM=cta}`, each `native` where the shape exceeds it (`benchmarks/factor_bench.cc:221-227`).
+    `{POTRF=tiny, TRSM=cta}`, each `native` where the shape exceeds it (`benchmarks/factor_bench.cc:222-228`).
 
     Data: `benchmarks/results/p2_posv_float.csv` (float, n=17, batch=16384, 7 reps, all `bad = 0`, residuals
     3.4e-08 to 5.0e-08). `rel_sd` is at most 0.0035, and the rows the argument rests on are all at or below

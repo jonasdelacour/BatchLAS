@@ -75,7 +75,7 @@ Files: `src/ops/gemm/{choice.hh,gemm.cc}`. The vendor TUs keep only the vendor i
 - Before the rewrite, 18 NN-only register variants computed wrong answers on transposed calls; a pin
   on a `can_run`-false transposed call now throws.
 
-Now (`src/ops/gemm/gemm.cc:93-140`; [the gemm page](../perf/gemm.md), "GEMM: what ships"):
+Now (`src/ops/gemm/gemm.cc:114-161`; [the gemm page](../perf/gemm.md), "GEMM: what ships"):
 
 | Planned | Now |
 |---|---|

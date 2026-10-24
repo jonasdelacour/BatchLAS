@@ -329,8 +329,6 @@ tables):
   (`src/ops/potrf/kernels/potrf_blocked.cc:340`). `Blocked` has no fields: `nb` and `W` come from
   `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`. `lpanel:panel=16`
   is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
-- **gemm `direct`** indexes the batch with `int` offsets (`b * stride`), which can overflow at a large
-  batch times stride. It is not a `can_run` term. The fix is 64-bit offsets.
 - **Grid-z ceiling.** gemm (`direct`, `tiled`, `reg`, `wide`, `splitk`), syrk, syr2k, trmm, symm and
   the hemm, herk and her2k natives chunk a batch past 65535 (`src/ops/level3/batched.hh`, gemm's
   `launch`). Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
@@ -341,7 +339,7 @@ tables):
   ortho and ormqr, so that is a separate change.
 
 Closed since 2026-10-06: gemm `direct` rebases each item in 64 bits
-(`src/ops/gemm/kernels/gemm_kernels.cc:310-313`); the stale `options.hh` line numbers in the potrf
+(`src/ops/gemm/kernels/gemm_launch.hh:313-316`); the stale `options.hh` line numbers in the potrf
 header comment are gone.
 
 Known defects that affect routing are in [known defects](known-defects.md): #12 (heterogeneous
@@ -588,7 +586,7 @@ The full family, form and window reference is [the gemm page](../perf/gemm.md) (
 
 - **Families:** `jacobi` (`gesvdj_cta`), `cta`, `blocked`, `vendor`. The jobs are canonicalised once,
   Thin to All where they coincide.
-- **`can_run`** (`src/ops/gesvd/gesvd.cc:64-82`): native needs a GPU, a homogeneous batch and
+- **`can_run`** (`src/ops/gesvd/gesvd.cc:71-93`): native needs a GPU, a homogeneous batch and
   `m, n, batch >= 1`.
   - `jacobi`: sub-group 32, not Hermitian, and `max(m, n) <= gesvd_jacobi_max_dim<T>(vectors, slm_budget)`
     (64, halved until its local memory fits).

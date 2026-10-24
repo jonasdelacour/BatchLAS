@@ -31,7 +31,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:71-74,647` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89; float and double red in `tests/known-failures.txt` |
 | 19 | `src/ops/potrf/potrf.cc` `can_run` | fixed: `blocked` serves Upper |
 | 20 | `src/sycl/kernel_attrs.hh:18-19` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
-| 21 | plain `range<3>` launches with the batch in dimension 0 (`ormbr.cc:169` and others) | open; worked around in the QR, gesvd and syev part loops |
+| 21 | plain `range<3>` launches with the batch in dimension 0 (`ormbr.cc:170` and others) | open; worked around in the QR, gesvd and syev part loops |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -113,7 +113,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
   also wrote past its last column.
 - **Cause:** the host `getri` copied `n * n` contiguous elements from `A` to `C` and read neither
   `ld`.
-- **Fix:** `src/backends/netlib_lapack.cc:1163` copies with the ld- and stride-aware
+- **Fix:** `src/backends/netlib_lapack.cc:1160` copies with the ld- and stride-aware
   `MatrixView::copy`, and the LAPACKE call passes `Cb.ld()` (`db9112ed`, 2026-10-12, B10).
 - **Status:** fixed. Recorded in [../perf/lu.md](../perf/lu.md).
 
@@ -222,12 +222,12 @@ reachable only through a `native` pin, are deleted. `BATCHLAS_SYRK_ROUTE=native`
 - **Root cause:** the host `alpha`/`beta` handed to cuBLAS were 8-byte aligned (a
   `std::complex<double>` parameter or closure member), and cuBLASLt loads them with a 16-byte
   vector load. Fixed in 9f551ab0: every cuBLAS call copies them into `alignas(16)` locals inside
-  `impl::run_native` (`src/backends/cublas.cc:64-65`, `:151-152`, `:244-245`, `:417-418`,
+  `impl::run_native` (`src/backends/cublas.cc:62-63`, `:151-152`, `:244-245`, `:417-418`,
   `:478-485`).
 - **Reached by:** `trsm` with `blocked` and one right-hand side. The unfixed build crashed on
   `trsm cdouble L/R order 64-384 q 1 batch 128` under Auto, and also in `getrf_tests`
   (`LuTest/7`) and `ortho_tests` (`OrthoMatrixTest/7`).
-- **Workaround (gemm), redundant:** `gemm_vendor_impl` (`src/backends/cublas.cc:45`) still calls
+- **Workaround (gemm), redundant:** `gemm_vendor_impl` (`src/backends/cublas.cc:43`) still calls
   `cublasZgemmStridedBatched` when `m` or `n` is 1 (`:69`). Guard:
   `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm` (`tests/trsm_tests.cc:588`). With the
   branch disabled (DPC++, threadripper02, sm_120, 2026-10-09), under `BATCHLAS_GEMM_ROUTE=vendor`:
@@ -348,7 +348,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   1.1e-3 at \f$\kappa = 174\f$, 0.20 at \f$2.9 \cdot 10^3\f$ and 0.996 at \f$10^4\f$. V stays at
   1.5e-6. `jacobi` and `blocked` stay at or below 6e-6 on the same matrices.
 - **Cause:** CTA mode always takes the normal-equations branch (`gesvd_direct_bidiag` is true only
-  for `Blocked`, `src/ops/gesvd/kernels/gesvd_blocked.cc:70-73`). V comes from the eigenvectors of
+  for `Blocked`, `src/ops/gesvd/kernels/gesvd_blocked.cc:71-74`). V comes from the eigenvectors of
   \f$B^T B\f$, and `build_bidiag_vectors` (`:517`) forms \f$u_i = B v_i / \sigma_i\f$ (`:582`), which scales the error of
   \f$v_i\f$ by \f$\sigma_{\max}/\sigma_i\f$. Same root as
   [gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa).
@@ -357,7 +357,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   the deep table ranks `cta` first in 14 double `vec=all` non-square rows (for example `m=8 n=32`,
   `m=32 n=8`); float and double `vec=none` rows also reach `cta`, but compute no vectors, so they
   cannot show the defect. Double's error is \f$\varepsilon_d\kappa^2\f$.
-- **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations` (`tests/gesvd_tests.cc:543`), listed in
+- **Test:** `GesvdTest.CtaProviderCoversAllJobCombinations` (`tests/gesvd_tests.cc:547`), listed in
   `tests/known-failures.txt` for float/CUDA and double/CUDA. Float: since the Philox generator, its
   `AN` matrix has \f$\kappa = 497\f$; 8 of 80 seeds fail. Double (threadripper02, sm_120,
   2026-10-12): the same orthogonality check fails at 8.39e-12 against the \f$128\,n\varepsilon\f$
@@ -389,8 +389,8 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Symptom:** the device link prints `.minnctapersm is ignored when neither .maxntid nor .reqntid
   is specified` for every functor that uses the macro without a fixed launch size. Counted with
   `scripts/register_probe.sh` on sm_120 (2026-10-19): 149 in `batchlas_extensions_cta` (the only
-  users there are `src/ops/getrf/kernels/getrf_tiny.cc:90`, `src/ops/gesv/kernels/gesv_tiny.cc:100`
-  and `src/ops/posv/kernels/posv_tiny.cc:95`) and 24 in `batchlas_sycl` (the 128x128 gemm
+  users there are `src/ops/getrf/kernels/getrf_tiny.cc:90`, `src/ops/gesv/kernels/gesv_tiny.cc:101`
+  and `src/ops/posv/kernels/posv_tiny.cc:96`) and 24 in `batchlas_sycl` (the 128x128 gemm
   functors, then without `reqd_work_group_size`). Right answers; register counts are uncapped.
 - **Cause:** `intel::max_work_group_size(1, 1, N)` in the macro (`src/sycl/kernel_attrs.hh:18-19`)
   lowers to no `.maxntid` on NVPTX with this DPC++, and `.minnctapersm` alone is dropped.
@@ -401,9 +401,9 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   and register probe per kernel: an applied bound moves registers and routing windows, and the
   tiny-solver tables were tuned with no bound in effect. Re-pins the potrf/posv/trsm kernel hashes.
 - **Status:** open for the three tiny solvers. Every gemm functor that uses the macro also declares
-  `reqd_work_group_size`: `BATCHLAS_GEMM_REQD_WG` in `register_128x128.hh:187,577,588` (u1 since
+  `reqd_work_group_size`: `BATCHLAS_GEMM_REQD_WG` in `register_128x128.hh:189,579,590` (u1 since
   WP-U, u4 since WP-N2) and `register_256x128.hh:256`, `BATCHLAS_WIDE_V2_REQD_WG` in
-  `register_64x64_k16_wide.hh:881`. Measured after WP-U: 0 ignored bounds in `batchlas_sycl`, u1
+  `register_64x64_k16_wide.hh:883`. Measured after WP-U: 0 ignored bounds in `batchlas_sycl`, u1
   capped at 128 registers
   ([gemm.md](../perf/gemm.md#gemm-wp-u-the-u1-128x128-launch-bound-enforced)).
 - **Compiler-dependent (2026-10-22, 2x4090 box):** the intel/llvm build there (`e79d489d`, Jan 2026)
@@ -420,13 +420,13 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Symptom:** pinned blocked gesvd (float, n = 40, values and vectors, chunking off) aborts with
   `CUDA_ERROR_INVALID_VALUE` and then SIGFPE from batch 65505; batch 65504 runs. At n = 16 the first
   failing batch is 65535.
-- **Cause:** `PackPPanelKernel` (`src/ops/gesvd/ormbr/ormbr.cc:169`) is a `parallel_for` over a
+- **Cause:** `PackPPanelKernel` (`src/ops/gesvd/ormbr/ormbr.cc:170`) is a `parallel_for` over a
   plain `sycl::range<3>` with the batch in dimension 0. DPC++ range rounding
   (`__pf_kernel_wrapper`) rounds that dimension up, here to 65536, past CUDA's 65535 grid. A batch
   that fits the grid is therefore not enough. Other plain `range<3>` launches with the batch in
-  dimension 0: `src/kernels/common/larft_wy.hh:260` (pack_v), `src/ops/orgqr/kernels/orgqr_blocked.cc:222,253`,
-  `src/ops/syev/kernels/uplo_mirror.cc:27`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
-  `src/ops/syev/sytrd/sytrd_sy2sb.cc:120`, `src/util/transpose.cc:29`.
+  dimension 0: `src/kernels/common/larft_wy.hh:261` (pack_v), `src/ops/orgqr/kernels/orgqr_blocked.cc:223,254`,
+  `src/ops/syev/kernels/uplo_mirror.cc:28`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
+  `src/ops/syev/sytrd/sytrd_sy2sb.cc:121`, `src/util/transpose.cc:30`.
 - **Workaround:** the part loops of blocked geqrf, orgqr, ormqr, gesvd (all types, complex general
   included) and syev (cta, blocked) keep every part at `max_groups_yz / 2` (`select::grid_capped_chunk`).
   Test: `Gesvd*.BlockedPastTheGridIsBitIdentical` (batch 65505, n = 40, float and complex<float>).
@@ -444,7 +444,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   route LOBPCG's projected solves (float, jobz=V, n = 12 and 18, batch 2) to the cuSOLVER `vendor`
   family, and a `vendor` pin under the old tables failed the same way.
 - **Refuted suspect:** the vendor wrapper's handling of the 12x12 corner of an 18x18 slab
-  (ld 18 > n). `SyevTest/*.VendorRouteHonoursLdSubViewsAndBatchStride` (`tests/syev_tests.cc:338`)
+  (ld 18 > n). `SyevTest/*.VendorRouteHonoursLdSubViewsAndBatchStride` (`tests/syev_tests.cc:340`)
   runs the pinned vendor on packed, ld > n, sub-view, padded-stride and batch-1 layouts, all four
   dtypes, against a closed-form graded spectrum with poisoned padding, and passes on the unchanged
   wrapper. The eigenpairs the vendor returned inside LOBPCG were correct.
@@ -469,7 +469,7 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 
 **Status:** worked around on both CTA paths; not reproduced.
 
-`src/ops/syev/kernels/syev_cta.cc:129-134` (the `uplo_eff` note) says the CTA SYTRD/SYEV pipeline
+`src/ops/syev/kernels/syev_cta.cc:130-135` (the `uplo_eff` note) says the CTA SYTRD/SYEV pipeline
 is wrong for `Uplo::Lower`. It runs the Upper pipeline and first symmetrizes
 `A_upper := conj(A_lower)`. No test or failure is recorded. The fused kernel
 (`syev_cta_fused.cc:52`) also always runs Upper, so neither path reaches the Lower `sytrd_cta`
@@ -524,7 +524,7 @@ refuted.
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling). To settle it, use
   graded input with the largest column norm in columns 32..63, near overflow.
 - **Recursive `stedc` may merge from unset eigenvectors under `NoEigenVectors`.**
-  `src/ops/syev/stedc/stedc.cc:536` forwards `jobz` to the leaf, but merges always consume the leaf
+  `src/ops/syev/stedc/stedc.cc:537` forwards `jobz` to the leaf, but merges always consume the leaf
   vectors. The level-synchronous driver ignores `jobz` (`:641`). To settle it, call
   `stedc(..., NoEigenVectors, ...)` with `StedcAlgorithm::Recursive` on a poisoned eigenvector
   buffer. See [stedc: eigenvalues-only still builds eigenvectors](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
@@ -559,7 +559,7 @@ refuted.
   `Span<std::byte> ws` by value with no default `block_size`, while the definition in
   `src/ops/syev/sytrd/sytrd_blocked.cc` is the `const Span<std::byte>&` overload, so a translation unit
   that saw only the internal header failed at link time. The header is deleted; the one
-  declaration, with its contract, is in `include/batchlas/blas/extensions.hh:1053`.
+  declaration, with its contract, is in `include/batchlas/blas/extensions.hh:1055`.
 - **`miniacc --help` terminated its host.** `miniacc::ParseCommandLine` called `std::exit(0)`,
   which skips destructors in the caller's frames. It sets `CliOptions::help_requested`, and
   `MiniAccMain` returns 0 (`include/batchlas/util/miniacc.hh:656,723`).
@@ -568,7 +568,7 @@ refuted.
 
 | Claim | Re-check | Verdict |
 | --- | --- | --- |
-| [../perf/lu.md](../perf/lu.md): `getrs` sits in a `BATCHLAS_HAS_CUBLAS` TU but calls cuSOLVER | `getrs_vendor` (`src/backends/cublas.cc:1068`) calls only `cublas?getrsBatched`; the gate matches the definition | did not reproduce |
+| [../perf/lu.md](../perf/lu.md): `getrs` sits in a `BATCHLAS_HAS_CUBLAS` TU but calls cuSOLVER | `getrs_vendor` (`src/backends/cublas.cc:843`) calls only `cublas?getrsBatched`; the gate matches the definition | did not reproduce |
 | `tridiagonal_solver` assumes `Q.ld() == n` and caps QR steps at six with no report | `src/ops/syev/tridiag/tridiag_solver.cc` addresses `Q` through `Q.ld()` (`:177`), allows `kTridiagMaxIterations = 30` steps per eigenvalue (`:30`) and throws `convergence_error` past that; `SteqrTest.TridiagSolverGradedAndSaturatingBatch` (`tests/steqr_tests.cc:1432`) runs it with `ld = n + 3` | does not hold |
 
 ## Guards that cannot fail

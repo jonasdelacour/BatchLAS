@@ -37,8 +37,8 @@ inline constexpr bool level3_vendor_available =
 `src/ops/<op>/choice.hh` lists each op's families, and `src/ops/<op>/<op>.cc` holds `key_of`, `can_run`, the
 launch and the workspace. `select::run` takes the first runnable entry of the nearest row of
 `tuned/<op>.<device>.txt`. Every family is fieldless. Derived legs (gram's tile width, the triangular
-kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and her2k still choose by hand in
-`cublas.cc` (vendor builds only) and have no `BATCHLAS_<OP>_ROUTE`.
+kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and her2k select from their own tables
+the same way since 2026-10-22.
 
 | op | candidates, tie-break order | keys | last resort |
 |---|---|---|---|
@@ -158,7 +158,7 @@ The old triangular gate (`syrk_prefer_triangular_tiles` at `ff340fc6`, `kTriangu
 > **Warning:** `n >= 257` is the edge the rows carry, but the supporting measurement says "from n = 384 up every
 > saturated shape won" (`experiments/GEMM_TO_LEVEL3_SURVEY.md`). The band **257 <= n <= 383** ranks `triangular`
 > first with no bracketing cell. Every shape there takes the predicated path: the unpredicated fast path needs
-> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:38-46`),
+> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:39-47`),
 > and the sweep never sampled the predicated path. On `tall`/`wide` rows, n = 256 (`tiles_per_side == 2`) ranks
 > `vendor` first, a recorded 0.89x pre-existing loss on the tile route.
 
@@ -224,8 +224,8 @@ untimed.
 
 ### herk and her2k crossovers
 
-hemm, herk and her2k choose by hand in the cuBLAS-gated TU. The predicates below are the same expansion decision as
-above, with different constants.
+hemm, herk and her2k chose by hand in the cuBLAS-gated TU until 2026-10-22; their tables transcribe the rules
+below. The predicates are the same expansion decision as above, with different constants.
 
 | predicate | shipped condition | evidence | bracketing non-winner |
 |---|---|---|---|
@@ -257,7 +257,7 @@ Built, measured, rejected.
 | `syr2k` for the `sytrd_blocked` trailing update, in `double` | 7.7x and 7.4x slower at n2=256, batch 1024; 1.9x slower at n2=512, batch 512; 1.55x faster only at n2=2048, batch 32 | Rejected for `double`. Float ships: 1.25x–1.66x on the update, 1.07x–1.27x end to end. The float path drops the upper-triangle symmetrize pass: nothing in the `sytrd_blocked` pipeline reads A's upper triangle, so the pass cost more than half the win |
 | `syr2k` at n = 1024 after WP1 S2, reported 10.9% faster | Repeating the step gave a 5.65–6.40 ms spread: noise | Not a win. Repeat flattering results as carefully as alarming ones |
 | `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_substitution_enabled<B, T>` |
-| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:172-178` records that no build option exists |
+| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:198-204` records that no build option exists |
 
 ## Correctness findings {#dispatch-correctness-findings}
 
@@ -363,8 +363,8 @@ kernels (`NoRouteError`), not dispatch faults.
 Later, the level-3 wave added vendor-free routes for float syr2k at batch 1, double symm and syrk `n <= 128`, and
 every trmm dtype on both sides (flat-kernel-selection.md §12).
 
-The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are compiled into `batchlas_selection_obj`
-whatever vendor library is present (`src/CMakeLists.txt:167-171`); `BACKEND_COMMON_SOURCES`
+The seven level-3 entry-point TUs (`src/ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}/<op>.cc`) are compiled into
+`batchlas_extensions_level3_obj` whatever vendor library is present (`src/CMakeLists.txt:189-191`); `BACKEND_COMMON_SOURCES`
 (`src/backends/CMakeLists.txt:1-3`) holds only `backend_handle_instantiations.cc`. The vendor TUs keep their library
 gates (`src/backends/CMakeLists.txt:13-35`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not
 created unless cuBLAS, cuSOLVER and cuSPARSE are all present (`BATCHLAS_HAS_CUDA_VENDOR_TUS`, `src/CMakeLists.txt:16-18`).

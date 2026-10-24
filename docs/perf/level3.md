@@ -251,8 +251,8 @@ Measured against a per-batch loop over the vendor's triangular primitive: float 
 x batch 1..512, and complex64 `cublas?hemm` over n 16..512 x batch 1..16. The expansion wins **1.2x–72x**
 everywhere except `batch <= 2 && n <= 128`, where the call is launch-bound and the expansion loses by up to **2.5x**.
 
-The shipped edge is more conservative than that loss region: `kExpandMinBatch = 4` and `kExpandMinDim = 256`
-(`src/kernels/common/triangular_expand.hh:29-30`), used by the float `symm` rows and by `hemm_vendor`. Batch 3 at every
+The shipped edge is more conservative than that loss region: batch >= 4 or max(m, n) >= 256, transcribed into the
+float `symm` rows and the `hemm` tables (the deleted `kExpandMinBatch` and `kExpandMinDim`). Batch 3 at every
 n, and batch <= 2 with `129 <= n <= 255`, take the loop although they lie outside the loss region. That slack
 is deliberate; the exploration numbers would support 2 and 128. `symm` ranks `vendor` first on every `tall` and
 `wide` row (no bracketing cell exists). Double `symm` ranks `vendor` first everywhere, and `expand` for double is unmeasured.
@@ -393,7 +393,7 @@ multiply uninitialised workspace. The precision table is at
 Built and rejected. In complex float the conjugating Gram route loses to GEMM-plus-Hermitian-fold at every shape:
 0.217 vs **0.206** ms at n=32 batch 2048, and 2.08 vs **1.57** ms at n=128 batch 512. A complex multiply is four
 real ones, so herk is compute bound where real syrk is bandwidth bound. The route stays reachable as
-`BATCHLAS_SYRK_ROUTE=gram` so the conjugation stays under test.
+herk's `gram` family (`BATCHLAS_HERK_ROUTE=gram`), so the conjugation stays under test.
 
 ### trmm for the WY block factor
 
@@ -408,7 +408,7 @@ Before the tile kernel, trmm for `W2 = T^H W1` lost at every shape. Re-measured 
 | `complex<double>` | 0.958x–1.010x | loses at ib = 16; excluded |
 | `netlib float` / `netlib double` | 0.336x–1.199x / 0.379x–1.064x | excluded (per-batch cblas loops both ways) |
 
-`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:53`) is therefore per type, plus `ib <= 64`. The effect
+`wy_trmm_applicable` (`src/ops/ormqr/kernels/ormqr_blocked.cc:55`) is therefore per type, plus `ib <= 64`. The effect
 on syev is small (1.036x at n=64 batch 2048, 1.003x at n=512). The 16-row tile moved `double` to 1.013x–1.036x
 and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 
@@ -416,7 +416,7 @@ and closed `complex<double>`'s ib = 16 hole to parity; it is kept for double.
 
 - `X^H A X` (`syevx_lobpcg.cc`, `syevx_filtered.cc`): a product of two different matrices; `syr2k` does not express it.
 - `A X` with symmetric A (`syevx_lobpcg.cc`, `lanczos.cc`, `ritz_values.cc`): symm would expand and then GEMM, adding a copy.
-- `gebrd_blocked.cc:359,360`: looks like syr2k, but `a22` is not symmetric.
+- `gebrd_blocked.cc:371,372`: looks like syr2k, but `a22` is not symmetric.
 - Transcribing the thresholds into the old `RouteTable::preferred` was killed: a `tiles_per_side >= 3` rule rejected
   the tile route for `129 <= n <= 383`, sending n = 256 to a kernel that wrote **both triangles**.
 
@@ -433,7 +433,7 @@ uplo at k = 200 and mirrors both sides before comparing.
 ### The herk test that could not fail
 
 `HerkTest` could not catch conjugating the wrong operand, which returns `conj(C)`: still Hermitian and consistent.
-`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:267`) compares against a GEMM and fails when the conjugation flips.
+`HerkTest.MatchesGemmReference` (`tests/herk_tests.cc:265`) compares against a GEMM and fails when the conjugation flips.
 
 ### The trmm poison test
 
@@ -481,8 +481,6 @@ the exception type differs by backend (template parameter `E`): cuBLAS, rocBLAS 
   stops being found.
 - **The vendor family never calls the public entry.** A fallback that did would re-enter the same gate and recurse
   without bound.
-- **One route parse per variable.** `BATCHLAS_EXPAND_ROUTE` comes from one Settings field that `expansion_route_pin`
-  and `expansion_preferred` both read, so the two cannot disagree.
 
 ### Level-3: scratch expansions and their ceilings
 

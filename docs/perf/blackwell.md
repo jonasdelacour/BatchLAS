@@ -21,7 +21,7 @@ and are not on main.
 
 | Section | On main | sm_120 table on main |
 |---|---|---|
-| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:367`), `scripts/check_device_calls.py` | n/a |
+| [icpx fast fp-model](#icpx-fast-fp-model), [device-call guard](#device-call-guard) | yes: `-ffp-model=precise` (`cmake/BatchLASOptions.cmake:416`), `scripts/check_device_calls.py` | n/a |
 | [cfloat spmm pair loads](#cfloat-spmm-under-the-precise-fp-model) | yes (`src/ops/spmm/kernels/spmm_native.cc`) | `tuned/spmm.sm_120.txt`, deep |
 | [compute-capability key](#compute-capability-key) | yes | n/a |
 | [syev retune](#syev-retune) | no (blocked edge 768, nb 16, WY 32, per-type latrd min-n are branch-only) | `tuned/syev.sm_120.txt`, deep |

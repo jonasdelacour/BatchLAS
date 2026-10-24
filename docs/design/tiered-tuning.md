@@ -100,7 +100,7 @@ Across cells:
   (`// family: <name> "path" ...`, `// common "path" ...`) add files outside the source list:
   posv's `cta` and `blocked` list potrf's and trsm's kernels, trmm's and symm's `expand` list gemm's.
 - `batchlas_tune --import-raw` turns a schema-1 raw sweep into a deep run. Its hashes are
-  `legacy:<kernels>` unless the raw file's op hash equals today's (`tools/tune/ledger.cc:446`), so
+  `legacy:<kernels>` unless the raw file's op hash equals today's (`tools/tune/ledger.cc:468`), so
   an old sweep imports stale.
 
 ## Engine: the lean cell
@@ -261,7 +261,7 @@ Tests follow the agent guide's "guards that cannot fail" rules (@ref dev_agent_g
 
 | Guard | What it checks |
 | --- | --- |
-| `tune_replay --raw <sweep> --tier <t>` (`tools/tune/replay.cc`) | replays a tier's racing and bisection as planned before the frontier (stride-1 lattice, refinement cap, `TierParams` rep cap; not the lean race) against the exhaustive trsm sweeps (4452 float, 4098 double cells, every rep), no GPU. Score: table misrank, the share of cells where the nearest row's first runnable entry is more than 3% slower than the exhaustive best. Bounds (excess over the noise floor): deep 0.2%, coarse 1%, preview 5% (`replay.cc:253`) |
+| `tune_replay --raw <sweep> --tier <t>` (`tools/tune/replay.cc`) | replays a tier's racing and bisection as planned before the frontier (stride-1 lattice, refinement cap, `TierParams` rep cap; not the lean race) against the exhaustive trsm sweeps (4452 float, 4098 double cells, every rep), no GPU. Score: table misrank, the share of cells where the nearest row's first runnable entry is more than 3% slower than the exhaustive best. Bounds (excess over the noise floor): deep 0.2%, coarse 1%, preview 5% (`replay.cc:290`) |
 | `tune_replay --slowdown` | planning schemes on shipped tables, ledgers and raw sweeps ("Engine: flip frontier and the slowdown replay") |
 | Host unit tests (`tests/tune_tests.cc`) | precedence (coarse never displaces a current deep record; a stale deep one is displaced), gap fill, partly-stale selection, lattice nesting, `--check` reproducibility; each with a deliberate break that turns only its own test red |
 | Racing guard | a synthetic spec with a true near-tie, an arm 4% slower (eliminated in deep) and one 2% slower (kept as a tie) |
@@ -806,7 +806,7 @@ crashes and a retry per cell, about +3 h on a deep gemv cdouble run.
 ## Engine: op order over all 19 ops
 
 A multi-op run measures op by op in a stable topological order of `op_dependencies()`
-(`schedule.cc:293`): an op follows every op whose table its timings depend on through a public entry
+(`schedule.cc:292`): an op follows every op whose table its timings depend on through a public entry
 point; input order breaks ties. `all` starts from `canonical_op_order()`:
 
 gemm, trsm, syr2k, gemv, spmm, trmm, symm, syrk, potrf, getrf, getrs, geqrf, ormqr, getri, posv,

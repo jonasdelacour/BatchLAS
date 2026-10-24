@@ -26,7 +26,7 @@ Open bugs: [known-defects.md](known-defects.md).
 - Metal's five failing tests: `hemm_tests`, `herk_tests`, `her2k_tests` (no native family),
   `posv_tests` (Upper complex<float> n = 33: potrf Upper above the `cta` ceiling has no vendor-free
   route, known-defects #19) and `lanczos_tests` (shared with every tree).
-- `BATCHLAS_ENABLE_VENDOR_BLAS` is the only vendor switch (`cmake/BatchLASOptions.cmake:317-326`);
+- `BATCHLAS_ENABLE_VENDOR_BLAS` is the only vendor switch (`cmake/BatchLASOptions.cmake:366-375`);
   there are no per-library options. A partial CUDA set fails configure.
 - CI runs the vendor-free CUDA configure, build and `ctest -LE slow` with `continue-on-error`
   (`.github/workflows/ci.yml`, "Vendor-free configure, build and ctest"): it reports, it does not gate.
@@ -43,7 +43,7 @@ The native families' `can_run` requires `d.is_gpu` for `geqrf`, `orgqr`, `ormqr`
 (their `blocked` delegates to children that select for themselves) (`src/ops/<op>/<op>.cc`; geqrf's
 in `can_run.hh`). Exceptions: `gemv`'s `direct` arm and `spmm`'s
 `direct`, which run on a host queue, and `gemm`, which accepts `is_gpu || !has_vendor`
-(`src/ops/gemm/gemm.cc:98`).
+(`src/ops/gemm/gemm.cc:119`).
 
 ### The metric: the `NoRouteError` census
 

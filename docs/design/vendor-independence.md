@@ -25,7 +25,7 @@ Two independent questions decide whether a call can reach a vendor library:
 - `Backend::SYCL` is a GPU with no vendor library at all (AdaptiveCpp Metal): every vendor predicate
   is false there (`src/select/vendor.hh`), so the Apple GPU build is vendor-free by construction.
 - `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the one switch over every vendor library (cuBLAS, cuSOLVER,
-  cuSPARSE, rocBLAS, rocSOLVER, rocSPARSE, LAPACKE, CBLAS; `cmake/BatchLASOptions.cmake:317-326`).
+  cuSPARSE, rocBLAS, rocSOLVER, rocSPARSE, LAPACKE, CBLAS; `cmake/BatchLASOptions.cmake:366-375`).
   There are no per-library options. The three CUDA libraries are all-or-nothing: a partial set fails
   configure (`cmake/BatchLASDependencies.cmake:214-232`).
 
@@ -102,7 +102,7 @@ With `BATCHLAS_HAS_CUBLAS` on, the answer is `true` for every type on CUDA, so v
 behaviour is unchanged. The internal callers that check it are `ortho.cc`, `ormqr_blocked.cc`,
 `sytrd_blocked.cc` and `src/select/coverage.cc`. The level-3 four launch from
 `src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`; each native `can_run` has a
-`kWired = select::native_gpu_backend<B>` term (for example `src/ops/trmm/trmm.cc:55`; symm adds ROCm).
+`kWired = select::native_gpu_backend<B>` term (for example `src/ops/trmm/trmm.cc:57`; symm adds ROCm).
 
 `factorization_vendor_available` covers six ops over two NVIDIA libraries; a per-op split is open
 debt (see [What is still open](#what-is-still-open-architecturally)). It is moot on CUDA while the
@@ -226,7 +226,7 @@ as another: a symbol that is present is not a kernel that runs.
 
 | Alternative | Result | Verdict |
 |---|---|---|
-| A compile-time gate (`-DBATCHLAS_ENABLE_COVERAGE`) | An inline header function is sound only if every TU in the process agrees, which a library cannot enforce; a test binary carrying its own weak copy of the resolver produced a valid header and zero `reached` rows | Rejected; `cmake/BatchLASOptions.cmake:172-178` records that the option does not exist |
+| A compile-time gate (`-DBATCHLAS_ENABLE_COVERAGE`) | An inline header function is sound only if every TU in the process agrees, which a library cannot enforce; a test binary carrying its own weak copy of the resolver produced a valid header and zero `reached` rows | Rejected; `cmake/BatchLASOptions.cmake:198-204` records that the option does not exist |
 
 ## Verification tooling
 
@@ -261,8 +261,8 @@ Per-op performance debts are on the `docs/perf/` pages. These belong to the vend
    The build switch `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` is the enforcement.
 4. `factorization_vendor_available` covers six ops over two NVIDIA libraries. A per-op split would
    move every call site.
-5. hemm, herk and her2k still select by hand and keep their windows in code. See
-   [docs/perf/dispatch.md](../perf/dispatch.md) and @ref design_flat_selection §11.
+5. hemm, herk and her2k select from transcribed tables (2026-10-22); their windows are the old
+   hand rules until a retune. See [docs/perf/dispatch.md](../perf/dispatch.md).
 6. The vendor-free suite is not green, and no selection mechanism can make it so. The gap is missing
    kernels, not routing. Status: [vendor-free-status.md](vendor-free-status.md).
 

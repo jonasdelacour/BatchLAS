@@ -53,10 +53,10 @@ comes from a reversal in the finalize kernel.
 
 `SyevxSelect { Extremal, Index, Value }` (`include/batchlas/blas/enums.hh:415`). `Extremal` is the default. It
 is normalized to an Index range internally, but it stays a separate value so no caller depends on a changed default.
-`EigenRangeType` (`include/batchlas/blas/extensions.hh:715`) is not reused, because its default `All` means every
+`EigenRangeType` (`include/batchlas/blas/extensions.hh:714`) is not reused, because its default `All` means every
 eigenvalue.
 
-`SyevxParams` (`include/batchlas/blas/extensions.hh:69-84`) has `select`, `il`, `iu` (inclusive, 0-based;
+`SyevxParams` (`include/batchlas/blas/extensions.hh:68-83`) has `select`, `il`, `iu` (inclusive, 0-based;
 `iu = -1` means \f$n-1\f$), `vl`, `vu` (the interval \f$(v_l, v_u]\f$), `abstol` (non-positive means
 \f$\epsilon\|T\|\f$) and `order`. All have defaults. `vl`, `vu` and `abstol` are `float_type`, since eigenvalues
 are real.
@@ -77,9 +77,9 @@ Overloads without `m` are legal only when the count is static (`Extremal` and `I
 
 ## syevx range: normalization and validation
 
-`syevx_resolve_range(n, neigs, params)` (`include/batchlas/blas/extensions.hh:401`, forwarding to the
+`syevx_resolve_range(n, neigs, params)` (`include/batchlas/blas/extensions.hh:400`, forwarding to the
 field-by-field overload defined at `src/ops/syevx/syevx.cc:180`) returns a
-`SyevxResolvedRange { value_range, il, iu, max_count, reverse }` (`extensions.hh:366`); `vl` and `vu` are read from
+`SyevxResolvedRange { value_range, il, iu, max_count, reverse }` (`extensions.hh:365`); `vl` and `vu` are read from
 `params` directly. It is the single normalization point for every solve and every `buffer_size`.
 
 | Input | Result |
@@ -215,8 +215,8 @@ The consistency tests put boundaries in spectral gaps. One test puts a boundary 
 ## syevx range: Python surface
 
 - `SyevxOptions` (`python/batchlas/_options.py:19`) has `select` (default `"extremal"`), `il`, `iu`, `vl`, `vu`, `abstol` and `order`, each defaulting to the C++ `SyevxParams` value.
-- `bl.syevx` (`python/batchlas/_api.py:1337`) returns `m` only when a range is requested, so existing unpacking is unchanged.
-- `bl.syevx_range` (`_api.py:1454`) returns per-item arrays sliced to \f$\min(m[b], \mathrm{capacity})\f$, plus `counts`, `truncated` and `capacity`. It returns lists, because a rectangular array would misstate the slots past \f$m[b]\f$.
+- `bl.syevx` (`python/batchlas/_api.py:1334`) returns `m` only when a range is requested, so existing unpacking is unchanged.
+- `bl.syevx_range` (`_api.py:1451`) returns per-item arrays sliced to \f$\min(m[b], \mathrm{capacity})\f$, plus `counts`, `truncated` and `capacity`. It returns lists, because a rectangular array would misstate the slots past \f$m[b]\f$.
   A Value range requires `neigs`. The only safe default is \f$n\f$, the [stein workspace](#syevx-range-stein-workspace-scaling) worst case.
   `select="extremal"` raises `ValueError`: use `bl.syevx`.
 

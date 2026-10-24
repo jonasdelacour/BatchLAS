@@ -102,7 +102,7 @@ float up to 35) and LPanel above that. The tables above replace them.
 |---|---|---|---|---|
 | CTA `NB`/`TS` (`potrf_cta.cc:42-45`) | 8/4 | 8/4 | 8/4 | 8/2 |
 | CTA fit ceiling, advertised / resident | 77 / 155 | 54 / 109 | 54 / 109 | 38 / 77 |
-| blocked `nb` (`potrf_blocked.cc:45-48`) | 128 | 96 | 96 | 64 |
+| blocked `nb` (`potrf_blocked.cc:51-54`) | 128 | 96 | 96 | 64 |
 | blocked `W` | 128 | 32 | 32 | 16 |
 
 No `nb` equals a fit ceiling; sizing `nb` from the fit ceiling is measurably wrong for every type. A vendor-free build,
@@ -112,7 +112,7 @@ and a bare `native` pin, take the first runnable non-vendor entry of the row. A 
 
 * `local_mem_size` is **101,376 B**. The budget used is `local_mem_size - 4096` = **97,280 B**
   (`select::Device::slm_budget`). `kPotrfReferenceSlmBudget` (`potrf_cta.cc:50`) serves only `potrf_cta_max_n<T>()`.
-* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:45-46` for every `nvidia_gpu_sm_*` target) is wrong
+* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:56-57` for every `nvidia_gpu_sm_*` target) is wrong
   here by 2.06x. No decision reads it.
 * The advertised ceiling is the first miss of a walk with `break`, not `continue`: `potrf_hole_padded` is not monotone
   (47,200 → 49,920 while 49,700 stays 49,700).

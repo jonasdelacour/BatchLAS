@@ -17,7 +17,7 @@ ptxas and CPU AOT for every object in its `.so`, single-threaded, so `-j` cannot
 | `ON` (default on macOS, `release` preset) | one `batchlas` `.so` from every object library | release and packaging: one SONAME, one export set, no cross-`.so` symbol cycles |
 
 Measured on the 2x RTX 4090 box (DPC++ at `/opt/dpcpp-cuda`, RelWithDebInfo,
-`nvidia_gpu_sm_89,native_cpu`; `cmake/BatchLASOptions.cmake:199-222`, `CMakePresets.json` `release`):
+`nvidia_gpu_sm_89,native_cpu`; `cmake/BatchLASOptions.cmake:248-271`, `CMakePresets.json` `release`):
 
 - Before the split, a one-line edit cost 216 s, of which 198 s was a single relink.
 - Monolithic: `--target batchlas -j16` from scratch took 11m38s, of which the one

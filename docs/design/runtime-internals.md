@@ -101,8 +101,8 @@ The `sig::` aliases are types and need no annotation.
 The instantiation tables in vendor TUs (`src/backends/`: `cublas.cc`, `cusolver.cc`, `cusparse.cc`,
 `rocblas.cc`, `rocsolver.cc`, `rocsparse.cc`, `netlib_lapack.cc`) name only `backend::`-qualified
 `*_vendor` symbols. Public entry points and their `*_buffer_size()` queries are instantiated in
-`src/ops/<op>/<op>.cc` (`src/ops/level3/level3.cc` for hemm/herk/her2k), compiled into
-`batchlas_selection_obj` in every build. The vendor call inside is `if constexpr`-gated, so the public
+`src/ops/<op>/<op>.cc`, compiled into `batchlas_selection_obj` (the level-3 seven into
+`batchlas_extensions_level3_obj`) in every build. The vendor call inside is `if constexpr`-gated, so the public
 symbol exists without the library. A public-op row in a vendor TU would be a duplicate symbol, and a
 vendor-free build would lose the op. Design record: @ref design_flat_selection.
 
