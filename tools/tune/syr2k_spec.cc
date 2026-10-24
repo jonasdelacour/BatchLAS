@@ -15,6 +15,7 @@
 
 #include <src/ops/syr2k/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <string>
 #include <utility>
@@ -82,6 +83,8 @@ class Syr2kSpec final : public OpSpec {
 public:
     std::string op() const override { return "syr2k"; }
     std::vector<std::string> key_names() const override { return {R2::key_names.begin(), R2::key_names.end()}; }
+    // The vendor loop wins batch 1 only. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1, 2, 3}); }
     std::vector<std::string> candidates(const std::string& dtype) const override {
         return with_real_dtype("syr2k", dtype, []<typename T>() { return spellings(R2::candidates<T>()); });
     }
@@ -89,7 +92,7 @@ public:
         std::vector<std::string> n, k, b;
         for (int v : R2::grid_n) n.push_back(std::to_string(v));
         for (int v : R2::grid_k) k.push_back(std::to_string(v));
-        for (int v : R2::grid_batch) b.push_back(std::to_string(v));
+        for (int v : with_slice_batches({R2::grid_batch.begin(), R2::grid_batch.end()})) b.push_back(std::to_string(v));
         return {{"n", n}, {"k", k}, {"batch", b}};
     }
     double bytes(const std::string& dtype, const CellKey& key) const override {  // A, B, C0, C

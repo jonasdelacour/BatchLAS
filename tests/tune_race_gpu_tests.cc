@@ -3,7 +3,12 @@
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).
 
+#include <batchlas/blas/functions/gemm.hh>
+#include <batchlas/blas/matrix.hh>
+
+#include <src/ops/gemm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 #include <tools/tune/schedule.hh>
 #include <tools/tune/spec.hh>
 #include <tools/tune/tune_core.hh>
@@ -20,6 +25,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -100,6 +106,47 @@ TEST(TuneRaceGpu, PreviewRaceAgreesWithSixteenTimedReps) {
     ASSERT_FALSE(tw.empty());
     EXPECT_LE(median(find(timed, rw)->ms), 1.03 * median(find(timed, tw)->ms))
         << "race winner " << rw << " vs 16-rep winner " << tw << " (" << eliminated << " eliminated)";
+}
+
+// The cold protocol (docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol): every
+// timed run starts with its read-only operands out of L2. gemm 32^3 float at batch 4096 reads
+// 32 MiB of A and B, which stay L2-resident between back-to-back calls on sm_89 (72 MB) and sm_120
+// (128 MiB), so the same call timed warm, as reset_and_run timed it before, is much faster.
+TEST(TuneRaceGpu, TimedRunsStartWithTheirOperandsOutOfL2) {
+    using batchlas::Matrix;
+    batchlas::Queue& q = gpu_queue();
+    constexpr int kN = 32, kBatch = 4096, kReps = 15;
+    CellRequest r = request("gemm", "float", "ta=N,tb=N,layout=packed,m=32,n=32,k=32,batch=4096", "time");
+    const std::string arm = "wide:m=32:n=32:k=16";  // the table's choice there (vendor is less L2-sensitive)
+    r.arms = {arm};
+    r.reps = kReps;
+    const auto got = find_spec("gemm")->run_cell(r, q);
+    ASSERT_EQ(got.size(), 1u);
+    ASSERT_EQ(got[0].status, "ok") << got[0].reason;
+    EXPECT_GE(q.workspace_capacity(), bench::scrub_bytes(q)) << "the scrub buffer is leased from the worker Queue's arena";
+    const double cold = median(got[0].ms);
+
+    auto A = Matrix<float>::Random(kN, kN, false, kBatch, 1), B = Matrix<float>::Random(kN, kN, false, kBatch, 2);
+    auto C = Matrix<float>::Random(kN, kN, false, kBatch, 3);
+    batchlas::select::ScopedPin<batchlas::ops::gemm::GemmChoice> pin("gemm", arm, batchlas::select::StrictPin{});
+    std::vector<double> warm;
+    for (int i = 0; i < 3 + kReps; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        (void)batchlas::gemm<kBackend, float>(q, A.view(), B.view(), C.view(), 1.0f, 1.0f, batchlas::Transpose::NoTrans,
+                                             batchlas::Transpose::NoTrans);
+        q.wait();
+        if (i >= 3) warm.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("gemm 32^3 x 4096 wide 32: tuner %.4g ms, back-to-back %.4g ms (%.2fx)\n", cold, median(warm),
+                cold / median(warm));
+    std::vector<double> scrub;  // the per-run cost the protocol adds (schedule.cc kScrubS models it)
+    for (int i = 0; i < 10; ++i) {
+        const auto t0 = std::chrono::steady_clock::now();
+        bench::scrub_l2(q);
+        scrub.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+    }
+    std::printf("scrub of %zu MiB: %.3f ms per run\n", bench::scrub_bytes(q) >> 20, median(scrub));
+    EXPECT_GT(cold, 1.5 * median(warm)) << "the tuner timed L2-warm operands: is bench::scrub_l2 in reset_and_run?";
 }
 
 // An arm raced alone (a benched arm's fresh child) has no rival to beat: race_step calls it the
@@ -318,3 +365,64 @@ TEST(TuneRaceGpu, FreshChildAgreesWithAWorkerAfterALargerLaunch) {
     GTEST_SKIP() << "needs batchlas_tune_impl: configure with -DBATCHLAS_BUILD_BENCHMARKS=ON";
 }
 #endif
+
+// The real specs' batch-ladder hooks, on sm_120's 188 SMs (host-only: no GPU is touched).
+// evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneSpecLadder, RealSpecHooksGiveTheDocumentedLadders) {
+    using B = std::vector<std::int64_t>;
+    const std::vector<std::pair<std::string, B>> want{
+        {"gemm", {376, 3008, 24064, 65536, 131072}},
+        {"ormqr", {376, 3008, 24064}},
+        {"syrk", {1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072}},
+        {"symm", {1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072}},
+        {"syr2k", {1, 2, 3, 47, 376, 3008, 24064, 65536, 131072}},
+        {"trmm", {1, 47, 376, 3008, 24064, 65536, 131072}},
+        {"potrf", {47, 376, 3008, 24064}},
+        {"trsm", {47, 376, 3008, 24064}},
+        {"posv", {47, 376, 3008, 24064}}};
+    for (const auto& [op, ladder] : want) {
+        const OpSpec* s = find_spec(op);
+        ASSERT_NE(s, nullptr) << op;
+        EXPECT_EQ(batch_ladder(188, s->ladder_classes(default_batch_classes()), s->ladder_extra_batches()), ladder) << op;
+    }
+}
+
+// The choice.hh-axis grids: every multi-batch level-3 line also takes 65536 and 131072 (sliced past grid-y);
+// the other ops stop at 32768. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneSpecLadder, Level3OldAxisGridsReachPastTheGridYCap) {
+    const std::set<std::string> tail{"65536", "131072"};
+    for (const std::string op : {"gemm", "syrk", "symm", "syr2k", "trmm", "ormqr", "potrf", "trsm"}) {
+        const OpSpec* s = find_spec(op);
+        ASSERT_NE(s, nullptr) << op;
+        const bool level3 = op != "ormqr" && op != "potrf" && op != "trsm";
+        std::vector<std::string> axis;
+        for (const auto& [name, values] : s->axes())
+            if (name == "batch") axis = values;
+        ASSERT_GE(axis.size(), 2u) << op;
+        const std::set<std::string> axis_tail(axis.end() - 2, axis.end());
+        EXPECT_EQ(axis_tail == tail, level3) << op << " batch axis ends " << axis[axis.size() - 2] << "," << axis.back();
+        std::map<CellKey, std::set<std::string>> lines;
+        for (const CellKey& k : s->grid("float", {})) {
+            CellKey rest;
+            for (const KV& kv : k)
+                if (kv.name != "batch") rest.push_back(kv);
+            lines[rest].insert(*key_get(k, "batch"));
+        }
+        std::size_t multi = 0, reach = 0;
+        for (const auto& [rest, b] : lines)
+            if (b.size() > 1) ++multi, reach += b.count("65536") && b.count("131072");
+        EXPECT_GT(multi, 0u) << op;
+        EXPECT_EQ(reach, level3 ? multi : 0u) << op << ": multi-batch lines holding 65536 and 131072";
+    }
+}
+
+TEST(TuneSpecLadder, SyrkKeepsItsSingleBatchVendorLine) {
+    const OpSpec* s = find_spec("syrk");
+    ASSERT_NE(s, nullptr);
+    const auto ladder = batch_strings(batch_ladder(188, default_batch_classes(), s->ladder_extra_batches()));
+    std::set<std::string> c_batches, other;
+    for (const CellKey& k : rebatch(s->grid("float", {}), ladder))
+        (*key_get(k, "trans") == "C" ? c_batches : other).insert(*key_get(k, "batch"));
+    EXPECT_EQ(other, std::set<std::string>(ladder.begin(), ladder.end()));
+    if (!c_batches.empty()) EXPECT_EQ(c_batches, std::set<std::string>{"1"}) << "trans=C is declared at batch 1 only";
+}

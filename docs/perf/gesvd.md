@@ -18,10 +18,12 @@ keyed on `herm`, `vec`, m and n. See [flat kernel selection](../design/flat-kern
 |---|---|---|
 | `jacobi` | `gesvdj_cta` (`src/ops/gesvd/kernels/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) |
 | `cta` | `gesvd_cta` (`src/ops/gesvd/kernels/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
-| `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
-| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked, and a homogeneous batch (`gesvd.cc:80`) |
+| `blocked` | `gesvd_blocked`: `gebrd` + `bdsdc` + `ormbr` | GPU; any general input (complex since 2026-10-22), or square Hermitian, either triangle |
+| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked; on CUDA only cuSOLVER's envelope: \f$\max(m,n) \le 32\f$, packed A and U, no thin factor, not values-only non-square; never on ROCm (no binding) |
 
-Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc:67-80`): each runs every item at the top-level extents.
+Every family, native and vendor, also needs a homogeneous batch (`gesvd.cc`, `can_run`): each runs every item at the top-level extents.
+Since `can_run(vendor)` holds the binding's own refusals, a row that ranks `vendor` above a shape the vendor cannot run
+falls to the next entry or the last resort (`blocked`) instead of throwing at launch.
 
 The sm_89 table is transcribed at `424a45bc` (the old router's order replayed per cell, not timed); the sm_120
 table is deep-measured. First family per input on sm_89:
@@ -30,8 +32,8 @@ table is deep-measured. First family per input on sm_89:
 |---|---|
 | real general, \f$\max(m,n) \le 32\f$ | `jacobi` (`cta`, `blocked` behind it) |
 | real general, \f$\max(m,n) \ge 33\f$ | `blocked`; in 33..64 `jacobi` stays behind `vendor` |
-| complex general | `jacobi` up to its ceiling, then `vendor` |
-| Hermitian, square | `cta` to 32, then `blocked` (Lower) or `vendor` (Upper) |
+| complex general | `jacobi` to 32; above it `blocked` (complex\<float\> 33..64: `blocked` then `jacobi`; complex\<double\>: `jacobi` then `blocked`), see [the complex blocked path](#gesvd-complex-general-on-the-blocked-path) |
+| Hermitian, square | `cta` to 32, then `blocked`; Upper rows copy the Lower ranking |
 | Hermitian, non-square | `vendor` |
 
 Pin with `BATCHLAS_GESVD_ROUTE=<family>` or `select::ScopedPin`; a pin that `can_run` refuses throws
@@ -112,8 +114,8 @@ Blocked orthogonality at \f$10^6\f$ is 1.1e-4 after the `bdsdc` repair (0.144 be
 
 Blocked is faster and more accurate below \f$\kappa \approx 10^4\f$, and the regime cannot be read from the shape.
 So Jacobi heads the real tuned row only at \f$\max(m,n) \le 32\f$. In 33..64 it stays behind `blocked` and `vendor`,
-and `BATCHLAS_GESVD_ROUTE=jacobi` still reaches it. Complex input in the band runs Jacobi, because the alternative
-is a throw.
+and `BATCHLAS_GESVD_ROUTE=jacobi` still reaches it. Complex input in the band ran Jacobi while the alternative was a throw;
+complex\<float\> now runs `blocked` first ([evidence](#gesvd-complex-general-on-the-blocked-path)).
 
 ## gesvd defect A: the normal equations square kappa {#gesvd-defect-a-the-normal-equations-square-kappa}
 
@@ -253,6 +255,35 @@ is needed in both directions (right inside the block, left at the bottom). Handl
 > **Note:** the test must use mixed-sign \f$d, e\f$, exact zeros and six decades of conditioning. A first version drew only
 > positive \f$d, e\f$ and passed with the bug present.
 
+## gesvd: L2 batch chunking {#gesvd-l2-batch-chunking}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+
+The general blocked path runs the batch in parts; an item is A plus the requested U and V^H. Singular
+values offset by `b0*k`, U/V^H only when wanted, info only when requested; workspace for one part. The
+Hermitian arm and cta/jacobi are untouched.
+
+**Rule:** `GESVD_BLOCKED_L2_CHUNK_PERCENT` = 150 for real scalars. Complex general (native since the
+complex gebrd) is not L2-chunked (unmeasured), but every type's parts are capped at `max_groups_yz / 2`:
+without the cap ormbr's `PackPPanelKernel` aborted from batch 65505 at n = 40
+([defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
+
+Cold A/B, float, pinned blocked, ns per item, median of 2 retained alternating passes:
+
+| n | vectors | batch | off | 75 % | 150 % | 300 % |
+|---:|---|---:|---:|---:|---:|---:|
+| 64 | all | 4096 | 4732 | 1.041 | 0.999 | 1.002 |
+| 64 | all | 16384 | 4594 | 1.087 | 1.010 | 1.016 |
+| 128 | all | 1024 | 18207 | 1.009 | 1.001 | 1.000 |
+| 128 | all | 4096 | 18323 | 1.061 | 0.966 | 0.991 |
+| 128 | all | 8192 | 18076 | 1.093 | 0.975 | 0.996 |
+| 128 | none | 4096 | 13846 | 0.998 | 0.998 | 0.999 |
+| 128 | none | 16384 | 13681 | 1.017 | 1.021 | 1.004 |
+| 256 | all | 1024 | 147119 | 0.878 | 0.712 | 0.874 |
+
+75 % (the sm_120 rule) sets parts below saturation with vectors; 150 % is within 2.1% everywhere and
+0.71 at n=256. Re-measured with the shipped rule: n=128 b8192 0.975, n=256 b1024 0.709.
+
 ## gesvd: the unblocked-gebrd cliff {#gesvd-the-unblocked-gebrd-cliff}
 
 The blocked gebrd threshold is 1 (`gesvd_use_blocked_gebrd`, `src/ops/gesvd/kernels/gesvd_blocked.cc`). Blocked wins at every
@@ -285,6 +316,47 @@ n=512, batch 256, float, `gesvd.gebrd` stage (ms):
 The optimum is 16, flat within 2% from 8 to 24. Per-case winners at `jobu = jobvh = None`: n=128: 8, n=256: 8, n=512: 16,
 n=1024: 16. Shipped buckets (`GEBRD_BLOCK_SIZE_{TINY,SMALL,MEDIUM,LARGE,XLARGE}`) are 16, 8, 8, 16, 16; TINY was not swept.
 End to end the retune gives 1.03–1.15x (float, with vectors and without).
+
+## gesvd: complex general on the blocked path {#gesvd-complex-general-on-the-blocked-path}
+
+Until 2026-10-22 complex general input above the Jacobi ceiling (64; 32 for `complex<double>` with
+vectors) had no route in any build: cuSOLVER `gesvdjBatched` stops at 32 and `blocked` refused
+complex. `gebrd` now reduces complex A to a *real* bidiagonal (LAPACK `zlabrd`/`zgebd2` with a
+real-beta `zlarfg`, `src/ops/gesvd/gebrd/larfg_real_beta.hh`), the real `bdsdc` solves it, its real
+vectors are widened into U and \f$V^H\f$, and the complex `unmbr` back-transforms run unchanged.
+m < n solves \f$A^H\f$.
+
+`gesvd_blocked_benchmark` vs `gesvd_vendor_benchmark BM_GESVD_BATCHLAS_JACOBI`, complex\<float\>,
+RTX 4090 GPU 1, warmup 3, min 8 iterations, best of 2 passes (pass-to-pass spread under 2%), ms per call:
+
+| n | batch | jobs | `blocked` | `jacobi` | jacobi / blocked |
+|---|---|---|---|---|---|
+| 33 | 2048 | N/N | 3.43 | 39.7 | 11.6x |
+| 33 | 2048 | A/A | 4.70 | 127.0 | 27.0x |
+| 48 | 2048 | N/N | 6.15 | 92.4 | 15.0x |
+| 48 | 2048 | A/A | 8.20 | 268.6 | 32.8x |
+| 64 | 128 | A/A | 2.83 | 33.0 | 11.6x |
+| 64 | 2048 | N/N | 10.05 | 153.1 | 15.2x |
+| 64 | 2048 | A/A | 13.76 | 464.6 | 33.8x |
+| 128 | 128 / 256 | A/A | 6.64 / 8.92 | no route before | — |
+| 256 | 128 / 256 | A/A | 32.7 / 70.4 | no route before | — |
+| 512 | 128 / 256 | A/A | 379.0 / 672.1 | no route before | — |
+
+Values only at n = 128, 256, 512, batch 128: 4.67, 24.8, 325.1 ms. Blocked is not saturated at
+batch 128 for n ≤ 64 (33: 0.91 ms at 128, 3.43 ms at 2048); Jacobi is. The sm_89 table therefore
+puts `blocked` first for complex\<float\> in 33..64 (153 untimed rows, ledger run `transcribed-167a4eaf`), as the real rows
+already do ([the wide band](#gesvd-the-wide-band-33-to-64)): Jacobi keeps the better relative
+accuracy at \f$\kappa \gtrsim 10^4\f$ and stays reachable by pin. complex\<double\> was not timed
+(1:64 FP64); its rows put `blocked` after `jacobi`, which itself stops at 32 with vectors.
+
+The rest of the change (both tables, untimed rows only, ledger run `transcribed-141d31db`): complex herm=N rows above 32 rank
+`blocked` before `vendor`, and Hermitian Upper square rows copy the Lower ranking. Vendor rows past
+the binding's envelope no longer throw at launch either way: `can_run(vendor)` refuses them.
+
+Accuracy (tests, not timed): `GesvdGeneralComplexTest.BlockedGradedPaddedShapesAndJobs` at
+\f$\kappa = 10^6\f$ meets `Check::values` and, for complex\<double\>, a per-value relative error of
+1e-6. On that graded input `bdsdc`'s vectors lose orthogonality as ~ eps·κ (measured 3e-3 float,
+3e-11 double, n = 48..130), as for real input; vectors are checked at κ = 10.
 
 ## gesvd: open debts
 

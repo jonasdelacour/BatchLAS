@@ -112,11 +112,24 @@ struct Record {
 std::optional<Record> parse_record(std::string_view line, std::string* err = nullptr);
 std::vector<Record> read_records(const std::string& path);  // throws std::runtime_error
 
+// NVML samples of the measuring GPU, one after each timed run (worker side): how many, how many
+// with clock-event reason 0x4 (SW power cap) active, and their SM clock sum.
+struct ClockStats {
+    int n = 0, capped = 0;
+    double mhz_sum = 0;
+    ClockStats& operator+=(const ClockStats& o);
+    double capped_fraction() const { return n > 0 ? double(capped) / double(n) : 0.0; }
+    double mean_mhz() const { return n > 0 ? mhz_sum / double(n) : NAN; }
+};
+inline constexpr double kThrottledFraction = 0.25;  // above it a cell is re-raced, at most kThrottleReraces times
+inline constexpr int kThrottleReraces = 1;
+
 struct Phases {  // wall seconds of one cell by phase; NaN = not measured. evidence: docs/design/tuning-data.md#tuning-data-ledger-file
     double setup = NAN, warm = NAN, timed = NAN, verify = NAN, ld = NAN;  // the worker or child process
     double guard = NAN, ipc = NAN, spawn = NAN, start = NAN;              // the driver
     std::string mode;  // "" (none) | worker | fresh | fallback
     int arms = 0;      // arms this measurement raced (a partial re-race: not its stored record's); 0 = unknown
+    ClockStats clk;    // not a phase: summed like one, never in fields()
     static const std::vector<std::pair<std::string, double Phases::*>>& fields();  // name, member; worker side first
     static constexpr std::size_t kWorkerFields = 5;
     void add(double Phases::*f, double s);  // a NaN field counts as 0
@@ -190,21 +203,16 @@ struct AppScan {
 };
 AppScan scan_compute_apps(std::string_view nvidia_smi_out, long self_pid);
 
-// Before/after a child (README "Guard"): refuse "" = measure; after: untolerated entries = discard.
-struct GuardCheck {
-    std::string refuse;
-    std::vector<std::string> tolerated;
-};
-GuardCheck guard_before(const AppScan& scan, bool allow_idle_foreign);
-std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+// Before a child on one GPU (README "Guard"): "" = measure, else why not. Any foreign compute
+// context on that GPU refuses, idle or not: an idle one still time-slices with the measurement.
+std::string guard_refusal(const AppScan& scan);
 
 struct ProcUtil {
     std::string pid;  // "" = the whole GPU (nvidia-smi's only figure); our own pids are dropped first
     double sm = 0;    // SM utilization, percent
 };
-// A tolerated pid or the whole GPU above `ceiling`, any other pid at any SM load ("610696 at 37%").
-std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, const std::vector<std::string>& tolerated,
-                                        double ceiling);
+// The whole GPU above `ceiling`, any foreign pid at any SM load ("610696 at 37%").
+std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, double ceiling);
 
 struct GuardChoice {
     std::string backend, warning, error;

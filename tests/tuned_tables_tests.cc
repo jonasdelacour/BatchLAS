@@ -26,6 +26,9 @@
 #include <src/ops/syrk/choice.hh>
 #include <src/ops/syr2k/choice.hh>
 #include <src/ops/trmm/choice.hh>
+#include <src/ops/hemm/choice.hh>
+#include <src/ops/herk/choice.hh>
+#include <src/ops/her2k/choice.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -161,20 +164,26 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(syev::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(syev::candidates<std::complex<double>>());
     }
-    namespace symm = batchlas::ops::symm;  // real-only
+    namespace symm = batchlas::ops::symm;  // complex T is complex-symmetric
     if (op == "symm") {
         if (dtype == "float") return spellings(symm::candidates<float>());
         if (dtype == "double") return spellings(symm::candidates<double>());
+        if (dtype == "cfloat") return spellings(symm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(symm::candidates<std::complex<double>>());
     }
-    namespace syrk = batchlas::ops::syrk;  // real-only: syrk has no complex instantiation
+    namespace syrk = batchlas::ops::syrk;
     if (op == "syrk") {
         if (dtype == "float") return spellings(syrk::candidates<float>());
         if (dtype == "double") return spellings(syrk::candidates<double>());
+        if (dtype == "cfloat") return spellings(syrk::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(syrk::candidates<std::complex<double>>());
     }
     namespace syr2k = batchlas::ops::syr2k;
-    if (op == "syr2k") {  // real-only: there is no complex syr2k table
+    if (op == "syr2k") {
         if (dtype == "float") return spellings(syr2k::candidates<float>());
         if (dtype == "double") return spellings(syr2k::candidates<double>());
+        if (dtype == "cfloat") return spellings(syr2k::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(syr2k::candidates<std::complex<double>>());
     }
     namespace trmm = batchlas::ops::trmm;
     if (op == "trmm") {
@@ -183,6 +192,10 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
+    // complex-only: their real spellings are symm, syrk and syr2k.
+    if (op == "hemm" && dtype[0] == 'c') return spellings(batchlas::ops::hemm::candidates<std::complex<float>>());
+    if (op == "herk" && dtype[0] == 'c') return spellings(batchlas::ops::herk::candidates<std::complex<float>>());
+    if (op == "her2k" && dtype[0] == 'c') return spellings(batchlas::ops::her2k::candidates<std::complex<float>>());
     return {};
 }
 
@@ -285,6 +298,9 @@ std::string key_spec(const std::string& op) {
     if (op == "syrk") join(batchlas::ops::syrk::key_names);
     if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    if (op == "hemm") join(batchlas::ops::hemm::key_names);
+    if (op == "herk") join(batchlas::ops::herk::key_names);
+    if (op == "her2k") join(batchlas::ops::her2k::key_names);
     return out;
 }
 
@@ -429,14 +445,16 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     for (const auto& e : sel::embedded_tables())
         for (const sel::Table& t : sel::parse_tables(e.text, e.name))
             names.insert(t.op + "." + t.dtype + "." + t.device + ".txt");
-    // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
-    const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
+    // hemm, herk and her2k are ComplexScalar-constrained: no real instantiation, so no real table.
+    const std::set<std::string> real_only{};
+    const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
+                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
+                           "herk", "her2k"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
-                if (dt[0] == 'c' && real_only.count(op)) {
+                if ((dt[0] == 'c' && real_only.count(op)) || (dt[0] != 'c' && complex_only.count(op))) {
                     EXPECT_FALSE(names.count(std::string(op) + "." + dt + "." + dev + ".txt")) << op << " " << dt;
                     continue;
                 }
@@ -450,6 +468,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
 // transcription kept only where the deep lattice measured nothing near, e.g. beyond the 2048
 // dimension cap).
 TEST(TunedTables, Sm120TablesAreDeepLedgerTablesNamingTheirLedger) {
+    // The complex-symmetric symm/syrk/syr2k rows (2026-10-22) postdate the deep run: transcribed only.
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
@@ -603,8 +622,13 @@ TEST(TunedTables, GeqrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
                 if (std::string(dev) == "sm_89") rows_89[key] = ranked;
                 else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
             }
-            EXPECT_EQ(got, want) << dt << " " << dev;
-            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            // The deep wide cells (float, cfloat) drop the transcribed row they bracket: wide 8192 x 1
+            // was not measured (cuSOLVER exceeds the cell timeout) and resolves to its deep neighbours.
+            const bool deep = std::string(dt) == "float" || std::string(dt) == "cfloat";
+            std::set<std::string> want_dt = want;
+            if (deep) want_dt.erase("wide 8192 1");
+            EXPECT_EQ(got, want_dt) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want_dt.size()) << dt << " " << dev;
         }
     }
 }

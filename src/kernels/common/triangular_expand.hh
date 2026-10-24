@@ -11,10 +11,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstdlib>
 #include <limits>
-#include <string_view>
-#include <batchlas/settings.hh>
 
 // Scratch expansions that turn a one-triangle operand (SYMM, HEMM, TRMM) into a
 // dense one a batched GEMM can read; the caller's unreferenced storage is never
@@ -22,26 +19,6 @@
 // Sizing and the fit ceiling live in ../expansion_budget.hh.
 // evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 namespace batchlas::backend::detail {
-
-// hemm's expansion vs its per-item vendor loop (symm and trmm choose from tables now). The
-// constants are deliberately more conservative than the measured loss region.
-// evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
-constexpr int kExpandMinBatch = 4;
-constexpr int kExpandMinDim = 256;
-
-// BATCHLAS_EXPAND_ROUTE pins "expand" or "loop"; it only ever narrows expansion_fits.
-inline bool expansion_preferred(int max_dim, int batch) {
-    // Same Settings field as expansion_route_pin(), so the two cannot disagree.
-    if (const char* route = batchlas::settings().selection.expand_route.get()) {
-        if (std::string_view(route) == "expand") {
-            return true;
-        }
-        if (std::string_view(route) == "loop") {
-            return false;
-        }
-    }
-    return batch >= kExpandMinBatch || max_dim >= kExpandMinDim;
-}
 
 // Work-group shape for the elementwise expansions: lanes walk a column (both
 // sides coalesce), and no more rows than the matrix has (tiny matrices).

@@ -8,9 +8,11 @@ binaries hold nearly all of it.
 | scope | command |
 |---|---|
 | one test case | `./build/tests/stedc_tests --gtest_filter='StedcTest/0.BatchedMatrices'` |
-| one binary | `ctest -R '^stedc_tests$'` |
+| one binary | `ctest -R '^stedc_tests(_heavy)?$'` (`^X$` alone is the quick half of a tiered binary) |
+| what a diff can break | `scripts/affected_tests.py --print-ctest-cmd` |
 | one component | `ctest -L tridiag` |
-| everything quick | `ctest -LE slow` (count: `ctest -N -LE slow`) |
+| the quick tier | `ctest -LE 'slow\|heavy'` (no slow suites, no `_heavy` case tiers) |
+| everything but the slow suites | `ctest -LE slow` (count: `ctest -N -LE slow`) |
 | everything | `ctest` (count: `ctest -N`) |
 
 Counts move as binaries are added, so none is written here: read them off `ctest -N` (see

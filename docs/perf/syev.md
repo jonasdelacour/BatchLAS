@@ -429,7 +429,7 @@ n = 256, batch 1024: cfloat 66.628 to **63.899 (1.043×)**; float unchanged. The
 predicted and the change kept (real 1.04× at no runtime cost; it forced a single-definition route prediction in
 `expansion_budget.hh`). The gate should read 1.04×, not "met".
 
-- **Fallback.** Forcing the host loop (`BATCHLAS_EXPAND_ROUTE=loop`) at \f$n_2\f$ = 480, k = 32, batch 512 gave
+- **Fallback.** Forcing the host loop (then `BATCHLAS_EXPAND_ROUTE=loop`, now `BATCHLAS_HER2K_ROUTE=vendor`) at \f$n_2\f$ = 480, k = 32, batch 512 gave
   5.3924 ms, 1.23× slower than the GEMM pair. The 7.8× warned about in the `sytrd_blocked.cc` comment was measured
   in double.
 - **Fit guard.** When the expansion does not fit, `her2k_vendor` silently drops to a per-item host loop. Budget
@@ -496,6 +496,49 @@ Past the knee extra batch buys little (n = 8, float, `syev_cta`): batch 65536 gi
 batch 1048576 gives 0.0071809 (4.7% better) in 24083 MiB (the run that caused the OOM). Saturation therefore means
 the knee, where a 4× batch step buys less than 5%. The bake-off driver enforces about 1.5 GB estimated footprint, a
 3 GB hard abort per invocation and a 120 s timeout, and reports a cell that does not reach its knee within them.
+
+## syev: L2 batch chunking {#syev-l2-batch-chunking}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+
+`syev_cta` and `syev_blocked` run the batch in parts of `tuning::blocked_chunk_items` items, an item
+counted as three n x n matrices (A, Z and the reflector pack or stedc merge matrix), not the part
+workspace: the cta workspace is 435 KB per item at float n=16 (mostly `steqr_wg`'s rotation store, which
+the CTA path never uses), and sizing by it shrank parts to 188 items and ran about 10x slower. Eigenvalues
+offset by `b0*n`, info by `b0`; workspace for one part (`chunk + batch % chunk`); `syev_cta` waits between
+parts on an out-of-order queue. `cta_fused` is one kernel and is not chunked. Every part is also capped at
+`max_groups_yz / 2` items (`select::grid_capped_chunk`; [defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
+
+**Rule:** `SYEV_CTA_L2_CHUNK_PERCENT` = 150, `SYEV_BLOCKED_L2_CHUNK_PERCENT` = 0 (no L2 chunking; the
+grid cap still splits a batch past 32767).
+
+Cold A/B, pinned route, ns per item, median of 2 retained alternating process passes x 5-7 reps (pass 0
+dropped), `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000` before the grid cap existed:
+
+| route | type | n | batch | off | 75 % | 150 % |
+|---|---|---:|---:|---:|---:|---:|
+| cta | float | 8 | 262144 | 9.3 | 0.789 | 1.001 |
+| cta | float | 16 | 16384 | 31.8 | 0.910 | 0.911 |
+| cta | float | 16 | 65536 | 35.3 | 0.825 | 1.026 |
+| cta | float | 32 | 16384 | 174.0 | 0.931 | 0.972 |
+| cta | cfloat | 16 | 32768 | 60.7 | 1.046 | 1.000 |
+| cta | cfloat | 16 | 131072 | 62.3 | 1.037 | 0.963 |
+| blocked | float | 64 | 8192 | 1553 | 1.021 | 0.912 |
+| blocked | float | 128 | 4096 | 7021 | 1.052 | 0.919 |
+| blocked | float | 128 | 1024 | 6442 | 1.069 | 1.056 |
+| blocked | float | 256 | 2048 | 30232 | 1.674 | 1.209 |
+| blocked | cfloat | 128 | 16384 | 10854 | 1.330 | 1.116 |
+
+- The cta gains past batch 32767 now come from the grid cap, which splits those batches into parts of at
+  most 16384 whatever the percent (re-measured: float n=16 b65536 and b131072 0.999 against the capped
+  baseline; cfloat n=16 b131072 1.029 at 100 %, the reason for 150 %).
+- Blocked loses at every percent at n=256 (75 % is 1.67x: parts of 128-256 items under-fill sytrd and
+  stedc) and for cfloat; percents 25-100 coincide at n=256 because the CU-multiple floor sets the part.
+- Re-measured with the shipped rule against `off`: cta float n=16 b16384 1.001 (one pass at 150 %; the
+  sweep's 0.911 there was baseline noise, so read single-pass cells in the table with ~10% doubt), cfloat
+  n=16 b131072 0.999, blocked float n=256 b2048 1.000.
+- syev two_stage and stedc are not chunked and not measured.
+- `steqr_buffer_size` reserves the `steqr_wg` rotation store on the CTA path (open, separate).
 
 ## syev: open debts and unmeasured items
 
@@ -602,7 +645,7 @@ also uses a literal the tuning parameter does not reach (see [stedc: open debts]
 | small-n bake-off (phase A), both precisions (973 measurements) | `benchmarks/results/syev_retune_phaseA.jsonl` (Git LFS) |
 | syev-context block-size sweep (phase B), float | `benchmarks/results/syev_retune_phaseB_float.jsonl` (Git LFS) |
 | driver for both, with its resource caps | a one-off driver, removed |
-| builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `build/presets/cuda` |
+| builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `cuda` (`build-cuda`; then `build/presets/cuda`) |
 | commits | `80737301` plan, `afc8ae35` baselines, `c42e5ce9`, `8c24626f` WP4, `405b4120` WP3, `f28a3fcd` WP1, `af8768b0` / `be327f5b` results (PR 68); `73eb5510` per-type routing (PR 65); `924b3a59` constant retune |
 
 Phase B is complete except n = 256; only the float file is committed (double phase-B figures appear only on this

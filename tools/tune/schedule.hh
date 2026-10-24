@@ -22,6 +22,7 @@ namespace batchlas::tune {
 inline constexpr double kChildOverheadS = 0.49;
 inline constexpr double kVerifyS = 0.05;        // per cell: the tie set's untimed verification run
 inline constexpr double kModelBytesPerS = 500e9;
+inline constexpr double kScrubS = 0.35e-3;  // per run: the cold protocol's L2 scrub (512 MiB + wait, sm_120)
 inline constexpr double kFrontierShare = 0.86;  // --plan. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
 
 struct PlanSpec {  // plain data, so tests need no OpSpec

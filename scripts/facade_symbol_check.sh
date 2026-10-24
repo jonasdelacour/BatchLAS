@@ -26,9 +26,10 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 
 CUDA_SO=build/src/libbatchlas_backends_cuda.so
-FACADE_SO=build/src/libbatchlas_backends.so
+# The level-3 seven's entry points live in their own GPU-only component (src/CMakeLists.txt).
+FACADE_SOS="build/src/libbatchlas_backends.so build/src/libbatchlas_extensions_level3.so"
 
-for f in "$CUDA_SO" "$FACADE_SO"; do
+for f in "$CUDA_SO" $FACADE_SOS; do
     [ -f "$f" ] || { echo "error: $f not found; build first"; exit 2; }
 done
 
@@ -48,7 +49,8 @@ for op in $OPS; do
     pub=$(mangled_public "$op")
     ven=$(mangled_vendor "$op")
     in_cuda=$(nm --defined-only "$CUDA_SO"   | grep -c "$pub")
-    in_facade=$(nm --defined-only "$FACADE_SO" | grep -c "$pub")
+    # shellcheck disable=SC2086
+    in_facade=$(for f in $FACADE_SOS; do nm --defined-only "$f"; done | grep -c "$pub")
     vendor_impl=$(nm --defined-only "$CUDA_SO" | grep -c "$ven")
 
     if [ "$in_cuda" -eq 0 ] && [ "$in_facade" -ge 1 ] && [ "$vendor_impl" -ge 1 ]; then

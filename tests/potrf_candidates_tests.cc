@@ -226,7 +226,7 @@ protected:
                                                                      resident::kMinBlocksPerSm, l->panel)
                          : 0;
         if (std::holds_alternative<pc::Blocked>(c))
-            return lower && sycl_potrf::potrf_blocked_available<T>() ? kUnbounded : 0;
+            return sycl_potrf::potrf_blocked_available<T>() ? kUnbounded : 0;
         return batchlas::select::solver_vendor_available<B> ? kUnbounded : 0;
     }
 
@@ -545,7 +545,6 @@ TYPED_TEST(PotrfCandidates, UnknownAndUncompiledPinsThrow) {
 TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;  // vendor-free, Upper has no route
     ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
@@ -558,10 +557,8 @@ TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
         batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_prob<T>(16, 2, Uplo::Lower, 51u);
         (void)this->run_auto(lo);
-        if (kVendor) {
-            auto hi = make_prob<T>(up, 2, Uplo::Upper, 52u);
-            (void)this->run_auto(hi);
-        }
+        auto hi = make_prob<T>(up, 2, Uplo::Upper, 52u);
+        (void)this->run_auto(hi);
         std::exit(0);
     };
     EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
@@ -580,13 +577,12 @@ TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     std::filesystem::remove_all(dir);
     const std::string lower = "16 " + std::to_string(static_cast<int>(Uplo::Lower));
     const std::string upper = std::to_string(up) + " " + std::to_string(static_cast<int>(Uplo::Upper));
-    ASSERT_EQ(flags.size(), kVendor ? 2u : 1u);
+    ASSERT_EQ(flags.size(), 2u);
     ASSERT_TRUE(flags.count(lower)) << "no Lower n=16 row";
     EXPECT_EQ(flags[lower], std::make_pair(std::string("1"), std::string("1")));
-    if (kVendor) {
-        ASSERT_TRUE(flags.count(upper)) << "no Upper n=" << up << " row";
-        EXPECT_EQ(flags[upper], std::make_pair(std::string("1"), std::string("0")));
-    }
+    // Upper above Tiny and Cta is served by the blocked driver, vendor or not.
+    ASSERT_TRUE(flags.count(upper)) << "no Upper n=" << up << " row";
+    EXPECT_EQ(flags[upper], std::make_pair(std::string("1"), std::string("1")));
 }
 
 // §8.5: the named can_run-false cases, each with its message.
@@ -595,7 +591,7 @@ TYPED_TEST(PotrfCandidates, CanRunFalsePinsThrow) {
     static constexpr Backend B = TestFixture::B;
     const int tiny = this->limit(C{pc::Tiny{}}, Uplo::Lower);
     struct Case { C c; Uplo uplo; int n; };
-    std::vector<Case> cases{{pc::Lpanel{8}, Uplo::Upper, 40}, {pc::Blocked{}, Uplo::Upper, 40},
+    std::vector<Case> cases{{pc::Lpanel{8}, Uplo::Upper, 40},
                             {pc::Tiny{}, Uplo::Lower, tiny + 1}, {pc::Tiny{}, Uplo::Upper, tiny + 1}};
     for (const auto& k : cases) {
         Matrix<T, MatrixFormat::Dense> A(k.n, k.n, 1);
@@ -692,28 +688,20 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
         EXPECT_NE(got.rfind("vendor", 0), 0u) << "native ran " << got << " at n=" << n;
     }
 
-    // Upper above both Upper-capable tiers: nothing native runs, so a warning and Auto --
-    // which, vendor-free, has nothing either and throws the no-route error.
+    // Upper above Tiny and Cta: `native` finds the blocked driver (Lpanel is Lower-only), in
+    // vendor and vendor-free builds alike, with no fallback warning.
     const int n = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     auto p = make_prob<T>(n, 2, Uplo::Upper, 24u);
     select::testing::reset_warnings();
     std::string err;
     std::vector<int32_t> info;
-    if constexpr (!batchlas::select::solver_vendor_available<B>) {
-        const Pin pin("potrf", "native");
-        ::testing::internal::CaptureStderr();
-        EXPECT_THROW((void)this->run_auto(p), batchlas::NoRouteError);
-        err = ::testing::internal::GetCapturedStderr();
-        EXPECT_NE(err.find("pinned \"native\", but no native candidate"), std::string::npos) << err;
-        return;
-    }
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("potrf", "native");
                   info = this->run_auto(p);
               }, &err),
-              "vendor");
-    EXPECT_NE(err.find("pinned \"native\", but no native candidate"), std::string::npos) << err;
-    expect_factored(*this->ctx, p, info, "native fallback", /*other_triangle_is_scratch=*/true);
+              "blocked");
+    EXPECT_EQ(err.find("no native candidate"), std::string::npos) << err;
+    expect_factored(*this->ctx, p, info, "native upper", /*other_triangle_is_scratch=*/false);
 }
 
 // §5.3: a ScopedPin wins over BATCHLAS_POTRF_ROUTE, and nested pins restore the outer one.

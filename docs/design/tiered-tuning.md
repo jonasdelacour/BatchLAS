@@ -46,7 +46,7 @@ deep results. Parameters: `params()` in `tools/tune/tier.hh`.
 
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | every 2nd point of each `choice.hh` log axis, ends kept, then flip-frontier rounds | as preview; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
+| Starting lattice | every 2nd point of each `choice.hh` axis (batch: the CU-aligned ladder), ends kept, then flip-frontier rounds | as preview; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
 | Bisection | geometric to hi/lo < 1.1 between adjacent grid values (grid midpoints are the frontier's); stride-1 ops: index space until adjacent, then geometric, plus a 10% runner-up margin | as preview; stride-1 ops: geometric to hi/lo < 1.1 | as coarse |
 | Refinement cap (x round-0 cells, per op and dtype; stride-1 ops only) | 3.0 | 1.0 | 2.0 |
 | Race reps floor per candidate (cap: 50 ms of the slowest arm, at most 16) | 3 | 4 | 6 |
@@ -105,9 +105,19 @@ Across cells:
 
 ## Engine: the lean cell
 
-The race of one cell: `run_race` (`tools/tune/cell_runner.hh`), constants in `tools/tune/race.hh`.
-Ledger `protocol=lean`; `full` is the older fixed-warm-up protocol (0.2 s per arm), absent is
-older still. `--plan` history reads only `lean` cells.
+The race of one cell (`run_race`, `tools/tune/cell_runner.hh`; constants in `race.hh`). Ledgers
+record it as `protocol=lean-cold`: every run (warm-up, race, verification) restores the inputs, scrubs
+L2 with a read of min(4 x L2, memory / 16) bytes leased from the worker Queue's arena, waits, then
+starts the clock ([the cold protocol](../perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol)).
+`lean` is the same race on L2-warm operands, `full` the engine before it (a fixed 0.2 s warm-up per
+arm), and an absent field is older still. A measured record of any other protocol ranks below every
+`lean-cold` record of its cell whatever its tier (C++ `best_records`, `sweep_to_table.py`), and the
+planner re-measures its cell in full (`protocol`), on and off round 0; until then the table keeps it.
+`--plan` history reads only `lean-cold` cells, so the first cold run plans from the model.
+
+After each timed run the worker samples NVML (SM clock, clock-event reason 0x4, SW power cap). A cell
+capped in more than 25% of its samples is raced once more; the record carries `clk_n`, `clk_capped`,
+`clk_mhz`, `throttled` and `throttle_reraces` (@ref design_tuning_data).
 
 | Step | Rule | Constant |
 | --- | --- | --- |
@@ -228,7 +238,8 @@ medians arrive as a `RefineCell`.
    not runnable or was eliminated. Near-tie alternation is not a flip.
 2. **Margin.** The preview margin (10%) applies only to brackets whose ends are both round-0 cells
    at the running tier; a refinement midpoint never re-triggers it.
-3. **Batch** is never bisected below its lattice spacing; it refills its own axis values.
+3. **Batch** is never bisected below its lattice spacing; it refills its own axis values (the
+   CU-aligned ladder: "Engine: the CU-aligned batch ladder").
 4. **Cap.** Without a frontier, refinement cells per op and dtype ≤ `refine_cap_factor` × round-0
    cells (preview 3.0, coarse 1.0, deep 2.0), counting the ledger's current records, so a stopped
    run resumes within the same total. Flips refine before margin hedges. Past the cap the run prints
@@ -538,6 +549,201 @@ replay with the sm_120 prior against it.
   applies it first. Case: geqrf's vendor (`geqrfBatched`, one CTA per matrix) is tens to hundreds of
   times slower than blocked on large cells, minutes per timed round without the rule.
 
+## Engine: the CU-aligned batch ladder
+
+> **Status:** built 2026-10-21. Offline replay of the sm_120 ledgers plus a getri and potrf float coarse
+> A/B on GPU 2 (warm operands, the tuner's protocol); no full re-tune run yet.
+
+**Rule.** A tiered run (preview, coarse, deep, calibrate) can replace an op's `choice.hh` batch axis
+with `batch_ladder(cus, classes, extras)` (`tools/tune/grid.cc`): max(1, round(c × CUs)) per class c,
+plus the spec's `ladder_extra_batches()`. The default classes are 0.25, 2, 16 and 128: latency (C/4),
+about one wave of a two-resident kernel (2C), and saturated (16C, 128C). On sm_120 (188 SMs) that is
+47, 376, 3008, 24064; on an RTX 4090 (128 SMs), 32, 256, 2048, 16384. The key stays `batch:log`. The
+table format, hashes, protocol and the meaning of existing rows are unchanged. The run's `grid` field
+records the ladder as its lattice.
+
+- **`--batch-ladder auto` (default).** The ladder applies to an (op, dtype) whose ledger has no run, or
+  has a run whose `grid` is this ladder (`ladder_applies`). On a ledger of `choice.hh`-axis runs only it
+  stays off and prints `batch ladder off`: no ladder cell is current there, so turning it on means
+  re-measuring every cell. A host-only `--plan` of `gemm --tier deep --dtype float` on the committed
+  sm_120 ledger plans 0 cells with the ladder off and 3380 cells, 2.61 h with refinement with it forced.
+- **`--batch-ladder default`** forces the default classes, `c,c,...` other classes; `off`, `--batches`
+  or `--grid batch=...` keep the `choice.hh` axis.
+- **Samples keep the `choice.hh` axis.** `--tier custom` and `--only-named` measure named keys only.
+- **Old-axis rows under a forced ladder.** The Region (refinement's domain) spans the declared grid as
+  well as the ladder, so old rows (batch 32768; 1-27 for non-level-3 ops) stay refinement cells and a
+  remeasure inside them requeues. A partly stale old row inside the Region joins round 0, as a grid
+  cell does. Old rows are never retired: `sweep_to_table.py` writes every non-stale record, so the
+  table keeps 128/512/2048/8192/32768 beside the ladder rows, and the L2-warm and co-tenant-contaminated
+  old rows (getrf float b64-255, the trsm 2.27 ms spikes) still govern their neighbourhoods. A full
+  ladder re-tune therefore starts from a fresh ledger root (see "Re-tune").
+- **Compute units.** A measuring run reads them on the first `--devices` GPU (`MAX_COMPUTE_UNITS` from
+  the `--info` child); another GPU of the run with a different count only warns. `--plan` has no CUDA
+  context and nvidia-smi has no SM-count query: it takes `--cus N`, else a name table (RTX PRO 6000
+  Blackwell 188, RTX 4090 128), else it refuses. A wrong table entry plans other batches than the
+  measuring run uses; `--cus N` pins both.
+- **Grids that are not lattices** (gemm, syrk, symm, ormqr): `rebatch` gives each line of the declared
+  grid (the cell less `batch`) the ladder. A line declared at one batch only (syrk's `trans=C`, at
+  batch 1) keeps it.
+- **Batch is still never bisected** ("Engine: refinement convergence rules", rule 3): the frontier and
+  bisection refill only ladder values.
+
+| Op | Hook | Batches on sm_120 | Reason |
+| --- | --- | --- | --- |
+| gemm | `ladder_classes`: no latency class; extras 65536, 131072 | 376, 3008, 24064, 65536, 131072 | its axis starts at 128; gemm is half of all round-0 cells and a fourth class adds a third to it; sliced past 65535 |
+| ormqr | `ladder_classes`: no latency class | 376, 3008, 24064 | as gemm's |
+| syrk, symm | extras 1, 2, 4, 8, 65536, 131072 | 1, 2, 4, 8, 47, 376, 3008, 24064, 65536, 131072 | the vendor-loop/native crossovers lie at batch 1-8; sliced past 65535 |
+| syr2k | extras 1, 2, 3, 65536, 131072 | 1, 2, 3, 47, ..., 24064, 65536, 131072 | the vendor loop wins batch 1 only; the ledger holds 1, 2, 3 |
+| trmm | extras 1, 65536, 131072 | 1, 47, ..., 24064, 65536, 131072 | below 128 the ledger holds batch 1 only |
+| the rest | none | 47, 376, 3008, 24064 | batch < 128 is out of scope (agent guide §10); the losses it costs are below |
+
+`TuneSpecLadder.RealSpecHooksGiveTheDocumentedLadders` (`tune_race_gpu_tests`) pins this table, and
+`TuneSpecLadder.Level3OldAxisGridsReachPastTheGridYCap` the `choice.hh`-axis grids (every multi-batch level-3
+line holds 65536 and 131072; ormqr, potrf and trsm none).
+
+**Cost.** Empty ledger (`batchlas_tune all --tier deep --dtype float,double,cfloat,cdouble --plan
+--ledger <empty>`, sm_120): round-0 cells 27061 → 24120, frontier estimate 51963 → 39834 cells, 20.1
+→ 19.9 GPU-h. More of the top row fits the 4 GiB cap at 24064 than at 32768, so the byte-model lattice
+estimate rises (8.05 → 8.69 h). On the committed ledger the comparison is 0 against a full re-tune:
+`all --tier deep --plan` on the committed ledgers (whose records are partly stale anyway since later
+kernel changes) plans, float and cfloat, 6748 cells / 5.99 h with `auto` (the old axis, stale cells
+only) and 12765 cells / 10.38 h with the ladder forced; all four dtypes 19415 / 22.2 h against
+23877 / 23.8 h. A fresh ledger, float and cfloat: 14267 cells / 10.8 h on the old axis, 12883 / 11.0 h
+on the ladder (fewer cells; more of them fit the cap at 24064). The ops whose round-0 count changes (empty ledger):
+
+| Op | Round-0 cells to measure, `choice.hh` axis | Ladder |
+| --- | ---: | ---: |
+| syrk | 1410 | 656 |
+| getrs | 1219 | 696 |
+| gemv | 542 | 320 |
+| getrf | 311 | 146 |
+| spmm | 1188 | 940 |
+| getri | 322 | 276 |
+| gemm | 13582 | 12594 |
+| ormqr, symm, potrf, trsm, posv, syev, syr2k, trmm | 5044 | 5049 |
+
+**GPU A/B (the direct check).** One float coarse run per op on GPU 2 into a scratch ledger, batch
+axis = the union of `choice.hh` and the ladder (`--grid batch=47:128:376:512:2048:3008:8192:24064:32768`),
+table from that ledger. `tune_replay --slowdown` then keeps only the ladder batches (`--batch-ladder 188`)
+or only the `choice.hh` batches (`--batch-ladder 1 --batch-classes 128,512,2048,8192,32768`) and scores
+every measured cell of the union. getri is a stride-1 op (coarse = full lattice: every cell, every
+arm); potrf ran its frontier (437 of 750 cells), so its oracle is the frontier's cells. Warm operands.
+
+| Op | Scored | Kept batches | `ladder` (every kept cell): geomean / p99 / worst | `ladder+frontier+bisect`: geomean / worst |
+| --- | --- | --- | --- | --- |
+| getri | all 171 | ladder | 0.10% / 1.044 / 1.09 | 0.62% / 1.28 |
+| getri | all 171 | `choice.hh` | 0.10% / 1.046 / 1.12 | 0.66% / 1.28 |
+| getri | batch ≥ 128 (148) | ladder | 0.11% / 1.044 / 1.09 | 0.71% / 1.28 |
+| getri | batch ≥ 128 (148) | `choice.hh` | 0.11% / 1.046 / 1.12 | 0.76% / 1.28 |
+| potrf | all 437 | ladder | 0.84% / 1.317 / 1.38 | 0.93% / 1.38 |
+| potrf | all 437 | `choice.hh` | 0.65% / 1.228 / 1.39 | 0.64% / 1.39 |
+| potrf | batch ≥ 128 (375) | ladder | 0.80% / 1.317 / 1.36 | 0.91% / 1.36 |
+| potrf | batch ≥ 128 (375) | `choice.hh` | 0.53% / 1.165 / 1.36 | 0.51% / 1.23 |
+
+getri: no difference. potrf: the ladder is 0.3-0.4 points of geomean worse at the same worst cell
+(float L n=175 b=512 picks `lpanel:panel=16`; n=1280 b=128 reads the b=47 row and picks vendor).
+
+**Held-out routing loss on the committed ledgers (a lower bound).** `tune_replay --slowdown --ledger
+<op>.sm_120.jsonl --batch-ladder 188 --batch-classes 0.25,2,16,128 [--batch-extra ...]
+--drop-nonmonotone 5 --min-batch B`. The ledgers hold no ladder batch, so `nearest_batches` keeps each
+exact-key group's measured batch nearest each ladder value; the rest are held out and scored:
+t(first runnable entry of the nearest kept row) / t(fastest). `--drop-nonmonotone 5` first drops
+co-tenant-contaminated cells (fastest or any arm > 5x itself at a larger batch of the line): potrf 1,
+trsm 8, getrf 8, symm 8, spmm 72. Like for like: today = `stride2+frontier+bisect` on every batch,
+ladder = `ladder+frontier+bisect` on the kept ones (what the driver runs), plus `ladder` (every kept
+cell, no frontier). The proxy keeps four of the five old batches at or above 128, so for most ops the
+held-out set is batch 8192 only; it is a lower bound on the real ladder's loss, not a test of it.
+
+Scored batch ≥ 128 (agent guide §10):
+
+| Op | Kept | Held out | Today: geomean / worst | Ladder+frontier: geomean / p99 / worst | `ladder`: geomean / worst |
+| --- | --- | --- | --- | --- | --- |
+| potrf | 128, 512, 2048, 32768 | 8192 | 0.06% / 1.19 | 0.31% / 1.135 / 1.50 | 0.25% / 1.50 |
+| trsm | 128, 512, 2048, 32768 | 8192 | 0.60% / 3.57 | 1.05% / 1.359 / 3.57 | 0.52% / 2.59 |
+| posv | 128, 512, 2048, 32768 | 8192 | 0.23% / 7.85 | 0.34% / 1.096 / 7.85 | 0.13% / 1.78 |
+| getrf | 128, 512, 2048, 32768 | 255, 256, 8192 | 0.14% / 1.28 | 0.54% / 1.169 / 1.47 | 0.45% / 1.47 |
+| getrs | 128, 512, 2048, 32768 | 8192 | 0.28% / 1.74 | 0.87% / 1.300 / 2.90 | 0.59% / 2.90 |
+| getri | 128, 512, 2048, 32768 | 8192 | 0.06% / 1.11 | 0.62% / 1.224 / 1.57 | 0.56% / 1.57 |
+| syev | 128, 512, 2048, 32768 | 8192 | 0.01% / 1.07 | 0.21% / 1.064 / 1.46 | 0.20% / 1.46 |
+| gemv | 128, 320, 8192, 32768 | 319, 1024 | 1.20% / 3.09 | 2.06% / 1.550 / 3.09 | 1.19% / 2.57 |
+| trmm | 128, 1024, 32768 | none | 3.64% / 8.46 | 2.95% / 1.488 / 1.78 | 0 |
+| gemm, ormqr, spmm, syrk, symm, syr2k | all | none | as ladder | identical | 0 by construction |
+
+Like for like the ladder costs 0.2-0.9 points of geomean (gemv 0.9, getrs 0.6, getri 0.6, trsm 0.45),
+worst 1.5-7.85 (posv's 7.85 is today's worst too). Scored from batch 32 the table is the same except
+getrf (kept 64 for 47; held out 128, 255, 256, 8192: today 0.20% / 1.36, ladder 0.64% / 1.47) and
+getrs (kept 127; today 0.30% / 2.41, ladder 1.71% / 2.90).
+
+**Batch < 32 without extras.** Scored from batch 1 (min-batch 0), ladder+frontier against today:
+getrs 3.66% / worst 3.59 (0.33% / 2.68; double n=128 nrhs=6 b=1 picks cta), gemv 2.53% / 5.64 (0.98% /
+3.09; double T b=1 picks vendor), getrf 0.87% / 2.82 (0.28% / 1.38; float n=32 b=8 picks cta), spmm
+18.42% / 16.92 (10.89% / 16.92, already the worst op today). These ops get no extras: batch 1-16 is
+outside the batches this project tunes for (§10), and their small-batch rows are kept today only
+because the `choice.hh` axes start at 1. Add `ladder_extra_batches()` to an op that needs them. The
+level-3 extras: syrk 0.51% / 3.16 (tall T n=1153 k=18 b=5: vendor), symm 0.53% / 2.81, syr2k and trmm
+as today; extras 1, 2, 3 only cost syrk 2.23% and symm 1.15%, extra 1 only 3.44% and 9.35%.
+
+**Rejected classes** (scheme `ladder`, geomean at batch ≥ 32; kept batches in brackets for potrf; a
+ranking of class sets against each other, not against today):
+
+| Classes | potrf | trsm | posv | getrf | getrs | getri | syev | gemv | Round-0 cells / est. GPU-h |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | ---: |
+| `choice.hh` axis (today) | | | | | | | | | 27061 / 20.1 |
+| 0.25, 1, 8, 64 [128, 2048, 8192] | 0.88% | 1.25% | 0.26% | 0.88% | 0.50% | 1.83% | 2.75% | 2.35% | 27375 / 21.9 |
+| 0.25, 1, 8, 64, 256 [+32768] | 0.69% | 0.53% | 0.12% | 0.67% | 0.16% | 0.31% | 2.73% | 1.65% | 28049 / 23.5 |
+| 0.25, 4, 64 [128, 512, 8192] | 0.84% | 1.19% | 0.42% | 0.96% | 1.83% | 2.01% | 0.76% | 2.35% | 17835 / 14.7 |
+| 0.25, 2, 8, 32, 128 [all five] | 0 | 0 | 0 | 0.30% | 1.02% | 0 | 0 | 0.04% | 28789 / 25.8 |
+| **0.25, 2, 16, 128** [128, 512, 2048, 32768] | 0.25% | 0.52% | 0.13% | 0.51% | 1.50% | 0.56% | 0.20% | 1.19% | 24120 / 19.9 |
+
+Costs are empty-ledger `--plan` totals with the gemm and ormqr hook. C/4, C, 8C, 64C (the plain
+reading of latency, one wave, saturated) has no top class near 32768, and the small-n CTA cells lose
+up to 3.7x (getri double n=2 b=32768). The five-class ladder reproduces today's five-point axis but
+plans more cells than today. The three-class ladder is the cheap option: 34% fewer round-0 cells and
+27% fewer GPU-h than today, at 0.4-2.0% geomean on these ops (`--batch-ladder 0.25,4,64`).
+
+**Batches past the grid-y cap.** Level-3 (gemm, syrk, symm, syr2k, trmm) runs a batch past
+`max_groups_yz` (65535) in chunks ([gemm batch chunking](../perf/gemm.md#gemm-batch-chunking)),
+so every native competes there and a table without a row past 32768 extends its 32768 (or lower) row
+to any batch. `with_slice_batches` (`tools/tune/grid.cc`) adds 65536 and 131072 to these specs'
+`ladder_extra_batches()` and to their `choice.hh` axes (the specs' `axes()` and `grid()`; `choice.hh`
+itself is unchanged, so no kernel hash moves). herk has no spec. A cell still passes the 4 GiB byte cap
+(`--cap-gib`): at 65536 that admits at most 64 KiB of operands per item (float gemm 64^3 NN packed, not
+128^3), so the large shapes need `--cap-gib 32` (96 GB parts) to get their rows. Host-only `--plan`, sm_120
+(`--cus 188`), all ops, float and cfloat, before → after: empty ledger 12883 → 13357 cells, 11.00 → 11.73 GPU-h
+with refinement; the committed ledger on its old axis 14149 → 14627 cells, 13.52 → 13.92 h; at `--cap-gib 32`
+(empty ledger) 17542 → 19614 cells, 39.3 → 52.1 h. gemm is +428 of the 474 cells at the default cap. The committed-ledger totals are above the 6748 cells
+quoted below because F4b's `src/ops/gemm/choice.hh` edit moved gemm's op hash, so every gemm record is stale.
+
+**Re-tune** (sm_120, GPUs 0, 2, 3; not run). A fresh ledger root, so no old-axis row survives into
+the tables; the committed ledger stays in git history:
+
+    L=$HOME/batchlas-tuning/ladder-sm120/ledger; mkdir -p $L
+    batchlas_tune all --tier deep --dtype float,cfloat --devices 0,2,3 --ledger $L --plan
+    batchlas_tune all --tier deep --dtype float,cfloat --devices 0,2,3 --ledger $L \
+        --guard-wait 86400 --progress-fd 3 3>events.jsonl
+    cp $L/*.sm_120.jsonl benchmarks/results/tuning/ledger/
+    python3 scripts/sweep_to_table.py --device sm_120
+
+The plan step prints the totals (empty ledger, float and cfloat: 12883 cells, 4.85 h lattice, 11.0 h with refinement). FP64 is skipped on 1:64
+parts (agent guide §10); add `double,cdouble` for a full run (19.9 GPU-h with all four). The copied
+ledgers keep the path `TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger` checks, but lose
+the double and cdouble rows unless those were re-tuned too. Then `tune_replay --slowdown --table
+tuned/<op>.sm_120.txt --ledger benchmarks/results/tuning/ledger/<op>.sm_120.jsonl` checks the new rows
+with the driver's own scheme.
+
+A ladder re-tune on sm_89 turns these `tuned_tables_tests` checks red, because they require exactly the
+`choice.hh` grid_batch rows: `PosvSm89TablesHoldExactlyTheChoiceGrid`,
+`TrsmTranscribedTablesHoldExactlyTheChoiceGrid`, `GemmTranscribedTablesHoldExactlyTheChoiceGrid`,
+`GemvTranscribedTablesHoldExactlyTheChoiceGrid`, `OrmqrTablesHoldExactlyTheChoiceGridOnBothDevices`,
+`GetrfTablesHoldExactlyTheChoiceGridOnBothDevices`, `GetrsTranscribedTablesHoldExactlyTheChoiceGrid`,
+`GetriTranscribedTablesHoldExactlyTheChoiceGrid`, `SpmmTranscribedTablesHoldExactlyTheChoiceGrid`
+(its CPU table too, if re-tuned) and `SyevTablesHoldExactlyTheChoiceGridOnBothDevices`. Relax each to
+"its keys cover the run's ledger grid" in the same change. Any sm_89 level-3 re-tune (either axis, now with the
+65536 and 131072 rows) does the same to `SyrkTranscribedTable.RowsAreExactlyTheChoiceGridOnSm89`,
+`Syr2kTranscribedTable.RowsAreTheGridAndHoldTheTranscribedRule`,
+`SymmTranscribedTable.HoldsTheChoiceGridAndTheTranscribedRule` and
+`TrmmTranscribedTable.RowsHoldTheChoiceGridAndTheTranscribedPreference`.
+
 ## Engine: matrix-dimension cap
 
 `--max-dim N` (default 2048 for tiered runs, off for custom, 0 = off): no cell is measured with a
@@ -763,7 +969,7 @@ ops declare their dependencies for op order and hashes). Not implemented:
 | View | Content |
 | --- | --- |
 | Status matrix | op × dtype × device. Staleness per kernel family: the header's hash against hash v2 of the sources now, the keys the ledger holds stale per dtype, `stale_kernel_warnings`; per dtype, rows and `behind` when the header does not name the newest run. The row-exact `--check` rule per dtype is in the op view |
-| Launch and progress | tiers preview, calibrate, coarse, deep, custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible. Estimate before start; cells and eliminations stream live (SSE); stop and resume use the skip rule. Runs live in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`); the tuner's own guard (`--allow-idle-foreign`, `--guard-wait`) replaces `gpu_guard.sh` |
+| Launch and progress | tiers preview, calibrate, coarse, deep, custom with listed cells (`--remeasure-keys`); `--allow-dirty` on request; `--device-key` when no GPU is visible. Estimate before start; cells and eliminations stream live (SSE); stop and resume use the skip rule. Runs live in `benchviz_runs/_tuning/<run>/` (`run.json`, `events.jsonl`, `run.log`, `exit`, `remeasure-keys.txt`); the tuner's own guard (`--guard-wait`; no foreign context on a measured GPU) replaces `gpu_guard.sh` |
 | Decision map | small multiples: columns and rows each facet one key or a pair of exact keys (gemm: columns ta × tb, rows four k slices of the planned lattice). Axes: the run's planned lattice (`grid` of its run line); other keys fixed, by default to the densest *measured* slice, batch at the largest value holding a quarter of the commonest one's cells. An unmeasured cell shows the next table's pick, faded by the weighted log2 distance to its serving row; cells served by an untimed row are hatched. Colourings: winning family, margin (runner-up over winner, 1× to 2×), vs vendor (vendor over best native). Interactive SVG, clickable for every candidate's timing and interval |
 | Ranked diff | cells whose pick changes between the shipped table and the rows `sweep_to_table.py` would write now, each pick the first entry the cell's record did not refuse (`skipped`, that is `can_run` false); predicted speedup = ratio of the two picks' medians in that record (a 3% tie keeps the earlier pick, so a change can read as low as 0.971×). Ranked by milliseconds saved; a change whose picks' intervals overlap is marked noise and hidden by default |
 
@@ -784,9 +990,8 @@ ops declare their dependencies for op order and hashes). Not implemented:
   The worker's warm start and each cell's warm-until-stable are the defence. The replay cannot test
   it: the raw files come from warm, back-to-back runs.
 - If the audit fails often, the speedup rests on racing and the adaptive grid alone.
-- Not implemented: per-rep `<run id>.reps.jsonl` files for deep runs; tolerated foreign pids and the
-  guard thresholds (`--util-ceiling`, `--allow-idle-foreign`) in `run` records (the guard backend is
-  recorded).
+- Not implemented: per-rep `<run id>.reps.jsonl` files for deep runs, and the guard threshold
+  (`--util-ceiling`) in `run` records (the guard backend is recorded).
 - Hashes do not follow a dependency's table ("Engine: op order over all 19 ops").
 - Budgets assume one GPU on a quiet box. On the shared 4090 box, guard waits come on top.
 - sm_89 has no measured table: the 2026-10-18 coarse gemm sm_89 run (the benchviz observation

@@ -48,10 +48,9 @@ using hemm_vendor = Event(Queue&,
 /// `hemm(ctx, A, B, C, HemmOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
 ///
-/// Not table-selected. On `Backend::CUDA` the cuBLAS backend chooses by a fixed rule between
-/// expanding `A` into scratch plus one strided-batched gemm and a per-item `cublas?hemm` loop
-/// (the loop also serves a scratch that does not fit); `BATCHLAS_EXPAND_ROUTE` = `expand` |
-/// `loop` pins it. The host backend runs the per-item `cblas_?hemm` loop.
+/// Table-selected (`tuned/hemm.<device>.txt`): `expand` writes the Hermitian matrix into scratch
+/// and runs one strided-batched gemm per batch chunk; `vendor` is the per-item `cublas?hemm` /
+/// `cblas_?hemm` loop. `BATCHLAS_HEMM_ROUTE` = `auto` | `native` | `vendor` | `expand` pins it.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
@@ -67,9 +66,11 @@ using hemm_vendor = Event(Queue&,
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
 ///         backend checks inside its deferred host task and throws std::runtime_error there)
-/// @throws batchlas::NoRouteError in a build without the vendor BLAS
-///         for `Ba`: hemm has no native implementation.
-/// @note Not instantiated for `Backend::ROCM` (rocBLAS has no wrapper here).
+/// @throws std::invalid_argument if `BATCHLAS_HEMM_ROUTE` names a family that is not compiled for
+///         `T` or cannot run the shape
+/// @throws batchlas::NoRouteError when no family can run the call (a CPU queue without netlib, or a
+///         heterogeneous batch vendor-free)
+/// @note On `Backend::ROCM` only `expand` runs (rocBLAS has no ?hemm wrapper here).
 /// @see symm, HemmOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
 /// @ingroup api_blas3
 template <Backend Ba, ComplexScalar T>
@@ -88,7 +89,7 @@ BATCHLAS_API Event hemm(Queue& ctx,
 namespace batchlas::backend {
 
 // DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
-// the public hemm is defined in src/ops/level3/level3.cc.
+// the public hemm is defined in src/ops/hemm/hemm.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of hemm (cuBLAS, host BLAS).
 ///

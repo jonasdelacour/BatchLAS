@@ -455,7 +455,7 @@ namespace batchlas{
 
     namespace backend {
 
-    template <Backend B, RealScalar T>
+    template <Backend B, FloatingOrComplexScalar T>
     Event symm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
@@ -471,13 +471,12 @@ namespace batchlas{
             const auto [m, n, k] = backend::shape::validate_product<batchlas::internal_error>("symm", A_view, B_view, C_view, side);
             static_cast<void>(k);  // cblas_?symm takes A's order from side, not as an argument
 
-            // The two complex slots have no callee because this overload is
-            // constrained to a real T; a complex caller reaches hemm below.
+            // The complex slots are the complex-symmetric ?symm (hemm is the Hermitian one).
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
-                    cblas_ssymm, cblas_dsymm, nullptr, nullptr,
+                    cblas_ssymm, cblas_dsymm, cblas_csymm, cblas_zsymm,
                     Layout::ColMajor,
                     side,
                     uplo,
@@ -640,7 +639,7 @@ namespace batchlas{
 
     namespace backend {
 
-    template <Backend B, RealScalar T>
+    template <Backend B, FloatingOrComplexScalar T>
     Event syrk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -653,12 +652,11 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
             const auto [n, k] = backend::shape::validate_rank_k<batchlas::internal_error>("syrk", A_view, C_view, transA, /*hermitian=*/false);
 
-            // The two complex slots have no callee because this overload is
-            // constrained to a real T; the complex rank-k update is herk.
+            // The complex slots are the complex-symmetric ?syrk (herk is the Hermitian one).
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
-                    cblas_ssyrk, cblas_dsyrk, nullptr, nullptr,
+                    cblas_ssyrk, cblas_dsyrk, cblas_csyrk, cblas_zsyrk,
                     Layout::ColMajor,
                     uplo,
                     transA,
@@ -682,7 +680,7 @@ namespace batchlas{
 
     namespace backend {
 
-    template <Backend B, RealScalar T>
+    template <Backend B, FloatingOrComplexScalar T>
     Event syr2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
@@ -697,13 +695,12 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
             const auto [n, k] = backend::shape::validate_rank_2k<batchlas::internal_error>("syr2k", A_view, B_view, C_view, transA, /*hermitian=*/false);
 
-            // The two complex slots have no callee because this overload is
-            // constrained to a real T; the complex rank-2k update is her2k.
+            // The complex slots are the complex-symmetric ?syr2k (her2k is the Hermitian one).
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
                 call_backend_nh<T, BackendLibrary::CBLAS>(
-                    cblas_ssyr2k, cblas_dsyr2k, nullptr, nullptr,
+                    cblas_ssyr2k, cblas_dsyr2k, cblas_csyr2k, cblas_zsyr2k,
                     Layout::ColMajor,
                     uplo,
                     transA,
@@ -1384,9 +1381,8 @@ namespace batchlas{
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size)
 
-    // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
-    // narrower domains get their own tables rather than one blanket loop.
-    #define NETLIB_REAL_OPS(B, fp) \
+    // hemm/herk/her2k are complex-only, so they get their own table.
+    #define NETLIB_SYMMETRIC_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, symm_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
@@ -1398,11 +1394,11 @@ namespace batchlas{
 
     // Instantiate for the floating-point types of interest.
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_OPS, B_)
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(NETLIB_REAL_OPS, B_)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYMMETRIC_OPS, B_)
     BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(NETLIB_COMPLEX_OPS, B_)
 
     #undef NETLIB_OPS
-    #undef NETLIB_REAL_OPS
+    #undef NETLIB_SYMMETRIC_OPS
     #undef NETLIB_COMPLEX_OPS
     #undef NETLIB_FORMAT_BACKEND_OP
     #undef B_

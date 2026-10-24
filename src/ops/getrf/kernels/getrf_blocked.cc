@@ -22,6 +22,7 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/settings.hh>
+#include <batchlas/tuning_params.hh>
 
 namespace batchlas {
 namespace sycl_getrf {
@@ -120,6 +121,19 @@ struct GetrfBlockedWs {
     Span<T*> p22;
 };
 
+// Items per pass: the phases hand the trailing matrix between kernels through L2, and the
+// children are routed at this batch. One panel has no hand-off, so it never splits. The query
+// and the call must agree, so both use it. evidence: docs/perf/lu.md#lu-l2-batch-chunking
+template <typename T>
+int getrf_blocked_chunk(Queue& ctx, int m, int n, int batch) {
+    if (std::min(m, n) <= getrf_blocked_nb<T>(std::min(m, n))) return batch;
+    const auto dev = ctx.device();
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, static_cast<int64_t>(m) * n * static_cast<int64_t>(sizeof(T)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
 template <typename T>
 GetrfBlockedWs<T> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batch) {
     const std::size_t b = static_cast<std::size_t>(batch);
@@ -145,8 +159,10 @@ std::size_t getrf_blocked_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A) {
     const int batch = static_cast<int>(A.batch_size());
     if (batch < 1) return 0;
+    const int chunk = getrf_blocked_chunk<T>(ctx, static_cast<int>(A.rows()),
+                                             static_cast<int>(A.cols()), batch);
     return workspace_bytes([&](BumpAllocator& pool) {
-        return getrf_blocked_layout<T>(ctx, pool, batch);
+        return getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
     });
 }
 
@@ -192,10 +208,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
     }
-    if (m != n) {
-        throw batchlas::invalid_argument(
-            "getrf_blocked: A must be square (getrf.cc's can_run refuses m != n)");
-    }
+    // m x n is ?GETRF's own loop: min(m, n) panels of full remaining height, every
+    // interchange and update spanning all n columns. The pivot list's stride is min(m, n).
+    const int mn = std::min(m, n);
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
     }
@@ -208,8 +223,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
             "getrf_blocked: device does not offer sub-group size 32, which the panel leaf "
             "requires");
     }
-    if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw batchlas::invalid_argument("getrf_blocked: pivot span is shorter than n * batch");
+    if (pivots.size() < static_cast<std::size_t>(mn) * static_cast<std::size_t>(batch)) {
+        throw batchlas::invalid_argument(
+            "getrf_blocked: pivot span is shorter than min(m, n) * batch");
     }
     {
         // min_blocks_per_sm = 1: the question is whether the panel leaf's argmax slots can
@@ -237,135 +253,146 @@ Event getrf_blocked_dispatch(Queue& ctx,
             "file, chooses the trsm candidate.");
     }
 
-    const int nb = getrf_blocked_nb<T>(n);
-    const LeftLaswp mode = getrf_left_laswp_mode();
+    const int nb = getrf_blocked_nb<T>(mn);
+    // The deferred gather stages R = n - k0 rows for n - k0 transpositions: a tall item moves
+    // rows below min(m, n), so it takes the walk.
+    const LeftLaswp mode = (m > n && getrf_left_laswp_mode() == LeftLaswp::DeferGather)
+                               ? LeftLaswp::DeferWalk
+                               : getrf_left_laswp_mode();
     const PanelLeaf leaf_mode = getrf_panel_leaf_mode();
     const std::size_t local_mem_all = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
+    // Chunk by chunk: each pass is a complete factorisation of its items, so the passes are
+    // independent, and the workspace is one chunk's. evidence: docs/perf/lu.md#lu-l2-batch-chunking
+    const int chunk = getrf_blocked_chunk<T>(ctx, m, n, batch);
     BumpAllocator pool(workspace);
-    auto ws = getrf_blocked_layout<T>(ctx, pool, batch);
+    auto ws = getrf_blocked_layout<T>(ctx, pool, chunk + batch % chunk);
     // detail::info_target's rule, inlined: an empty OR SHORT caller span means "not
     // requested" and falls back to pool scratch, and it is THAT span that is zeroed.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : ws.info;
-
-    // The fill belongs HERE, not after the first panel: getf2_panel_device READS
-    // info[b], so this is a real read-after-write. Unguarded, the first panel reads
-    // the caller's garbage back and reports a false singularity.
-    ctx->fill(info.data(), int32_t(0), static_cast<std::size_t>(batch));
-    if (!ctx.in_order()) ctx.wait();
+    const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
 
     // PACKED 1-BASED int32, matching the vendor arms bit for bit (getrf_native.hh's
-    // PIVOT CONTRACT); the stride is the ORDER, cublas?getrfBatched's PivotArray layout.
+    // PIVOT CONTRACT); the stride is min(m, n), cublas?getrfBatched's PivotArray layout.
     auto piv_i32 = pivots.as_span<int>();
-    int* const piv_ptr = piv_i32.data();
 
     const int ld = A.ld();
     const int stride = A.stride();
-    T* const a_ptr = A.data_ptr();
 
-    // The explicit 6-arg constructor, never operator()(Slice, Slice), which would
-    // propagate the parent's pointer array; each role passes its own, never nullptr.
-    auto sub = [&](int r0, int nr, int c0, int nc, Span<T*> ptrs) {
-        return MatrixView<T, MatrixFormat::Dense>(
-            a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-            nr, nc, ld, stride, batch, ptrs.data());
-    };
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
+        T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
+        int* const piv_ptr = piv_i32.data() + static_cast<std::ptrdiff_t>(b0) * mn;
+        int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
 
-    for (int j0 = 0; j0 < n; j0 += nb) {
-        const int ib = std::min(nb, n - j0);   // THE SHORT FINAL PANEL, here only
-        const int mp = n - j0;                 // panel height, and A22's height + ib
-        const int j2 = j0 + ib;
-        const int n2 = n - j2;                 // trailing columns; ZERO on the last panel
-        const int m2 = mp - ib;                // trailing rows;    ZERO on the last panel
-
-        // (P) piv_stride is n and piv_base is j0, which is what makes ipiv global
-        // 1-based and info a global column index with no fix-up. The two leaves answer the
-        // SAME contract: nothing below this line depends on which one ran.
-        T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
-        if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
-            (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
-                                               piv_ptr, n, j0, info.data());
-        } else {
-            (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
-                                           piv_ptr, n, j0, info.data(), nullptr);
-        }
-
-        // A caller may build an out-of-order queue, so every dependent edge guards itself.
+        // The fill belongs HERE, not after the first panel: getf2_panel_device READS
+        // info[b], so this is a real read-after-write. Unguarded, the first panel reads
+        // the caller's garbage back and reports a false singularity.
+        ctx->fill(info_ptr, int32_t(0), static_cast<std::size_t>(cb));
         if (!ctx.in_order()) ctx.wait();
 
-        // (S-left) The panel's interchanges on the finished columns [0, j0). Skip it
-        // and P A = L U silently stops holding: L's finished columns must travel too.
-        if (mode == LeftLaswp::InLoop && j0 > 0) {
-            (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr, ld, stride, /*ncols=*/j0, batch,
-                piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+        // The explicit 6-arg constructor, never operator()(Slice, Slice), which would
+        // propagate the parent's pointer array; each role passes its own, never nullptr.
+        auto sub = [&](int r0, int nr, int c0, int nc, Span<T*> ptrs) {
+            return MatrixView<T, MatrixFormat::Dense>(
+                a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
+                nr, nc, ld, stride, cb, ptrs.data());
+        };
+
+        for (int j0 = 0; j0 < mn; j0 += nb) {
+            const int ib = std::min(nb, mn - j0);  // THE SHORT FINAL PANEL, here only
+            const int mp = m - j0;                 // panel height, and A22's height + ib
+            const int j2 = j0 + ib;
+            const int n2 = n - j2;                 // trailing columns; ZERO on the last panel
+            const int m2 = mp - ib;                // trailing rows;    ZERO on the last panel
+
+            // (P) piv_stride is min(m, n) and piv_base is j0, which is what makes ipiv global
+            // 1-based and info a global column index with no fix-up. The two leaves answer the
+            // SAME contract: nothing below this line depends on which one ran.
+            T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
+            if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
+                (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
+                                                   piv_ptr, mn, j0, info_ptr);
+            } else {
+                (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
+                                               piv_ptr, mn, j0, info_ptr, nullptr);
+            }
+
+            // A caller may build an out-of-order queue, so every dependent edge guards itself.
             if (!ctx.in_order()) ctx.wait();
-        }
 
-        if (n2 <= 0) break;   // the short final panel: no trailing work at all
-
-        // (S-right) The same interchanges on the trailing columns, before (T) reads them.
-        const bool gathered = getrf_right_gather<T>(mp) &&
-            lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
-                /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
-                slm_budget, max_wg);
-        if (!gathered) {
-            (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
-                /*ncols=*/n2, batch,
-                piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
-        }
-        if (!ctx.in_order()) ctx.wait();
-
-        // (T) U12 := L11 \ A12. L11 is unit lower, so the diagonal it holds (which
-        // is U's) is not read. alpha comes THIRD in the public trsm.
-        const auto L11 = sub(j0, ib, j0, ib, ws.p11);
-        const auto A12 = sub(j0, ib, j2, n2, ws.p12);
-        (void)panel_trsm(ctx, L11, A12, T(1), Side::Left, Uplo::Lower,
-                         Transpose::NoTrans, Diag::Unit);
-        if (!ctx.in_order()) ctx.wait();
-
-        if (m2 > 0) {
-            // (G) A22 -= L21 U12. Every GEMM here loads the prior value whatever
-            // beta is, so A22 must already hold the trailing block -- it does.
-            const auto L21 = sub(j2, m2, j0, ib, ws.p21);
-            const auto A22 = sub(j2, m2, j2, n2, ws.p22);
-            (void)trailing_gemm(ctx, L21, A12, A22, T(-1), T(1),
-                                Transpose::NoTrans, Transpose::NoTrans,
-                                ComputePrecision::Default);
-            if (!ctx.in_order()) ctx.wait();
-        }
-    }
-
-    // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, n) in increasing k.
-    // Extents come from ib and j0, never nb: a loop written from the block COUNT
-    // reads past the pivot list at n = 129.
-    if (mode != LeftLaswp::InLoop) {
-        bool done = false;
-        if (mode == LeftLaswp::DeferGather) {
-            done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
-                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
-                n, nb, slm_budget, max_wg);
-            if (done && !ctx.in_order()) ctx.wait();
-        }
-        if (!done) {
-            // Fallback, never a throw: taken when the staging tile will not fit SLM.
-            for (int c0 = 0; c0 < n; c0 += nb) {
-                const int ib = std::min(nb, n - c0);
-                const int k0 = c0 + ib;
-                if (k0 >= n) break;              // the last block: nothing deferred
+            // (S-left) The panel's interchanges on the finished columns [0, j0). Skip it
+            // and P A = L U silently stops holding: L's finished columns must travel too.
+            if (mode == LeftLaswp::InLoop && j0 > 0) {
                 (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
-                    ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
-                    /*ncols=*/ib, batch,
-                    piv_ptr, /*piv_stride=*/n, /*k0=*/k0, /*k1=*/n, /*forward=*/true);
+                    ctx, a_ptr, ld, stride, /*ncols=*/j0, cb,
+                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+                if (!ctx.in_order()) ctx.wait();
+            }
+
+            if (n2 <= 0) break;   // the short final panel: no trailing work at all
+
+            // (S-right) The same interchanges on the trailing columns, before (T) reads them.
+            const bool gathered = getrf_right_gather<T>(mp) &&
+                lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
+                    ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
+                    /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
+                    slm_budget, max_wg);
+            if (!gathered) {
+                (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                    ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
+                    /*ncols=*/n2, cb,
+                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+            }
+            if (!ctx.in_order()) ctx.wait();
+
+            // (T) U12 := L11 \ A12. L11 is unit lower, so the diagonal it holds (which
+            // is U's) is not read. alpha comes THIRD in the public trsm.
+            const auto L11 = sub(j0, ib, j0, ib, ws.p11);
+            const auto A12 = sub(j0, ib, j2, n2, ws.p12);
+            (void)panel_trsm(ctx, L11, A12, T(1), Side::Left, Uplo::Lower,
+                             Transpose::NoTrans, Diag::Unit);
+            if (!ctx.in_order()) ctx.wait();
+
+            if (m2 > 0) {
+                // (G) A22 -= L21 U12. Every GEMM here loads the prior value whatever
+                // beta is, so A22 must already hold the trailing block -- it does.
+                const auto L21 = sub(j2, m2, j0, ib, ws.p21);
+                const auto A22 = sub(j2, m2, j2, n2, ws.p22);
+                (void)trailing_gemm(ctx, L21, A12, A22, T(-1), T(1),
+                                    Transpose::NoTrans, Transpose::NoTrans,
+                                    ComputePrecision::Default);
                 if (!ctx.in_order()) ctx.wait();
             }
         }
+
+        // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, mn) in increasing k.
+        // Extents come from ib and j0, never nb: a loop written from the block COUNT
+        // reads past the pivot list at n = 129.
+        if (mode != LeftLaswp::InLoop) {
+            bool done = false;
+            if (mode == LeftLaswp::DeferGather) {
+                done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
+                    ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
+                    mn, nb, slm_budget, max_wg);
+                if (done && !ctx.in_order()) ctx.wait();
+            }
+            if (!done) {
+                // Fallback, never a throw: taken when the staging tile will not fit SLM.
+                for (int c0 = 0; c0 < mn; c0 += nb) {
+                    const int ib = std::min(nb, mn - c0);
+                    const int k0 = c0 + ib;
+                    if (k0 >= mn) break;             // the last block: nothing deferred
+                    (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                        ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
+                        /*ncols=*/ib, cb,
+                        piv_ptr, /*piv_stride=*/mn, /*k0=*/k0, /*k1=*/mn, /*forward=*/true);
+                    if (!ctx.in_order()) ctx.wait();
+                }
+            }
+        }
+
     }
 
     return ctx.get_event();

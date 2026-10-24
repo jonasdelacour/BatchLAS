@@ -21,6 +21,7 @@
 
 #include <src/ops/symm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <stdexcept>
 #include <string>
@@ -102,7 +103,7 @@ public:
         return {{"form", {Y::grid_form.begin(), Y::grid_form.end()}},
                 {"m", ints(Y::grid_mn)},
                 {"n", ints(Y::grid_mn)},
-                {"batch", ints(Y::grid_batch)}};
+                {"batch", ints(batches())}};
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
@@ -110,7 +111,7 @@ public:
         std::vector<CellKey> cells;
         for (int m : Y::grid_mn)
             for (int n : Y::grid_mn)
-                for (int b : Y::grid_batch)
+                for (int b : batches())
                     cells.push_back({{"form", std::string(Y::form_of(m, n))}, {"m", std::to_string(m)},
                                      {"n", std::to_string(n)}, {"batch", std::to_string(b)}});
         return filter_cells(*this, std::move(cells), overrides);
@@ -122,6 +123,8 @@ public:
     std::string refine_key() const override { return "m"; }
     // k = 8: the cheapest frontier passing the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     FrontierPlan frontier() const override { return {2, 8, 0.05}; }
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1, 2, 4, 8}); }  // as syrk's
+    static std::vector<int> batches() { return with_slice_batches({Y::grid_batch.begin(), Y::grid_batch.end()}); }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -138,7 +141,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/symm/symm.cc"
         // symm expand calls the public gemm: its native kernels and can_run count too.
-        // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }

@@ -334,10 +334,11 @@ sizes while `sgemm` is correct (Known Pitfalls in @ref dev_agent_guide).
 | Object library | Holds |
 | --- | --- |
 | `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; the target `generate_export_header()` is keyed on (@ref design_symbol_visibility) |
-| `batchlas_selection_obj` | flat selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, the generated tuned-tables TU |
+| `batchlas_selection_obj` | flat selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc` but the level-3 seven, the generated tuned-tables TU |
+| `batchlas_extensions_level3_obj` | `src/ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}/<op>.cc` (entry points plus their native kernels) and `src/ops/trsm/kernels/`, GPU-only |
 | `batchlas_backends_obj`, `_cuda_obj`, `_rocm_obj` | vendor wrapper TUs (`src/backends/`) |
-| `batchlas_extensions_{eigen,factorization,tridiag,sytrd,latrd,stedc,cta}_obj` | native drivers and kernels under `src/ops/` and `src/kernels/common/`; lists in `src/ops/CMakeLists.txt` group by device-link cluster, not folder |
-| `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,trsm,gemv,spmm}/kernels/` |
+| `batchlas_extensions_*_obj` (eigen, factorization, tridiag, sytrd, latrd, stedc, cta, posv, gesv) | native drivers and kernels under `src/ops/` and `src/kernels/common/`; lists in `src/ops/CMakeLists.txt` group by device-link cluster, not folder |
+| `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,gemv,spmm}/kernels/`; gemm's reg and wide rows are generated shard TUs (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`) |
 | `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities); `EXTRA_SOURCES` (norm, cond, random cond, transpose, elementwise, the verification checks `matrix_checks.cc`) |
 
 - **Selection is compiled unconditionally.** Its vendor calls are `if constexpr`-gated on
@@ -346,10 +347,13 @@ sizes while `sgemm` is correct (Known Pitfalls in @ref dev_agent_guide).
   the CUDA set is all-or-nothing (`BATCHLAS_HAS_CUDA_VENDOR_TUS`, `cmake/BatchLASDependencies.cmake`):
   a partial cuBLAS/cuSOLVER/cuSPARSE set is a configure error. The ROCm library exists when at least
   one ROCm math library is enabled.
-- **`batchlas_extensions_cta_obj` is the only `NO_CPU_TARGETS` library.** Its kernels are GPU-only
-  (32-lane CTA and tiny tiers). Nothing warns if a source moves out of it; it silently gains a CPU
-  image. `batchlas_sycl_obj` keeps the CPU target: its native-CPU image completes a vendor-free CPU
-  build.
+- **The object libraries in `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) build with
+  `NO_CPU_TARGETS`:** `batchlas_extensions_cta_obj` (32-lane CTA and tiny tiers),
+  `batchlas_extensions_posv_obj` and `batchlas_extensions_gesv_obj` (`posv_tiny.cc`, `gesv_tiny.cc`,
+  split out of cta to shorten its device link), and `batchlas_extensions_level3_obj` (every native arm
+  of trsm and the level-3 seven has `d.is_gpu` in its `can_run`; their CPU images were most of the
+  backends link). Nothing warns if a source moves out of those lists; it silently gains a CPU image.
+  `batchlas_sycl_obj` keeps the CPU target: its native-CPU image completes a vendor-free CPU build.
 - **A source sits with the sources whose device symbols it calls.** The shared library is the
   device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body` and must stay in one
   object library; split, they link only while the helpers are inline templates, and fail with
@@ -360,7 +364,7 @@ sizes while `sgemm` is correct (Known Pitfalls in @ref dev_agent_guide).
   `#pragma unroll` and the register arrays go to the stack. AdaptiveCpp's JIT never sees stage-1
   `-mllvm` options; `BATCHLAS_UNROLL_FULL` covers it there.
 - **Split by default, monolithic for release.** The default build makes each object library its own
-  shared library (14 components); `BATCHLAS_MONOLITHIC_LIBRARY` (default ON on macOS, where split
+  shared library (15 components, plus the vendor `_cuda`/`_rocm` ones); `BATCHLAS_MONOLITHIC_LIBRARY` (default ON on macOS, where split
   dylibs are rejected) links one `libbatchlas`. The device link runs per shared library, so the split
   keeps a one-file relink small: the merged link took 575 s for a 273 MiB `.so` on the RTX 4090 box,
   out of 11 m 38 s for a `-j16` build. Hidden visibility applies only to the monolithic build; in split

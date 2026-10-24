@@ -3,12 +3,16 @@
 
 #include <batchlas/util/minibench.hh>
 
+#include <batchlas/sycl_interop.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
 #include <batchlas/blas/matrix.hh>
 
+#include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <tuple>
@@ -33,6 +37,31 @@ inline double bench_event_elapsed_ms(const batchlas::Event& start, const batchla
 }
 
 namespace bench {
+
+// The cold-cache protocol of the tuner and minibench: min(4 x L2, global memory / 16) bytes.
+inline std::size_t scrub_bytes(const batchlas::Queue& q) {
+    const batchlas::Device d = q.device();
+    const std::size_t l2 = d.get_property(batchlas::DeviceProperty::GLOBAL_MEM_CACHE_SIZE);
+    const std::size_t mem = d.get_property(batchlas::DeviceProperty::GLOBAL_MEM_SIZE);
+    return std::max<std::size_t>(16, std::min(4 * l2, mem / 16) / 16 * 16);
+}
+
+// Evicts the operands from L2 before a timed call: a read-only scan of scrub_bytes() leased from
+// q's arena (kept there, so allocated once per Queue), then a wait. The xor feeds a one-word sink
+// whose condition never holds, so the loads are not dead code.
+// evidence: docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol
+inline void scrub_l2(batchlas::Queue& q) {
+    const std::size_t bytes = scrub_bytes(q);
+    auto ws = q.workspace(bytes + 16);
+    const auto* src = reinterpret_cast<const sycl::uint4*>(ws.data());
+    auto* sink = reinterpret_cast<std::uint32_t*>(ws.data() + bytes);
+    batchlas::sycl_queue(q).parallel_for(sycl::range<1>(bytes / 16), [=](sycl::id<1> i) {
+        const sycl::uint4 v = src[i];
+        const std::uint32_t x = v.x() ^ v.y() ^ v.z() ^ v.w();
+        if (x == 0x9e3779b9u + static_cast<std::uint32_t>(i[0])) *sink = x;
+    });
+    q.wait();
+}
 
 struct ManagedInputs {
     explicit ManagedInputs(std::shared_ptr<batchlas::Queue> q_) : q(std::move(q_)) {}
@@ -378,4 +407,10 @@ inline double bench_time_region_ms(F&& f) {
     f();
     auto t1 = std::chrono::steady_clock::now();
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
+}
+
+template <typename Q>
+inline void minibench::State::SetBatchEndWait(std::shared_ptr<Q> q) {
+    batch_end_fn_ = [q] { q->wait(); };
+    scrub_fn_ = [q] { bench::scrub_l2(*q); };
 }

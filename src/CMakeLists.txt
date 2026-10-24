@@ -26,6 +26,9 @@ add_library(batchlas_extensions_sytrd_obj OBJECT)
 add_library(batchlas_extensions_latrd_obj OBJECT)
 add_library(batchlas_extensions_stedc_obj OBJECT)
 add_library(batchlas_extensions_cta_obj OBJECT)
+add_library(batchlas_extensions_posv_obj OBJECT)
+add_library(batchlas_extensions_gesv_obj OBJECT)
+add_library(batchlas_extensions_level3_obj OBJECT)
 add_library(batchlas_util_obj OBJECT)
 add_library(batchlas_extra_obj OBJECT)
 # src/ops/CMakeLists.txt target_sources()s the native BLAS kernels into this, so the
@@ -43,9 +46,19 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_extensions_latrd_obj
     batchlas_extensions_stedc_obj
     batchlas_extensions_cta_obj
+    batchlas_extensions_posv_obj
+    batchlas_extensions_gesv_obj
+    batchlas_extensions_level3_obj
     batchlas_util_obj
     batchlas_extra_obj
     batchlas_sycl_obj
+)
+# GPU-only device-code clusters: compiled and device-linked without the CPU SYCL target.
+set(BATCHLAS_NO_CPU_OBJECT_LIBS
+    batchlas_extensions_cta_obj
+    batchlas_extensions_posv_obj
+    batchlas_extensions_gesv_obj
+    batchlas_extensions_level3_obj
 )
 
 if(TARGET batchlas_backends_cuda_obj)
@@ -70,11 +83,16 @@ if(NOT BATCHLAS_SYCL_IMPL_ACPP)
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/gesv/kernels/gesv_tiny.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/posv/kernels/posv_tiny.cc
         ${CMAKE_CURRENT_SOURCE_DIR}/ops/trsm/kernels/trsm_sg_left.cc
+        # complex<float> 8x8 tile MACs of the triangular kernels (herk/her2k, complex syrk/syr2k)
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/syrk/syrk.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/syr2k/syr2k.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/herk/herk.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/ops/her2k/her2k.cc
         PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
 endif()
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})
-    if(_obj STREQUAL "batchlas_extensions_cta_obj")
+    if(_obj IN_LIST BATCHLAS_NO_CPU_OBJECT_LIBS)
         batchlas_apply_object_options(${_obj} NO_CPU_TARGETS)
     else()
         batchlas_apply_object_options(${_obj})
@@ -107,7 +125,7 @@ generate_export_header(batchlas_core_obj
 )
 
 # MONOLITHIC MODE ONLY, and that restriction is load-bearing rather than tidy.
-# Measured on the 14 split .so in build/presets/dev-tests: 879 symbol
+# Measured on the 14 split .so in build/presets/dev-tests (before posv/gesv split out): 879 symbol
 # references cross a component boundary, and four weak DATA objects
 # (batchlas_kernel_trace::g_records, batchlas::QueueImpl::device_arrays and
 # both guard variables) are defined in all 14 libraries and collapsed to one
@@ -151,7 +169,7 @@ add_custom_command(
 )
 target_sources(batchlas_selection_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are root-based
-# (<src/...>). ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
+# (<src/...>). ops/level3 holds headers the level-3 ops share (batch chunking, expand, fold).
 target_sources(batchlas_selection_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -164,11 +182,13 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/symm/symm.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/level3/level3.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
+# The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
+# so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
+# were 590 of the backends link's 713 CPU-seconds and could never launch.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 
@@ -216,13 +236,13 @@ function(batchlas_configure_component target)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# One public library, or fourteen components. See BATCHLAS_MONOLITHIC_LIBRARY
+# One public library, or sixteen components. See BATCHLAS_MONOLITHIC_LIBRARY
 # in cmake/BatchLASOptions.cmake for why the split is the DEV default and the
 # merge is the RELEASE shape.
 # ---------------------------------------------------------------------------
 if(BATCHLAS_MONOLITHIC_LIBRARY)
-    # Every object library, one device link. batchlas_extensions_cta_obj is
-    # built with batchlas_sycl_no_cpu_options while the other 14 use
+    # Every object library, one device link. BATCHLAS_NO_CPU_OBJECT_LIBS are
+    # built with batchlas_sycl_no_cpu_options while the others use
     # batchlas_sycl_options, so this merge puts objects with two different
     # -fsycl-targets sets into one sycl-post-link. MEASURED: it links. The
     # single `Linking CXX shared library libbatchlas.so` step took 575 s
@@ -262,7 +282,7 @@ if(BATCHLAS_MONOLITHIC_LIBRARY)
     # spelling of the same objects.
     add_library(batchlas_util ALIAS batchlas)
 else()
-# --- split mode: the 14 component .so, deliberately left unindented so the
+# --- split mode: the 16 component .so, deliberately left unindented so the
 # --- diff against the pre-BATCHLAS_MONOLITHIC_LIBRARY file stays readable.
 add_library(batchlas_core SHARED
     $<TARGET_OBJECTS:batchlas_core_obj>
@@ -327,6 +347,24 @@ add_library(batchlas_extensions_cta SHARED
 )
 batchlas_configure_component(batchlas_extensions_cta NO_CPU_TARGETS)
 
+# src/ops/CMakeLists.txt, EXTENSIONS_POSV_SOURCES: one tiny-tier TU each, split from cta.
+add_library(batchlas_extensions_posv SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_posv_obj>
+)
+batchlas_configure_component(batchlas_extensions_posv NO_CPU_TARGETS)
+
+add_library(batchlas_extensions_gesv SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_gesv_obj>
+)
+batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
+
+# ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
+# and src/ops/CMakeLists.txt): GPU-only.
+add_library(batchlas_extensions_level3 SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_level3_obj>
+)
+batchlas_configure_component(batchlas_extensions_level3 NO_CPU_TARGETS)
+
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>
 )
@@ -354,6 +392,9 @@ set(BATCHLAS_COMPONENT_TARGETS
     batchlas_extensions_latrd
     batchlas_extensions_stedc
     batchlas_extensions_cta
+    batchlas_extensions_posv
+    batchlas_extensions_gesv
+    batchlas_extensions_level3
     batchlas_util
     batchlas_extra
     batchlas_sycl
@@ -377,7 +418,7 @@ endif()
 endif()
 
 # cmake/BatchLASPackaging.cmake needs this list and runs in the top-level scope,
-# so hand it over rather than keeping a second hand-written copy of the same 16
+# so hand it over rather than keeping a second hand-written copy of the same 18
 # names in the packaging file (the two drifted apart once already).
 set_property(GLOBAL PROPERTY BATCHLAS_COMPONENT_TARGETS "${BATCHLAS_COMPONENT_TARGETS}")
 
@@ -442,7 +483,7 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
 endif()
 
 # In monolithic mode `batchlas` is the SHARED library itself, already fully
-# configured above. In split mode it is the INTERFACE facade over the 14
+# configured above. In split mode it is the INTERFACE facade over the 16
 # components, and it is the facade that carries the --no-as-needed mitigation.
 if(NOT BATCHLAS_MONOLITHIC_LIBRARY)
     add_library(batchlas INTERFACE)

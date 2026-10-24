@@ -135,6 +135,7 @@ struct Job {
     Ledger ledger;  // read once; plan_round's `stored` pointers point into it
     std::vector<AxisSpec> axes;
     std::unique_ptr<Region> region;
+    bool ladder = false;  // the batch axis is the CU-aligned ladder
     std::vector<CellKey> next;
     std::map<CellKey, CellRecord> mine;
     std::map<CellKey, std::vector<std::string>> runnable;
@@ -178,7 +179,7 @@ struct Job {
 };
 
 bool measurable(const PlannedCell& c) {
-    return c.reason.empty() || c.reason == "remeasure" || c.reason.rfind("partial:", 0) == 0;
+    return c.reason.empty() || c.reason == "remeasure" || c.reason == "protocol" || c.reason.rfind("partial:", 0) == 0;
 }
 
 class TieredRun {
@@ -258,8 +259,23 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     for (const auto& [name, values] : o_.grid)
         for (auto& a : ax)
             if (a.first == name) a.second = values;
+    const std::vector<CellKey> declared = s.grid(dtype, o_.grid);
+    std::vector<CellKey> grid = declared;
+    // A sample (custom, --only-named) measures named keys only: no ladder. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    for (auto& a : ax)
+        if (a.first == "batch" && !o_.batch_classes.empty() && !named_only()) {
+            const auto ladder = batch_strings(batch_ladder(o_.cus > 0 ? o_.cus : id_.cus,
+                                                           s.ladder_classes(o_.batch_classes), s.ladder_extra_batches()));
+            if (o_.ladder_auto && !ladder_applies(j->ledger.runs, ladder)) {
+                std::printf("== %s %s: batch ladder off, the ledger holds only choice.hh-axis runs (--batch-ladder "
+                            "default forces it: a re-tune of every cell)\n", op.c_str(), dtype.c_str());
+                continue;
+            }
+            j->ladder = true;
+            a.second = ladder;
+            grid = rebatch(grid, a.second);
+        }
     j->axes = axis_specs(s.key_names(), ax);
-    const std::vector<CellKey> grid = s.grid(dtype, o_.grid);
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
@@ -283,13 +299,26 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     if (named_only()) j->next.clear();
     else if (j->frontier) j->next = frontier_start(grid, j->axes, j->fp.stride);
     else if (!calibrate()) j->next = lattice ? tier_lattice(j->axes, o_.tier) : tier_subsample(grid, o_.tier);
+    // The Region spans the declared grid too, so old-axis rows (batch 32768, level-3's 1..27) stay refinement cells.
+    std::vector<CellKey> span = grid;
+    if (j->ladder) span.insert(span.end(), declared.begin(), declared.end());
+    j->region = std::make_unique<Region>(span);
     if (j->frontier || calibrate()) {
         j->universe = grid, j->on_grid.insert(grid.begin(), grid.end());
         const std::set<CellKey> r0(j->next.begin(), j->next.end());
+        // Under the ladder a partly stale old-axis row inside the Region is re-raced too, not left with stale times;
+        // so is every row another protocol timed (warm L2), whatever its tier.
+        const std::set<std::string> cold = protocol_runs(j->ledger);
         for (const auto& [k, r] : best_records(j->ledger, j->fh))
-            if (j->on_grid.count(k) && !r0.count(k) && tier_rank(r->tier) >= tier_rank(o_.tier) &&
-                freshness(*r, j->fh) == Freshness::partly_stale)
+            if ((j->on_grid.count(k) || (j->ladder && j->region->contains(k))) && !r0.count(k) &&
+                (other_protocol(*r, cold) ||
+                 (tier_rank(r->tier) >= tier_rank(o_.tier) && freshness(*r, j->fh) == Freshness::partly_stale)))
                 j->next.push_back(k);
+    } else if (!named_only()) {  // a lattice run: off-lattice rows (earlier refinement midpoints) another protocol timed
+        const std::set<std::string> cold = protocol_runs(j->ledger);
+        const std::set<CellKey> r0(j->next.begin(), j->next.end());
+        for (const auto& [k, r] : best_records(j->ledger, j->fh))
+            if (other_protocol(*r, cold) && j->region->contains(k) && !r0.count(k)) j->next.push_back(k);
     }
     // Named cells join round 0 even off the lattice (refinement midpoints), so no budget stops them.
     if (const auto r = o_.remeasure.find(op + "." + dtype); r != o_.remeasure.end()) {
@@ -307,7 +336,6 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
             if (std::find(j->next.begin(), j->next.end(), k) == j->next.end()) j->next.push_back(k);
         }
     }
-    j->region = std::make_unique<Region>(grid);
     jobs_.push_back(std::move(j));
 }
 
@@ -531,6 +559,21 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
         worker = m_->persistent() && !j.fresh && !job.arms.empty();
     }
     ArmBatch b = job.arms.empty() ? ArmBatch{} : worker ? m_->measure(job) : m_->measure_fresh(job);
+    // A cell the SW power cap held for most of its timed runs is raced again; the record keeps the
+    // last try's clocks and every try's wall time. evidence: docs/perf/batch-sensitivity.md#batch-sensitivity-timing-hygiene
+    int reraces = 0;
+    while (b.error.empty() && b.phases.clk.capped_fraction() > kThrottledFraction && reraces < kThrottleReraces) {
+        ++reraces;
+        std::printf("[gpu%d] %s %s %s: SW power cap in %d of %d clock samples; racing it again\n", gpu, op.c_str(),
+                    j.dtype.c_str(), key_text(c.key).c_str(), b.phases.clk.capped, b.phases.clk.n);
+        std::fflush(stdout);
+        emit(Json().str("ev", "throttled").str("op", op).str("dtype", j.dtype).key(c.key).integer("gpu", gpu)
+                 .integer("capped", b.phases.clk.capped).integer("samples", b.phases.clk.n));
+        Phases before = b.phases;
+        before.clk = {};
+        b = worker ? m_->measure(job) : m_->measure_fresh(job);
+        b.phases += before;
+    }
     verdicts(j, c.key, b.arms);
     b.arms.insert(b.arms.end(), ld_bad.begin(), ld_bad.end());
     std::vector<std::string> ld_failed;
@@ -578,6 +621,7 @@ void TieredRun::measure_one(Job& j, const PlannedCell& c, int gpu, int round) {
                                    NAN, 0, true});
     r.phases = b.phases;
     r.phases.arms = static_cast<int>(job.arms.size());
+    r.throttle_reraces = reraces;
     {
         std::lock_guard<std::mutex> lock(mu_);
         auto& live = j.runnable[c.key];
@@ -1044,6 +1088,13 @@ std::string git_head(const std::string& repo) {
 
 int run_tiered(const TieredOpts& o, const RunIdentity& id, CellMeasurer* m) { return TieredRun(o, id, m).go(); }
 
+bool ladder_applies(const std::vector<RunMeta>& runs, const std::vector<std::string>& ladder) {
+    const std::string want = "batch=" + join(ladder, ",");
+    return runs.empty() || std::any_of(runs.begin(), runs.end(), [&](const RunMeta& r) {
+               return (" " + r.grid + " ").find(" " + want + " ") != std::string::npos;
+           });
+}
+
 int status_main(const std::string& repo, const std::string& ledger_root, const std::string& tuned_dir) {
     std::map<std::tuple<std::string, std::string, std::string>, StatusRow> rows;
     std::map<std::pair<std::string, std::string>, std::map<std::string, std::string>> hashes;
@@ -1085,7 +1136,9 @@ int status_main(const std::string& repo, const std::string& ledger_root, const s
                     r.runs = l.runs.size();
                     r.cells = keys.size();
                     r.stale = keys.size() - best.size();
+                    const std::set<std::string> cold = protocol_runs(l);
                     for (const auto& [k, c] : best) {
+                        r.stale += other_protocol(*c, cold);  // a warm-L2 record: re-measured by the next run
                         r.tiers[c->tier]++;
                         r.partial += freshness(*c, fh) == Freshness::partly_stale;
                     }

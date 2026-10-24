@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 
 #include <chrono>
+#include <cstdlib>
 
 namespace batchlas::tune::nvml {
 
@@ -40,6 +41,8 @@ struct Lib {
     Ret (*util)(Device, Utilization*) = nullptr;
     Ret (*proc_util)(Device, ProcessSample*, unsigned*, unsigned long long) = nullptr;
     Ret (*uuid)(Device, char*, unsigned) = nullptr;
+    Ret (*clock_info)(Device, int, unsigned*) = nullptr;               // optional: clocks()
+    Ret (*event_reasons)(Device, unsigned long long*) = nullptr;       // optional: clocks()
 };
 
 template <typename F>
@@ -59,6 +62,9 @@ const Lib& lib() {
             return l;
         }
         Ret (*init)() = nullptr;
+        sym(h, "nvmlDeviceGetClockInfo", l->clock_info);
+        if (!sym(h, "nvmlDeviceGetCurrentClocksEventReasons", l->event_reasons))
+            sym(h, "nvmlDeviceGetCurrentClocksThrottleReasons", l->event_reasons);
         if (!sym(h, "nvmlDeviceGetComputeRunningProcesses_v3", l->procs))
             sym(h, "nvmlDeviceGetComputeRunningProcesses_v2", l->procs);
         if (!l->procs) sym(h, "nvmlDeviceGetComputeRunningProcesses", l->procs_v1);
@@ -137,6 +143,24 @@ std::optional<std::string> uuid(int gpu) {
     char buf[96] = {};  // NVML_DEVICE_UUID_V2_BUFFER_SIZE
     if (!d || lib().uuid(*d, buf, sizeof(buf)) != kSuccess) return std::nullopt;
     return std::string(buf);
+}
+
+std::optional<Clocks> clocks(int gpu) {
+    constexpr int kClockSm = 1;  // NVML_CLOCK_SM
+    const auto d = device(gpu);
+    Clocks c;
+    if (!d || !lib().clock_info || !lib().event_reasons || lib().clock_info(*d, kClockSm, &c.sm_mhz) != kSuccess ||
+        lib().event_reasons(*d, &c.reasons) != kSuccess)
+        return std::nullopt;
+    return c;
+}
+
+int visible_gpu() {
+    const char* v = std::getenv("CUDA_VISIBLE_DEVICES");
+    if (!v || !*v) return -1;
+    char* end = nullptr;
+    const long g = std::strtol(v, &end, 10);
+    return *end == '\0' && g >= 0 ? int(g) : -1;
 }
 
 unsigned long long now_us() {

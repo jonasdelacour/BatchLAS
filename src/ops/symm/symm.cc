@@ -11,6 +11,7 @@
 #include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
 
+#include <src/ops/level3/batched.hh>
 #include <src/ops/symm/choice.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/kernels/common/triangular_expand.hh>
@@ -19,7 +20,9 @@
 #include <src/util/kernel-trace.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <complex>
 #include <cstddef>
+#include <type_traits>
 #include <cstdint>
 #include <stdexcept>
 #include <variant>
@@ -32,7 +35,14 @@ using select::overloaded;
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <typename T>
+template <Backend B>
+inline constexpr bool kExpandWired = select::native_gpu_backend<B> || B == Backend::ROCM;
+// ROCm's vendor arm symmetrizes a real copy (MatrixView::symmetrize is real-only).
+template <Backend B, class T>
+inline constexpr bool kVendorWired =
+    select::has_library<B>(spec.vendor) && !(B == Backend::ROCM && !std::is_floating_point_v<T>);
+
+template <class T>
 select::Key key_of(const MV<T>& C) {
     return {{"form", form_of(C.rows(), C.cols())}, {"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -41,49 +51,19 @@ select::Key key_of(const MV<T>& C) {
 // feeds rejects a heterogeneous B or C against the homogeneous scratch; every vendor loop
 // (cuBLAS, netlib) runs each item at the top-level (m, n). So no family takes a heterogeneous
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
-// BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget), and its batch sits in grid z.
-template <Backend B, typename T>
+// BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget) and grid z holds its batch, so the launch
+// chunks the batch and only an item whose own scratch does not fit is refused.
+template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
-    const std::int64_t k = A.rows(), batch = A.batch_size();
+    constexpr bool kWired = kExpandWired<B>;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
-                        C.cols() >= 1 && batch >= 1 && batch <= d.max_groups_yz;
+                        C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
-        [&](Expand) {
-            return native && backend::detail::expansion_fits<T>(
-                                 q, int(k), int(batch),
-                                 backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)), d.max_groups_yz);
-        },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
+        [&](Vendor) { return kVendorWired<B, T> && d.has_vendor && homogeneous; },
     }, c);
-}
-
-// The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on
-// first touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while
-// the kernels reading it are only enqueued.
-template <Backend B, typename T>
-Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
-                  Uplo uplo) {
-    const int n = A.rows(), batch = A.batch_size();
-    const int ld = backend::detail::expanded_ld<T>(n);
-    auto ws = q.workspace(backend::detail::expanded_workspace_bytes<T>(q, n, batch));
-    BumpAllocator pool(ws.span());
-    auto storage = pool.allocate<T>(q, std::size_t(ld) * std::size_t(n) * std::size_t(batch));
-    const MV<T> full(storage.data(), n, n, ld, ld * n, batch);
-    Event expansion;
-    {
-        BATCHLAS_KERNEL_TRACE_SCOPE("symm.expand");
-        expansion = backend::detail::expand_mirrored<T, /*Conjugate=*/false>(q, full, A, uplo);
-    }
-    // An out-of-order queue orders nothing between the expansion and a vendor gemm's stream.
-    if (!q.in_order()) expansion.wait();
-    if (side == Side::Left)
-        return gemm<B, T>(q, full, Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                          ComputePrecision::Default);
-    return gemm<B, T>(q, Bm, full, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
-                      ComputePrecision::Default);
 }
 
 // rocBLAS has no symm wrapper: ROCm's vendor arm symmetrizes a copy of A and calls the public
@@ -108,11 +88,16 @@ template <Backend B, typename T>
 Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
-        [&](Expand) { return expand_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo); },
+        [&](Expand) -> Event {
+            if constexpr (kExpandWired<B>)
+                return level3::expand_gemm<B, T, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
+            else
+                throw std::logic_error("symm: expand is wired for GPU backends only");  // can_run refuses it
+        },
         [&](Vendor) -> Event {
-            if constexpr (B == Backend::ROCM && select::has_library<B>(spec.vendor))
+            if constexpr (B == Backend::ROCM && kVendorWired<B, T>)
                 return symmetrize_gemm<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
-            else if constexpr (select::has_library<B>(spec.vendor))
+            else if constexpr (B != Backend::ROCM && kVendorWired<B, T>)
                 return backend::symm_vendor<B, T>(q, A, Bm, C, alpha, beta, side, uplo);
             else select::no_vendor<B, T>(spec);
         },
@@ -123,7 +108,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 
 // symm takes no caller workspace (no symm_buffer_size); Expand leases its scratch from the
 // queue's arena, so R5 has nothing to size.
-template <Backend Back, RealScalar T>
+template <Backend Back, FloatingOrComplexScalar T>
 Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
     backend::shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
@@ -140,10 +125,7 @@ Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
 }
 
 #define SYMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, symm)
-BATCHLAS_IF_CUDA(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::CUDA))
-BATCHLAS_IF_SYCL(BATCHLAS_FOR_EACH_DEVICE_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::SYCL))
-BATCHLAS_IF_ROCM(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::ROCM))
-BATCHLAS_IF_HOST(BATCHLAS_FOR_EACH_REAL_TYPE_1(SYMM_INSTANTIATE, Backend::NETLIB))
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYMM_INSTANTIATE)
 #undef SYMM_INSTANTIATE
 
 }  // namespace batchlas

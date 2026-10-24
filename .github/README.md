@@ -96,7 +96,7 @@ the nearest device's and warns once, so retune on new hardware:
 
 ```bash
 cmake --preset benchmarks && cmake --build --preset benchmarks --target batchlas_tune
-B=build/presets/benchmarks/tools/tune/batchlas_tune
+B=build-benchmarks/tools/tune/batchlas_tune
 $B --list                                                   # ops, candidates, grids
 $B all --tier preview --dtype float,double --devices 0 --plan   # cells and time estimate, no GPU
 $B all --tier coarse  --dtype float,double --devices 0 --out tuned

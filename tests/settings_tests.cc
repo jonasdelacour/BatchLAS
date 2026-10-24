@@ -268,9 +268,9 @@ TEST(SettingsRouting, OnlyTheRouteVariableIsRead) {
     EXPECT_FALSE(gemm_pin(&source).has_value());
     EXPECT_FALSE(select::detail::pin_text("syev", &source).has_value());
 
-    EXPECT_EQ(RoutingSettings::ops.size(), 19u);
+    EXPECT_EQ(RoutingSettings::ops.size(), 22u);
     for (const std::string_view op : RoutingSettings::ops) EXPECT_NO_THROW((void)settings().routing.route(op));
-    for (const char* op : {"hemm", "herk", "her2k", "iluk", "nosuchop"})
+    for (const char* op : {"iluk", "nosuchop"})
         EXPECT_THROW((void)settings().routing.route(op), std::invalid_argument) << op;
     EXPECT_FALSE(select::detail::pin_text("iluk", &source).has_value());
 

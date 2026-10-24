@@ -64,6 +64,8 @@ LEDGER_STATUS_TIMED = ("ok", "eliminated")
 TIE = 0.03  # the tuner's tie band (tune_core.cc rank())
 LFS_POINTER = "version https://git-lfs.github.com/spec/v1"  # the first line of an unfetched LFS file
 HASH_VECTOR = "tests/data/kernel_hash_v2"
+PROTOCOL = "lean-cold"  # tools/tune/ledger.hh kProtocol: a measured record of another protocol ranks below
+MONOTONE_DROP = 5.0  # a whole-cell time this many times lower at a larger batch flags both cells
 
 
 def parse_keys(spec):
@@ -245,6 +247,8 @@ def read_ledger(path, dtype=None, raw=False):
         led.warnings.append(f"{path}: run {ident[0]} ({ident[1]}) is {runs[ident]['batchlas']}: excluded from the table")
     led.runs = [r for ident, r in runs.items() if ident not in dirty]
     led.cells = [c for c in led.cells if (c["run_id"], c["dtype"]) not in dirty]
+    for c in led.cells:
+        c["protocol"] = runs.get((c["run_id"], c["dtype"]), {}).get("protocol", "")
     led.rehash = dict(rehash)
     for c in [] if raw else led.cells:
         for r in c["cands"]:
@@ -299,10 +303,11 @@ def usable(cell, family_hash):
 
 
 def best_records(cells, family_hash):
-    """Per key, skipping all-error and stale records, the highest tier, then newest date, then
-    larger run id, then the later line (the C++ best_records)."""
+    """Per key, skipping all-error and stale records: a measured PROTOCOL record first, then the
+    highest tier, newest date, larger run id, then the later line (the C++ best_records)."""
     def order(c):
-        return (LEDGER_TIERS[::-1].index(c["tier"]), c["date"], c["run_id"])
+        cold = c["tier"] not in UNHASHED and c.get("protocol") == PROTOCOL
+        return (cold, LEDGER_TIERS[::-1].index(c["tier"]), c["date"], c["run_id"])
     best = {}
     for c in cells:
         if not usable(c, family_hash):
@@ -430,6 +435,39 @@ def ledger_rows(keyspec, cells, family_hash):
     return kept
 
 
+def winner_ms(cell):
+    """The whole-cell time of a record: its first ranked candidate's median, None when untimed."""
+    for name in cell["ranked"]:
+        res = next((r for r in cell["cands"] if r["cand"] == name), None)
+        if res and res["status"] in LEDGER_STATUS_TIMED and res["median"] and res["median"] > 0:
+            return float(res["median"])
+    return None
+
+
+def monotonicity(op, dtype, cells, family_hash):
+    """--remeasure-keys lines for the cells around a drop: at fixed other key fields, a cell whose
+    whole-cell time exceeds MONOTONE_DROP x a larger batch's, and that larger batch. Whole-cell time
+    cannot fall as the batch grows, so one of the two is a bad measurement (co-tenant time-slicing,
+    a throttled run, a warm-L2 time). Reports only: nothing is re-measured here."""
+    groups = defaultdict(list)
+    for key, c in best_records([c for c in cells if c["tier"] not in UNHASHED], family_hash).items():
+        fields = dict(key)
+        ms = winner_ms(c)
+        if "batch" not in fields or ms is None or not fields["batch"].isdigit():
+            continue
+        groups[tuple(kv for kv in key if kv[0] != "batch")].append((int(fields["batch"]), ms, key))
+    flagged = set()
+    for row in groups.values():
+        row.sort()
+        worst = None  # the slowest smaller batch so far
+        for b, ms, key in row:
+            if worst and worst[0] > MONOTONE_DROP * ms:
+                flagged.update((worst[1], key))
+            if worst is None or ms > worst[0]:
+                worst = (ms, key)
+    return [f"{op} {dtype} " + ",".join(f"{k}={v}" for k, v in key) for key in sorted(flagged)]
+
+
 def newest(runs):
     return max(runs, key=lambda r: (r.get("date", ""), r["run_id"]))
 
@@ -460,6 +498,7 @@ class Derived:
     warnings: list
     vocab: dict          # dtype -> candidate spellings of its newest run
     keys: str            # the run lines' '# keys:' text
+    remeasure: list = field(default_factory=list)  # monotonicity(): --remeasure-keys lines
 
 
 def ledger_text(op, device, ledger_path, judge=None, kernels=None, repo=REPO):
@@ -491,8 +530,9 @@ def ledger_text(op, device, ledger_path, judge=None, kernels=None, repo=REPO):
     for c in led.cells:
         cells_by[c["dtype"]].append(c)
     counts = {t: 0 for t in LEDGER_TIERS}
-    body = []
+    body, remeasure = [], []
     for d in dtypes:
+        remeasure += monotonicity(op, d, cells_by[d], judge)
         rows = ledger_rows(keyspec, cells_by[d], judge)
         for key in sorted(rows):
             tier, entries = rows[key]
@@ -509,7 +549,7 @@ def ledger_text(op, device, ledger_path, judge=None, kernels=None, repo=REPO):
         f"# source={LEDGER}{rel_path(ledger_path)} tiers={','.join(f'{t}:{counts[t]}' for t in LEDGER_TIERS)}",
         f"# keys: dtype:exact {keys}",
     ]
-    return Derived("\n".join(lines + body) + "\n", counts, led.warnings, vocab, keys)
+    return Derived("\n".join(lines + body) + "\n", counts, led.warnings, vocab, keys, remeasure)
 
 
 def parse_table(text):
@@ -594,7 +634,7 @@ def header_hashes(header):
     return out
 
 
-def check_table(path, failures, notes, repo=REPO):
+def check_table(path, failures, notes, repo=REPO, remeasure=None):
     """Re-derive one table from the ledger its source= names, judged by its header's hashes, plus
     the format checks; stale header hashes go to notes."""
     rel = os.path.relpath(path, repo)
@@ -617,6 +657,9 @@ def check_table(path, failures, notes, repo=REPO):
     judge = header_hashes(header)
     der = ledger_text(*ident, ledger, judge, header.get("kernels", ""), repo)
     notes += [f"{rel}: {w}" for w in der.warnings]
+    notes += [f"{rel}: monotonicity: {line}" for line in der.remeasure]
+    if remeasure is not None:
+        remeasure += der.remeasure
     if disk != der.text:
         failures.append(f"{rel}: differs from {src} (re-run scripts/sweep_to_table.py)")
     if not keyspec or keyspec[0][:2] != ("dtype", False) or keyspec[1:] != parse_keys(der.keys):
@@ -670,14 +713,14 @@ def stale_kernel_warnings(table_path, repo=REPO):
     return out
 
 
-def check(tuned_dir, ledger_root, repo=REPO):
+def check(tuned_dir, ledger_root, repo=REPO, remeasure=None):
     failures, notes = [], []
     names = sorted(f for f in os.listdir(tuned_dir) if not f.startswith("."))
     covered = set()
     for name in names:
         if name == "README.md" or os.path.isdir(os.path.join(tuned_dir, name)):
             continue
-        led = check_table(os.path.join(tuned_dir, name), failures, notes, repo)
+        led = check_table(os.path.join(tuned_dir, name), failures, notes, repo, remeasure)
         if led:
             covered.add(os.path.realpath(led))
     for name in sorted(os.listdir(ledger_root)):
@@ -696,7 +739,7 @@ def ledger_files(root, op=None, device=None):
     return out
 
 
-def write_tables(root, out_dir, op=None, device=None):
+def write_tables(root, out_dir, op=None, device=None, remeasure=None):
     os.makedirs(out_dir, exist_ok=True)
     found = ledger_files(root, op, device)
     if not found:
@@ -709,6 +752,10 @@ def write_tables(root, out_dir, op=None, device=None):
         with open(dest, "w") as f:
             f.write(der.text)
         print(f"wrote {os.path.relpath(dest)}: " + ", ".join(f"{t}={n}" for t, n in der.counts.items()))
+        for line in der.remeasure:
+            print(f"monotonicity: {line}")
+        if remeasure is not None:
+            remeasure += der.remeasure
 
 
 SAMPLE_MIN_CELLS = 64
@@ -1108,6 +1155,27 @@ def self_test():
         led = build(base, d)
         expect(tiers(rows_of(led)) == {8: "preview", 32: "coarse", 64: "deep", 256: "preview"},
                f"gap fill drops a lower tier inside a higher bracket -> {tiers(rows_of(led))}")
+        # a measured PROTOCOL record outranks another protocol's at a higher tier
+        warm = dict(run_line(r1, "2026-10-01"), protocol="lean")
+        cold = dict(run_line(r2, "2026-10-02", "preview"), protocol=PROTOCOL)
+        got = tiers(rows_of(build([warm, cell(r1, "deep", 64), cold, cell(r2, "preview", 64)], d, "cold.jsonl")))
+        expect(got == {64: "preview"}, f"a cold preview record under a warm deep one -> {got}")
+        got = tiers(rows_of(build([dict(warm, protocol=PROTOCOL), cell(r1, "deep", 64), dict(cold, protocol="lean"),
+                                   cell(r2, "preview", 64)], d, "cold.jsonl")))
+        expect(got == {64: "deep"}, f"a warm preview record under a cold deep one -> {got}")
+
+        # monotonicity: whole-cell time 10 ms at batch 128 but 1 ms at 1024 flags both; 2x and n=32 do not
+        def timed_cell(n, batch, ms):
+            c = cell(r1, "deep", n, batch=batch)
+            for i in range(len(cands)):
+                if c[f"m{i}"] is not None:
+                    c[f"m{i}"] = ms
+            return c
+        mono = build([warm] + [timed_cell(64, b, ms) for b, ms in ((32, 0.5), (128, 10.0), (1024, 1.0), (4096, 4.0))] +
+                     [timed_cell(32, b, ms) for b, ms in ((128, 2.0), (1024, 1.0))], d, "mono.jsonl")
+        got = monotonicity("posv", "float", read_ledger(mono, "float").cells, fh)
+        want = ["posv float uplo=L,n=64,nrhs=1,batch=1024", "posv float uplo=L,n=64,nrhs=1,batch=128"]
+        expect(got == want, f"monotonicity -> {got}")
         # phase timers, the run's protocol and an audit's seconds leave the table byte-identical
         plain = ledger_text("posv", "sm_0", build(base, d, "ph.jsonl"), fh, "k").text
         phases = {"ph_setup": 0.5, "ph_warm": 0.2, "ph_timed": 1.25, "ph_verify": 0.1, "ph_ld": 0.3, "ph_guard": 0.05,
@@ -1389,6 +1457,8 @@ def main():
     ap.add_argument("--at", help="--rehash-sample, --rehash-moved: the commit to record (default HEAD)")
     ap.add_argument("--emit-sample", metavar="OUT",
                     help="with --op and --device: write a stratified --remeasure-keys file for a --rehash-sample run")
+    ap.add_argument("--remeasure-out", metavar="FILE",
+                    help="with --check or a table write: the cells monotonicity() flags, as a --remeasure-keys file")
     ap.add_argument("--cells", type=int, default=SAMPLE_MIN_CELLS,
                     help="--emit-sample: this many cells (default %(default)s); a ledger with fewer exits 1")
     args = ap.parse_args()
@@ -1421,15 +1491,24 @@ def main():
         bad = self_test()
         print("\n".join(bad + [f"--self-test: {'FAILED' if bad else 'OK'}"]))
         return 1 if bad else 0
+    remeasure = []
+
+    def write_remeasure():
+        if args.remeasure_out:
+            with open(args.remeasure_out, "w") as fh:
+                fh.write("".join(ln + "\n" for ln in remeasure))
+            print(f"wrote {args.remeasure_out}: {len(remeasure)} cells (batchlas_tune --remeasure-keys)")
     if args.check:
-        failures, notes = check(args.out, args.ledger)
+        failures, notes = check(args.out, args.ledger, remeasure=remeasure)
         for n in notes:
             print(n)
         for f in failures:
             print("FAIL:", f)
+        write_remeasure()
         print(f"\n--check: {'FAILED, ' + str(len(failures)) + ' problems' if failures else 'OK'}")
         return 1 if failures else 0
-    write_tables(args.ledger, args.out, args.op, args.device)
+    write_tables(args.ledger, args.out, args.op, args.device, remeasure)
+    write_remeasure()
     return 0
 
 

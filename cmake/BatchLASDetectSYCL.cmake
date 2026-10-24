@@ -21,16 +21,27 @@ set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -Wno-c++20-extensions
     -Wno-option-ignored
 )
-# The SYCL device link runs llvm-foreach over one device image per object.
-# Parallelising it is pure scheduling - the emitted device images come out
-# byte-identical. Measured: cta 131 s -> 56 s (2.3x), factorization 26.5 s ->
-# 17.0 s at N=4. It buys nothing on a library dominated by one large image
-# (tridiag, latrd) and nothing on executable links, which carry no device code.
-# N=4 is deliberately conservative against oversubscription under `make -j20`.
+# The SYCL device link runs llvm-foreach over the device modules sycl-post-link splits
+# out. Parallelising it is pure scheduling - the device images come out byte-identical.
+# llvm-foreach runs BATCHES of N and waits for each batch's slowest module, so a link pays
+# the sum of its batch maxima: backends at N=4 was 4 batches of CPU AOT (171+153+97 s). It
+# cannot split one module, so a library dominated by one image (latrd, posv, gesv) gains
+# nothing. auto = the logical cores, clamped to 4..32: after the gemm shards an opencl-aot job
+# peaks at 1.2 GB (the largest process of a full build is 1.6 GB) and a link has at most ~40 modules.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+set(_batchlas_link_jobs "${BATCHLAS_SYCL_LINK_JOBS}")
+if(_batchlas_link_jobs STREQUAL "auto")
+    cmake_host_system_information(RESULT _batchlas_link_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    if(_batchlas_link_jobs LESS 4)
+        set(_batchlas_link_jobs 4)
+    elseif(_batchlas_link_jobs GREATER 32)
+        set(_batchlas_link_jobs 32)
+    endif()
+endif()
 set(BATCHLAS_SYCL_BASE_LINK_OPTIONS -fsycl)
-if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
+if(_batchlas_link_jobs GREATER 1)
     list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS
-        -fsycl-max-parallel-link-jobs=${BATCHLAS_SYCL_LINK_JOBS})
+        -fsycl-max-parallel-link-jobs=${_batchlas_link_jobs})
 endif()
 
 # The per-architecture local-memory table. Its one caller is the tile cap below, which
@@ -625,6 +636,27 @@ foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_CXX_OPTIONS BATCHLAS_SYCL_EXTRA_CXX_OPT
         "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_opt_esc}>>")
 endforeach()
 
+# BATCHLAS_SYCL_GLOBAL_OFFSET (cmake/BatchLASOptions.cmake). The flag reaches the device
+# codegen through the link driver; probed first so a compiler without the GlobalOffset pass
+# keeps building (with the twins) instead of failing every link on an unknown -mllvm option.
+if(NOT BATCHLAS_SYCL_GLOBAL_OFFSET)
+    set(_go_dir "${PROJECT_BINARY_DIR}/CMakeFiles/batchlas_global_offset_probe")
+    file(MAKE_DIRECTORY "${_go_dir}")
+    file(WRITE "${_go_dir}/probe.cc" "int main() { return 0; }\n")
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" -mllvm -enable-global-offset=false -fsyntax-only "${_go_dir}/probe.cc"
+        RESULT_VARIABLE _go_rc OUTPUT_QUIET ERROR_VARIABLE _go_err)
+    if(_go_rc EQUAL 0)
+        list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS "SHELL:-mllvm -enable-global-offset=false")
+        message(STATUS "SYCL global-offset kernel twins: off (-mllvm -enable-global-offset=false)")
+    else()
+        message(WARNING "${CMAKE_CXX_COMPILER} rejects -mllvm -enable-global-offset=false; "
+            "keeping the _with_offset kernel twins (slower device links): ${_go_err}")
+    endif()
+else()
+    message(STATUS "SYCL global-offset kernel twins: kept (BATCHLAS_SYCL_GLOBAL_OFFSET=ON)")
+endif()
+
 foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_LINK_OPTIONS BATCHLAS_SYCL_EXTRA_LINK_OPTIONS)
     batchlas_build_interface_option(_opt_esc "${_opt}")
     target_link_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:${_opt_esc}>")
@@ -667,6 +699,42 @@ endif()
 if(BATCHLAS_SYCL_RUNTIME_DIR AND NOT BATCHLAS_SYCL_RUNTIME_DIR IN_LIST CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES)
     list(APPEND CMAKE_BUILD_RPATH "${BATCHLAS_SYCL_RUNTIME_DIR}")
     list(APPEND CMAKE_INSTALL_RPATH "${BATCHLAS_SYCL_RUNTIME_DIR}")
+endif()
+
+# Some intel/llvm builds (e79d489d, Jan 2026) lower reqd_work_group_size(1, 1, N) on NVPTX to
+# reqntidx=N then reqntidx=1 and no reqntidz: ptxas sees `.reqntid 1, 1` and every launch fails
+# with CUDA_ERROR_INVALID_VALUE. The same builds emit .maxntid for max_work_group_size, which
+# ptxas rejects next to .reqntid. Newer builds have the opposite behaviour (known defect #20),
+# so the gemm register functors pick their spelling from this probe of the device IR.
+set(BATCHLAS_NVPTX_REQD_WG_OK OFF)
+set(_reqd_probe_target "")
+foreach(_t IN LISTS BATCHLAS_SYCL_TARGETS)
+    if(_t MATCHES "^nvidia_gpu_sm_" AND NOT _reqd_probe_target)
+        set(_reqd_probe_target "${_t}")
+    endif()
+endforeach()
+if(_reqd_probe_target)
+    set(_reqd_dir "${PROJECT_BINARY_DIR}/CMakeFiles/batchlas_reqd_wg_probe")
+    file(MAKE_DIRECTORY "${_reqd_dir}")
+    file(WRITE "${_reqd_dir}/probe.cc"
+        "#include <sycl/sycl.hpp>\n"
+        "struct K { int* p; [[sycl::reqd_work_group_size(1, 1, 256)]] void operator()(sycl::nd_item<3> it) const"
+        " { p[it.get_global_linear_id()] = 1; } };\n"
+        "void f(sycl::queue& q, int* p) { q.parallel_for(sycl::nd_range<3>({1, 1, 256}, {1, 1, 256}), K{p}); }\n")
+    set(_reqd_args -fsycl -fsycl-targets=${_reqd_probe_target} -fsycl-device-only -S)
+    if(BATCHLAS_CUDA_PATH)
+        list(APPEND _reqd_args "--cuda-path=${BATCHLAS_CUDA_PATH}")
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" ${_reqd_args} -o "${_reqd_dir}/probe.ll" "${_reqd_dir}/probe.cc"
+        RESULT_VARIABLE _reqd_rc OUTPUT_QUIET ERROR_QUIET)
+    if(_reqd_rc EQUAL 0 AND EXISTS "${_reqd_dir}/probe.ll")
+        file(READ "${_reqd_dir}/probe.ll" _reqd_ir)
+        if(_reqd_ir MATCHES "\"reqntidx\", i32 256" AND _reqd_ir MATCHES "\"reqntidz\", i32 1")
+            set(BATCHLAS_NVPTX_REQD_WG_OK ON)
+        endif()
+    endif()
+    message(STATUS "NVPTX reqd_work_group_size lowering: ${BATCHLAS_NVPTX_REQD_WG_OK} (${_reqd_probe_target})")
 endif()
 
 # What a consumer's own SYCL translation units need (BatchLAS_SYCL_COMPILE_OPTIONS).

@@ -321,10 +321,11 @@ TEST(NoRoute, IsUnsupported) {
 #if BATCHLAS_HAS_CUDA_BACKEND && !BATCHLAS_HAS_CUBLAS
     Queue q;
     if (q.device().type != DeviceType::GPU) GTEST_SKIP() << "the vendor-free call needs the CUDA queue";
-    using C = std::complex<float>;
+    // complex<double> syr2k has only the vendor family (hemm went native 2026-10-22).
+    using C = std::complex<double>;
     Matrix<C, MatrixFormat::Dense> A(4, 4, 2), B(4, 4, 2), Cm(4, 4, 2);
-    const auto call = [&] { (void)hemm(q, A, B, Cm, HemmOptions<C>{}); };
-    ExpectThreeWayCatch<batchlas::unsupported>(call, "no route for hemm");
+    const auto call = [&] { (void)syr2k(q, A, B, Cm, Syr2kOptions<C>{}); };
+    ExpectThreeWayCatch<batchlas::unsupported>(call, "no route for syr2k");
     EXPECT_THROW(call(), std::runtime_error);
 #endif
 }

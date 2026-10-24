@@ -73,6 +73,11 @@ std::string cell_line(const CellRecord& r, const std::string& dtype) {
         if (!std::isnan(r.phases.*f)) j.num("ph_" + name, r.phases.*f);
     if (!r.phases.mode.empty()) j.str("ph_mode", r.phases.mode);
     if (r.phases.arms > 0) j.integer("ph_arms", r.phases.arms);
+    if (const ClockStats& k = r.phases.clk; k.n > 0) {
+        j.integer("clk_n", k.n).integer("clk_capped", k.capped).num("clk_mhz", std::round(k.mean_mhz()));
+        if (k.capped_fraction() > kThrottledFraction) j.integer("throttled", 1);
+    }
+    if (r.throttle_reraces > 0) j.integer("throttle_reraces", r.throttle_reraces);
     return j.line();
 }
 
@@ -133,6 +138,9 @@ CellRecord parse_cell(const Record& r) {
     for (const auto& [name, f] : Phases::fields()) c.phases.*f = r.number("ph_" + name);
     c.phases.mode = r.get("ph_mode");
     if (const double a = r.number("ph_arms"); std::isfinite(a)) c.phases.arms = static_cast<int>(a);
+    if (const double n = r.number("clk_n"); std::isfinite(n) && n > 0)
+        c.phases.clk = {int(n), int(r.number("clk_capped")), r.number("clk_mhz") * n};
+    if (const double t = r.number("throttle_reraces"); std::isfinite(t)) c.throttle_reraces = int(t);
     return c;
 }
 
@@ -326,8 +334,22 @@ bool all_error(const CellRecord& r) {
     return !r.cands.empty() && std::all_of(r.cands.begin(), r.cands.end(), [](const CandResult& c) { return c.status == "error"; });
 }
 
+std::set<std::string> protocol_runs(const Ledger& l) {
+    std::set<std::string> out;
+    for (const RunMeta& m : l.runs)
+        if (m.protocol == kProtocol) out.insert(m.run_id);
+    return out;
+}
+
+bool other_protocol(const CellRecord& r, const std::set<std::string>& protocol_runs) {
+    return !unhashed(r.tier) && !protocol_runs.count(r.run_id);
+}
+
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash) {
-    const auto order = [](const CellRecord& x) { return std::tuple(tier_rank(x.tier), x.date, x.run_id); };
+    const std::set<std::string> runs = protocol_runs(l);
+    const auto order = [&](const CellRecord& x) {
+        return std::tuple(!unhashed(x.tier) && runs.count(x.run_id) > 0, tier_rank(x.tier), x.date, x.run_id);
+    };
     std::map<CellKey, const CellRecord*> best;
     for (const CellRecord& c : l.cells) {
         if (all_error(c) || freshness(c, family_hash) == Freshness::stale) continue;

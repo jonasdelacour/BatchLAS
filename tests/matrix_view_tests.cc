@@ -4,6 +4,8 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <complex>
+#include <cstdint>
+#include <limits>
 
 using namespace batchlas;
 
@@ -44,6 +46,52 @@ TEST(MatrixViewTest, BatchItemView) {
             for (int i = 0; i < rows; ++i)
                 EXPECT_EQ(item.at<MatrixFormat::Dense>(i, j), float(10 * b + j * rows + i));
     }
+}
+
+// batch_range keeps extents, ld and stride (non-natural here), offsets the base by first * stride in
+// 64 bits, takes the matching active extents and drops the pointer array (it would address item 0).
+TEST(MatrixViewTest, BatchRangeView) {
+    constexpr int rows = 3, cols = 2, ld = 5, stride = 13, batch = 5;
+    UnifiedVector<float> mem(std::size_t(stride) * batch, -1.0f);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) mem[std::size_t(b) * stride + j * ld + i] = float(100 * b + 10 * j + i);
+    UnifiedVector<float*> ptrs(batch, nullptr);
+    const MatrixView<float, MatrixFormat::Dense> view(mem.data(), rows, cols, ld, stride, batch, ptrs.data());
+    const auto r = view.batch_range(2, 3);
+    EXPECT_EQ(r.data_ptr(), mem.data() + 2 * stride);
+    EXPECT_EQ(r.rows(), rows);
+    EXPECT_EQ(r.cols(), cols);
+    EXPECT_EQ(r.ld(), ld);
+    EXPECT_EQ(r.stride(), stride);
+    EXPECT_EQ(r.batch_size(), 3);
+    for (int b = 0; b < 3; ++b)
+        for (int j = 0; j < cols; ++j)
+            for (int i = 0; i < rows; ++i) EXPECT_EQ(r(i, j, b), float(100 * (b + 2) + 10 * j + i));
+    Queue q;
+    EXPECT_THROW((void)r.data_ptrs(q), batchlas::invalid_argument);
+    EXPECT_NO_THROW((void)view.batch_range(0, batch));
+    EXPECT_NO_THROW((void)view.batch_range(batch - 1, 1));
+    EXPECT_THROW((void)view.batch_range(-1, 2), batchlas::out_of_range);
+    EXPECT_THROW((void)view.batch_range(1, 0), batchlas::out_of_range);
+    EXPECT_THROW((void)view.batch_range(3, 3), batchlas::out_of_range);
+    EXPECT_THROW((void)view.batch_range(1, std::numeric_limits<int>::max()), batchlas::out_of_range);
+
+    UnifiedVector<int> ar(batch), ac(batch);
+    for (int b = 0; b < batch; ++b) ar[b] = 1 + b % 3, ac[b] = 2 - b % 2;
+    const auto het = view.with_active_dims(ar.to_span(), ac.to_span()).batch_range(1, 4);
+    EXPECT_TRUE(het.is_heterogeneous());
+    for (int b = 0; b < 4; ++b) {
+        EXPECT_EQ(het.rows(b), ar[b + 1]);
+        EXPECT_EQ(het.cols(b), ac[b + 1]);
+    }
+
+    // first * stride past INT_MAX: the offset is 64-bit (pointer arithmetic only, nothing is read).
+    const int big_stride = 1 << 20, big_batch = 4096;
+    const MatrixView<float, MatrixFormat::Dense> wide(mem.data(), rows, cols, ld, big_stride, big_batch);
+    const auto far = wide.batch_range(big_batch - 1, 1);
+    EXPECT_EQ(reinterpret_cast<std::uintptr_t>(far.data_ptr()) - reinterpret_cast<std::uintptr_t>(mem.data()),
+              std::uintptr_t(big_batch - 1) * big_stride * sizeof(float));
 }
 
 TEST(MatrixViewTest, DenseHeterogeneousActiveDimensionsPropagateToViews) {

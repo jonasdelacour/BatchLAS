@@ -312,11 +312,8 @@ def reload_settings() -> None:
 def _route_variable(op: str) -> str:
     name = str(op).strip().lower()
     if name not in _ext._route_ops:
-        hint = ""
-        if name in ("hemm", "herk", "her2k"):
-            hint = " (hemm, herk and her2k are pinned by BATCHLAS_EXPAND_ROUTE)"
         raise InvalidArgumentError(
-            f"no BATCHLAS_<OP>_ROUTE for op {op!r}{hint}; route ops: {', '.join(_ext._route_ops)}"
+            f"no BATCHLAS_<OP>_ROUTE for op {op!r}; route ops: {', '.join(_ext._route_ops)}"
         )
     return f"BATCHLAS_{name.upper()}_ROUTE"
 

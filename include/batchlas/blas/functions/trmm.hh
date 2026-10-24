@@ -74,9 +74,9 @@ using trmm_vendor = Event(Queue&,
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
-///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
-///         batch <= 65535 and a shape the `triangular` tiles or the `expand`
-///         scratch admit (@ref md_docs_2perf_2level3).
+///         unless the call is on a GPU (`Backend::CUDA` or `Backend::SYCL`) with homogeneous
+///         operands and a shape the `triangular` tiles or one item's `expand` scratch admit;
+///         both chunk the batch (@ref md_docs_2perf_2level3).
 /// @see trsm, TrmmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
 template <Backend Ba, typename T>

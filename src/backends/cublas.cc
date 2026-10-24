@@ -19,9 +19,6 @@
 #include <src/backends/batch_launch.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/backends/gemm_heterogeneous.hh>
-#include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
-#include <src/ops/syrk/choice.hh>
-#include <src/kernels/common/triangular_expand.hh>
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include <src/util/template-instantiations.hh>
@@ -142,10 +139,7 @@ namespace batchlas {
         const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
         static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
 
-        // The two complex slots have no callee because symm is instantiated
-        // only for float and double here -- a complex caller reaches the
-        // Hermitian sibling hemm_vendor below instead -- so, exactly as hemm
-        // does for the two real slots, they are never selected.
+        // The complex slots are the complex-symmetric ?symm (no conjugate; hemm_vendor is Hermitian).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
@@ -153,7 +147,7 @@ namespace batchlas {
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, nullptr, nullptr,
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, cublasCsymm, cublasZsymm,
                     handle, side, uplo, m, n, &alpha_h,
                     A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
                     C_i.data_ptr(), C_i.ld());
@@ -165,7 +159,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, RealScalar T>
+    template <Backend Back, FloatingOrComplexScalar T>
     Event symm_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B,
@@ -178,9 +172,7 @@ namespace batchlas {
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    // cuBLAS has no batched ?hemm, so a batch is a host loop over launches. Expanding the
-    // Hermitian triangle into scratch turns it into one strided-batched GEMM (trmm's and
-    // symm's `expand` families make the same trade). Not table-selected: a fixed rule.
+    // The per-item cublas?hemm loop only: hemm's expand family is in src/ops/hemm/hemm.cc.
     template <Backend Back, ComplexScalar T>
     Event hemm_vendor(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -192,53 +184,9 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
-
-        // The loop beats the expansion on a launch-bound call, so the shape must earn the extra kernel.
-        // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
-        const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
-        if (detail::expansion_fits<T>(ctx, k, A.batch_size(), expansion_bytes) &&
-            detail::expansion_preferred(std::max({m, n, k}), A.batch_size())) {
-            const int ld = detail::expanded_ld<T>(k);
-
-            auto ws = ctx.workspace(expansion_bytes);
-            BumpAllocator pool(ws.span());
-            auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) *
-                                                     static_cast<std::size_t>(k) *
-                                                     static_cast<std::size_t>(A.batch_size()));
-
-            MatrixView<T, MatrixFormat::Dense> expanded(storage.data(), k, k, ld, ld * k, A.batch_size());
-
-            // The GEMM cannot be pointed at the caller's A. HEMM reads one
-            // triangle and takes the other to be its conjugate transpose, and
-            // takes the diagonal to be real, so neither the opposite triangle
-            // nor the diagonal's imaginary part is part of the operand -- that
-            // storage may hold anything at all.
-            Event expansion = detail::expand_mirrored<T, /*Conjugate=*/true>(ctx, expanded, A, uplo);
-
-            // The GEMM runs on the queue's native stream, which an in-order
-            // queue shares with the expansion kernel. An out-of-order queue
-            // orders nothing across the SYCL/native boundary and offers no event
-            // to hang the vendor launch off, so there the dependency has to be
-            // waited out.
-            if (!ctx.in_order()) {
-                expansion.wait();
-            }
-
-            if (side == Side::Left) {
-                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, beta,
-                                            Transpose::NoTrans, Transpose::NoTrans,
-                                            ComputePrecision::Default);
-            }
-            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, beta,
-                                        Transpose::NoTrans, Transpose::NoTrans,
-                                        ComputePrecision::Default);
-        }
-
-        // Slower, but it needs no scratch, so it is what an expansion too large
-        // for the device falls back to. The two real slots have no callee
-        // because BLAS has no real ?hemm; T is constrained to complex, so they
-        // are never selected.
+        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+        static_cast<void>(k);  // cublas?hemm takes A's order from side
+        // The two real slots have no callee: BLAS has no real ?hemm, and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
@@ -258,92 +206,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    // GEMM over the whole n x n product vs the per-item cublas?herk loop. A conjunction, unlike
-    // the expansion's disjunction: the GEMM pays twice the arithmetic, so it needs an n ceiling.
-    // BATCHLAS_EXPAND_ROUTE (-1 when unset) is parsed once, in ../expansion_budget.hh, which
-    // sytrd_blocked.cc also reads to predict her2k's route; a second parse here would drift.
-    // evidence: docs/perf/level3.md#herk-and-her2k-the-gemm-plus-fold-crossovers
-    inline bool herk_gemm_preferred(int n, int batch) {
-        const int pin = ::batchlas::backend::detail::expansion_route_pin();
-        if (pin >= 0) {
-            return pin != 0;
-        }
-        return batch >= 4 && n <= 768;
-    }
-
-    // her2k's crossover lives in ../expansion_budget.hh so sytrd_blocked.cc can evaluate it too.
-    using ::batchlas::backend::detail::her2k_gemm_preferred;
-
-    // Fold a dense rank-k product into the referenced triangle of a Hermitian
-    // C: C = product + beta * C, or, for TwoSided, C = product + product^H +
-    // beta * C.
-    //
-    // TwoSided is how HER2K gets its second term for free. The two terms
-    // alpha * A * B^H and conj(alpha) * B * A^H are conjugate transposes of one
-    // another, so one GEMM produces both and the mirrored read below adds them.
-    //
-    // The unreferenced triangle is neither read nor written -- the work items
-    // covering it return before touching C -- and the diagonal is real on exit,
-    // because C = C^H says so whatever the caller left in its imaginary part.
-    template <typename T, bool TwoSided>
-    Event accumulate_hermitian(Queue& ctx,
-                               const MatrixView<T, MatrixFormat::Dense>& C,
-                               const MatrixView<T, MatrixFormat::Dense>& product,
-                               float_t<T> beta,
-                               Uplo uplo) {
-        using real_t = float_t<T>;
-        const int n = C.rows();
-        const int batch = C.batch_size();
-        const bool lower = uplo == Uplo::Lower;
-
-        T* dst = C.data_ptr();
-        const T* src = product.data_ptr();
-        const int ldc = C.ld();
-        const int ldp = product.ld();
-        const std::size_t stride_c = static_cast<std::size_t>(C.stride());
-        const std::size_t stride_p = static_cast<std::size_t>(product.stride());
-
-        const auto shape = detail::expand_group_shape(n);
-        const sycl::range<3> global(static_cast<std::size_t>(batch),
-                                    static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.cols) * shape.cols),
-                                    static_cast<std::size_t>(::batchlas::detail::ceil_div(n, shape.rows) * shape.rows));
-        const sycl::range<3> local(1,
-                                   static_cast<std::size_t>(shape.cols),
-                                   static_cast<std::size_t>(shape.rows));
-
-        ctx->parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
-            const int i = static_cast<int>(item.get_global_id(2));
-            const int j = static_cast<int>(item.get_global_id(1));
-            if (i >= n || j >= n || (lower ? (i < j) : (i > j))) {
-                return;
-            }
-            const int b = static_cast<int>(item.get_group(0));
-
-            const std::size_t p_base = static_cast<std::size_t>(b) * stride_p;
-            T value = src[p_base + static_cast<std::size_t>(j) * ldp + i];
-            if constexpr (TwoSided) {
-                const T mirrored = src[p_base + static_cast<std::size_t>(i) * ldp + j];
-                value = T(value.real() + mirrored.real(), value.imag() - mirrored.imag());
-            }
-
-            T* c = dst + static_cast<std::size_t>(b) * stride_c +
-                   static_cast<std::size_t>(j) * ldc + i;
-            if (beta != real_t(0)) {
-                // beta is real and C is Hermitian, so the diagonal's
-                // imaginary part is not an input either: it is storage the
-                // caller never had to fill.
-                const T prev = *c;
-                value = T(value.real() + beta * prev.real(),
-                          i == j ? value.imag() : value.imag() + beta * prev.imag());
-            }
-            *c = i == j ? T(value.real(), real_t(0)) : value;
-        });
-
-        return ctx.get_event();
-    }
-
-    // cuBLAS has no batched ?herk: the alternative to a per-item loop is one strided-batched
-    // GEMM over the whole n x n product plus the fold above. Not table-selected: a fixed rule.
+    // The per-item cublas?herk loop only: herk's gram and fold families are in src/ops/herk/herk.cc.
     template <Backend Back, ComplexScalar T>
     Event herk_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -354,64 +217,8 @@ namespace batchlas {
                       Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
-        const int batch = C.batch_size();
-
-        // The same single-tile Gram kernel as syrk, with the ^H conjugating
-        // whichever operand carries it. Opt-in only (BATCHLAS_SYRK_ROUTE=gram): a complex
-        // multiply is four real ones, so this shape is compute bound for herk
-        // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
-        // wins on every Gram shape measured.
-        // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
-        // Must stay equal to ops::syrk can_run(Gram) (src/ops/syrk/syrk.cc) for a complex T with
-        // conjugated = true; syrk_gram_supported carries n, k, homogeneity and the batch match.
-        if constexpr (Back == Backend::CUDA) {
-            const select::Device& d = select::device_of<Back>(ctx);
-            if (d.is_gpu && ops::syrk::herk_gram_pinned() &&
-                detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true) &&
-                batch >= 1 && batch <= ops::syrk::kMaxGridBatch && d.max_wg >= ops::syrk::gram_threads(n) &&
-                d.slm_budget >= ops::syrk::gram_slm_bytes<T>(n)) {
-                return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
-            }
-        }
-
-        const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
-        if (herk_gemm_preferred(n, batch) && detail::expansion_fits<T>(ctx, n, batch, product_bytes)) {
-            const int ld = detail::expanded_ld<T>(n);
-
-            auto ws = ctx.workspace(product_bytes);
-            BumpAllocator pool(ws.span());
-            auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) *
-                                                     static_cast<std::size_t>(n) *
-                                                     static_cast<std::size_t>(batch));
-
-            MatrixView<T, MatrixFormat::Dense> product(storage.data(), n, n, ld, ld * n, batch);
-
-            // The GEMM cannot be pointed at C: it would write both triangles,
-            // and HERK owns only one of them.
-            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-            // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)::batchlas::gemm<Back, T>(ctx, A, A, product, T(alpha), T(0),
-                                 transA,
-                                 transA == Transpose::NoTrans ? Transpose::ConjTrans
-                                                              : Transpose::NoTrans,
-                                 ComputePrecision::Default);
-
-            // The GEMM runs on the queue's native stream, which an in-order
-            // queue shares with the fold below. An out-of-order queue orders
-            // nothing across the SYCL/native boundary, so there the dependency
-            // has to be waited out.
-            if (!ctx.in_order()) {
-                ctx.wait();
-            }
-
-            return accumulate_hermitian<T, /*TwoSided=*/false>(ctx, C, product, beta, uplo);
-        }
-
-        // Slower for a batch, but it needs no scratch, so it is also what a
-        // product too large for the device falls back to. The two real slots
-        // have no callee because BLAS has no real ?herk -- that is syrk; T is
-        // constrained to complex, so they are never selected.
+        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+        // The two real slots have no callee: BLAS has no real ?herk (that is syrk), and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
@@ -430,10 +237,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    // As herk_vendor, except that the single GEMM carries both of HER2K's
-    // terms: alpha * A * B^H and conj(alpha) * B * A^H are conjugate transposes
-    // of one another, so the fold reads the product's mirrored element instead
-    // of running a second GEMM.
+    // The per-item cublas?her2k loop only: her2k's fold family is in src/ops/her2k/her2k.cc.
     template <Backend Back, ComplexScalar T>
     Event her2k_vendor(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
@@ -445,33 +249,7 @@ namespace batchlas {
                        Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
-        const int batch = C.batch_size();
-        const bool no_trans = transA == Transpose::NoTrans;
-
-        const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
-        if (her2k_gemm_preferred(n, batch) && detail::expansion_fits<T>(ctx, n, batch, product_bytes)) {
-            const int ld = detail::expanded_ld<T>(n);
-
-            auto ws = ctx.workspace(product_bytes);
-            BumpAllocator pool(ws.span());
-            auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) *
-                                                     static_cast<std::size_t>(n) *
-                                                     static_cast<std::size_t>(batch));
-
-            MatrixView<T, MatrixFormat::Dense> product(storage.data(), n, n, ld, ld * n, batch);
-
-            (void)::batchlas::gemm<Back, T>(ctx, A, B, product, alpha, T(0),
-                                 transA,
-                                 no_trans ? Transpose::ConjTrans : Transpose::NoTrans,
-                                 ComputePrecision::Default);
-
-            if (!ctx.in_order()) {
-                ctx.wait();
-            }
-
-            return accumulate_hermitian<T, /*TwoSided=*/true>(ctx, C, product, beta, uplo);
-        }
+        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
 
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -511,16 +289,14 @@ namespace batchlas {
 
         const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
 
-        // The two complex slots have no callee because syrk is instantiated
-        // only for float and double here; the complex rank-k update is herk,
-        // which is a separate routine above.
+        // The complex slots are the complex-symmetric ?syrk (A A^T; herk_vendor is A A^H).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
             alignas(16) auto beta_h = beta;
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, nullptr, nullptr,
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, cublasCsyrk, cublasZsyrk,
                     handle, uplo, transA, n, k, &alpha_h,
                     A_i.data_ptr(), A_i.ld(), &beta_h,
                     C_i.data_ptr(), C_i.ld());
@@ -532,7 +308,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, RealScalar T>
+    template <Backend Back, FloatingOrComplexScalar T>
     Event syrk_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& C,
@@ -558,9 +334,7 @@ namespace batchlas {
 
         const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
 
-        // The two complex slots have no callee because syr2k is instantiated
-        // only for float and double here; the complex rank-2k update is her2k,
-        // which is a separate routine above.
+        // The complex slots are the complex-symmetric ?syr2k (her2k_vendor is the Hermitian one).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
             alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
@@ -568,7 +342,7 @@ namespace batchlas {
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, nullptr, nullptr,
+                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, cublasCsyr2k, cublasZsyr2k,
                     handle, uplo, transA, n, k, &alpha_h,
                     A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta_h,
                     C_i.data_ptr(), C_i.ld());
@@ -580,7 +354,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, RealScalar T>
+    template <Backend Back, FloatingOrComplexScalar T>
     Event syr2k_vendor(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B,
@@ -1224,9 +998,8 @@ namespace batchlas {
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size)
 
-    // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
-    // narrower domains get their own tables rather than one blanket loop.
-    #define CUBLAS_REAL_OPS(B, fp) \
+    // hemm/herk/her2k are complex-only, so they get their own table.
+    #define CUBLAS_SYMMETRIC_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, symm_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
@@ -1237,11 +1010,11 @@ namespace batchlas {
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, her2k_vendor)
 
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUBLAS_OPS, B_)
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(CUBLAS_REAL_OPS, B_)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUBLAS_SYMMETRIC_OPS, B_)
     BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(CUBLAS_COMPLEX_OPS, B_)
 
     #undef CUBLAS_OPS
-    #undef CUBLAS_REAL_OPS
+    #undef CUBLAS_SYMMETRIC_OPS
     #undef CUBLAS_COMPLEX_OPS
     #undef B_
 }

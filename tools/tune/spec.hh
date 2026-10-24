@@ -72,6 +72,8 @@ public:
     virtual double bytes(const std::string& dtype, const CellKey& key) const = 0;
     virtual std::string refine_key() const { return "n"; }
     virtual FrontierPlan frontier() const { return {}; }
+    virtual std::vector<double> ladder_classes(const std::vector<double>& run) const { return run; }  // of TieredOpts::batch_classes
+    virtual std::vector<int> ladder_extra_batches() const { return {}; }  // kept besides; evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
     // The matrix extents a cell allocates (rows/cols of every operand); --max-dim caps their max. Default:
     // every integer-valued key but `batch`. Override where an extent is derived rather than keyed.
     virtual std::vector<std::int64_t> dims(const std::string& dtype, const CellKey& key) const;

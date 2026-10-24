@@ -20,6 +20,7 @@
 
 #include <src/ops/syrk/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <stdexcept>
 #include <string>
@@ -90,6 +91,9 @@ class SyrkSpec final : public OpSpec {
 public:
     std::string op() const override { return "syrk"; }
     std::vector<std::string> key_names() const override { return {K::key_names.begin(), K::key_names.end()}; }
+    // The vendor-loop crossovers sit at batch 1-8. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1, 2, 4, 8}); }
+    static std::vector<int> batches() { return with_slice_batches({K::grid_batch.begin(), K::grid_batch.end()}); }
     std::vector<std::string> candidates(const std::string& dtype) const override {
         return with_real_dtype("syrk", dtype, []<typename T>() { return spellings(K::candidates<T>()); });
     }
@@ -100,7 +104,7 @@ public:
             return out;
         };
         return {{"form", {"sq", "tall", "wide"}}, {"trans", {K::grid_trans.begin(), K::grid_trans.end()}},
-                {"n", ints(K::grid_n)}, {"k", ints(K::grid_k)}, {"batch", ints(K::grid_batch)}};
+                {"n", ints(K::grid_n)}, {"k", ints(K::grid_k)}, {"batch", ints(batches())}};
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
@@ -117,7 +121,7 @@ public:
                     continue;
                 }
                 for (int k : K::grid_k)
-                    for (int b : K::grid_batch) add(t, n, k, b);
+                    for (int b : batches()) add(t, n, k, b);
             }
         return filter_cells(*this, std::move(cells), overrides);
     }

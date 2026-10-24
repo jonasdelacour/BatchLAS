@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -31,10 +32,13 @@ struct CellRecord {
     std::vector<std::string> ranked;  // winner first; empty = nothing timed (still a record)
     std::string date;                 // ISO, compares as text
     Phases phases;                    // this measurement's; none on a copy (retract) or an untimed record
+    int throttle_reraces = 0;         // re-raced because the SW power cap held > kThrottledFraction of the samples
 };
 
 // RunMeta::protocol of this engine's runs; --plan estimates from history of the same protocol only.
-inline constexpr const char* kProtocol = "lean";  // "full": the fixed warm-up engine before it
+// "lean-cold": the lean race with L2 scrubbed before every timed run; "lean" timed L2-warm operands,
+// "full" was the fixed warm-up engine before it. scripts/sweep_to_table.py PROTOCOL is the same string.
+inline constexpr const char* kProtocol = "lean-cold";
 
 inline constexpr const char* kUnraced = "unraced:calibrate";  // off-probe arm: skipped, not stale, not unrunnable
 
@@ -98,8 +102,15 @@ std::vector<std::string> stale_candidates(const CellRecord& r, const std::map<st
 
 bool all_error(const CellRecord& r);  // every candidate "error": a failed child, no record
 
-// Per key, skipping all_error and stale records (sweep_to_table.py's rule too): highest tier, then
-// newest date, then larger run_id (later line on a full tie).
+// The run ids whose run line records kProtocol.
+std::set<std::string> protocol_runs(const Ledger& l);
+
+// A measured record of a run under another protocol (an older one, or none recorded): the planner
+// re-measures its cell whatever its hashes. Unhashed tiers are never measured, so never this.
+bool other_protocol(const CellRecord& r, const std::set<std::string>& protocol_runs);
+
+// Per key, skipping all_error and stale records (sweep_to_table.py's rule too): a measured
+// kProtocol record first, then highest tier, newest date, larger run_id (later line on a full tie).
 std::map<CellKey, const CellRecord*> best_records(const Ledger& l, const std::map<std::string, std::string>& family_hash);
 
 // Schema-1 raw sweep -> one run in <ledger_root>/<op>.<device>.jsonl at `tier` (a custom run records itself this way); hashes are

@@ -4,7 +4,8 @@
 // Cta in local memory; Blocked factorises Cta-sized panels and updates the rest with the public trsm and
 // gemm, each of which picks its own kernel. PIVOTS: every family packs 1-based int32 into the int64 span's
 // first half (getrf_native.hh), except NETLIB's LAPACKE, which writes int64 -- so no native family runs on
-// that backend.
+// that backend. An m x n item has min(m, n) pivots at stride min(m, n); Cta and Blocked take it, Tiny is
+// square-only. evidence: docs/perf/lu.md#getrf-non-square-m-x-n
 
 #include <batchlas/backend_config.h>
 
@@ -41,15 +42,20 @@ select::Key key_of(const MV<T>& A) {
 // top-level order (known-defects #12).
 template <Backend B, typename T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
-    const std::int64_t n = A.rows();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() &&
-                        A.rows() == A.cols() && n >= 1 && A.batch_size() >= 1;
+    const std::int64_t m = A.rows(), n = A.cols();
+    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 &&
+                        n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
         [&](Tiny) {
-            return native && n <= sycl_getrf::getrf_tiny_max_n<T>() && d.max_wg >= sycl_getrf::kGetrfTinyWgSize;
+            return native && m == n && n <= sycl_getrf::getrf_tiny_max_n<T>() &&
+                   d.max_wg >= sycl_getrf::kGetrfTinyWgSize;
         },
-        [&](Cta) { return native && n <= sycl_getrf::getrf_cta_max_n_for_slm<T>(budget); },
+        [&](Cta) {
+            return native && (m == n ? n <= sycl_getrf::getrf_cta_max_n_for_slm<T>(budget)
+                                     : sycl_getrf::getrf_cta_fits_rect<T>(static_cast<int>(m), static_cast<int>(n),
+                                                                          budget));
+        },
         [&](Blocked) {
             // min_blocks 1: the driver asks whether the panel leaf's argmax slots fit at all.
             return native && sycl_getrf::getrf_blocked_available<T>() &&
@@ -111,7 +117,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
     getrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // The coverage row's key: m, n are A's extents (a non-square call reaches the vendor), k = m.
+    // The coverage row's key: m, n are A's extents, k = m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
     const select::Key key = ops::getrf::key_of<T>(A);
     return select::run<B, T>(

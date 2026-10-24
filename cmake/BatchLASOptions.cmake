@@ -103,6 +103,32 @@ list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
 if(NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 endif()
+# Build tree only: RPATH entries inside the build tree become $ORIGIN-relative, so a copied
+# tree (cp -a build seed) loads its own .so instead of the original's. Entries outside the
+# tree (the SYCL runtime, CUDA) stay absolute, and the install RPATH above is untouched.
+if(NOT DEFINED CMAKE_BUILD_RPATH_USE_ORIGIN)
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+endif()
+
+# A test or benchmark executable is not relinked when only a BatchLAS .so it links changed:
+# every library edit used to relink ~150 executables. The library still builds first.
+option(BATCHLAS_LINK_DEPENDS_NO_SHARED
+    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable, which fails at load time ('undefined symbol') instead of relinking (in-tree executables and shared libraries are linked -z now for that); scripts/gate.sh turns it OFF"
+    ON)
+if(BATCHLAS_LINK_DEPENDS_NO_SHARED)
+    set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
+    # Lazy binding would find a symbol missing from a .so only when the call runs, and a
+    # case that never runs it (skipped, filtered, another tier) would stay green. BIND_NOW
+    # resolves an object's own references at load; the executable's flag does not cover the
+    # .so it loads, so the components carry it too (one component calling a symbol another
+    # dropped). --no-undefined is not an option: the components reference each other cyclically.
+    if(UNIX AND NOT APPLE)
+        add_link_options(
+            "$<$<IN_LIST:$<TARGET_PROPERTY:TYPE>,EXECUTABLE;SHARED_LIBRARY;MODULE_LIBRARY>:-Wl,-z,now>")
+    endif()
+else()
+    set(CMAKE_LINK_DEPENDS_NO_SHARED OFF)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -193,13 +219,36 @@ if(BATCHLAS_NVIDIA_ARCH STREQUAL "sm_50")
     set_property(CACHE BATCHLAS_NVIDIA_ARCH PROPERTY VALUE "")
     set(BATCHLAS_NVIDIA_ARCH "")
 endif()
-set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
-    "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
+# 4 was the old fixed default; a cache written by that version still holds it, so it moves to
+# auto once. Only an entry carrying the old docstring is that default: a -D on the command line
+# (fresh tree or not) has the "specified on the command line" docstring and is kept.
+get_property(_batchlas_link_jobs_doc CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY HELPSTRING)
+set(BATCHLAS_SYCL_LINK_JOBS "auto" CACHE STRING
+    "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables, auto = the logical cores, 4..32")
+if(BATCHLAS_SYCL_LINK_JOBS STREQUAL "4" AND NOT BATCHLAS_SYCL_LINK_JOBS_MIGRATED
+   AND _batchlas_link_jobs_doc STREQUAL
+       "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
+    message(STATUS "BATCHLAS_SYCL_LINK_JOBS: the old cached default 4 is now auto "
+                   "(pass -DBATCHLAS_SYCL_LINK_JOBS=4 again to keep 4)")
+    set_property(CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY VALUE "auto")
+    set_property(CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY HELPSTRING
+        "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables, auto = the logical cores, 4..32")
+    set(BATCHLAS_SYCL_LINK_JOBS "auto")
+endif()
+unset(_batchlas_link_jobs_doc)
+set(BATCHLAS_SYCL_LINK_JOBS_MIGRATED ON CACHE INTERNAL "BATCHLAS_SYCL_LINK_JOBS left its old default once")
+# DPC++ only (BatchLASDetectSYCL.cmake). OFF passes -mllvm -enable-global-offset=false to the
+# device link, so no kernel gets a `<name>_with_offset` twin: about half of every NVPTX device
+# link. Nothing in the tree launches with a SYCL 1.2.1 global offset (parallel_for(range, id,
+# k), get_offset()); a kernel that did would no longer see its offset.
+option(BATCHLAS_SYCL_GLOBAL_OFFSET
+    "DPC++: keep the _with_offset twin of every kernel (SYCL 1.2.1 global offsets). OFF (default) drops them and roughly halves NVPTX device-link time"
+    OFF)
 
 # ---------------------------------------------------------------------------
-# One .so, or fourteen.
+# One .so, or sixteen.
 #
-# OFF (the DEVELOPMENT default) builds the 14 component shared objects. That
+# OFF (the DEVELOPMENT default) builds the 16 component shared objects. That
 # split exists for one measured reason: the unit of SYCL device linking is the
 # shared library, not the object file, so one changed object redoes
 # sycl-post-link + ptxas + AOT for every object in the same .so. Before the
@@ -226,7 +275,7 @@ if(APPLE)
     set(_batchlas_monolithic_default ON)
 endif()
 option(BATCHLAS_MONOLITHIC_LIBRARY
-    "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
+    "Build ONE batchlas shared library instead of the 16 component .so (release shape; makes every incremental edit relink the world)"
     ${_batchlas_monolithic_default})
 # Monolithic mode used to hide every symbol unconditionally. The in-tree tests reach ~1,000
 # unannotated internal symbols, so a monolithic tree that builds tests defaults it OFF.

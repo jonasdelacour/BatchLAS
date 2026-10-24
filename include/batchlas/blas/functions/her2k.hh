@@ -49,11 +49,10 @@ using her2k_vendor = Event(Queue&,
 /// `her2k(ctx, A, B, C, Her2kOptions<T>{...})`, with owning `Matrix` arguments,
 /// and without `Ba` (taken from `ctx.backend()`).
 ///
-/// Not table-selected. On `Backend::CUDA` the cuBLAS backend chooses by a fixed rule between one
-/// strided-batched gemm into scratch that carries both terms, folded into the `uplo` triangle,
-/// and a per-item `cublas?her2k` loop (the loop also serves a scratch that does not fit);
-/// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop` pins it. The host backend runs the per-item
-/// `cblas_?her2k` loop.
+/// Table-selected (`tuned/her2k.<device>.txt`): `fold` runs one strided-batched gemm into scratch
+/// that carries both terms, folded into the `uplo` triangle; `triangular` (complex<float>) is a
+/// tile kernel over that triangle only; `vendor` is the per-item `cublas?her2k` / `cblas_?her2k`
+/// loop. `BATCHLAS_HER2K_ROUTE` = `auto` | `native` | `vendor` | `fold` | `triangular` pins it.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
 /// @tparam T   `std::complex<float>` or `std::complex<double>`
@@ -69,9 +68,11 @@ using her2k_vendor = Event(Queue&,
 /// @pre All operands have the same batch size and conforming shapes per item.
 /// @throws std::invalid_argument if the shapes do not conform (`Backend::CUDA`; the host
 ///         backend checks inside its deferred host task and throws std::runtime_error there)
-/// @throws batchlas::NoRouteError in a build without the vendor BLAS
-///         for `Ba`: her2k has no native implementation.
-/// @note Not instantiated for `Backend::ROCM`.
+/// @throws std::invalid_argument if `BATCHLAS_HER2K_ROUTE` names a family that is not compiled for
+///         `T` or cannot run the shape
+/// @throws batchlas::NoRouteError when no family can run the call (a CPU queue without netlib, or a
+///         heterogeneous batch vendor-free)
+/// @note On `Backend::ROCM` only `fold` runs (rocBLAS has no ?her2k wrapper here).
 /// @see syr2k, herk, Her2kOptions, @ref md_docs_2cpp-api, @ref md_docs_2perf_2level3 (the rule's crossover)
 /// @ingroup api_blas3
 template <Backend Ba, ComplexScalar T>
@@ -90,7 +91,7 @@ BATCHLAS_API Event her2k(Queue& ctx,
 namespace batchlas::backend {
 
 // DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
-// the public her2k is defined in src/ops/level3/level3.cc.
+// the public her2k is defined in src/ops/her2k/her2k.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of her2k (cuBLAS, host BLAS).
 ///

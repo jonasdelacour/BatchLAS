@@ -56,6 +56,13 @@ inline T accumulate(const T& accum, const T& a, const T& b) {
     }
 }
 
+// v, or its conjugate when C (a complex T only).
+template <bool C, typename T>
+inline T conj_if(const T& v) {
+    if constexpr (C && is_std_complex_v<T>) return T(v.real(), -v.imag());
+    else return v;
+}
+
 template <typename T>
 inline void tile_store4(T* p, const TileVec4<T>& in) {
     if constexpr (sizeof(T) == sizeof(float)) {

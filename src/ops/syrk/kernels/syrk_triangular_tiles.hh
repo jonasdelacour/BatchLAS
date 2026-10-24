@@ -4,7 +4,8 @@
 // A 128x128x8 register-tiled SYRK over the triangular tile set: tiles outside
 // the requested triangle are never launched, and diagonal tiles mask their
 // epilogue (the other half is neither read nor written). Inner loop as in
-// src/ops/gemm/kernels/register_128x128.hh; both operands are A at two row offsets.
+// src/ops/gemm/kernels/register_128x128.hh; both operands are A at two row offsets. Any scalar:
+// packets are 128-bit only for float (tile_load4), and complex MACs are written out (accumulate).
 // evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
 #include <src/kernels/common/triangular_tiles.hh>
@@ -23,7 +24,7 @@
 
 namespace batchlas::backend::detail {
 
-template <typename T, bool TransOperand, bool AlignedFastPath>
+template <typename T, bool TransOperand, bool AlignedFastPath, bool Conjugate>
 class SyrkTriangularTilesKernel;
 
 // Does this problem satisfy everything the unpredicated path assumes? A tile
@@ -46,7 +47,7 @@ bool syrk_triangular_fast_path(const MatrixView<T, MatrixFormat::Dense>& A,
         aligned(C.data_ptr(), C.ld(), C.stride());
 }
 
-template <typename T, bool TransOperand, bool AlignedFastPath>
+template <typename T, bool TransOperand, bool AlignedFastPath, bool Conjugate>
 Event launch_syrk_triangular_tiles(Queue& ctx,
                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                    const MatrixView<T, MatrixFormat::Dense>& C,
@@ -91,7 +92,7 @@ Event launch_syrk_triangular_tiles(Queue& ctx,
         const int batch = A.batch_size();
         const bool lower = uplo == Uplo::Lower;
 
-        batchlas::impl::parallel_for<SyrkTriangularTilesKernel<T, TransOperand, AlignedFastPath>>(h,
+        batchlas::impl::parallel_for<SyrkTriangularTilesKernel<T, TransOperand, AlignedFastPath, Conjugate>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
                 if (bid >= batch) {
@@ -137,23 +138,23 @@ BATCHLAS_UNROLL_FULL
                     if constexpr (AlignedFastPath) {
                         if constexpr (TransOperand) {
                             const TileVec4<T> va =
-                                tile_vec4(Ab + (k0 + s_l) +
-                                          static_cast<std::ptrdiff_t>(m0 + s_row) * lda);
+                                tile_load4(Ab + (k0 + s_l) +
+                                           static_cast<std::ptrdiff_t>(m0 + s_row) * lda);
                             const TileVec4<T> vb =
-                                tile_vec4(Ab + (k0 + s_l) +
-                                          static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
+                                tile_load4(Ab + (k0 + s_l) +
+                                           static_cast<std::ptrdiff_t>(n0 + s_row) * lda);
 BATCHLAS_UNROLL_FULL
                             for (int i = 0; i < 4; ++i) {
                                 sa[(s_l + i) * AStride + s_row] = va.v[i];
                                 sb[(s_l + i) * BStride + s_row] = vb.v[i];
                             }
                         } else {
-                            tile_vec4(&sa[s_l * AStride + s_row]) =
-                                tile_vec4(Ab + (m0 + s_row) +
-                                          static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
-                            tile_vec4(&sb[s_l * BStride + s_row]) =
-                                tile_vec4(Ab + (n0 + s_row) +
-                                          static_cast<std::ptrdiff_t>(k0 + s_l) * lda);
+                            tile_store4(&sa[s_l * AStride + s_row],
+                                        tile_load4(Ab + (m0 + s_row) +
+                                                   static_cast<std::ptrdiff_t>(k0 + s_l) * lda));
+                            tile_store4(&sb[s_l * BStride + s_row],
+                                        tile_load4(Ab + (n0 + s_row) +
+                                                   static_cast<std::ptrdiff_t>(k0 + s_l) * lda));
                         }
                     } else {
                         // The shared tiles are always filled to their full
@@ -195,19 +196,26 @@ BATCHLAS_UNROLL_FULL
 
 BATCHLAS_UNROLL_FULL
                     for (int kk = 0; kk < TileK; ++kk) {
-                        const TileVec4<T> a0 = tile_vec4(&sa[kk * AStride + ty * Band]);
-                        const TileVec4<T> a1 = tile_vec4(&sa[kk * AStride + 64 + ty * Band]);
-                        const TileVec4<T> b0 = tile_vec4(&sb[kk * BStride + tx * Band]);
-                        const TileVec4<T> b1 = tile_vec4(&sb[kk * BStride + 64 + tx * Band]);
-                        const T af[ThreadTile] = {a0.v[0], a0.v[1], a0.v[2], a0.v[3],
-                                                  a1.v[0], a1.v[1], a1.v[2], a1.v[3]};
-                        const T bf[ThreadTile] = {b0.v[0], b0.v[1], b0.v[2], b0.v[3],
-                                                  b1.v[0], b1.v[1], b1.v[2], b1.v[3]};
+                        const TileVec4<T> a0 = tile_load4(&sa[kk * AStride + ty * Band]);
+                        const TileVec4<T> a1 = tile_load4(&sa[kk * AStride + 64 + ty * Band]);
+                        const TileVec4<T> b0 = tile_load4(&sb[kk * BStride + tx * Band]);
+                        const TileVec4<T> b1 = tile_load4(&sb[kk * BStride + 64 + tx * Band]);
+                        // herk: A A^H conjugates the column factor, A^H A the row factor.
+                        constexpr bool kConjA = Conjugate && TransOperand;
+                        constexpr bool kConjB = Conjugate && !TransOperand;
+                        const T af[ThreadTile] = {conj_if<kConjA>(a0.v[0]), conj_if<kConjA>(a0.v[1]),
+                                                  conj_if<kConjA>(a0.v[2]), conj_if<kConjA>(a0.v[3]),
+                                                  conj_if<kConjA>(a1.v[0]), conj_if<kConjA>(a1.v[1]),
+                                                  conj_if<kConjA>(a1.v[2]), conj_if<kConjA>(a1.v[3])};
+                        const T bf[ThreadTile] = {conj_if<kConjB>(b0.v[0]), conj_if<kConjB>(b0.v[1]),
+                                                  conj_if<kConjB>(b0.v[2]), conj_if<kConjB>(b0.v[3]),
+                                                  conj_if<kConjB>(b1.v[0]), conj_if<kConjB>(b1.v[1]),
+                                                  conj_if<kConjB>(b1.v[2]), conj_if<kConjB>(b1.v[3])};
 BATCHLAS_UNROLL_FULL
                         for (int i = 0; i < ThreadTile; ++i) {
 BATCHLAS_UNROLL_FULL
                             for (int j = 0; j < ThreadTile; ++j) {
-                                accum[i][j] += af[i] * bf[j];
+                                accum[i][j] = accumulate(accum[i][j], af[i], bf[j]);
                             }
                         }
                     }
@@ -226,7 +234,11 @@ BATCHLAS_UNROLL_FULL
                         return;
                     }
                     T* p = &Cb[row + static_cast<std::ptrdiff_t>(col) * ldc];
-                    *p = beta == T(0) ? alpha * value : alpha * value + beta * *p;
+                    T out = beta == T(0) ? alpha * value : alpha * value + beta * *p;
+                    if constexpr (Conjugate) {
+                        if (row == col) out = T(out.real(), typename T::value_type(0));  // Hermitian diagonal
+                    }
+                    *p = out;
                 };
 
 BATCHLAS_UNROLL_FULL
@@ -245,14 +257,14 @@ BATCHLAS_UNROLL_FULL
                                         out.v[i] = alpha * accum[band * Band + i][j];
                                     }
                                 } else {
-                                    const TileVec4<T> prior = tile_vec4(const_cast<const T*>(p));
+                                    const TileVec4<T> prior = tile_load4(const_cast<const T*>(p));
 BATCHLAS_UNROLL_FULL
                                     for (int i = 0; i < 4; ++i) {
                                         out.v[i] = alpha * accum[band * Band + i][j] +
                                             beta * prior.v[i];
                                     }
                                 }
-                                tile_vec4(p) = out;
+                                tile_store4(p, out);
                                 continue;
                             }
                         }
@@ -268,7 +280,9 @@ BATCHLAS_UNROLL_FULL
     return ctx.get_event();
 }
 
-template <typename T>
+// Conjugate: herk's A A^H (NoTrans) or A^H A (ConjTrans), with a real diagonal; alpha and beta
+// then carry herk's real scalars.
+template <typename T, bool Conjugate = false>
 Event syrk_triangular_tiles(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& A,
                             const MatrixView<T, MatrixFormat::Dense>& C,
@@ -282,11 +296,11 @@ Event syrk_triangular_tiles(Queue& ctx,
     const bool fast = syrk_triangular_fast_path(A, C, n, k);
 
     if (transA == Transpose::NoTrans) {
-        return fast ? launch_syrk_triangular_tiles<T, false, true>(ctx, A, C, alpha, beta, uplo)
-                    : launch_syrk_triangular_tiles<T, false, false>(ctx, A, C, alpha, beta, uplo);
+        return fast ? launch_syrk_triangular_tiles<T, false, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
+                    : launch_syrk_triangular_tiles<T, false, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
     }
-    return fast ? launch_syrk_triangular_tiles<T, true, true>(ctx, A, C, alpha, beta, uplo)
-                : launch_syrk_triangular_tiles<T, true, false>(ctx, A, C, alpha, beta, uplo);
+    return fast ? launch_syrk_triangular_tiles<T, true, true, Conjugate>(ctx, A, C, alpha, beta, uplo)
+                : launch_syrk_triangular_tiles<T, true, false, Conjugate>(ctx, A, C, alpha, beta, uplo);
 }
 
 } // namespace batchlas::backend::detail

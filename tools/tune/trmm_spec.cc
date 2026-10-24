@@ -16,6 +16,7 @@
 
 #include <src/ops/trmm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <string>
 #include <utility>
@@ -95,7 +96,7 @@ public:
         std::vector<std::string> o, r, b;
         for (int v : M::grid_order) o.push_back(std::to_string(v));
         for (int v : M::grid_q) r.push_back(std::to_string(v));
-        for (int v : M::grid_batch) b.push_back(std::to_string(v));
+        for (int v : with_slice_batches({M::grid_batch.begin(), M::grid_batch.end()})) b.push_back(std::to_string(v));
         return {{"side", {"L", "R"}}, {"order", o}, {"q", r}, {"batch", b}};
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {  // A, B, Cp, C
@@ -103,6 +104,7 @@ public:
         return (o * o + 3.0 * o * double(key_int(k, "q"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "order"; }
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1}); }  // evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
     FrontierPlan frontier() const override { return {2, 8, 0.05}; }  // k = 8 passes the per-op gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
@@ -123,7 +125,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/trmm/trmm.cc"
         // trmm expand calls the public gemm: its native kernels and can_run count too.
-        // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/trmm_spec.cc"; }

@@ -215,7 +215,7 @@ Must not be set:
   see [A green run that tested nothing](#a-green-run-that-tested-nothing).
 - **`OPENBLAS_CORETYPE`.** `tests/CMakeLists.txt` sets it per test, and the configure-time dgemm
   health check runs with `--unset=OPENBLAS_CORETYPE`; a global value defeats that probe. Source
-  `build/presets/dev-tests/batchlas-env.sh` only for a CI step that launches a binary outside `ctest`.
+  `build-dev-tests/batchlas-env.sh` only for a CI step that launches a binary outside `ctest`.
 
 ### Where to put it
 
@@ -267,14 +267,14 @@ JUnit (the only place `consumer_package_tests`, a bash script with no gtest XML,
 executables appear).
 
 ```bash
-mkdir -p build/presets/dev-tests/gtest-xml
-GTEST_OUTPUT=xml:build/presets/dev-tests/gtest-xml/ \
+mkdir -p build-dev-tests/gtest-xml
+GTEST_OUTPUT=xml:build-dev-tests/gtest-xml/ \
     ctest --preset dev-tests --output-junit ctest.xml
 python3 .github/ci/compare_failures.py \
     --junit ctest.xml \
-    --gtest-dir build/presets/dev-tests/gtest-xml \
+    --gtest-dir build-dev-tests/gtest-xml \
     --require consumer_package_tests \
-    --expected-tests-from build/presets/dev-tests
+    --expected-tests-from build-dev-tests
 ```
 
 - The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
@@ -339,7 +339,7 @@ Static checks take seconds and need no toolchain:
 ```
 
 The wrapper builds the docs into `build/docs` when Doxygen 1.18+ is on `PATH` (not strict; set
-`BATCHLAS_DOCS_STRICT=1` to match the `docs` job). Run `cmake --install build/presets/dev-tests --prefix /tmp/inst`
+`BATCHLAS_DOCS_STRICT=1` to match the `docs` job). Run `cmake --install build-dev-tests --prefix /tmp/inst`
 first and pass the prefix to check the package before pushing anything that touches the install rules.
 
 Full gate, as the nightly runs it (the preset sets `execution.jobs=1`; do not add `-j`):
@@ -350,13 +350,26 @@ cmake --build --preset dev-tests            # tens of minutes
 ctest --preset dev-tests
 ```
 
-`ctest -N` counts the tests; `ctest -LE slow` takes about 95 s on the 4090. Do not run the full suite on
-every edit; `tests/README.md` has the scoping table. `scripts/ctest_gpus.sh` was validated only on
-threadripper02; CI and local full gates stay serial.
+Locally, `scripts/gate.sh` (on the 4090 box `CUDA_VISIBLE_DEVICES=0 scripts/gate.sh`) does the
+same on persistent trees and adds the vendor-free tree:
+`build-gate` (preset `dev-tests`, full ctest, `compare_failures.py` against the ledger) and
+`build-gate-vf` (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `-LE slow`, no ledger, so it reports names).
+Both set `BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF`, so every executable relinks against the `.so` it
+tests; the gate holds the box-wide build lock through ctest. Its ctest runs with
+`ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` when that is unset and `sycl-ls` lists a `native_cpu`
+device, so CPU queues do not land on `native_cpu`. First run on the 4090 box: 67 min;
+later runs rebuild incrementally. Its reports: `build-gate/gate/compare.txt` and
+`build-gate/gate-summary.txt`.
+
+`ctest -N` counts the tests. Serial on the 4090 box (2026-10): the quick tier `ctest -LE 'slow|heavy'`
+416 s, the full suite 1287 s. `ctest -LE slow` (what PR CI runs) includes the `<name>_heavy` case
+tiers. Do not run the full suite on every edit; `tests/README.md` has the scoping table.
+`scripts/ctest_gpus.sh` was validated only on threadripper02; CI and local full gates stay serial.
 
 Two scopes are wrong for a pre-push gate: `ctest -LE slow` excludes the four `slow` suites and
-`consumer_package_tests`; `BATCHLAS_TEST_TARGET_SET=smoke` (the `fast-dev` preset) runs only the smoke binaries, with
-none of the ledger's failures. It is an edit-loop tool only.
+`consumer_package_tests`; `ctest -LE 'slow|heavy'` also drops the saturating-batch race guards;
+`BATCHLAS_TEST_TARGET_SET=smoke` (the `fast-dev` preset) runs only the smoke binaries, with none of
+the ledger's failures. It is an edit-loop tool only.
 
 ## Why there is no hosted compile job
 

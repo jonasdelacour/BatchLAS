@@ -27,6 +27,9 @@ add_executable(batchlas_tune_impl
     symm_spec.cc
     syrk_spec.cc
     syr2k_spec.cc
+    hemm_spec.cc
+    herk_spec.cc
+    her2k_spec.cc
     syev_spec.cc
     gesvd_spec.cc
     spmm_spec.cc

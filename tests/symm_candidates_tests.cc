@@ -347,7 +347,8 @@ TYPED_TEST_SUITE(SymmCandidates, Types);
 
 // §8.1: each candidate on extents straddling the expansion's 32-wide mirror tile (31/32/33, a
 // ragged 77) and the old 255|256 threshold, both sides, both triangles, batch 1 and 5. Then the
-// scratch budget straddled: BATCHLAS_EXPAND_MAX_BYTES at exactly the lease, and one byte short.
+// scratch budget straddled: BATCHLAS_EXPAND_MAX_BYTES at exactly one item's lease (the batch then
+// runs one item per chunk) and one byte short (no chunk fits: refused).
 TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
     using T = typename TestFixture::T;
     int ran = 0;
@@ -374,7 +375,7 @@ TYPED_TEST(SymmCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(ran, 0);
     for (auto [k, batch] : {std::pair{33, 3}, std::pair{64, 2}}) {
         Spec s{Side::Left, Uplo::Lower, k, 5, batch};
-        const std::size_t bytes = backend::detail::expanded_workspace_bytes<T>(*this->ctx, k, batch);
+        const std::size_t bytes = backend::detail::expanded_workspace_bytes<T>(*this->ctx, k, 1);
         for (std::size_t cap : {bytes, bytes - 1}) {
             const ScopedEnvVar budget("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(cap).c_str());
             auto p = make_prob<T>(s);
@@ -482,9 +483,9 @@ TYPED_TEST(SymmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// expand_mirrored and its gemm put the batch in grid z: 65535 items launch, 65536 do not on
-// CUDA, so the pin refuses 65536 and Auto takes the vendor (vendor-free: no route). Metal has
-// no such cap: both launch.
+// expand_mirrored puts the batch in grid z: a direct expansion launches 65535 items and not 65536
+// on CUDA, and the op chunks the batch, so the pin runs both and every item is right. Metal has
+// no such cap: both launch directly too.
 TYPED_TEST(SymmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -503,27 +504,9 @@ TYPED_TEST(SymmCandidates, GridBatchCeiling) {
         Cd.fill(T(1));
         const bool launches = this->direct(C{sy::Expand{}}, A, Bm, Cd, T(1), T(1), Side::Left, Uplo::Lower, &why);
         EXPECT_EQ(launches, batch <= dev.max_groups_yz) << "direct expand at batch " << batch << ": " << why;
-        {
-            const Pin pin("symm", C{sy::Expand{}});
-            if (batch <= dev.max_groups_yz) {
-                call();
-                for (int it : {0, batch / 2, batch - 1}) EXPECT_EQ(double(Cm(0, 1, it)), 7.0) << "item " << it;
-                continue;
-            }
-            try {
-                call();
-                ADD_FAILURE() << "expand accepted batch " << batch;
-            } catch (const std::invalid_argument& e) {
-                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
-            }
-        }
-        const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
-        if constexpr (TestFixture::kVendor) {
-            EXPECT_EQ(traced_choice(call), "vendor");
-            EXPECT_EQ(double(Cm(0, 1, batch - 1)), 7.0);
-        } else {
-            EXPECT_THROW(call(), batchlas::NoRouteError);
-        }
+        const Pin pin("symm", C{sy::Expand{}});
+        call();
+        for (int it : {0, batch / 2, batch - 1}) EXPECT_EQ(double(Cm(0, 1, it)), 7.0) << "item " << it;
     }
 }
 

@@ -158,6 +158,8 @@ void append_static_rows(std::ostringstream& out) {
     // evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
     using namespace batchlas::select;
     const bool tiles_f32 = level3_tile_substitution_enabled<B, float>;
+    const bool gemm_folds = native_gpu_backend<B> || B == Backend::ROCM;
+    const bool hermitian_vendor = level3_vendor_available<B> && B != Backend::ROCM;  // rocblas.cc wraps none
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        true},
@@ -167,9 +169,10 @@ void append_static_rows(std::ostringstream& out) {
         {"symm",  level3_vendor_available<B>,        tiles_f32},
         {"syrk",  level3_vendor_available<B>,        tiles_f32},
         {"syr2k", level3_vendor_available<B>,        tiles_f32},
-        {"hemm",  level3_vendor_available<B>,        false},
-        {"herk",  level3_vendor_available<B>,        false},
-        {"her2k", level3_vendor_available<B>,        false},
+        // hemm's expand and herk's / her2k's fold run over the public gemm, so on ROCm too.
+        {"hemm",  hermitian_vendor,                  gemm_folds},
+        {"herk",  hermitian_vendor,                  gemm_folds},
+        {"her2k", hermitian_vendor,                  gemm_folds},
         {"geqrf", factorization_vendor_available<B>, true},
         {"orgqr", factorization_vendor_available<B>, true},
         {"getrf", factorization_vendor_available<B>, true},

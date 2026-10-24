@@ -276,6 +276,67 @@ vendor-free build); **routed** is both seams choosing their own route. Ratios ar
 * A single square gemm does not model the trailing update: the driver issues 217 `32 x 32 x 128` and `mr x 32 x 128`
   gemms, and nsys shows them at 10.63 ms against cuBLAS's 10.95 ms for one square gemm.
 
+### potrf: L2 batch chunking {#potrf-l2-batch-chunking}
+
+> **Status:** current · RTX PRO 6000 Blackwell Max-Q (sm_120, 188 SMs, 128 MiB L2), CUDA 13.2 · measured 2026-10-21
+
+The blocked driver factors the batch in parts (`potrf_blocked_chunk` in `src/ops/potrf/kernels/potrf_blocked.cc`),
+for the reason and by the rule of [LU: L2 batch chunking](lu.md#lu-l2-batch-chunking): `tuning::blocked_chunk_items`,
+`BLOCKED_L2_CHUNK_PERCENT` = 75 % of L2 rounded up to a multiple of the CU count, one pass below two chunks, the last part takes the remainder,
+`info` offset per part, workspace (pointer arrays, the `W x W` product scratch, the leaf's) one part's. Two
+differences: an item is its **lower triangle**, `n(n+1)/2 x sizeof(T)`, since the driver reads and writes nothing
+else; and one block (`n <= nb`; float n=64 at sm_120, where the occupancy clamp sets nb) never splits. Auto ranks `lpanel` or
+`vendor` first at every float row of `tuned/potrf.sm_120.txt`, so Auto is unchanged (b=32768: n=64 1.002, n=128 1.000,
+n=256 1.000; n=512 b=16384 0.999); the `blocked` rows were timed before chunking (retune pending).
+
+Chunk at sm_120, float: n=128 3196 items, n=256 940, n=512 376.
+
+**sm_89 (RTX 4090, 2026-10-23, cold, pinned blocked):** 75 % holds. float n=64 b16384 1.000, n=128 b4096
+0.981, b16384 0.969, n=256 b2048 0.912 (re-measured 0.913); cfloat n=128 b4096 0.876. The chunk loop also
+serves `Uplo::Upper` since the merge with main (the Upper schedule runs inside each part).
+
+Float, `BATCHLAS_POTRF_ROUTE=blocked`, ns per item, protocol as in the LU grid:
+
+| n | batch | off cold | on cold | on/off cold | on/off warm |
+|---:|---:|---:|---:|---:|---:|
+| 64 | 32768 | 64.1 | 64.1 | 1.000 | 1.002 |
+| 128 | 4096 | 216.5 | 216.8 | 1.002 | 1.000 |
+| 128 | 6392 | 215.9 | 222.3 | 1.029 | 1.037 |
+| 128 | 8192 | 222.6 | 220.5 | 0.990 | 0.981 |
+| 128 | 16384 | 241.3 | 218.2 | 0.904 | 0.904 |
+| 128 | 32768 | 236.6 | 220.5 | 0.932 | 0.928 |
+| 256 | 1024 | 1161.5 | 1165.0 | 1.003 | 0.992 |
+| 256 | 1880 | 1044.2 | 1017.3 | 0.974 | 0.980 |
+| 256 | 8192 | 1209.0 | 1069.1 | 0.884 | 0.886 |
+| 256 | 32768 | 1312.4 | 1120.0 | 0.853 | 0.854 |
+| 512 | 752 | 5549.7 | 5575.2 | 1.005 | 1.006 |
+| 512 | 2048 | 5915.2 | 5591.8 | 0.945 | 0.948 |
+| 512 | 8192 | 6259.2 | 5610.3 | 0.896 | 0.898 |
+| 512 | 16384 | 6558.3 | 5624.8 | 0.858 | 0.858 |
+
+21 cells: geomean 0.948 cold, 0.949 warm. The one loss is n=128 just past two chunks (b=6392, two parts of 3196:
++3%): per-item cost at n=128 bottoms out near 4096 items. **cfloat** n=128 pinned: b=4096 0.945, b=8192 0.900,
+b=32768 0.871.
+
+Forced chunk sizes, cold, b=32768 (n=512: 16384): n=64 every size 1.00-1.33 (one block: what made the no-split rule); n=128 1128 1.229,
+3008 0.964, **4136 0.911**, 6016 0.924; n=256 376 1.085, **752 0.866**, 1128 0.916, 1504 0.881, 3008 0.922; n=512 188
+0.916, **376 0.859**, 752 0.862, 3008 0.934. In triangle bytes the best part holds 0.75-1.5 L2.
+
+**The shared `info`.** With no caller `info`, every part uses the pool's `ws.info`, so it is zeroed per part and, on an
+out-of-order Queue, only after the previous part's last fixup (a wait before each part after the first): a late
+`info[b] != 0` quenches the next part's item `b` to identity with nothing reported. Breaks against
+`BlockedChunksRezeroSharedInfoPerPart` (chunk 7, item 3 failing in part 1's last block, item 9 in part 2's first),
+planted and reverted:
+
+| break planted | observed |
+|---|---|
+| `ws.info` zeroed only for the first part | red in the four types, in and out of order; exactly items 10, 16 and 17 (3 + 7, 9 + 7, 3 + 14) |
+| the inter-part wait removed | **green** (8 out-of-order reps per type): the race is not reached on this runtime; the wait stays because the submission order alone admits it |
+
+**Retune pending (float and cfloat).** Auto gains nothing until
+`tuned/potrf.sm_120.txt` re-times `blocked`: at cfloat n=128 b=32768 pinned `blocked` with chunking runs 255.8 ns per
+item against Auto's 283.8 (cold), so the retune must re-check cfloat there.
+
 ### The panel-solve verdict {#the-panel-solve-verdict}
 
 With the gemm seam held at vendor, the panel solve is the only variable. `trsm=vendor / trsm=native` whole-potrf ratios:
@@ -349,8 +410,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 3. **Small `n` (<= 256) loses for every type.** No blocked-driver tuning addresses it.
 4. **The strided-`ld` cost of the trailing gemm is not isolated.** The cheap probe (pack `L21` contiguous per panel,
    about 0.5 ms at n = 1024) was never run.
-5. **`Uplo::Upper` is unimplemented in the blocked driver** (`can_run` refuses it, `potrf.cc:54`). Ways out: mirror as
-   syev does, or use a transposed schedule.
+5. **`Uplo::Upper` in the blocked driver:** done, see [the blocked Upper driver](#the-blocked-upper-driver).
 6. **The trsm windows** were measured on the racing kernel above `q*batch ~ 65k` and not re-run. They survive as
    untimed rows of `tuned/trsm.sm_89.txt`.
 7. **The out-of-order-queue defect cannot be made to fail on this box.** Five dependent edges are guarded by
@@ -361,13 +421,58 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
     and `PotrfCandidates.CanRunEqualsLaunch` compares them with the drivers.
 11. **The accuracy test is loose.** The residual bound `4*n*eps` is looser than the true worst case `(0.2, 1] * n * eps`;
     a defect that costs less than about 4x in accuracy passes.
-12. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower.** 112 of 216 cases skip (host backends of a GPU kernel).
+12. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower** outside the blocked driver (`BlockedUpper*` cases, below). 112 of 216 cases skip (host backends of a GPU kernel).
 13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
     (`src/ops/potrf/kernels/potrf_lpanel_device.hh:178-188`) measured green at batch 1024 to 16384, because the eight dependent
     prefetch loads cover the window on this card. Record it as *unfalsifiable*, never *covered*. Closing it needs a probe
     that widens the hazard window on purpose. See [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel).
+
+## The blocked Upper driver {#the-blocked-upper-driver}
+
+`Uplo::Upper` above the tiny and CTA ceilings used to have no native route (known-defects #19): `lpanel` and `blocked`
+required Lower. `can_run` for `blocked` no longer reads `uplo` (`lpanel` stays Lower-only: its left-looking update reads
+the factored lower triangle). Upper is the same right-looking schedule on the transposed block rows, with no copies:
+
+| step (panel j, block ib) | Lower | Upper |
+|---|---|---|
+| leaf | CTA potrf Lower on A11 | CTA potrf Upper on A11 (a load/store transform of the same kernel) |
+| panel solve | trsm Right/Lower/ConjTrans on A21 | trsm Left/Upper/ConjTrans on A12 (ib x m2) |
+| diagonal tile | product = -L L^H, folded into the lower triangle | product = -U^H U (gemm ConjTrans, NoTrans), folded into the upper |
+| rest of the block | C = C - Lr L^H | C = C - U^H Ur (a block row of the upper triangle) |
+| failure quench | identity diagonal, zero panel column | the same on the panel row |
+
+The unreferenced lower triangle is neither read nor written (the fold is the only writer to A22), so a native Upper
+`potrf` keeps the caller's lower triangle, unlike cuSOLVER's. `posv` Upper inherits the route through the public `potrf`.
+
+Tests (`potrf_tests`, `PotrfBlockedTest`): `BlockedUpperPaddedPoisonedSaturatingBatch` (n = 33, 54, 55, 77, 78, 128, 256 and
+the nb/W structures, ld = n + 5, stride = ld n + 9, lower triangle and padding poisoned with large finite values, batch
+1024 for n <= 128 and 128 above, every item bit-identical to item 0), `BlockedUpperInfoIsTheGlobalColumn` (planted failures
+in and across blocks, a healthy neighbour in the batch), `FacadeBlockedUpper` (pinned `blocked`, lower triangle untouched).
+Deliberate breaks, each red in all 12 `BlockedUpper*` and `FacadeBlockedUpper` cases and nothing else: the fold told Lower
+instead of Upper; the rest-of-block-row gemm skipped.
+
+**Measurements** (sm_89, device 1, `factor_bench --arms=vendor,blocked,native`, 12 reps, median ms; the `native` arm is the
+CTA kernel at n <= 77 and `blocked` above, so it equals `blocked` there):
+
+| type | n | batch | cuSOLVER Upper | blocked Upper | blocked Lower |
+|---|---|---|---|---|---|
+| float | 128 | 128 / 512 | 0.101 / 0.175 | 0.140 / 0.237 | 0.135 / 0.188 |
+| float | 256 | 128 / 512 | 0.254 / 0.916 | 0.417 / 1.058 | 0.397 / 0.977 |
+| float | 384 | 128 / 512 | 0.611 / 2.901 | 0.728 / 2.540 | 0.663 / 2.513 |
+| float | 512 | 128 / 512 | 1.229 / 6.293 | 1.261 / 4.691 | 1.137 / 4.430 |
+| cfloat | 128 | 128 / 512 | 0.117 / 0.266 | 0.264 / 0.514 | 0.249 / 0.329 |
+| cfloat | 256 | 128 / 512 | 0.368 / 1.674 | 0.953 / 2.420 | 0.801 / 1.627 |
+| cfloat | 512 | 128 / 512 | 2.195 / 10.48 | 2.821 / 11.10 | 1.980 / 8.194 |
+
+Upper costs 0-10% more than Lower for float (the fold and the gemm run on transposed operands); cfloat Upper is up to 1.5x
+Lower at batch 512. cuSOLVER's Upper is much slower than its Lower from batch 512 (float n = 512: 6.29 against 4.84 ms), so
+blocked Upper wins float n = 384 and 512 at batch 512 (1.14x, 1.34x) and ties at batch 128; it loses elsewhere and for cfloat
+everywhere (0.35-0.94x). `tuned/potrf.sm_89.txt` therefore carries 12 `# custom` rows (ledger run `custom-5dc7f884`) for float Upper (n = 96..512, batch 128
+and 512), ranking `blocked` first only at n = 384 and 512, batch 512; every other Upper cell stays on the vendor. Vendor-free
+builds and `Backend::SYCL` have only `blocked` above the CTA ceiling, at the speeds above. Single sweep, 12 reps; the 1.14x cell is
+a screen, not a verdict.
 
 ## Raw evidence
 
@@ -529,7 +634,7 @@ on the composed arm, so it was reverted. Measure a flip against the arm it actua
 
 ### Register probe (tiny tier) {#register-probe-tiny-tier}
 
-Gate: **stack frame == 0 AND spill == 0 AND regs x 64 <= 65536**. Probe: `BATCHLAS_BUILD_DIR=$PWD/build/presets/dev-tests
+Gate: **stack frame == 0 AND spill == 0 AND regs x 64 <= 65536**. Probe: `BATCHLAS_BUILD_DIR=$PWD/build-dev-tests
 scripts/register_probe.sh out.log '' batchlas_extensions_cta` (sm_89). Every cell has frame 0 and spill 0:
 
 | type | N | regs | regs x wg (64) |

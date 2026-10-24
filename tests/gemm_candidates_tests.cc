@@ -24,6 +24,7 @@
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/util/resident_capacity.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <algorithm>
 #include <cctype>
@@ -50,6 +51,7 @@ using namespace batchlas;
 namespace {
 
 namespace og = batchlas::ops::gemm;
+namespace ub = test_utils::usm_bulk;
 using C = og::GemmChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -432,12 +434,22 @@ struct Problem {
     UnifiedVector<T> mem;
     UnifiedVector<T> mem0;
     UnifiedVector<T*> pa, pb, pc;
+    ub::Pristine<T> pristine;  // mem0's contents, run-length on the host
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, pa.data()}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, pb.data()}; }
     MVof<T> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, pc.data()}; }
     static std::size_t at(const Region& r, int it, int i, int j) {
         return r.off + std::size_t(it) * r.stride + std::size_t(j) * r.ld + i;
+    }
+    // The first element of mem (`got`: its host copy, else downloaded) not bit-identical to
+    // mem0's, C's m x n of every item skipped when skip_c.
+    std::optional<std::size_t> first_change(bool skip_c, const T* got = nullptr) const {
+        using H = typename ub::Pristine<T>::Hole;
+        if (!got) got = ub::download(mem.data(), mem.size(), 0);
+        std::optional<H> hole;
+        if (skip_c) hole = H{c.off, std::size_t(c.ld), std::size_t(s.m), std::size_t(s.n)};
+        return pristine.first_change(got, mem.size(), hole);
     }
 };
 
@@ -446,28 +458,29 @@ T poison() {
     return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
+// segs: (offset, batch stride) of each region of whole items, ascending. Only the representatives
+// draw, in the order of one pass over the batch; the rest of the batch is copied from them.
 template <typename T>
-void init(Problem<T>& p, std::size_t total) {
+void init(Problem<T>& p, std::size_t total, std::initializer_list<std::pair<std::size_t, std::size_t>> segs) {
     using R = RealOf<T>;
     const Spec& s = p.s;
     p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
     p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    p.mem = UnifiedVector<T>(total, s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>());
+    const T fill = s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>();
     p.pa = UnifiedVector<T*>(s.batch, nullptr);
     p.pb = UnifiedVector<T*>(s.batch, nullptr);
     p.pc = UnifiedVector<T*>(s.batch, nullptr);
+    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), fill, segs);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
-    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    for (int it = 0; it < s.batch; ++it) {
-        const int r = it % reps;
+    for (int it = 0; it < reps; ++it) {
         auto put = [&](const Region& g, bool is_c) {
             for (int j = 0; j < g.cols; ++j)
                 for (int i = 0; i < g.rows; ++i) {
-                    T& v = p.mem[Problem<T>::at(g, it, i, j)];
-                    if (it != r) v = p.mem[Problem<T>::at(g, r, i, j)];
-                    else if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
+                    T& v = p.pristine.at(Problem<T>::at(g, it, i, j));
+                    if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
                     else {
                         const auto re = u(gen), im = u(gen);
                         v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
@@ -478,7 +491,16 @@ void init(Problem<T>& p, std::size_t total) {
         if (p.b.off != p.a.off) put(p.b, false);
         put(p.c, true);
     }
+    p.mem = UnifiedVector<T>(total);
+    p.pristine.write(p.mem.data());
     p.mem0 = p.mem;
+}
+
+// The first element at which two equally sized UnifiedVectors differ bit for bit.
+template <typename T>
+std::optional<std::size_t> first_diff(const UnifiedVector<T>& x, const UnifiedVector<T>& y) {
+    if (x.size() != y.size()) return std::min(x.size(), y.size());
+    return ub::first_diff(ub::download(x.data(), x.size(), 0), ub::download(y.data(), y.size(), 1), x.size());
 }
 
 std::size_t up4(std::size_t v) { return (v + 3) / 4 * 4; }
@@ -504,7 +526,8 @@ Problem<T> make_problem(const Spec& s) {
     p.a = region(8, ar, ac, s.layout);
     p.b = region(end(p.a), br, bc, s.layout_b.value_or(s.layout));
     p.c = region(end(p.b), s.m, s.n, s.layout);
-    init(p, end(p.c) + 4);
+    init(p, end(p.c) + 4,
+         {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)}, {p.c.off, std::size_t(p.c.stride)}});
     return p;
 }
 
@@ -544,7 +567,7 @@ Problem<T> make_panel(Spec s, int parent) {
     p.b = s.tb == kN ? u12 : l21;
     p.c = {std::size_t(s.k) * ld + r0 + s.k, s.m, s.n, ld, stride};          // A22
     EXPECT_EQ(s.m, s.n) << "a panel update is square";
-    init(p, std::size_t(stride) * s.batch);
+    init(p, std::size_t(stride) * s.batch, {{0, std::size_t(stride)}});
     return p;
 }
 
@@ -578,19 +601,19 @@ void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
     ASSERT_TRUE(items_ok(ctx, p, items)) << what;
-    std::vector<char> inc(p.mem.size(), 0);
-    for (int it = 0; it < s.batch; ++it)
-        for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.m; ++i) inc[Problem<T>::at(p.c, it, i, j)] = 1;
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    const auto moved = p.first_change(true, got);
+    ASSERT_FALSE(moved.has_value()) << what << ": wrote outside C at element " << moved.value_or(0);
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
-            for (int j = 0; j < s.n; ++j)
-                for (int i = 0; i < s.m; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[Problem<T>::at(p.c, it, i, j)],
-                                          p.mem[Problem<T>::at(p.c, it % s.period, i, j)]))
-                        << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            for (int j = 0; j < s.n; ++j) {
+                const T* x = got + Problem<T>::at(p.c, it, 0, j);
+                const T* r = got + Problem<T>::at(p.c, it % s.period, 0, j);
+                if (std::memcmp(x, r, std::size_t(s.m) * sizeof(T)) == 0) continue;
+                int i = 0;
+                while (same_bits(x[i], r[i])) ++i;
+                FAIL() << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            }
 }
 
 const char* layout_word(Layout l) {
@@ -685,6 +708,11 @@ protected:
         g_slm_per_item = select::device_of<B>(*this->ctx).family == "apple" ? 8 : 0;
         g_max_wg = int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
         g_cuda_cc = this->ctx->device().cuda_compute_capability();
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     static bool expect_runs(const C& c, const Spec& s) {
@@ -708,10 +736,12 @@ protected:
     // stages, whose 8-byte copies need 8-byte bases); copied back for expect_gemm.
     void run_pinned_base8(const C& c, Problem<T>& p) {
         constexpr std::size_t reals = sizeof(T) / sizeof(RealOf<T>);
-        UnifiedVector<RealOf<T>> raw(reals * p.mem.size() + 1, RealOf<T>(0));
+        UnifiedVector<RealOf<T>> raw(reals * p.mem.size() + 1);
+        const RealOf<T> zero(0);
+        ub::copy(raw.data(), &zero, sizeof zero, raw.data());
         T* base = reinterpret_cast<T*>(raw.data() + 1);
         ASSERT_EQ(reinterpret_cast<std::uintptr_t>(base) % 16u, sizeof(RealOf<T>));
-        std::memcpy(base, p.mem.data(), p.mem.size() * sizeof(T));
+        ub::copy(base, p.mem.data(), p.mem.size() * sizeof(T), base);
         UnifiedVector<T*> pa(p.s.batch, nullptr), pb(p.s.batch, nullptr), pc(p.s.batch, nullptr);
         auto view = [&](const Region& g, UnifiedVector<T*>& ptrs) {
             return MVof<T>(base + g.off, g.rows, g.cols, g.ld, g.stride, p.s.batch, ptrs.data());
@@ -721,7 +751,7 @@ protected:
             (void)gemm<B, T>(*this->ctx, view(p.a, pa), view(p.b, pb), view(p.c, pc), p.alpha, p.beta, p.s.ta, p.s.tb);
             this->ctx->wait();
         }
-        std::memcpy(p.mem.data(), base, p.mem.size() * sizeof(T));
+        ub::copy(p.mem.data(), base, p.mem.size() * sizeof(T), base);
     }
     std::string auto_choice(const Spec& s) {
         const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
@@ -1211,8 +1241,8 @@ TYPED_TEST(GemmCandidates, SmallEveryBucketEveryFormAtSaturatingBatch) {
                     const C small{og::Small{}};
                     if (!TestFixture::expect_runs(small, s)) {
                         EXPECT_FALSE(this->pin_accepted(small, p)) << name(small, s) << " was accepted";
-                        for (std::size_t e = 0; e < p.mem.size(); ++e)
-                            ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << name(small, s) << ": refused but wrote " << e;
+                        const auto e = p.first_change(false);
+                        ASSERT_FALSE(e.has_value()) << name(small, s) << ": refused but wrote " << e.value_or(0);
                         ++refused;
                         continue;
                     }
@@ -1925,8 +1955,8 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
                 ++nan_checked;
                 auto again = make_problem<T>(s);
                 this->run_pinned(c, again);
-                for (std::size_t e = 0; e < p.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(p.mem[e], again.mem[e])) << name(c, s) << ": a repeated call differs at " << e;
+                const auto e = first_diff(p.mem, again.mem);
+                ASSERT_FALSE(e.has_value()) << name(c, s) << ": a repeated call differs at " << e.value_or(0);
                 ++repeated;
             }
     }
@@ -1964,25 +1994,22 @@ TYPED_TEST(GemmCandidates, SplitKOnAnOutOfOrderQueueReducesAfterTheSlices) {
     }
 }
 
-// split-k puts batch * s groups in grid z: a pin is a launch at batch * s <= 65535 and a refusal
-// one item past it (where the device caps the grid), with C left bit for bit.
-TYPED_TEST(GemmCandidates, SplitKGridCeilingIsBatchTimesSlices) {
+// split-k puts batch * s groups in grid z, so launch() chunks the batch to floor(65535 / s) items per
+// call: a pin is a correct launch at, one past, and several chunks past batch * s = 65535.
+TYPED_TEST(GemmCandidates, SplitKGridCeilingIsServedByBatchChunking) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     const int ceiling = int(test_utils::kCudaGridYZ);
     if (dev.max_groups_yz > ceiling) GTEST_SKIP() << dev.key << " has no grid z cap";
     for (int sl : {2, 8}) {
         const C c{og::SplitK{16, 16, 16, sl}};
-        const Spec at{kN, kN, 2, 2, 20, ceiling / sl, Layout::Packed};
-        Spec past = at;
-        past.batch += 1;
-        auto p = make_problem<T>(at);
-        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_gemm(*this->ctx, p, name(c, at));
-        auto q = make_problem<T>(past);
-        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
-        for (std::size_t e = 0; e < q.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
+        const int chunk = ceiling / sl;
+        for (int batch : {chunk, chunk + 1, 3 * chunk + 5}) {
+            const Spec sp{kN, kN, 2, 2, 20, batch, Layout::Packed};
+            auto p = make_problem<T>(sp);
+            ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, sp);
+            expect_gemm(*this->ctx, p, name(c, sp));
+        }
     }
 }
 
@@ -2461,50 +2488,32 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
 }
 
-// can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535 on
-// CUDA), so a pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto
-// serve the larger batch (whichever of small and the vendor the table ranks first; vendor-free:
-// small). Metal has no group-count cap there: one past
-// CUDA's ceiling is a launch too.
-TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
+// direct, tiled, reg and wide put the batch in grid z (<= 65535 on CUDA); launch() chunks a larger
+// batch, so every native pin is a correct launch at, one past, and several chunks past the ceiling
+// (the chunk seams are where an offset error lands), and Auto serves it natively vendor-free.
+TYPED_TEST(GemmCandidates, GridCeilingIsServedByBatchChunking) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
     ASSERT_EQ(dev.max_groups_yz, test_utils::expected_grid_yz(dev.family)) << dev.key;
     const int ceiling = int(test_utils::kCudaGridYZ);
-    const bool capped = dev.max_groups_yz <= ceiling;
-    const Spec at{kN, kN, 2, 2, 2, ceiling, Layout::Packed};
-    const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
+    int past_runs = 0;
     for (const C& c : og::candidates<T>()) {
-        // split-k's ceiling is batch * s (SplitKGridCeilingIsBatchTimesSlices)
-        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::Small>(c) ||
-            std::holds_alternative<og::SplitK>(c))
-            continue;
+        // split-k's chunk is floor(ceiling / s) (SplitKGridCeilingIsServedByBatchChunking)
+        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::SplitK>(c)) continue;
         if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
-        auto p = make_problem<T>(at);
-        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
-        expect_gemm(*this->ctx, p, name(c, at));
-        auto q = make_problem<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
-        if (!capped) {
-            expect_gemm(*this->ctx, q, name(c, past));
-            continue;
+        for (int batch : {ceiling, ceiling + 1, 2 * ceiling + 9}) {
+            const Spec sp{kN, kN, 2, 2, 2, batch, Layout::Packed};
+            auto p = make_problem<T>(sp);
+            ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, sp);
+            expect_gemm(*this->ctx, p, name(c, sp));
+            past_runs += batch > ceiling;
         }
-        for (std::size_t e = 0; e < q.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
     }
-    {
-        auto p = make_problem<T>(past);
-        ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
-        expect_gemm(*this->ctx, p, "small past the grid ceiling");
-    }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
+    ASSERT_GT(past_runs, 0);
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
+    const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
     auto p = make_problem<T>(past);
-    const std::string got = traced_choice([&] { this->run(p); });
-    // Which of the two the table ranks first is a measurement (sm_120 complex rows rank small
-    // since the 2026-10 retune); the invariant is that Auto lands on a choice with no grid cap.
-    EXPECT_TRUE(got == "small" || (TestFixture::kVendor && got == "vendor"))
-        << label(past) << ": Auto past the grid ceiling chose " << got;
+    this->run(p);
     expect_gemm(*this->ctx, p, "auto past the grid ceiling");
 }
 
@@ -2532,26 +2541,58 @@ TYPED_TEST(GemmCandidates, EmptyBatchIsANoOp) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty batch wrote element " << e;
 }
 
-// A non-default precision is a correctness condition: every native pin refuses it, and Auto
-// takes the vendor (no route at all vendor-free).
-TYPED_TEST(GemmCandidates, NonDefaultPrecisionHasNoNativeRoute) {
+// ComputePrecision contract (enums.hh): the scalar's own precision is exact, so every native pin
+// serves it and is correct; a lower-precision HINT (F16/BF16/TF32 on a single-precision scalar)
+// goes to the vendor where one exists and is answered at full precision where none does; a
+// mismatched pair (F64 on float, F32/F16/BF16/TF32 on double) is refused on every path.
+TYPED_TEST(GemmCandidates, ComputePrecisionContract) {
     using T = typename TestFixture::T;
-    const ComputePrecision prec =
-        std::is_same_v<RealOf<T>, float> ? ComputePrecision::F32 : ComputePrecision::F64;
+    constexpr bool single = std::is_same_v<RealOf<T>, float>;
+    const ComputePrecision own = single ? ComputePrecision::F32 : ComputePrecision::F64;
+    const ComputePrecision wrong = single ? ComputePrecision::F64 : ComputePrecision::F32;
     const Spec s{kN, kT, 40, 24, 16, 2, Layout::Strided};
+    int ran = 0;
     for (const C& c : og::candidates<T>()) {
         if (std::holds_alternative<og::Vendor>(c) || !oracle_native<T>(c, s.ta, s.tb, s.m, s.n, s.k)) continue;
-        auto p = make_problem<T>(s);
         const Pin pin("gemm", c);
-        EXPECT_THROW(this->run(p, prec), std::invalid_argument) << select::to_string(c);
+        {
+            auto p = make_problem<T>(s);
+            ASSERT_NO_THROW(this->run(p, own)) << select::to_string(c);
+            expect_gemm(*this->ctx, p, select::to_string(c) + " own precision");
+            ++ran;
+        }
+        auto p = make_problem<T>(s);
+        EXPECT_THROW(this->run(p, wrong), std::invalid_argument) << select::to_string(c);
+        if constexpr (single) {
+            auto q = make_problem<T>(s);
+            if constexpr (TestFixture::kVendor) {
+                EXPECT_THROW(this->run(q, ComputePrecision::TF32), std::invalid_argument) << select::to_string(c);
+            } else {
+                ASSERT_NO_THROW(this->run(q, ComputePrecision::TF32)) << select::to_string(c);
+                expect_gemm(*this->ctx, q, select::to_string(c) + " TF32 hint");
+            }
+        }
     }
+    ASSERT_GT(ran, 0) << "no native candidate was exercised";
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
-    auto p = make_problem<T>(s);
+    {
+        auto p = make_problem<T>(s);
+        ASSERT_NO_THROW(this->run(p, own));
+        expect_gemm(*this->ctx, p, "auto, own precision");
+    }
     if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(traced_choice([&] { this->run(p, prec); }), "vendor");
-        expect_gemm(*this->ctx, p, "auto, non-default precision");
+        auto p = make_problem<T>(s);
+        if constexpr (single)
+            EXPECT_EQ(traced_choice([&] { this->run(p, ComputePrecision::TF32); }), "vendor");
+        EXPECT_ANY_THROW(this->run(p, wrong));
     } else {
-        EXPECT_THROW(this->run(p, prec), batchlas::NoRouteError);
+        auto p = make_problem<T>(s);
+        EXPECT_THROW(this->run(p, wrong), batchlas::NoRouteError);
+        if constexpr (single) {
+            auto q = make_problem<T>(s);
+            ASSERT_NO_THROW(this->run(q, ComputePrecision::BF16));
+            expect_gemm(*this->ctx, q, "auto, BF16 hint, vendor-free");
+        }
     }
 }
 

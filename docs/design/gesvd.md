@@ -5,8 +5,12 @@
 Batched SVD has four families, chosen per shape by `tuned/gesvd.<device>.txt`: one-sided Jacobi
 (`gesvdj_cta`, \f$\max(m,n) \le 64\f$; complex\<double\> with vectors to 32), the normal-equations
 `cta` path (\f$\le 32\f$), the bidiagonal `blocked` path (`gebrd`, then `bdsdc` on the batched
-`stedc`, then `ormbr`), and the vendor. This page gives the design rules, the Jacobi kernel's
-local-memory and scaling rules, and the traps. Measurements are in @ref perf_gesvd "the GESVD performance page".
+`stedc`, then `ormbr`), and the vendor. Complex general input takes `blocked`: `gebrd` follows
+LAPACK `zlabrd`/`zgebd2` with a real-beta `zlarfg`, so the bidiagonal is real and the real `bdsdc`
+solves it; its real vectors are widened into U and \f$V^H\f$ before the complex `unmbr`
+back-transforms (rows hold \f$\bar u\f$, as `unmbr 'P'` expects). This page gives the design rules,
+the Jacobi kernel's local-memory and scaling rules, and the traps. Measurements are in
+@ref perf_gesvd "the GESVD performance page".
 
 | Piece | Source |
 |---|---|
@@ -16,7 +20,7 @@ local-memory and scaling rules, and the traps. Measurements are in @ref perf_ges
 | one-sided Jacobi kernel | `src/ops/gesvd/kernels/gesvdj_cta.cc` |
 | `cta` and `blocked` drivers | `src/ops/gesvd/kernels/gesvd_blocked.cc` |
 | sub-ops | `src/ops/gesvd/{gebrd,bdsdc,bdsqr,ormbr}/` |
-| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1732` |
+| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1734` |
 
 ## gesvd design: why one-sided Jacobi
 

@@ -25,7 +25,8 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 
 - `run`: one per (run id, dtype): host, device, device name, `batchlas` (commit), argv, date,
   tier, `keys` (the `# keys:` text from `choice.hh`), `candidates` (`|`-joined spellings in
-  candidate order), `protocol` (the per-cell protocol: `lean`; `full` = the fixed warm-up engine
+  candidate order), `protocol` (the per-cell protocol: `lean-cold`, operands out of L2 before every
+  timed run; `lean` = the same race L2-warm; `full` = the fixed warm-up engine
   before it; absent in ledgers written before the field), `guard` (the guard backend: `nvml`,
   `nvidia-smi` or `off`; absent before the field), `prior` (calibrate runs only: the borrowed table as
   `<device>@<header date>`; table generation ignores it), `grid` (the log axes' full lattice the run planned
@@ -38,7 +39,9 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
   `ph_verify`, `ph_ld` (the ld audit's second run), `ph_guard`, `ph_ipc` (worker round trip less the
   worker's phases), `ph_spawn` (fresh child start and exit less its phases), `ph_start` (a worker
   start: guard, spawn, CUDA init, clock warm-up), `ph_mode` (`worker`, `fresh`, `fallback`) and
-  `ph_arms` (the arms raced now; a partial re-race's record also holds its stored arms).
+  `ph_arms` (the arms raced now; a partial re-race's record also holds its stored arms), and NVML clock
+  metadata: `clk_n` samples (one per timed run), `clk_capped` of them with reason 0x4 (SW power cap),
+  `clk_mhz` (mean SM clock), `throttled: 1` when more than 25% were capped, `throttle_reraces`.
   Every try and child of the cell is summed. A retract copy and an untimed record carry none.
   Table generation ignores them.
 - `audit`: one fresh-process audit (the carve-out check): `key`, `verdict`, `fresh_ms`, `warm_ms`,
@@ -70,8 +73,9 @@ Writers append under `flock(LOCK_EX)`, one `write()` per line, and repair a torn
 the same lock. Several dtype jobs and processes share one file. A reader ignores a truncated last
 line with a warning, so a cell is either fully recorded or absent.
 
-**Which record counts.** Per cell, the best current record by tier (order above), then the later
-line. A `cell` record is:
+**Which record counts.** Per cell, the best current record: a measured record of a `lean-cold` run
+first (another protocol's ranks below it whatever its tier, and the tuner re-measures its cell), then
+by tier (order above), then the later line. A `cell` record is:
 
 - **current** when every candidate's family hash matches the source tree. A candidate stored as
   `skipped` is not compared (a change to what can run goes through the hashed `<op>.cc`); one

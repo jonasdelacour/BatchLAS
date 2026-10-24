@@ -31,7 +31,6 @@ TYPED_TEST_SUITE(HerkTest, HerkTestTypes);
 // result: it is neither read through beta nor written, and neither is the
 // imaginary part of the diagonal, because C = C^H forces that to zero whatever
 // the caller stored there.
-//
 // Checking only that the referenced triangle holds the right numbers would miss
 // both halves of that. This test poisons the storage HERK may not touch -- the
 // unreferenced triangle and the diagonal's imaginary part, each with a value
@@ -39,7 +38,6 @@ TYPED_TEST_SUITE(HerkTest, HerkTestTypes);
 // referenced triangle matches alpha A A^H + beta C0 in double (C0 clean, with a
 // real diagonal), the poison is still bit-for-bit intact afterwards, and the
 // diagonal came out real.
-//
 // The shapes are ragged on purpose: the GEMM route folds an n x n product into
 // C with a tiled elementwise kernel, so what matters is the sizes where the
 // tiling does not divide evenly and where the product's leading dimension is
@@ -156,13 +154,13 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
 
     sweep("default");
 
-    if constexpr (TestFixture::BackendType == Backend::CUDA) {
+    if constexpr (TestFixture::BackendType == Backend::CUDA || TestFixture::BackendType == Backend::SYCL) {
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+            ScopedEnvVar route("BATCHLAS_HERK_ROUTE", "fold");
             sweep("gemm");
         }
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            ScopedEnvVar route("BATCHLAS_HERK_ROUTE", "vendor");  // Auto vendor-free
             sweep("vendor-loop");
         }
     }
@@ -315,25 +313,27 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
     };
 
     sweep("default");
-    if constexpr (Ba == Backend::CUDA) {
+    if constexpr (Ba == Backend::CUDA || Ba == Backend::SYCL) {
         // The Gram kernel is not on herk's automatic path -- it loses to the
         // GEMM-plus-fold in complex -- so without pinning it the conjugation
         // this test exists to check would never run.
-        ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
+        ScopedEnvVar pin("BATCHLAS_HERK_ROUTE", "gram");
         sweep("gram");
     }
 }
 
-// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535:
-// with gram pinned, a batch of 65536 must fall back to a route that runs, not throw.
-TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
+// The gram tile kernel and the GEMM-plus-fold put the batch in a grid dimension capped at 65535
+// on CUDA: pinned, each chunks a batch of 65536 and every item is right (vendor-free too).
+TYPED_TEST(HerkTest, NativesChunkABatchAboveTheGrid) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
     constexpr Backend Ba = TestFixture::BackendType;
-    if constexpr (Ba != Backend::CUDA || !BATCHLAS_HAS_CUBLAS) {
-        GTEST_SKIP() << "the gram opt-in is cuBLAS's herk (no route vendor-free)";
+    if constexpr (Ba != Backend::CUDA && Ba != Backend::SYCL) {
+        GTEST_SKIP() << "gram and fold are GPU families";
     } else {
-        const ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
+      for (const char* family : {"gram", "fold"}) {
+        SCOPED_TRACE(family);
+        const ScopedEnvVar pin("BATCHLAS_HERK_ROUTE", family);
         const int n = 8, k = 5, batch = 65536;
         const real_t alpha = real_t(0.75), beta = real_t(-0.5);
         auto A = Matrix<T, MatrixFormat::Dense>::Random(n, k, false, batch, 31);
@@ -349,5 +349,6 @@ TYPED_TEST(HerkTest, GramBatchAboveGridFallsBack) {
                       MV::gemm_backward_error(*(this->ctx), A, Transpose::NoTrans, A, Transpose::ConjTrans,
                                               C0, C, MV::up(T(alpha)), MV::up(T(beta)),
                                               C.all_items(), Uplo::Lower));
+      }
     }
 }

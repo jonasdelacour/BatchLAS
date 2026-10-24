@@ -1287,8 +1287,8 @@ TYPED_TEST(BatchPolicy, GemmWithZeroInnerExtentScalesC) {
 }
 
 // A batch of 4 with active orders {n, n-3, n, n-5}: every family of these ops launches one
-// (n, ld, stride) for the whole batch, so the call must find no route (hemm/herk/her2k, which
-// have no selection: an argument error), never return a padded answer. gemm has a per-item loop.
+// (n, ld, stride) for the whole batch, so the call must find no route (gesv/posv refuse it before
+// selection: an argument error), never return a padded answer. gemm has a per-item loop.
 // In a vendor build "no route" is select's "no runnable kernel"; vendor-free it is NoRouteError.
 TYPED_TEST(BatchPolicy, HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt) {
     using T = typename TestFixture::ScalarType;
@@ -1298,9 +1298,9 @@ TYPED_TEST(BatchPolicy, HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt) {
     ASSERT_TRUE(ops.view(ops.a, true).is_heterogeneous());
     for (const auto& [name, call] : ops.calls(true)) {
         if (name == "gemm") continue;
-        // No selection (hemm/herk/her2k) or a pre-selection refusal (gesv/posv): an argument error.
+        // A pre-selection refusal (gesv/posv): an argument error.
         const bool refused_upfront =
-            name == "hemm" || name == "herk" || name == "her2k" || name == "gesv" || name == "posv";
+            name == "gesv" || name == "posv";
         try {
             call();
             this->ctx->wait();

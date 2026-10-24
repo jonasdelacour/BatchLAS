@@ -131,8 +131,7 @@ BATCHLAS_INTERNAL_API std::size_t potrf_blocked_buffer_size(Queue& ctx,
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned potrf_blocked_debug_params(Queue& ctx, int n);  // nb | W<<16
 
-// Uplo::LOWER ONLY -- the right-looking schedule overwrites the wrong triangle for Upper,
-// so it throws. `info` is LAPACK's (1-based, GLOBAL, first failure wins) while the leaf
+// Either triangle (Upper is the transposed block-row schedule). `info` is LAPACK's (1-based, GLOBAL, first failure wins) while the leaf
 // writes a sub-view-LOCAL index, so the driver translates and merges.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,

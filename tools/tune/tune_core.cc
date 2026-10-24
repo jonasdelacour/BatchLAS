@@ -431,8 +431,14 @@ void Phases::add(double Phases::*f, double s) {
     this->*f = std::isnan(this->*f) ? s : this->*f + s;
 }
 
+ClockStats& ClockStats::operator+=(const ClockStats& o) {
+    n += o.n, capped += o.capped, mhz_sum += o.mhz_sum;
+    return *this;
+}
+
 Phases& Phases::operator+=(const Phases& o) {
     for (const auto& [name, f] : fields()) add(f, o.*f);
+    clk += o.clk;
     if (mode.empty()) mode = o.mode;
     return *this;
 }
@@ -755,9 +761,6 @@ AppScan scan_compute_apps(std::string_view out, long self_pid) {
 }
 
 namespace {
-bool is_pid(const std::string& s) {
-    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
-}
 std::string bracket(const std::vector<std::string>& v) {
     std::string out;
     for (const auto& s : v) out += (out.empty() ? "" : ",") + s;
@@ -765,32 +768,16 @@ std::string bracket(const std::vector<std::string>& v) {
 }
 }  // namespace
 
-GuardCheck guard_before(const AppScan& scan, bool allow_idle_foreign) {
-    GuardCheck g;
-    const bool all_pids = std::all_of(scan.foreign.begin(), scan.foreign.end(), is_pid);
-    if (!scan.foreign.empty() && (!allow_idle_foreign || !all_pids)) {
-        g.refuse = "compute processes " + bracket(scan.foreign);
-        return g;
-    }
-    g.tolerated = scan.foreign;
-    return g;
+std::string guard_refusal(const AppScan& scan) {
+    return scan.foreign.empty() ? std::string() : "compute processes " + bracket(scan.foreign);
 }
 
-std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated) {
-    std::vector<std::string> fresh;
-    for (const auto& f : after.foreign)
-        if (!is_pid(f) || std::find(tolerated.begin(), tolerated.end(), f) == tolerated.end()) fresh.push_back(f);
-    return fresh;
-}
-
-std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, const std::vector<std::string>& tolerated,
-                                        double ceiling) {
+std::vector<std::string> foreign_active(const std::vector<ProcUtil>& samples, double ceiling) {
     std::map<std::string, double> peak;
     for (const ProcUtil& s : samples) peak[s.pid] = std::max(peak[s.pid], s.sm);
     std::vector<std::string> active;
     for (const auto& [pid, sm] : peak) {
-        const bool known = pid.empty() || std::find(tolerated.begin(), tolerated.end(), pid) != tolerated.end();
-        if (known ? sm <= ceiling : sm <= 0) continue;
+        if (pid.empty() ? sm <= ceiling : sm <= 0) continue;
         char u[32];
         std::snprintf(u, sizeof(u), "%g", sm);
         active.push_back((pid.empty() ? "GPU" : pid) + " at " + u + "%");

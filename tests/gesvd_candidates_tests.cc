@@ -261,16 +261,18 @@ protected:
             return s.herm == 'N' && md <= sycl_gesvd::gesvd_jacobi_max_dim<T>(vectors(s), g_slm_budget);
         if (std::holds_alternative<gs::Cta>(c))
             return md <= sycl_gesvd::kGesvdCtaMaxDim && !canonical_thin(s) && (s.herm == 'N' ? kReal : s.m == s.n);
-        if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' ? kReal : (s.m == s.n && s.herm == 'L');
-        return kVendor;
+        if (std::holds_alternative<gs::Blocked>(c)) return s.herm == 'N' || s.m == s.n;
+        return kVendor && (B != Backend::CUDA || vendor_accepts(s)) && B != Backend::ROCM;
     }
-    // cuSOLVER gesvdjBatched: max(m, n) <= 32, a packed batch, no thin factor, and it reads the
-    // whole matrix (no Hermitian shortcut). Its refusals are not in can_run (see gesvd.md). A
-    // values-only non-square call faults inside it on 424a45bc too (gesvd.md, "Found").
-    static bool vendor_envelope(const Spec& s) {
-        return s.herm == 'N' && std::max(s.m, s.n) <= 32 && !canonical_thin(s) && s.gap == 0 && s.ldpad == 0 &&
+    // cuSOLVER gesvdjBatched: max(m, n) <= 32, a packed batch, no thin factor; a values-only
+    // non-square call faults inside it on 424a45bc (gesvd.md, "Found"). can_run holds all of it.
+    static bool vendor_accepts(const Spec& s) {
+        return std::max(s.m, s.n) <= 32 && !canonical_thin(s) && (s.gap == 0 || s.batch == 1) &&
                (vectors(s) || s.m == s.n);
     }
+    // ... and it reads the whole matrix (no Hermitian shortcut), so its answer is checked only
+    // on general input.
+    static bool vendor_envelope(const Spec& s) { return s.herm == 'N' && s.ldpad == 0 && vendor_accepts(s); }
 
     void run(Svd<T>& p, Queue* on = nullptr) {
         Queue& q = on ? *on : *this->ctx;
@@ -359,11 +361,11 @@ protected:
 
 TYPED_TEST_SUITE(GesvdCandidates, Types);
 
-// Pre-existing driver defect (gesvd.md, "Found"): cta with Upper, and blocked with Lower at
-// n <= 32, read the UNREFERENCED triangle, so those straddles store the full Hermitian matrix.
+// Pre-existing driver defect (gesvd.md, "Found"): cta with Upper reads the UNREFERENCED triangle,
+// so those straddles store the full Hermitian matrix. Blocked mirrors either triangle first.
 bool reads_the_other_triangle(const C& c, char h, int n) {
-    return (std::holds_alternative<gs::Cta>(c) && h == 'U') ||
-           (std::holds_alternative<gs::Blocked>(c) && h == 'L' && n <= 32);
+    static_cast<void>(n);
+    return std::holds_alternative<gs::Cta>(c) && h == 'U';
 }
 
 // Shapes straddling cta's 32, jacobi's 32 (cdouble with vectors) and 64, square and not.
@@ -404,7 +406,7 @@ TYPED_TEST(GesvdCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // The defect itself: every Hermitian-capable family with poison in the unreferenced triangle.
-// Disabled until the drivers honour the triangle; cta Lower and blocked Lower at 48 pass today.
+// Disabled until cta Upper honours the triangle; every other pair passes.
 TYPED_TEST(GesvdCandidates, DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle) {
     using T = typename TestFixture::T;
     for (const C& c : {C{gs::Cta{}}, C{gs::Blocked{}}})
@@ -419,8 +421,8 @@ TYPED_TEST(GesvdCandidates, DISABLED_HermitianFamiliesIgnoreTheUnreferencedTrian
             }
 }
 
-// The vendor inside cuSOLVER's envelope (packed, max(m, n) <= 32, no thin factor); outside it the
-// pin is accepted (can_run is has_vendor alone) and the library refuses at launch.
+// The vendor inside cuSOLVER's envelope (packed, max(m, n) <= 32, no thin factor); outside it
+// can_run refuses the pin, so Auto never ranks a vendor that would throw.
 TYPED_TEST(GesvdCandidates, VendorPinRunsInsideItsEnvelope) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -437,17 +439,25 @@ TYPED_TEST(GesvdCandidates, VendorPinRunsInsideItsEnvelope) {
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(C{gs::Vendor{}}, p); }), "vendor") << label(s);
                 expect_solved(p, "vendor " + label(s));
             }
-        Spec big{48, 48, 2};
-        big.gap = 0;
-        big.ldpad = 0;
-        auto p = make_svd<T>(big);
-        try {
-            this->run_pinned(C{gs::Vendor{}}, p);
-            ADD_FAILURE() << "cuSOLVER took 48 x 48";
-        } catch (const std::invalid_argument& e) {
-            ADD_FAILURE() << "the pin was refused: " << e.what();
-        } catch (const std::exception& e) {
-            EXPECT_NE(std::string(e.what()).find("gesvd_vendor (CUSOLVER)"), std::string::npos) << e.what();
+        // Straddles of every vendor_accepts term: size 32|33, packed|strided, thin, values-only wide.
+        for (Spec s : {Spec{32, 32, 2}, Spec{33, 33, 2}, Spec{8, 33, 2}, Spec{16, 16, 2}, Spec{32, 8, 2},
+                       Spec{32, 8, 2, 'N', SvdVectors::Thin, SvdVectors::Thin},
+                       Spec{8, 32, 2, 'N', SvdVectors::None, SvdVectors::None}}) {
+            for (int gap : {0, 7}) {
+                s.gap = gap;
+                s.ldpad = 0;
+                auto p = make_svd<T>(s);
+                // Strict: a plain `vendor` pin that cannot run falls back to Auto instead of throwing.
+                bool accepted = true;
+                try {
+                    const Pin pin("gesvd", "vendor", select::StrictPin{});
+                    (void)gesvd_buffer_size<B, T>(*this->ctx, p.A(), p.sv.to_span(), p.U, p.Vh, s.ju, s.jv);
+                } catch (const std::invalid_argument& e) {
+                    if (std::string(e.what()).find("(strict)") == std::string::npos) throw;
+                    accepted = false;
+                }
+                EXPECT_EQ(accepted, this->vendor_accepts(s)) << label(s) << " gap " << gap;
+            }
         }
     }
 }
@@ -468,14 +478,9 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
                     const bool pin = this->pin_accepted(c, a);
                     std::string why;
                     const bool run = this->direct(c, b, &why);
-                    // Blocked Hermitian Upper: syev_blocked mirrors Upper into Lower and launches,
-                    // but can_run keeps a Lower-only clause (gesvd.md, deviation).
-                    const bool upper_blocked = std::holds_alternative<gs::Blocked>(c) && h == 'U' && m == n;
-                    if (!upper_blocked) {
-                        EXPECT_EQ(pin, run) << name(c, s) << ": can_run says " << pin << ", the driver "
-                                            << (run ? "launches" : "refuses: " + why);
-                        disagreements += pin != run;
-                    }
+                    EXPECT_EQ(pin, run) << name(c, s) << ": can_run says " << pin << ", the driver "
+                                        << (run ? "launches" : "refuses: " + why);
+                    disagreements += pin != run;
                     EXPECT_EQ(pin, this->expect_runs(c, s)) << name(c, s) << ": can_run disagrees with the oracle";
                 }
     }
@@ -518,9 +523,12 @@ TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
                     refused = e.what();
                 }
             });
-            // cuSOLVER may refuse the empty call in its sizing step, before any trace line.
+            // cuSOLVER may refuse the empty call in its sizing step, before any trace line; on CUDA
+            // can_run already refuses a values-only non-square vendor call, so nothing runs.
             if (got.rfind("<no gesvd", 0) == 0 && !refused.empty())
-                EXPECT_NE(refused.find("CUSOLVER"), std::string::npos) << label(s) << ": " << refused;
+                EXPECT_TRUE(refused.find("CUSOLVER") != std::string::npos ||
+                            refused.find("no runnable kernel") != std::string::npos)
+                    << label(s) << ": " << refused;
             else
                 EXPECT_EQ(got, "vendor") << label(s) << " " << refused;
         }
@@ -781,7 +789,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsEveryKeyField) {
     const TableGuard restore;
     select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
     struct Probe { Spec s; const char* expect; const char* field; bool real_only; };
-    // Only cta runs a native Upper, so the Upper row tells itself apart with the vendor (whose
+    // The Upper row tells itself apart with the vendor, which no other row ranks first (its
     // answer is not checked: it reads the poisoned triangle).
     if (TestFixture::kVendor) {
         Spec u{16, 16, 2, 'U'};
@@ -821,8 +829,8 @@ TYPED_TEST(GesvdCandidates, TraceShowsTheLookupKey) {
     }
 }
 
-// With a table naming only the vendor, a vendor-free build takes the last resort, blocked, for a
-// real general matrix, and has no route for a complex general one past jacobi's ceiling.
+// With a table naming only the vendor, a shape the vendor cannot run (every shape vendor-free,
+// max(m, n) > 32 under cuSOLVER) takes the last resort, blocked, real or complex.
 TYPED_TEST(GesvdCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
@@ -837,20 +845,14 @@ TYPED_TEST(GesvdCandidates, VendorFreeLastResortIsBlocked) {
                        "herm=N vec=all m=16 n=16 | vendor 1\n");
     const TableGuard restore;
     select::testing::set_builtin_tables(test_utils::dtype_keyed(std::move(files)));
-    if constexpr (TestFixture::kVendor) {
-        GTEST_SKIP() << "the vendor serves the row";
-    } else {
-        Spec s{40, 40, 2, 'N'};
+    if (TestFixture::kVendor && TestFixture::B != Backend::CUDA) GTEST_SKIP() << "the vendor serves the row";
+    for (Spec s : {Spec{40, 40, 2, 'N'}, Spec{96, 72, 2, 'N'}, Spec{48, 48, 2, 'U'}}) {
+        s.poison = s.herm != 'N';
         auto p = make_svd<T>(s);
-        if constexpr (TestFixture::kReal) {
-            std::string all;
-            EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), "blocked");
-            EXPECT_NE(all.find("last resort"), std::string::npos) << all;
-            expect_solved(p, "last resort");
-        } else {
-            auto q = make_svd<T>(Spec{96, 96, 2, 'N'});
-            EXPECT_THROW(this->run(q), batchlas::NoRouteError);
-        }
+        std::string all;
+        EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), "blocked") << label(s);
+        EXPECT_NE(all.find("last resort"), std::string::npos) << all;
+        expect_solved(p, "last resort " + label(s));
     }
 }
 
@@ -957,10 +959,10 @@ TEST(GesvdTranscribedTable, RowsHoldTheTranscribedPreference) {
     const Row rows[] = {
         {"float", "N", "all", 32, 32, "jacobi|cta|blocked|vendor"}, {"float", "N", "all", 33, 33, "blocked|vendor|jacobi"},
         {"float", "N", "all", 65, 65, "blocked|vendor"},           {"double", "N", "thin", 32, 8, "jacobi|blocked|vendor"},
-        {"double", "L", "all", 32, 32, "cta|blocked|vendor"},      {"double", "U", "all", 32, 32, "cta|vendor"},
-        {"double", "U", "all", 33, 33, "vendor"},                  {"cfloat", "N", "all", 64, 64, "jacobi|vendor"},
-        {"cfloat", "N", "all", 65, 65, "vendor"},                  {"cdouble", "N", "all", 33, 33, "vendor"},
-        {"cdouble", "N", "none", 64, 64, "jacobi|vendor"},         {"cdouble", "L", "none", 48, 48, "blocked|vendor"}};
+        {"double", "L", "all", 32, 32, "cta|blocked|vendor"},      {"double", "U", "all", 32, 32, "cta|blocked|vendor"},
+        {"double", "U", "all", 33, 33, "blocked|vendor"},          {"cfloat", "N", "all", 64, 64, "blocked|jacobi|vendor"},
+        {"cfloat", "N", "all", 65, 65, "blocked|vendor"},          {"cdouble", "N", "all", 33, 33, "blocked|vendor"},
+        {"cdouble", "N", "none", 64, 64, "jacobi|blocked|vendor"}, {"cdouble", "L", "none", 48, 48, "blocked|vendor"}};
     for (const char* dev : {"sm_89"})
         for (const Row& r : rows) {
             const auto tables = select::tables_in_borrow_order("gesvd", r.dtype, select::device_from_key(dev));

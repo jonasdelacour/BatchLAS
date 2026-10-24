@@ -20,6 +20,7 @@
 
 #include <src/ops/ormqr/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <algorithm>
 #include <stdexcept>
@@ -122,6 +123,9 @@ public:
         return (2.0 * m * k + 2.0 * m * q) * double(key_int(c, "batch")) * dtype_bytes(dtype);
     }
     std::string refine_key() const override { return "m"; }
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override {  // as gemm's
+        return without_latency_class(run);
+    }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -139,9 +143,10 @@ public:
         // kernel-deps-begin
         // common "src/ops/ormqr/ormqr.cc"
         // family: vendor "src/ops/ormqr/vendor.hh"
-        // ormqr blocked's WY width comes from tuning_params.hh; its updates call the public gemm and trmm.
+        // ormqr blocked's WY width and batch chunk come from tuning_params.hh; its updates call the public
+        // gemm and trmm.
         // family: blocked "include/batchlas/tuning_params.hh"
-        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
+        // family: blocked "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/kernels/register_128x128.hh" "src/ops/gemm/kernels/register_256x128.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/register_64x64_k16_wide.hh"
         // family: blocked "src/ops/gemm/kernels/register_launchers.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/register_wide_transposed.hh" "src/ops/gemm/kernels/small_batched.hh" "src/ops/gemm/kernels/tiled_general.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // family: blocked "src/ops/trmm/choice.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/backends/level3_shape.hh" "src/expansion_budget.hh"
         // kernel-deps-end

@@ -55,6 +55,7 @@ static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSi
 // 224 below is the HEADROOM a new instantiation may use before re-probing, not a measurement.
 // evidence: docs/perf/lu.md#lu-p2-the-register-bound-is-assumed-not-probed
 constexpr int kWorstRegsPerThread = 224;   // per SUB-PARTITION: 32 x 224 = 7,168 of 16,384
+// Probe: scripts/register_probe.sh out.log '' batchlas_extensions_gesv (a cta probe has no tiny kernel).
 static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 

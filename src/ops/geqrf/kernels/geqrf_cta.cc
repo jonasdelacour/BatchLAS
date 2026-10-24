@@ -484,10 +484,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("geqrf_cta: degenerate extents");
     }
-    if (m < n) {
-        throw batchlas::invalid_argument(
-            "geqrf_cta: m < n is not supported (geqrf's can_run refuses it)");
-    }
+    // m < n is the whole wide ?GEQR2: m reflectors, each applied across all n columns.
     if (A.is_heterogeneous()) {
         // One launch covers the batch with a single (m, n, ld, stride) tuple.
         throw batchlas::invalid_argument("geqrf_cta: heterogeneous batch is not supported");

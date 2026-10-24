@@ -52,7 +52,7 @@ using symm_vendor = Event(Queue&,
 /// `BATCHLAS_SYMM_ROUTE` = `auto` | `native` | `vendor` | `expand`.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T   `float` or `double`
+/// @tparam T   `float`, `double`, or complex: complex-symmetric A (no conjugate; that is hemm)
 /// @param ctx    queue the work is enqueued on
 /// @param A      batch of symmetric matrices; only the `uplo` triangle is read
 /// @param B      batch of m x n matrices; not modified
@@ -70,13 +70,13 @@ using symm_vendor = Event(Queue&,
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
 ///         unless the call is `Backend::CUDA` or `Backend::ROCM` on a GPU, with homogeneous operands,
-///         batch <= 65535 and an expansion scratch that fits (the `expand` choice;
+///         and one item's expansion scratch that fits (the `expand` choice chunks the batch;
 ///         @ref md_docs_2perf_2level3).
 /// @note `Backend::ROCM` has no vendor symm: its `vendor` choice symmetrizes a copy of `A`
 ///       and calls gemm, and blocks the host until it finishes.
 /// @see hemm, SymmOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Ba, RealScalar T>
+template <Backend Ba, FloatingOrComplexScalar T>
 BATCHLAS_API Event symm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B,
@@ -98,7 +98,7 @@ namespace batchlas::backend {
 ///
 /// Not an entry point: batchlas::symm calls it. Same arguments and semantics.
 /// @ingroup api_dispatch
-template <Backend Back, RealScalar T>
+template <Backend Back, FloatingOrComplexScalar T>
 BATCHLAS_API Event symm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
                                const MatrixView<T, MatrixFormat::Dense>& B,

@@ -1,6 +1,6 @@
 # Known defects {#design_known_defects}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current · checked 2026-10-23
 
 Each entry is a defect located to a line, with its symptom, cause, workaround and status. Open
 entries are left in the tree; fixed and closed entries keep their numbered heading, because code,
@@ -12,25 +12,26 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | # | where | status |
 |---|---|---|
 | 1 | `src/ops/ortho/ortho.cc:228-231` | fixed (WP8) |
-| 2 | `src/util/cond.cc:24,68` | open on the vendor backends: throws in a vendor-free CUDA or ROCm build; `Backend::SYCL` goes through the public `syev` |
+| 2 | `src/util/cond.cc`, `src/util/norm.cc` | fixed: both call the public `syev` |
 | 3 | `src/ops/lanczos/lanczos.cc:117-122` | open, 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:38-39,71-72` | open, inferred, unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:400,412,429,441` | open, NaN from unwritten workspace |
-| 6 | `src/backends/netlib_lapack.cc:1163` | fixed 2026-10-12 (`db9112ed`) |
+| 6 | `src/backends/netlib_lapack.cc:1160` | fixed 2026-10-12 (`db9112ed`) |
 | 7 | `src/ops/trsm/trsm.cc:48,60` | closed: not a defect; the gate is armed |
 | 8 | `src/backends/syrk_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` (deleted) | closed when the file was removed |
 | 10 | `src/ops/syev/sytrd/latrd_lower_panel.cc` | fixed, barrier armed; residual rate not bounded |
 | 11 | `src/ops/gemm/kernels/epilogue_linear.hh:14-15`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
-| 12 | every `can_run` in `src/ops/`, `src/ops/level3/level3.cc` | fixed (WP3): a heterogeneous batch has no route |
+| 12 | every `can_run` in `src/ops/`, `src/ops/{hemm,herk,her2k}/` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
 | 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
-| 16 | `ormqr_blocked` sub-kernels | open, not reproduced on threadripper02 (sm_120) |
+| 16 | blocked geqrf/orgqr/ormqr part loops | fixed: parts capped at half the grid (reproduced on sm_89) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
-| 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:70-73,582` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89; float and double red in `tests/known-failures.txt` |
-| 19 | `src/ops/potrf/potrf.cc:48,54` `can_run` | open, `NoRouteError` vendor-free; seen on Metal |
-| 20 | `src/sycl/kernel_attrs.hh:18-19` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; every gemm functor works around it |
+| 18 | `src/ops/gesvd/kernels/gesvd_blocked.cc:71-74,647` | open; reached under Auto on sm_120 (14 double `vec=all` non-square rows), pin-only on sm_89; float and double red in `tests/known-failures.txt` |
+| 19 | `src/ops/potrf/potrf.cc` `can_run` | fixed: `blocked` serves Upper |
+| 20 | `src/sycl/kernel_attrs.hh:18-19` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
+| 21 | plain `range<3>` launches with the batch in dimension 0 (`ormbr.cc:169` and others) | open; worked around in the QR, gesvd and syev part loops |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -54,17 +55,15 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
   algorithm.
 - **Status:** fixed (WP8).
 
-## Defect 2: `cond` calls the vendor `syev` directly
+## Defect 2: `cond` and `norm` called the vendor `syev` directly
 
-- **Symptom:** the spectral `cond` throws in a vendor-free build on a vendor backend
-  (`Backend::CUDA`, `Backend::ROCM`).
-- **Cause:** `cond_syev_buffer_size` (`src/util/cond.cc:24`) and `cond_spectral_impl` (`:68`) call
-  `ops::syev::detail::syev_vendor_buffer_size_or_throw` and `syev_vendor_or_throw` for every
-  backend except `Backend::SYCL`, bypassing the public `syev` selection. `Backend::SYCL` (Metal)
-  already calls the public `syev` and `syev_buffer_size` (`:22`, `:66`).
-- **Fix needs:** take the `Backend::SYCL` arm for every backend. The shims are in
-  `src/ops/syev/vendor.hh`.
-- **Status:** open.
+- **Symptom:** the Spectral `cond` and `norm` threw in a vendor-free build on CUDA and ROCm.
+- **Cause:** both called `ops::syev::detail::syev_vendor_or_throw` and its buffer-size query for every
+  backend but SYCL, bypassing the public `syev` selection.
+- **Fix:** `cond_spectral_impl` and `norm_spectral_vendor_impl` call the public `syev` and `syev_buffer_size` for
+  every backend, so selection picks the vendor or a native route. Tests: `cond_tests` and `norm_tests` in a
+  `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` tree.
+- **Status:** fixed.
 
 ## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
@@ -278,26 +277,28 @@ triangle gets a wrong answer today. `linalg::eigh`, `eigvalsh` and the Hermitian
 mirror the named triangle on their copy first (`MatrixView::hermitize`), so they are unaffected.
 
 - **Tests:** `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
-  (`tests/gesvd_candidates_tests.cc:405`, disabled as a whole; `cta` Lower and `blocked` Lower at
-  n = 48 pass) and `SyevCandidates.OtherTriangleIsNeverRead` (`tests/syev_candidates_tests.cc:369`,
-  which skips exactly the drivers listed in `reads_other_triangle`, `:362-367`). The Python
-  `test_coverage.py` marks `syev_cta` Upper `xfail(strict)`.
-- **Fix needs:** mirror or read only the named triangle in each driver, then enable the gesvd test
-  and remove the syev skip list. gesvd's `can_run` also refuses blocked Hermitian Upper
-  (`src/ops/gesvd/gesvd.cc:79`), which the driver could run by mirroring.
-- **Status:** open.
+  (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
+  (`tests/syev_candidates_tests.cc`). Both are skipped for exactly these drivers.
+- **Fix needs:** mirror or read only the named triangle in each driver, then remove the skip list.
+- **gesvd blocked fixed 2026-10-22:** the Hermitian arm mirrors Lower into Upper before
+  `syev_blocked` (Upper is mirrored the other way inside it), and `can_run` admits Upper.
+  `PinnedCandidatesStraddleTheirLimits` now poisons blocked at every n, both triangles.
+- **Status:** open for `gesvd_cta` Upper and the syev drivers.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
 - **Symptom:** `BATCHLAS_GESVD_ROUTE=vendor`, float 8x4, jobs N/N, batch 3 gives
   `CUDA_ERROR_ILLEGAL_ADDRESS`.
-- **Cause:** gesvd's vendor `can_run` is `d.has_vendor && homogeneous`
-  (`src/ops/gesvd/gesvd.cc:80`). Other cuSOLVER refusals (`max(m, n) > 32`, non-packed batches,
-  thin factors) arrive as launch-time throws.
-- **Workaround:** Auto never sends this shape to the vendor, because a native family runs first.
-- **Status:** open, pinned vendor only.
+- **Cause:** gesvd's vendor `can_run` is `has_vendor` alone. Other cuSOLVER refusals
+  (`max(m, n) > 32`, non-packed batches, thin factors) arrive as launch-time throws.
+- **Fix (2026-10-22):** on CUDA `can_run(vendor)` is now the binding's envelope:
+  \f$\max(m,n) \le 32\f$, packed A and U, no thin factor, and not values-only non-square. On ROCm
+  (a "not implemented" stub) it is false. A refused pin throws `cannot run this shape`; Auto falls to
+  the next entry or the last resort (`blocked`). `GesvdCandidates.VendorPinRunsInsideItsEnvelope`
+  straddles every term.
+- **Status:** fixed.
 
-## Defect 16: `ormqr` blocked throws at batch > 65535
+## Defect 16: `ormqr` blocked throws at batch > 65535 {#defect-16-blocked-qr-past-the-grid}
 
 - **Symptom:** `ormqr` float L T m=2 k=1 q=1 batch=65536 under Auto gives "Number of work-groups
   exceed limit for dimension 2".
@@ -307,18 +308,25 @@ mirror the named triangle on their copy first (`MatrixView::hermitize`), so they
   [flat-kernel-selection.md](flat-kernel-selection.md) §11.
 - **Not reproduced (WP3 review, threadripper02, sm_120, CUDA 13.2):** `ormqr_blocked` called
   directly at batch 65536 ran and applied Q correctly for every side and trans (complex: N, C) at
-  m/k/q = 2/1/1, 17/17/3 and 40/33/5, all four types. The public gemm sub-calls refuse a batch
-  above the device's grid-y/z limit for every 3-D native launch but `small`'s
-  (`A.batch_size() <= d.max_groups_yz`, `src/ops/gemm/gemm.cc:103`; 65535 on CUDA,
-  `ops::gemm::kMaxGridBatch`), so in a vendor build they take the vendor. Vendor-free at L T batch 65536, double runs correctly (gemm `small`), while
-  float (sub-trmm), complex<float> and complex<double> (sub-gemm) throw `NoRouteError` from the
-  sub-op. Vendor-free there is no other ormqr family, so the outcome equals a `can_run` refusal; only
-  the coverage miss row names the sub-op. The 2x4090 box was not re-checked. `can_run(Blocked)`
-  therefore has no batch term: a term would make double vendor-free unservable past 65535. Test:
-  `OrmqrCandidates.BlockedPastTheGridLimitRunsOrHasNoRoute` (L T, batch 65536, pinned `blocked`).
-- **Fix needs:** a reproducer. If one is found: fold the batch into dimension 0 or loop over batch
-  chunks; the driver itself still does not check.
-- **Status:** open, not reproduced.
+  m/k/q = 2/1/1, 17/17/3 and 40/33/5, all four types. The public gemm and trmm sub-calls used to
+  refuse batch > 65535 for every 3-D native launch, so vendor-free at L T batch 65536 float (sub-trmm),
+  complex<float> and complex<double> (sub-gemm) threw `NoRouteError` from the sub-op. Since the
+  level-3 and gemm batch chunking (`src/ops/level3/batched.hh`, gemm's `launch`) those natives run such a batch in chunks, so a
+  sub-op no longer refuses it: the vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, threadripper02, 2026-10-21)
+  runs L T batch 65536 for all four CUDA types and applies Q to every item. The 2x4090 box was not re-checked.
+  `can_run(Blocked)` has no batch term. Test: `OrmqrCandidates.BlockedPastTheGridLimitRuns` (L T, batch 65536,
+  pinned `blocked`; no `NoRouteError` tolerance).
+- **Reproduced (2x4090, sm_89, 2026-10-23):** with the L2 chunk forced above the batch, pinned
+  blocked geqrf (float, complex<float>, complex<double>) and ormqr (float) at batch 65537 returned
+  items past the grid that differ from item 0: a silent wrong answer, not a throw. Whether it shows
+  depends on the local size the runtime picks for the batch dimension, which is why the shapes above
+  ran.
+- **Fix:** the blocked geqrf, orgqr, ormqr, gesvd and syev part loops cap every part at
+  `max_groups_yz / 2` (`select::grid_capped_chunk`, `src/select/grid_chunk.hh`; half because of
+  [defect 21](#defect-21-range-rounded-past-the-grid)). Tests:
+  `*BlockedPastTheGridLimitIsBitIdentical` in `geqrf_tests` and `ormqr_blocked_tests` (red under
+  a deliberate no-cap break: geqrf float/cfloat/cdouble, ormqr float).
+- **Status:** fixed in the blocked QR drivers.
 
 ## Defect 17: cuSPARSE spmm: shapes refused in `can_run`, and the alignment waiver
 
@@ -370,8 +378,11 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `Uplo::Lower`, so only `tiny` and `cta` serve Upper, and `cta` is capped by
   `potrf_cta_max_n_for_slm(budget)` (`:45`). With the vendor family absent nothing else is runnable. On CUDA
   the 97,280 B budget puts the ceiling higher, and a vendor build still has the `vendor` family.
-- **Fix needs:** an Upper arm for `lpanel` or `blocked` (or a transpose into the Lower path).
-- **Status:** open.
+- **Fix:** the blocked driver has an Upper schedule (`potrf_blocked.cc`): leaf `potrf` Upper on the diagonal
+  block, `trsm` Left/Upper/ConjTrans on the row panel, and the trailing update `-U12^H U12` through the public
+  gemm folded into the upper triangle only. `can_run` for `blocked` no longer reads `uplo`; `lpanel` stays
+  Lower-only. `posv` Upper inherits it. Tests: `PotrfBlockedTest.BlockedUpper*`, `FacadeBlockedUpper`.
+- **Status:** fixed. Metal's ledger entry in `tests/known-failures-acpp-metal.txt` needs a re-run to confirm.
 
 ## Defect 20: `BATCHLAS_LAUNCH_BOUNDS` emits no `.maxntid`, so ptxas ignores the bound
 
@@ -395,6 +406,34 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   `register_64x64_k16_wide.hh:881`. Measured after WP-U: 0 ignored bounds in `batchlas_sycl`, u1
   capped at 128 registers
   ([gemm.md](../perf/gemm.md#gemm-wp-u-the-u1-128x128-launch-bound-enforced)).
+- **Compiler-dependent (2026-10-22, 2x4090 box):** the intel/llvm build there (`e79d489d`, Jan 2026)
+  has the opposite behaviour. `max_work_group_size` emits `.maxntid 256, 1, 1` + `.minnctapersm`,
+  while `reqd_work_group_size(1, 1, 256)` lowers to `reqntidx=256, reqntidx=1` and no `reqntidz`:
+  ptxas then rejects `.maxntid` next to `.reqntid` ("Conflicting directives"), and with the bound
+  dropped the `.reqntid 1, 1` kernels fail every launch with `CUDA_ERROR_INVALID_VALUE`. A configure
+  probe of the device IR (`BATCHLAS_NVPTX_REQD_WG_OK`, `cmake/BatchLASDetectSYCL.cmake`) keeps the
+  `reqd_work_group_size` spelling only where it lowers correctly; elsewhere the launch bound alone
+  applies, which that compiler honours.
+
+## Defect 21: a plain range launch is range-rounded past the grid {#defect-21-range-rounded-past-the-grid}
+
+- **Symptom:** pinned blocked gesvd (float, n = 40, values and vectors, chunking off) aborts with
+  `CUDA_ERROR_INVALID_VALUE` and then SIGFPE from batch 65505; batch 65504 runs. At n = 16 the first
+  failing batch is 65535.
+- **Cause:** `PackPPanelKernel` (`src/ops/gesvd/ormbr/ormbr.cc:169`) is a `parallel_for` over a
+  plain `sycl::range<3>` with the batch in dimension 0. DPC++ range rounding
+  (`__pf_kernel_wrapper`) rounds that dimension up, here to 65536, past CUDA's 65535 grid. A batch
+  that fits the grid is therefore not enough. Other plain `range<3>` launches with the batch in
+  dimension 0: `src/kernels/common/larft_wy.hh:260` (pack_v), `src/ops/orgqr/kernels/orgqr_blocked.cc:222,253`,
+  `src/ops/syev/kernels/uplo_mirror.cc:27`, `src/ops/syev/sytrd/band_reduction.cc` (nine launches),
+  `src/ops/syev/sytrd/sytrd_sy2sb.cc:120`, `src/util/transpose.cc:29`.
+- **Workaround:** the part loops of blocked geqrf, orgqr, ormqr, gesvd (all types, complex general
+  included) and syev (cta, blocked) keep every part at `max_groups_yz / 2` (`select::grid_capped_chunk`).
+  Test: `Gesvd*.BlockedPastTheGridIsBitIdentical` (batch 65505, n = 40, float and complex<float>).
+- **Fix needs:** `nd_range` launches with an explicit local size, or the batch out of dimension 0, at
+  the sites above. syev two_stage (band_reduction, sy2sb) and `transpose` have no part loop and are not
+  covered.
+- **Status:** open outside the capped part loops.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 

@@ -1,0 +1,983 @@
+# op=her2k device=sm_120 batchlas=26168c21 kernels=6fa054cc family_kernels=triangular:88463057,fold:4bb22fc1,vendor:bc277522 date=2026-10-23
+# source=ledger:benchmarks/results/tuning/ledger/her2k.sm_120.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:980
+# keys: dtype:exact n:log:2 k:log batch:log
+dtype=cfloat n=1 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=1 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=1 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=1 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=1 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=1 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=2 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=2 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=2 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=2 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=2 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=4 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=4 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=4 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=4 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=4 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=8 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=8 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=8 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=8 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=8 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=8 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=16 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=16 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=16 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=16 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=16 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=16 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=32 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=32 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=32 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=32 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=32 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=32 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=64 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=64 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=64 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=64 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=64 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=64 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=127 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=1 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=127 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=8 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=127 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=127 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=1 | vendor - | fold - | triangular - # transcribed
+dtype=cfloat n=127 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=127 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=128 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=256 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=64 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=512 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=64 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=1024 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=64 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=2048 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=1 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=8 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=1 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=2 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=3 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=128 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=1024 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=8192 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=64 batch=32768 | triangular - | fold - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=512 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=1 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=2 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=3 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=128 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=1024 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=8192 | fold - | triangular - | vendor - # transcribed
+dtype=cfloat n=4096 k=4096 batch=32768 | fold - | triangular - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=1 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=1 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=1 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=1 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=1 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=2 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=2 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=2 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=2 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=2 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=4 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=4 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=4 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=4 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=4 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=8 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=8 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=8 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=8 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=8 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=8 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=16 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=16 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=16 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=16 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=16 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=16 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=32 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=32 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=32 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=32 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=32 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=32 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=64 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=64 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=64 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=64 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=64 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=64 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=127 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=127 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=127 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=127 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=1 | vendor - | fold - # transcribed
+dtype=cdouble n=127 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=127 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=128 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=256 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=512 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=1024 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=2048 k=4096 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=1 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=8 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=64 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=512 batch=32768 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=1 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=2 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=3 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=128 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=1024 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=8192 | fold - | vendor - # transcribed
+dtype=cdouble n=4096 k=4096 batch=32768 | fold - | vendor - # transcribed

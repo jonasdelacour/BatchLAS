@@ -31,6 +31,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/error.hh>
+#include <batchlas/util/bench_structured.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -347,9 +348,9 @@ static int run(const Cfg& c) {
     UnifiedVector<int32_t> info(nbatch, 0);
     UnifiedVector<int64_t> piv(size_t(n) * nbatch, 0);
     // getrf packs 1-based int32 pivots in the FIRST HALF of the int64 span
-    // (src/ops/getrf/getrf_native.hh), n per item.
+    // (src/ops/getrf/getrf_native.hh), min(m, n) per item.
     const int* pivi = reinterpret_cast<const int*>(piv.data());
-    const int pstride = n;
+    const int pstride = kmin;
     UnifiedVector<T> tau(size_t(kmin) * nbatch);
 
     const bool has_rhs = (c.op == OpKind::getrs) || is_solve_op(c.op);
@@ -367,6 +368,10 @@ static int run(const Cfg& c) {
         case OpKind::potrf:
         case OpKind::posv: (void)A0v.fill_random_spd(*q, 12345); break;
         case OpKind::getrf:
+            // fill_random_pivoted is square-only; an m x n getrf takes unstructured data.
+            if (m == n) (void)A0v.fill_random_pivoted(*q, 12345);
+            else (void)A0v.fill_random(*q, false, 12345);
+            break;
         case OpKind::gesv:
         case OpKind::getrs: (void)A0v.fill_random_pivoted(*q, 12345); break;
         case OpKind::geqrf:
@@ -407,6 +412,7 @@ static int run(const Cfg& c) {
         // A fused solve overwrites A with the factor AND B with X, so both are restored.
         else if (is_solve_op(c.op)) { reset_A(); (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else reset_A();
+        bench::scrub_l2(*q);  // cold operands, as the tuner times them (docs/perf/batch-sensitivity.md)
     };
 
     // An arm's NAME is its pin, so --arms=vendor,cta,tiny needs no new flag per tier;
@@ -554,8 +560,8 @@ static int run(const Cfg& c) {
                 within = verify::within<T>(Check::factorization, n, a.residual);
                 break;
             case OpKind::getrf: {
-                // Packed 1-based int32 pivots, n per item, in the first half of the int64 span.
-                VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), n, batch, 1, pstride);
+                // Packed 1-based int32 pivots, min(m, n) per item, in the first half of the int64 span.
+                VectorView<int32_t> pivv(reinterpret_cast<int32_t*>(piv.data()), kmin, batch, 1, pstride);
                 a.residual = MV::getrf_residual(*q, A0v, Av, pivv, items);
                 within = verify::within<T>(Check::factorization, n, a.residual);
                 // The discriminating oracle: pivots elementwise against host xGETRF.
@@ -564,13 +570,13 @@ static int run(const Cfg& c) {
                 for (int b : items) {
                     if (!verify::getrf_pivots(A0v, b, hp)) { flag(a, "pivot_oracle_unavailable"); break; }
                     // Agreement in the data's own precision rests on fill_lu's dominance margin (no near-ties).
-                    for (int k = 0; k < n; ++k)
+                    for (int k = 0; k < kmin; ++k)
                         if (hp[size_t(k)] != pivi[size_t(b) * size_t(pstride) + size_t(k)]) ++mism;
                 }
                 a.extra = double(mism);
                 if (mism != 0) flag(a, "pivot_mismatch");
                 int nontrivial = 0;
-                for (int k = 0; k < n; ++k) nontrivial += (pivi[k] != k + 1);
+                for (int k = 0; k < kmin; ++k) nontrivial += (pivi[k] != k + 1);
                 if (nontrivial == 0) flag(a, "vacuous_pivots");
                 break;
             }
@@ -690,13 +696,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "factor_bench: %s needs nrhs > 0\n", opn.c_str());
         return 2;
     }
-    if ((c.op == OpKind::potrf || c.op == OpKind::getrf || c.op == OpKind::getrs ||
-         is_solve_op(c.op)) && c.m != c.n) {
+    if ((c.op == OpKind::potrf || c.op == OpKind::getrs || is_solve_op(c.op)) && c.m != c.n) {
         std::fprintf(stderr, "factor_bench: %s is square; m must equal n\n", opn.c_str());
         return 2;
     }
-    if (c.n > c.m) {
-        std::fprintf(stderr, "factor_bench: this harness assumes n <= m\n");
+    if (c.op == OpKind::orgqr && c.n > c.m) {
+        std::fprintf(stderr, "factor_bench: orgqr needs n <= m\n");
         return 2;
     }
 

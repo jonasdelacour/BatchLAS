@@ -209,12 +209,14 @@ struct State {
     double RunTimedKernelMsOnce() { return timed_kernel_ms_ ? timed_kernel_ms_() : 0.0; }
     void RunBatchEnd() { if (batch_end_fn_) batch_end_fn_(); }
 
-    // Convenience: set batch end to a simple wait() on a shared queue-like
-    // object without needing to write a lambda at each callsite.
+    // The run's queue: a wait() after every run, and an L2 scrub (bench::scrub_l2) before it.
+    // Defined in util/bench_structured.hh, which owns the scrub.
     template <typename Q>
-    void SetBatchEndWait(std::shared_ptr<Q> q) {
-        batch_end_fn_ = [q]{ q->wait(); };
-    }
+    void SetBatchEndWait(std::shared_ptr<Q> q);
+    void SetScrub(std::function<void()> scrub) { scrub_fn_ = std::move(scrub); }
+    void RunScrub() { if (scrub_fn_) scrub_fn_(); }
+
+    std::function<void()> scrub_fn_;
 };
 
 // Benchmark representation and registry
@@ -299,73 +301,24 @@ inline Result run_benchmark(const Benchmark& b,
         // Optional one-time preparation step (not timed).
         state.RunPrepareOnce();
 
-        // Warmup calls (not timed). Ensure completion after each warmup batch
-        // and once more before starting timed measurement to avoid contamination
-        // from any outstanding async work (e.g., USM migrations).
-        for (size_t i = 0; i < cfg.warmup_runs; ++i) {
-            for (size_t j = 0; j < cfg.warmup_internal_iterations; ++j) {
-                state.RunBeforeEachRun();
-                if (state.HasTimedKernel()) {
-                    (void)state.RunTimedKernelMsOnce();
-                } else {
-                    state.RunKernelOnce();
-                }
-            }
-            state.RunBatchEnd();
-        }
-
-        // Determine optimal internal iterations for measurement by sampling
-        size_t measurement_internal_iters = 1;
-        double sample_time = 0.0;
-        if (state.HasTimedKernel()) {
+        // Every run is cold and synchronous, as the tuner times it: inputs restored, L2 scrubbed
+        // and the queue drained outside the timed interval, then one run timed alone.
+        // evidence: docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol
+        auto one_run = [&state]() -> double {
             state.RunBeforeEachRun();
-            sample_time = state.RunTimedKernelMsOnce();
-            while (sample_time < 1.0 && measurement_internal_iters < 10000) {
-                measurement_internal_iters *= 10;
-                sample_time = 0.0;
-                for (size_t i = 0; i < measurement_internal_iters; ++i) {
-                    state.RunBeforeEachRun();
-                    sample_time += state.RunTimedKernelMsOnce();
-                }
-            }
-        } else {
+            state.RunScrub();
+            if (state.HasTimedKernel()) return state.RunTimedKernelMsOnce();
             state.ResetTiming();
             state.ResumeTiming();
             state.RunKernelOnce();
             state.RunBatchEnd();
-            sample_time = state.StopTiming();
+            return state.StopTiming();
+        };
+        for (size_t i = 0; i < cfg.warmup_runs * cfg.warmup_internal_iterations; ++i) (void)one_run();
 
-            while (sample_time < 1.0 && measurement_internal_iters < 10000) {
-                measurement_internal_iters *= 10;
-                state.ResetTiming();
-                state.ResumeTiming();
-                for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
-                state.RunBatchEnd();
-                sample_time = state.StopTiming();
-            }
-        }
-
-        // Measurements
         while (res.iterations < cfg.max_iters &&
                (res.iterations < cfg.min_iters || total_ms < cfg.min_time_ms)) {
-            double time_per_iter = 0.0;
-            if (state.HasTimedKernel()) {
-                double batch_ms = 0.0;
-                for (size_t i = 0; i < measurement_internal_iters; ++i) {
-                    state.RunBeforeEachRun();
-                    batch_ms += state.RunTimedKernelMsOnce();
-                }
-                time_per_iter = batch_ms / measurement_internal_iters;
-                // Keep the previous behavior for end-of-batch hooks (e.g., queue.wait()).
-                state.RunBatchEnd();
-            } else {
-                state.ResetTiming();
-                state.ResumeTiming();
-                for (size_t i = 0; i < measurement_internal_iters; ++i) state.RunKernelOnce();
-                state.RunBatchEnd();
-                double t = state.StopTiming();
-                time_per_iter = t / measurement_internal_iters;
-            }
+            const double time_per_iter = one_run();
             times.push_back(time_per_iter);
             total_ms += time_per_iter;
             ++res.iterations;

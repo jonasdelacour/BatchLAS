@@ -22,4 +22,12 @@ if [ -n "${CTEST_RESOURCE_GROUP_COUNT:-}" ] && [ -n "${CTEST_RESOURCE_GROUP_0_GP
     export CUDA_VISIBLE_DEVICES="$dev"
 fi
 
+# A <name>_heavy entry runs the same executable as <name>: in GTEST_OUTPUT directory mode
+# both would write <name>.xml, so the heavy one gets its own file (tests/CMakeLists.txt).
+if [ -n "${BATCHLAS_GTEST_XML_STEM:-}" ]; then
+    case "${GTEST_OUTPUT:-}" in
+        xml:*/) export GTEST_OUTPUT="${GTEST_OUTPUT}${BATCHLAS_GTEST_XML_STEM}.xml" ;;
+    esac
+fi
+
 exec "$@"

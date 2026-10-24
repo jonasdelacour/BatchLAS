@@ -38,9 +38,9 @@ Auto takes the first entry of the row that `can_run` admits. Keys are `form`, `n
 
 **Correctness terms.**
 
-- `m >= n` for native `geqrf`: a wide view walks past the bottom of the panel in the trailing update. `n <= m` for `orgqr`: Q's columns live in \f$C^m\f$.
-- GPU-only for both. Heterogeneous batches are refused by both (nothing in this tree gets heterogeneous-batch QR right, netlib included, `src/backends/netlib_lapack.cc:1208-1221` (geqrf), `:1250-1265` (orgqr)).
-- `d.has_sg32` is `geqrf`'s alone. It enumerates `sycl::info::device::sub_group_sizes` (`src/select/select.cc:280`, `src/util/queue-impl.cc:367-379`) and is never inferred from `MAX_SUB_GROUP_SIZE`, which returns the first size and so accepts a `{64}` device; a `reqd_sub_group_size(32)` kernel there aborts at launch. `orgqr`'s `can_run` has neither `has_sg32` nor the SLM budget, because `ormqr_blocked` has no `reqd_sub_group_size` and holds nothing resident.
+- Native `geqrf` takes any m x n on `cta` and `blocked` ([geqrf wide shapes](#geqrf-wide-shapes-m-less-than-n)); `tiny` is square-only. `n <= m` for `orgqr`: Q's columns live in \f$C^m\f$.
+- GPU-only for both. Heterogeneous batches are refused by both (nothing in this tree gets heterogeneous-batch QR right, netlib included, `src/backends/netlib_lapack.cc:1207-1217` (geqrf), `:1249-1252` (orgqr)).
+- `d.has_sg32` is `geqrf`'s alone. It enumerates `sycl::info::device::sub_group_sizes` (`src/select/select.cc:231`, `src/util/queue-impl.cc:338-349`) and is never inferred from `MAX_SUB_GROUP_SIZE`, which returns the first size and so accepts a `{64}` device; a `reqd_sub_group_size(32)` kernel there aborts at launch. `orgqr`'s `can_run` has neither `has_sg32` nor the SLM budget, because `ormqr_blocked` has no `reqd_sub_group_size` and holds nothing resident.
 
 ### CTA capacity
 
@@ -188,7 +188,7 @@ Break K3 replaced LAPACK's real-beta `larfg` sign convention with `detail::larfg
 
 ### Short final panels on square matrices
 
-Reference break 1 (drop the last reflector) is green for float and double on a square matrix and red for complex: the final reflector acts on a 1x1 block, where LAPACK returns `tau = 0` for a real scalar but non-zero for a complex one. **A short-final-panel regression test on a square real matrix guards nothing**; use `m > n`, a middle panel, or complex. Break 5 (drop a middle reflector) is red for all four types and is the standing check. Break N1 (`ib` to `nb` in the larft and pack_v calls) cannot turn anything red: `can_run` requires `m >= n`, so a short final panel has `n2 == 0` and the driver exits before the WY update; the error class exists only at the leaf (break KD).
+Reference break 1 (drop the last reflector) is green for float and double on a square matrix and red for complex: the final reflector acts on a 1x1 block, where LAPACK returns `tau = 0` for a real scalar but non-zero for a complex one. **A short-final-panel regression test on a square real matrix guards nothing**; use `m > n`, a middle panel, or complex. Break 5 (drop a middle reflector) is red for all four types and is the standing check. Break N1 (`ib` to `nb` in the larft and pack_v calls) could not turn anything red while `can_run` required `m >= n`: a short final panel then has `n2 == 0` and the driver exits before the WY update. A wide A now gives the short final panel a trailing block, so `GeqrfTest.WideFactorsTheWholeMatrix` (`m = nb + 1`, `3 nb + 2`) is the case that can see it.
 
 ### Break sweeps
 
@@ -213,6 +213,43 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 
 > **Warning:** The label selection in the gate must be one `-L "blas|ortho"` flag. Repeated `-L` flags AND together, select zero tests, and exit 0.
 
+## QR: L2 batch chunking {#qr-l2-batch-chunking}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+
+The blocked geqrf, orgqr and ormqr drivers can run the batch in parts of `tuning::blocked_chunk_items`
+items. Item sizes: geqrf A + V + W1 + W2 (never split when k <= nb); orgqr 2mn + m nb + 2 nb n; ormqr
+nq k + C + V + 2W. tau and C are offset per part; parts wait on out-of-order queues. sytrd and
+band_reduction size once at their largest operands, so each driver halves its chunk until a part fits the
+workspace given; the ormqr facade therefore skips its insufficient-workspace check for the Blocked
+family (the driver still throws if one item does not fit).
+
+**Rule:** `GEQRF_`, `ORGQR_` and `ORMQR_BLOCKED_L2_CHUNK_PERCENT` = 0: no L2 chunking. Every part is
+capped at `max_groups_yz / 2` items (`select::grid_capped_chunk`, `src/select/grid_chunk.hh`): before
+the cap a batch past the grid left items unfactored with no error
+([defect 16](../design/known-defects.md#defect-16-blocked-qr-past-the-grid)).
+
+Cold A/B, pinned blocked, ns per item, median of 2 retained alternating passes x 5 reps:
+
+| op | type | n | batch | off | 75 % | 150 % | 300 % |
+|---|---|---:|---:|---:|---:|---:|---:|
+| geqrf | float | 64 | 16384 | 632 | 1.128 | 1.052 | 1.014 |
+| geqrf | float | 128 | 16384 | 2097 | 1.222 | 1.100 | 1.068 |
+| geqrf | float | 256 | 2048 | 7939 | 1.427 | 1.200 | 1.031 |
+| geqrf | cfloat | 128 | 4096 | 3862 | 1.572 | 1.261 | 1.077 |
+| orgqr | float | 128 | 16384 | 2456 | 1.242 | 1.023 | 1.003 |
+| orgqr | cfloat | 128 | 4096 | 4862 | 1.866 | 1.473 | 1.241 |
+| ormqr L C | float | 64 | 16384 | 485 | 0.989 | 0.946 | 0.974 |
+| ormqr L C | float | 128 | 4096 | 1857 | 1.053 | 0.827 | 0.971 |
+| ormqr L C | cfloat | 64 | 16384 | 781 | 1.137 | 0.847 | 0.955 |
+
+- geqrf and orgqr lose at every percent; the parts under-fill the trailing gemms.
+- ormqr alone wins at 150 % (0.83-0.95; re-checked n=64 b4096 1.002, b8192 0.961), but orgqr applies the
+  routed ormqr, and with ormqr chunked inside it orgqr lost 1.017-1.484x (cfloat n=128 b4096: 4863 ->
+  7215 ns); syev blocked n=256 lost 2.8% the same way. A per-caller rule (chunk only a top-level ormqr)
+  is open.
+- Re-measured with the shipped rule against `off`: orgqr cfloat n=128 b4096 1.000, float n=64 b16384 0.999.
+
 ## Open debts
 
 1. **No window is a timed table row, and only the in-window part of the native wins is realised.** Widening one needs an end-to-end gate (a 2.16x kernel win once became an 11% `gesvd` loss). Fix: a `tools/tune/batchlas_tune` retune of `geqrf`, `orgqr`, `ormqr`.
@@ -225,6 +262,8 @@ Twelve experiment-harness breaks (5 reference, 7 kernel) and 13 against the ship
 9. **`ormqr`'s `blocked` width ladder is float-only and keyed on `A.rows()`** (`block_size()`, `ormqr.cc:73-78`; `tuning_params.hh:139-146`, :232-235), costing 1.11-1.55x for three types. It is a derived leg, so no table retune fixes it. The checked-in `include/batchlas/tuning_params.hh` is the only copy; nothing is generated.
 10. **Callers that size once at a bounding panel pay the blocked layout**: `geqrf_buffer_size_bound` (`geqrf.cc:101-112`) reserves 168 MB (float) or 671 MB (cdouble) at n=64 batch=8192 even where `cta` runs; sizing W1/W2 on `n - nb` took about 28% off.
 14. **double and cdouble rank `cta` ahead of `tiny` in the vendor-free walk**, though the tiny grid measured CTA and Blocked at 0.14-0.67x of vendor at n = 8..28 against `tiny` 0.33-1.13x. One retune or measured edit fixes it; cdouble has no grid.
+
+15. **Wide `geqrf` rows:** closed for float and cfloat on sm_89 (deep, 2026-10-23; [the table rows](#geqrf-wide-the-table-rows)); FP64 and sm_120 stay transcribed.
 
 Closed: the occupancy-scaled tier capacity (P7), the `potrf` tier order, the `ormqr` route resolution (P5), the tiny window.
 
@@ -576,3 +615,74 @@ The header holds `ormqr_blocked.cc`'s bodies (moved verbatim); a third private c
 ### larft_wy.hh: pack_v indexes the row fastest
 
 `sycl::id<3>` makes dim 2 the fastest-varying index and both operands are column-major, so with the column in dim 2 a warp read and wrote 32 sectors instead of 4. Before the swap `pack_v` on a 17.3 MB job (float m = n = 1024, batch 128, nb = 32) took 63.7 us median per instance, 3.4x the DRAM floor (the 72 MB L2 hid most of the amplification; about 8x at larger m or batch). The same fix covers `OrgqrIdentityKernel` and `OrgqrCopyBackKernel`.
+
+## geqrf wide shapes, m less than n {#geqrf-wide-shapes-m-less-than-n}
+
+**2026-10-23, RTX 4090 (sm_89), GPU 1.** A wide `geqrf` (m < n) writes the k = m reflectors below the diagonal, and their \f$Q^H\f$ applied to every column above it, so R is upper trapezoidal m x n. Tau holds `min(m, n)` entries per item, as before.
+
+- **What changed:** before this, `can_run` refused m < n on every native family, so a wide `geqrf` had no route in a vendor-free build or on `Backend::SYCL`.
+- **No new kernel:** `cta`'s `?GEQR2` and the blocked driver already ran `min(m, n)` reflectors and applied each one across all n trailing columns, which is LAPACK's own m < n path. The fix removes the gate in `can_run.hh`, `geqrf_cta.cc` and `geqrf_blocked.cc`. `tiny` stays square-only.
+- **No separate ormqr pass:** the wide part `A(:, m:n)` is the last panels' trailing update, so the "QR of the leading block, then `ormqr`" composition is not needed.
+- **Consumers:** orgqr and ormqr take the leading m x m reflector block. `GeqrfTest.WideFactorsTheWholeMatrix` forms Q with the routed `ormqr` and checks \f$\|A_0 - Q\,\mathrm{triu}(F)\|\f$ over all n columns.
+
+### geqrf wide: native against cuSOLVER
+
+`factor_bench geqrf`, median ms, arms interleaved, best native arm shown.
+
+| type | shape | batch 128: vendor / native | ratio | batch 1024: vendor / native | ratio |
+|---|---|---:|---:|---:|---:|
+| float | 48x64 | 1.066 / 0.118 cta | 9.0x | 1.074 / 0.337 cta | 3.2x |
+| float | 4x64 | 0.098 / 0.016 cta | 6.3x | 0.103 / 0.035 cta | 3.0x |
+| float | 32x256 | 3.98 / 0.251 cta | 15.9x | 4.01 / 0.694 blocked | 5.8x |
+| float | 128x256 | 18.0 / 1.30 blocked | 13.8x | 29.7 / 3.60 blocked | 8.3x |
+| float | 64x512 | 17.6 / 0.725 blocked | 24.3x | 25.5 / 2.21 blocked | 11.5x |
+| float | 256x1024 | 269 / 4.58 blocked | 58.7x | 461 / 24.6 blocked | 18.7x |
+| float | 16x1024 | 7.79 / 0.160 blocked | 48.6x | 8.07 / 0.696 blocked | 11.6x |
+| float | 1000x1024 | 2200 / 34.4 blocked | 64x | 4323 / 248 blocked | 17.4x |
+| float | 128x8192 | 1056 / 7.97 blocked | 132x | 1364 / 57.9 blocked | 23.6x |
+| cfloat | 48x64 | 1.197 / 0.136 cta | 8.8x | 1.207 / 0.543 cta | 2.2x |
+| cfloat | 4x64 | 0.116 / 0.019 cta | 6.2x | 0.118 / 0.046 blocked | 2.6x |
+| cfloat | 128x256 | 20.3 / 2.51 blocked | 8.1x | 48.7 / 6.80 blocked | 7.2x |
+| cfloat | 64x512 | 19.5 / 1.41 blocked | 13.9x | 36.0 / 4.26 blocked | 8.4x |
+| cfloat | 256x1024 | 355 / 9.34 blocked | 38x | 732 / 47.9 blocked | 15.3x |
+| cfloat | 16x1024 | 8.23 / 0.195 blocked | 42x | not admitted | |
+| cfloat | 128x8192 | 1224 / 15.8 blocked | 78x | not admitted | |
+
+The native arm wins every measured cell. Another agent's test binary may have shared GPU 1 during part of the first sweep. Both arms are interleaved in one process, and the ratios dwarf any such skew.
+
+- **Contaminated cells, not admitted:** the cfloat batch-1024 runs of 128x8192, 1000x1024, 16x1024 and 8x256 were taken while another user's process held GPU 1 at 100% (23 GB). A 128x8192 cfloat batch-1024 problem alone is about 8.6 GB per buffer, so it also oversubscribes the card. These runs were noisy (`rel_sd` up to 0.35) and repeated badly.
+- **The smallest cells (1x2 to 8x16):** all quantized to about 2.26 ms under that contention, so they say nothing.
+
+### geqrf wide: the table rows
+
+Measured 2026-10-23 into the sm_89 ledger (deep tier, `--only-named` on the wide keys) on GPU 0 of the
+2x4090 box, with GPU 1 held by another user's job (`--allow-idle-foreign` for the idle desktop
+contexts on GPU 0). ms per call at the tuner's batch:
+
+| dtype | n | aspect 1 | aspect 4 | aspect 64 |
+|---|---|---|---|---|
+| float | 64 | cta 4.50, vendor 6.80 | vendor 1.42, cta 1.79 | vendor 0.049, cta 0.054 |
+| float | 1024 | blocked 15.5, vendor 1391 | blocked 7.43, vendor 311 | blocked 2.49, vendor 19.4 |
+| float | 8192 | not measured | blocked 69.4, vendor 79518 | blocked 4.63, vendor 1023 |
+| cfloat | 64 | cta 4.03, vendor 9.27 | blocked 2.59, vendor 3.14 | vendor 0.047, cta 0.160 |
+| cfloat | 1024 | blocked 25.0, vendor 1958 | blocked 9.27, vendor 360 | blocked 2.25, vendor 15.6 |
+| cfloat | 8192 | not measured | blocked 117, vendor 85507 | blocked 5.68, vendor 1153 |
+
+- **n = 8192, aspect 1** was dropped: cuSOLVER exceeds the 1800 s cell timeout there and the worker
+  retried indefinitely. The transcribed vendor-only row it replaced is gone (a deep neighbour brackets
+  it), so lookups there resolve to the aspect-4 row, `blocked`.
+- **n = 2** keys have no valid (m, n) and the cells error by construction; their transcribed rows stay.
+- **The vendor keeps** only the smallest, most extreme shapes (n = 64 at aspect 4 and 64), by a few
+  percent to 9%.
+- **FP64** stays vendor-first and untimed (1:64 card).
+
+### geqrf wide: armed break
+
+Stopping the blocked trailing update at column m (`n2 = min(m, n) - j2`) turned red exactly these tests, on all four types, and nothing square or tall:
+
+- `GeqrfTest.WideFactorsTheWholeMatrix`;
+- `NativeFactorMatchesTheVendorElementwise` (its wide rows);
+- `GeqrfCandidates.PinnedCandidatesStraddleTheirLimits`;
+- `ExactWorkspaceInAPoisonedArena`.
+
+Reverted.

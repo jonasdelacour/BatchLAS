@@ -290,7 +290,7 @@ protected:
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
-    static constexpr bool kFloat = std::is_same_v<T, float>;
+    static constexpr bool kNative = true;  // the triangular kernel serves every real T
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -305,9 +305,8 @@ protected:
     // Real C is T to both kernels, so trans never refuses one.
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<sk::Vendor>(c)) return kVendor;
-        if (s.batch > grid_yz) return false;
         if (std::holds_alternative<sk::Gram>(c)) return s.n <= backend::detail::kGramMaxTile;
-        return kFloat && backend::detail::triangular_tile_count(s.n) <= grid_yz;
+        return kNative && backend::detail::triangular_tile_count(s.n) <= grid_yz;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run instead of throwing (§5.3).
@@ -347,8 +346,8 @@ protected:
             if (std::holds_alternative<sk::Gram>(c)) {
                 (void)backend::detail::syrk_gram_tiles<T, false>(q, A, Cm, p.alpha, p.beta, p.s.uplo, p.s.trans);
             } else if (std::holds_alternative<sk::Triangular>(c)) {
-                if constexpr (kFloat) {
-                    (void)backend::detail::syrk_triangular_tiles<float>(q, A, Cm, p.alpha, p.beta, p.s.uplo,
+                if constexpr (kNative) {
+                    (void)backend::detail::syrk_triangular_tiles<T>(q, A, Cm, p.alpha, p.beta, p.s.uplo,
                                                                         p.s.trans);
                 } else {
                     if (why) *why = "triangular is a float kernel";
@@ -417,7 +416,7 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                     if (want) EXPECT_TRUE(correct(*this->ctx, p)) << name(c, s);
                 }
                 auto p = make_prob<T>(s);
-                const bool no_native = !TestFixture::kFloat && s.n > 128;
+                const bool no_native = !TestFixture::kNative && s.n > 128;
                 if (no_native && !TestFixture::kVendor) {
                     EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
                     continue;
@@ -488,9 +487,10 @@ TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
 }
 
 // The grid term (AGENTS §8.9, a launch at the ceiling): the tile kernels put the batch in a grid
-// dimension capped at 65535 on CUDA, and one past it the direct launch throws ("Number of
-// work-groups exceed limit"). A pin at the ceiling launches; one past it is refused, and Auto
-// takes the vendor (vendor-free: no route). Metal has no such cap: one past it launches too.
+// dimension capped at 65535 on CUDA, and one past it the direct kernel launch throws ("Number of
+// work-groups exceed limit"). The op chunks the batch, so a pin at the ceiling and one past it
+// both run and are right, while the direct launch past it still throws (the chunking is what
+// serves it). Metal has no such cap: one past it launches directly too.
 TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
@@ -509,28 +509,16 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
         Spec past = at;
         past.batch = ceiling + 1;
         auto q = make_prob<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, q), !capped) << name(c, past);
+        EXPECT_TRUE(this->pin_accepted(c, q)) << name(c, past);
+        EXPECT_TRUE(correct(*this->ctx, q)) << name(c, past);
         auto e = make_prob<T>(past);
         if (!capped) {
-            EXPECT_TRUE(correct(*this->ctx, q)) << name(c, past);
             EXPECT_TRUE(this->direct(c, e)) << name(c, past) << ": the direct launch past CUDA's ceiling";
             continue;
         }
-        EXPECT_TRUE(untouched(q)) << name(c, past);
         std::string why;
         EXPECT_FALSE(this->direct(c, e, &why)) << name(c, past) << ": the direct launch past the ceiling ran";
         EXPECT_NE(why.find("exceed limit"), std::string::npos) << why;
-    }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
-    Spec past{1, 1, ceiling + 1};
-    past.period = 1;
-    auto p = make_prob<T>(past);
-    if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(this->auto_choice(p), "vendor");
-        EXPECT_TRUE(correct(*this->ctx, p)) << "auto past the grid ceiling";
-    } else {
-        const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-        EXPECT_THROW(this->run(p), batchlas::NoRouteError);
     }
 }
 
@@ -541,7 +529,7 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
 // device. Metal has no such cap: there one past it launches and is checked the same way.
 TYPED_TEST(SyrkCandidates, TriangularTileGridCeiling) {
     static constexpr Backend B = TestFixture::B;
-    if constexpr (!TestFixture::kFloat) {
+    if constexpr (!TestFixture::kNative) {
         GTEST_SKIP() << "triangular is a float kernel";
     } else {
         int last = 1;
@@ -641,7 +629,7 @@ TYPED_TEST(SyrkCandidates, CanRunFalsePinsThrow) {
     std::vector<Case> cases{{sk::Gram{}, {129, 8, 2}, "cannot run this shape"},
                             {sk::Gram{}, {4096, 1, 1}, "cannot run this shape"},
                             {sk::Gram{}, {129, 8, 2, Uplo::Upper, Transpose::ConjTrans}, "cannot run this shape"}};
-    if constexpr (!TestFixture::kFloat)
+    if constexpr (!TestFixture::kNative)
         cases.push_back({sk::Triangular{}, {300, 8, 2}, "is not a compiled syrk double candidate"});
     for (const auto& k : cases) {
         auto p = make_prob<T>(k.s);
@@ -667,7 +655,7 @@ TYPED_TEST(SyrkCandidates, HeterogeneousBatchHasNoRoute) {
 TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     // float: gram cannot run and the transcribed rule takes the vendor (tall, n in 129..256); double: gram.
-    const Spec s = TestFixture::kFloat ? Spec{200, 53, 2} : Spec{96, 20, 3};
+    const Spec s = TestFixture::kNative ? Spec{200, 53, 2} : Spec{96, 20, 3};
     std::string auto_pick;
     {
         auto p = make_prob<T>(s);
@@ -676,8 +664,8 @@ TYPED_TEST(SyrkCandidates, ClassWordsAndSpellings) {
     std::vector<std::pair<const char*, std::string>> expect{{"vendor", TestFixture::kVendor ? "vendor" : auto_pick},
                                                             {"auto", auto_pick},
                                                             {" Auto ", auto_pick},
-                                                            {"native", TestFixture::kFloat ? "triangular" : "gram"}};
-    if constexpr (TestFixture::kFloat) expect.push_back({"TRIANGULAR", "triangular"});
+                                                            {"native", TestFixture::kNative ? "triangular" : "gram"}};
+    if constexpr (TestFixture::kNative) expect.push_back({"TRIANGULAR", "triangular"});
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
             auto p = make_prob<T>(s);
@@ -720,7 +708,7 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
         auto p = make_prob<T>(Spec{200, 8, 2});
         EXPECT_THROW(this->run(p), std::invalid_argument) << "the environment pin was not read";
     }
-    const C other = TestFixture::kFloat ? C{sk::Triangular{}} : C{sk::Vendor{}};
+    const C other = TestFixture::kNative ? C{sk::Triangular{}} : C{sk::Vendor{}};
     if (this->vendor_word_falls_back(other)) GTEST_SKIP() << "double has one native family and no vendor here";
     auto p = make_prob<T>(Spec{48, 8, 2});
     EXPECT_EQ(traced_choice([&] {
@@ -767,7 +755,8 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
                                                                        });
             auto p = make_prob<T>(s);
             if (want == test_utils::kNoTableEntryRuns) {
-                EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
+                // A vendor-only row vendor-free: the last resort, whose first entry runs every GPU shape.
+                EXPECT_EQ(this->auto_choice(p), "triangular") << label(s);
                 continue;
             }
             EXPECT_EQ(this->auto_choice(p), want) << label(s);
@@ -780,11 +769,11 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
 // key_of turns exactly its probe red. Double alternates gram with the vendor, so it needs one.
 TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
-    if (!TestFixture::kFloat && !TestFixture::kVendor) GTEST_SKIP() << "double's only alternative is the vendor";
+    if (!TestFixture::kNative && !TestFixture::kVendor) GTEST_SKIP() << "double's only alternative is the vendor";
     const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
-    const std::string alt = TestFixture::kFloat ? "triangular" : "vendor";
+    const std::string alt = TestFixture::kNative ? "triangular" : "vendor";
     const std::string ga = " | gram 1 | " + alt + " 2\n", ag = " | " + alt + " 1 | gram 2\n";
     const TableGuard restore;
     // N: gram only at the base cell. T: alt at the base cell, gram at k=100 and on the wide row.
@@ -836,7 +825,7 @@ TYPED_TEST(SyrkCandidates, VendorFreeLastResort) {
     for (const Spec& s : {Spec{200, 9, 3}, Spec{64, 9, 3}}) {
         auto p = make_prob<T>(s);
         std::string want = "vendor";
-        if (!TestFixture::kVendor) want = TestFixture::kFloat ? "triangular" : (s.n <= 128 ? "gram" : "");
+        if (!TestFixture::kVendor) want = TestFixture::kNative ? "triangular" : (s.n <= 128 ? "gram" : "");
         if (want.empty()) {
             EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
             continue;
@@ -862,7 +851,7 @@ TYPED_TEST(SyrkCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     const std::string out = dir + "/cov";
     const Spec lo{48, 20, 2, Uplo::Lower, Transpose::NoTrans};
     const Spec hi{300, 7, 2, Uplo::Upper, Transpose::Trans};
-    const C hi_c = TestFixture::kFloat ? C{sk::Triangular{}} : C{sk::Vendor{}};
+    const C hi_c = TestFixture::kNative ? C{sk::Triangular{}} : C{sk::Vendor{}};
     const bool hi_runs = !this->vendor_word_falls_back(hi_c);
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
@@ -907,7 +896,7 @@ TYPED_TEST(SyrkCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"
                                                      : "?";
-    const std::string scalar = TestFixture::kFloat ? "float" : "double";
+    const std::string scalar(select::dtype_name<T>());
     auto as_int = [](auto e) { return std::to_string(static_cast<int>(e)); };
     std::vector<std::tuple<std::string, Spec, std::string>> want{{"48 48 20", lo, "gram"}};
     if (hi_runs) want.push_back({"300 300 7", hi, select::to_string(hi_c)});
@@ -922,7 +911,7 @@ TYPED_TEST(SyrkCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         EXPECT_EQ(f[9], algo == "vendor" ? "vendor" : "native") << key;
         EXPECT_EQ(f[10], algo) << key;
         EXPECT_EQ(f[12], "1") << key << ": a native family exists";
-        EXPECT_EQ(f[13], key == "48 48 20" || TestFixture::kFloat ? "1" : "0") << key << ": native supported";
+        EXPECT_EQ(f[13], key == "48 48 20" || TestFixture::kNative ? "1" : "0") << key << ": native supported";
         EXPECT_EQ(f[15], as_int(s.uplo)) << key;
         EXPECT_EQ(f[16], as_int(Side::Left)) << key;
         EXPECT_EQ(f[17], as_int(Diag::NonUnit)) << key;
@@ -988,27 +977,6 @@ TYPED_TEST(SyrkCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
-}
-
-// herk's opt-in reads syrk's pin, the word `gram` only (case-folded, trimmed, ScopedPin or env).
-TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
-    const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-    EXPECT_FALSE(sk::herk_gram_pinned());
-    for (const char* yes : {"gram", " GRAM ", "Gram"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", yes);
-        EXPECT_TRUE(sk::herk_gram_pinned()) << yes;
-    }
-    for (const char* no : {"triangular", "vendor", "native", "auto", "bogus", "gram:1"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", no);
-        EXPECT_FALSE(sk::herk_gram_pinned()) << no;
-    }
-    {
-        const Pin pin("syrk", C{sk::Gram{}});
-        EXPECT_TRUE(sk::herk_gram_pinned());
-    }
-    const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", "gram");
-    const Pin pin("syrk", C{sk::Triangular{}});
-    EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
 // The sm_89 transcription (no GPU): each table holds exactly choice.hh's grid (the full product

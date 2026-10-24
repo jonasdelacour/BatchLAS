@@ -51,7 +51,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 /// @ingroup api_qr_lowlevel
 // Runs in src/ops/geqrf/geqrf.cc before the selection key reads A.rows()/A.cols().
 // Deliberately no squareness check (rectangular A is the point of geqrf), no
-// m >= n check (can_run sends a wide view to the vendor, which serves it) and no
+// m >= n check (the native cta and blocked kernels and the vendors serve m < n) and no
 // tau-length check.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>

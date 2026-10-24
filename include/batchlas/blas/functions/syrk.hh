@@ -45,12 +45,13 @@ using syrk_vendor = Event(Queue&,
 /// without `Ba` (taken from `ctx.backend()`).
 ///
 /// Each call takes a kernel family from the tuned table for its shape (@ref selection_tables):
-/// `gram` (one tile covers `C`, n <= 128), `triangular` (`float` only: 128-wide tiles of the
+/// `gram` (one tile covers `C`, n <= 128), `triangular` (128-wide tiles of the
 /// requested half) or `vendor` (the library's per-item `?syrk` loop). Pin one with
 /// `BATCHLAS_SYRK_ROUTE` = `auto` | `native` | `vendor` | `gram` | `triangular`.
 ///
 /// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
-/// @tparam T   `float` or `double`
+/// @tparam T   `float`, `double`, or complex: complex-symmetric \f$AA^T\f$ (no conjugate; that is herk),
+///             with `Transpose::NoTrans` or `Transpose::Trans` only
 /// @param ctx     queue the work is enqueued on
 /// @param A       batch of n x k (NoTrans) or k x n (Trans) matrices; not modified
 /// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
@@ -66,12 +67,11 @@ using syrk_vendor = Event(Queue&,
 /// @throws std::runtime_error if no family can run the call in a build with the vendor BLAS
 ///         (a heterogeneous batch: every family takes one (n, k) per launch)
 /// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
-///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
-///         batch <= 65535, and either `T` is `float` (the `triangular` tiles) or the
-///         `gram` tile admits the shape (@ref md_docs_2perf_2level3).
+///         unless the call is on a GPU (`Backend::CUDA` or `Backend::SYCL`) with homogeneous
+///         operands (the `triangular` tiles serve every such shape; @ref md_docs_2perf_2level3).
 /// @see herk, syr2k, SyrkOptions, @ref md_docs_2cpp-api
 /// @ingroup api_blas3
-template <Backend Ba, RealScalar T>
+template <Backend Ba, FloatingOrComplexScalar T>
 BATCHLAS_API Event syrk(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& C,
@@ -92,7 +92,7 @@ namespace batchlas::backend {
 ///
 /// Not an entry point: batchlas::syrk calls it. Same arguments and semantics.
 /// @ingroup api_dispatch
-template <Backend Back, RealScalar T>
+template <Backend Back, FloatingOrComplexScalar T>
 BATCHLAS_API Event syrk_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
                                const MatrixView<T, MatrixFormat::Dense>& C,

@@ -20,6 +20,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/ops/trmm/kernels/trmm_triangular_tiles.hh>
@@ -50,6 +51,7 @@ using namespace batchlas;
 namespace {
 
 namespace tm = batchlas::ops::trmm;
+namespace ub = test_utils::usm_bulk;
 using C = tm::TrmmChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -94,6 +96,7 @@ struct Prob {
     Region a, b, c;
     UnifiedVector<T> mem;
     UnifiedVector<T> mem0;
+    ub::Pristine<T> pristine;  // mem0's contents, run-length on the host
 
     MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
@@ -119,24 +122,28 @@ Prob<T> make_prob(const Spec& s) {
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
     p.c = {p.b.off + std::size_t(p.b.stride) * s.batch + 13, br, bc, br + 1, (br + 1) * bc + 3};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 17, poison<T>());
+    const std::size_t total = p.c.off + std::size_t(p.c.stride) * s.batch + 17;
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    // Only the representatives draw (the order of one pass over the batch); the rest are copies.
+    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), poison<T>(),
+                                 {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)},
+                                  {p.c.off, std::size_t(p.c.stride)}});
     // Named locals: the two draws of a complex entry in a fixed order on every compiler.
     auto draw = [&] {
         const auto re = u(gen), im = u(gen);
         return MatrixView<T, MatrixFormat::Dense>::make(re, im);
     };
-    for (int it = 0; it < s.batch; ++it) {
-        const int r = it % std::max(reps, 1);
+    for (int it = 0; it < reps; ++it) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
-                if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
+                if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j)) p.pristine.at(p.ai(it, i, j)) = draw();
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? draw() : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.pristine.at(p.bi(it, i, j)) = draw();
     }
+    p.mem = UnifiedVector<T>(total);
+    p.pristine.write(p.mem.data());
     p.mem0 = p.mem;
     return p;
 }
@@ -174,18 +181,21 @@ void expect_trmm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.n, r))
         << what << " worst backward error over " << items.size() << " items " << r << " exceeds "
         << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.n);
-    std::vector<char> inc(p.mem.size(), 0);
-    for (int it = 0; it < s.batch; ++it)
-        for (int j = 0; j < p.c.cols; ++j)
-            for (int i = 0; i < p.c.rows; ++i) inc[p.ci(it, i, j)] = 1;
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    using H = typename ub::Pristine<T>::Hole;
+    const H hole{p.c.off, std::size_t(p.c.ld), std::size_t(p.c.rows), std::size_t(p.c.cols)};
+    const auto moved = p.pristine.first_change(got, p.mem.size(), hole);
+    ASSERT_FALSE(moved.has_value()) << what << ": wrote outside C at element " << moved.value_or(0);
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
-            for (int j = 0; j < p.c.cols; ++j)
-                for (int i = 0; i < p.c.rows; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[p.ci(it, i, j)], p.mem[p.ci(it % s.period, i, j)]))
-                        << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            for (int j = 0; j < p.c.cols; ++j) {
+                const T* x = got + p.ci(it, 0, j);
+                const T* rep = got + p.ci(it % s.period, 0, j);
+                if (std::memcmp(x, rep, std::size_t(p.c.rows) * sizeof(T)) == 0) continue;
+                int i = 0;
+                while (same_bits(x[i], rep[i])) ++i;
+                FAIL() << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            }
 }
 
 std::string label(const Spec& s) {
@@ -280,6 +290,11 @@ protected:
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
         if constexpr (B != Backend::CUDA && B != Backend::SYCL)
             GTEST_SKIP() << "the native families are wired for CUDA and SYCL only";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     std::size_t expand_bytes(int order, int batch) {
@@ -290,10 +305,9 @@ protected:
     // the expansion's fit (BATCHLAS_EXPAND_MAX_BYTES included), the vendor's presence.
     std::int64_t grid_yz() const { return test_utils::expected_grid_yz(select::device_of<B>(*this->ctx).family); }
     bool expect_runs(const C& c, const Spec& s) {
-        const bool grid = s.batch <= grid_yz();
-        if (std::holds_alternative<tm::Triangular>(c)) return grid && s.side == Side::Left;
-        if (std::holds_alternative<tm::Expand>(c))
-            return grid && backend::detail::expansion_fits<T>(*this->ctx, s.n, s.batch, expand_bytes(s.n, s.batch), grid_yz());
+        if (std::holds_alternative<tm::Triangular>(c)) return s.side == Side::Left;  // the batch is chunked
+        if (std::holds_alternative<tm::Expand>(c))  // chunked: one item's scratch must fit
+            return backend::detail::expansion_fits<T>(*this->ctx, s.n, 1, expand_bytes(s.n, 1), grid_yz());
         return kVendor;
     }
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<tm::Vendor>(c) && !kVendor; }
@@ -419,16 +433,16 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(refused, 0);
 }
 
-// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: the exact scratch
-// size runs, one byte less is refused, and Auto, under a table ranking expand first, then takes the
-// next route (triangular on the Left, the vendor on the Right).
+// The expansion's fit term (R3), straddled with BATCHLAS_EXPAND_MAX_BYTES: one item's exact
+// scratch runs (one item per chunk), one byte less is refused, and Auto, under a table ranking
+// expand first, then takes the next route (triangular on the Left, the vendor on the Right).
 TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
     using T = typename TestFixture::T;
     const TableGuard restore;
     this->rank_trmm("expand 1 | triangular 2 | vendor 3", "expand 1 | vendor 2");
     for (Side side : {Side::Left, Side::Right}) {
         Spec s{side, Uplo::Upper, Transpose::Trans, Diag::Unit, 37, 6, 4};
-        const std::size_t bytes = this->expand_bytes(s.n, s.batch);
+        const std::size_t bytes = this->expand_bytes(s.n, 1);
         {
             const ScopedEnvVar cap("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(bytes).c_str());
             auto p = make_prob<T>(s);
@@ -539,9 +553,9 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
-// Both native launches put the batch in grid z: a pin launches at 65535 and is refused at 65536
-// on CUDA, where the direct launch throws; Auto then takes the vendor (vendor-free: no route).
-// Metal has no such cap: one past it launches too.
+// Both native launches put the batch in grid z: the direct launch runs at 65535 and throws at
+// 65536 on CUDA; the op chunks the batch, so a pin runs both and is right. Metal has no such cap:
+// one past it launches directly too.
 TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
     using T = typename TestFixture::T;
     const select::Device& dev = select::device_of<TestFixture::B>(*this->ctx);
@@ -556,24 +570,12 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         Spec past = at;
         past.batch = ceiling + 1;
         auto r = make_prob<T>(past);
-        EXPECT_EQ(this->pin_accepted(c, r), !capped) << name(c, past);
-        if (!capped) {
-            expect_trmm(*this->ctx, r, name(c, past));
-            continue;
-        }
+        EXPECT_TRUE(this->pin_accepted(c, r)) << name(c, past);
+        expect_trmm(*this->ctx, r, name(c, past));
+        if (!capped) continue;
         auto d = make_prob<T>(past);
         std::string why;
         EXPECT_FALSE(this->direct(c, d, &why)) << name(c, past) << ": the launch ran past the grid ceiling";
-    }
-    if (!capped) return;  // Auto past it is then whatever the table ranks first
-    Spec past{Side::Right, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 2, 2, ceiling + 1};
-    auto p = make_prob<T>(past);
-    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
-    if constexpr (TestFixture::kVendor) {
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor");
-        expect_trmm(*this->ctx, p, "auto past the grid ceiling");
-    } else {
-        EXPECT_THROW(this->run(p), batchlas::NoRouteError);
     }
 }
 

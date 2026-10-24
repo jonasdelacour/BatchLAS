@@ -10,7 +10,7 @@
       "name": "dev",
       "displayName": "Dev",
       "description": "Default RelWithDebInfo SYCL build.",
-      "binaryDir": "${sourceDir}/build/presets/dev",
+      "binaryDir": "${sourceDir}/build-dev",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "BATCHLAS_BUILD_TESTS": "OFF",
@@ -24,7 +24,7 @@
       "displayName": "Dev Tests",
       "description": "RelWithDebInfo build with tests enabled.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/dev-tests",
+      "binaryDir": "${sourceDir}/build-dev-tests",
       "cacheVariables": {
         "BATCHLAS_BUILD_TESTS": "ON"
       }
@@ -34,7 +34,7 @@
       "displayName": "Fast Dev",
       "description": "RelWithDebInfo build for iteration: batchlas plus a smoke-test subset.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/fast-dev",
+      "binaryDir": "${sourceDir}/build-fast-dev",
       "cacheVariables": {
         "BATCHLAS_BUILD_TESTS": "ON",
         "BATCHLAS_TEST_TARGET_SET": "smoke"
@@ -45,7 +45,7 @@
       "displayName": "Benchmarks",
       "description": "Build benchmarks and the tools/tune table tuner.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/benchmarks",
+      "binaryDir": "${sourceDir}/build-benchmarks",
       "cacheVariables": {
         "BATCHLAS_BUILD_BENCHMARKS": "ON"
       }
@@ -55,7 +55,7 @@
       "displayName": "CUDA",
       "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs. BATCHLAS_MONOLITHIC_LIBRARY is deliberately NOT set here - see the note in the release preset. A monolithic gate would put the 575 s single-threaded device link in front of every pre-push run and every re-run after a one-line fix. No CI job builds the release preset, so a monolithic export regression shows up only when that preset is built.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/cuda",
+      "binaryDir": "${sourceDir}/build-cuda",
       "cacheVariables": {
         "BATCHLAS_ENABLE_CUDA": "AUTO",
         "BATCHLAS_BUILD_TESTS": "ON",
@@ -67,7 +67,7 @@
       "displayName": "Dev (GPU only)",
       "description": "Fast iteration: drops the native_cpu SYCL target. ~30% off every compile and every device link. GPU coverage ONLY - see dev-tests for the full build.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/dev-gpu",
+      "binaryDir": "${sourceDir}/build-dev-gpu",
       "cacheVariables": {
         "BATCHLAS_CPU_TARGET": "none"
       }
@@ -77,7 +77,7 @@
       "displayName": "Dev Tests (GPU only)",
       "description": "dev-gpu plus tests. Roughly half of every typed suite is not instantiated and ctest still reports green - do not use as a pre-push gate.",
       "inherits": "dev-gpu",
-      "binaryDir": "${sourceDir}/build/presets/dev-gpu-tests",
+      "binaryDir": "${sourceDir}/build-dev-gpu-tests",
       "cacheVariables": {
         "BATCHLAS_BUILD_TESTS": "ON"
       }
@@ -147,7 +147,7 @@
       "displayName": "Release",
       "description": "The shipping shape: Release, no tests, no benchmarks, and ONE batchlas shared library. Inherits dev for the same toolchain discovery every other preset gets, then overrides the three things a release differs in. Do not iterate in this tree: the unit of SYCL device linking is the shared library, so ANY one-line edit costs the whole 575 s (9m35s), single-threaded, measured device link of all 15 object libraries. CAP THE PARALLELISM: a from-scratch build of this preset was OOM-killed at --parallel 20 AND at --parallel 8 on a 125 GB box with 115 GB free, both times during compilation rather than the link, which puts a single heavy SYCL translation unit above 14 GB. --parallel 4 completes in 728 s wall. That ceiling is a property of the from-scratch compile, not of the monolithic shape, so it applies to any cold full build here.",
       "inherits": "dev",
-      "binaryDir": "${sourceDir}/build/presets/release",
+      "binaryDir": "${sourceDir}/build-release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "BATCHLAS_BUILD_TESTS": "OFF",

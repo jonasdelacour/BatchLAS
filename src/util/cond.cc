@@ -8,23 +8,17 @@
 #include <limits>
 #include <type_traits>
 #include <src/queue.hh>
-#include <src/ops/syev/vendor.hh>
 namespace batchlas
 {
     template <Backend B, typename T>
     struct CondSpectralKernel;
 
-    // Sized and run on the same arm, so the buffer and the call branch identically.
+    // Sized and run through the same public syev, so the buffer and the call cannot disagree.
     template <Backend B, typename T>
     size_t cond_syev_buffer_size(Queue &ctx, const MatrixView<T, MatrixFormat::Dense> &A,
                                  const Span<typename base_type<T>::type> eig) {
-        if constexpr (B == Backend::SYCL) {
-            return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
-        } else {
-            return ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, A, eig,
-                                                                                  JobType::NoEigenVectors,
-                                                                                  Uplo::Lower);
-        }
+        // The public syev, so selection decides vendor vs native (a vendor-free build has no vendor).
+        return syev_buffer_size<B, T>(ctx, A, eig, JobType::NoEigenVectors, Uplo::Lower);
     }
 
     template <Backend B, typename T>
@@ -60,15 +54,7 @@ namespace batchlas
                         auto eig_span = Span<Real>(eig.data(), eig.size());
 
                         auto syev_ws = pool.allocate<std::byte>(ctx, cond_syev_buffer_size<B, T>(ctx, A_copy, eig_span));
-                        Event e;
-                        if constexpr (B == Backend::SYCL) {
-                            // No vendor solver (the vendor-free SYCL backend): the public syev's native kernels.
-                            e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
-                        } else {
-                            e = ops::syev::detail::syev_vendor_or_throw<B, T>(ctx, A_copy, eig_span,
-                                                                                   JobType::NoEigenVectors,
-                                                                                   Uplo::Lower, syev_ws);
-                        }
+                        Event e = syev<B, T>(ctx, A_copy, eig_span, JobType::NoEigenVectors, Uplo::Lower, syev_ws);
                         ctx.enqueue(e);
 
                         ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {

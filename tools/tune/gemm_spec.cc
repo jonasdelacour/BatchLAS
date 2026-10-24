@@ -20,6 +20,7 @@
 
 #include <src/ops/gemm/choice.hh>
 #include <tools/tune/cell_runner.hh>
+#include <tools/tune/grid.hh>
 
 #include <algorithm>
 #include <set>
@@ -149,7 +150,7 @@ public:
         kk.insert(G::grid_large_skinny_k.begin(), G::grid_large_skinny_k.end());
         return {{"ta", {"N", "T", "C"}}, {"tb", {"N", "T", "C"}}, {"layout", {"packed", "strided"}},
                 {"m", ints(mn)},         {"n", ints(mn)},         {"k", ints(kk)},
-                {"batch", ints(G::grid_batch)}};
+                {"batch", ints(batches())}};
     }
     std::vector<CellKey> grid(const std::string& dtype,
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
@@ -194,7 +195,7 @@ public:
         };
         std::vector<CellKey> out;
         for (const auto& [f, packed, m, n, k] : shapes)
-            for (int b : G::grid_batch) {
+            for (int b : batches()) {
                 CellKey key{{"ta", f.substr(0, 1)}, {"tb", f.substr(1, 1)}, {"layout", packed ? "packed" : "strided"},
                             {"m", std::to_string(m)}, {"n", std::to_string(n)}, {"k", std::to_string(k)},
                             {"batch", std::to_string(b)}};
@@ -211,12 +212,21 @@ public:
     std::string refine_key() const override { return "k"; }
     // No stricter frontier passes the per-op replay gate. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     FrontierPlan frontier() const override { return {1}; }
+    // No latency class: the grid starts at 128 and its full lattice dominates the run. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override {
+        return without_latency_class(run);
+    }
+    std::vector<int> ladder_extra_batches() const override { return with_slice_batches({}); }
+    static std::vector<int> batches() { return with_slice_batches({G::grid_batch.begin(), G::grid_batch.end()}); }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             "src/ops/gemm/kernels/gemm_kernels.cc",
+            "src/ops/gemm/kernels/gemm_launch.hh",
+            "src/ops/gemm/kernels/gemm_rows.hh",
+            "src/ops/gemm/kernels/gemm_shard.cc.in",
             "src/ops/gemm/gemm_kernels.hh",
             "src/ops/gemm/kernels/accessors.hh",
             "src/ops/gemm/kernels/epilogue_linear.hh",

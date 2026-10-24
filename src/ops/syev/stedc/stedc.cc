@@ -17,6 +17,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/ops/syev/stedc/stedc_internal.hh>
 #include <algorithm>
+#include <vector>
 #include <cstdio>
 #include <cstdlib>
 
@@ -471,10 +472,10 @@ void stedc_merge_step(Queue& ctx,
     int64_t dd_max = n;
     if (n >= stedc_deflation_gemm_min_n) {
         ctx.wait();
-        int32_t observed = 0;
-        for (size_t b = 0; b < static_cast<size_t>(batch_size); ++b) {
-            observed = std::max(observed, n_reduced[b]);
-        }
+        std::vector<int32_t> host_reduced(static_cast<size_t>(batch_size));
+        ctx->memcpy(host_reduced.data(), n_reduced.data(), sizeof(int32_t) * host_reduced.size()).wait();
+        const int32_t observed =
+            host_reduced.empty() ? 0 : *std::max_element(host_reduced.begin(), host_reduced.end());
         dd_max = std::clamp<int64_t>(observed, 1, n);
     }
 

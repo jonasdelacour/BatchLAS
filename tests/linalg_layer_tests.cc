@@ -1204,11 +1204,6 @@ TYPED_TEST(LinalgTyped, GramBothSidesBothTriangles) {
     const int m = 9, n = 5, batch = 3;
     const Transpose h = kIsComplex<T> ? Transpose::ConjTrans : Transpose::Trans;
     auto A = padded<T>(q, make<T>(q, m, n, batch, Fill::general, 111));
-    // Complex gram is herk, which has no native family: vendor-free it must throw, not fall back.
-    if (kIsComplex<T> && !(BATCHLAS_HAS_CUBLAS || BATCHLAS_HAS_ROCBLAS)) {
-        EXPECT_THROW((void)linalg::gram(q, A), NoRouteError);
-        return;
-    }
     auto inner = linalg::gram(q, A);
     auto outer = linalg::gram(q, A, Transpose::NoTrans);
     q.wait();
