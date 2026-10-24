@@ -30,13 +30,13 @@ GRANULARITY: GTEST CASE, NOT CTEST TEST
     Get the gtest layer by exporting GTEST_OUTPUT before the run; no CMake change
     is needed, because CMake's per-test ENVIRONMENT property is additive:
 
-        mkdir -p build/presets/dev-tests/gtest-xml
-        GTEST_OUTPUT=xml:build/presets/dev-tests/gtest-xml/ \
+        mkdir -p build-dev-tests/gtest-xml
+        GTEST_OUTPUT=xml:build-dev-tests/gtest-xml/ \
             ctest --preset dev-tests --output-junit ctest.xml
         python3 .github/ci/compare_failures.py --junit ctest.xml \
-            --gtest-dir build/presets/dev-tests/gtest-xml \
+            --gtest-dir build-dev-tests/gtest-xml \
             --require consumer_package_tests \
-            --expected-tests-from build/presets/dev-tests
+            --expected-tests-from build-dev-tests
 
     The trailing slash on GTEST_OUTPUT is required -- it selects directory mode.
 
@@ -143,6 +143,12 @@ CTEST_REAL_SKIP = re.compile(r"^(SKIP_RETURN_CODE=\d+|SKIP_REGULAR_EXPRESSION_MA
 # with a counter: gemm_tests.xml and gemm_tests_1.xml. Which one holds the
 # pinned run is decided by ctest execution order, not by anything declared.
 RERUN_SUFFIX = re.compile(r"^(.*)_(\d+)$")
+
+# A <name>_heavy ctest entry (tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS) runs the cases of
+# <name>'s executable that <name> itself filters out, and writes <name>_heavy.xml. The two
+# filters are exact complements, so folding the file back onto <name> loses nothing and a
+# ledger line keeps naming the executable whichever tier the case runs in.
+HEAVY_SUFFIX = "_heavy"
 
 # ctest's own words for "the process died" rather than "a test case reported a
 # failure". gtest writes its XML only at the end of a run, so any of these means
@@ -275,9 +281,13 @@ def read_gtest_dir(path, junit_names):
         if m and (m.group(1) in junit_names or m.group(1) in stems):
             ambiguous.add(binary)
         binaries.add(binary)
+        owner = binary
+        if binary.endswith(HEAVY_SUFFIX) and len(binary) > len(HEAVY_SUFFIX):
+            owner = binary[:-len(HEAVY_SUFFIX)]
+            binaries.add(owner)
         full = os.path.join(path, name)
         for tc in ET.parse(full).getroot().iter("testcase"):
-            ident = "%s::%s.%s" % (binary, tc.get("classname") or "", tc.get("name") or "")
+            ident = "%s::%s.%s" % (owner, tc.get("classname") or "", tc.get("name") or "")
             result = tc.get("result")
             failure = tc.find("failure")
             if failure is None:
@@ -319,7 +329,9 @@ def reconcile(junit_results, gtest_results, gtest_binaries):
         if prev is None or (prev.outcome != FAILED and r.outcome == FAILED):
             by_ident[r.ident] = r
         if r.outcome == FAILED:
-            failing_binaries.add(r.ident.split("::", 1)[0])
+            # The FILE's stem, not the ident's: a folded <name>_heavy failure must excuse
+            # only the <name>_heavy ctest entry, never a process death of <name>.
+            failing_binaries.add(os.path.basename(r.source)[:-len(".xml")])
     for r in junit_results:
         if r.outcome == FAILED and r.ident in failing_binaries:
             continue  # already accounted for, case by case
@@ -366,6 +378,22 @@ _FIXTURE_CTEST = ('add_test(alpha "true")\nadd_test(beta "true")\n'
                   'set_tests_properties(beta PROPERTIES LABELS "slow")\n')
 _FIXTURE_JUNIT = ('<?xml version="1.0"?>\n<testsuite tests="1">'
                   '<testcase name="alpha" classname="alpha" status="run"/></testsuite>\n')
+# gemm_x and its gemm_x_heavy tier; the heavy file holds the one failing case.
+_FIXTURE_HEAVY_XML = ('<?xml version="1.0"?>\n<testsuites><testsuite name="S">'
+                      '<testcase name="C" classname="S" status="run" result="completed">'
+                      '<failure message="boom"/></testcase></testsuite></testsuites>\n')
+_FIXTURE_BASE_XML = ('<?xml version="1.0"?>\n<testsuites><testsuite name="S">'
+                     '<testcase name="D" classname="S" status="run" result="completed"/>'
+                     '</testsuite></testsuites>\n')
+
+
+def _heavy_junit(base_status, heavy_status):
+    case = '<testcase name="%s" classname="%s" status="%s">%s</testcase>'
+    fail = '<failure message="Failed"/>'
+    return ('<?xml version="1.0"?>\n<testsuite tests="2">'
+            + case % ("gemm_x", "gemm_x", base_status, fail if base_status == "fail" else "")
+            + case % ("gemm_x_heavy", "gemm_x_heavy", heavy_status, fail if heavy_status == "fail" else "")
+            + '</testsuite>\n')
 
 
 def self_test():
@@ -394,6 +422,24 @@ def self_test():
              "registered and run agree at 1, under a floor of 2: the suite shrank"),
             (["--expected-tests-from", build, "--label-exclude", "slow", "--min-tests", "1"], 0,
              "at the floor passes"),
+        ]
+        gdir = os.path.join(tmp, "gtest")
+        os.mkdir(gdir)
+        for name, text in (("gemm_x_heavy.xml", _FIXTURE_HEAVY_XML), ("gemm_x.xml", _FIXTURE_BASE_XML)):
+            with open(os.path.join(gdir, name), "w") as fh:
+                fh.write(text)
+        hknown = os.path.join(tmp, "heavy_known.txt")
+        with open(hknown, "w") as fh:
+            fh.write("gemm_x::S.C\n")
+        for base_status, heavy_status in (("run", "fail"), ("fail", "run")):
+            with open(os.path.join(tmp, "heavy_%s.xml" % base_status), "w") as fh:
+                fh.write(_heavy_junit(base_status, heavy_status))
+        heavy = ["--gtest-dir", gdir, "--known", hknown]
+        cases += [
+            (heavy + ["--junit", os.path.join(tmp, "heavy_run.xml")], 0,
+             "a gemm_x_heavy case matches its gemm_x:: ledger line"),
+            (heavy + ["--junit", os.path.join(tmp, "heavy_fail.xml")], 1,
+             "gemm_x failing with no failing case of its own is not excused by gemm_x_heavy"),
         ]
         for extra, expect, why in cases:
             try:

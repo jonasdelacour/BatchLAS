@@ -4,7 +4,7 @@ include(CMakePackageConfigHelpers)
 set(BATCHLAS_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/BatchLAS")
 
 function(batchlas_install_package)
-    # Set by src/CMakeLists.txt: the 14 component .so plus the two conditional
+    # Set by src/CMakeLists.txt: the 16 component .so plus the two conditional
     # vendor ones, or EMPTY when BATCHLAS_MONOLITHIC_LIBRARY is ON. Read rather
     # than re-listed, because the hand-written second copy of these names that
     # used to live here is exactly the thing that drifts.

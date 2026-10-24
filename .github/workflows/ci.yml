@@ -616,7 +616,7 @@ jobs:
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests-from build/presets/dev-tests --label-exclude slow \
+            --expected-tests-from build-dev-tests --label-exclude slow \
             --min-tests 95
 
       - name: Install to a temp prefix and check the generated export
@@ -633,7 +633,7 @@ jobs:
         # is what keeps it from rotting.
         run: |
           set -euo pipefail
-          cmake --install build/presets/dev-tests --prefix "$RUNNER_TEMP/inst"
+          cmake --install build-dev-tests --prefix "$RUNNER_TEMP/inst"
           .github/ci/run_local_checks.sh "$RUNNER_TEMP/inst"
 
       - name: Upload test reports
@@ -651,7 +651,7 @@ jobs:
             ${{ runner.temp }}/ctest-junit.xml
             ${{ runner.temp }}/gtest-xml/
             ${{ runner.temp }}/configure.log
-            build/presets/dev-tests/Testing/Temporary/LastTest.log
+            build-dev-tests/Testing/Temporary/LastTest.log
 
   # ---------------------------------------------------------------------------
   # NIGHTLY. Everything too slow to put in front of a pull request.
@@ -722,7 +722,7 @@ jobs:
           python3 .github/ci/compare_failures.py \
             --junit "$RUNNER_TEMP/ctest-junit.xml" \
             --gtest-dir "$RUNNER_TEMP/gtest-xml" \
-            --expected-tests-from build/presets/dev-tests --min-tests 100 \
+            --expected-tests-from build-dev-tests --min-tests 100 \
             --require consumer_package_tests
 
       - name: Vendor-free configure, build and ctest
@@ -744,7 +744,7 @@ jobs:
         # configures, compiles and links at all.
         #
         # Separate binary dir: no preset describes this configuration, and it
-        # must not clobber build/presets/dev-tests.
+        # must not clobber build-dev-tests.
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -774,7 +774,7 @@ jobs:
             ${{ runner.temp }}/ctest-junit-vendor-free.xml
             ${{ runner.temp }}/gtest-xml/
             ${{ runner.temp }}/configure.log
-            build/presets/dev-tests/Testing/Temporary/LastTest.log
+            build-dev-tests/Testing/Temporary/LastTest.log
             build/vendor-free/Testing/Temporary/LastTest.log
 
 # ---------------------------------------------------------------------------

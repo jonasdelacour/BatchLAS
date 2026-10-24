@@ -49,8 +49,8 @@ GUARD="$HERE/gpu_guard.sh"
 BENCH="${FACTOR_BENCH:-}"
 if [ -z "$BENCH" ]; then
     for cand in \
-        "$ROOT/build/presets/benchmarks/benchmarks/factor_bench" \
-        "$ROOT/build/presets/dev-tests/benchmarks/factor_bench" \
+        "$ROOT/build-benchmarks/benchmarks/factor_bench" \
+        "$ROOT/build-dev-tests/benchmarks/factor_bench" \
         "$ROOT/build/benchmarks/factor_bench"; do
         [ -x "$cand" ] && { BENCH="$cand"; break; }
     done

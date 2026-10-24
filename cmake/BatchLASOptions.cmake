@@ -103,6 +103,23 @@ list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
 if(NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 endif()
+# Build tree only: RPATH entries inside the build tree become $ORIGIN-relative, so a copied
+# tree (cp -a build seed) loads its own .so instead of the original's. Entries outside the
+# tree (the SYCL runtime, CUDA) stay absolute, and the install RPATH above is untouched.
+if(NOT DEFINED CMAKE_BUILD_RPATH_USE_ORIGIN)
+    set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+endif()
+
+# A test or benchmark executable is not relinked when only a BatchLAS .so it links changed:
+# every library edit used to relink ~150 executables. The library still builds first.
+option(BATCHLAS_LINK_DEPENDS_NO_SHARED
+    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable that fails loudly at load time ('undefined symbol') instead of relinking; turn OFF for gate/CI trees"
+    ON)
+if(BATCHLAS_LINK_DEPENDS_NO_SHARED)
+    set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
+else()
+    set(CMAKE_LINK_DEPENDS_NO_SHARED OFF)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -195,11 +212,18 @@ if(BATCHLAS_NVIDIA_ARCH STREQUAL "sm_50")
 endif()
 set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
     "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
+# DPC++ only (BatchLASDetectSYCL.cmake). OFF passes -mllvm -enable-global-offset=false to the
+# device link, so no kernel gets a `<name>_with_offset` twin: about half of every NVPTX device
+# link. Nothing in the tree launches with a SYCL 1.2.1 global offset (parallel_for(range, id,
+# k), get_offset()); a kernel that did would no longer see its offset.
+option(BATCHLAS_SYCL_GLOBAL_OFFSET
+    "DPC++: keep the _with_offset twin of every kernel (SYCL 1.2.1 global offsets). OFF (default) drops them and roughly halves NVPTX device-link time"
+    OFF)
 
 # ---------------------------------------------------------------------------
-# One .so, or fourteen.
+# One .so, or sixteen.
 #
-# OFF (the DEVELOPMENT default) builds the 14 component shared objects. That
+# OFF (the DEVELOPMENT default) builds the 16 component shared objects. That
 # split exists for one measured reason: the unit of SYCL device linking is the
 # shared library, not the object file, so one changed object redoes
 # sycl-post-link + ptxas + AOT for every object in the same .so. Before the
@@ -226,7 +250,7 @@ if(APPLE)
     set(_batchlas_monolithic_default ON)
 endif()
 option(BATCHLAS_MONOLITHIC_LIBRARY
-    "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
+    "Build ONE batchlas shared library instead of the 16 component .so (release shape; makes every incremental edit relink the world)"
     ${_batchlas_monolithic_default})
 # Monolithic mode used to hide every symbol unconditionally. The in-tree tests reach ~1,000
 # unannotated internal symbols, so a monolithic tree that builds tests defaults it OFF.

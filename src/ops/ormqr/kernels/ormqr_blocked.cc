@@ -5,6 +5,7 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 
 #include <src/math-helpers.hh>
 #include <src/kernels/common/larft_wy.hh>
@@ -257,6 +258,7 @@ size_t ormqr_blocked_buffer_size(Queue& ctx,
                                  int32_t block_size) {
     validate_ormqr_dims(a, c, side, tau);
 
+    if (block_size == 0) block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM;  // the header default
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:
@@ -293,6 +295,7 @@ Event ormqr_blocked(Queue& ctx,
         }
     }
 
+    if (block_size == 0) block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM;  // the header default
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 16:

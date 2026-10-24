@@ -3,7 +3,6 @@
 #include <complex>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
-#include <batchlas/tuning_params.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/queue-dispatch.hh>
@@ -1042,6 +1041,9 @@ namespace batchlas {
      * entries restored on the first off-diagonal), the diagonal goes to `d_out`, the
      * off-diagonal to `e_out` and the reflector scalars to `tau_out`.
      *
+     * @param block_size panel width; 0 (the default) selects `tuning::SYTRD_BLOCK_SIZE_MEDIUM`
+     *        (`batchlas/tuning_params.hh`), and a negative value is treated as 1. Pass the
+     *        same value to sytrd_blocked_buffer_size().
      * @pre `ctx` is in-order (SYCL kernels and backend BLAS calls are not separately ordered)
      * @pre `ws` holds at least sytrd_blocked_buffer_size() bytes (the W panel)
      * @throws batchlas::invalid_argument on a non-square A, short d/e/tau, a batch mismatch or
@@ -1056,7 +1058,7 @@ namespace batchlas {
                                      const VectorView<T>& tau_out,
                                      Uplo uplo,
                                      const Span<std::byte>& ws,
-                                     int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
+                                     int32_t block_size = 0);
 
     /** @brief Required workspace, in bytes, for sytrd_blocked(); arguments as for the call. @ingroup api_tridiag_lowlevel */
     template <Backend B, typename T>
@@ -1066,7 +1068,7 @@ namespace batchlas {
                                                   const VectorView<T>& e,
                                                   const VectorView<T>& tau,
                                                   Uplo uplo,
-                                                  int32_t block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM);
+                                                  int32_t block_size = 0);
 
     /**
      * @brief First stage of two-stage reduction: dense -> band (LAPACK xSYTRD_SY2SB).

@@ -21,6 +21,8 @@
 #
 #   scripts/register_probe.sh out.log ''            # batchlas_sycl (default)
 #   scripts/register_probe.sh out.log '' batchlas_extensions_cta
+#   scripts/register_probe.sh out.log '' batchlas_extensions_posv   # posv_tiny.cc
+#   scripts/register_probe.sh out.log '' batchlas_extensions_gesv   # gesv_tiny.cc
 #
 # The script now FAILS LOUDLY if the named target has no link.txt, rather than
 # probing the default and reporting a healthy-looking result for the wrong thing.
@@ -73,13 +75,16 @@
 # at least a visible choice. Neither is subtracted from the other: read the one your
 # claim needs.
 #
-# Each kernel appears TWICE, as `<name>` and `<name>_with_offset`; they can differ
-# by a couple of registers. Take the max. Grep by mangled name. The two counters below
-# FOLD the twins onto the base name and count each kernel ONCE -- they are two codegen
-# variants of one source kernel, a frame or a spill appears in both, and counting lines
+# TWINS. With BATCHLAS_SYCL_GLOBAL_OFFSET=ON (not the default) each kernel appears TWICE,
+# as `<name>` and `<name>_with_offset`; they can differ by a couple of registers, so take
+# the max. The default build passes -mllvm -enable-global-offset=false at the device link
+# and emits no twins, so every kernel appears once. Grep by mangled name. The counters
+# below FOLD any twin onto the base name and count each kernel ONCE, which is the same
+# number in both builds -- a frame or a spill appears in both variants, and counting lines
 # would double every number against a claim that is always made about one kernel. The
-# raw `entry functions:` line above is left UN-folded, because the baselines recorded
-# here are raw ptxas line counts.
+# raw `entry functions:` line is left UN-folded (the baselines recorded here are raw ptxas
+# line counts from twin builds, so halve them before comparing with a default build); the
+# `_with_offset twins among them:` line says which kind of build the log came from.
 #
 # Verified against WP2's wide-scalar tile, which reproduces
 # docs/perf/gemm.md's standalone measurements exactly:
@@ -120,6 +125,8 @@ rc=0
 echo "exit=$rc  target=$TARGET  log=$OUT"
 ENTRIES=$(grep -c 'Compiling entry function' "$OUT" || true)
 echo "entry functions: $ENTRIES"
+TWINS=$(grep 'Compiling entry function' "$OUT" | grep -c '_with_offset' || true)
+echo "_with_offset twins among them: $TWINS (0 unless BATCHLAS_SYCL_GLOBAL_OFFSET=ON)"
 # A SILENT ZERO IS HOW THE BROKEN GATE SURVIVED A WHOLE CAMPAIGN. An empty log, a link
 # that died before ptxas ran, and a -v that never reached the backend all render as
 # "0 with spill", which reads exactly like a clean probe. Refuse to report instead.
@@ -139,7 +146,8 @@ fi
 # gesvdj_cta_impl<complex<double>>; attributing each spill line to its owning
 # `Function properties for` name in /tmp/regprobe_cta.log (2026-09-11) gives a mix of
 # eight distinct non-inlined device functions, each emitted twice because both the base
-# entry and its `_with_offset` twin pull the same callee in:
+# entry and its `_with_offset` twin pull the same callee in (a twin build; the default
+# build has no twins and would list each once):
 #     6  gesvdj_cta_impl<complex<double>, 32, {64,false | 32,true | 32,false}>
 #     8  ormqx_cta_impl<complex<double>, 32, ...>   (four instantiations)
 #     2  syev_cta_fused_impl<complex<double>, 32, 1>

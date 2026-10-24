@@ -166,6 +166,7 @@ endif()
 #   ctest -L eig            # only the eigensolver tests
 #   ctest -LE slow          # everything except the known-expensive binaries
 #   ctest -L tridiag -LE slow
+#   ctest -L heavy          # only the <name>_heavy case tiers (BATCHLAS_HEAVY_TESTS below)
 #
 # COMPONENT: which part of the library a test covers. Pick the label matching
 # the subsystem you changed; if you touched a shared low-level piece (Queue,
@@ -220,6 +221,44 @@ set(BATCHLAS_SLOW_TESTS
 #   iluk_tests             2.5 s, 17 tests
 #   syevx_tests            2.7 s, 102 tests
 #   sytrd_sb2st_hh_tests   5.8 s, 9 tests
+
+# Case-level tiers. A binary in BATCHLAS_HEAVY_TESTS is registered twice: <name> runs
+# --gtest_filter=-<HEAVY> and <name>_heavy (labels slow;heavy) runs --gtest_filter=<HEAVY>.
+# One pattern list feeds both filters, so the two are exact complements by construction.
+# The heavy tier holds the saturating-batch race guards (agent guide section 8 rule 5) and
+# the AutoReads table-routing guards: it is part of the pre-push gate, never optional.
+# Measured (2x RTX 4090, serial, 2026-10-23 full run): these patterns move 1463 s of
+# case time out of `-LE slow`, which falls from ~1990 s to ~430 s (~335 s without the
+# route-native reruns); gemm_candidates_tests keeps 43 s of its 1057 s.
+set(BATCHLAS_HEAVY_TEST_PATTERNS
+    *Saturating*
+    *AutoReads*
+    *PinnedCandidatesEveryFormShapeAndLayout*
+    *PinnedCandidatesStraddleTheirLimits*
+    *CoverageRow*
+    *AtEveryK*
+    *WideV2ComplexDoubleElementLeg*
+    *WideV2TileAndSlabEdgesUnderNaNPoison*
+    *BareNativePicksTheBestRunnableNonVendor*
+    *ComplexSymmetricSyr*kFamilies*
+    *SameAsInOrder*
+    *FreshChildAgreesWithAWorkerAfterALargerLaunch*
+    *EigenvaluesOnlyLowerMatchesNetlib*
+    *GradedHermitianRunsAtN512*)
+string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
+# Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
+# binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy
+# entry that selects no case (a stale line, or cases compiled out in this configuration)
+# reports SKIPPED rather than a silent pass.
+set(BATCHLAS_HEAVY_TESTS
+    gemm_candidates_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
+    gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
+    getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
+    orgqr_candidates_tests ormqr_candidates_tests posv_candidates_tests
+    potrf_candidates_tests potrf_tests spmm_candidates_tests spmm_tests syev_blocked_tests
+    syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
+    syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
+    tune_race_gpu_tests verify_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -391,10 +430,27 @@ function(batchlas_add_test_target test_name)
     list(FIND BATCHLAS_HOST_ONLY_TESTS ${test_name} _host_only_idx)
     if(_host_only_idx EQUAL -1)
         batchlas_gpu_test_command(_cmd ${test_name})
-        add_test(NAME ${test_name} COMMAND ${_cmd})
-        batchlas_test_needs_gpu(${test_name})
     else()
-        add_test(NAME ${test_name} COMMAND ${test_name})
+        set(_cmd ${test_name})
+    endif()
+    set(_entries ${test_name})
+    set(_heavy OFF)
+    if(test_name IN_LIST BATCHLAS_HEAVY_TESTS)
+        set(_heavy ON)
+    endif()
+    if(_heavy)
+        add_test(NAME ${test_name} COMMAND ${_cmd} "--gtest_filter=-${BATCHLAS_HEAVY_TEST_FILTER}")
+        # The _heavy XML must not collide with <name>.xml under GTEST_OUTPUT=xml:<dir>/:
+        # tests/ctest_gpu_env.sh renames it from BATCHLAS_GTEST_XML_STEM, so it needs the
+        # launcher even without GPU slots. Not on Apple: SIP strips DYLD_* through /bin/sh.
+        set(_heavy_cmd ${_cmd})
+        if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
+            set(_heavy_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
+        endif()
+        add_test(NAME ${test_name}_heavy COMMAND ${_heavy_cmd} "--gtest_filter=${BATCHLAS_HEAVY_TEST_FILTER}")
+        list(APPEND _entries ${test_name}_heavy)
+    else()
+        add_test(NAME ${test_name} COMMAND ${_cmd})
     endif()
 
     batchlas_test_component(_component ${test_name})
@@ -403,22 +459,38 @@ function(batchlas_add_test_target test_name)
     if(NOT _slow_idx EQUAL -1)
         list(APPEND _labels slow)
     endif()
-    set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
-    if(test_name IN_LIST BATCHLAS_RUN_SERIAL_TESTS)
-        set_tests_properties(${test_name} PROPERTIES RUN_SERIAL TRUE)
-    endif()
-    if(test_name STREQUAL "sg_partition_tests")
-        # A backend that breaks a divergent collective deadlocks rather than
-        # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
-        set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
-    endif()
-
+    set(_env "")
     if(BATCHLAS_OPENBLAS_CORETYPE)
         # The host BLAS was found to compute dgemm incorrectly with its
         # auto-detected kernel. OpenBLAS picks the kernel in its library
         # constructor, before main(), so this has to come from the environment.
-        set_tests_properties(${test_name} PROPERTIES
-            ENVIRONMENT "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+        list(APPEND _env "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+    endif()
+    foreach(_entry IN LISTS _entries)
+        if(_host_only_idx EQUAL -1)
+            batchlas_test_needs_gpu(${_entry})
+        endif()
+        if(test_name IN_LIST BATCHLAS_RUN_SERIAL_TESTS)
+            set_tests_properties(${_entry} PROPERTIES RUN_SERIAL TRUE)
+        endif()
+        if(test_name STREQUAL "sg_partition_tests")
+            # A backend that breaks a divergent collective deadlocks rather than
+            # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
+            set_tests_properties(${_entry} PROPERTIES TIMEOUT 300)
+        endif()
+    endforeach()
+    set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
+    if(_env)
+        set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "${_env}")
+    endif()
+    if(_heavy)
+        set(_heavy_labels ${_labels} slow heavy)
+        list(REMOVE_DUPLICATES _heavy_labels)
+        list(APPEND _env "BATCHLAS_GTEST_XML_STEM=${test_name}_heavy")
+        set_tests_properties(${test_name}_heavy PROPERTIES
+            LABELS "${_heavy_labels}"
+            ENVIRONMENT "${_env}"
+            SKIP_REGULAR_EXPRESSION "Running 0 tests from 0 test suites")
     endif()
 endfunction()
 

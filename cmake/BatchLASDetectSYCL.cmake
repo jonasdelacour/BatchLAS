@@ -21,12 +21,11 @@ set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -Wno-c++20-extensions
     -Wno-option-ignored
 )
-# The SYCL device link runs llvm-foreach over one device image per object.
-# Parallelising it is pure scheduling - the emitted device images come out
-# byte-identical. Measured: cta 131 s -> 56 s (2.3x), factorization 26.5 s ->
-# 17.0 s at N=4. It buys nothing on a library dominated by one large image
-# (tridiag, latrd) and nothing on executable links, which carry no device code.
-# N=4 is deliberately conservative against oversubscription under `make -j20`.
+# The SYCL device link runs llvm-foreach over the device modules sycl-post-link splits
+# out. Parallelising it is pure scheduling - the device images come out byte-identical
+# (factorization 26.5 s -> 17.0 s at N=4). It cannot split one module, so a library
+# dominated by one large image (latrd, posv, gesv) gains nothing, and executable links
+# carry no device code. N=4 is conservative against oversubscription under `make -j`.
 set(BATCHLAS_SYCL_BASE_LINK_OPTIONS -fsycl)
 if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
     list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS
@@ -624,6 +623,27 @@ foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_CXX_OPTIONS BATCHLAS_SYCL_EXTRA_CXX_OPT
     target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
         "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_opt_esc}>>")
 endforeach()
+
+# BATCHLAS_SYCL_GLOBAL_OFFSET (cmake/BatchLASOptions.cmake). The flag reaches the device
+# codegen through the link driver; probed first so a compiler without the GlobalOffset pass
+# keeps building (with the twins) instead of failing every link on an unknown -mllvm option.
+if(NOT BATCHLAS_SYCL_GLOBAL_OFFSET)
+    set(_go_dir "${PROJECT_BINARY_DIR}/CMakeFiles/batchlas_global_offset_probe")
+    file(MAKE_DIRECTORY "${_go_dir}")
+    file(WRITE "${_go_dir}/probe.cc" "int main() { return 0; }\n")
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" -mllvm -enable-global-offset=false -fsyntax-only "${_go_dir}/probe.cc"
+        RESULT_VARIABLE _go_rc OUTPUT_QUIET ERROR_VARIABLE _go_err)
+    if(_go_rc EQUAL 0)
+        list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS "SHELL:-mllvm -enable-global-offset=false")
+        message(STATUS "SYCL global-offset kernel twins: off (-mllvm -enable-global-offset=false)")
+    else()
+        message(WARNING "${CMAKE_CXX_COMPILER} rejects -mllvm -enable-global-offset=false; "
+            "keeping the _with_offset kernel twins (slower device links): ${_go_err}")
+    endif()
+else()
+    message(STATUS "SYCL global-offset kernel twins: kept (BATCHLAS_SYCL_GLOBAL_OFFSET=ON)")
+endif()
 
 foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_LINK_OPTIONS BATCHLAS_SYCL_EXTRA_LINK_OPTIONS)
     batchlas_build_interface_option(_opt_esc "${_opt}")

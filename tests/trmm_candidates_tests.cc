@@ -19,6 +19,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/ops/trmm/kernels/trmm_triangular_tiles.hh>
@@ -49,6 +50,7 @@ using namespace batchlas;
 namespace {
 
 namespace tm = batchlas::ops::trmm;
+namespace ub = test_utils::usm_bulk;
 using C = tm::TrmmChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -93,6 +95,7 @@ struct Prob {
     Region a, b, c;
     UnifiedVector<T> mem;
     UnifiedVector<T> mem0;
+    ub::Pristine<T> pristine;  // mem0's contents, run-length on the host
 
     MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
@@ -118,24 +121,28 @@ Prob<T> make_prob(const Spec& s) {
     p.a = {0, s.n, s.n, s.n + 3, (s.n + 3) * s.n + 5};
     p.b = {std::size_t(p.a.stride) * s.batch + 11, br, bc, br + 2, (br + 2) * bc + 7};
     p.c = {p.b.off + std::size_t(p.b.stride) * s.batch + 13, br, bc, br + 1, (br + 1) * bc + 3};
-    p.mem = UnifiedVector<T>(p.c.off + std::size_t(p.c.stride) * s.batch + 17, poison<T>());
+    const std::size_t total = p.c.off + std::size_t(p.c.stride) * s.batch + 17;
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
     const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    // Only the representatives draw (the order of one pass over the batch); the rest are copies.
+    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), poison<T>(),
+                                 {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)},
+                                  {p.c.off, std::size_t(p.c.stride)}});
     // Named locals: the two draws of a complex entry in a fixed order on every compiler.
     auto draw = [&] {
         const auto re = u(gen), im = u(gen);
         return MatrixView<T, MatrixFormat::Dense>::make(re, im);
     };
-    for (int it = 0; it < s.batch; ++it) {
-        const int r = it % std::max(reps, 1);
+    for (int it = 0; it < reps; ++it) {
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.n; ++i)
-                if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j))
-                    p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
+                if ((i == j && s.diag == Diag::NonUnit) || p.owned(i, j)) p.pristine.at(p.ai(it, i, j)) = draw();
         for (int j = 0; j < bc; ++j)
-            for (int i = 0; i < br; ++i) p.mem[p.bi(it, i, j)] = it < reps ? draw() : p.mem[p.bi(r, i, j)];
+            for (int i = 0; i < br; ++i) p.pristine.at(p.bi(it, i, j)) = draw();
     }
+    p.mem = UnifiedVector<T>(total);
+    p.pristine.write(p.mem.data());
     p.mem0 = p.mem;
     return p;
 }
@@ -173,18 +180,21 @@ void expect_trmm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.n, r))
         << what << " worst backward error over " << items.size() << " items " << r << " exceeds "
         << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.n);
-    std::vector<char> inc(p.mem.size(), 0);
-    for (int it = 0; it < s.batch; ++it)
-        for (int j = 0; j < p.c.cols; ++j)
-            for (int i = 0; i < p.c.rows; ++i) inc[p.ci(it, i, j)] = 1;
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    using H = typename ub::Pristine<T>::Hole;
+    const H hole{p.c.off, std::size_t(p.c.ld), std::size_t(p.c.rows), std::size_t(p.c.cols)};
+    const auto moved = p.pristine.first_change(got, p.mem.size(), hole);
+    ASSERT_FALSE(moved.has_value()) << what << ": wrote outside C at element " << moved.value_or(0);
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
-            for (int j = 0; j < p.c.cols; ++j)
-                for (int i = 0; i < p.c.rows; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[p.ci(it, i, j)], p.mem[p.ci(it % s.period, i, j)]))
-                        << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            for (int j = 0; j < p.c.cols; ++j) {
+                const T* x = got + p.ci(it, 0, j);
+                const T* rep = got + p.ci(it % s.period, 0, j);
+                if (std::memcmp(x, rep, std::size_t(p.c.rows) * sizeof(T)) == 0) continue;
+                int i = 0;
+                while (same_bits(x[i], rep[i])) ++i;
+                FAIL() << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            }
 }
 
 std::string label(const Spec& s) {
@@ -279,6 +289,11 @@ protected:
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU kernels";
         if constexpr (B != Backend::CUDA && B != Backend::SYCL)
             GTEST_SKIP() << "the native families are wired for CUDA and SYCL only";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     std::size_t expand_bytes(int order, int batch) {

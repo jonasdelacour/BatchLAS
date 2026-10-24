@@ -10,7 +10,6 @@
 #include <batchlas/export.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
-#include <batchlas/tuning_params.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
@@ -22,6 +21,9 @@ namespace batchlas {
 /// of @p block_size and applies each as \f$ I - V T V^H \f$ (LAPACK
 /// `larft`/`larfb`) with level-3 GEMMs. Same result as ormqr(); batched through
 /// strided-batch views. Meant for medium sizes, where the CTA kernels do not apply.
+/// @param block_size panel width; 0 (the default) selects `tuning::ORMQR_BLOCK_SIZE_MEDIUM`
+///        (`batchlas/tuning_params.hh`), and a negative value is treated as 1. Pass the same
+///        value to ormqr_blocked_buffer_size().
 /// @pre @p ctx is in-order (the pack / larft / GEMM steps are not separately ordered)
 /// @pre @p workspace holds at least ormqr_blocked_buffer_size() bytes (V, T and W)
 /// @throws batchlas::invalid_argument on mismatched batch or order, a short @p tau,
@@ -36,9 +38,10 @@ BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  Transpose trans,
                                  Span<T> tau,
                                  Span<std::byte> workspace,
-                                 int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
+                                 int32_t block_size = 0);
 
 /// @brief Workspace, in bytes, that ormqr_blocked() needs for this @p block_size.
+/// @param block_size as for ormqr_blocked(); 0 selects `tuning::ORMQR_BLOCK_SIZE_MEDIUM`
 /// @ingroup api_internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
@@ -47,6 +50,6 @@ BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
                                               Side side,
                                               Transpose trans,
                                               Span<T> tau,
-                                              int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
+                                              int32_t block_size = 0);
 
 } // namespace batchlas
