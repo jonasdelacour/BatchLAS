@@ -220,6 +220,7 @@ n eps; no slack.
 | `tests/sytrd_blocked_tests.cc` `TrailingUpdateRoutesAgree` relation | `syr2k ≤ 4 · gemm + 16 u` compares two measured errors (each route is also checked at its kind) |
 | `tests/syevx_tests.cc` LOBPCG instrumentation tests | staged vs host-read history (rates, residual norms, Ritz values): non-eigen quantities from two paths of the code under test |
 | `tests/cond_tests.cc` log10 and `ztol` checks | the random log-cond tolerances against the generator's target, the log10 tolerances and the band-structure zero checks are properties of the inputs and the estimator, not a residual |
+| `tests/matrix_tests.cc` `fill_graded_hermitian` spectrum ratio (`w.back() / w.front()` against \f$10^{c}\f$, 1%) | a property of the input generator, like the cond targets above; the spectrum itself is judged at `values` |
 | `tests/norm_tests.cc` `expect_norm_close` | a four-line scalar relative error (judged at `blas`): the library has no scalar-vs-scalar error |
 | `tests/linalg_layer_tests.cc` `NormMatchesTheHostFrobeniusNorm`, `CondMatchesTheDiagonalReference` | one scalar per item against a closed form on exact small-integer data: no scalar-vs-scalar kind |
 | `tests/device_blas_tests.cc` `expect_vector_near` / `expect_matrix_near` and the gemv/dot/conj spot checks | hand-computed results on small-integer data, exact in float: any error is a bug, and a componentwise kind would loosen them |

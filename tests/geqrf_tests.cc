@@ -1762,18 +1762,24 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
             this->ctx->wait();
 
             // The reference runs in double on a tight copy of each pristine item.
-            // tau is O(1) for a random matrix and the two implementations differ only in the
-            // association order of one column norm. A dropped or doubled tau, a tau written at
-            // the wrong stride, or the unscaled fused larfg all miss by O(1).
-            std::vector<std::vector<double>> ref_tau(batch);
-            double scale = 1.0;
             for (int b = 0; b < batch; ++b) {
-                ASSERT_TRUE(verify::geqrf_tau(MVof<T>(const_cast<T*>(pristine.data()), n, n, p.ld, p.stride, batch), b, ref_tau[b])) << "geqrf_tau failed at n=" << n << " b=" << b;
-                for (double t : ref_tau[b]) scale = std::max(scale, std::fabs(t));
+                std::vector<double> ref_tau;
+                ASSERT_TRUE(verify::geqrf_tau(MVof<T>(const_cast<T*>(pristine.data()), n, n, p.ld, p.stride, batch), b, ref_tau)) << "geqrf_tau failed at n=" << n << " b=" << b;
+
+                // tau is O(1) for a random matrix and the two implementations differ only
+                // in the association order of one column norm, so the tolerance is a few
+                // hundred eps and not a wildcard. A dropped or doubled tau, a tau written
+                // at the wrong stride, or the unscaled fused larfg all miss by O(1).
+                const double tol = 256.0 * double(n) *
+                                   double(std::numeric_limits<RealOf<T>>::epsilon());
+                for (int i = 0; i < n; ++i) {
+                    const double got = MVof<T>::up(p.tau[static_cast<size_t>(b) * n + i]);
+                    const double want = ref_tau[static_cast<size_t>(i)];
+                    ASSERT_NEAR(got, want, tol * std::max(1.0, std::fabs(want)))
+                        << "tau[" << i << "] of item " << b << " at n=" << n
+                        << " disagrees with LAPACKE (" << got << " vs " << want << ")";
+                }
             }
-            const VectorView<T> got(p.tau.data(), n, batch, 1, n);
-            EXPECT_VERIFY(T, verify::Check::values, n, MVof<T>::values_error(got, ref_tau, scale, got.all_items()))
-                << "tau disagrees with LAPACKE at n=" << n;
         }
     }
 }

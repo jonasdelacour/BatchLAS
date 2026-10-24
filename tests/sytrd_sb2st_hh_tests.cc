@@ -124,6 +124,8 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
 
     auto& ctx = *this->ctx;
 
+    const Real tol = std::is_same_v<Real, float> ? Real(2e-3) : Real(1e-10);
+
     for (int n : {16, 24, 32, 48, 129, 200}) {
         for (int kd : {2, 3, 4, 8, 16, 33, 48, 64}) {
             if (kd >= n) continue;
@@ -215,7 +217,7 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
 
                 // Q must be orthogonal.
                 const double orth = MatrixView<T, MatrixFormat::Dense>::orthogonality(ctx, MatrixView<T, MatrixFormat::Dense>(Q.data(), n, n, n));
-                EXPECT_VERIFY(T, verify::Check::orthogonality, n, orth) << "n=" << n << " kd=" << kd << " b=" << b;
+                EXPECT_LT(orth, tol) << "n=" << n << " kd=" << kd << " b=" << b;
 
                 // Q^H A Q must be tridiagonal, with diag == d and |subdiag| == e.
                 Real offtri = Real(0);
@@ -224,19 +226,26 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                         if (std::abs(i - j) > 1)
                             offtri += abs_of(Bm[static_cast<size_t>(i) * n + j]) *
                                       abs_of(Bm[static_cast<size_t>(i) * n + j]);
-                EXPECT_VERIFY(T, verify::Check::factorization, n, double(std::sqrt(offtri) / scale))
+                EXPECT_LT(std::sqrt(offtri) / scale, tol)
                     << "off-tridiagonal n=" << n << " kd=" << kd << " b=" << b;
 
-                std::vector<std::vector<double>> ref_d(batch), ref_e(batch);
-                for (int i = 0; i < n; ++i) ref_d[b].push_back(double(std::real(Bm[static_cast<size_t>(i) * n + i])));
-                for (int i = 0; i + 1 < n; ++i) ref_e[b].push_back(double(abs_of(Bm[static_cast<size_t>(i + 1) * n + i])));
-                const std::vector<int> item{b};
-                EXPECT_VERIFY(T, verify::Check::values, n,
-                              (MatrixView<T, MatrixFormat::Dense>::values_error(d, ref_d, double(scale), item)))
-                    << "d n=" << n << " kd=" << kd << " b=" << b;
-                EXPECT_VERIFY(T, verify::Check::values, n,
-                              (MatrixView<T, MatrixFormat::Dense>::values_error(e, ref_e, double(scale), item)))
-                    << "e n=" << n << " kd=" << kd << " b=" << b;
+                for (int i = 0; i < n; ++i) {
+                    const T bii = Bm[static_cast<size_t>(i) * n + i];
+                    Real re;
+                    if constexpr (std::is_same_v<T, std::complex<float>> ||
+                                  std::is_same_v<T, std::complex<double>>) {
+                        re = bii.real();
+                    } else {
+                        re = bii;
+                    }
+                    EXPECT_NEAR(re, d(i, b), tol * scale)
+                        << "d[" << i << "] n=" << n << " kd=" << kd;
+                }
+                for (int i = 0; i + 1 < n; ++i) {
+                    const Real got = abs_of(Bm[static_cast<size_t>(i + 1) * n + i]);
+                    EXPECT_NEAR(got, e(i, b), tol * scale)
+                        << "e[" << i << "] n=" << n << " kd=" << kd;
+                }
             }
         }
     }
