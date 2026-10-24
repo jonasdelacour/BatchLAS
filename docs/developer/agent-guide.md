@@ -140,7 +140,7 @@ cmake -S . -B build -DLAPACKE_LIBRARY=/opt/lib/liblapacke.so -DCBLAS_LIBRARY=/op
 ```bash
 # A new worktree: seed its tree from a built one BEFORE editing (§7), else configure.
 scripts/seed_build_tree.sh ~/BatchLAS/build build    # 9 s; first build is incremental
-cmake -B build .                                     # no seed: full build 5 min warm ccache, 21-23 cold
+cmake -B build .                                     # no seed: full build 5 min with a warm ccache
 # GPU-only iteration tree (nvptx64 only; never the gate, §7):
 #   cmake -B build-gpu . -DBATCHLAS_CPU_TARGET=none
 
@@ -169,10 +169,13 @@ ctest --test-dir build -LE 'slow|heavy'
 # (full: build 14 + ctest 21; vendor-free: build 13 + ctest 19); later runs rebuild
 # incrementally. Seed a missing gate tree only from a dev-tests-configured tree:
 # from plain build/ (BATCHLAS_ALLOW_UNSAFE_ENV differs, so backend_config.h does)
-# 221 of 243 objects recompile. The gate prints the option drift.
-scripts/gate.sh                  # 2x4090 box (OOM history, docs/ci.md)
-scripts/gate.sh --parallel       # threadripper02
-scripts/gate.sh --seed-from build-dev-tests   # first run only
+# 221 of 243 objects recompile. The gate prints the option drift. Its ctest gets
+# ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu' when unset and sycl-ls lists native_cpu (§8);
+# pin the GPU yourself. --seed-allow-dirty: the checkout has any untracked or modified
+# file (seed_build_tree.sh refuses a dirty seed otherwise, and the full tree fails).
+CUDA_VISIBLE_DEVICES=0 scripts/gate.sh     # 2x4090 box (OOM history, docs/ci.md; GPU 1 is shared)
+scripts/gate.sh --parallel                 # threadripper02
+CUDA_VISIBLE_DEVICES=0 scripts/gate.sh --seed-from build-dev-tests --seed-allow-dirty   # first run
 
 # Also before pushing, if you touched cmake/, include/ or the install rules:
 # the packaging gate. These are the same checks CI runs (.github/workflows/ci.yml).
@@ -280,8 +283,10 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
 The build is **SYCL device-link-bound**, not compile-bound. The unit of device linking is the
 shared library: changing one object re-runs `sycl-post-link` + ptxas + CPU-target AOT for every
 object in that `.so`, and `-j` cannot shorten it. Full build of a fresh tree: 4090 box (-j8,
-library + 90 test binaries) 312-314 s with a warm ccache, 1260-1370 s cold; threadripper02 (-j32)
-284-334 s cold. Findings and before/after tables: @ref design_build_performance.
+library + 90 test binaries) 312-314 s with a warm ccache; 1260-1370 s for c960d7b1/cc9cee8c with a
+partial ccache (118/77 hits), before the sycl and backends links were cut (no cold build of the
+current tree measured); threadripper02 (-j32) 284-334 s cold. Findings and before/after tables:
+@ref design_build_performance.
 
 **The loop on the 4090 box** (2026-10-24; one-line append, then rebuild the library):
 
@@ -312,8 +317,9 @@ A TU that a CPU queue can run (gemm, gemv, spmm, NETLIB paths) must keep its CPU
   DPC++ device temporaries in a tmpfs `/tmp` are RAM; leaked ones reached 38-43 GiB (~12 GiB/day)
   on a zero-swap box. `rm -rf <build>/.tmp` is safe while no build of that tree runs.
 - `BATCHLAS_LINK_DEPENDS_NO_SHARED=ON`: a `.so` change no longer relinks ~150 executables (full
-  build after a `stedc.cc` edit 71 -> 22 s). Executables link `-z now`, so a symbol removed from a
-  `.so` fails at load, not later. `scripts/gate.sh` turns it OFF.
+  build after a `stedc.cc` edit 71 -> 22 s). Executables and the component `.so` link `-z now`, so a
+  symbol removed from a `.so` fails when any binary loads it, not when the call runs.
+  `scripts/gate.sh` turns it OFF.
 - `CMAKE_BUILD_RPATH_USE_ORIGIN=ON`: build-tree RUNPATHs are `$ORIGIN`-relative, so a copied
   (seeded) tree loads its own `.so`, never the seed's.
 
@@ -621,8 +627,9 @@ boxes.
   foreign process. A display attached to a GPU also slows L2-resident vendor cells: measure on a
   headless GPU. Use `benchmarks/gpu_guard.sh`, plus a `flock` against your own duplicate jobs.
 - Warm up: idle clocks are ~210 MHz. Use `--warmup=3 --min_iters=8` and discard a first pass over
-  every cell. CUDA device images are AOT SASS: no JIT, ~0.3 s module load per process. JIT applies
-  to `spir64`, AdaptiveCpp `generic` and Metal images, whose first process pays it.
+  every cell. CUDA device images are AOT SASS: no JIT, ~0.3 s module load per process. The CPU image
+  of a full-target tree (`spir64_x86_64`) is AOT too (`opencl-aot` at the device link). JIT applies
+  to a generic `spir64` target, AdaptiveCpp `generic` and Metal images, whose first process pays it.
 - Alternate the A/B order between reps and discard the first pass. Per-rep CV is ~3%, so an effect
   under 5% needs 14-16 reps; 6 reps is a screen, not a verdict.
 - The Google Benchmark `--name` filter is a *substring* match. Filter on the CSV name column, which is

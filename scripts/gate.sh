@@ -19,6 +19,9 @@
 # Environment: BATCHLAS_GATE_CUDA (default ON), BATCHLAS_GATE_PRESET (default dev-tests),
 # BATCHLAS_GATE_DIR / BATCHLAS_GATE_VF_DIR (default build-gate / build-gate-vf),
 # BATCHLAS_GATE_CXX (compiler for a new tree; default /opt/dpcpp-cuda/bin/clang++ when present).
+# ctest runs with ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu' when it is unset and sycl-ls lists
+# both a native_cpu and an opencl:cpu device: else CPU queues land on native_cpu, which has no
+# image in a spir64_x86_64 build ("No kernel named"). CUDA_VISIBLE_DEVICES is left to the caller.
 # Every configure forces the gate's shape (full CPU+GPU targets, every test, split libraries,
 # no offset twins), so a GPU-only or smoke seed cannot turn the gate into a smaller run.
 # The box-wide build lock (/tmp/batchlas-build.lock) is held for the whole gate, ctest included:
@@ -39,7 +42,7 @@ while [ "$#" -gt 0 ]; do
         --seed-from) seed_from=$(cd "$2" && pwd); shift 2 ;;
         --seed-allow-dirty) seed_dirty=(--allow-dirty); shift ;;
         --parallel) parallel=1; shift ;;
-        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gate: unknown argument $1" >&2; exit 64 ;;
     esac
 done
@@ -136,13 +139,15 @@ print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(s
     local junit="$root/$dir/gate/ctest-junit.xml" gx="$root/$dir/gate/gtest-xml"
     local -a filter=()
     [ "$kind" = full ] || filter=(-LE slow)
+    local -a envp=(GTEST_OUTPUT="xml:$gx/")
+    [ -z "$selector" ] || envp+=(ONEAPI_DEVICE_SELECTOR="$selector")
     rm -rf "$gx" "$junit"; mkdir -p "$gx"
     t0=$(date +%s); rc=0
     if [ "$parallel" = 1 ]; then
-        GTEST_OUTPUT="xml:$gx/" "$here/ctest_gpus.sh" --test-dir "$dir" --output-junit "$junit" "${filter[@]}" \
+        env "${envp[@]}" "$here/ctest_gpus.sh" --test-dir "$dir" --output-junit "$junit" "${filter[@]}" \
             > "$dir/gate/ctest.out" 2>&1 || rc=$?
     else
-        GTEST_OUTPUT="xml:$gx/" ctest --test-dir "$dir" -j 1 --output-junit "$junit" "${filter[@]}" \
+        env "${envp[@]}" ctest --test-dir "$dir" -j 1 --output-junit "$junit" "${filter[@]}" \
             > "$dir/gate/ctest.out" 2>&1 || rc=$?
     fi
     note "$kind: ctest ${filter[*]:-(full)} exit $rc in $(elapsed $(( $(date +%s) - t0 ))): $(grep -E 'tests passed|tests failed' "$dir/gate/ctest.out" | tail -n 1)"
@@ -177,6 +182,16 @@ print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(s
 }
 
 export LC_ALL=C
+selector=""
+if [ -z "${ONEAPI_DEVICE_SELECTOR+set}" ]; then
+    sycl_ls=$(command -v sycl-ls || true)
+    [ -n "$sycl_ls" ] || [ -z "$cxx" ] || [ ! -x "$(dirname "$cxx")/sycl-ls" ] || sycl_ls=$(dirname "$cxx")/sycl-ls
+    devices=$([ -z "$sycl_ls" ] || "$sycl_ls" 2>/dev/null || true)
+    if grep -q '^\[native_cpu:' <<<"$devices" && grep -q '^\[opencl:cpu\]' <<<"$devices"; then
+        selector='cuda:*;opencl:cpu'
+        note "ctest runs with ONEAPI_DEVICE_SELECTOR='$selector' (sycl-ls lists native_cpu and opencl:cpu)"
+    fi
+fi
 for kind in full vf; do
     [ -z "$only" ] || [ "$only" = "$kind" ] || continue
     dir=$full_dir; [ "$kind" = full ] || dir=$vf_dir

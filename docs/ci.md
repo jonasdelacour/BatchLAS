@@ -340,11 +340,14 @@ cmake --build --preset dev-tests            # tens of minutes
 ctest --preset dev-tests
 ```
 
-Locally, `scripts/gate.sh` does the same on persistent trees and adds the vendor-free tree:
+Locally, `scripts/gate.sh` (on the 4090 box `CUDA_VISIBLE_DEVICES=0 scripts/gate.sh`) does the
+same on persistent trees and adds the vendor-free tree:
 `build-gate` (preset `dev-tests`, full ctest, `compare_failures.py` against the ledger) and
 `build-gate-vf` (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `-LE slow`, no ledger, so it reports names).
 Both set `BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF`, so every executable relinks against the `.so` it
-tests; the gate holds the box-wide build lock through ctest. First run on the 4090 box: 67 min;
+tests; the gate holds the box-wide build lock through ctest. Its ctest runs with
+`ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` when that is unset and `sycl-ls` lists a `native_cpu`
+device, so CPU queues do not land on `native_cpu`. First run on the 4090 box: 67 min;
 later runs rebuild incrementally. Its reports: `build-gate/gate/compare.txt` and
 `build-gate/gate-summary.txt`.
 

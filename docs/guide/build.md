@@ -124,7 +124,7 @@ cmake --build build -j8
 | `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link: `auto` (default; the logical cores, clamped to 4..32), a count, or `1` to disable |
 | `BATCHLAS_SYCL_GLOBAL_OFFSET` | DPC++: keep the `_with_offset` twin of every kernel (SYCL 1.2.1 global offsets). Default `OFF`: `-mllvm -enable-global-offset=false`, which roughly halves NVPTX device-link time ([build performance](../design/build-performance.md)) |
 | `BATCHLAS_PRIVATE_TMPDIR` | run every compile and link with `TMPDIR` in a per-command directory under `<build>/.tmp`, removed afterwards (default `ON`; keeps device-link temporaries out of a tmpfs `/tmp`) |
-| `BATCHLAS_LINK_DEPENDS_NO_SHARED` | do not relink executables when only a BatchLAS `.so` they link changed (default `ON`; executables link `-z now`, so a removed symbol fails at load). `scripts/gate.sh` turns it `OFF` |
+| `BATCHLAS_LINK_DEPENDS_NO_SHARED` | do not relink executables when only a BatchLAS `.so` they link changed (default `ON`; executables and the component `.so` link `-z now`, so a removed symbol fails at load). `scripts/gate.sh` turns it `OFF` |
 | `CMAKE_BUILD_RPATH_USE_ORIGIN` | build-tree RUNPATHs relative to `$ORIGIN` (BatchLAS defaults it to `ON`), so a copied tree (`scripts/seed_build_tree.sh`) loads its own libraries |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted; `ACPP` without an `acpp` compiler takes `acpp` from `PATH`, else `/opt/adaptivecpp/bin`, also replacing a cached compiler (`ccmake`); CMake then resets the cache and the value reads `AUTO` |
 | `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
@@ -240,7 +240,7 @@ scripts/b -B build-dev-tests stedc_tests
 ctest --test-dir build-dev-tests -R '^stedc_tests(_heavy)?$' --output-on-failure
 scripts/affected_tests.py --print-build-cmd --print-ctest-cmd --build-dir build-dev-tests
 ctest --test-dir build-dev-tests -LE 'slow|heavy'    # the quick tier
-scripts/gate.sh                                      # before pushing
+CUDA_VISIBLE_DEVICES=0 scripts/gate.sh               # before pushing
 ```
 
 Binaries in `BATCHLAS_HEAVY_TESTS` (`tests/CMakeLists.txt`) register two entries: `X` (quick cases)

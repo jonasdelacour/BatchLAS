@@ -184,7 +184,7 @@ target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
 # The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
 # so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
-# were 590 of the backends link's 760 CPU-seconds and could never launch.
+# were 590 of the backends link's 713 CPU-seconds and could never launch.
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)

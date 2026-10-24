@@ -353,7 +353,7 @@ that area's objects.
 | `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc` but the level-3 seven, and the generated tuned-tables TU |
 | `batchlas_extensions_level3_obj` | `src/ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}/<op>.cc` (entry points plus their native kernels) and `src/ops/trsm/kernels/`, GPU-only |
 | `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | vendor wrapper TUs; the CUDA and ROCm libraries exist only when a vendor library of that family is enabled |
-| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
+| `batchlas_extensions_*_obj` (eigen, factorization, tridiag, sytrd, latrd, stedc, cta, posv, gesv) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
 | `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,gemv,spmm}/kernels/`; gemm's reg and wide rows are generated shard TUs (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`) |
 | `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities) and `EXTRA_SOURCES` (norms, cond, transpose, random matrices) |
 

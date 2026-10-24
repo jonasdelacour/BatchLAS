@@ -92,8 +92,9 @@ them, so a bad split would fail loudly in ptxas):
   gemm TU compiles in 20 s (was 256 s), and the largest sycl module is now 59 s.
 
 After the splits the libraries are: sycl 38 spir + 35 nvptx modules (194 s), backends 1 module
-(1.5 s replay), level3 12 nvptx modules (about 47 s). The largest single process fell from 3.5 GB
-to 1.2 GB, and relinking all 16 libraries raised box memory by 11 GB at most.
+(1.5 s replay), level3 12 nvptx modules (about 47 s). One opencl-aot job peaks at 1.2 GB (the
+largest process of a one-file rebuild, was 3.5 GB); the largest process of a full build is 1.6 GB,
+and relinking all 16 libraries raised box memory by 11 GB at most.
 
 ### build performance: executables relinked on every library change
 
@@ -164,7 +165,9 @@ and `run_local_checks.sh` passed after the change.
 - The posv and gesv links (about 169 s each): one module each, the floor.
 - Header edits: about 280 of 318 objects include `matrix.hh`, `settings`, `error`, `enums` or
   `workspace`.
-- The cold build (1260-1370 s): every compile plus every link. Seeding a new tree
+- A new tree without a warm cache: every compile plus every link. 1260-1370 s was measured on
+  c960d7b1/cc9cee8c with a partial ccache (118/77 hits), before the sycl and backends links were
+  cut; no cold build of the current tree was measured. Seeding a new tree
   (`scripts/seed_build_tree.sh`, 9 s, then a 20 s first build) or a cache warmed by
   `scripts/prewarm_cache.sh` avoids it.
 - Tests: `gemm_candidates_tests_heavy` (351 s) is the longest single ctest entry. The first

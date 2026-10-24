@@ -113,15 +113,18 @@ endif()
 # A test or benchmark executable is not relinked when only a BatchLAS .so it links changed:
 # every library edit used to relink ~150 executables. The library still builds first.
 option(BATCHLAS_LINK_DEPENDS_NO_SHARED
-    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable, which fails at load time ('undefined symbol') instead of relinking (in-tree executables are linked -z now for that); scripts/gate.sh turns it OFF"
+    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable, which fails at load time ('undefined symbol') instead of relinking (in-tree executables and shared libraries are linked -z now for that); scripts/gate.sh turns it OFF"
     ON)
 if(BATCHLAS_LINK_DEPENDS_NO_SHARED)
     set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
     # Lazy binding would find a symbol missing from a .so only when the call runs, and a
     # case that never runs it (skipped, filtered, another tier) would stay green. BIND_NOW
-    # makes every executable resolve all of its own references when it is loaded.
+    # resolves an object's own references at load; the executable's flag does not cover the
+    # .so it loads, so the components carry it too (one component calling a symbol another
+    # dropped). --no-undefined is not an option: the components reference each other cyclically.
     if(UNIX AND NOT APPLE)
-        add_link_options("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:-Wl,-z,now>")
+        add_link_options(
+            "$<$<IN_LIST:$<TARGET_PROPERTY:TYPE>,EXECUTABLE;SHARED_LIBRARY;MODULE_LIBRARY>:-Wl,-z,now>")
     endif()
 else()
     set(CMAKE_LINK_DEPENDS_NO_SHARED OFF)
@@ -216,13 +219,23 @@ if(BATCHLAS_NVIDIA_ARCH STREQUAL "sm_50")
     set_property(CACHE BATCHLAS_NVIDIA_ARCH PROPERTY VALUE "")
     set(BATCHLAS_NVIDIA_ARCH "")
 endif()
+# 4 was the old fixed default; a cache written by that version still holds it, so it moves to
+# auto once. Only an entry carrying the old docstring is that default: a -D on the command line
+# (fresh tree or not) has the "specified on the command line" docstring and is kept.
+get_property(_batchlas_link_jobs_doc CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY HELPSTRING)
 set(BATCHLAS_SYCL_LINK_JOBS "auto" CACHE STRING
     "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables, auto = the logical cores, 4..32")
-# 4 was the old fixed default; an existing cache still holds it, so it moves to auto once.
-if(BATCHLAS_SYCL_LINK_JOBS STREQUAL "4" AND NOT BATCHLAS_SYCL_LINK_JOBS_MIGRATED)
+if(BATCHLAS_SYCL_LINK_JOBS STREQUAL "4" AND NOT BATCHLAS_SYCL_LINK_JOBS_MIGRATED
+   AND _batchlas_link_jobs_doc STREQUAL
+       "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
+    message(STATUS "BATCHLAS_SYCL_LINK_JOBS: the old cached default 4 is now auto "
+                   "(pass -DBATCHLAS_SYCL_LINK_JOBS=4 again to keep 4)")
     set_property(CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY VALUE "auto")
+    set_property(CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY HELPSTRING
+        "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables, auto = the logical cores, 4..32")
     set(BATCHLAS_SYCL_LINK_JOBS "auto")
 endif()
+unset(_batchlas_link_jobs_doc)
 set(BATCHLAS_SYCL_LINK_JOBS_MIGRATED ON CACHE INTERNAL "BATCHLAS_SYCL_LINK_JOBS left its old default once")
 # DPC++ only (BatchLASDetectSYCL.cmake). OFF passes -mllvm -enable-global-offset=false to the
 # device link, so no kernel gets a `<name>_with_offset` twin: about half of every NVPTX device

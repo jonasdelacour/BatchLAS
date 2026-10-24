@@ -27,7 +27,7 @@ set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
 # the sum of its batch maxima: backends at N=4 was 4 batches of CPU AOT (171+153+97 s). It
 # cannot split one module, so a library dominated by one image (latrd, posv, gesv) gains
 # nothing. auto = the logical cores, clamped to 4..32: after the gemm shards an opencl-aot job
-# peaks at 1.1 GB and a link has at most ~40 modules.
+# peaks at 1.2 GB (the largest process of a full build is 1.6 GB) and a link has at most ~40 modules.
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 set(_batchlas_link_jobs "${BATCHLAS_SYCL_LINK_JOBS}")
 if(_batchlas_link_jobs STREQUAL "auto")
