@@ -109,10 +109,10 @@ lanes, and DRAM traffic and runtime rose. The access-pattern change did not redu
 reads, replacing two full \f$n_2 \times n_2\f$ GEMMs. The update alone is 3.4–3.6× faster (RTX 4090, float,
 undated). Times for nb = 16 / 24 / 32 (ms): n = 512, batch 1024: 264 / 253 / 248 becomes 228 / 227 / 232.
 
-- **Route:** CUDA and float only. Other types fall to `syr2k_vendor_impl`, a host loop of one
+- **Route:** float on a native GPU backend (CUDA or SYCL), complex<float> on CUDA with cuBLAS (`level3_tile_substitution_enabled`). Other types would fall to `syr2k_vendor_impl`, a host loop of one
   `cublasXsyr2k` per batch member, which is **7.8× slower** than the GEMM pair in double (n = 256,
   batch 1024).
-- **Complex float** goes through `her2k` (one batched `gemm_vendor` into scratch, then
+- **Complex float** goes through `her2k` (one batched public `gemm` into scratch, then
   `accumulate_hermitian<TwoSided=true>`). At \f$n_2 = 480\f$, batch 512 it beats the pair 1.32–1.33×; end to
   end 1.043× ([syev: her2k trailing update for complex float (WP3)](syev.md#syev-her2k-trailing-update-for-complex-float-wp3)).
 - **Complex double** is excluded: 16 bytes per element of scratch, and unmeasured.

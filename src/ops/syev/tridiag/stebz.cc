@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // stebz: selected eigenvalues of a batch of symmetric tridiagonal matrices, by
 // bisection on Sturm sequence sign counts.
 //

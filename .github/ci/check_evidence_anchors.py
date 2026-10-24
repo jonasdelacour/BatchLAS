@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that every `evidence: docs/...#anchor` pointer resolves to a real heading.
 
 The house rule is that measured numbers live in docs/perf/<op>.md and code

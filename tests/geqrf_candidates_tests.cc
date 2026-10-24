@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every geqrf candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-geqrf. The limit oracle reads the drivers' own capacity
 // queries; which kernel ran is read back from the select trace or a bit-for-bit comparison
@@ -152,7 +153,7 @@ std::string label(const Spec& s) {
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
 
 // The outermost geqrf trace line for whatever `run` calls, and the choice it names.
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -169,7 +170,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("geqrf ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no geqrf trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");

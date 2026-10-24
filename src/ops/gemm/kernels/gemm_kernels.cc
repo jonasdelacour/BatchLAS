@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The gemm kernels' launchers, one per family of src/ops/gemm/choice.hh. Which family runs is
 // decided only in src/ops/gemm/gemm.cc; nothing here selects, and nothing falls back to another
 // kernel: a launcher handed a form or config it does not instantiate throws. The reg and wide rows

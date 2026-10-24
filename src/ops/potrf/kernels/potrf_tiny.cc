@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched POTRF, the TINY tier: right-looking unblocked Cholesky with one matrix
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
 // barriers, every cross-lane value a sub-group shuffle; the shared load/pad/store helpers

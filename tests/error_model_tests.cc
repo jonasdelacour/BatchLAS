@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // What BatchLAS throws, as a type a consumer can catch.
 //
 // Before include/batchlas/error.hh there were 573 throw sites in include/ + src/
@@ -111,8 +112,8 @@ static_assert(std::is_base_of_v<std::runtime_error, batchlas::workspace_error>);
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::convergence_error>);
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::internal_error>);
 // api_misuse and internal_error stay under std::runtime_error deliberately.
-// tests/mempool_tests.cc:1115 and :1131 catch std::runtime_error around
-// src/queue.hh:53 (a Queue used from a foreign thread, an api_misuse site), and
+// tests/mempool_tests.cc:1116 and :1131 catch std::runtime_error around
+// src/queue.hh:54 (a Queue used from a foreign thread, an api_misuse site), and
 // the second does so inside a std::thread lambda -- if that throw stops matching
 // there it does not fail an assertion, it terminates the test binary.
 static_assert(std::is_base_of_v<std::runtime_error, batchlas::api_misuse>);
@@ -244,7 +245,7 @@ TEST(ErrorModelHierarchy, OutOfRangeIsCaughtThreeWays) {
 
 TEST(ErrorModelHierarchy, ErrorIsCaughtThreeWays) {
     ExpectThreeWayCatch<batchlas::error>(
-        [] { throw batchlas::error("ILU(k): symbolic phase produced a row without diagonal"); },
+        [] { throw batchlas::error("iluk: symbolic phase produced a row without diagonal"); },
         "symbolic phase");
 }
 
@@ -339,7 +340,7 @@ TEST(NoRoute, IsUnsupported) {
 // THE REGRESSION THESE CATCH -- the proof.
 //
 // Take MatrixViewRejectsShortLeadingDimension below and revert its site
-// (src/matrix.cc:1880) to `std::invalid_argument`, the pre-migration spelling.
+// (src/matrix.cc:1881) to `std::invalid_argument`, the pre-migration spelling.
 // Reading the assertions in ExpectThreeWayCatch against that:
 //
 //   * r.specific -- the handler is `catch (const batchlas::invalid_argument&)`
@@ -364,7 +365,7 @@ TEST(NoRoute, IsUnsupported) {
 // ---------------------------------------------------------------------------
 
 TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
-    // src/matrix.cc:1880 -- "leading dimension N is smaller than the row count M".
+    // src/matrix.cc:1881 -- "leading dimension N is smaller than the row count M".
     // Pure host validation inside the MatrixView constructor: the buffer is
     // described, never read.
     std::vector<float> buffer(64, 0.0f);
@@ -378,7 +379,7 @@ TEST(ErrorModelSites, MatrixViewRejectsShortLeadingDimension) {
 }
 
 TEST(ErrorModelSites, MatrixViewElementAccessOutOfRange) {
-    // src/matrix.cc:1984 / :2006 -- MatrixView::at(row, col, batch), reached
+    // src/matrix.cc:1985 / :2006 -- MatrixView::at(row, col, batch), reached
     // through operator(). Two of the 5 sites that stay on std::out_of_range's
     // side of the hierarchy so Python element access keeps raising IndexError.
     std::vector<float> buffer(64, 0.0f);
@@ -393,12 +394,12 @@ TEST(ErrorModelSites, MatrixViewElementAccessOutOfRange) {
 }
 
 TEST(ErrorModelSites, BumpAllocatorOverflowIsAWorkspaceError) {
-    // include/batchlas/util/mempool.hh:86 -- "Attempted to allocate N bytes from
+    // include/batchlas/util/mempool.hh:87 -- "Attempted to allocate N bytes from
     // a BumpAllocator with only M bytes remaining." The canonical workspace
     // shortfall: a *_buffer_size that under-counted, surfacing where the bytes
     // run out instead of as a silent heap overflow.
     //
-    // tests/mempool_tests.cc:193 catches this same site as std::runtime_error,
+    // tests/mempool_tests.cc:194 catches this same site as std::runtime_error,
     // which is one reason workspace_error must stay inside that arm.
     Device device = Device::default_device();
     const size_t align = BumpAllocator::alignment<int32_t>(device);
@@ -415,7 +416,7 @@ TEST(ErrorModelSites, BumpAllocatorOverflowIsAWorkspaceError) {
 }
 
 TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
-    // include/batchlas/util/mempool.hh:129 -- "BumpAllocator::remaining() is not
+    // include/batchlas/util/mempool.hh:130 -- "BumpAllocator::remaining() is not
     // available in sizing mode." Wrong-MODE API misuse, not exhaustion: a sizing
     // pool's extent is fictitious, so a callee that sized itself against
     // remaining().size() would size against a number that means nothing.
@@ -431,7 +432,7 @@ TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
 // Message text other tests match on.
 //
 // Two live catch sites assert on the TEXT of a message, not only its type
-// (tests/matrix_tests.cc:1076, tests/options_api_tests.cc:592; the syr2k and trmm
+// (tests/matrix_tests.cc:1077, tests/options_api_tests.cc:593; the syr2k and trmm
 // cuBLASDx sites went with cuBLASDx). A type migration must not reword them. Only
 // the one needing no queue and no device is re-checked here; the other is guarded
 // where it lives.
@@ -456,7 +457,7 @@ TEST(ErrorModelSites, MessagesSurviveTheTypeChange) {
 // ---------------------------------------------------------------------------
 // No installed public header may terminate the host process.
 //
-// include/batchlas/util/miniacc.hh:675 used to call exit(0) from its --help
+// include/batchlas/util/miniacc.hh:676 used to call exit(0) from its --help
 // handling. A library must never terminate its caller's process, and that file
 // IS installed, so it shipped that behaviour to every consumer.
 //

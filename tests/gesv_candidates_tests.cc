@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every gesv candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-gesv. The limit oracle reads the driver's own capacity
 // queries; which kernel ran is read back from the select trace or a bit-for-bit comparison
@@ -159,7 +160,7 @@ void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info
 }
 
 // The choice the outermost gesv trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();

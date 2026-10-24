@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Sequential (un-pipelined) Householder SB2ST schedule + reflector store.
 
 `householder_sb2st.py` reproduces LAPACK's pipelined schedule (THGRSIZ=N,

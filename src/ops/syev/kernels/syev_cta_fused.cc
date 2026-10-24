@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -56,7 +57,7 @@ namespace {
 
 template <typename U>
 inline typename base_type<U>::type real_part_f(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return x.real();
     } else {
         return x;
@@ -75,7 +76,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                 size_t cta_wg_size_multiplier,
                                 int32_t* info) {
     using Real = typename base_type<T>::type;
-    constexpr bool kComplex = internal::is_complex<T>::value;
+    constexpr bool kComplex = detail::is_complex<T>::value;
 
     const auto batch_size = a.batch_size();
 

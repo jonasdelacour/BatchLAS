@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // posv for the tuner (flat-kernel-selection-phase3-plan.md §1.1): SPD A, random B, the
 // MatrixView::solve_residual (docs/design/verification.md). posv's cta and blocked times
 // include the public potrf and trsm the composition calls, each choosing for itself (plan §2 "Coupling").
@@ -20,7 +21,7 @@ namespace {
 
 namespace S = ops::posv;
 
-template <class T>
+template <typename T>
 struct PosvProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -69,7 +70,7 @@ public:
     std::string op() const override { return "posv"; }
     std::vector<std::string> key_names() const override { return {S::key_names.begin(), S::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(S::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(S::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, r, b;
@@ -117,7 +118,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PosvProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                              int(key_int(req.key, "batch")), req.ld_pad, uplo);

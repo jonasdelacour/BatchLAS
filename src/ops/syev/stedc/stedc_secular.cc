@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>
@@ -757,7 +758,7 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
 
 
             for (int i = 0; i < n; i++) {
-                auto norm = internal::nrm2<T>(cta, VectorView<T>(Qview.data() + i * Qview.ld(), n, Qview.batch_size(), 1, Qview.stride()));
+                auto norm = detail::nrm2<T>(cta, VectorView<T>(Qview.data() + i * Qview.ld(), n, Qview.batch_size(), 1, Qview.stride()));
 
                 for (int k = tid; k < n; k += bdim) Qview(k, i, bid) = Qview(k, i, bid) / norm;
             }

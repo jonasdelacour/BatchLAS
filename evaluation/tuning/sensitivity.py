@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Find tuning parameters that do not earn their place in the search.
 
 Grid search costs the product of every grid, so a parameter that changes

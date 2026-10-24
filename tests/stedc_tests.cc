@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -534,14 +535,14 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
 //
 //   * `leaf_steqr_params.max_sweeps` is real. It caps the leaf steqr, and the
 //     level-synchronous driver -- the default -- folds each leaf's status back
-//     into the caller's span (src/ops/syev/stedc/stedc.cc:921-936; the fold is
+//     into the caller's span (src/ops/syev/stedc/stedc.cc:922-937; the fold is
 //     needed because that one steqr call solves leaves*batch problems, so its
 //     batch axis is LONGER than `info`). This is what the forced case below
 //     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
 //   * `max_sec_iter` is NOT reachable on the arms that run by default:
-//     src/ops/syev/stedc/stedc_secular.cc:297 and :521 hardcode `i < 50` and :700
+//     src/ops/syev/stedc/stedc_secular.cc:298 and :521 hardcode `i < 50` and :700
 //     hardcodes `iter >= 100`, so the parameter never reaches the loop. Only
-//     Fused/FusedCta honour it (stedc_merge_cta.cc:1005). A test that set
+//     Fused/FusedCta honour it (stedc_merge_cta.cc:1006). A test that set
 //     max_sec_iter, ran the default arm and watched nothing fail would look
 //     exactly like a working guard while testing a value that never left the
 //     parameter struct -- so it is not written here.
@@ -596,7 +597,7 @@ TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
 // implementation from one that memsets the span to zero, so this forces the
 // failure on the SAME input the case above solves cleanly. `max_sweeps = 1`
 // rather than a "reduced" 50 because 50 is the default, and the CTA tiers rewrite
-// the default to 400 (syev_cta.cc:177-180) -- a habit worth not relying on the
+// the default to 400 (syev_cta.cc:178-181) -- a habit worth not relying on the
 // absence of.
 //
 // It also exercises the part of the plumbing that is unique to stedc: the leaf

@@ -12,7 +12,7 @@ best and top-K), and `generate_tuning_header.py` turns the profile into constant
 From the repository root, after building the benchmarks:
 
 ```sh
-cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON && cmake --build build -j
+cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON && cmake --build build -j8
 python3 evaluation/tuning/tune.py --space evaluation/tuning/spaces/default.json \
     --backend CUDA --type float --out build/tuning/profile.json --skip-missing
 ```
@@ -128,7 +128,7 @@ same accessor feeds `*_buffer_size()` and the matching solve.
 
    ```sh
    cmake -B build -DBATCHLAS_BUILD_BENCHMARKS=ON
-   cmake --build build -j --target stedc_benchmark steqr_benchmark \
+   cmake --build build -j8 --target stedc_benchmark steqr_benchmark \
          sytrd_blocked_benchmark ormqr_blocked_benchmark syev_benchmark
    ```
 

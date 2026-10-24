@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Host-only. evidence: docs/design/tiered-tuning.md#engine-tiers-and-the-per-cell-algorithm

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Generic backend: plain sycl::sub_group collectives (host pass, Native CPU, non-PTX acpp JIT).
 // Those are defined only for a converged sub-group, so a diverging Masked

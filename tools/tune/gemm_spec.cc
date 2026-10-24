@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gemm for the tuner (flat-kernel-selection-phase3-plan.md §1.3, §3): random A, B and C0 in
 // [-1, 1) (complex parts both), alpha with an imaginary part and beta = 1, so the epilogue reads C
 // (docs/developer/agent-guide.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
@@ -12,6 +13,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -41,7 +43,7 @@ Transpose trans_of(const std::string& w, bool complex) {
     return Transpose::Trans;  // a real scalar's C is its T (the key folds it)
 }
 
-template <class T>
+template <typename T>
 struct GemmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -133,7 +135,7 @@ public:
     std::string op() const override { return "gemm"; }
     std::vector<std::string> key_names() const override { return {G::key_names.begin(), G::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(G::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(G::candidates<T>()); });
     }
     // Every value a grid cell may take, per axis (the --grid filter's vocabulary).
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -186,7 +188,7 @@ public:
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-                throw std::invalid_argument("gemm has no grid axis '" + name + "'");
+                throw batchlas::invalid_argument("gemm has no grid axis '" + name + "'");
         auto keep = [&](const std::string& name, const std::string& v) {
             const auto it = overrides.find(name);
             return it == overrides.end() || std::find(it->second.begin(), it->second.end(), v) != it->second.end();
@@ -200,7 +202,7 @@ public:
                 if (std::all_of(key.begin(), key.end(), [&](const auto& kv) { return keep(kv.name, kv.value); }))
                     out.push_back(std::move(key));
             }
-        if (out.empty()) throw std::invalid_argument("gemm: the --grid filters leave no cell of the declared grid");
+        if (out.empty()) throw batchlas::invalid_argument("gemm: the --grid filters leave no cell of the declared grid");
         return out;
     }
     double bytes(const std::string& dtype, const CellKey& key) const override {  // A, B, C0, C
@@ -265,7 +267,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/gemm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             auto get = [&](std::string_view name, const char* dflt) {
                 const std::string* v = key_get(req.key, name);
                 return v ? *v : std::string(dflt);

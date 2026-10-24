@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that every file .gitattributes routes through Git LFS is committed as an LFS pointer.
 
 Raw benchmark results live under benchmarks/results/ and are stored in LFS, so a PR that adds a

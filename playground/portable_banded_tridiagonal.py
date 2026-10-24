@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """portable_banded_tridiagonal
 
 Portable, blocked Householder reduction of a symmetric/Hermitian banded matrix

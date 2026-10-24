@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Breadth-first tiered rounds (docs/design/tiered-tuning.md, "Engine: driver interface"). SYCL-free:

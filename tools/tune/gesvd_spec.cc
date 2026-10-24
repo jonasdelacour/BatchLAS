@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesvd for the tuner. herm=N: MatrixView::fill_random m x n A (complex parts both); herm=L|U:
 // MatrixView::fill_graded_hermitian (condition 100) with both triangles valid (the vendor family
 // reads all of A). Every item differs. Verified on the default items (docs/design/verification.md):
@@ -48,7 +49,7 @@ SvdVectors job_of(const std::string& vec) {
     return vec == "none" ? SvdVectors::None : vec == "thin" ? SvdVectors::Thin : SvdVectors::All;
 }
 
-template <class T>
+template <typename T>
 struct GesvdProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = typename base_type<T>::type;
@@ -88,12 +89,12 @@ struct GesvdProblem {
     std::size_t workspace() {
         std::string src;
         if (job == SvdVectors::None && m != n && select::detail::pin_text("gesvd", &src) == std::optional<std::string>("vendor"))
-            throw std::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
+            throw batchlas::invalid_argument("gesvd vendor: values-only non-square faults (known defect 15)");
         try {
             return herm ? gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job, *herm)
                         : gesvd_buffer_size<kBackend, T>(q, Av, s.to_span(), Uv, Vhv, job, job);
         } catch (const batchlas::unsupported& e) {
-            throw std::invalid_argument(e.what());
+            throw batchlas::invalid_argument(e.what());
         }
     }
     void reset() {
@@ -156,7 +157,7 @@ public:
     std::string op() const override { return "gesvd"; }
     std::vector<std::string> key_names() const override { return {G::key_names.begin(), G::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(G::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(G::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> herm(G::grid_herm.begin(), G::grid_herm.end()), vec(G::grid_vec.begin(), G::grid_vec.end());
@@ -172,7 +173,7 @@ public:
                 continue;
             out.push_back(std::move(c));
         }
-        if (out.empty()) throw std::invalid_argument("gesvd: the --grid values leave no keyable cell");
+        if (out.empty()) throw batchlas::invalid_argument("gesvd: the --grid values leave no keyable cell");
         return out;
     }
     double bytes(const std::string& dtype, const CellKey& key) const override {  // A0, A, U, Vh at the derived batch
@@ -225,7 +226,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/gesvd_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const std::string h = *key_get(req.key, "herm");
             const std::optional<Uplo> herm =
                 h == "N" ? std::nullopt : std::optional<Uplo>(h == "U" ? Uplo::Upper : Uplo::Lower);

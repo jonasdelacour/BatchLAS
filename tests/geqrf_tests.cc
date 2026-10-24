@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF and the ORGQR that consumes its output.
 //
 // Every numerical test calls the native entry points directly, bypassing the selector,
@@ -575,7 +576,7 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
 }
 
 // G6. The complex convention no residual can see: LAPACK's clarfg/zlarfg return a REAL
-// beta, internal::larfg is phase-preserving, and swapping the two leaves qr, orth and the
+// beta, detail::larfg is phase-preserving, and swapping the two leaves qr, orth and the
 // explicit-Q residual GREEN for every type.
 TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
     using T = typename TestFixture::T;

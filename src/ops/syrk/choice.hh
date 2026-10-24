@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -22,14 +23,14 @@ struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syrk_vendo
 using SyrkChoice = std::variant<Gram, Triangular, Vendor>;  ///< fieldless (tile, leg derived); natives: CUDA GPU
 
 /// Every compiled choice in tie-break order (§6.3); complex<double> has no triangular (registers).
-template <class T>
+template <typename T>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, std::complex<double>>) return std::array<SyrkChoice, 2>{Gram{}, Vendor{}};
     else return select::all_of<SyrkChoice>();
 }
 
 /// Is the per-item vendor loop linked for (B, T)? rocblas.cc wraps the real ?syrk only.
-template <Backend B, class T>
+template <Backend B, typename T>
 inline constexpr bool vendor_wired = select::has_library<B>(select::Lib::level3) &&
                                      !(B == Backend::ROCM && !std::is_floating_point_v<T>);
 
@@ -60,7 +61,7 @@ inline constexpr std::array<int, 17> grid_batch{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 
 inline constexpr std::int64_t kMaxGridBatch = 65535;  ///< batch ceiling of both tile kernels
 inline constexpr std::int64_t kMaxGridTiles = 65535;  ///< triangular's tile-count ceiling
 inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
-template <class T>
+template <typename T>
 constexpr std::int64_t triangular_slm_bytes() {  ///< two staged 8 x 128 operand tiles
     return std::int64_t(2) * 8 * 128 * std::int64_t(sizeof(T));
 }
@@ -75,7 +76,7 @@ inline constexpr int gram_threads(std::int64_t n) {  // the lanes meeting the tr
     const int lanes = gram_tile(n) / 4;
     return (lanes * (lanes + 1) / 2 + 31) / 32 * 32;
 }
-template <class T>
+template <typename T>
 constexpr std::int64_t gram_slm_bytes(std::int64_t n) {  // the staged [KC][tile] operand
     return std::int64_t(32) * gram_tile(n) * std::int64_t(sizeof(T));
 }

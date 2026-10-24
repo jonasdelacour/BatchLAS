@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched GEQRF: the CTA tier and the blocked driver, whose panel leaf IS the CTA device

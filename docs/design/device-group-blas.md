@@ -1,6 +1,6 @@
 # Device-side group BLAS {#design_device_group_blas}
 
-> **Status:** current · checked 2026-10-06
+> **Status:** current · checked 2026-10-21
 
 Function templates in `namespace batchlas::device` (`#include <batchlas/blas/device.hh>`) that run
 **inside** a SYCL kernel. A work-item group computes **one** operation on **one** matrix or vector.
@@ -72,7 +72,7 @@ When no tiled path applies, `gemm`, `syrk`/`herk` and `syr2k`/`her2k` run the ge
 **tile-group (0, 0) only**. Otherwise each group would scale `C` by `beta` again. The result is correct
 but slow (guard: `group_blas_gemm.hh`, `group_blas_rankk.hh`).
 
-The guard is narrower than the hazard (read from the code on 2026-10-06, not tested):
+The guard is narrower than the hazard (read from the code, last on 2026-10-21; not tested):
 
 * `gemm`'s non-register sub-group path runs before the guard, and every tile-group runs it over the whole output.
 * `symm` and `trmm` have no guard at all.
@@ -106,8 +106,10 @@ with one tile-group.
 
 ## Device group BLAS: where it is used
 
-- Library: `src/ops/syev/sytrd/latrd_lower_panel.cc`, `larft_wy.hh`, `ormqr_cta.cc`, `ormqr_blocked.cc`,
-  `sytrd_blocked.cc`, `src/math-helpers.hh`.
+- Library: `src/ops/syev/sytrd/latrd_lower_panel.cc`, `src/ops/syev/sytrd/sytrd_blocked.cc`,
+  `src/kernels/common/larft_wy.hh` (and through it `src/ops/ormqr/kernels/ormqr_blocked.cc`),
+  `src/ops/ormqr/kernels/ormqr_cta.cc`, `src/math-helpers.hh`. Several CTA kernels include
+  `device/detail/group_blas_common.hh` for its executor helpers only.
 - Tests: `tests/device_blas_tests.cc`. Benchmarks: `benchmarks/device_blas_level{2,3}_benchmark.cc`.
 
 The device group BLAS is outside the host-side selection layer ([flat kernel selection](flat-kernel-selection.md)).

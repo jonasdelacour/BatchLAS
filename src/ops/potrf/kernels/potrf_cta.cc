@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched POTRF: the CTA kernel's launcher and capability surface; the
 // device code is in potrf_cta_device.hh. This TU must stay in EXTENSIONS_CTA_SOURCES
 // next to potrf_blocked.cc, whose diagonal leaf is potrf_cta_body -- splitting a

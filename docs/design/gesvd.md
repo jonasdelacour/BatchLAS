@@ -1,14 +1,26 @@
 # gesvd design {#design_gesvd}
 
-> **Status:** current.
+> **Status:** current · checked 2026-10-21
 
-Batched SVD uses one-sided Jacobi (`gesvdj_cta`) up to n = 64 (complex\<double\> with vectors up
-to 32). Above that it bidiagonalises with `gebrd`, solves the bidiagonal problem with `bdsdc` on
-the batched `stedc`, and back-transforms with `ormbr`. Complex input takes the same path: `gebrd`
-follows LAPACK `zlabrd`/`zgebd2` with a real-beta `zlarfg`, so the bidiagonal is real and the real
-`bdsdc` solves it; its real vectors are widened into U and \f$V^H\f$ before the complex `unmbr`
-back-transforms (rows hold \f$\bar u\f$, as `unmbr 'P'` expects). This page gives the design rules, the
-kernel's local-memory and scaling rules, and the traps. Measurements are in @ref perf_gesvd "the GESVD performance page".
+Batched SVD has four families, chosen per shape by `tuned/gesvd.<device>.txt`: one-sided Jacobi
+(`gesvdj_cta`, \f$\max(m,n) \le 64\f$; complex\<double\> with vectors to 32), the normal-equations
+`cta` path (\f$\le 32\f$), the bidiagonal `blocked` path (`gebrd`, then `bdsdc` on the batched
+`stedc`, then `ormbr`), and the vendor. Complex general input takes `blocked`: `gebrd` follows
+LAPACK `zlabrd`/`zgebd2` with a real-beta `zlarfg`, so the bidiagonal is real and the real `bdsdc`
+solves it; its real vectors are widened into U and \f$V^H\f$ before the complex `unmbr`
+back-transforms (rows hold \f$\bar u\f$, as `unmbr 'P'` expects). This page gives the design rules,
+the Jacobi kernel's local-memory and scaling rules, and the traps. Measurements are in
+@ref perf_gesvd "the GESVD performance page".
+
+| Piece | Source |
+|---|---|
+| entry point, `can_run`, workspace, launch | `src/ops/gesvd/gesvd.cc` |
+| families `jacobi`, `cta`, `blocked`, `vendor`; keys `herm`, `vec`, `m`, `n` | `src/ops/gesvd/choice.hh` |
+| Jacobi and CTA ceilings (`gesvd_jacobi_max_dim`, `kGesvdCtaMaxDim`) | `src/ops/gesvd/gesvd_native.hh` |
+| one-sided Jacobi kernel | `src/ops/gesvd/kernels/gesvdj_cta.cc` |
+| `cta` and `blocked` drivers | `src/ops/gesvd/kernels/gesvd_blocked.cc` |
+| sub-ops | `src/ops/gesvd/{gebrd,bdsdc,bdsqr,ormbr}/` |
+| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1734` |
 
 ## gesvd design: why one-sided Jacobi
 
@@ -32,8 +44,8 @@ Remark 2.2).
 Why Jacobi here:
 
 - **No back-transform.** U and V come out of the iteration.
-- **One kernel.** The former CTA path needed five or more launches with global round trips.
-- **Dial.** `max_sweeps` and `tol_multiplier` (`GesvdjParams`).
+- **One kernel.** The `cta` family needs five or more launches with global round trips.
+- **Dial.** `max_sweeps` (default 30) and `tol_multiplier` (default 1) in `GesvdjParams`.
 - **Reuse.** `gesvdj_cta` is `syev_jacobi_cta` without its Phase 2 (the \f$A \leftarrow U^H A\f$
   update), plus a Gram phase, column norms and an SVD epilogue.
 
@@ -72,8 +84,16 @@ factor of n. The rejected criteria are in the
 
 `bdsdc` writes the vectors it computes, so \f$U^T U = I\f$ is a property of the method.
 `tests/bdsdc_tests.cc` checks it on graded spectra, a hostile gebrd-like generator, rank
-deficiency of multiplicity 1-5, and the all-zero matrix. `bdsqr` stays behind
-`BATCHLAS_GESVD_BIDIAG=bdsqr`: it keeps relative accuracy for tiny \f$\sigma\f$ at 300-400x the cost.
+deficiency of multiplicity 1-5, and the all-zero matrix.
+
+`BATCHLAS_GESVD_BIDIAG` picks the `blocked` path's bidiagonal solver
+(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:57-65`):
+
+| Value | Solver | Note |
+|---|---|---|
+| unset, `bdsdc`, anything else | `bdsdc` | default |
+| `bdsqr` | one thread per matrix, zero-shift QR | keeps relative accuracy for tiny \f$\sigma\f$ at 300-400x the cost |
+| `normal` | tridiagonal of \f$B^T B\f$ | squares \f$\kappa\f$; overridden for a thin tall U (`:80-82`) |
 
 ## gesvdj_cta: the lane-equals-row mapping decision
 
@@ -125,10 +145,13 @@ Bytes per problem with V resident, plus the work-group pair table:
 | complex\<float\> | 17,344 (+992) | 67,712 + 4,032 = 71,744 |
 | complex\<double\> | 34,624 (+992) | 134,784 + 4,032 = 138,816 |
 
-The device reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
-launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim` (`src/ops/gesvd/gesvd_native.hh`) sets
-the cap, and both the kernel guard `gesvdj_cta_max_dim` and `can_run` read it. Other types drop to
-1-2 work-groups per SM, against 10 at C=32. Occupancy, not the cap, is the binding limit.
+The RTX 4090 reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
+launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim<T>(want_vectors, budget)`
+(`src/ops/gesvd/gesvd_native.hh:30`) returns the widest C whose smallest work-group fits the
+device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:84`) and the kernel guard
+`gesvdj_cta_max_dim` (`gesvdj_cta.cc:802`) both read it, so a device with less local memory gets
+a lower cap. Other types drop to 1-2 work-groups per SM, against 10 at C=32. Occupancy, not the
+cap, is the binding limit.
 
 - The pair table is `int16` `p | (q << 8)`, with `static_assert(C <= 64)`. The packing breaks at
   \f$C \ge 128\f$.
@@ -189,9 +212,10 @@ ratio of \f$1.69\times10^{38}\f$, against \f$9.2\times10^{18}\f$ for centring on
 input keeps \f$\beta = 1\f$. The column-norm epilogue uses a scaled sum of squares. Without it, an
 underflowing norm gives \f$\sigma = 0\f$ and fabricates a U column.
 
-> **Note:** the \f$\max\f$/\f$\min\f$ reductions read `Nrm_local` only for the first 32 columns. On the
-> C=64 rung, columns 32..63 do not affect \f$\beta\f$. Correctness holds, but the overflow headroom
-> covers only those 32 columns. Observed, not measured.
+> **Note:** the \f$\max\f$/\f$\min\f$ reductions read `Nrm_local` only for the first 32 columns
+> (`gesvdj_cta.cc:354`). On the C=64 rung, columns 32..63 do not affect \f$\beta\f$. Correctness
+> holds, but the overflow headroom covers only those 32 columns. Read from the code, not measured;
+> listed as an [unverified candidate](known-defects.md#unverified-candidates).
 
 ## gesvdj_cta: sweep, convergence and extraction rules
 
@@ -234,8 +258,9 @@ column is still repaired.
 
 ## gesvdj_cta: traps and dead ends
 
-- **Build group.** `gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES`
-  (`src/ops/CMakeLists.txt`). Moving it gives the 32-lane kernel a CPU AOT image with no error.
+- **Build group.** `gesvd/kernels/gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES`
+  (`src/ops/CMakeLists.txt:88`), the one library configured `NO_CPU_TARGETS`. Moving it gives the
+  32-lane kernel a CPU AOT image with no error.
 - **`GesvdjParams` is its own struct.** Reusing `JacobiParams` would bring its ascending
   `sort_order` default, which invites a silent reversal.
 - **Explicit instantiations** each need a `template ...;` line spelled with `BATCHLAS_UNPAREN fp`.
@@ -270,25 +295,36 @@ LAPACK 'O' is absent. If added, append an enumerator so existing ordinals stay s
 
 ## gesvd design: vendor binding and dispatch
 
-- **The header declares `backend::gesvd_vendor` only.** Each backend TU defines and instantiates
-  it for its own `Backend`. A throwing definition in the header would collide with `cusolver.cc`.
+- **The header declares `backend::gesvd_vendor` only** (`include/batchlas/blas/functions/gesvd.hh:220`).
+  Each backend TU (`src/backends/cusolver.cc:417`, `rocsolver.cc:420`, `netlib_lapack.cc:878`)
+  defines and instantiates it for its own `Backend`. A throwing definition in the header would
+  collide with `cusolver.cc`.
 - **One branch per family, checked by the compiler.** `launch` and `workspace` in
   `src/ops/gesvd/gesvd.cc` are `std::visit`s over `GesvdChoice`.
+- **`can_run` (`gesvd.cc:71-93`) is correctness only.** Every family needs a homogeneous batch.
+  `jacobi`: not Hermitian, sub-group 32, \f$\max(m,n) \le\f$ `gesvd_jacobi_max_dim`. `cta`:
+  sub-group 32, \f$\max(m,n) \le 32\f$, not thin; real general or square Hermitian. `blocked`: real
+  general or square Hermitian Lower. `vendor`: the solver library.
 - **A pin that `can_run` refuses throws.** `BATCHLAS_GESVD_ROUTE=jacobi` on a 128x128 real matrix
-  raises `std::invalid_argument` (`src/select/select.hh`). Only `native` and `vendor` fall back.
+  raises `batchlas::invalid_argument` (`src/select/select.hh`). Only `native` and `vendor` fall back.
 - **Order lives in the tables.** Jacobi is ahead of CTA on accuracy evidence
   ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)). The order is
-  the rows of `tuned/gesvd.<arch>.txt`. Jacobi stays admissible to 64, so a pin still
-  reaches the 33..64 band
-  ([evidence](../perf/gesvd.md#gesvd-what-routes-today)).
+  the rows of `tuned/gesvd.<device>.txt` (sm_89 transcribed, sm_120 deep-measured). Jacobi stays
+  admissible to 64, so a pin still reaches the 33..64 band
+  ([evidence](../perf/gesvd.md#gesvd-what-routes-today)). Where a table ranks `cta` first for real
+  general input with vectors, [known defect 18](known-defects.md#defect-18-gesvd_cta-left-vectors-lose-orthogonality-as-eps-times-kappa-squared)
+  applies.
 
 ## gesvd design: test and benchmark traps
 
-- Register a test binary in both `TEST_TARGETS` and the `eig` label list in `tests/CMakeLists.txt`.
-  A missing label drops it from `ctest -L eig` without an error.
+- Register a test binary in both `TEST_TARGETS` and `BATCHLAS_TEST_LABELS_eig` in
+  `tests/CMakeLists.txt`. A missing label drops it from `ctest -L eig` without an error.
 - Fill test matrices with the plain `Matrix<T,F>(n, n, batch)` constructor when the host writes to
   them afterwards. `Matrix::Zeros` and `Matrix::Diagonal` race with those writes.
-- A test through `gesvd` must assert the route taken, on an observable only that path produces.
-  For example, \f$\|U^H U - I\|\f$ at \f$\kappa = 10^5\f$.
+- A test through `gesvd` must pin or assert the route taken (`BATCHLAS_GESVD_ROUTE`, a
+  `select::ScopedPin`), on an observable only that path produces. For example,
+  \f$\|U^H U - I\|\f$ at \f$\kappa = 10^5\f$.
+- Check results with `EXPECT_VERIFY` (`Check::factorization`, `Check::orthogonality_rotations`,
+  `Check::values`; @ref design_verification), not a local residual helper.
 - minibench positional arguments replace the whole sweep. `state.range(i)` returns 0 when missing,
   so pass all four (`32 16384 1 1`).

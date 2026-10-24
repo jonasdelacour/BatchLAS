@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The POD device scalar shared by the SYCL kernels. std::complex must never

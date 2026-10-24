@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests for bdsdc, the bidiagonal divide-and-conquer SVD.
 //
 // bdsdc solves the same problem as bdsqr but through the interleaved

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every potrf candidate, pinned: docs/design/flat-kernel-selection.md §8.1-§8.3 and §8.5.
 // The limit oracle below reads the drivers' own capacity queries; whether a pin was taken is
 // read back from the select trace, never assumed from the pin being accepted.
@@ -6,6 +7,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/error.hh>
 #include <batchlas/no_route.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/util/env.hh>
@@ -156,7 +158,7 @@ void expect_factored(Queue& ctx, const Prob<T>& p, const std::vector<int32_t>& i
 bool clobbers_other(const C& c, Uplo uplo) { return std::holds_alternative<pc::Vendor>(c) && uplo == Uplo::Upper; }
 
 // The spelling the outermost potrf trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -308,7 +310,7 @@ protected:
                         return backend::potrf_vendor<B, T>(q, A, uplo, w, info);
                     });
                 } else {
-                    throw std::runtime_error("no vendor solver in this build");
+                    throw batchlas::unsupported("no vendor solver in this build");
                 }
             }
         }, c);

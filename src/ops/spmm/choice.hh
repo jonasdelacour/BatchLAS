@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -16,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::spmm_vendor (cuSPA
 
 using SpmmChoice = std::variant<Direct, Vendor>;  ///< fieldless: body (by transA), column block, pair load derived
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<SpmmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};  ///< vendor: every format

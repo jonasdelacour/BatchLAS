@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <algorithm>
 #include <complex>
 #include <type_traits>

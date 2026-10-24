@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // The target device code is lowered to, as a value. DPC++ runs one device pass per target, so
 // these are compile-time constants. AdaptiveCpp generic (SSCP) compiles one IR for every target

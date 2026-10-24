@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrf for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted
 // inputs (row-permuted dominant, complex parts both), verified on the default items by
 // MatrixView::getrf_residual (factorization) and MatrixView::pivot_ratio (the partial-pivoting rule
@@ -23,7 +24,7 @@ namespace {
 
 namespace F = ops::getrf;
 
-template <class T>
+template <typename T>
 struct GetrfProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -73,7 +74,7 @@ public:
     std::string op() const override { return "getrf"; }
     std::vector<std::string> key_names() const override { return {F::key_names.begin(), F::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(F::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(F::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, b;
@@ -124,7 +125,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/getrf_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             GetrfProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad);
             if (req.mode == "race") return run_race<F::GetrfChoice>("getrf", p, req, 1.0);
             return run_arms<F::GetrfChoice>("getrf", p, req, 1.0);

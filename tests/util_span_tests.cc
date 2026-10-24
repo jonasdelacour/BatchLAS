@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/sycl-span.hh>
 #include <vector>
@@ -42,7 +43,7 @@ TEST(SyclSpanTest, CopyConstruction) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> original(data, 5);
     Span<int> copy(original);
-    
+
     EXPECT_EQ(copy.size(), 5);
     EXPECT_EQ(copy.data(), data);
     EXPECT_EQ(copy[0], 1);
@@ -52,12 +53,12 @@ TEST(SyclSpanTest, CopyConstruction) {
 TEST(SyclSpanTest, Subspan) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> span(data, 5);
-    
+
     Span<int> sub1 = span.subspan(2);
     EXPECT_EQ(sub1.size(), 3);
     EXPECT_EQ(sub1.data(), data + 2);
     EXPECT_EQ(sub1[0], 3);
-    
+
     Span<int> sub2 = span.subspan(1, 3);
     EXPECT_EQ(sub2.size(), 3);
     EXPECT_EQ(sub2.data(), data + 1);
@@ -68,7 +69,7 @@ TEST(SyclSpanTest, Subspan) {
 TEST(SyclSpanTest, IteratorAccess) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> span(data, 5);
-    
+
     int sum = 0;
     for (auto it = span.begin(); it != span.end(); ++it) {
         sum += *it;
@@ -79,7 +80,7 @@ TEST(SyclSpanTest, IteratorAccess) {
 TEST(SyclSpanTest, FrontBack) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> span(data, 5);
-    
+
     EXPECT_EQ(span.front(), 1);
     EXPECT_EQ(span.back(), 5);
 }
@@ -87,14 +88,14 @@ TEST(SyclSpanTest, FrontBack) {
 TEST(SyclSpanTest, SizeBytes) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> span(data, 5);
-    
+
     EXPECT_EQ(span.size_bytes(), 5 * sizeof(int));
 }
 
 TEST(SyclSpanTest, AsSpan) {
     int data[5] = {1, 2, 3, 4, 5};
     Span<int> span(data, 5);
-    
+
     Span<char> charSpan = span.template as_span<char>();
     EXPECT_EQ(charSpan.size(), 5 * sizeof(int));
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // symm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/symm.<device>.txt row that can_run() admits. Expand mirrors A's referenced triangle into a
 // dense scratch copy and hands it to the public gemm, which picks its own kernel; Vendor is the per-item
@@ -7,6 +8,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/symm.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/level3/batched.hh>
@@ -30,17 +32,17 @@ namespace ops::symm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 template <Backend B>
 inline constexpr bool kExpandWired = select::native_gpu_backend<B> || B == Backend::ROCM;
 // ROCm's vendor arm symmetrizes a real copy (MatrixView::symmetrize is real-only).
-template <Backend B, class T>
+template <Backend B, typename T>
 inline constexpr bool kVendorWired =
     select::has_library<B>(spec.vendor) && !(B == Backend::ROCM && !std::is_floating_point_v<T>);
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& C) {
     return {{"form", form_of(C.rows(), C.cols())}, {"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -51,7 +53,7 @@ select::Key key_of(const MV<T>& C) {
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget) and grid z holds its batch, so the launch
 // chunks the batch and only an item whose own scratch does not fit is refused.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = kExpandWired<B>;
@@ -66,7 +68,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
 
 // rocBLAS has no symm wrapper: ROCm's vendor arm symmetrizes a copy of A and calls the public
 // gemm, with none of expand's batch or scratch limits. The copy dies here, so the call waits.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
                       Uplo uplo) {
     Matrix<T, MatrixFormat::Dense> full(A.rows(), A.cols(), A.batch_size());
@@ -82,7 +84,7 @@ Event symmetrize_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
     return q.create_event_after_external_work();
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
@@ -90,7 +92,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             if constexpr (kExpandWired<B>)
                 return level3::expand_gemm<B, T, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw std::logic_error("symm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("symm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B == Backend::ROCM && kVendorWired<B, T>)
@@ -109,7 +111,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, FloatingOrComplexScalar T>
 Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
-    backend::shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
+    backend::shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
     // An empty problem is a no-op under any pin, as syrk's and trmm's are (the cuBLAS loop faults on one).
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: C's extents and A's order.

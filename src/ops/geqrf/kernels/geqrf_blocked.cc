@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF -- the BLOCKED tier: a right-looking blocked Householder QR.
 // Per panel: geqr2 leaf, pack V, larft T, then W1 = V^H A22; W2 = T^H W1; A22 -= V W2.
 // The update applies (I - V T^H V^H), not (I - V T V^H); identical for real scalars, so
@@ -37,7 +38,7 @@ namespace {
 // GEMM gates its float transposed-register kernel on Transpose::Trans.
 template <typename T>
 inline constexpr Transpose kConjT =
-    batchlas::internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    batchlas::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
 // Keep a multiple of 16, and never below 32 for complex: the wide-scalar GEMM gates on
 // min_dim >= 32, and min_dim of the trailing NN update IS the block width.

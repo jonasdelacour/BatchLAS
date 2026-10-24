@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
 #include <src/math-helpers.hh>
 
@@ -8,7 +9,7 @@ Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
     detail::require_device_fp64<T>(ctx, "lascl");
     constexpr T zero = T(0);
     constexpr T one  = T(1);
-    const T smlnum = internal::smlnum<T>();
+    const T smlnum = detail::smlnum<T>();
     const T bignum = T(1) / smlnum;
 
     T cfromc = cfrom;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -34,7 +35,7 @@ namespace {
 
 template <typename T>
 inline void enforce_real_diagonal(T& x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
         x = T(static_cast<Real>(x.real()), Real(0));
     }
@@ -116,7 +117,7 @@ inline void dump_dense_matrix_csv(Queue& ctx,
     for (int j = 0; j < cols; ++j) {
         for (int i = 0; i < rows; ++i) {
             const T v = host_view(i, j, 0);
-            if constexpr (internal::is_complex<T>::value) {
+            if constexpr (detail::is_complex<T>::value) {
                 os << i << "," << j << "," << std::real(v) << "," << std::imag(v) << "\n";
             } else {
                 os << i << "," << j << "," << v << "," << 0 << "\n";
@@ -514,7 +515,7 @@ inline void bandr1_one_qr_step(Queue& ctx,
     }
     const int dump_batch = dump.batch;
 
-    const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
     const int m = i2 - i1 + 1;
     const int r = j2 - j1 + 1;
@@ -932,7 +933,7 @@ inline int bandr1_run_chase_sweeps(
                 }
 
                 bandr1_one_qr_step<B, T>(ctx, abw, kd_work, b, sweep, step_in_sweep, steps_done, i1, i2, j1, j2,
-                                         buffers.Bmat, buffers.Symmat, buffers.Postmat, 
+                                         buffers.Bmat, buffers.Symmat, buffers.Postmat,
                                          buffers.Premat, buffers.Rightmat,
                                          buffers.tau_buf, buffers.ws_backend);
                 ++steps_done;
@@ -1000,7 +1001,7 @@ inline void bandr1_extract_tridiagonal_output(
                          [=](sycl::id<2> idx) {
                              const int b = static_cast<int>(idx[0]);
                              const int j = static_cast<int>(idx[1]);
-                             dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                             dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
                          });
     });
 
@@ -1010,7 +1011,7 @@ inline void bandr1_extract_tridiagonal_output(
                              [=](sycl::id<2> idx) {
                                  const int b = static_cast<int>(idx[0]);
                                  const int j = static_cast<int>(idx[1]);
-                                 eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
+                                 eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
                                  tauptr[b * tau_stride + j * tau_inc] = T(0);
                              });
         });
@@ -1135,7 +1136,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
 
     size_t off = 0;
     auto buffers = bandr1_init_buffers_and_copy_input<T>(ctx, ab_in, abw_out, kd, kd_work, nb_target, ws, off);
-    
+
     const int max_sweeps = (params.max_sweeps < 0) ? std::max(0, kd - 1) : std::max(0, params.max_sweeps);
     bandr1_run_chase_sweeps<B, T>(ctx, abw_out, kd_work, kd, n, d_seq_single, nb_seq_single, max_sweeps, max_steps, buffers);
 
@@ -1250,7 +1251,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
             });
         });
 
@@ -1285,7 +1286,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
             cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n)), [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
-                dptr[b * d_stride + j * d_inc] = internal::real_part(AB(0, j, b));
+                dptr[b * d_stride + j * d_inc] = detail::real_part(AB(0, j, b));
             });
         });
 
@@ -1294,7 +1295,7 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
                 cgh.parallel_for(sycl::range<2>(static_cast<size_t>(batch), static_cast<size_t>(n - 1)), [=](sycl::id<2> idx) {
                     const int b = static_cast<int>(idx[0]);
                     const int j = static_cast<int>(idx[1]);
-                    eptr[b * e_stride + j * e_inc] = internal::abs(AB(1, j, b));
+                    eptr[b * e_stride + j * e_inc] = detail::abs(AB(1, j, b));
                     tauptr[b * tau_stride + j * tau_inc] = T(0);
                 });
             });

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gemm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.3): select::run takes
 // the first entry of the nearest tuned/gemm.<device>.txt row that can_run() admits. A
 // heterogeneous batch never reaches choose(): it is split into homogeneous items first, and each item
@@ -27,14 +28,14 @@ namespace ops::gemm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 struct Dims {
     std::int64_t m, n, k;
 };
 
-template <class T>
+template <typename T>
 Dims dims_of(const MV<T>& A, const MV<T>& B, Transpose ta, Transpose tb) {
     const auto [m, k] = get_effective_dims(A, ta);
     const auto [kb, n] = get_effective_dims(B, tb);
@@ -43,29 +44,29 @@ Dims dims_of(const MV<T>& A, const MV<T>& B, Transpose ta, Transpose tb) {
 }
 
 // One launch covers the batch with one (m, n, k, ld, stride), so the three views must agree.
-template <class T>
+template <typename T>
 void validate(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Transpose tb) {
     const auto [m, k] = get_effective_dims(A, ta);
     const auto [kb, n] = get_effective_dims(B, tb);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size() || k != kb || C.rows() != m ||
         C.cols() != n || m < 0 || n < 0 || k < 0)
-        throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+        throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
 }
 
-template <class T>
+template <typename T>
 bool contiguous16(const MV<T>& M) {
     const bool aligned = reinterpret_cast<std::uintptr_t>(M.data_ptr()) % 16 == 0;
     return aligned && M.ld() == M.rows() && (M.batch_size() == 1 || M.stride() == M.ld() * M.cols());
 }
 
 // C folds to T for a real scalar (conj is the identity): one row serves both.
-template <class T>
+template <typename T>
 std::string_view trans_word(Transpose t) {
     if (t == Transpose::NoTrans) return "N";
     return (!is_complex_v<T> || t == Transpose::Trans) ? "T" : "C";
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta, Transpose tb) {
     const Dims d = dims_of<T>(A, B, ta, tb);
     const bool packed = contiguous16<T>(A) && contiguous16<T>(B) && contiguous16<T>(C);
@@ -74,7 +75,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, const MV<T>& C, Transpose ta,
 }
 
 // Does a wide config instantiate this form? A real Trans is served by a ConjTrans instantiation.
-template <class T>
+template <typename T>
 bool wide_form(const WideCfg& c, Transpose ta, Transpose tb) {
     auto op = [](Transpose t) { return t == Transpose::NoTrans ? 0 : t == Transpose::Trans ? 1 : 2; };
     return wide_serves<T>(c, op(ta), op(tb));
@@ -92,7 +93,7 @@ inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
 // vendor library exists it is the one that honours the hint (tensor cores), so the natives answer
 // it only when there is none. Any other pair (F64 on float, F32 on double, ...) is an error on
 // every path, as cuBLAS's enum_convert already makes it.
-template <class T>
+template <typename T>
 bool native_serves_precision(ComputePrecision p, bool has_vendor) {
     constexpr bool single = std::is_same_v<typename base_type<T>::type, float>;
     switch (p) {
@@ -109,7 +110,7 @@ bool native_serves_precision(ComputePrecision p, bool has_vendor) {
 // Correctness only (R3): false means the launcher would throw or answer wrongly. Every register
 // and wide tile hard-wires its transpose form, so a form it does not instantiate is refused
 // here (a silent wrong answer otherwise). evidence: docs/perf/gemm.md#choices-flat-selection-p34
-template <class T>
+template <typename T>
 bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, const MV<T>& C,
              Transpose ta, Transpose tb, ComputePrecision precision) {
     const Dims s = dims_of<T>(A, B, ta, tb);
@@ -162,7 +163,7 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
 // Runs `fn` on consecutive batch chunks of at most `chunk` items, so a native kernel that puts the
 // batch in grid z serves any batch. The chunks are disjoint in C and the views are the strided
 // ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call.
-template <class T, class Fn>
+template <typename T, typename Fn>
 Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, std::int64_t chunk, Fn&& fn) {
     const std::int64_t batch = A.batch_size();
     if (batch <= chunk) return fn(A, Bm, C);
@@ -180,7 +181,7 @@ Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C
     return last;
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Transpose ta, Transpose tb, ComputePrecision precision) {
     const std::int64_t grid = select::device_of<B>(q).max_groups_yz;

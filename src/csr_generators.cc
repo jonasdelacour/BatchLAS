@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/csr_generators.hh>
 
 namespace batchlas {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched POTRF, declarations only (no <sycl/sycl.hpp>). EVERY *_dispatch re-checks its

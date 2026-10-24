@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Offline replay of the tiered tuner against an exhaustive raw sweep, and the slowdown replay of planning

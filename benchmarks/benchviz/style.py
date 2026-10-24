@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The house figure style (ported from the deleted plotting/stylesheet.py), as used for the PASC'24
 dualization paper and the MSc thesis.
 

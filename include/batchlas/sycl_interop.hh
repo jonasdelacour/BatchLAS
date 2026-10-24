@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 /// @file
 /// @brief SYCL interop: batchlas::Queue and batchlas::Event to and from `sycl::queue` and

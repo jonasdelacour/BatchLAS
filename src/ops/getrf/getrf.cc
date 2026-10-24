@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrf (flat-kernel-selection.md §4.3, R1; phase 5): select::run takes the first entry of the nearest
 // tuned/getrf.<device>.txt row that can_run() admits. Tiny holds the whole matrix in registers,
 // Cta in local memory; Blocked factorises Cta-sized panels and updates the rest with the public trsm and
@@ -27,10 +28,10 @@ namespace ops::getrf {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -39,7 +40,7 @@ select::Key key_of(const MV<T>& A) {
 // argument check at the top of that driver's *_dispatch. One launch covers the batch with a single
 // (n, ld, stride), so no family takes a heterogeneous batch: every vendor runs each item at the
 // top-level order (known-defects #12).
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 &&
@@ -65,7 +66,7 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivots, Span<std::byte> ws,
              Span<int32_t> info) {
     return std::visit(overloaded{
@@ -94,7 +95,7 @@ Event launch(Queue& q, const GetrfChoice& c, const MV<T>& A, Span<int64_t> pivot
 
 // Exactly the chosen family's need (R5); Blocked's gemm and trsm take no workspace. None of these
 // may read A.data_ptr(): inv.cc sizes getrf from a layout pass with a null data pointer.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_getrf::getrf_tiny_buffer_size<T>(q, A); },
@@ -112,7 +113,7 @@ std::size_t workspace(Queue& q, const GetrfChoice& c, const MV<T>& A) {
 
 template <Backend B, typename T>
 Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
-            Span<std::byte> work_space, Span<int32_t> info) {
+            Span<std::byte> workspace, Span<int32_t> info) {
     getrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -122,7 +123,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
     return select::run<B, T>(
         ops::getrf::spec, ctx, key, ops::getrf::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getrf::can_run<B, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getrf::launch<B, T>(ctx, c, A, pivots, work_space, info); });
+        [&](const auto& c) { return ops::getrf::launch<B, T>(ctx, c, A, pivots, workspace, info); });
 }
 
 template <Backend B, typename T>

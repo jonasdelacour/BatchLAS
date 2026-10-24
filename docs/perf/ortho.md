@@ -42,7 +42,7 @@ Invariants that the code keeps next to the call:
 - `svqb_alg` keeps its GEMM. It scales the whole `k x k` matrix before `syev`, so a one-triangle `C`
   would multiply uninitialised workspace.
 - The gate is that `syrk` reaches the Gram tile kernel on this route (`select::level3_tile_substitution_enabled`,
-  `src/select/vendor.hh`), not "this is NVIDIA".
+  `src/select/vendor.hh:105`; `gram_via_syrk`, `src/ops/ortho/ortho.cc:173-177`), not "this is NVIDIA".
 - `BATCHLAS_ORTHO_GRAM=gemm` pins GEMM, so the substitution can be measured from one binary.
 
 ## ortho: host devices force Householder
@@ -59,7 +59,7 @@ for. The LOBPCG soft-locking A/B hit exactly this (see [soft locking](syevx.md#l
 
 ## ortho: open debts
 
-- **The transposed CGS arm** builds a view that does not describe the memory; see
-  [known defect 1](../design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory).
+- **The transposed CGS arm** is fixed ([known defect 1](../design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory),
+  WP8; `src/ops/ortho/ortho.cc:228-231`) but has no timing on this page.
 - The per-precision table has no recorded date or raw file. A re-measure should record both (see
   @ref documentation_conventions).

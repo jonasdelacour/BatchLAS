@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Fold a full GEMM product into the uplo triangle of C only:

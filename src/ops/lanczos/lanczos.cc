@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 //Implementation file for Lanczos algorithm
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>
@@ -50,32 +51,32 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         auto n = A.rows();
 
-        auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
+        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
         auto Vmem = pool.allocate<T>(ctx, (1+n)*n*batch_size);
         auto V_vectormem = pool.allocate<T>(ctx, n*2*batch_size);
         auto alphas = pool.allocate<T>(ctx, n*batch_size);
         auto betas = pool.allocate<T>(ctx, n*batch_size);
-        
+
         //Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
         // Known defect: both columns are multiplied, one is consumed.
         // evidence: docs/design/known-defects.md#defect-3-lanczos-issues-a-two-column-multiply-and-consumes-one-column
         auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size);
-        
+
         Span<std::byte> spmm_buffer;
         if constexpr (!(MF == MatrixFormat::Dense)){
             spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
         }
-        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size), 
+        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size),
             MatrixView(Vmem.data(), n, n-2, n, (n+1)*n, batch_size), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
 
         auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
         auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
 
-        
+
         auto wg_init = std::min(size_t(n), get_kernel_max_wg_size<InitKernel<B, T, MF>>(ctx));
         auto wg_lanczos = std::min(size_t(n), get_kernel_max_wg_size<LanczosKernel<B, T, MF>>(ctx));
-        
+
         //Initial guess
         auto init = [&](){
             ctx -> submit([&](sycl::handler& h) {
@@ -85,7 +86,7 @@ namespace batchlas {
                     auto tid = item.get_local_linear_id();
                     auto bdim = item.get_local_range()[0];
                     auto cta = item.get_group();
-                    
+
                     auto localV = Vmem.subspan(bid*(n+1)*n, n);
 
                     // Same start vector for every item: keyed on the row only.
@@ -135,7 +136,7 @@ namespace batchlas {
                         auto local_v_current =  Span(v_current_ptr +    bid*(n+1)*n,n);
                         auto local_v_next =     Span(v_next_ptr +       bid*2*n,n);
                         auto local_output =     Span(Vmem.data() + bid*(n+1)*n + (it+1)*n, n);
-                    
+
                         auto localAlphas = alphas.subspan(bid*n, n);
                         auto localBetas = betas.subspan(bid*n, n);
 
@@ -158,7 +159,7 @@ namespace batchlas {
                         }
                         auto beta = sycl::sqrt(real_part(batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>())));
                         localBetas[it] = beta;
-                        
+
                         if( it < iterations - 1) {
                             for (size_t i = tid; i < n; i += wg) {
                                 local_output[i] = local_v_next[i] / beta; //Normalize the Ritz vector
@@ -179,10 +180,10 @@ namespace batchlas {
                                                     VectorView<real_t>(W.data(), n, batch_size),
                                                     jobz,
                                                     steqr_params));
-        
+
         init();
         lanczos_iteration(n);
-        
+
         (void)steqr<B> (ctx,
             VectorView<real_t>(alphas.data(), n, batch_size),
             lanczos_offdiagonals<real_t>(betas.data(), n, batch_size),
@@ -226,7 +227,7 @@ namespace batchlas {
         auto subspace_view = MatrixView(V.data_ptr(), n, n - 1, n, (n+1)*n, batch_size);
 
         // Basic memory required for Lanczos iteration
-        size_t basic_size = BumpAllocator::allocation_size<T>(ctx, (n+1)*n*batch_size) + 
+        size_t basic_size = BumpAllocator::allocation_size<T>(ctx, (n+1)*n*batch_size) +
                           BumpAllocator::allocation_size<T>(ctx, n*2*batch_size) +
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // alphas
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // betas
@@ -237,7 +238,7 @@ namespace batchlas {
         }
         // Additional memory required for the tridiagonal solver
         basic_size += BumpAllocator::allocation_size<std::byte>(ctx,
-                        steqr_buffer_size<T>(ctx, 
+                        steqr_buffer_size<T>(ctx,
                             VectorView<typename base_type<T>::type>(nullptr, n, batch_size),
                             lanczos_offdiagonals<typename base_type<T>::type>(nullptr, n, batch_size),
                             VectorView<typename base_type<T>::type>(W.data(), n, batch_size),
@@ -245,8 +246,8 @@ namespace batchlas {
                             lanczos_steqr_params<T>()));
 
         // Eigenvector memory (only if needed)
-        size_t eigenvectors_size = (jobz == JobType::EigenVectors) ? 
-                                 BumpAllocator::allocation_size<T>(ctx, n*n*batch_size) : 
+        size_t eigenvectors_size = (jobz == JobType::EigenVectors) ?
+                                 BumpAllocator::allocation_size<T>(ctx, n*n*batch_size) :
                                  BumpAllocator::allocation_size<T>(ctx, n*batch_size);
 
         size_t sort_size = sort_buffer_size(ctx, W, V, jobz);
@@ -269,7 +270,7 @@ namespace batchlas {
         JobType, \
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
-    
+
     #define LANCZOS_INSTANTIATE_FOR_TYPE(back, fp) \
         BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(LANCZOS_INSTANTIATE, back, BATCHLAS_UNPAREN fp)
 

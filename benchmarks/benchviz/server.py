@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The live dashboard: standard library only (http.server + server-sent events).
 
 The server never measures anything itself. A run started from the page is a

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gesvd (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/gesvd.<device>.txt row that can_run() admits. Jacobi is one-sided Jacobi in local memory;
 // Cta forms the normal equations and solves them with syev_cta; Blocked bidiagonalises (or, Hermitian,
@@ -27,9 +28,9 @@ namespace ops::gesvd {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
-template <class T>
+template <typename T>
 using SV = Span<typename base_type<T>::type>;
 
 // The call after canonicalisation: Thin is rewritten to All wherever the two coincide, once,
@@ -41,13 +42,13 @@ struct Job {
     bool vectors() const { return jobu != SvdVectors::None || jobvh != SvdVectors::None; }
 };
 
-template <class T>
+template <typename T>
 Job canonical(const MV<T>& A, SvdVectors jobu, SvdVectors jobvh, std::optional<Uplo> herm) {
     const std::int64_t k = std::min<std::int64_t>(A.rows(), A.cols());
     return {canonical_jobu(jobu, A.rows(), k), canonical_jobvh(jobvh, A.cols(), k), herm};
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const Job& j) {
     const char* herm = !j.herm ? "N" : (*j.herm == Uplo::Lower ? "L" : "U");
     const char* vec = j.thin() ? "thin" : (j.vectors() ? "all" : "none");
@@ -55,7 +56,7 @@ select::Key key_of(const MV<T>& A, const Job& j) {
 }
 
 // A batch whose items sit ld * cols apart: gesvdjBatched takes no stride argument.
-template <class T>
+template <typename T>
 bool packed(const MV<T>& M) {
     return M.batch_size() == 1 || M.stride() == static_cast<std::int64_t>(M.ld()) * M.cols();
 }
@@ -66,7 +67,7 @@ bool packed(const MV<T>& M) {
 // Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
 // runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
@@ -92,7 +93,7 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
 }
 
 // Exactly the chosen family's need (R5).
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh,
                       const Job& j) {
     return std::visit(overloaded{
@@ -115,7 +116,7 @@ std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, c
 
 // Every driver clears or stores `info` itself, and exactly one runs. Jacobi gets default
 // GesvdjParams: no sweep cap is reachable from the public entry point.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh,
              const Job& j, Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -136,7 +137,7 @@ Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu, SvdVectors jobvh,
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
@@ -158,7 +159,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
         });
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
     if (A.batch_size() == 0) return 0;

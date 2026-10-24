@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """The op registry: what to run per LAPACK op, over which grid, and its flop
 count. Why only these ten ops, and why the BatchLAS arm is pinned `native`
 rather than `auto`: README.md, "What is compared"."""

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests of MatrixView's verification checks (docs/design/verification.md#verification-acceptance).
 // Every "exact" input is built from small integers and dyadic scalars, so the host reference is
 // exact in every dtype and an exact result scores 0. Unread triangles and padding hold large finite
@@ -32,9 +33,9 @@ namespace {
 using cfloat = std::complex<float>;
 using cdouble = std::complex<double>;
 using Dtypes = ::testing::Types<float, double, cfloat, cdouble>;
-template <class T> using MV = MatrixView<T, MatrixFormat::Dense>;
-template <class T> using promoted_t = typename MV<T>::promoted_type;
-template <class T> using real_t = batchlas::float_t<T>;
+template <typename T> using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename T> using promoted_t = typename MV<T>::promoted_type;
+template <typename T> using real_t = batchlas::float_t<T>;
 
 // Leaked: static destruction after the SYCL runtime is gone hangs.
 batchlas::Queue& ctx() {
@@ -47,20 +48,20 @@ const double kNaN = std::numeric_limits<double>::quiet_NaN();
 // Uniform [-1, 1] draws for the integer-valued cases, read from a filled Matrix.
 constexpr int kDraws = 4096;
 
-template <class E> E poison() { return MV<E>::make(3.0e3, -2.0e3); }
-template <class E> E bump() { return MV<E>::make(500.0, -300.0); }
-template <class T> T down(const promoted_t<T>& x) {
+template <typename E> E poison() { return MV<E>::make(3.0e3, -2.0e3); }
+template <typename E> E bump() { return MV<E>::make(500.0, -300.0); }
+template <typename T> T down(const promoted_t<T>& x) {
     const cdouble z(x);
     return MV<T>::make(z.real(), z.imag());
 }
-template <class T> T rand_int(const double*& rng, double amp) {
+template <typename T> T rand_int(const double*& rng, double amp) {
     const double re = std::round(amp * *rng++);
     const double im = std::round(amp * *rng++);
     return MV<T>::make(re, im);
 }
-template <class T> promoted_t<T> alpha_of() { return MV<T>::up(MV<T>::make(0.5, 0.5)); }
-template <class T> promoted_t<T> beta_of() { return MV<T>::up(MV<T>::make(-2.0, 1.0)); }
-template <class T> T phase(int k) {
+template <typename T> promoted_t<T> alpha_of() { return MV<T>::up(MV<T>::make(0.5, 0.5)); }
+template <typename T> promoted_t<T> beta_of() { return MV<T>::up(MV<T>::make(-2.0, 1.0)); }
+template <typename T> T phase(int k) {
     if constexpr (batchlas::is_std_complex_v<T>) {
         const int q = ((k % 4) + 4) % 4;
         return MV<T>::make(q == 0 ? 1.0 : q == 2 ? -1.0 : 0.0, q == 1 ? 1.0 : q == 3 ? -1.0 : 0.0);
@@ -72,7 +73,7 @@ template <class T> T phase(int k) {
 // One batched operand at a non-natural layout (matrix: ld = rows+3, stride = ld*cols+5; vector:
 // inc = 2, stride = 2*size+5), with its intended content per item kept aside so it can be re-stored
 // at a wrong layout.
-template <class E> struct Batched {
+template <typename E> struct Batched {
     using value_type = E;
     int rows = 0, cols = 0, inc = 1, ld = 0, batch = kB;
     long long stride = 0;
@@ -111,31 +112,31 @@ template <class E> struct Batched {
     VectorView<E> vview() { return VectorView<E>(buf.data(), rows, batch, inc, static_cast<int>(stride)); }
 };
 
-template <class C> double bound_of(const C& c) { return batchlas::verify::bound<typename C::type>(C::kind, c.bound_n); }
+template <typename C> double bound_of(const C& c) { return batchlas::verify::bound<typename C::type>(C::kind, c.bound_n); }
 
-template <class C> void expect_small(C& c) {
+template <typename C> void expect_small(C& c) {
     const double v = c.value();
     EXPECT_LT(v, bound_of(c) / 100) << "value " << v;
 }
-template <class C> void expect_fails(C& c) {
+template <typename C> void expect_fails(C& c) {
     const double v = c.value();
     EXPECT_TRUE(std::isnan(v) || v > bound_of(c) * 100) << "value " << v << " bound " << bound_of(c);
 }
 
-template <class C> void exact_is_small() { C c; expect_small(c); }
-template <class C> void perturbed_fails() {
+template <typename C> void exact_is_small() { C c; expect_small(c); }
+template <typename C> void perturbed_fails() {
     C c;
     c.out().at(kB / 2, c.hot_r, c.hot_c) += bump<typename std::remove_reference_t<decltype(c.out())>::value_type>();
     expect_fails(c);
 }
-template <class C> void wrong_ld_fails() { C c; c.out().store_wrong_ld(); expect_fails(c); }
-template <class C> void wrong_stride_fails() { C c; c.out().store_wrong_stride(); expect_fails(c); }
-template <class C> void last_item_only_fails() {
+template <typename C> void wrong_ld_fails() { C c; c.out().store_wrong_ld(); expect_fails(c); }
+template <typename C> void wrong_stride_fails() { C c; c.out().store_wrong_stride(); expect_fails(c); }
+template <typename C> void last_item_only_fails() {
     C c;
     c.out().at(kB - 1, c.hot_r, c.hot_c) += bump<typename std::remove_reference_t<decltype(c.out())>::value_type>();
     expect_fails(c);
 }
-template <class C> void nan_fails() {
+template <typename C> void nan_fails() {
     C c;
     c.out().at(kB / 2, c.hot_r, c.hot_c) = MV<typename std::remove_reference_t<decltype(c.out())>::value_type>::make(kNaN, 0.0);
     expect_fails(c);
@@ -144,7 +145,7 @@ template <class C> void nan_fails() {
 }  // namespace
 
 #define VERIFY_RESIDUAL_SUITE(Name, Case)                                                  \
-    template <class T> class Name : public ::testing::Test {};                             \
+    template <typename T> class Name : public ::testing::Test {};                             \
     TYPED_TEST_SUITE(Name, Dtypes);                                                        \
     TYPED_TEST(Name, ExactIsSmall) { exact_is_small<Case<TypeParam>>(); }                  \
     TYPED_TEST(Name, PerturbedElementFails) { perturbed_fails<Case<TypeParam>>(); }        \
@@ -157,7 +158,7 @@ namespace {
 
 // ------------------------------------------------------------------ potrf
 
-template <class T> struct PotrfCase {
+template <typename T> struct PotrfCase {
     using type = T;
     static constexpr Check kind = Check::factorization;
     static constexpr int n = 8;
@@ -191,14 +192,14 @@ template <class T> struct PotrfCase {
     double value() { return MV<T>::potrf_residual(ctx(), A0.mview(), F.mview(), uplo); }
 };
 
-template <class T> struct PotrfUpperCase : PotrfCase<T> {
+template <typename T> struct PotrfUpperCase : PotrfCase<T> {
     PotrfUpperCase() : PotrfCase<T>(Uplo::Upper) {}
 };
 
 // ------------------------------------------------------------------ similarity
 
 // Q = P D (a permutation with unit-phase entries, unitary and exact), B small complex integers, A0 = Q B Q^H.
-template <class T> struct SimilarityCase {
+template <typename T> struct SimilarityCase {
     using type = T;
     static constexpr Check kind = Check::factorization;
     static constexpr int n = 6;
@@ -234,7 +235,7 @@ template <class T> struct SimilarityCase {
 
 // ------------------------------------------------------------------ getrf
 
-template <class T> struct GetrfCase {
+template <typename T> struct GetrfCase {
     using type = T;
     static constexpr Check kind = Check::factorization;
     int m, n, mn, bound_n, hot_r, hot_c = 0;
@@ -285,7 +286,7 @@ template <class T> struct GetrfCase {
 
 // Reflectors with three unit-phase entries below the unit, so v^H v = 4 and tau = (1+i)/4 (real:
 // 1/2) makes H unitary with dyadic entries: Q R is exact in every dtype.
-template <class T> struct QrCase {
+template <typename T> struct QrCase {
     using type = T;
     static constexpr Check kind = Check::factorization;
     static constexpr int m = 9, n = 6, k = 6;
@@ -330,7 +331,7 @@ template <class T> struct QrCase {
 
 // ------------------------------------------------------------------ solve
 
-template <class T> struct SolveCase {
+template <typename T> struct SolveCase {
     using type = T;
     static constexpr Check kind = Check::solve;
     static constexpr int n = 8, nrhs = 5;
@@ -363,7 +364,7 @@ template <class T> struct SolveCase {
 };
 
 // getri: A0 = D P (unit phases times a permutation), X = A0^{-1} = P^T D^{-1}, B0 empty.
-template <class T> struct InverseCase {
+template <typename T> struct InverseCase {
     using type = T;
     static constexpr Check kind = Check::solve;
     static constexpr int n = 7;
@@ -393,7 +394,7 @@ template <class T> struct InverseCase {
 
 // ------------------------------------------------------------------ gemm family
 
-template <class T> promoted_t<T> op_at(const std::vector<T>& M, int rows, Transpose t, int i, int j) {
+template <typename T> promoted_t<T> op_at(const std::vector<T>& M, int rows, Transpose t, int i, int j) {
     if (t == Transpose::NoTrans) return MV<T>::up(M[j * rows + i]);
     const auto x = MV<T>::up(M[i * rows + j]);
     return t == Transpose::ConjTrans ? MV<T>::conj(x) : x;
@@ -406,7 +407,7 @@ struct GemmConfig {
     bool zero_beta = false;
 };
 
-template <class T> struct GemmCase {
+template <typename T> struct GemmCase {
     using type = T;
     static constexpr Check kind = Check::blas;
     GemmConfig g;
@@ -454,7 +455,7 @@ template <class T> struct GemmCase {
     }
 };
 
-template <class T> struct GemvCase {
+template <typename T> struct GemvCase {
     using type = T;
     static constexpr Check kind = Check::blas;
     static constexpr int ar = 7, ac = 5;
@@ -488,7 +489,7 @@ template <class T> struct GemvCase {
     }
 };
 
-template <class T> struct TrsmCase {
+template <typename T> struct TrsmCase {
     using type = T;
     static constexpr Check kind = Check::solve;
     Side side;
@@ -535,13 +536,13 @@ template <class T> struct TrsmCase {
     double value() { return MV<T>::trsm_residual(ctx(), A.mview(), side, uplo, ta, diag, X.mview(), B0.mview(), alpha); }
 };
 
-template <class T> struct TrsmRightCase : TrsmCase<T> {
+template <typename T> struct TrsmRightCase : TrsmCase<T> {
     TrsmRightCase() : TrsmCase<T>(Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::Unit) {}
 };
 
 // ------------------------------------------------------------------ spmm
 
-template <class T> struct SpmmCase {
+template <typename T> struct SpmmCase {
     using type = T;
     static constexpr Check kind = Check::blas;
     static constexpr int am = 6, ak = 7, n = 5;
@@ -601,19 +602,19 @@ template <class T> struct SpmmCase {
     double value() { return MV<T>::spmm_backward_error(ctx(), aview(), ta, B.mview(), tb, C0.mview(), C.mview(), alpha, beta); }
 };
 
-template <class T> struct SpmmTransCase : SpmmCase<T> {
+template <typename T> struct SpmmTransCase : SpmmCase<T> {
     SpmmTransCase() : SpmmCase<T>(Transpose::ConjTrans, Transpose::NoTrans) {}
 };
 
 // ------------------------------------------------------------------ orthogonality and eigen
 
 // Sylvester Hadamard H16 / 4 with unit phases on the rows: unitary, entries +-1/4 or +-i/4.
-template <class T> T hadamard(int i, int j, int b) {
+template <typename T> T hadamard(int i, int j, int b) {
     const int h = __builtin_popcount(unsigned(i & j)) % 2 == 0 ? 1 : -1;
     return down<T>(MV<T>::up(phase<T>(i + b)) * (0.25 * h));
 }
 
-template <class T> struct OrthoCase {
+template <typename T> struct OrthoCase {
     using type = T;
     static constexpr Check kind = Check::orthogonality;
     static constexpr int m = 16, k = 12;
@@ -630,7 +631,7 @@ template <class T> struct OrthoCase {
     double value() { return MV<T>::orthogonality(ctx(), Q.mview()); }
 };
 
-template <class T> struct EigenCase {
+template <typename T> struct EigenCase {
     using type = T;
     using R = real_t<T>;
     static constexpr Check kind = Check::eigen_residual;
@@ -661,7 +662,7 @@ template <class T> struct EigenCase {
     double value() { return MV<T>::eigen_residual(ctx(), A.mview(), V.mview(), w.vview()); }
 };
 
-template <class T> struct ValuesCase {
+template <typename T> struct ValuesCase {
     using type = T;
     using R = real_t<T>;
     static constexpr Check kind = Check::values;
@@ -831,16 +832,16 @@ TEST(PivotsValid, RangeAndLayout) {
 
 namespace {
 
-template <class T> T delta() { return MV<T>::make(0.5, -0.25); }
-template <class T> double nrm2(const T& x) { return std::norm(cdouble(MV<T>::up(x))); }
-template <class T> double mod(const T& x) { return std::abs(cdouble(MV<T>::up(x))); }
+template <typename T> T delta() { return MV<T>::make(0.5, -0.25); }
+template <typename T> double nrm2(const T& x) { return std::norm(cdouble(MV<T>::up(x))); }
+template <typename T> double mod(const T& x) { return std::abs(cdouble(MV<T>::up(x))); }
 
-template <class C> void expect_value(C& c, double expected) {
+template <typename C> void expect_value(C& c, double expected) {
     const double v = c.value();
     EXPECT_NEAR(v, expected, 1e-12 * expected) << "value " << v << " expected " << expected;
 }
 
-template <class E> double frob2(Batched<E>& M, int b) {
+template <typename E> double frob2(Batched<E>& M, int b) {
     double s = 0;
     for (int j = 0; j < M.cols; ++j)
         for (int i = 0; i < M.rows; ++i) s += nrm2(M.ex(b, i, j));
@@ -849,7 +850,7 @@ template <class E> double frob2(Batched<E>& M, int b) {
 
 // Only (n-1, n-1) of L L^H (or U^H U) moves, by |l + d|^2 - |l|^2; the denominator is the norm of
 // A0's triangle.
-template <class T> void potrf_known(Uplo u) {
+template <typename T> void potrf_known(Uplo u) {
     PotrfCase<T> c(u);
     const int n = c.n, b = kB - 1;
     const T d = delta<T>();
@@ -862,7 +863,7 @@ template <class T> void potrf_known(Uplo u) {
     expect_value(c, std::abs(std::norm(l + cdouble(MV<T>::up(d))) - std::norm(l)) / std::sqrt(den));
 }
 
-template <class C> void trsm_known() {
+template <typename C> void trsm_known() {
     using T = typename C::type;
     C c;
     const int b = kB - 1, i0 = c.xr - 1, j0 = c.xc - 1;
@@ -948,7 +949,7 @@ TYPED_TEST(InverseSolveResidual, KnownValue) {
 namespace {
 
 // Componentwise: only C(i0, j0) is off, by d, over |alpha| sum |opA||opB| + |beta||C0|.
-template <class T> void gemm_known(const GemmConfig& g) {
+template <typename T> void gemm_known(const GemmConfig& g) {
     GemmCase<T> c(g);
     const int b = kB - 1, i0 = g.m - 1, j0 = 0;
     const T d = delta<T>();
@@ -1029,10 +1030,10 @@ TYPED_TEST(ValuesError, KnownValue) {
 
 namespace {
 
-template <class T> T unit_tau() { return batchlas::is_std_complex_v<T> ? MV<T>::make(0.25, 0.25) : MV<T>::make(0.5, 0.0); }
+template <typename T> T unit_tau() { return batchlas::is_std_complex_v<T> ? MV<T>::make(0.25, 0.25) : MV<T>::make(0.5, 0.0); }
 
 // QrCase's reflectors; F's diagonal and upper triangle stay poison, which form_q must not read.
-template <class T> void unit_reflectors(Batched<T>& F, Batched<T>& tau, int k, const double*& rng) {
+template <typename T> void unit_reflectors(Batched<T>& F, Batched<T>& tau, int k, const double*& rng) {
     for (int b = 0; b < kB; ++b)
         for (int i = 0; i < k; ++i) {
             tau.ex(b, i, 0) = unit_tau<T>();
@@ -1044,7 +1045,7 @@ template <class T> void unit_reflectors(Batched<T>& F, Batched<T>& tau, int k, c
 }
 
 // Q = H_0 ... H_{k-1} by right-multiplication Q <- Q H_j: not form_q's order.
-template <class T> std::vector<promoted_t<T>> q_by_rows(Batched<T>& F, Batched<T>& tau, int b, int k) {
+template <typename T> std::vector<promoted_t<T>> q_by_rows(Batched<T>& F, Batched<T>& tau, int b, int k) {
     using D = promoted_t<T>;
     const int m = F.rows;
     std::vector<D> Q(m * m, D(0));
@@ -1063,7 +1064,7 @@ template <class T> std::vector<promoted_t<T>> q_by_rows(Batched<T>& F, Batched<T
     return Q;
 }
 
-template <class T> struct FormQCase {
+template <typename T> struct FormQCase {
     using type = T;
     static constexpr Check kind = Check::orthogonality;
     static constexpr int m = 9, k = 5;
@@ -1096,7 +1097,7 @@ template <class T> struct FormQCase {
 
 // Q explicit (Hadamard columns, a different column set per item), R in geqrf storage (poison below
 // the diagonal), A0 = Q triu(R) exact.
-template <class T> struct QrReconCase {
+template <typename T> struct QrReconCase {
     using type = T;
     static constexpr Check kind = Check::factorization;
     static constexpr int m = 16, n = 6, k = 6;
@@ -1131,7 +1132,7 @@ template <class T> struct QrReconCase {
 
 // U: Hadamard columns (m x ucols, a different set per item); Vh: a phased permutation (vrows x n);
 // s dyadic; A0 = U(:, :k) diag(s) Vh(:k, :) exact. Columns of U and rows of Vh past k hold poison.
-template <class T> struct SvdCase {
+template <typename T> struct SvdCase {
     using type = T;
     using R = real_t<T>;
     static constexpr Check kind = Check::factorization;
@@ -1292,7 +1293,7 @@ struct SolveConfig {
     int m, k;  // op(A) is m x k
 };
 
-template <class T> struct StructSolveCase {
+template <typename T> struct StructSolveCase {
     using type = T;
     static constexpr Check kind = Check::solve;
     static constexpr int nrhs = 4;
@@ -1409,7 +1410,7 @@ struct Rank2kConfig {
     bool zero_beta = false;
 };
 
-template <class T> struct Rank2kCase {
+template <typename T> struct Rank2kCase {
     using type = T;
     static constexpr Check kind = Check::blas;
     static constexpr int n = 6, k = 5;
@@ -1470,7 +1471,7 @@ template <class T> struct Rank2kCase {
     double value() { return value(g.herm, g.uplo); }
 };
 
-template <class T> struct Rank2kSymCase : Rank2kCase<T> {
+template <typename T> struct Rank2kSymCase : Rank2kCase<T> {
     Rank2kSymCase() : Rank2kCase<T>({false, Transpose::Trans, Uplo::Upper}) {}
 };
 
@@ -1531,7 +1532,7 @@ TYPED_TEST(Rank2kBackwardError, InvalidCombinationsThrow) {
 namespace {
 
 // Only C(i0, j0) is off, by d, over |alpha| (sum |opA(i0,:)||opB(j0,:)| + |opB(i0,:)||opA(j0,:)|) + |beta||C0|.
-template <class T> void rank2k_known(const Rank2kConfig& g) {
+template <typename T> void rank2k_known(const Rank2kConfig& g) {
     Rank2kCase<T> c(g);
     const int b = kB - 1, i0 = c.hot_r, j0 = c.hot_c;
     const T d = delta<T>();
@@ -1563,7 +1564,7 @@ TYPED_TEST(Rank2kBackwardError, HermitianDiagonalKnownValue) {
 
 namespace {
 
-template <class T> struct LuSolveCase {
+template <typename T> struct LuSolveCase {
     using type = T;
     static constexpr Check kind = Check::solve;
     static constexpr int n = 7, nrhs = 4;
@@ -1707,7 +1708,7 @@ namespace {
 
 // U(k,k) = 4 * phase, L(i,k) = a / U(k,k) with cabs1(a) <= 4: a cabs1 partial-pivoting factor whose
 // ratio cabs1(L U(k,k)) / cabs1(U(k,k)) = cabs1(a) / 4 exactly.
-template <class T> struct PivotCase {
+template <typename T> struct PivotCase {
     static constexpr int n = 6;
     Batched<T> F = Batched<T>::matrix(n, n);
 
@@ -1728,13 +1729,13 @@ template <class T> struct PivotCase {
     double value() { return MV<T>::pivot_ratio(F.mview()); }
 };
 
-template <class T> void expect_ratio_fails(double v) {
+template <typename T> void expect_ratio_fails(double v) {
     EXPECT_TRUE(std::isnan(v) || v > 1.1 * batchlas::verify::pivot_ratio_bound<T>()) << "ratio " << v;
 }
 
 }  // namespace
 
-template <class T> class PivotRatio : public ::testing::Test {};
+template <typename T> class PivotRatio : public ::testing::Test {};
 TYPED_TEST_SUITE(PivotRatio, Dtypes);
 
 TYPED_TEST(PivotRatio, ExactPasses) {

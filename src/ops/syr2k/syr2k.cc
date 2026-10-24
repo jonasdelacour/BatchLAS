@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syr2k (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/syr2k.<device>.txt row that can_run() admits. Triangular is the 128x128x8 tile-masked
 // kernel that writes only the requested half of C.
@@ -5,6 +6,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syr2k.hh>
+#include <batchlas/error.hh>
 
 #include <src/ops/level3/batched.hh>
 #include <src/ops/syr2k/choice.hh>
@@ -24,16 +26,16 @@ namespace ops::syr2k {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the k of C = alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C.
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     return {{"n", C.rows()}, {"k", inner<T>(A, transA)}, {"batch", C.batch_size()}};
 }
@@ -43,7 +45,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // launch chunks the batch (grid z); the tile-count term is grid y's own limit. Every vendor loop (cuBLAS,
 // rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
 // batch, so the vendor is refused one too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
              Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
@@ -60,7 +62,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Uplo uplo, Transpose transA) {
     return std::visit(overloaded{
@@ -76,7 +78,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
                 });
             }
             else
-                throw std::logic_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
+                throw batchlas::internal_error("syr2k: triangular reached for a (backend, dtype) can_run refuses");
         },
         [&](Vendor) -> Event {
             if constexpr (vendor_wired<B, T>)
@@ -92,9 +94,9 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, FloatingOrComplexScalar T>
 Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Uplo uplo, Transpose transA) {
-    backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+    backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
-        throw std::invalid_argument("SYR2K: ConjTrans with a complex T is her2k's, not a symmetric update");
+        throw batchlas::invalid_argument("syr2k: ConjTrans with a complex T is her2k's, not a symmetric update");
     // An empty batch launches nothing under any pin, as syrk's does (the cuBLAS loop faults on one).
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

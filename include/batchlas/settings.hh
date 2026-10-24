@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -15,6 +16,7 @@
 // Move where the STRING comes from, never how it is parsed (seven boolean dialects coexist).
 // evidence: docs/design/environment.md#environment-move-the-string-not-the-parser
 
+#include <batchlas/error.hh>
 #include <batchlas/export.hh>
 #include <array>
 #include <cstddef>
@@ -97,7 +99,7 @@ struct RoutingSettings {
     }
 
     /// @brief The captured `BATCHLAS_<OP>_ROUTE` for `op`.
-    /// @throws std::invalid_argument for an op not in `ops`
+    /// @throws batchlas::invalid_argument for an op not in `ops`
     const EnvValue& route(std::string_view op) const { return values[checked(op)]; }
     /// @brief Mutable access to the captured `BATCHLAS_<OP>_ROUTE` for `op`, as configure() needs.
     EnvValue& route(std::string_view op) { return values[checked(op)]; }
@@ -106,7 +108,7 @@ private:
     static std::size_t checked(std::string_view op) {
         const std::size_t i = index_of(op);
         if (i == ops.size())
-            throw std::invalid_argument("batchlas: no BATCHLAS_<OP>_ROUTE for op '" + std::string(op) + "'");
+            throw ::batchlas::invalid_argument("batchlas: no BATCHLAS_<OP>_ROUTE for op '" + std::string(op) + "'");
         return i;
     }
 };

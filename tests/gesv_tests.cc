@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // P2: the fused factor-and-solve tier for GESV, and the routing that (deliberately)
 // does not yet reach it. Every numerical test drives the native dispatch entry point
 // DIRECTLY against a host reference; the vendor is never an oracle here, and could not

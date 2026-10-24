@@ -1,10 +1,11 @@
 # Matrix model {#design_matrix_model}
 
-> **Status:** current · checked 2026-10-06
+> **Status:** current · checked 2026-10-21
 
 Entry points take a `MatrixView`: a pointer, shape, leading dimension and batch stride over memory
-the caller owns. `Matrix` owns memory and produces views. `KernelMatrixView` is the struct a kernel
-captures. The user contract is in [the C++ API guide](../cpp-api.md#column-major-always).
+the caller owns. `Matrix` owns memory and is a `MatrixView` of it. `KernelMatrixView` is the struct a
+kernel captures. The user contract is in [the C++ API guide](../cpp-api.md#column-major-always);
+implementation checks in [runtime internals](runtime-internals.md#runtime-internals-matrix-layout-checks).
 
 ## Matrix model: column-major storage
 
@@ -40,6 +41,8 @@ wraps in `int` at \f$b = 8192\f$. The in-item offset cannot overflow for an allo
 
 ## Matrix model: what each constructor validates
 
+Every rejection throws `batchlas::invalid_argument` (@ref design_error_model).
+
 - `Matrix` rejects negative arguments, resolved `ld < rows` and resolved `stride < ld * cols`.
 - The copying `Matrix` and `Span` forms also reject null data, non-positive extents or batch, a
   `stride < ld * cols` when `batch > 1`, and a `Span` shorter than the layout.
@@ -51,9 +54,9 @@ The `ld < rows` check catches an argument-order trap. The batch is the third arg
 `MatrixView<float> V(p, n, n, batch)` means `ld = batch` and throws when `batch < n`.
 
 Unchecked on purpose: null data and zero extents (shape-only views are passed to about 37
-`*_buffer_size` queries), and `stride >= ld * cols`. Two in-repo sites violate the last one, the
-transposed CGS view in `src/ops/ortho/ortho.cc` (see [known defects](known-defects.md)) and a sizing
-dummy in `syevx_lobpcg`. A throw would break both.
+`*_buffer_size` queries), and `stride >= ld * cols`. The recorded violators of the last were the
+transposed CGS view in `ortho` (fixed, [known defect 1](known-defects.md)) and a sizing dummy in
+`syevx_lobpcg`; whether the check can now be added is open.
 
 `rows_`, `cols_` and `batch_size_` must default-initialise to zero. The USM check reads them to decide
 whether a null pointer is legal.
@@ -65,8 +68,12 @@ whether a null pointer is legal.
 - `MatrixView<T, F>` aliases caller memory and must not outlive it, including in-flight kernels. A view
   over `sycl::malloc_device` memory is not host-dereferenceable.
 - `Matrix<T, F>` derives from `MatrixView<T, F>` (a view of its own storage), and `Vector<T>` from
-  `VectorView<T>`; see @ref design_api_conventions for what that means for overloads.
-- `Matrix::clone()` copies in the source layout. For CSR it allocates `matrix_stride` slots per item.
+  `VectorView<T>`. Pass `.view()` only to a generic parameter; see
+  [a Matrix is a MatrixView](api-conventions.md#api-conventions-a-matrix-is-a-matrixview).
+- `Matrix::clone()` copies in the source layout (`ld`, stride, CSR strides, active extents). For CSR it
+  allocates `matrix_stride` slots per item.
+- Queue-less helpers run on `Device::default_device_for<T>()`: the default device, or the first CPU
+  for `double`/`complex<double>` on a GPU without fp64.
 
 ## Matrix model: the pointer array and sliced views
 
@@ -131,9 +138,9 @@ is not. Global-scope names are using-declarations, which `BATCHLAS_NO_GLOBAL_NAM
 
 ## Matrix model: USM hints need the caller's Queue
 
-Advice calls (`set_access_device`, `prefetch`, ...) take a mandatory `const Queue&`. A default `Queue` is on
-`Device::default_device()`, the wrong device in a multi-GPU process. `Span`'s advice calls default the queue
-and swallow errors.
+Advice calls (`set_access_device`, `prefetch`, ...) on `Matrix`/`MatrixView` take a mandatory
+`const Queue&`. A default `Queue` is on `Device::default_device()`, the wrong device in a multi-GPU
+process. `Span`'s advice calls default the queue and swallow errors.
 
 ## Matrix model: open debts
 
@@ -141,5 +148,7 @@ and swallow errors.
 - `fill_triangular_random` and `fill_tridiag_toeplitz` address items as packed \f$n \times n\f$, ignoring `ld`
   and `stride`. `fill_triangular_random` seeds by position, so every item gets the same matrix.
 - `fill_random` writes all of `data()`, padding included, so on a sub-block view it writes neighbours.
-- `fill_diagonal(ctx, Span, k)` with `k != 0` and one shared diagonal builds a view over only \f$n - |k|\f$
-  values, so its debug assert can fire on a valid call.
+
+`fill_diagonal(ctx, Span|VectorView, k)` sizes the diagonal as
+\f$\max(0, \min(\mathtt{rows} - r_0, \mathtt{cols} - c_0))\f$ since 2026-10-12, so the former
+short-view debt on wide views and \f$|k|\f$ at an edge is closed.

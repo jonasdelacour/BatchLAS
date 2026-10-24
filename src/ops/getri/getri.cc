@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getri (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
 // tuned/getri.<device>.txt row that can_run() admits. Blocked writes P into C and solves with two
 // public trsm calls (each picks its own kernel); Vendor is cublas<t>getriBatched / rocsolver / LAPACKE.
@@ -27,10 +28,10 @@ namespace ops::getri {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
@@ -42,7 +43,7 @@ select::Key key_of(const MV<T>& A) {
 // netlib's pivots wrongly. evidence: docs/perf/lu.md#lu-correctness-findings
 // Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) {
@@ -53,7 +54,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Span<int64_t> pivots,
              Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -72,7 +73,7 @@ Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Spa
 }
 
 // Exactly the chosen family's need (R5); Blocked's trsm calls take no workspace.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) { return sycl_getri::getri_blocked_buffer_size<T>(q, A); },
@@ -88,7 +89,7 @@ std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
 
 template <Backend Back, typename T>
 Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
-            Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
+            Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
     getri_validate_params<T>(A, C);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -98,7 +99,7 @@ Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     return select::run<Back, T>(
         ops::getri::spec, ctx, key, ops::getri::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, work_space, info); });
+        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, workspace, info); });
 }
 
 template <Backend Back, typename T>

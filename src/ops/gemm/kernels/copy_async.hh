@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Global -> local copies that skip the registers: float 128x128 (4 B) and wide v2 128x128 (8, 16 B).

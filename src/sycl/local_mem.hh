@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // The local memory one work-group may launch with: what every SLM capacity is computed from.
 // DPC++ reports the CUDA opt-in maximum (99 KiB on sm_89/sm_120) and opts launches in itself.

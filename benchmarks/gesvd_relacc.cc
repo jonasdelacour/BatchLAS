@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Relative-accuracy instrument for batched SVD, swept over conditioning.
 //
 // This exists because the pre-existing gesvd accuracy benchmarks cannot see the
@@ -14,13 +15,13 @@
 //      column prints blank.
 //
 // Both are fixed here. Also note miniacc's terminal summary prints only a fixed
-// whitelist of metric names (miniacc.hh:425), which is the other reason the old
+// whitelist of metric names (miniacc.hh:426), which is the other reason the old
 // metrics were invisible -- the names below (R, O, max_relerr) are chosen to be
 // on that whitelist so the numbers actually reach the terminal, not just --csv.
 //
 // The reference is exact, not another solve: random_with_log10_cond_metric
 // builds A = U * S * V^H from an explicitly constructed geometric spectrum
-// (src/util/random_cond.cc:46), so the true singular values are known in closed
+// (src/util/random_cond.cc:47), so the true singular values are known in closed
 // form. Comparing against a second floating-point solve would put the reference
 // at the same error floor as the thing being measured.
 
@@ -52,7 +53,7 @@ void GesvdRelAccSizes(Benchmark* b) {
 
 // The spectrum random_with_log10_cond_metric actually builds, in closed form:
 //   s_i = exp((i - (n-1)/2) * ln(10) * log10_kappa2 / (n-1)),  i ascending.
-// (src/util/random_cond.cc:46). Returned DESCENDING to match the BatchLAS gesvd
+// (src/util/random_cond.cc:47). Returned DESCENDING to match the BatchLAS gesvd
 // output convention -- which is descending, produced by an index reversal in
 // finalize_values_only, not by a sort flag.
 std::vector<double> reference_spectrum_descending(int n, double log10_kappa2) {
@@ -256,7 +257,7 @@ void run_gesvd_relacc(miniacc::State& state) {
                 // MatrixView::triangularize. That helper indexes `i*ld + j` while
                 // naming i the row, so on this library's COLUMN-major storage its
                 // uplo is inverted: triangularize(Uplo::Upper) keeps the LOWER
-                // triangle (src/matrix.cc:796-805). Using it here silently fed
+                // triangle (src/matrix.cc:797-806). Using it here silently fed
                 // the kernel geqrf's Householder reflectors instead of R -- the
                 // factorisation still succeeded, it just factored the wrong
                 // matrix, which showed up only as a singular-value mismatch
@@ -326,7 +327,7 @@ void run_gesvd_relacc(miniacc::State& state) {
 
             const bool ok = std::isfinite(e.max_relerr) && std::isfinite(e.recon) && std::isfinite(e.ortho);
             // "iterations_done" is on miniacc's printable whitelist
-            // (miniacc.hh:425); an arbitrary name would reach only --csv.
+            // (miniacc.hh:426); an arbitrary name would reach only --csv.
             state.RecordSample({{"max_relerr", e.max_relerr},
                                 {"R", e.recon},
                                 {"O", e.ortho},

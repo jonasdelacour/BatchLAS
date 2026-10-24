@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getrs for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A
 // factored once, untimed, by the public getrf under Auto (factor_bench's protocol), fill_random B,
 // NoTrans, verified on the default items by MatrixView::lu_solve_residual against those factors
@@ -7,6 +8,7 @@
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -25,7 +27,7 @@ namespace {
 
 namespace S = ops::getrs;
 
-template <class T>
+template <typename T>
 struct GetrsProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -52,7 +54,7 @@ struct GetrsProblem {
         (void)getrf<kBackend, T>(q, Av, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
-            if (info[std::size_t(b)] != 0) throw std::runtime_error("getrs input: getrf reported a singular item");
+            if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("getrs input: getrf reported a singular item");
     }
     std::size_t workspace() { return getrs_buffer_size<kBackend, T>(q, Av, Xv, Transpose::NoTrans); }
     void reset() {  // the solve overwrites B with X; A and the pivots are read only
@@ -75,7 +77,7 @@ public:
     std::string op() const override { return "getrs"; }
     std::vector<std::string> key_names() const override { return {S::key_names.begin(), S::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(S::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(S::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, r, b;
@@ -112,7 +114,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/getrs_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             GetrsProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "nrhs")),
                               int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::solve, p.n);

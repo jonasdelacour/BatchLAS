@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
@@ -36,7 +37,7 @@ namespace {
 template <typename U>
 inline typename base_type<U>::type abs_if_complex_j(const U& x) {
     using Real = typename base_type<U>::type;
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return sycl::hypot(x.real(), x.imag());
     } else {
         return sycl::fabs(x);
@@ -47,7 +48,7 @@ inline typename base_type<U>::type abs_if_complex_j(const U& x) {
 // diagonals exactly real after an update.
 template <typename U>
 inline U force_real_j(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return U(x.real(), typename base_type<U>::type(0));
     } else {
         return x;
@@ -56,7 +57,7 @@ inline U force_real_j(const U& x) {
 
 template <typename U>
 inline typename base_type<U>::type real_part_j(const U& x) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         return x.real();
     } else {
         return x;
@@ -145,7 +146,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         constexpr std::size_t kRotSlots = (P / 2 > 0) ? (P / 2) : 1;
         constexpr std::size_t kPairSlots = (P - 1) * kRotSlots;
         constexpr std::size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
-        constexpr bool kNeedPhase = internal::is_complex<T>::value;
+        constexpr bool kNeedPhase = detail::is_complex<T>::value;
         {
             const std::size_t local_mem_bytes = impl::local_mem_bytes(dev);
             const std::size_t avail = (local_mem_bytes > kPairTabBytes) ? (local_mem_bytes - kPairTabBytes) : 1;
@@ -258,7 +259,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                         if (lane == c) {
                             // The diagonal of a Hermitian matrix is real by
                             // definition; drop any imaginary noise in the input.
-                            if constexpr (internal::is_complex<T>::value) {
+                            if constexpr (detail::is_complex<T>::value) {
                                 v = T(v.real(), Real(0));
                             }
                         }
@@ -314,7 +315,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                 // g carries the sign of a_pq, which is exactly
                                 // Golub & Van Loan Alg. 8.5.1.
                                 Real g;
-                                if constexpr (internal::is_complex<T>::value) {
+                                if constexpr (detail::is_complex<T>::value) {
                                     g = g_abs;
                                     d_rot = T(apq.real() / g_abs, -apq.imag() / g_abs);
                                 } else {

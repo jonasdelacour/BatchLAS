@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Validation for the Householder stage-2 chase (sytrd_sb2st_hh).
 //
 // The point of this routine, versus the shipped Givens sytrd_sb2st, is that it
@@ -147,7 +148,7 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                 }
             }
 
-            const auto sched = internal::build_sb2st_hh_schedule(n, kd);
+            const auto sched = detail::build_sb2st_hh_schedule(n, kd);
             const int nrefl = std::max<int>(1, static_cast<int>(sched.size()));
 
             Matrix<T, MatrixFormat::Dense> ab_tri(2, n, batch);
@@ -157,10 +158,10 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
             Vector<Real> e(std::max(1, n - 1), batch);
 
             const size_t ws_bytes =
-                internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
+                detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             UnifiedVector<std::byte> ws(ws_bytes);
 
-            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
+            (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
                                            Uplo::Lower, kd, ws.to_span());
             ctx.wait();
 
@@ -279,7 +280,7 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
                         ab(r, j, b) = (i < n) ? Adense[b][static_cast<size_t>(i) * n + j] : T(0);
                     }
 
-            const auto sched = internal::build_sb2st_hh_schedule(n, kd);
+            const auto sched = detail::build_sb2st_hh_schedule(n, kd);
             const int nrefl = std::max<int>(1, static_cast<int>(sched.size()));
 
             Matrix<T, MatrixFormat::Dense> ab_tri(2, n, batch);
@@ -289,8 +290,8 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
             Vector<Real> e(std::max(1, n - 1), batch);
 
             UnifiedVector<std::byte> ws(
-                internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
-            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
+                detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
+            (void)detail::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
                                            Uplo::Lower, kd, ws.to_span());
             ctx.wait();
 
@@ -307,11 +308,11 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
                 lens[k] = sched[k].len;
             }
 
-            const auto wave_host = internal::build_sb2st_hh_wave_offsets(sched, n);
+            const auto wave_host = detail::build_sb2st_hh_wave_offsets(sched, n);
             UnifiedVector<int32_t> waves(wave_host.size());
             for (size_t k = 0; k < wave_host.size(); ++k) waves[k] = wave_host[k];
 
-            (void)internal::unmqr_hb2st<B, T>(
+            (void)detail::unmqr_hb2st<B, T>(
                 ctx, vmat, tau, Z, n, kd,
                 Span<const int32_t>(starts.data(), sched.size()),
                 Span<const int32_t>(lens.data(), sched.size()),
@@ -356,8 +357,8 @@ TEST(Sb2stHhWaves, ReflectorsInAWaveAreDisjoint) {
     for (int n : {16, 33, 64, 100, 129, 256, 512}) {
         for (int kd : {2, 3, 8, 16, 32, 64}) {
             if (kd >= n) continue;
-            const auto sched = internal::build_sb2st_hh_schedule(n, kd);
-            const auto off = internal::build_sb2st_hh_wave_offsets(sched, n);
+            const auto sched = detail::build_sb2st_hh_schedule(n, kd);
+            const auto off = detail::build_sb2st_hh_wave_offsets(sched, n);
             if (sched.empty()) continue;
 
             ASSERT_GE(off.size(), 2u) << "n=" << n << " kd=" << kd;

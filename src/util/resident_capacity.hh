@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The occupancy rule shared by the local-memory-resident tiers (potrf, getrf, geqrf), in one

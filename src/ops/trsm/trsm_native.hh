@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched TRSM declarations: V1 (CTA solver, one work-group per matrix)

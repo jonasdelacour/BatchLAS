@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // herk for the tuner (complex only): C = alpha op(A) op(A)^H + beta C on the lower triangle, A and
 // C0 from MatrixView::fill_random, C0's diagonal made real, its strict upper triangle poisoned with a
 // large finite value, alpha = 1.25, beta = 0.75 so C is read. uplo is not a table key: fixed at L.
@@ -25,7 +26,7 @@ namespace {
 
 namespace H = ops::herk;
 
-template <class T>
+template <typename T>
 struct HerkProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = float_t<T>;

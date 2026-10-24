@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -18,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::symm_vendor (cubla
 
 using SymmChoice = std::variant<Expand, Vendor>;  ///< fieldless: expansion ld and gemm tile derived; native: CUDA GPU
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3): the expansion, then the vendor loop.
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3): the expansion, then the vendor loop.
 constexpr auto candidates() { return select::all_of<SymmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};  ///< nothing in the row runs

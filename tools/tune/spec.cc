@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: MIT
 #include <tools/tune/spec.hh>
+
+#include <batchlas/error.hh>
 
 #include <algorithm>
 #include <chrono>
@@ -116,7 +119,7 @@ std::vector<CellKey> OpSpec::grid(const std::string& dtype,
     auto ax = axes();
     for (const auto& [name, values] : overrides) {
         auto it = std::find_if(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; });
-        if (it == ax.end()) throw std::invalid_argument(op() + " has no grid axis '" + name + "'");
+        if (it == ax.end()) throw batchlas::invalid_argument(op() + " has no grid axis '" + name + "'");
         it->second = values;
     }
     std::vector<CellKey> cells{CellKey{}};

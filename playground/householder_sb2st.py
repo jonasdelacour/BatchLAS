@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """householder_sb2st.py
 
 Portable NumPy reference for Householder SB2ST-style (stage-2) reduction:

@@ -1,5 +1,7 @@
 # Results and evidence database {#results_index}
 
+> **Status:** current · section index
+
 Generated from the tree on every documentation build. To add results, see @ref documentation_conventions.
 
 | Page | What you find there |

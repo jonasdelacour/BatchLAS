@@ -75,8 +75,8 @@ Lower-level functions (algorithm-specific variants, workspace queries, validatio
 @brief Value-returning, NumPy-like wrappers over the entry points.
 
 @defgroup api_dispatch Backend dispatch and vendor seams
-@brief How a call reaches a backend: the Queue's backend, owning arguments, and the
-`backend::*_vendor` declarations the vendor families call.
+@brief How a call reaches a backend: backend deduction from the Queue, the USM pointer check, and
+the `backend::*_vendor` declarations the vendor families call.
 
 Which kernel runs for a shape is decided by flat kernel selection (developer docs:
 @ref api_selection; design: @ref design_flat_selection; per-op families and tables:
@@ -110,8 +110,7 @@ Lower-level functions (algorithm-specific variants, workspace queries, validatio
 `select::choose`, pins, the trace, the coverage instrument and the vendor seam.
 
 This is library-internal code under `src/select/` and `src/ops/<op>/`; none of it is installed.
-The design, its rules R1-R8 and the record of how it was built are on
-@ref design_flat_selection. Every op's families and shipped tables are listed on the generated
+The design and its rules R1-R8 are on @ref design_flat_selection. Every op's families and shipped tables are listed on the generated
 @ref selection_tables page, which is the authoritative inventory; this group documents the
 mechanism they share.
 
@@ -178,7 +177,7 @@ measured shape followed by every candidate timed there, fastest first. Inventory
 not seen until `detail::reload_settings()`; `ScopedEnvVar` triggers one). The value is trimmed and
 lower-cased, then means `auto`, `native` (the best runnable non-vendor choice), `vendor`, or a
 spelling. A spelling that does not parse, is not a compiled candidate, or
-fails `can_run` throws `std::invalid_argument` (R6); `native` and `vendor` fall back to the
+fails `can_run` throws batchlas::invalid_argument (R6); `native` and `vendor` fall back to the
 automatic choice with a one-time warning when nothing in their class can run. Tests pin with the
 RAII `select::ScopedPin`, which wins over the environment on its thread.
 
@@ -189,8 +188,8 @@ a tag naming the table used (`[sm_120]`, a borrowed table, `override`, `fallthro
 `last resort`, `pinned`). `BATCHLAS_COVERAGE_OUT=<path>` makes `batchlas::coverage` write one CSV
 per process: `linked` rows (what this build contains), `reached` rows (what calls actually ran,
 with the choice spelling) and `miss` rows (calls nothing could serve). A `linked` row is never
-evidence that a kernel runs. Instrument details and defects: the "Dispatch: the coverage
-instrument" section of @ref perf_dispatch.
+evidence that a kernel runs. Instrument details and defects: the "Coverage instrument" section
+of @ref perf_dispatch.
 
 @section selection_vendor_seam The vendor seam
 

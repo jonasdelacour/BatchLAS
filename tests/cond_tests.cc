@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/matrix.hh>

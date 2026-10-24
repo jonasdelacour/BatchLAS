@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/queue.hh>
 #include <src/sycl/local_mem.hh>
 #include <cstdio>
@@ -99,14 +100,14 @@ bool Queue::backend_available(batchlas::Backend backend) {
         case Backend::MKL:    return false;
         case Backend::NETLIB: return BATCHLAS_HAS_HOST_BACKEND;
         case Backend::SYCL:   return BATCHLAS_HAS_SYCL_BACKEND;
-        // AUTO is a request, not a backend; MAGMA has no dispatch target, so
+        // Auto is a request, not a backend; MAGMA has no dispatch target, so
         // claiming it is available would be a lie that only surfaces at the call.
         default: return false;
     }
 }
 
 void Queue::set_backend(batchlas::Backend backend) {
-    if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
+    if (backend != batchlas::Backend::Auto && !backend_available(backend)) {
         throw batchlas::unsupported(
             std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
             " is not compiled into this build of BatchLAS.");
@@ -119,17 +120,17 @@ void Queue::set_backend(batchlas::Backend backend) {
             "Use a CPU Queue for host LAPACK.");
     }
     backend_ = backend;
-    resolved_backend_ = batchlas::Backend::AUTO;  // re-resolve on next query
+    resolved_backend_ = batchlas::Backend::Auto;  // re-resolve on next query
 }
 
 batchlas::Backend Queue::backend() const {
     using batchlas::Backend;
-    if (backend_ != Backend::AUTO) return backend_;
-    if (resolved_backend_ != Backend::AUTO) return resolved_backend_;
+    if (backend_ != Backend::Auto) return backend_;
+    if (resolved_backend_ != Backend::Auto) return resolved_backend_;
 
-    // Resolve AUTO from the device: prefer the vendor's own stack, fall back to
+    // Resolve Auto from the device: prefer the vendor's own stack, fall back to
     // the host implementation, which is the only one guaranteed to run anywhere.
-    Backend choice = Backend::AUTO;
+    Backend choice = Backend::Auto;
     if (device_.type == DeviceType::GPU) {
         const Vendor vendor = device_.get_vendor();
         if (vendor == Vendor::NVIDIA && backend_available(Backend::CUDA)) {
@@ -142,10 +143,10 @@ batchlas::Backend Queue::backend() const {
             choice = Backend::SYCL;  // native kernels only, e.g. an Apple GPU through acpp Metal
         }
     }
-    if (choice == Backend::AUTO && backend_available(Backend::NETLIB)) {
+    if (choice == Backend::Auto && backend_available(Backend::NETLIB)) {
         choice = Backend::NETLIB;
     }
-    if (choice == Backend::AUTO) {
+    if (choice == Backend::Auto) {
         throw batchlas::unsupported("Queue::backend: no backend compiled into this build can serve this device.");
     }
     resolved_backend_ = choice;
@@ -324,7 +325,7 @@ Event Queue::create_event_after_external_work() {
 
 std::vector<Device> Device::get_devices(DeviceType type){
     std::vector<Device> devices(QueueImpl::device_arrays.at(static_cast<int>(type)).size());
-    std::generate(devices.begin(), devices.end(), 
+    std::generate(devices.begin(), devices.end(),
         [i = size_t{0}, type]() mutable { return Device(i++, type); });
     return devices;
 }
@@ -340,7 +341,7 @@ Vendor Device::get_vendor() const {
 
 size_t Device::get_property(DeviceProperty property) const {
     auto d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
-    
+
     switch(int(property)){
         case 0: return d.get_info<sycl::info::device::max_work_group_size>();
         case 1: return d.get_info<sycl::info::device::max_clock_frequency>();
@@ -353,7 +354,8 @@ size_t Device::get_property(DeviceProperty property) const {
         case 8: return d.get_info<sycl::info::device::mem_base_addr_align>();
         case 9: return d.get_info<sycl::info::device::global_mem_cache_line_size>();
         case 10: return d.get_info<sycl::info::device::global_mem_cache_size>();
-        default: std::cerr << "Unknown property" << std::endl; return 0;
+        default: throw batchlas::invalid_argument("Device::get_property: unknown DeviceProperty " +
+                                                  std::to_string(int(property)));
     }
 }
 

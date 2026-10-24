@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Fail if a registered ctest executable was not built.
 
     .github/ci/check_built_tests.py <build-dir>

@@ -1,10 +1,11 @@
 # API conventions {#design_api_conventions}
 
-> **Status:** current · checked 2026-10-06
+> **Status:** current · checked 2026-10-21
 
 The rules behind the shape of the entry points in `include/batchlas/blas/`: the two spellings,
 the dispatch overload, owning arguments, argument checks, workspace and `info` arguments.
-The user-facing rules are in [the C++ API guide](../cpp-api.md).
+The user-facing rules are in [the C++ API guide](../cpp-api.md); exception classes in
+@ref design_error_model.
 
 ## api conventions: the backend is bound to the Queue by with_backend
 
@@ -15,11 +16,15 @@ passes it to `f`:
 with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
 ```
 
-- Only backends compiled into the build have a `case`. Others, and `Backend::MAGMA` and
-  `Backend::SYCL`, throw `batchlas::unsupported`.
+- Only backends compiled into the build have a `case` (`CUDA`, `ROCM`, `SYCL`, `NETLIB`); any other,
+  including the reserved `Backend::MKL` and `Backend::MAGMA`, throws `batchlas::unsupported`
+  (`include/batchlas/blas/queue-dispatch.hh`).
+- `Backend::SYCL` is a GPU with no vendor library (AdaptiveCpp Metal). In a build without device
+  fp64 a `double` or `complex<double>` call on it throws `batchlas::unsupported` before dispatch
+  (`with_backend_for<T>`); the plain `with_backend` callable must not name those types for it.
 - Naming a backend never pins a kernel. Flat selection inside the entry point picks the kernel;
   `BATCHLAS_<OP>_ROUTE` pins it. See [flat kernel selection](flat-kernel-selection.md) and
-  @ref selection_tables. The level-3 ops hemm, herk and her2k still choose by hand.
+  @ref selection_tables.
 - Two spellings: `gemm(ctx, ...)` takes the backend from the queue, `gemm<B>(ctx, ...)` fixes it.
   Library code under `src/ops/` must use `<B>`, because the runtime spelling reads
   `ctx.backend()` instead of the `B` the algorithm was instantiated for.
@@ -40,8 +45,9 @@ with_backend(ctx, [&](auto B) { return gemm<B.value, T>(ctx, ...); });
 ## api conventions: shape checks live on both option overloads
 
 - Shape preconditions (`detail::require_square`, `require_same_rows`, `require_same_batch`,
-  `require_span_at_least`, `require_info_span`; `blas/options.hh`) throw `std::invalid_argument`.
-  `std::runtime_error` is reserved for environment and backend failures.
+  `require_span_at_least`, `require_info_span`; `blas/options.hh`) throw `batchlas::invalid_argument`
+  (a `std::invalid_argument`). Environment, device and backend failures are `batchlas::error`
+  subclasses (a `std::runtime_error`).
 - Checks sit on both the deducing overload and `template <Backend B, ...>`.
 - Output spans use `>=`, not `==`. A caller may slice one arena across several calls.
 - `geqrf` has no squareness check. Every backend indexes `tau.data() + i * min(m, n)`, so a
@@ -70,12 +76,15 @@ it with no forwarder and no `.view()`.
 
 A bare pointer from host memory (`std::vector`, `new`, `malloc`) reaches the device as a wild
 address. The result is `CUDA_ERROR_ILLEGAL_ADDRESS`, then an abort that no `catch` can stop.
-Checked spellings throw `std::invalid_argument` naming the argument: by position from the
-dispatch macro, by name from option overloads (`BATCHLAS_CHECK_ARGS`, e.g. `gemm: A`).
+Checked spellings throw `batchlas::invalid_argument` naming the argument
+(`Queue::require_device_accessible`): by position from the dispatch macro, by name from option
+overloads (`BATCHLAS_CHECK_ARGS`, e.g. `gemm: A`).
 
 - Cost: one USM query per pointer argument, about 70 ns.
-- Not checked: an empty `Span`, and a default-constructed view. The latter is the spelling for an
-  unused optional matrix, e.g. `syevx(..., JobType::NoEigenVectors, MatrixView<T>(), params)`.
+- Not checked: an empty `Span`, and a view or vector that addresses no element (a zero extent or
+  batch). A default-constructed view is the spelling for an unused optional matrix, e.g.
+  `syevx(..., JobType::NoEigenVectors, MatrixView<T>(), params)`.
+- On a CPU device any non-null pointer passes: ordinary host memory is what its kernels read.
 - Off switch: `BATCHLAS_SKIP_POINTER_CHECKS=1`. It is honoured only when `BATCHLAS_ALLOW_UNSAFE_ENV`
   is ON; otherwise the setting is false whatever the environment says.
 - Any non-empty value whose first character is not `0` disables the checks, so `=false`, `=off`
@@ -89,9 +98,10 @@ dispatch macro, by name from option overloads (`BATCHLAS_CHECK_ARGS`, e.g. `gemm
 Option overloads come in pairs: one takes `Span<std::byte> ws`, the other leases scratch from the
 queue's arena, sized by the matching `*_buffer_size`.
 
-- Do not merge them with `Span<std::byte> ws = {}` and a null check. In a `BumpAllocator` sizing
-  pass, pool allocations return empty spans while the inputs stay real. A null check would then
-  factorise live data, and the damage shows up later as non-convergence.
+- Do not merge them with `Span<std::byte> ws = {}` and a null check. A `BumpAllocator` sizing pass
+  hands out non-null, unbacked pointers while the inputs stay real, so a null check cannot tell a
+  sizing pass from a caller's workspace (@ref design_workspace). A wrong guess runs kernels on live
+  data or on unbacked scratch; the damage shows up later, as non-convergence or a fault.
 - `getrf`, `getri`, `geqrf` and `orgqr` take no options and no workspace parameter. Their only
   option-layer spelling is the arena one.
 - Sizing branches exactly as the call does. `ormqr` sizes with the same `block_size_hint`, and
@@ -154,7 +164,9 @@ caller's USM, written in place.
 A wrapper that launches more than once (copy, then factor) runs its body through
 `detail::on_in_order_queue` (`batchlas/util/sycl-device-queue.hh`), the mechanism the multi-launch
 drivers use. On an out-of-order `Queue` the factorisation would otherwise read the copy before it is
-written. Guard: `LinalgWrappers.OutOfOrder*` in `tests/linalg_layer_tests.cc`.
+written. Guard: `LinalgWrappers.OutOfOrder*` in `tests/linalg_layer_tests.cc`. The Hermitian
+wrappers mirror the named triangle onto their copy (`hermitize`), because some drivers read the
+other one ([defect 14](known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle)).
 
 ### api conventions: linalg::solve keeps its Transpose branch
 

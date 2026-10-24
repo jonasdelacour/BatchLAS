@@ -42,7 +42,7 @@ double quot(double num, double den) {
     return den > 0 ? num / den : num;
 }
 
-template <class V> std::vector<int> pick(const V& A, std::span<const int> items) {
+template <typename V> std::vector<int> pick(const V& A, std::span<const int> items) {
     return items.empty() ? A.default_items() : std::vector<int>(items.begin(), items.end());
 }
 
@@ -54,33 +54,33 @@ std::vector<std::span<const int>> chunks(std::span<const int> items, std::size_t
     return out;
 }
 
-template <class P> using MV = MatrixView<P, MatrixFormat::Dense>;
+template <typename P> using MV = MatrixView<P, MatrixFormat::Dense>;
 
 // Kernels see the POD device scalar, never std::complex (Annex-G operator*).
 // evidence: docs/perf/gemm.md#gemm-the-pod-device-scalar
-template <class P> using Dev = typename sycl_device::DevMap<P>::type;
+template <typename P> using Dev = typename sycl_device::DevMap<P>::type;
 
 // Element (i, j) of item b of a dense view, as the device scalar.
-template <class P> Dev<P>* dev_ptr(const MV<P>& A) { return reinterpret_cast<Dev<P>*>(A.data_ptr()); }
+template <typename P> Dev<P>* dev_ptr(const MV<P>& A) { return reinterpret_cast<Dev<P>*>(A.data_ptr()); }
 
-template <class D> D dev_op(const D* p, int ld, long long stride, int b, Transpose t, int i, int l) {
+template <typename D> D dev_op(const D* p, int ld, long long stride, int b, Transpose t, int i, int l) {
     if (t == Transpose::NoTrans) return p[b * stride + static_cast<long long>(l) * ld + i];
     const D x = p[b * stride + static_cast<long long>(i) * ld + l];
     return t == Transpose::ConjTrans ? sycl_device::dev_conj(x) : x;
 }
 
 // A packed view of the first rows x cols of each item of a packed (ld = ld) promoted batch.
-template <class P> MV<P> window(const MV<P>& A, int rows, int cols) {
+template <typename P> MV<P> window(const MV<P>& A, int rows, int cols) {
     return MV<P>(A.data_ptr(), rows, cols, A.ld(), A.stride(), A.batch_size());
 }
 
-template <class P> void frobenius(Queue& ctx, const MV<P>& A, double* out) {
+template <typename P> void frobenius(Queue& ctx, const MV<P>& A, double* out) {
     if (std::size_t(A.rows()) * A.cols() == 0) { std::fill(out, out + A.batch_size(), 0.0); return; }
     (void)norm(ctx, A, NormType::Frobenius, Span<double>(out, std::size_t(A.batch_size())));
 }
 
 // R := R - a T, both masked to `mask` when given; then ||R||_F and ||T||_F per item into num, den.
-template <class P> void difference(Queue& ctx, const MV<P>& R, const MV<P>& T, P a, std::optional<Uplo> mask, double* num, double* den) {
+template <typename P> void difference(Queue& ctx, const MV<P>& R, const MV<P>& T, P a, std::optional<Uplo> mask, double* num, double* den) {
     if (std::size_t(R.rows()) * R.cols() != 0) {
         (void)linalg::axpby_into(ctx, P(1), R, -a, T, R);
         if (mask) {
@@ -93,19 +93,19 @@ template <class P> void difference(Queue& ctx, const MV<P>& R, const MV<P>& T, P
 }
 
 // The Hermitian (real: symmetric) matrix from the lower triangle, in place.
-template <class P> void mirror_lower(Queue& ctx, const MV<P>& A) {
+template <typename P> void mirror_lower(Queue& ctx, const MV<P>& A) {
     if constexpr (is_std_complex_v<P>) (void)A.hermitize(ctx, Uplo::Lower);
     else (void)A.symmetrize(ctx, Uplo::Lower);
 }
 
-template <class P> Matrix<P> identity(Queue& ctx, int rows, int cols, int batch) {
+template <typename P> Matrix<P> identity(Queue& ctx, int rows, int cols, int batch) {
     Matrix<P> I(rows, cols, batch);
     if (std::size_t(rows) * cols * batch) (void)I.fill_identity(ctx);
     return I;
 }
 
 // A batch of row/column vectors as an n x 1 matrix of promoted entries (host-read through inc and stride).
-template <class P, class E> Matrix<P> column_of(const VectorView<E>& v, int size, const std::vector<int>& items) {
+template <typename P, typename E> Matrix<P> column_of(const VectorView<E>& v, int size, const std::vector<int>& items) {
     Matrix<P> out(size, 1, int(items.size()));
     for (std::size_t g = 0; g < items.size(); ++g)
         for (int i = 0; i < size; ++i) out.data()[g * size + i] = P(v(i, items[g]));
@@ -128,7 +128,7 @@ std::vector<std::int32_t> pivots(const VectorView<std::int32_t>& piv, std::span<
 }
 
 // Row interchanges k <-> piv[k] of each item of M, k in [0, count), in order or reversed.
-template <class P> void row_swaps(Queue& ctx, const MV<P>& M, const std::vector<std::int32_t>& p0, int count, bool forward) {
+template <typename P> void row_swaps(Queue& ctx, const MV<P>& M, const std::vector<std::int32_t>& p0, int count, bool forward) {
     UnifiedVector<std::int32_t> piv(p0.size());
     std::copy(p0.begin(), p0.end(), piv.data());
     const std::int32_t* p = piv.data();
@@ -146,7 +146,7 @@ template <class P> void row_swaps(Queue& ctx, const MV<P>& M, const std::vector<
 }
 
 // x <- H_0 ... H_{k-1} x for each column of X; reflector i below F's diagonal, tau a k x 1 batch.
-template <class P> void apply_q(Queue& ctx, const MV<P>& X, const MV<P>& F, const MV<P>& tau, int k) {
+template <typename P> void apply_q(Queue& ctx, const MV<P>& X, const MV<P>& F, const MV<P>& tau, int k) {
     using D = Dev<P>;
     namespace sd = sycl_device;
     D* x = dev_ptr(X);
@@ -170,7 +170,7 @@ template <class P> void apply_q(Queue& ctx, const MV<P>& X, const MV<P>& F, cons
 }
 
 // The componentwise ratio (or denominator) of each element, nanmax'ed on the host.
-template <class P> double componentwise(Queue& ctx, const MV<P>& A, Transpose ta, const MV<P>& B, Transpose tb, const MV<P>* C0,
+template <typename P> double componentwise(Queue& ctx, const MV<P>& A, Transpose ta, const MV<P>& B, Transpose tb, const MV<P>* C0,
                                         const MV<P>* C, std::optional<Uplo> tri, P alpha, P beta, bool c0_real_diag, bool den_only) {
     using D = Dev<P>;
     using R = typename sycl_device::DevMap<P>::real;
@@ -471,7 +471,7 @@ namespace {
 
 // ||op(M) xv - bv||_F / (||M||_F ||xv||_F) per item, xv = X V and bv = B0 V for 8 seeded probe columns
 // V above full_limit multiply-adds per item (V = I below it).
-template <class T, class P>
+template <typename T, typename P>
 double solve_core(Queue& ctx, const MV<P>& M, Transpose ta, const MV<P>& X, const MV<P>& B, double full_limit,
                   const std::vector<bool>& nan_items) {
     const int g = M.batch_size();

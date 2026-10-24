@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The definitions behind gemm_launch.hh's row declarations, and the macros a shard TU
 // instantiates them with. Include it only from a shard TU: a row instantiated twice is an
 // undiagnosed ODR duplicate (explicit instantiations are COMDAT), a row instantiated nowhere

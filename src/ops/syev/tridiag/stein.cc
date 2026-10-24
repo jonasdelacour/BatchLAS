@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // stein: eigenvectors of a batch of symmetric tridiagonal matrices by inverse
 // iteration, given eigenvalues (from `stebz`).
 //

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Enforce the comment-density ceiling on BatchLAS C++ sources.
 
 WHY THIS EXISTS
@@ -37,6 +38,9 @@ Counting a trailing comment as a comment line would let a file reach 100%
 without a single line of prose, which is the opposite of what is being
 measured. A whitespace-only line is blank even inside a block comment: it is in
 neither the numerator nor the denominator.
+
+A whole-line `// SPDX-License-Identifier: ...` tag is licensing, not prose: it
+is in neither count.
 
 Comment markers inside string literals, character literals and raw strings do
 not open a comment. `1'000'000` is not a character literal.
@@ -106,6 +110,8 @@ SKIP_PARTS = ("third_party", "thirdparty", "extern", "external", "_deps",
 # identifier character, so that `FOOR"x"` is not read as a raw string.
 RAW_OPEN = re.compile(r'(?:u8|u|U|L)?R"([^()\\ \t]{0,16})\(')
 IDENT = re.compile(r'[A-Za-z0-9_]')
+# A whole-line `// SPDX-License-Identifier: ...` tag is licensing, not prose.
+SPDX_LINE = re.compile(r'^\s*//\s*SPDX-License-Identifier:\s*\S')
 
 
 # --------------------------------------------------------------------------
@@ -289,6 +295,8 @@ def classify_detail(text, exempt_doc):
 
         if not line.strip():
             continue                      # blank: in neither count
+        if has_comment and not has_code and state == "normal" and SPDX_LINE.match(line):
+            continue                      # license tag: in neither count
         if exempt_doc and has_comment and not has_code and has_doc and not has_plain:
             doc_lines += 1                # public API doc: in neither count
             continue
@@ -501,6 +509,12 @@ SELF_TEST_CASES = [
     ("empty", "", 0.0, "an empty file is 0%, not a division by zero"),
     ("doc_in_plain", "/// brief\n//! more\n/** a\n * b */\nint a = 1;\n",
      80.0, "plain classify() counts doc comments like any other comment"),
+    ("spdx", "// SPDX-License-Identifier: MIT\n// why\nint a = 1;\n",
+     50.0, "a whole-line SPDX tag is in neither count; `// why` still is (1/2)"),
+    ("spdx_trailing", "int a = 1;  // SPDX-License-Identifier: MIT\n// why\n",
+     50.0, "an SPDX tag after code is just a code line"),
+    ("spdx_in_block", "/*\n// SPDX-License-Identifier: MIT\n*/\nint a = 1;\n",
+     75.0, "an SPDX line inside a block comment is block text and counts"),
 ]
 
 # The public-API exemption, armed in both directions: the same text must be

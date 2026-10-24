@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that public headers are self-contained within the installed include tree.
 
 `include/` is what gets installed; `src/` is not. A public header that says

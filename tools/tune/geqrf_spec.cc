@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // geqrf for the tuner (docs/design/flat-kernel-selection.md#phase-5-geqrf): MatrixView::fill_random A
 // (complex parts both), ld = m + ld_pad. Verified on the default items by MatrixView::qr_residual
 // (factorization) and the orthogonality of Q's first min(m, n) columns from MatrixView::form_q
@@ -11,6 +12,7 @@
 
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -39,7 +41,7 @@ std::optional<int> rows_of(const std::string& form, int n, int aspect) {
     return int(m);
 }
 
-template <class T>
+template <typename T>
 struct GeqrfProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -93,7 +95,7 @@ public:
         return {ops::geqrf::key_names.begin(), ops::geqrf::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::geqrf::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::geqrf::candidates<T>()); });
     }
     // grid_wide_n and grid_wide_aspect are subsets of grid_n and grid_aspect.
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
@@ -107,7 +109,7 @@ public:
         const auto ax = axes();
         for (const auto& [name, values] : overrides)
             if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-                throw std::invalid_argument("geqrf has no grid axis '" + name + "'");
+                throw batchlas::invalid_argument("geqrf has no grid axis '" + name + "'");
         auto keep = [&](const std::string& name, const std::string& v) {
             const auto it = overrides.find(name);
             return it == overrides.end() || std::find(it->second.begin(), it->second.end(), v) != it->second.end();
@@ -124,7 +126,7 @@ public:
             for (int a : ops::geqrf::grid_aspect) add("tall", n, a);
         for (int n : ops::geqrf::grid_wide_n)
             for (int a : ops::geqrf::grid_wide_aspect) add("wide", n, a);
-        if (out.empty()) throw std::invalid_argument("geqrf: the --grid filters leave no cell of the declared grid");
+        if (out.empty()) throw batchlas::invalid_argument("geqrf: the --grid filters leave no cell of the declared grid");
         return out;
     }
     std::vector<std::int64_t> dims(const std::string&, const CellKey& k) const override {  // m derives from (form, n, aspect)
@@ -179,10 +181,10 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/geqrf_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int n = int(key_int(req.key, "n"));
             const auto m = rows_of(*key_get(req.key, "form"), n, int(key_int(req.key, "aspect")));
-            if (!m) throw std::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
+            if (!m) throw batchlas::invalid_argument("geqrf: no (m, n) has key " + key_arg(req.key));
             GeqrfProblem<T> p(q, *m, n, qr_batch(double(*m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);
             return run_arms<ops::geqrf::GeqrfChoice>("geqrf", p, req, 1.0);

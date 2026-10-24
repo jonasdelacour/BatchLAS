@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every getrf candidate, pinned: docs/design/flat-kernel-selection.md §8 (phase 5). The limit
 // oracle reads the drivers' own capacity queries; which kernel ran is read back from the select
 // trace or a bit-for-bit comparison with the direct driver, never assumed from the pin.
@@ -191,7 +192,7 @@ void expect_rect_factored(Queue& ctx, const Rect<T>& p, const std::string& what,
 }
 
 // The choice the outermost getrf trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -208,7 +209,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("getrf ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no getrf trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");

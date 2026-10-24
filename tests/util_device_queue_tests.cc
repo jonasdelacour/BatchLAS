@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -60,13 +61,15 @@ TEST(DeviceTest, DeviceProperties) {
     try {
         // Get default device, which should always be available
         Device device = Device::default_device();
-        
+
         // Test getting various properties
         EXPECT_NO_THROW({
             size_t wg_size = device.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
             size_t compute_units = device.get_property(DeviceProperty::MAX_COMPUTE_UNITS);
         });
-        
+        // Was a stderr print and a silent 0.
+        EXPECT_THROW((void)device.get_property(static_cast<DeviceProperty>(999)), batchlas::invalid_argument);
+
         // Device name and vendor should return something
         EXPECT_FALSE(device.get_name().empty());
         EXPECT_FALSE(device.get_vendor() == Vendor::OTHER);
@@ -77,7 +80,7 @@ TEST(DeviceTest, DeviceProperties) {
 
 TEST(EventTest, Basic) {
     Event event;
-    
+
     // Basic construction and move operations should work
     EXPECT_NO_THROW({
         Event event2;
@@ -95,14 +98,14 @@ TEST(QueueTest, DeviceConstruction) {
     try {
         // Get default device and create queue
         Device device = Device::default_device();
-        
+
         EXPECT_NO_THROW({
             Queue queue(device);
             EXPECT_EQ(queue.device().idx, device.idx);
             EXPECT_EQ(queue.device().type, device.type);
             EXPECT_TRUE(queue.in_order());
         });
-        
+
         EXPECT_NO_THROW({
             Queue queue(device, false);
             EXPECT_FALSE(queue.in_order());
@@ -115,16 +118,16 @@ TEST(QueueTest, DeviceConstruction) {
 TEST(QueueTest, MoveOperations) {
     try {
         Device device = Device::default_device();
-        
+
         Queue queue1(device);
-        
+
         // Test move construction
         EXPECT_NO_THROW({
             Queue queue2 = std::move(queue1);
             EXPECT_EQ(queue2.device().idx, device.idx);
             EXPECT_EQ(queue2.device().type, device.type);
         });
-        
+
         // Test move assignment
         EXPECT_NO_THROW({
             Queue queue3;
@@ -140,7 +143,7 @@ TEST(QueueTest, MoveOperations) {
 TEST(QueueTest, GetEvent) {
     try {
         Queue queue(Device::default_device());
-        
+
         EXPECT_NO_THROW({
             Event event = queue.get_event();
         });
@@ -153,7 +156,7 @@ TEST(QueueTest, EnqueueEvent) {
     try {
         Queue queue(Device::default_device());
         Event event = queue.get_event();
-        
+
         EXPECT_NO_THROW({
             queue.enqueue(event);
         });
@@ -166,11 +169,11 @@ TEST(QueueTest, EnqueueMultipleEvents) {
     try {
         Queue queue(Device::default_device());
         std::vector<Event> events;
-        
+
         for (int i = 0; i < 3; i++) {
             events.push_back(queue.get_event());
         }
-        
+
         EXPECT_NO_THROW({
             queue.enqueue(events);
         });

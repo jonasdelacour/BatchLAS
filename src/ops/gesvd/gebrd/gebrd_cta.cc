@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/util/group-invoke.hh>
@@ -22,7 +23,7 @@ inline T group_reduce_sum_select_from_group(const Group& g, T v) {
     const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
     (void)lanes;
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         using Real = typename base_type<T>::type;
         Real re = v.real();
         Real im = v.imag();
@@ -62,7 +63,7 @@ inline T larfg_small(const Partition& part,
             return std::array<T, 3>{alpha_leader, T(0), T(0)};
         }
 
-        const auto scalars = internal::larfg(alpha_leader, xnorm, len);
+        const auto scalars = detail::larfg(alpha_leader, xnorm, len);
         return std::array<T, 3>{scalars.beta, scalars.tau, scalars.scale};
     });
 
@@ -267,7 +268,7 @@ Event gebrd_cta(Queue& ctx,
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("gebrd_cta: complex types are not implemented");
     } else {
         const int64_t n64 = a_in.rows();

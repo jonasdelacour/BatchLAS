@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // gemv for the tuner: MatrixView::fill_random A, x and y0 (complex parts both), alpha with an
 // imaginary part and beta = 0.75, so the epilogue reads y. trans=T times ConjTrans for a complex
 // scalar (the key folds C into T). A's ld and x's and y's item strides are padded by --ld-pad.
@@ -22,7 +23,7 @@ namespace {
 
 namespace V = ops::gemv;
 
-template <class T>
+template <typename T>
 struct GemvProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -71,7 +72,7 @@ public:
     std::string op() const override { return "gemv"; }
     std::vector<std::string> key_names() const override { return {V::key_names.begin(), V::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(V::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(V::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> o, r, b;
@@ -102,7 +103,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/gemv_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             constexpr bool kComplex = !std::is_same_v<T, typename base_type<T>::type>;
             const bool n = *key_get(req.key, "trans") == "N";
             const Transpose t = n ? Transpose::NoTrans : kComplex ? Transpose::ConjTrans : Transpose::Trans;

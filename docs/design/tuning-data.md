@@ -1,11 +1,10 @@
 # Tuning data layout {#design_tuning_data}
 
-> **Status:** implemented in the tuning PR (2026-10-11), decided by the maintainer on 2026-10-09
-> ("Full: 2 files per op/device"). Replaces the per-dtype tables, the per-run ledger directories
-> and the converted routing sweeps. The only normative page for tables, ledgers, tiers and
-> staleness; other pages point here. Engine: @ref design_tiered_tuning.
+> **Status:** current · checked 2026-10-21
 
-Two files per (op, device), one source of truth, one vocabulary.
+Two files per (op, device), one source of truth, one vocabulary. This is the only normative page
+for tables, ledgers, tiers, staleness and generation; the engine that writes the ledgers is
+@ref design_tiered_tuning.
 
 | File | Role | Written by | Stored |
 | --- | --- | --- | --- |
@@ -14,6 +13,11 @@ Two files per (op, device), one source of truth, one vocabulary.
 
 The key and candidate vocabulary lives only in `src/ops/<op>/choice.hh`. The tuner copies it into
 each run line of the ledger; nothing else spells it.
+
+**Shipped set (2026-10-21):** 39 tables and 39 ledgers. sm_120: 19 tables of `deep` rows, plus
+`transcribed` rows where no deep row lies near (beyond the 2048 dimension cap, for example) and a
+few `custom` rows (gemv, posv, trmm). sm_89: 19 untimed tables, potrf `converted`, the other 18
+`transcribed`. cpu: `spmm.cpu.txt`, `transcribed`.
 
 ## The ledger file {#tuning-data-ledger-file}
 
@@ -27,7 +31,7 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
   `nvidia-smi` or `off`; absent before the field), `prior` (calibrate runs only: the borrowed table as
   `<device>@<header date>`; table generation ignores it), `grid` (the log axes' full lattice the run planned
   on, `n=1,2,4 batch=8,16`; `tune_replay --ledger` reads it; absent before the field). A later `run` line with the same (run id, dtype) replaces the earlier one.
-- `cell`: one measurement of one cell (`key`, `tier`, `round`, `ranked`, per-candidate
+- `cell`: one measurement of one cell (`run_id`, `key`, `tier`, `round`, `date`, `ranked`, `cands`, per-candidate
   `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
   lean race's tie set, already verified in its size decade; absent = verified, as in every older
   ledger; table generation keeps it in the row), plus the cell's wall seconds by phase, each written only when measured:
@@ -105,10 +109,10 @@ files (common, its own, `kernel-deps`), hash v2:
   and `check_tuned_tables.py --self-test`.
 - Table staleness is one function, `sweep_to_table.stale_kernel_warnings`: the header's
   `kernels=`/`family_kernels=` against the sources now. A table whose `tiers=` counts no
-  deep, coarse, calibrate, preview or custom row (all converted/prior/transcribed) carries no hash and is never stale;
-  a missing or unparsable `tiers=` is checked.
+  deep, coarse, calibrate, preview or custom row (all converted/prior/transcribed) is never stale,
+  whatever hashes its header names; a missing or unparsable `tiers=` is checked.
 - Shared device headers (`src/sycl/kernel_attrs.hh`, `src/sycl/sscp_target.hh`,
-  `src/kernels/common/sg_partition/` and `group-collectives.hh`) sit in a spec's common section, once,
+  `src/kernels/common/sg_partition/` and `include/batchlas/util/group-collectives.hh`) sit in a spec's common section, once,
   wherever its sources include them; `tune_tests` (`SharedKernelHeadersAreCommonInEverySpec`)
   follows the includes and checks it.
 
@@ -208,50 +212,48 @@ scripts/sweep_to_table.py --rehash-moved BASE                                # "
   `.github/ci/check_tuned_tables.py` print the same warnings from one function,
   `sweep_to_table.stale_kernel_warnings`, which compares the op-level `kernels=` and every
   `family_kernels=` hash (kernel-deps included). A table with only converted/prior/transcribed rows
-  (every sm_89 table) carries no hash and is never reported stale.
+  (every sm_89 table and `spmm.cpu.txt`) is never reported stale, although its header names hashes.
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.
 
-The library side is tested in C++. `tuned_tables_tests` checks that every embedded table's
-`# keys:` line equals `dtype:exact` followed by the op's `choice.hh` keys, and that every spelling
-is one of that dtype's candidates.
+The library side is tested in C++ (`tests/tuned_tables_tests.cc`, suite `TunedTables`):
 
-## Migration (one-off) {#tuning-data-migration}
+| Test | Checks |
+| --- | --- |
+| `EmbeddedSetIsExactlyTunedDirByNameAndBytes` | the embedded set equals `tuned/`, by name and bytes |
+| `EveryEmbeddedTableIsKeyedByDtypeThenChoiceKeysAndNamesOnlyCandidates` | `# keys:` is `dtype:exact` then the op's `choice.hh` keys; every spelling is a candidate of its dtype |
+| `RankedTimesFollowTheTieRule`, `TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck` | timed rows obey the 3% tie order; untimed rows only the spelling check |
+| `EveryOpShipsATableForEveryDtypeOnEveryShippedDevice` | every op has every dtype on sm_89 and sm_120 (real only for symm, syrk, syr2k); cpu ships spmm only |
+| `Sm120TablesAreDeepLedgerTablesNamingTheirLedger` | every sm_120 table's `source=` names its ledger and every dtype has timed rows |
+| `<Op>TranscribedTablesHoldExactlyTheChoiceGrid` (posv sm_89, trsm, gemm, gemv) | the transcribed rows cover exactly the `choice.hh` grid |
 
-`scripts/migrate_tuning_data.py`, committed with the data and deleted in the next commits of the
-same PR, wrote the new files from the old ones:
+## Provenance of the migrated records {#tuning-data-migration}
 
-- **Deep run (sm_120):** the 183 run files merged into the 19 per-op ledgers: every line, in
-  file-name-then-line order per old directory, with `dtype` added. 146,544 lines.
-- **Untimed rows (sm_120):** rows tagged `# transcribed` in the shipped tables became
-  `transcribed` cells under run `transcribed-<sha>`, the sha of the transcribed table they came
-  from (`aad906cb^`).
-- **sm_89 and cpu transcribed tables:** became `transcribed` cells, with run lines carrying the
-  table's keys, the sm_120 run's candidates and `batchlas` set to the transcribed sha.
-- **sm_89 potrf converted rows** became `converted` cells (the rows' `# noisy` marks, 1 row,
-  were dropped).
-- **Rehash:** 59 verified `rehash` lines (`proof: normalized`), every family of 18 ops. gemv's were refused: its
-  records predate real edits to `src/ops/gemv/gemv.cc` and `src/sycl/device_scalar.hh`, and its
-  full re-run (`20261009T042647-threadripper02-422873`) was `-dirty`; gemv was re-measured at
-  deep on 2026-10-11 (run `20261011T204301-threadripper02-39013`).
-- **Check:** each new table, regenerated with today's hashes and restricted to one dtype, has
-  exactly the rows of the old per-dtype table (keys, entries, times, tier tags), gemv sm_120
-  excepted.
+The layout replaced per-dtype tables and per-run ledger directories in merge `8fa73fd0`
+(2026-10-11). The old files are in its first parent, `707fa9b8`. A one-off
+`scripts/migrate_tuning_data.py` (not in the tree) wrote the ledgers:
 
-Deleted afterwards:
+| Source | Became |
+| --- | --- |
+| sm_120 deep run: 183 run files | the 19 sm_120 ledgers, every line in file-name-then-line order, `dtype` added: 146,544 lines |
+| sm_120 rows tagged `# transcribed` | `transcribed` cells under run `transcribed-<sha>`, the sha of the table they came from (`aad906cb^`) |
+| sm_89 and cpu transcribed tables | `transcribed` cells; run lines carry the table's keys, the sm_120 run's candidates, `batchlas` = the transcribed sha |
+| sm_89 potrf converted rows | `converted` cells (the one row's `# noisy` mark dropped) |
+| v1 hashes | 59 `rehash` lines (`proof: normalized`), every family of 18 ops |
 
-- the per-dtype tables and the per-run ledger directories;
-- `tuned/transcribed/*.csv` and the potrf sweeps under `benchmarks/results/routing/`
-  (`sm120_potrf_sweep{,_edges}.jsonl` and their campaign files, `sm89_potrf_archive.jsonl`);
-- the converter and raw-tuner inputs of `sweep_to_table.py`, with its Python `OpSpec`.
-
-Kept, because a page or a test cites them (no table is generated from them):
-`routing/sm120_posv_sweep.jsonl` (`docs/perf/potrf.md`, `docs/perf/blackwell.md`) and
-`routing/sm120_potrf_phase2_gate.csv` (`tune_tests`). The old raw trsm tuner output
-`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` is kept as provenance; its machine,
-build and grid are in `benchmarks/results/tuning/README.md`.
-
-The deleted files remain in git history at the merge base of this PR.
+- gemv's rehash was refused: its records predate real edits to `src/ops/gemv/gemv.cc` and
+  `src/sycl/device_scalar.hh`. Its full re-run `20261009T042647-threadripper02-422873` is `-dirty`;
+  gemv was re-measured at deep on 2026-10-11 (run `20261011T204301-threadripper02-39013`).
+- Check at migration: each regenerated table, restricted to one dtype, had exactly the old
+  per-dtype table's rows (keys, entries, times, tier tags), gemv sm_120 excepted.
+- Deleted: the per-dtype tables, the per-run ledger directories, `tuned/transcribed/*.csv`, the
+  potrf sweeps under `benchmarks/results/routing/` (`sm120_potrf_sweep{,_edges}.jsonl` with their
+  campaign files, `sm89_potrf_archive.jsonl`), and the converter and raw-tuner inputs of
+  `sweep_to_table.py` with its Python `OpSpec`.
+- Kept as cited data, no table generated from them: `routing/sm120_posv_sweep.jsonl`
+  (`docs/perf/potrf.md`, `docs/perf/blackwell.md`), `routing/sm120_potrf_phase2_gate.csv`
+  (`tune_tests`), and the raw trsm tuner output `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`
+  (machine, build and grid in `benchmarks/results/tuning/README.md`).
 
 ## License
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extra.hh>
 #include <src/queue.hh>
 

@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <batchlas/blas/linalg.hh>
 #include <src/queue.hh>
+#include <src/util/internal-api.hh>
 #include <sycl/sycl.hpp>
 #include <batchlas/util/mempool.hh>
 #include <execution>
@@ -54,7 +56,7 @@ namespace batchlas{
     // Helper type traits to identify our enum types
     template<typename T>
     struct is_linalg_enum : std::false_type {};
-    
+
     template<> struct is_linalg_enum<Side> : std::true_type {};
     template<> struct is_linalg_enum<Uplo> : std::true_type {};
     template<> struct is_linalg_enum<Transpose> : std::true_type {};
@@ -62,7 +64,7 @@ namespace batchlas{
     template<> struct is_linalg_enum<Layout> : std::true_type {};
     template<> struct is_linalg_enum<JobType> : std::true_type {};
 
-    template <class T>
+    template <typename T>
     struct is_complex_or_floating_point : std::bool_constant<FloatingOrComplexScalar<T>> {};
 
     template<auto>
@@ -297,7 +299,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUBLAS
         if constexpr (B == BackendLibrary::CUBLAS || B == BackendLibrary::CUSOLVER || B == BackendLibrary::CUSPARSE) {
             using BaseType = typename base_type<T>::type;
-            
+
             // Handle default precision first
             if (precision == ComputePrecision::Default) {
                 if constexpr (std::is_same_v<BaseType, float>) {
@@ -317,7 +319,7 @@ namespace batchlas{
                     default:
                         throw batchlas::unsupported("Unsupported precision for single precision type");
                 }
-            } 
+            }
             else if constexpr (std::is_same_v<BaseType, double>) {
                 if (precision == ComputePrecision::F64) {
                     return CUBLAS_COMPUTE_64F;
@@ -387,7 +389,7 @@ namespace batchlas{
         }
     }
 
-    
+
 
 
     template<BackendLibrary B, typename T>
@@ -521,7 +523,7 @@ namespace batchlas{
             using ReturnT = std::conditional_t<std::is_const_v<T>,
                                              const CudaT*,
                                              CudaT*>;
-            
+
             if constexpr (std::is_same_v<BaseT, float> || std::is_same_v<BaseT, double>) {
                 return ptr; // No conversion needed
             } else {
@@ -599,7 +601,7 @@ namespace batchlas{
         return status;
     }
 #endif
-    
+
 #if BATCHLAS_HAS_CUDA_BACKEND
     template <typename T, BackendLibrary BL, Backend B, typename Fun1, typename Fun2, typename Fun3, typename Fun4, typename... Args>
     auto call_backend(const Fun1& fun1, const Fun2& fun2, const Fun3& fun3, const Fun4& fun4, const LinalgHandle<B>& handle, Args&&... args) {
@@ -676,14 +678,14 @@ namespace batchlas{
     // Variadic template for converting multiple enums
 /*     template <Backend B, typename... Args>
     auto enum_convert(Args&&... args) {
-        static_assert((is_linalg_enum<std::remove_reference_t<Args>>::value && ...), 
+        static_assert((is_linalg_enum<std::remove_reference_t<Args>>::value && ...),
                      "All arguments must be linalg enum types");
         return std::make_tuple(enum_convert<B>(std::forward<Args>(args))...);
     }
  */
 
 
-        
+
 
 
     #if BATCHLAS_HAS_CUDA_BACKEND
@@ -702,17 +704,17 @@ namespace batchlas{
             static constexpr cudaDataType_t type = CUDA_R_32F;
         };
 
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUBLAS> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
         };
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUSPARSE> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
         };
-        
+
         template <>
         struct BackendScalar<double, BackendLibrary::CUSOLVER> {
             static constexpr cudaDataType_t type = CUDA_R_64F;
@@ -822,21 +824,23 @@ namespace batchlas{
             LinalgHandle() {
                 cudaDeviceSynchronize();
                 auto blas_status = cublasCreate(&blas_handle_);
-                if (blas_status != CUBLAS_STATUS_SUCCESS) {
-                    std::cerr << "CUBLAS initialization failed with status: " << blas_status << std::endl;
-                    throw batchlas::device_error("CUBLAS initialization failed");
-                }
+                if (blas_status != CUBLAS_STATUS_SUCCESS)
+                    throw batchlas::device_error("cuBLAS initialization failed with status " +
+                                                 std::to_string(static_cast<int>(blas_status)));
 
                 auto sparse_status = cusparseCreate(&sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
-                    std::cerr << "CUSPARSE initialization failed with status: " << sparse_status << std::endl;
-                    throw batchlas::device_error("CUSPARSE initialization failed");
+                    cublasDestroy(blas_handle_);  // no destructor runs for a throwing constructor
+                    throw batchlas::device_error("cuSPARSE initialization failed with status " +
+                                                 std::to_string(static_cast<int>(sparse_status)));
                 }
 
                 auto solver_status = cusolverDnCreate(&solver_handle_);
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
-                    std::cerr << "CUSOLVER initialization failed with status: " << solver_status << std::endl;
-                    throw batchlas::device_error("CUSOLVER initialization failed");
+                    cusparseDestroy(sparse_handle_);
+                    cublasDestroy(blas_handle_);
+                    throw batchlas::device_error("cuSOLVER initialization failed with status " +
+                                                 std::to_string(static_cast<int>(solver_status)));
                 }
                 cudaDeviceSynchronize();
             }
@@ -852,15 +856,18 @@ namespace batchlas{
                 cudaDeviceSynchronize();
                 auto blas_status = cublasDestroy(blas_handle_);
                 if (blas_status != CUBLAS_STATUS_SUCCESS) {
-                    std::cerr << "CUBLAS initialization failed with status: " << blas_status << std::endl;
+                    batchlas::detail::warn("cuBLAS handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(blas_status)));
                 }
                 auto sparse_status = cusparseDestroy(sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
-                    std::cerr << "CUSPARSE initialization failed with status: " << sparse_status << std::endl;
+                    batchlas::detail::warn("cuSPARSE handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(sparse_status)));
                 }
                 auto solver_status = cusolverDnDestroy(solver_handle_);
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
-                    std::cerr << "CUSOLVER initialization failed with status: " << solver_status << std::endl;
+                    batchlas::detail::warn("cuSOLVER handle destruction failed with status " +
+                                           std::to_string(static_cast<int>(solver_status)));
                 }
                 cudaDeviceSynchronize();
             }

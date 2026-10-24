@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -49,24 +50,24 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GESV: Matrix dimensions cannot be negative (A: rows=" +
+            "gesv: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) +
             "; B: rows=" + std::to_string(B.rows()) +
             ", cols=" + std::to_string(B.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument(
-            "GESV: A must be square, got " + std::to_string(A.rows()) + "x" +
+            "gesv: A must be square, got " + std::to_string(A.rows()) + "x" +
             std::to_string(A.cols()));
     }
     if (A.rows() != B.rows()) {
         throw batchlas::invalid_argument(
-            "GESV: B must have A.rows() rows, got " + std::to_string(B.rows()) +
+            "gesv: B must have A.rows() rows, got " + std::to_string(B.rows()) +
             " against " + std::to_string(A.rows()));
     }
     if (A.batch_size() != B.batch_size()) {
         throw batchlas::invalid_argument(
-            "GESV: A and B must share a batch size, got " +
+            "gesv: A and B must share a batch size, got " +
             std::to_string(A.batch_size()) + " and " + std::to_string(B.batch_size()));
     }
 }
@@ -88,21 +89,21 @@ inline void gesv_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @param A           batch of n x n matrices; overwritten with L and U
 /// @param B           batch of n x nrhs right-hand sides; overwritten with X
 /// @param pivots      pivot output, `n * batch` entries in getrf()'s format
-/// @param work_space  device-accessible scratch of at least gesv_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least gesv_buffer_size() bytes
 /// @param info        per-item status as for getrf(): 0 on success, i > 0 if
 ///                    U(i,i) is exactly zero (that item's X is meaningless).
 ///                    Empty span = not requested.
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if gesv_validate_params() rejects the call
 /// @throws batchlas::workspace_error if the composed getrf + getrs route is
-///         chosen and @p work_space is shorter than its getrf leg needs
+///         chosen and @p workspace is shorter than its getrf leg needs
 /// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event gesv(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B,
                         Span<int64_t> pivots,
-                        Span<std::byte> work_space,
+                        Span<std::byte> workspace,
                         Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that gesv() needs for these operands on this queue.
@@ -123,8 +124,8 @@ inline Event gesv(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B,
                   Span<int64_t> pivots,
-                  Span<std::byte> work_space) {
-    return gesv<Back, T>(ctx, A, B, pivots, work_space, Span<int32_t>{});
+                  Span<std::byte> workspace) {
+    return gesv<Back, T>(ctx, A, B, pivots, workspace, Span<int32_t>{});
 }
 
 

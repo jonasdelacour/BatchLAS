@@ -26,7 +26,7 @@ struct HostBlasDoubleHealth {
 
 // Port of cmake/BatchLASBlasHealthCheck.cmake on a strided sample of C. The sizes are the ones
 // that expose the known defect: n=64 and n=256 happen to be correct there.
-template <class Dgemm> HostBlasDoubleHealth probe_dgemm(Dgemm dgemm) {
+template <typename Dgemm> HostBlasDoubleHealth probe_dgemm(Dgemm dgemm) {
     HostBlasDoubleHealth health;
     static const int sizes[] = {128, 200, 512};
     for (int n : sizes) {

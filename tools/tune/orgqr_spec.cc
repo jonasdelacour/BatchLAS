@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // orgqr for the tuner (src/ops/orgqr/choice.hh): reflectors and tau from one untimed public geqrf
 // (Auto) of a MatrixView::fill_random M, R on and above the diagonal (values orgqr must ignore),
 // ld = m + ld_pad. Verified on the default items by MatrixView::qr_reconstruction, ||M - Q R||_F /
@@ -12,6 +13,7 @@
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -28,7 +30,7 @@
 namespace batchlas::tune {
 namespace {
 
-template <class T>
+template <typename T>
 struct OrgqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -79,7 +81,7 @@ public:
         return {ops::orgqr::key_names.begin(), ops::orgqr::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::orgqr::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::orgqr::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"m", ints(ops::orgqr::grid)}, {"n", ints(ops::orgqr::grid)}};
@@ -88,7 +90,7 @@ public:
                               const std::map<std::string, std::vector<std::string>>& overrides) const override {
         auto cells = OpSpec::grid(dtype, overrides);
         std::erase_if(cells, [](const CellKey& k) { return key_int(k, "n") > key_int(k, "m"); });
-        if (cells.empty()) throw std::invalid_argument("orgqr: the --grid values leave no cell with n <= m");
+        if (cells.empty()) throw batchlas::invalid_argument("orgqr: the --grid values leave no cell with n <= m");
         return cells;
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {  // A0, A (tau is n per item; M is the check's)
@@ -122,9 +124,9 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/orgqr_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
-            if (n > m) throw std::invalid_argument("orgqr: n > m has no native family to tune");
+            if (n > m) throw batchlas::invalid_argument("orgqr: n > m has no native family to tune");
             OrgqrProblem<T> p(q, m, n, qr_batch(double(m) * double(n) * sizeof(T)), req.ld_pad);
             if (req.mode == "race") return run_race<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);
             return run_arms<ops::orgqr::OrgqrChoice>("orgqr", p, req, 1.0);

@@ -16,7 +16,7 @@ LOBPCG iteration counts in the hardening sections are CPU (NETLIB) builds with
 
 ## syevx: routing thresholds as they stand
 
-The dense `Auto` rule, from `syevx_select_algorithm` (`src/ops/syevx/syevx.cc:302-320`):
+The dense `Auto` rule, from `syevx_select_algorithm` (`src/ops/syevx/syevx.cc:304-321`):
 
 | condition | route |
 |---|---|
@@ -32,7 +32,7 @@ The dense `Auto` rule, from `syevx_select_algorithm` (`src/ops/syevx/syevx.cc:30
 ## syevx: the Direct baseline was never cuSOLVER
 
 Before commit `fc4fa7a9`, `syev`'s `Auto` order put the in-house blocked solver ahead of the vendor, so
-every dense `Direct` solve ran it. The fix, `syev_prefer_vendor` (`syev.hh:181` when written; no longer in `include/` or `src/`, routing is
+every dense `Direct` solve ran it. The fix, `syev_prefer_vendor` (`syev.hh:182` when written; no longer in `include/` or `src/`, routing is
 now flat selection, see [syev](syev.md)), sent `syev` to the vendor on CUDA. Over `n = 64..1024`, `batch = 1..512`, the vendor won 24 of 25
 shapes (1.27x to 15.4x). Blocked leads by up to 1.37x on `320 <= n <= 640` with `batch >= 128`; that
 carve-out is kept as measured, since the boundary is not monotone in `n`.

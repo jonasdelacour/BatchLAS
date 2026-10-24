@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every posv candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // flat-kernel-selection-phase3-plan.md §1.1. The limit oracle reads the drivers' own capacity
 // queries; which kernel ran is read back from the select trace or a bit-for-bit comparison
@@ -165,7 +166,7 @@ void expect_solved(Queue& ctx, const Sys<T>& p, const std::vector<int32_t>& info
 }
 
 // The choice the outermost posv trace line names for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();

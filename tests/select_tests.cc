@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // src/select/select.hh on a synthetic choice variant and synthetic tables (no GPU, no kernel),
 // then the batch policy every public entry point shares, on a real queue.
 // docs/design/flat-kernel-selection.md §5 and §8.5.
@@ -5,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions.hh>
+#include <batchlas/error.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/util/env.hh>
 
@@ -239,7 +241,7 @@ TEST(SelectTable, LedgerTableMixesTimedAndTranscribedRows) {
     ASSERT_NE(hi, nullptr);
     EXPECT_EQ(hi->ranked[0].spelling, "blocked");
     EXPECT_THROW(sel::parse_table("# op=synth dtype=float device=sm_89 source=sweep.jsonl\n# keys: n:log\nn=4 | tiny -\n",
-                                  "synth.sm_89.txt"), std::runtime_error);
+                                  "synth.sm_89.txt"), batchlas::internal_error);
 }
 
 TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
@@ -253,7 +255,7 @@ TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
     EXPECT_EQ(t.family, "gfx");
     EXPECT_EQ(t.arch_number, 90);
     EXPECT_THROW(sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt"),
-                 std::runtime_error) << "an old <op>.<dtype>.<device>.txt name supplies nothing";
+                 batchlas::internal_error) << "an old <op>.<dtype>.<device>.txt name supplies nothing";
 }
 
 // tuned/<op>.<device>.txt: dtype is the first key; the file splits into one Table per dtype, each
@@ -294,7 +296,7 @@ TEST(SelectTable, AnOpDeviceFileSplitsIntoOneTablePerDtype) {
         try {
             sel::parse_tables(t, "synth.sm_120.txt");
             ADD_FAILURE() << "accepted:\n" << t;
-        } catch (const std::runtime_error& e) {
+        } catch (const batchlas::internal_error& e) {
             EXPECT_NE(std::string(e.what()).find(why), std::string::npos) << e.what();
         }
     }
@@ -348,13 +350,13 @@ TEST(SelectTable, EveryParseErrorNamesFileAndLine) {
         try {
             sel::parse_table(text, "synth.sm_120.txt");
             ADD_FAILURE() << "accepted:\n" << text;
-        } catch (const std::runtime_error& e) {
+        } catch (const batchlas::internal_error& e) {
             const std::string m = e.what();
             EXPECT_EQ(m.find("synth.sm_120.txt" + where), 0u) << m;
             EXPECT_NE(m.find(why), std::string::npos) << m;
         }
     }
-    EXPECT_THROW(sel::parse_table(keys, "untitled"), std::runtime_error);  // no op/dtype/device at all
+    EXPECT_THROW(sel::parse_table(keys, "untitled"), batchlas::internal_error);  // no op/dtype/device at all
 }
 
 // ---- nearest ----------------------------------------------------------------------------
@@ -455,7 +457,7 @@ TEST(SelectNearest, ExactKeysAreDroppedFromTheRightOneAtATime) {
 
 TEST(SelectNearest, MissingKeyThrows) {
     const auto t = sel::parse_table(table("sm_120", kGrid), "synth.sm_120.txt");
-    EXPECT_THROW(t.nearest({{"uplo", "L"}, {"n", 64}}), std::invalid_argument);
+    EXPECT_THROW(t.nearest({{"uplo", "L"}, {"n", 64}}), batchlas::internal_error);
 }
 
 // ---- the ranked walk, borrowing and the last resort -------------------------------------
@@ -473,7 +475,7 @@ TEST_F(Select, EmbeddedTablesWithBadSpellingsFailLoudly) {
     try {
         choose("sm_120", key("L", 64, 1024));
         ADD_FAILURE() << "accepted";
-    } catch (const std::runtime_error& e) {
+    } catch (const batchlas::internal_error& e) {
         EXPECT_NE(std::string(e.what()).find("synth.sm_120.txt:4:"), std::string::npos) << e.what();
     }
 }
@@ -612,7 +614,7 @@ TEST_F(Select, LastResortOrderThenThrow) {
     try {
         choose("sm_120", key("L", 64, 1024), [](const C&) { return false; });
         ADD_FAILURE() << "no throw";
-    } catch (const std::runtime_error& e) {
+    } catch (const batchlas::unsupported& e) {
         EXPECT_STREQ(e.what(), "synth: no runnable kernel on sm_120");
     }
 }
@@ -625,7 +627,7 @@ std::string pin_error(const std::string& pin, const Pred& ok = kAll) {
     sel::ScopedPin<C> p("synth", pin);
     try {
         choose("sm_120", key("L", 64, 1024), ok);
-    } catch (const std::invalid_argument& e) {
+    } catch (const batchlas::invalid_argument& e) {
         return e.what();
     }
     return "<no throw>";
@@ -675,7 +677,7 @@ TEST_F(Select, StrictClassWordPinThrowsInsteadOfFallingBack) {
         sel::ScopedPin<C> p("synth", pin, sel::StrictPin{});
         try {
             return S(choose("sm_120", key("L", 64, 1024), ok));
-        } catch (const std::invalid_argument& e) {
+        } catch (const batchlas::invalid_argument& e) {
             return e.what();
         }
     };
@@ -768,7 +770,7 @@ TEST_F(Select, EnvPinIsReadOnEveryCallAndScopedPinBeatsIt) {
         try {
             pick();
             ADD_FAILURE() << "no throw";
-        } catch (const std::invalid_argument& e) {
+        } catch (const batchlas::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("BATCHLAS_POTRF_ROUTE=\"regsiter_tiled\""), std::string::npos);
         }
     }
@@ -826,6 +828,29 @@ TEST_F(Select, TunedDirThatIsNotADirectoryIsIgnoredWithOneWarning) {
     EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), "tiny");
     const std::string err = ::testing::internal::GetCapturedStderr();
     EXPECT_EQ(err, "batchlas: BATCHLAS_TUNED_DIR=/nonexistent/select_tests is not a directory; ignoring it\n");
+}
+
+// A bad override table is the user's input (invalid_argument); the same text built in is a
+// library defect (internal_error, EmbeddedTablesWithBadSpellingsFailLoudly).
+TEST_F(Select, TunedDirWithBadTableIsAnInvalidArgument) {
+    sel::testing::set_builtin_tables({file("sm_120", "uplo=L n=64 batch=1024 | tiny 1\n")});
+    const std::vector<std::pair<std::string, std::string>> bad{
+        file("sm_120", "uplo=L n=64 batch=1024 | lpanel:x 1\n"),
+        {"synth.sm_120.txt", "# keys: dtype:exact n:log\ndtype=half n=4 | tiny 1\n"},
+        {"synth.sm_120.txt", "# keys: dtype:exact side:exact\ndtype=float side=L | tiny 1\n"},
+    };
+    for (std::size_t i = 0; i < bad.size(); ++i) {
+        const auto& f = bad[i];  // a fresh dir each: the loader caches by path
+        TempDir dir("select_tests.bad_dir." + std::to_string(::getpid()) + "." + std::to_string(i));
+        dir.write(f);
+        ScopedEnvVar over("BATCHLAS_TUNED_DIR", dir.path.c_str());
+        try {
+            choose("sm_120", key("L", 64, 1024));
+            ADD_FAILURE() << "accepted:\n" << f.second;
+        } catch (const batchlas::invalid_argument& e) {
+            EXPECT_EQ(std::string(e.what()).rfind("BATCHLAS_TUNED_DIR: synth.sm_120.txt", 0), 0u) << e.what();
+        }
+    }
 }
 
 // The loader parses each table file once, however many dtypes ask for it (gemm's files are
@@ -1038,12 +1063,12 @@ namespace {
 
 using batchlas::Backend;
 using batchlas::MatrixFormat;
-template <class T>
+template <typename T>
 using Dense = batchlas::MatrixView<T, MatrixFormat::Dense>;
-template <class T>
+template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-template <class T, Backend B>
+template <typename T, Backend B>
 struct PolicyConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
@@ -1061,14 +1086,14 @@ using PolicyTuple = decltype(std::tuple_cat(
     std::tuple<>{}));
 using PolicyTypes = test_utils::tuple_to_types<PolicyTuple>::type;
 
-template <class Config>
+template <typename Config>
 class BatchPolicy : public test_utils::BatchLASTest<Config> {};
 TYPED_TEST_SUITE(BatchPolicy, PolicyTypes);
 
 // Every op once, by name, on `batch` items of order n at a padded ld, a stride that is not
 // ld * n and inc 2; with `het`, A, B and C carry active orders {n, n-3, n, n-5, ...}. Every
 // buffer starts as a large finite sentinel, so a write anywhere shows.
-template <class T, Backend B>
+template <typename T, Backend B>
 struct OpBattery {
     static constexpr int n = 8, ld = 11, stride = 11 * 8 + 5;
     batchlas::Queue& q;
@@ -1163,7 +1188,7 @@ struct OpBattery {
             {"spmm", [=, this] { return spmm_buffer_size<B, T, MatrixFormat::CSR>(q, csr(), Bv, Cv, T(1), T(0.5), N, N); }},
         };
     }
-    template <class U>
+    template <typename U>
     static int changed(const batchlas::UnifiedVector<U>& v, U s) {
         return int(std::count_if(v.data(), v.data() + v.size(), [&](const U& x) { return !(x == s); }));
     }
@@ -1286,6 +1311,7 @@ TYPED_TEST(BatchPolicy, HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt) {
             const std::string what = e.what();
             EXPECT_NE(what.find(refused_upfront ? "heterogeneous batch" : "no runnable kernel"), std::string::npos)
                 << name << ": " << what;
+            EXPECT_TRUE(refused_upfront || dynamic_cast<const batchlas::unsupported*>(&e)) << name << ": " << what;
         }
     }
 }

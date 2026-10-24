@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
@@ -376,6 +377,19 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
             linalg::svd(ctx, A, GesvdOptions{.jobu = SvdVectors::Thin, .jobvh = SvdVectors::All});
         [[maybe_unused]] auto hermitian = linalg::svd(ctx, A, GesvdOptions{.hermitian_uplo = Uplo::Lower});
     }
+}
+
+// Compile guard for the C++ block of .github/README.md, written exactly as there; same rules as above.
+[[maybe_unused]] void readme_example(int n, int batch) {
+    Queue ctx(Device::default_device());                 // backend comes from the device
+    Matrix<float> A(n, n, batch), B(n, n, batch), C(n, n, batch), S(n, n, batch);
+    (void)A.fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+    (void)B.fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+    (void)S.fill_random_spd(ctx);
+
+    (void)gemm(ctx, A, B, C, {.alpha = 2.0f});           // C := 2 A B
+    (void)potrf(ctx, S, PotrfOptions{.uplo = Uplo::Lower}); // S := its Cholesky factor
+    ctx.wait();                                          // nothing is readable before this
 }
 
 // What the layer must NOT accept. Each of these is spelled as a concept rather

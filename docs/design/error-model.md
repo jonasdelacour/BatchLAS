@@ -23,23 +23,23 @@ Not wrapped, so `catch (const batchlas::exception&)` does not see them:
   `src/ops/syev/sytrd/sytrd_sy2sb.cc`). Wrapping it would lose pybind11's `MemoryError`.
 - `sycl::exception`, from the SYCL runtime.
 
-## error model: kernel selection throws outside the hierarchy
+## error model: kernel selection throws {#error-model-kernel-selection-throws-outside-the-hierarchy}
 
-Flat kernel selection (`src/select/`, see `docs/design/flat-kernel-selection.md`) throws plain `std::`
-types, except `NoRouteError`, which is a `batchlas::unsupported` (and so a `std::runtime_error`).
-The other rows do not match `batchlas::exception`:
+Flat kernel selection (`src/select/`, see `docs/design/flat-kernel-selection.md`) throws only
+`batchlas::` types.
 
 | Site | Thrown | When |
 | --- | --- | --- |
-| `select::detail::resolve_pin` (`src/select/select.hh`) | `std::invalid_argument` | `BATCHLAS_<OP>_ROUTE` (or `ScopedPin`) does not parse, is not a compiled candidate, or cannot run the shape. `native` and `vendor` warn and fall back to Auto. |
-| `select::detail::walk` | `std::runtime_error` | No candidate in any table row or the last-resort list can run the call. |
-| `select::detail::validate`, `parse_table` | `std::runtime_error` | A tuned table (built in or from `BATCHLAS_TUNED_DIR`) names an unknown spelling. |
-| `select::throw_no_vendor_route` (`src/select/vendor.hh`) | `batchlas::NoRouteError` (`include/batchlas/no_route.hh`), a `batchlas::unsupported` | No vendor library and no native kernel for the request, typically `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`. |
+| `select::detail::resolve_pin` (`src/select/select.hh`) | `invalid_argument` | `BATCHLAS_<OP>_ROUTE` (or `ScopedPin`) does not parse, is not a compiled candidate, or cannot run the shape. `native` and `vendor` warn and fall back to Auto (a `StrictPin` throws). |
+| `select::detail::walk` | `unsupported` | No candidate in any table row or the last-resort list can run the call. |
+| `select::detail::validate`, `parse_table`, `parse_tables`, `Table::nearest` | `internal_error` | A built-in tuned table does not parse, names an unknown spelling or dtype, or keys on a field the op does not supply. |
+| the same, for a `BATCHLAS_TUNED_DIR` table | `invalid_argument` | The same defects in a user table; the message starts `BATCHLAS_TUNED_DIR: `. |
+| `select::throw_no_vendor_route` (`src/select/vendor.hh`) | `NoRouteError` (`include/batchlas/no_route.hh`), an `unsupported` | No vendor library and no native kernel for the request, typically `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`. |
 
-Ops that parse pin words outside `src/select` throw `std::invalid_argument` for an unknown word and
-`batchlas::unsupported` for a known pin this build cannot serve. By meaning, the `select` throws
-should be `invalid_argument` and `unsupported`. Changing them alters what `std::` catchers see, so
-that change needs its own commit.
+- `select::pick` turns only an `unsupported` from the walk into `NoRouteError`; a table defect
+  propagates unchanged.
+- Ops that parse pin words outside `src/select` throw `invalid_argument` for an unknown word and
+  `unsupported` for a known pin this build cannot serve.
 
 ## error model: the three tag-base rules
 
@@ -68,7 +68,7 @@ Rule four (every class carries `BATCHLAS_API`) is in
 | --- | --- | --- |
 | `invalid_argument` | The call violates the API contract. | No; fix the call. |
 | `out_of_range` | An index is outside its container (`MatrixView::at`, `batch_item`). | No. Kept separate so Python raises `IndexError`. |
-| `error` | Base of the runtime arm. Nothing throws it directly. | n/a |
+| `error` | Base of the runtime arm. The library never throws it directly; `tools/tune` and `benchmarks/` throw it for an OS I/O failure (open, lock, write, a failed child command). | n/a |
 | `unsupported` | No route, kernel or backend in this build on this device serves the request. | Not as asked; another route, backend, type or shape may work. |
 | `device_error` | The device or its vendor runtime failed. | Sometimes. A repeating status code is a real fault. |
 | `workspace_error` | Scratch is too small, or the arena ran out. | Yes: re-query `*_buffer_size()`, or halve the batch. |
@@ -83,6 +83,10 @@ Rule four (every class carries `BATCHLAS_API`) is in
   empty problem or a heterogeneous batch before selection runs, so a pin cannot change it. By
   meaning these are `invalid_argument` or `unsupported`.
 - `api_misuse` is for a valid argument used at the wrong time or from the wrong thread.
+- `tools/tune` and `benchmarks/` throw the same classes: a bad flag, ledger, sweep or input file is
+  `invalid_argument`, an OS I/O failure is `error`, a getrf breakdown in generated input is
+  `convergence_error`, a dirty `--repo` tree is `api_misuse`, a build without a GPU backend is
+  `unsupported`.
 
 ## error model: Python exception classes {#error-model-python-exception-classes}
 
@@ -98,9 +102,9 @@ exported from `batchlas`.
 | `unsupported`, `device_error`, `workspace_error`, `convergence_error`, `internal_error`, `api_misuse` | `UnsupportedError`, `DeviceError`, `WorkspaceError`, `ConvergenceError`, `InternalError`, `ApiMisuseError` (each a `BatchLASError`) | `RuntimeError` |
 | `NoRouteError` | `NoRouteError` (an `UnsupportedError`), with `op`, `backend` and `dtype` attributes | `RuntimeError` |
 
-- The `std::` arms are wide because a bad `BATCHLAS_<OP>_ROUTE` pin throws a plain
-  `std::invalid_argument`.
-- The other `std::runtime_error`s outside the hierarchy stay a plain `RuntimeError`.
+- The `std::` arms also map a plain `std::invalid_argument` or `std::out_of_range` from outside
+  BatchLAS.
+- A `std::runtime_error` outside the hierarchy stays a plain `RuntimeError`.
 
 ## error model: batch-wide convergence errors
 

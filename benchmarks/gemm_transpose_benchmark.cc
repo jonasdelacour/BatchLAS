@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+#include <batchlas/error.hh>
 #include <batchlas/util/minibench.hh>
 
 #include <batchlas/backend_config.h>
@@ -29,7 +31,7 @@ inline Transpose transpose_from_arg(int value) {
     case 2:
         return Transpose::ConjTrans;
     default:
-        throw std::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
+        throw batchlas::invalid_argument("transpose arg must be 0=NoTrans, 1=Trans, or 2=ConjTrans");
     }
 }
 

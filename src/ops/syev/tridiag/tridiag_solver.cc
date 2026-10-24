@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/linalg-impl.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <src/math-helpers.hh>
@@ -223,7 +224,7 @@ Event tridiagonal_solver(Queue& ctx,
                     int it = 0;
                     while (uniform(std::abs(L[k-1]) > eps * (std::abs(D[k-1]) + std::abs(D[k])))) {
                         if (it++ == kTridiagMaxIterations) { failed = true; break; }
-                        const auto [l0, l1] = internal::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
+                        const auto [l0, l1] = detail::eigenvalues_2x2(D[k-1], L[k-1], D[k]);
                         const T shift = std::abs(l0 - D[k]) < std::abs(l1 - D[k]) ? l0 : l1;
                         T_QTQ(cta, k+1, D, L, U, Vlocal, shift);
                         if (jobz == JobType::EigenVectors) {
@@ -234,7 +235,7 @@ Event tridiagonal_solver(Queue& ctx,
                 if (tid == 0) status_ptr[bid] = failed ? 1 : 0;
 
                 for (int i = tid; i < n; i += bdim) {
-                    if constexpr (internal::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<T>::value) {
                         batch_W[i] = D[i].real();
                     } else {
                         batch_W[i] = D[i];

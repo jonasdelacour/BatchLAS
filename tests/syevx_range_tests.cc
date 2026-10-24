@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Pure host-side tests for `syevx_resolve_range`.
 //
 // The resolver is the single place where the three user-facing selectors

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The register-resident GETRF panel leaf: one work-group per m x ncols panel, item `tid`

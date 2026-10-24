@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -60,8 +61,8 @@ Event steqr_impl(Queue& ctx,
     auto scratch = steqr_impl_layout<T>(ctx, allocator, n, batch_size);
     auto scan_view = scratch.scan;
     auto temp_deflation_indices = scratch.temp_deflation_indices;
-    
-    
+
+
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_ranges");
         ctx -> submit([&](sycl::handler& cgh) {
@@ -94,9 +95,9 @@ Event steqr_impl(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_scan");
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+        (void)detail::scan_inclusive_inplace<int32_t>(ctx, scan_view);
     }
-    
+
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_writeout");
         ctx -> submit([&](sycl::handler& cgh) {
@@ -132,7 +133,7 @@ Event steqr_impl(Queue& ctx,
             if (n == 1) continue; //Nothing to do for 1x1 blocks
             if (n == 2) { //Analytically compute eigenvalues for 2x2 blocks
                 if (store_givens) {
-                    auto [rt1, rt2, c, s] = internal::laev2(d_(0), e_(0), d_(1));
+                    auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
                     d_(0) = rt1;
                     d_(1) = rt2;
                     e_(0) = T(0);
@@ -140,7 +141,7 @@ Event steqr_impl(Queue& ctx,
                     order_view[gid] = ApplyOrder::Forward;
                     sweep_counts[gid] = 1;
                 } else {
-                    auto [rt1, rt2] = internal::eigenvalues_2x2(d_(0), e_(0), d_(1));
+                    auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
                     d_(0) = rt1;
                     d_(1) = rt2;
                     e_(0) = T(0);
@@ -156,14 +157,14 @@ Event steqr_impl(Queue& ctx,
                 for (size_t idx = 0; idx < n - 1; ++idx)
                     anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
 
-                if (anorm > internal::ssfmax<T>()) {
-                    auto alpha = internal::ssfmax<T>() / anorm;
+                if (anorm > detail::ssfmax<T>()) {
+                    auto alpha = detail::ssfmax<T>() / anorm;
                     // Scale down to avoid overflow
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
                     // Scale up to avoid underflow
-                    auto alpha = internal::ssfmin<T>() / anorm;
+                    auto alpha = detail::ssfmin<T>() / anorm;
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
                 }
@@ -178,43 +179,43 @@ Event steqr_impl(Queue& ctx,
                 };
 
                 // Form Wilkinson shift in virtual indexing: trailing 2x2 of virtual block
-                const auto shift = internal::wilkinson_shift(d_get(n - 2),
+                const auto shift = detail::wilkinson_shift(d_get(n - 2),
                                                    e_get(n - 2),
                                                    d_get(n - 1));
 
                 // First Givens rotation eliminates the first subdiagonal in virtual indexing
-                auto [c0, s0] = internal::givens_rotation(d_get(0) - shift, e_get(0));
+                auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
                 if (store_givens) {
                     rotations_view(0, k, gid) = {c0, s0};
                 }
-                auto bulge = internal::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
+                auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
 
                 // Chase the bulge across the block in virtual indexing
                 for (size_t j = 1; j < n - 1; ++j) {
-                    auto [cj, sj] = internal::givens_rotation(e_get(j - 1), bulge);
+                    auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
                     if (store_givens) {
                         rotations_view(j, k, gid) = {cj, sj};
                     }
-                    bulge = internal::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
+                    bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
                 }
 
                 bool deflatable = false;
                 for (size_t j = 0; j < n - 1; ++j) {
                     // Check for deflation
-                    if (std::abs(e_(j)) * std::abs(e_(j)) <= internal::eps2<T>() * std::abs(d_(j))*std::abs(d_(j + 1)) +
-                        internal::safmin<T>()) {
+                    if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j))*std::abs(d_(j + 1)) +
+                        detail::safmin<T>()) {
                         e_(j) = T(0);
                         deflatable = true;
                     }
                 }
 
-                if (anorm > internal::ssfmax<T>()) {
-                    auto alpha = anorm / internal::ssfmax<T>();
+                if (anorm > detail::ssfmax<T>()) {
+                    auto alpha = anorm / detail::ssfmax<T>();
                     // Scale back up
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
-                } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
-                    auto alpha = anorm / internal::ssfmin<T>();
+                } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
+                    auto alpha = anorm / detail::ssfmin<T>();
                     // Scale back down
                     for (size_t idx = 0; idx < n; ++idx) d_(idx) *= alpha;
                     for (size_t idx = 0; idx < n - 1; ++idx) e_(idx) *= alpha;
@@ -471,7 +472,7 @@ STEQR_LEGACY_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
 #endif
 
 #define STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE(fp) \
-template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>); 
+template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 
 BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE)
 

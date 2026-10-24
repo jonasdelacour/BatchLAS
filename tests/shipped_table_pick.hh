@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Auto's expected pick for one shape, read from the shipped tables, so a retune changes the
@@ -48,7 +49,7 @@ inline std::vector<std::pair<std::string, std::string>> dtype_keyed(std::vector<
 }
 
 // `native_only`: what the class word "native" resolves to (the vendor family is skipped).
-template <class Choice, class Probe>
+template <typename Choice, typename Probe>
 std::string shipped_table_pick(std::string_view op, std::string_view dtype, const batchlas::select::Device& d,
                                const batchlas::select::Key& key, Probe&& probe, bool native_only = false) {
     for (const batchlas::select::Table* t : batchlas::select::tables_in_borrow_order(op, dtype, d)) {

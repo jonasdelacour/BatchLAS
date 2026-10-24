@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The 48 KB dynamic-local-memory launch hole, spelled once for both potrf leaves: a request

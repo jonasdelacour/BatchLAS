@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native FUSED factor-and-solve, declarations only: gesv (LU) and posv (Cholesky) for

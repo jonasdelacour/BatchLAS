@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Helpers to generate unique variable names in macros
 #define MINI_BENCH_CONCAT_INNER(x, y) x##y

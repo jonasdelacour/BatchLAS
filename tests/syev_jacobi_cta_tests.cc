@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/enums.hh>
@@ -36,49 +37,49 @@ namespace {
 // independent of the kernel under test.
 // ---------------------------------------------------------------------------
 static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double>& A_in, int n) {
-	std::vector<double> A = A_in; // column-major n x n
-	const double tol = double(n) * std::numeric_limits<double>::epsilon();
+    std::vector<double> A = A_in; // column-major n x n
+    const double tol = double(n) * std::numeric_limits<double>::epsilon();
 
-	for (int sweep = 0; sweep < 100; ++sweep) {
-		int rotations = 0;
-		for (int p = 0; p < n - 1; ++p) {
-			for (int q = p + 1; q < n; ++q) {
-				const double apq = A[p + q * n];
-				const double app = A[p + p * n];
-				const double aqq = A[q + q * n];
-				if (std::abs(apq) <= tol * std::sqrt(std::abs(app) * std::abs(aqq))) continue;
-				if (apq == 0.0) continue;
+    for (int sweep = 0; sweep < 100; ++sweep) {
+        int rotations = 0;
+        for (int p = 0; p < n - 1; ++p) {
+            for (int q = p + 1; q < n; ++q) {
+                const double apq = A[p + q * n];
+                const double app = A[p + p * n];
+                const double aqq = A[q + q * n];
+                if (std::abs(apq) <= tol * std::sqrt(std::abs(app) * std::abs(aqq))) continue;
+                if (apq == 0.0) continue;
 
-				const double tau = (aqq - app) / (2.0 * apq);
-				const double t = std::copysign(1.0, tau) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
-				const double c = 1.0 / std::sqrt(1.0 + t * t);
-				const double s = t * c;
+                const double tau = (aqq - app) / (2.0 * apq);
+                const double t = std::copysign(1.0, tau) / (std::abs(tau) + std::sqrt(1.0 + tau * tau));
+                const double c = 1.0 / std::sqrt(1.0 + t * t);
+                const double s = t * c;
 
-				// A <- J^T A J with J = [[c, s], [-s, c]] on rows/cols (p,q).
-				for (int r = 0; r < n; ++r) {
-					const double arp = A[r + p * n];
-					const double arq = A[r + q * n];
-					A[r + p * n] = c * arp - s * arq;
-					A[r + q * n] = s * arp + c * arq;
-				}
-				for (int cc = 0; cc < n; ++cc) {
-					const double apc = A[p + cc * n];
-					const double aqc = A[q + cc * n];
-					A[p + cc * n] = c * apc - s * aqc;
-					A[q + cc * n] = s * apc + c * aqc;
-				}
-				A[p + q * n] = 0.0;
-				A[q + p * n] = 0.0;
-				++rotations;
-			}
-		}
-		if (rotations == 0) break;
-	}
+                // A <- J^T A J with J = [[c, s], [-s, c]] on rows/cols (p,q).
+                for (int r = 0; r < n; ++r) {
+                    const double arp = A[r + p * n];
+                    const double arq = A[r + q * n];
+                    A[r + p * n] = c * arp - s * arq;
+                    A[r + q * n] = s * arp + c * arq;
+                }
+                for (int cc = 0; cc < n; ++cc) {
+                    const double apc = A[p + cc * n];
+                    const double aqc = A[q + cc * n];
+                    A[p + cc * n] = c * apc - s * aqc;
+                    A[q + cc * n] = s * apc + c * aqc;
+                }
+                A[p + q * n] = 0.0;
+                A[q + p * n] = 0.0;
+                ++rotations;
+            }
+        }
+        if (rotations == 0) break;
+    }
 
-	std::vector<double> w(static_cast<std::size_t>(n));
-	for (int i = 0; i < n; ++i) w[static_cast<std::size_t>(i)] = A[i + i * n];
-	std::sort(w.begin(), w.end());
-	return w;
+    std::vector<double> w(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) w[static_cast<std::size_t>(i)] = A[i + i * n];
+    std::sort(w.begin(), w.end());
+    return w;
 }
 
 // Graded SPD matrix A = D * M * D with D = diag(2^{-grade*k}) and M a
@@ -92,79 +93,79 @@ static std::vector<double> reference_jacobi_eigenvalues(const std::vector<double
 // where Jacobi's relative-accuracy bound bites and a tridiagonalizing method
 // loses the small eigenvalues.
 static void make_graded_spd(int n, int grade, unsigned seed,
-							std::vector<double>& out_double,
-							std::vector<float>& out_float) {
-	std::minstd_rand rng(seed);
-	std::uniform_int_distribution<int> dist(-16, 16);
+                            std::vector<double>& out_double,
+                            std::vector<float>& out_float) {
+    std::minstd_rand rng(seed);
+    std::uniform_int_distribution<int> dist(-16, 16);
 
-	std::vector<double> M(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
-	for (int j = 0; j < n; ++j) {
-		for (int i = j; i < n; ++i) {
-			if (i == j) {
-				M[i + j * n] = 1.0;
-			} else {
-				const double v = double(dist(rng)) / 256.0; // dyadic, |v| <= 1/16
-				M[i + j * n] = v;
-				M[j + i * n] = v;
-			}
-		}
-	}
+    std::vector<double> M(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+    for (int j = 0; j < n; ++j) {
+        for (int i = j; i < n; ++i) {
+            if (i == j) {
+                M[i + j * n] = 1.0;
+            } else {
+                const double v = double(dist(rng)) / 256.0; // dyadic, |v| <= 1/16
+                M[i + j * n] = v;
+                M[j + i * n] = v;
+            }
+        }
+    }
 
-	std::vector<double> D(static_cast<std::size_t>(n));
-	for (int i = 0; i < n; ++i) D[static_cast<std::size_t>(i)] = std::ldexp(1.0, -grade * i);
+    std::vector<double> D(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i) D[static_cast<std::size_t>(i)] = std::ldexp(1.0, -grade * i);
 
-	out_double.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
-	out_float.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0f);
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			const double v = D[static_cast<std::size_t>(i)] * M[i + j * n] * D[static_cast<std::size_t>(j)];
-			out_double[static_cast<std::size_t>(i + j * n)] = v;
-			out_float[static_cast<std::size_t>(i + j * n)] = static_cast<float>(v);
-		}
-	}
+    out_double.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+    out_float.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0f);
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            const double v = D[static_cast<std::size_t>(i)] * M[i + j * n] * D[static_cast<std::size_t>(j)];
+            out_double[static_cast<std::size_t>(i + j * n)] = v;
+            out_float[static_cast<std::size_t>(i + j * n)] = static_cast<float>(v);
+        }
+    }
 }
 
 // Random symmetric matrix with dyadic entries, so it is represented exactly in
 // both float and double and the two precisions see identical input.
 static void make_dyadic_symmetric(int n, unsigned seed,
-								  std::vector<double>& out_double,
-								  std::vector<float>& out_float) {
-	std::minstd_rand rng(seed);
-	std::uniform_int_distribution<int> dist(-1024, 1024);
+                                  std::vector<double>& out_double,
+                                  std::vector<float>& out_float) {
+    std::minstd_rand rng(seed);
+    std::uniform_int_distribution<int> dist(-1024, 1024);
 
-	out_double.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
-	out_float.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0f);
-	for (int j = 0; j < n; ++j) {
-		for (int i = j; i < n; ++i) {
-			const double v = double(dist(rng)) / 1024.0; // dyadic in [-1, 1]
-			out_double[static_cast<std::size_t>(i + j * n)] = v;
-			out_double[static_cast<std::size_t>(j + i * n)] = v;
-			out_float[static_cast<std::size_t>(i + j * n)] = static_cast<float>(v);
-			out_float[static_cast<std::size_t>(j + i * n)] = static_cast<float>(v);
-		}
-	}
+    out_double.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+    out_float.assign(static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0f);
+    for (int j = 0; j < n; ++j) {
+        for (int i = j; i < n; ++i) {
+            const double v = double(dist(rng)) / 1024.0; // dyadic in [-1, 1]
+            out_double[static_cast<std::size_t>(i + j * n)] = v;
+            out_double[static_cast<std::size_t>(j + i * n)] = v;
+            out_float[static_cast<std::size_t>(i + j * n)] = static_cast<float>(v);
+            out_float[static_cast<std::size_t>(j + i * n)] = static_cast<float>(v);
+        }
+    }
 }
 
 template <typename T, Backend B>
 struct SyevJacobiCtaConfig {
-	using ScalarType = T;
-	static constexpr Backend BackendVal = B;
+    using ScalarType = T;
+    static constexpr Backend BackendVal = B;
 };
 
 } // namespace
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 using SyevJacobiCtaTestTypes = ::testing::Types<
-	SyevJacobiCtaConfig<float, Backend::CUDA>,
-	SyevJacobiCtaConfig<double, Backend::CUDA>,
-	SyevJacobiCtaConfig<std::complex<float>, Backend::CUDA>,
-	SyevJacobiCtaConfig<std::complex<double>, Backend::CUDA>>;
+    SyevJacobiCtaConfig<float, Backend::CUDA>,
+    SyevJacobiCtaConfig<double, Backend::CUDA>,
+    SyevJacobiCtaConfig<std::complex<float>, Backend::CUDA>,
+    SyevJacobiCtaConfig<std::complex<double>, Backend::CUDA>>;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 using SyevJacobiCtaTestTypes = ::testing::Types<
-	SyevJacobiCtaConfig<float, Backend::ROCM>,
-	SyevJacobiCtaConfig<double, Backend::ROCM>,
-	SyevJacobiCtaConfig<std::complex<float>, Backend::ROCM>,
-	SyevJacobiCtaConfig<std::complex<double>, Backend::ROCM>>;
+    SyevJacobiCtaConfig<float, Backend::ROCM>,
+    SyevJacobiCtaConfig<double, Backend::ROCM>,
+    SyevJacobiCtaConfig<std::complex<float>, Backend::ROCM>,
+    SyevJacobiCtaConfig<std::complex<double>, Backend::ROCM>>;
 #elif BATCHLAS_HAS_SYCL_BACKEND
 // AdaptiveCpp Metal: the native kernels in float and complex<float>; double needs device fp64.
 using SyevJacobiCtaTestTypes = ::testing::Types<
@@ -186,208 +187,208 @@ TYPED_TEST_SUITE(SyevJacobiCtaTest, SyevJacobiCtaTestTypes);
 #if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND || BATCHLAS_HAS_SYCL_BACKEND
 
 TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyMatchesNetlib) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 16;
-	const int batch = 64;
+    const int n = 16;
+    const int batch = 64;
 
-	for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-		SCOPED_TRACE(::testing::Message() << "uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper"));
+    for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+        SCOPED_TRACE(::testing::Message() << "uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper"));
 
-		Matrix<Scalar, MatrixFormat::Dense> A0 =
-			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
-		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
+        Matrix<Scalar, MatrixFormat::Dense> A0 =
+            Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/123);
+        Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
-		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+        auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::NoEigenVectors, uplo).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
-	}
+        test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
+    }
 }
 
 TYPED_TEST(SyevJacobiCtaTest, EigenvaluesOnlyLeavesMatrixUntouched) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 12;
-	const int batch = 2;
+    const int n = 12;
+    const int batch = 2;
 
-	Matrix<Scalar, MatrixFormat::Dense> A0 =
-		Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/99);
-	Matrix<Scalar, MatrixFormat::Dense> A = A0;
-	auto W = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/99);
+    Matrix<Scalar, MatrixFormat::Dense> A = A0;
+    auto W = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+    syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
-	for (int b = 0; b < batch; ++b) {
-		for (int j = 0; j < n; ++j) {
-			for (int i = 0; i < n; ++i) {
-				ASSERT_EQ(A.view()(i, j, b), A0.view()(i, j, b))
-					<< "A was modified at (" << i << "," << j << "," << b << ") for NoEigenVectors";
-			}
-		}
-	}
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                ASSERT_EQ(A.view()(i, j, b), A0.view()(i, j, b))
+                    << "A was modified at (" << i << "," << j << "," << b << ") for NoEigenVectors";
+            }
+        }
+    }
 }
 
 TYPED_TEST(SyevJacobiCtaTest, EigenvectorsResidualAndOrtho) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int batch = 2;
+    const int batch = 2;
 
-	for (int n : {16, 32}) {
-		for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-			SCOPED_TRACE(::testing::Message() << "n=" << n
-							<< " uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper"));
+    for (int n : {16, 32}) {
+        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+            SCOPED_TRACE(::testing::Message() << "n=" << n
+                            << " uplo=" << (uplo == Uplo::Lower ? "Lower" : "Upper"));
 
-			Matrix<Scalar, MatrixFormat::Dense> A0 =
-				Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
-			Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
+            Matrix<Scalar, MatrixFormat::Dense> A0 =
+                Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/456);
+            Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
-			auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+            auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-			syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, uplo).wait();
+            syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, uplo).wait();
 
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
+            test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
 
-			test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
-		}
-	}
+            test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
+        }
+    }
 }
 
 // Odd n exercises the padded round-robin schedule: the pivot index space is
 // rounded up to n+1 and pairs touching the phantom index must be skipped.
 TYPED_TEST(SyevJacobiCtaTest, OddAndSmallSizes) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int batch = 3;
+    const int batch = 3;
 
-	for (int n : {1, 2, 3, 5, 7, 13, 17, 31}) {
-		SCOPED_TRACE(::testing::Message() << "n=" << n);
+    for (int n : {1, 2, 3, 5, 7, 13, 17, 31}) {
+        SCOPED_TRACE(::testing::Message() << "n=" << n);
 
-		Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(
-			n, n, /*hermitian=*/true, batch, /*seed=*/static_cast<unsigned>(1000 + n));
-		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
+        Matrix<Scalar, MatrixFormat::Dense> A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(
+            n, n, /*hermitian=*/true, batch, /*seed=*/static_cast<unsigned>(1000 + n));
+        Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
-		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+        auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
+        test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W_jac, n, false, A0.all_items());
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
-	}
+        test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, A0.all_items());
+    }
 }
 
 TYPED_TEST(SyevJacobiCtaTest, DescendingSortOrder) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 16;
-	const int batch = 2;
+    const int n = 16;
+    const int batch = 2;
 
-	Matrix<Scalar, MatrixFormat::Dense> A0 =
-		Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2468);
-	Matrix<Scalar, MatrixFormat::Dense> A_asc = A0;
-	Matrix<Scalar, MatrixFormat::Dense> A_desc = A0;
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2468);
+    Matrix<Scalar, MatrixFormat::Dense> A_asc = A0;
+    Matrix<Scalar, MatrixFormat::Dense> A_desc = A0;
 
-	auto W_asc = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
-	auto W_desc = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+    auto W_asc = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+    auto W_desc = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	JacobiParams<Scalar> p_desc;
-	p_desc.sort_order = SortOrder::Descending;
+    JacobiParams<Scalar> p_desc;
+    p_desc.sort_order = SortOrder::Descending;
 
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A_asc, W_asc.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
-	syev_jacobi_cta<B, Scalar>(*this->ctx, A_desc, W_desc.to_span(), JobType::EigenVectors, Uplo::Lower,
-							   Span<std::byte>(), p_desc).wait();
+    syev_jacobi_cta<B, Scalar>(*this->ctx, A_asc, W_asc.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+    syev_jacobi_cta<B, Scalar>(*this->ctx, A_desc, W_desc.to_span(), JobType::EigenVectors, Uplo::Lower,
+                               Span<std::byte>(), p_desc).wait();
 
-	test_utils::expect_eigenvalues_agree<Scalar>(W_desc, W_asc, n, batch, /*reversed=*/true);
-	for (int b = 0; b < batch; ++b) {
-		for (int i = 1; i < n; ++i) {
-			const std::size_t prev = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-								   + static_cast<std::size_t>(i - 1);
-			const std::size_t cur = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
-								  + static_cast<std::size_t>(i);
-			ASSERT_GE(W_desc[prev], W_desc[cur]) << "not descending at i=" << i;
-		}
-	}
+    test_utils::expect_eigenvalues_agree<Scalar>(W_desc, W_asc, n, batch, /*reversed=*/true);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 1; i < n; ++i) {
+            const std::size_t prev = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
+                                   + static_cast<std::size_t>(i - 1);
+            const std::size_t cur = static_cast<std::size_t>(b) * static_cast<std::size_t>(n)
+                                  + static_cast<std::size_t>(i);
+            ASSERT_GE(W_desc[prev], W_desc[cur]) << "not descending at i=" << i;
+        }
+    }
 }
 
 TYPED_TEST(SyevJacobiCtaTest, NearDegenerateResidualAndOrtho) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int batch = 1;
+    const int batch = 1;
 
-	for (int n : {24, 32}) {
-		SCOPED_TRACE(::testing::Message() << "n=" << n);
+    for (int n : {24, 32}) {
+        SCOPED_TRACE(::testing::Message() << "n=" << n);
 
-		Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
-		A0.fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/static_cast<unsigned>(1337 + n)).wait();
-		Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
+        Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch);
+        A0.fill_near_degenerate_hermitian(*this->ctx, 1e-3, /*seed=*/static_cast<unsigned>(1337 + n)).wait();
+        Matrix<Scalar, MatrixFormat::Dense> A_jac = A0;
 
-		auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+        auto W_jac = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A_jac, W_jac.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
 
-		test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, 0);
-	}
+        test_utils::expect_eigenpairs<Scalar>(*this->ctx, A0, A_jac, W_jac, n, 0);
+    }
 }
 
 TYPED_TEST(SyevJacobiCtaTest, RepeatedRunsDoNotHang) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
 
-	const int n = 16;
-	const int batch = 4;
-	const int iters = 50;
+    const int n = 16;
+    const int batch = 4;
+    const int iters = 50;
 
-	Matrix<Scalar, MatrixFormat::Dense> A0 =
-		Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
-	auto W = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
+    Matrix<Scalar, MatrixFormat::Dense> A0 =
+        Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/2025);
+    auto W = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	for (int t = 0; t < iters; ++t) {
-		Matrix<Scalar, MatrixFormat::Dense> A = A0;
-		syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
-	}
+    for (int t = 0; t < iters; ++t) {
+        Matrix<Scalar, MatrixFormat::Dense> A = A0;
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+    }
 }
 
 // A NaN entry in item 0: the rank sort must still be a bijection (NaN last, ties on index), so no
 // slot of W keeps the 12345 it was poisoned with and A's columns are a permutation; items 1.. are
 // unaffected.
 TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
-	using Scalar = typename TestFixture::ScalarType;
-	using Real = typename base_type<Scalar>::type;
-	constexpr Backend B = TestFixture::BackendType;
-	const int n = 16, batch = 4;
-	auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77);
-	A0.view()(3, 3, 0) = Scalar(std::numeric_limits<Real>::quiet_NaN());
-	for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
-		for (const JobType jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
-			SCOPED_TRACE(::testing::Message() << "descending " << (order == SortOrder::Descending) << ", vectors " << (jobz == JobType::EigenVectors));
-			auto A = A0;
-			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
-			JacobiParams<Scalar> params{};
-			params.sort_order = order;
-			syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
-			for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
-			const std::vector<int> clean{1, 2, 3};
-			test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W, n, /*sorted_copy=*/true, clean);
-		}
-	}
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 16, batch = 4;
+    auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77);
+    A0.view()(3, 3, 0) = Scalar(std::numeric_limits<Real>::quiet_NaN());
+    for (const auto order : {SortOrder::Ascending, SortOrder::Descending}) {
+        for (const JobType jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+            SCOPED_TRACE(::testing::Message() << "descending " << (order == SortOrder::Descending) << ", vectors " << (jobz == JobType::EigenVectors));
+            auto A = A0;
+            UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch, Real(12345));
+            JacobiParams<Scalar> params{};
+            params.sort_order = order;
+            syev_jacobi_cta<B, Scalar>(*this->ctx, A, W.to_span(), jobz, Uplo::Lower, Span<std::byte>(), params).wait();
+            for (int i = 0; i < n; ++i) EXPECT_NE(W[i], Real(12345)) << "slot " << i << " of the NaN item was never written";
+            const std::vector<int> clean{1, 2, 3};
+            test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W, n, /*sorted_copy=*/true, clean);
+        }
+    }
 }
 
 // Verifies that the float kernel agrees with an exact-input double reference to
@@ -398,64 +399,64 @@ TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
 // kernel.
 TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 #if BATCHLAS_HAS_CUDA_BACKEND
-	constexpr Backend B = Backend::CUDA;
+    constexpr Backend B = Backend::CUDA;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-	constexpr Backend B = Backend::SYCL;
+    constexpr Backend B = Backend::SYCL;
 #else
-	constexpr Backend B = Backend::ROCM;
+    constexpr Backend B = Backend::ROCM;
 #endif
-	if (!test_utils::should_run_backend(B)) {
-		GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
-	}
-	if (!test_utils::should_run_float_type<float>()) {
-		GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
-	}
-	auto ctx = Queue("gpu", true);
-	if (ctx.device().type != DeviceType::GPU) {
-		GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
-	}
+    if (!test_utils::should_run_backend(B)) {
+        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+    }
+    if (!test_utils::should_run_float_type<float>()) {
+        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+    }
+    auto ctx = Queue("gpu", true);
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
+    }
 
-	for (int n : {8, 16, 31, 32}) {
-		SCOPED_TRACE(::testing::Message() << "n=" << n);
+    for (int n : {8, 16, 31, 32}) {
+        SCOPED_TRACE(::testing::Message() << "n=" << n);
 
-		std::vector<double> A_d;
-		std::vector<float> A_f;
-		make_dyadic_symmetric(n, /*seed=*/static_cast<unsigned>(555 + n), A_d, A_f);
+        std::vector<double> A_d;
+        std::vector<float> A_f;
+        make_dyadic_symmetric(n, /*seed=*/static_cast<unsigned>(555 + n), A_d, A_f);
 
-		const std::vector<double> w_true = reference_jacobi_eigenvalues(A_d, n);
+        const std::vector<double> w_true = reference_jacobi_eigenvalues(A_d, n);
 
-		double a_fro = 0.0;
-		for (double v : A_d) a_fro += v * v;
-		a_fro = std::sqrt(a_fro);
+        double a_fro = 0.0;
+        for (double v : A_d) a_fro += v * v;
+        a_fro = std::sqrt(a_fro);
 
-		Matrix<float, MatrixFormat::Dense> A(n, n, 1);
-		for (int j = 0; j < n; ++j) {
-			for (int i = 0; i < n; ++i) {
-				A.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
-			}
-		}
+        Matrix<float, MatrixFormat::Dense> A(n, n, 1);
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                A.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
+            }
+        }
 
-		auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-		syev_jacobi_cta(ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+        auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
+        syev_jacobi_cta(ctx, A, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
-		double max_abs = 0.0;
-		for (int i = 0; i < n; ++i) {
-			max_abs = verify::nanmax(max_abs,
-							   std::abs(static_cast<double>(W[static_cast<std::size_t>(i)])
-										- w_true[static_cast<std::size_t>(i)]));
-		}
+        double max_abs = 0.0;
+        for (int i = 0; i < n; ++i) {
+            max_abs = verify::nanmax(max_abs,
+                               std::abs(static_cast<double>(W[static_cast<std::size_t>(i)])
+                                        - w_true[static_cast<std::size_t>(i)]));
+        }
 
-		// LAWN 169 Prop. 2.3 bounds the backward error of s cyclic sweeps by
-		// O(s*n*eps); with s ~ 7 the measured constant here is ~24, so a bound of
-		// 2*n leaves headroom while still catching an order-of-magnitude
-		// regression.
-		const double unit = static_cast<double>(std::numeric_limits<float>::epsilon()) * a_fro;
-		std::cout << "  n=" << n << ": max |lambda_float - lambda_double| = " << max_abs
-				  << " = " << (max_abs / unit) << " * eps*||A||_F\n";
-		EXPECT_LE(max_abs, 2.0 * double(n) * unit)
-			<< "max |lambda_float - lambda_double| = " << max_abs
-			<< " = " << (max_abs / unit) << " * eps*||A||_F (||A||_F = " << a_fro << ")";
-	}
+        // LAWN 169 Prop. 2.3 bounds the backward error of s cyclic sweeps by
+        // O(s*n*eps); with s ~ 7 the measured constant here is ~24, so a bound of
+        // 2*n leaves headroom while still catching an order-of-magnitude
+        // regression.
+        const double unit = static_cast<double>(std::numeric_limits<float>::epsilon()) * a_fro;
+        std::cout << "  n=" << n << ": max |lambda_float - lambda_double| = " << max_abs
+                  << " = " << (max_abs / unit) << " * eps*||A||_F\n";
+        EXPECT_LE(max_abs, 2.0 * double(n) * unit)
+            << "max |lambda_float - lambda_double| = " << max_abs
+            << " = " << (max_abs / unit) << " * eps*||A||_F (||A||_F = " << a_fro << ")";
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -472,93 +473,93 @@ TEST(SyevJacobiCtaAccuracy, RandomSymmetricMatchesDoubleReference) {
 // ---------------------------------------------------------------------------
 TEST(SyevJacobiCtaAccuracy, GradedSpdRelativeAccuracy) {
 #if BATCHLAS_HAS_CUDA_BACKEND
-	constexpr Backend B = Backend::CUDA;
+    constexpr Backend B = Backend::CUDA;
 #elif BATCHLAS_HAS_SYCL_BACKEND
-	constexpr Backend B = Backend::SYCL;
+    constexpr Backend B = Backend::SYCL;
 #else
-	constexpr Backend B = Backend::ROCM;
+    constexpr Backend B = Backend::ROCM;
 #endif
 
-	if (!test_utils::should_run_backend(B)) {
-		GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
-	}
-	if (!test_utils::should_run_float_type<float>()) {
-		GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
-	}
-	auto ctx = Queue("gpu", true);
-	if (ctx.device().type != DeviceType::GPU) {
-		GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
-	}
+    if (!test_utils::should_run_backend(B)) {
+        GTEST_SKIP() << "Backend filtered by BATCHLAS_TEST_BACKEND environment variable";
+    }
+    if (!test_utils::should_run_float_type<float>()) {
+        GTEST_SKIP() << "Float type filtered by BATCHLAS_TEST_FLOAT_TYPE environment variable";
+    }
+    auto ctx = Queue("gpu", true);
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "GPU backend requires GPU device, but none was selected";
+    }
 
-	const int n = 16;
-	const int grade = 4; // D_ii = 2^{-4i}, so kappa(A) ~ 2^{120} ~ 1.3e36
+    const int n = 16;
+    const int grade = 4; // D_ii = 2^{-4i}, so kappa(A) ~ 2^{120} ~ 1.3e36
 
-	std::vector<double> A_d;
-	std::vector<float> A_f;
-	make_graded_spd(n, grade, /*seed=*/20240601, A_d, A_f);
+    std::vector<double> A_d;
+    std::vector<float> A_f;
+    make_graded_spd(n, grade, /*seed=*/20240601, A_d, A_f);
 
-	const std::vector<double> w_true = reference_jacobi_eigenvalues(A_d, n);
+    const std::vector<double> w_true = reference_jacobi_eigenvalues(A_d, n);
 
-	// Sanity: the construction really is graded and positive definite.
-	ASSERT_GT(w_true.front(), 0.0) << "reference says the test matrix is not positive definite";
-	ASSERT_LT(w_true.front() / w_true.back(), 1e-20) << "test matrix is not graded enough to be discriminating";
+    // Sanity: the construction really is graded and positive definite.
+    ASSERT_GT(w_true.front(), 0.0) << "reference says the test matrix is not positive definite";
+    ASSERT_LT(w_true.front() / w_true.back(), 1e-20) << "test matrix is not graded enough to be discriminating";
 
-	Matrix<float, MatrixFormat::Dense> A_jac(n, n, 1);
-	for (int j = 0; j < n; ++j) {
-		for (int i = 0; i < n; ++i) {
-			A_jac.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
-		}
-	}
+    Matrix<float, MatrixFormat::Dense> A_jac(n, n, 1);
+    for (int j = 0; j < n; ++j) {
+        for (int i = 0; i < n; ++i) {
+            A_jac.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
+        }
+    }
 
-	auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
-	syev_jacobi_cta(ctx, A_jac, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
+    auto W = UnifiedVector<float>(static_cast<std::size_t>(n));
+    syev_jacobi_cta(ctx, A_jac, W.to_span(), JobType::NoEigenVectors, Uplo::Lower).wait();
 
-	double max_rel = 0.0;
-	for (int i = 0; i < n; ++i) {
-		const double got = static_cast<double>(W[static_cast<std::size_t>(i)]);
-		const double want = w_true[static_cast<std::size_t>(i)];
-		const double rel = std::abs(got - want) / std::abs(want);
-		max_rel = verify::nanmax(max_rel, rel);
-		std::cout << "  lambda[" << i << "] jacobi=" << got << " ref=" << want << " rel=" << rel << "\n";
-	}
+    double max_rel = 0.0;
+    for (int i = 0; i < n; ++i) {
+        const double got = static_cast<double>(W[static_cast<std::size_t>(i)]);
+        const double want = w_true[static_cast<std::size_t>(i)];
+        const double rel = std::abs(got - want) / std::abs(want);
+        max_rel = verify::nanmax(max_rel, rel);
+        std::cout << "  lambda[" << i << "] jacobi=" << got << " ref=" << want << " rel=" << rel << "\n";
+    }
 
-	// Relative, not absolute: every eigenvalue including the smallest must be
-	// accurate to a modest multiple of float eps. An absolute-accuracy solver
-	// would show rel ~ 1 on the small end.
-	const double bound = 200.0 * static_cast<double>(std::numeric_limits<float>::epsilon());
-	EXPECT_LE(max_rel, bound) << "max relative eigenvalue error " << max_rel
-							  << " exceeds " << bound
-							  << " -- the relative-accuracy property is not being achieved";
+    // Relative, not absolute: every eigenvalue including the smallest must be
+    // accurate to a modest multiple of float eps. An absolute-accuracy solver
+    // would show rel ~ 1 on the small end.
+    const double bound = 200.0 * static_cast<double>(std::numeric_limits<float>::epsilon());
+    EXPECT_LE(max_rel, bound) << "max relative eigenvalue error " << max_rel
+                              << " exceeds " << bound
+                              << " -- the relative-accuracy property is not being achieved";
 
-	// Informational head-to-head against the tridiagonalization-based path on
-	// the same input. Deliberately NOT asserted: this documents why the Jacobi
-	// kernel exists without pinning a competitor's numbers into the test suite.
-	{
-		Matrix<float, MatrixFormat::Dense> A_tri(n, n, 1);
-		for (int j = 0; j < n; ++j) {
-			for (int i = 0; i < n; ++i) {
-				A_tri.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
-			}
-		}
-		auto W_tri = UnifiedVector<float>(static_cast<std::size_t>(n));
-		SteqrParams<float> sp;
-		auto ws = UnifiedVector<std::byte>(
-			syev_cta_buffer_size(ctx, A_tri, JobType::NoEigenVectors, sp));
-		syev_cta(ctx, A_tri, W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
-						   ws.to_span(), sp).wait();
+    // Informational head-to-head against the tridiagonalization-based path on
+    // the same input. Deliberately NOT asserted: this documents why the Jacobi
+    // kernel exists without pinning a competitor's numbers into the test suite.
+    {
+        Matrix<float, MatrixFormat::Dense> A_tri(n, n, 1);
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                A_tri.view()(i, j, 0) = A_f[static_cast<std::size_t>(i + j * n)];
+            }
+        }
+        auto W_tri = UnifiedVector<float>(static_cast<std::size_t>(n));
+        SteqrParams<float> sp;
+        auto ws = UnifiedVector<std::byte>(
+            syev_cta_buffer_size(ctx, A_tri, JobType::NoEigenVectors, sp));
+        syev_cta(ctx, A_tri, W_tri.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+                           ws.to_span(), sp).wait();
 
-		std::vector<float> w_tri(W_tri.begin(), W_tri.begin() + n);
-		std::sort(w_tri.begin(), w_tri.end());
+        std::vector<float> w_tri(W_tri.begin(), W_tri.begin() + n);
+        std::sort(w_tri.begin(), w_tri.end());
 
-		double tri_max_rel = 0.0;
-		for (int i = 0; i < n; ++i) {
-			const double want = w_true[static_cast<std::size_t>(i)];
-			tri_max_rel = verify::nanmax(tri_max_rel,
-								   std::abs(static_cast<double>(w_tri[static_cast<std::size_t>(i)]) - want)
-									   / std::abs(want));
-		}
-		std::cout << "  [informational] max relative error: jacobi_cta=" << max_rel
-				  << "  syev_cta(sytrd+steqr)=" << tri_max_rel << "\n";
-	}
+        double tri_max_rel = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const double want = w_true[static_cast<std::size_t>(i)];
+            tri_max_rel = verify::nanmax(tri_max_rel,
+                                   std::abs(static_cast<double>(w_tri[static_cast<std::size_t>(i)]) - want)
+                                       / std::abs(want));
+        }
+        std::cout << "  [informational] max relative error: jacobi_cta=" << max_rel
+                  << "  syev_cta(sytrd+steqr)=" << tri_max_rel << "\n";
+    }
 }
 #endif

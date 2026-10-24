@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/functions.hh>
@@ -629,7 +630,7 @@ inline void write_denominator_column(QBatch& Q_bid,
 
 // Blue's-scaled 2-norm of a contiguous column, reduced through `adapter` so the
 // same code serves both the work-group-wide and the sub-group-partition variant.
-// Mirrors internal::nrm2 (src/math-helpers.hh) exactly; the only difference is
+// Mirrors detail::nrm2 (src/math-helpers.hh) exactly; the only difference is
 // that the three accumulators are reduced as scalars instead of a sycl::vec<R,3>,
 // which is componentwise-identical.
 template <typename T, typename Adapter, typename QBatch>
@@ -637,7 +638,7 @@ inline T nrm2_column(const Adapter& adapter,
                      QBatch& Q_bid,
                      int32_t dd,
                      int32_t col) {
-    using R = internal::base_float_t<T>;
+    using R = detail::base_float_t<T>;
 
     const int radix = std::numeric_limits<R>::radix;
     const int p     = std::numeric_limits<R>::digits;
@@ -662,7 +663,7 @@ inline T nrm2_column(const Adapter& adapter,
 
     R abig = R(0), amed = R(0), asml = R(0);
     for (int32_t i = adapter.lane_id(); i < dd; i += adapter.width()) {
-        const R ax = sycl::fabs(static_cast<R>(internal::abs(Q_bid(i, col))));
+        const R ax = sycl::fabs(static_cast<R>(detail::abs(Q_bid(i, col))));
         if (ax > tbig) {
             const R t = ax * sbig;
             abig += t * t;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The native batched POTRF CTA kernel: one matrix is staged whole into local

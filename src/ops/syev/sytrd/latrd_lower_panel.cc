@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/device.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/extensions.hh>
@@ -73,7 +74,7 @@ inline bool use_grid_latrd(int64_t n) {
 // evidence: docs/perf/sytrd.md#sytrd-complex-multiply-in-the-latrd-symv
 template <typename U>
 inline void mac(U& acc, const U& a, const U& b) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         using R = typename U::value_type;
         const R ar = a.real(), ai = a.imag();
         const R br = b.real(), bi = b.imag();
@@ -88,7 +89,7 @@ inline void mac(U& acc, const U& a, const U& b) {
 // acc += conj(a) * b == (ar - i.ai)(br + i.bi)
 template <typename U>
 inline void mac_conj(U& acc, const U& a, const U& b) {
-    if constexpr (internal::is_complex<U>::value) {
+    if constexpr (detail::is_complex<U>::value) {
         using R = typename U::value_type;
         const R ar = a.real(), ai = a.imag();
         const R br = b.real(), bi = b.imag();
@@ -132,7 +133,7 @@ template <typename T, int WG, bool FuseTrailingUpdate> class LatrdLowerPanelKern
 
 template <typename T>
 inline T pack_real(typename base_type<T>::type x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return T(x, typename base_type<T>::type(0));
     } else {
         return T(x);
@@ -141,7 +142,7 @@ inline T pack_real(typename base_type<T>::type x) {
 
 template <typename T>
 inline typename base_type<T>::type unpack_real(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return x.real();
     } else {
         return static_cast<typename base_type<T>::type>(x);
@@ -299,7 +300,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     const int x0 = i + 2;
                     Real sumsq = Real(0);
                     for (int r = x0 + lid; r < n; r += wg) {
-                        sumsq += internal::abs2_if_complex(Ab(r, i));
+                        sumsq += detail::abs2_if_complex(Ab(r, i));
                     }
                     sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
 
@@ -315,7 +316,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
 
                     if (lid == 0) {
                         const Real xnorm = sycl::sqrt(sumsq);
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             if (xnorm == Real(0) && alpha.imag() == Real(0)) {
                                 tau_i = T(0);
                                 beta = alpha;
@@ -334,7 +335,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_i = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -458,7 +459,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             if (rr == cc) {
                                 a_rc = T(a_rc.real(), typename T::value_type(0));
                             }
@@ -614,7 +615,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     // ---- sumsq partial (only over rows this group just wrote) --
                     Real sumsq = Real(0);
                     for (int r = slo + lid; r < rhi; r += wg) {
-                        sumsq += internal::abs2_if_complex(Ab(r, i));
+                        sumsq += detail::abs2_if_complex(Ab(r, i));
                     }
                     sumsq = batchlas::device::detail::reduce_sum_group(g, sumsq);
                     if (lid == 0) red_sumsq[gg] = pack_real<T>(sumsq);
@@ -637,7 +638,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                     T scale = T(0);
                     {
                         const Real xnorm = sycl::sqrt(sumsq_total);
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             if (xnorm == Real(0) && alpha.imag() == Real(0)) {
                                 tau_i = T(0);
                                 beta = alpha;
@@ -656,7 +657,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                 beta = alpha;
                                 scale = T(0);
                             } else {
-                                beta = -internal::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
+                                beta = -detail::sign_nonzero(alpha) * T(sycl::hypot(static_cast<Real>(alpha), xnorm));
                                 tau_i = (beta - alpha) / beta;
                                 scale = T(1) / (alpha - beta);
                             }
@@ -786,7 +787,7 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         }
 
                         T a_rc = Ab(rr, cc) - acc;
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             if (rr == cc) {
                                 a_rc = T(a_rc.real(), typename T::value_type(0));
                             }
@@ -910,7 +911,7 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
 
                     const int x0 = i + 2;
                     T alpha_i = i + 1 < n ? Ab(i + 1, i) : T(0);
-                    const T tau_i = internal::larfg(g, alpha_i, Ab(Slice(x0, SliceEnd()), i));
+                    const T tau_i = detail::larfg(g, alpha_i, Ab(Slice(x0, SliceEnd()), i));
                     if (lid == 0) {
                         E_view(i, b)   = alpha_i;
                         TAU_view(i, b) = tau_i;

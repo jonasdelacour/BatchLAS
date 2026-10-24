@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg-ops.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 #include <batchlas/blas/matrix.hh>

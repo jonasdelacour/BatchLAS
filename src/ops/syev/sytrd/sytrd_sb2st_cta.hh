@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <batchlas/blas/matrix.hh>
@@ -13,7 +14,7 @@
 
 namespace batchlas {
 
-namespace internal {
+namespace detail {
 
 // Band-to-tridiagonal (xSBTRD/xHBTRD) Givens primitives shared by sytrd_sb2st.cc and sytrd_sb2st_cta.cc.
 template <typename T>
@@ -70,14 +71,14 @@ inline void largv_impl(int nrot, StridedView<T> x, StridedView<T> w, StridedView
 
 template <typename T>
 inline T real_as_T(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return T(x.real(), typename T::value_type(0));
     } else {
         return x;
     }
 }
 
-template <typename T, bool IsComplex = internal::is_complex<T>::value>
+template <typename T, bool IsComplex = detail::is_complex<T>::value>
 struct btrd_givens_ops;
 
 // Real/symmetric variant (DSBTRD-style primitives).
@@ -86,7 +87,7 @@ struct btrd_givens_ops<T, false> {
     using Real = typename base_type<T>::type;
 
     static inline void lartg(const T& f_in, const T& g_in, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = internal::lartg(f_in, g_in);
+        auto [ct, st, rt] = detail::lartg(f_in, g_in);
         c = ct;
         s = T(st);
         r = T(rt);
@@ -173,7 +174,7 @@ struct btrd_givens_ops<T, true> {
     using Real = typename base_type<T>::type;
 
     static inline void lartg(const T& f, const T& g, Real& c, T& s, T& r) {
-        auto [ct, st, rt] = internal::lartg(f, g);
+        auto [ct, st, rt] = detail::lartg(f, g);
         c = ct;
         s = st;
         r = rt;
@@ -277,7 +278,7 @@ struct btrd_givens_ops<T, true> {
         // Make subdiagonal real (phase chaining) and extract D/E.
         for (int j = 0; j < n - 1; ++j) {
             const T t = sub[j];
-            const Real a = internal::abs(t);
+            const Real a = detail::abs(t);
             E[j] = a;
             T phase = T(1);
             if (a != Real(0)) {
@@ -323,6 +324,6 @@ BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISP
 
 #undef BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_EXTERN
 
-} // namespace internal
+} // namespace detail
 
 } // namespace batchlas

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -255,7 +256,7 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
 
     // Allocate memory for the matrix data
     values_ = UnifiedVector<T>(static_cast<size_t>(stride_) * batch_size);
-    
+
     // If batched, set up the data pointers
     if (batch_size > 1) {
         ptrs_.resize(batch_size);
@@ -363,7 +364,7 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
     values_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
     row_offsets_store_.resize(static_cast<size_t>(offset_stride_) * batch_size);
     col_indices_store_.resize(static_cast<size_t>(matrix_stride_) * batch_size);
-    
+
     std::copy(values, values + static_cast<size_t>(matrix_stride_) * batch_size, values_.data());
     std::copy(row_offsets, row_offsets + static_cast<size_t>(offset_stride_) * batch_size, row_offsets_store_.data());
     std::copy(col_indices, col_indices + static_cast<size_t>(matrix_stride_) * batch_size, col_indices_store_.data());
@@ -400,14 +401,14 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
         auto row_nnz_counts = row_nnz_counts_mem.to_span();
         auto batch_nnz_counts = batch_nnz_counts_mem.to_span();
-        
+
         // Calculate optimal work-group size for reduction operations
-        const int wg_size = compute_optimal_wg_size(q.device(), KernelType::REDUCTION, rows, batch_size); 
-        
+        const int wg_size = compute_optimal_wg_size(q.device(), KernelType::REDUCTION, rows, batch_size);
+
         // First kernel: Count non-zeros per row
         q->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<int, 1> local_counts(sycl::range<1>(wg_size), cgh);
-                
+
             batchlas::impl::parallel_for(cgh,
                 sycl::nd_range<3>(
                     sycl::range<3>(batch_size, cols, wg_size),
@@ -418,15 +419,15 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                     const size_t c = item.get_group(1);  // Now working on columns
                     const size_t local_id = item.get_local_id(2);
                     const size_t group_size = item.get_local_range(2);
-                    
-                    
+
+
                     // Process consecutive rows within the same column for better coalescing
                     for (size_t r = local_id; r < rows; r += group_size) {
                         // In column-major format, row elements in the same column are contiguous
                         size_t dense_idx = b * dense_stride + c * dense_ld + r;
                         bool is_nonzero = false;
                         // Use zero_threshold instead of comparing with exact zero
-                        if constexpr (std::is_same_v<T, std::complex<float>> || 
+                        if constexpr (std::is_same_v<T, std::complex<float>> ||
                                       std::is_same_v<T, std::complex<double>>) {
                             // For complex numbers, check both real and imaginary parts
                             auto val = dense_data_ptr[dense_idx];
@@ -449,12 +450,12 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                 }
             );
         }).wait();
-        
+
         // Compute per-matrix (per-batch) number of non-zeros using joint_reduce
         q->submit([&](sycl::handler& cgh) {
             auto row_nnz_acc = row_nnz_counts.data();
             auto batch_nnz_acc = batch_nnz_counts.data();
-            
+
             batchlas::impl::parallel_for(cgh,
             sycl::nd_range<1>(
                 sycl::range<1>(batch_size * wg_size),
@@ -463,11 +464,11 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             [=](sycl::nd_item<1> item) {
                 const size_t b = item.get_group(0); // batch index
                 const size_t local_id = item.get_local_id(0);
-                
+
                 // Calculate the begin and end iterators for this batch's row counts
                 auto begin_iter = row_nnz_acc + (b * rows);
                 auto end_iter = begin_iter + rows;
-                
+
                 // Use joint_reduce directly on the range of row counts for this batch
                 int total_sum = sycl::joint_reduce(
                     item.get_group(),
@@ -475,7 +476,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                     end_iter,
                     sycl::plus<int>()
                 );
-                
+
                 // First thread writes the result
                 if (local_id == 0) {
                     batch_nnz_acc[b] = total_sum;
@@ -496,7 +497,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
         // Initialize batch offset counters
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
-        
+
         // Second kernel: Compute row offsets using work-group scan
         q -> submit ([&](sycl::handler& cgh) {
             auto row_offsets_acc = result.row_offsets().data();
@@ -504,7 +505,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
             auto batch_offsets_acc = batch_offsets.data();
             auto wgs = compute_optimal_wg_size(q.device(), KernelType::SCAN, rows + 1, batch_size);
             batchlas::impl::parallel_for(cgh,
-                sycl::nd_range<1>(batch_size * wgs, 
+                sycl::nd_range<1>(batch_size * wgs,
                                  wgs),
                 [=](sycl::nd_item<1> item) {
                     size_t idx_val = item.get_global_id(0);
@@ -520,7 +521,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                 }
             );
         }).wait();
-        
+
         // 3. Populate CSR values and column indices
         UnifiedVector<int> row_counters(batch_size * rows, 0);
         q->submit([&](sycl::handler& cgh) {
@@ -538,18 +539,18 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                 [=](sycl::nd_item<1> item) {
                     size_t local_id = item.get_local_linear_id();
                     size_t b = item.get_group(0); // batch index
-                    
+
                     for (size_t id = local_id; id < rows*cols; id += item.get_local_range(0)) {
                         size_t r = id / rows; // Row index
                         size_t c = id % rows; // Column index
-                        
+
                         // Calculate dense index (Column-Major)
                         size_t dense_idx = b * dense_stride + c * dense_ld + r;
                         T val = dense_acc[dense_idx];
 
                         // Use zero_threshold instead of comparing with exact zero
                         bool is_nonzero = false;
-                        if constexpr (std::is_same_v<T, std::complex<float>> || 
+                        if constexpr (std::is_same_v<T, std::complex<float>> ||
                                     std::is_same_v<T, std::complex<double>>) {
                             // For complex numbers, check both real and imaginary parts
                             is_nonzero = std::abs(val.real()) > zero_threshold || std::abs(val.imag()) > zero_threshold;
@@ -557,7 +558,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                             // For real numbers
                             is_nonzero = std::abs(val) > zero_threshold;
                         }
-                        
+
                         if (is_nonzero) {
                             // Use atomic to get position in CSR arrays
                             sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::work_group>
@@ -565,7 +566,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
                             int pos = counter.fetch_add(1);
                             // Get base offset for this row
                             int csr_idx = row_offsets_acc[b * (rows + 1) + r] + pos;
-                      
+
                             // Write value and column index
                             col_indices_acc[b*max_nnz + csr_idx] = c;
                             values_acc[b*max_nnz + csr_idx] = val;
@@ -594,7 +595,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         // 1. Allocate and zero Dense matrix
         Matrix<T, MatrixFormat::Dense> result(rows, cols, batch_size);
         result.fill(T(0)); // Important: Initialize dense matrix to zero
-        
+
         T* result_data_ptr = result.data().data();
         int dense_ld = result.ld();
         int dense_stride = result.stride();
@@ -613,7 +614,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 
                 // Adjust start/end nnz based on potential batch stride in values/indices
                 // Assuming matrix_stride applies to values and col_indices
-                int batch_val_col_base = b * csr_mat_stride; 
+                int batch_val_col_base = b * csr_mat_stride;
 
                 for (int csr_idx = start_nnz; csr_idx < end_nnz; ++csr_idx) {
                     int idx_in_batch = batch_val_col_base + csr_idx;
@@ -641,9 +642,9 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stride) const {
     if constexpr (MType == MatrixFormat::Dense) {
-        return MatrixView<T, MType>(*this, rows, cols, 
-                                    ld > 0 ? ld : this->ld(), 
-                                    stride > 0 ? stride : this->stride(), 
+        return MatrixView<T, MType>(*this, rows, cols,
+                                    ld > 0 ? ld : this->ld(),
+                                    stride > 0 ? stride : this->stride(),
                                     batch_size_);
     } else {
         // This implementation is simplified - in practice, extracting a submatrix from CSR format
@@ -674,7 +675,7 @@ void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
     if (rows_ != src.rows_ || cols_ != src.cols_ || batch_size_ != src.batch_size_) {
         throw batchlas::invalid_argument("Matrix dimensions or batch size mismatch in copy_from");
     }
-    
+
     if constexpr (MType == MatrixFormat::Dense) {
         // Same tiering as the from-data constructor above: one bulk copy when
         // both sides are packed, one copy per column when a leading dimension or
@@ -718,25 +719,25 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
     Matrix<T, MType> result(n, n, batch_size);
-    
+
     // Create a queue to submit work to
     Queue q = default_queue_for<T>();
-    
+
     // Get pointer to the matrix data
     T* data_ptr = result.values_.data();
-    
+
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
-    
+
     // Use batched matrix decomposition strategy
     auto [global_size, local_size, wg_per_matrix] = compute_batched_matrix_decomposition(
         batch_size, n * n, q.device(), KernelType::ELEMENTWISE);
-    
+
     // Submit a kernel to initialize the identity matrix
     q -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
         size_t global_id = item.get_global_id(0);
         size_t total_work_items = item.get_global_range(0);
-        
+
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
             // Calculate 3D coordinates from flat index
@@ -744,12 +745,12 @@ Matrix<T, MType> Matrix<T, MType>::Identity(int n, int batch_size) {
             size_t remainder = flat_idx % (n * n);
             size_t i = remainder / n;               // row index
             size_t j = remainder % n;               // column index
-            
+
             // Set diagonal elements to 1, others to 0
             data_ptr[b * n * n + i * n + j] = (i == j) ? T(1) : T(0);
         }
     }).wait();
-    
+
     return result;
 }
 
@@ -767,7 +768,7 @@ Matrix<T, MType> Matrix<T, MType>::Triangular(int n, Uplo uplo, T diagonal_value
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value, 
+Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diagonal_value,
                                              T non_diagonal_value) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_triangular");
     T* data_ptr = data_.data();
@@ -813,7 +814,7 @@ Event MatrixView<T, MType>::fill_triangular(const Queue& ctx, Uplo uplo, T diago
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo, 
+Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
                                                     Diag diag,
                                                     unsigned int seed) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::fill_triangular_random");
@@ -829,7 +830,7 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
     ctx->parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
         size_t global_id = item.get_global_id(0);
         size_t total_work_items = item.get_global_range(0);
-        
+
         // Grid-stride loop to handle large matrices
         for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
             // Calculate 3D coordinates from flat index
@@ -837,13 +838,13 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
             size_t remainder = flat_idx % (n * n);
             size_t i = remainder % n;               // row index
             size_t j = remainder / n;               // column index
-            
+
             // Keyed on the in-matrix position only: every item gets the same matrix (documented).
             const T rand_value = philox::uniform_symmetric<T>(seed, 0, remainder);
             if (i == j) {
                 // Diagonal elements
                 data_ptr[b * n * n + i * n + j] = (diag == Diag::Unit) ? T(1) : rand_value;
-            } else if ((uplo == Uplo::Lower && i < j) || 
+            } else if ((uplo == Uplo::Lower && i < j) ||
                       (uplo == Uplo::Upper && i > j)) {
                 // Lower or upper triangular elements
                 data_ptr[b * n * n + i * n + j] = rand_value;
@@ -859,7 +860,7 @@ Event MatrixView<T, MType>::fill_triangular_random(const Queue& ctx, Uplo uplo,
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
-Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo, 
+Event MatrixView<T, MType>::triangularize(const Queue& ctx, Uplo uplo,
                                                     Diag diag) const {
     detail::require_device_fp64<T>(ctx, "MatrixView::triangularize");
     // `uplo` names the triangle to KEEP: Uplo::Upper zeroes the strict lower triangle. The count is
@@ -994,7 +995,7 @@ Event MatrixView<T, MType>::hermitize(const Queue& ctx, Uplo uplo) const{
             }
             if (i == j) {
                 // Ensure diagonal elements are real
-                if constexpr (std::is_same_v<T, std::complex<float>> || 
+                if constexpr (std::is_same_v<T, std::complex<float>> ||
                               std::is_same_v<T, std::complex<double>>) {
                     size_t diag_idx = b * stride + i * ld + i;
                     data_ptr[diag_idx] = T(std::real(data_ptr[diag_idx]), 0);
@@ -1049,7 +1050,7 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
             data_ptr[idx] = philox::uniform_symmetric<T>(seed, 0, idx);
         }
     });
-    
+
     // If hermitian flag is set, enforce Hermitian property using a kernel
     if (hermitian) {
         if (rows != cols) {
@@ -1059,11 +1060,11 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
         int ld = ld_;
         int stride = stride_;
         size_t hermitian_elements = static_cast<size_t>(batch_size) * rows * cols;
-        
+
         // Compute optimal work-group size for the hermitian operation
         auto [herm_global_size, herm_local_size] = compute_nd_range_sizes(
             hermitian_elements, ctx.device(), KernelType::ELEMENTWISE);
-        
+
         ctx->parallel_for(sycl::nd_range<1>(herm_global_size, herm_local_size),
                         [=](sycl::nd_item<1> item) {
             for (size_t flat = item.get_global_id(0); flat < hermitian_elements; flat += item.get_global_range(0)) {
@@ -1518,7 +1519,7 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         ctx->parallel_for<FillContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             size_t global_id = item.get_global_id(0);
             size_t total_work_items = item.get_global_range(0);
-            
+
             // Grid-stride loop to handle large data
             for (size_t idx = global_id; idx < total_elements; idx += total_work_items) {
                 data_ptr[idx] = value;
@@ -1535,7 +1536,7 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
         ctx->parallel_for<FillNonContiguousKernel<T, MType>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
             size_t global_id = item.get_global_id(0);
             size_t total_work_items = item.get_global_range(0);
-            
+
             // Grid-stride loop to handle large data
             for (size_t flat_idx = global_id; flat_idx < total_elements; flat_idx += total_work_items) {
                 // Calculate 3D coordinates from flat index
@@ -1548,7 +1549,7 @@ Event MatrixView<T, MType>::fill(const Queue& ctx, T value) const {
             }
         });
         }
-        
+
     }
     return ctx.get_event();
 }
@@ -1704,14 +1705,14 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
     T* data_ptr = data().data();
     int n = rows_; // Assuming square matrix
     int batch_size = batch_size_;
-    
+
     // Calculate total number of elements
     size_t total_elements = static_cast<size_t>(n) * n * batch_size;
-    
+
     // Compute optimal work-group size for element-wise operations
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
-    
+
     // Submit a kernel to initialize the tridiagonal Toeplitz matrix
     ctx -> parallel_for(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
         for (size_t flat_idx = item.get_global_id(0); flat_idx < total_elements; flat_idx += item.get_global_range(0)) {
@@ -1720,7 +1721,7 @@ Event MatrixView<T, MType>::fill_tridiag_toeplitz(const Queue& ctx, T diag, T su
             int64_t remainder = flat_idx % (n * n);
             int64_t i = remainder % n;               // row index
             int64_t j = remainder / n;               // column index
-        
+
             if (i == j) {
                 data_ptr[b * n * n + j * n + i] = diag; // Diagonal element
             } else if (i == j - 1) {
@@ -1950,7 +1951,7 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                 ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
     // TRAP: MatrixView(p, n, n, batch) (Matrix's argument order) gives ld = batch; `ld_ < rows`
     // catches it. Deliberately NOT checked: null data / zero extents (shape-only sizing views) and
-    // stride >= ld*cols (two live violators, ortho.cc and syevx_lobpcg sizing, would throw).
+    // stride >= ld*cols (the recorded violator left is a syevx_lobpcg sizing view; ortho's was fixed).
     // evidence: docs/design/runtime-internals.md#runtime-internals-matrix-layout-checks
     const std::string prefix = "MatrixView(data, rows, cols, ld, stride, batch_size): ";
     if (rows < 0 || cols < 0) {
@@ -2003,11 +2004,11 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(
-    const MatrixView<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) : 
+    const MatrixView<T, MType>& matrix, int rows, int cols, int ld, int stride, int batch_size) :
     MatrixView<T, MType>(matrix.data_ptr(),
-                        rows > 0 ? rows : matrix.rows_, 
-                        cols > 0 ? cols : matrix.cols_, 
-                        ld > 0 ? ld : matrix.ld_, 
+                        rows > 0 ? rows : matrix.rows_,
+                        cols > 0 ? cols : matrix.cols_,
+                        ld > 0 ? ld : matrix.ld_,
                         stride > 0 ? stride : matrix.stride_,
                         batch_size > 0 ? batch_size : matrix.batch_size_,
                         matrix.data_ptrs_.data()) {
@@ -2067,7 +2068,7 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
     if (batch_index < 0 || batch_index >= batch_size_) {
         throw batchlas::out_of_range("Batch index out of range");
     }
-    
+
     if constexpr (MType == MatrixFormat::Dense) {
         // Calculate offset to the start of the batch. In int64_t, not int: the product is
         // being widened to size_t anyway, and computing it in int wraps before the widening
@@ -2082,7 +2083,7 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
         // Calculate offsets to the start of the batch (int64_t for the same reason).
         int64_t val_offset = static_cast<int64_t>(batch_index) * matrix_stride_;
         int64_t row_offset = static_cast<int64_t>(batch_index) * offset_stride_;
-        
+
         // Create a new view with batch_size = 1, keeping the parent's strides so the
         // spans cover the slots this item actually owns.
         return MatrixView<T, MType>(
@@ -2132,19 +2133,19 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
                 auto dest_view = dest.kernel_view();
                 auto src_view  = src.kernel_view();
-                
+
 
                 batchlas::impl::parallel_for<CopyKernel3D<T, MType>>(cgh, sycl::nd_range<1>(global_size, local_size),
                                 [=](sycl::nd_item<1> item) {
                     size_t gid = item.get_global_id(0);
-                    
+
                     // Calculate 3D coordinates from flat index
                     for (size_t idx = gid; idx < static_cast<size_t>(src_view.rows()) * src_view.cols() * src_view.batch_size(); idx += item.get_global_range(0)) {
                         size_t b = idx / (static_cast<size_t>(src_view.rows()) * src_view.cols());    // batch index
                         size_t remainder = idx % (static_cast<size_t>(src_view.rows()) * src_view.cols());
                         size_t i = remainder % src_view.rows();            // row index
                         size_t j = remainder / src_view.rows();            // column index
-                        
+
                         dest_view(i, j, b) = src_view(i, j, b);
                     }
                 });
@@ -2226,7 +2227,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
             auto bid = item.get_group(0);
             auto lid = item.get_local_id(0);
             bool is_close = true;
-            auto compare = [=](const auto& x,const auto& y) { 
+            auto compare = [=](const auto& x,const auto& y) {
                 auto max_val = std::max(std::abs(x), std::abs(y));
                 if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                     return true; // Both values are effectively zero
@@ -2238,7 +2239,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
                 is_close = compare(a(lid, bid).real(), b(lid, bid).real()) &&
                            compare(a(lid, bid).imag(), b(lid, bid).imag());
             } else {
-                is_close = compare(a(lid, bid), b(lid, bid));   
+                is_close = compare(a(lid, bid), b(lid, bid));
             }
 
             group_matches[lid] = is_close ? 1 : 0;
@@ -2278,8 +2279,8 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
     }
     UnifiedVector<bool> batch_results(A.batch_size());
     if constexpr (MType == MatrixFormat::Dense) {
-        
-    
+
+
         ctx -> submit([&](sycl::handler& cgh) {
             auto results = batch_results.data();
             auto Aview = A.kernel_view();
@@ -2290,7 +2291,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
                 auto bid = item.get_group(0);
                 auto lid = item.get_local_id(0);
                 bool is_close = true;
-                auto compare = [=](const auto& x,const auto& y) { 
+                auto compare = [=](const auto& x,const auto& y) {
                     auto max_val = std::max(std::abs(x), std::abs(y));
                     if (max_val <= std::numeric_limits<float_t<T>>::epsilon()) {
                         return true; // Both values are effectively zero

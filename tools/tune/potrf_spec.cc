@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // potrf for the tuner (docs/design/flat-kernel-selection.md §6.1): SPD inputs, the MatrixView::potrf_residual
 // factorization residual (docs/design/verification.md), every candidates<T>() entry pinned through
 // the public potrf.
@@ -20,7 +21,7 @@ namespace {
 
 namespace P = ops::potrf;
 
-template <class T>
+template <typename T>
 struct PotrfProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -64,7 +65,7 @@ public:
     std::string op() const override { return "potrf"; }
     std::vector<std::string> key_names() const override { return {P::key_names.begin(), P::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(P::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(P::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, b;
@@ -114,7 +115,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/potrf_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const Uplo uplo = *key_get(req.key, "uplo") == "U" ? Uplo::Upper : Uplo::Lower;
             PotrfProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad, uplo);
             const double tol = batchlas::verify::bound<T>(batchlas::verify::Check::factorization, p.n);

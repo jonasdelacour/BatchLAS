@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Counter-based Philox4x32-10 (Salmon et al., SC'11; Random123 constants). Every value is a pure

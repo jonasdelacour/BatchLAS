@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -242,7 +243,7 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
 
         const size_t geqrf_ws = geqrf_buffer_size_bound<B, T>(ctx, V0, tau_span);
-        const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
         const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span, ormqr_nb_hint);
         const size_t panel_ws = std::max(geqrf_ws, std::max(ormqr_l_ws, ormqr_r_ws));
@@ -300,7 +301,7 @@ Event sytrd_sy2sb(Queue& ctx,
     auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
     auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
     const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
-    const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+    const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
     // Same hint used for the query and for every ormqr call in the loop below.
     // Keep this identical to sytrd_sy2sb_buffer_size or the pool overruns.
     const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
@@ -312,8 +313,8 @@ Event sytrd_sy2sb(Queue& ctx,
                                                            ormqr_nb_hint);
     const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
-    
-    
+
+
     // Main loop: i advances in blocks of kd.
     for (int i = 0; i <= n - kd_i - 1; i += kd_i) {
         const int pn = n - i - kd_i;
@@ -348,7 +349,7 @@ Event sytrd_sy2sb(Queue& ctx,
         // A := Q^H A Q on the rows/columns Q acts on. The two ranges overlap
         // exactly on the trailing block, so it gets both sides and everything
         // else gets one.
-        const Transpose trans_left_it = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        const Transpose trans_left_it = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         // The hint is clamped to k = min(rows, cols) inside the dispatch, so on a
         // short final panel (pk < kd) it degrades to min(nb, pk) and the workspace
         // sized from the i = 0 panel still bounds it.

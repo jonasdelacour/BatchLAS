@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests for bdsqr, the bidiagonal QR iteration.
 //
 // This file exists because bdsqr had ZERO callers anywhere in the tree (420

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // posv (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.1): select::run takes
 // the first entry of the nearest tuned/posv.<device>.txt row that can_run() admits. Tiny is the
 // fused factor-and-solve kernel; Cta and Blocked compose the public potrf with one fused solve (Cta) or
@@ -26,7 +27,7 @@ namespace ops::posv {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
                    Uplo uplo) {
     return {{"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"nrhs", B.cols()},
@@ -37,7 +38,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView
 // check at the top of that driver's *_dispatch; Blocked's children decide for themselves,
 // except on a heterogeneous batch: vendor potrf and trsm accept it and solve at the full
 // storage order, a silent wrong answer, so no family may take one.
-template <class T>
+template <typename T>
 bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& B) {
     const int64_t n = A.rows(), nrhs = B.cols();
@@ -57,7 +58,7 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
@@ -87,7 +88,7 @@ Event launch(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::De
 }
 
 // Exactly the chosen family's need (R5); neither solve of Cta or Blocked takes workspace.
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo) {
     return std::visit(overloaded{
@@ -99,7 +100,7 @@ std::size_t workspace(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixF
 
 // n or nrhs 0 (batch 0 returned earlier, a no-op) or a heterogeneous batch has no kernel, so
 // both throw before choose(): neither Auto nor a pin can take them.
-template <class T>
+template <typename T>
 void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
                          const char* who) {
     if (A.is_heterogeneous() || Bm.is_heterogeneous())
@@ -115,7 +116,7 @@ void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const Matr
 
 template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
+           Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     posv_validate_params<T>(A, B, uplo);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -129,7 +130,7 @@ Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
         [&](const auto& c) {
             // Cta and Blocked chain potrf into the solves, so they need an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::posv::launch<Back, T>(q, c, A, B, uplo, work_space, info);
+                return ops::posv::launch<Back, T>(q, c, A, B, uplo, workspace, info);
             });
         });
 }

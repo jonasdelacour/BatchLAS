@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, or scores planning schemes, no GPU.
 //   tune_replay --raw <jsonl> --tier preview|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--verify-s s] [--cell-overhead-s s] [--no-holdout] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--refine-cap f] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).

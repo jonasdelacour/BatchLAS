@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -98,7 +99,7 @@ TEST(MatrixDenseTest, BasicConstructionAndFill) {
     EXPECT_EQ(mat.cols_, cols);
     EXPECT_EQ(mat.batch_size_, batch);
     EXPECT_EQ(mat.data().size(), rows * cols * batch);
-    
+
     // Fill and check
     mat.fill(7.5f);
     for (auto v : mat.data()) {
@@ -764,7 +765,7 @@ TEST(MatrixCSRTest, CopyFromView) {
     for (int i = 0; i < rows + 1; ++i) EXPECT_EQ(dst.row_offsets()[i], row_offsets[i]);
     for (int i = 0; i < nnz; ++i) EXPECT_EQ(dst.col_indices()[i], col_indices[i]);
 }
- 
+
 TEST(MatrixCSRTest, ExceptionOnCopyFromMismatchedShape) {
     Matrix<float, MatrixFormat::CSR> a(2, 2, NonZeros{2}, 1);
     Matrix<float, MatrixFormat::CSR> b(3, 2, NonZeros{2}, 1);
@@ -1549,14 +1550,15 @@ TYPED_TEST(MatrixFillTest, GradedHermitianHasTheRequestedSpectrum) {
                     std::vector<double> w;
                     ASSERT_TRUE(batchlas::verify::eigenvalues(n, a, w));
                     EXPECT_NEAR(w.back() / w.front(), std::pow(10.0, cond), 0.01 * std::pow(10.0, cond)) << "item " << b;
-                    double worst = 0;
-                    for (int i = 0; i < n; ++i) {
-                        const double lambda = std::pow(10.0, -cond * double(n - 1 - i) / double(n - 1));
-                        worst = std::max(worst, std::abs(w[i] - lambda));
-                    }
+                    std::vector<std::vector<double>> lambda(1);
+                    for (int i = 0; i < n; ++i)
+                        lambda[0].push_back(std::pow(10.0, -cond * double(n - 1 - i) / double(n - 1)));
                     // Normwise relative (lambda_max = 1): a small eigenvalue carries the
                     // reflectors' absolute rounding, ~n eps, not a relative one.
-                    EXPECT_LT(worst, 1e-10) << "item " << b;
+                    const VectorView<double> got(w.data(), n, 1, 1, n);
+                    EXPECT_VERIFY(T, batchlas::verify::Check::values, n,
+                                  (MatrixView<T, MatrixFormat::Dense>::values_error(got, lambda, 1.0, std::vector<int>{0})))
+                        << "item " << b;
                 }
             }
     }

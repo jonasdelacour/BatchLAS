@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
@@ -184,7 +185,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                 Real f2 = eb[zrow];
                                 eb[zrow] = Real(0);
                                 for (int32_t j = zrow + 1; j <= m; ++j) {
-                                    const auto rz = internal::lartg<Real>(db[j], f2);
+                                    const auto rz = detail::lartg<Real>(db[j], f2);
                                     db[j] = rz.r;
                                     if (accumulate_u) {
                                         apply_rotation_to_cols(U, b, j, zrow, rz.c, rz.s);
@@ -202,7 +203,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                 Real f2 = eb[m - 1];
                                 eb[m - 1] = Real(0);
                                 for (int32_t j = m - 1; j >= l; --j) {
-                                    const auto rz = internal::lartg<Real>(db[j], f2);
+                                    const auto rz = detail::lartg<Real>(db[j], f2);
                                     db[j] = rz.r;
                                     if (accumulate_vh) {
                                         apply_rotation_to_rows(Vh, b, j, m, rz.c, rz.s);
@@ -222,7 +223,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                     // DBDSQR's shift: the smaller singular value of the trailing 2x2 of B (?LAS2,
                     // no squares, so no overflow near sqrt(max)), dropped when negligible.
                     const int32_t p = m - 1;
-                    Real shift = internal::las2(db[p], eb[p], db[m])[0];
+                    Real shift = detail::las2(db[p], eb[p], db[m])[0];
                     const Real sll = safe_abs(db[l]);
                     if (sll > Real(0) && (shift / sll) * (shift / sll) < std::numeric_limits<Real>::epsilon()) {
                         shift = Real(0);
@@ -231,7 +232,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                     Real g = eb[l];
 
                     for (int32_t k = l; k <= m - 1; ++k) {
-                        const auto r1 = internal::lartg<Real>(f, g);
+                        const auto r1 = detail::lartg<Real>(f, g);
                         const Real cs = r1.c;
                         const Real sn = r1.s;
                         if (accumulate_vh) {
@@ -248,7 +249,7 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         g = sn * dk1;
                         db[k + 1] = cs * dk1;
 
-                        const auto r2 = internal::lartg<Real>(f, g);
+                        const auto r2 = detail::lartg<Real>(f, g);
                         const Real cs2 = r2.c;
                         const Real sn2 = r2.s;
                         if (accumulate_u) {
@@ -395,7 +396,7 @@ Event bdsqr(Queue& ctx,
         }
     }
 
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("bdsqr: complex types are not implemented yet");
     } else {
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Float 256x128 and 128x256 tiles, k = 8 slabs, 4 copy_async stages, one 256-lane group per SM: the

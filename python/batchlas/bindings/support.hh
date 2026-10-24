@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <pybind11/numpy.h>
@@ -387,7 +388,7 @@ void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invok
 inline Backend parse_backend(std::string value) {
     value = lower_copy(std::move(value));
     if (value.empty() || value == "auto") {
-        return Backend::AUTO;
+        return Backend::Auto;
     }
     if (value == "cuda") {
         return Backend::CUDA;
@@ -737,7 +738,7 @@ inline Queue& acquire_queue(const std::optional<std::string>& device_name, Backe
 
     // Checked here rather than inside with_backend so the error stays a Python
     // NotImplementedError, which is what callers have always seen.
-    if (backend != Backend::AUTO && !Queue::backend_available(backend)) {
+    if (backend != Backend::Auto && !Queue::backend_available(backend)) {
         throw_not_implemented("requested backend is not available in this build");
     }
 
@@ -747,7 +748,7 @@ inline Queue& acquire_queue(const std::optional<std::string>& device_name, Backe
     const Key key{device_cache_key(device_name), backend};
     auto it = cache.find(key);
     if (it == cache.end()) {
-        // Backend::AUTO is passed through rather than resolved here: the Queue
+        // Backend::Auto is passed through rather than resolved here: the Queue
         // resolves it from the device vendor on first use. That is a behaviour
         // change -- the old code picked the first *compiled* backend, so
         // backend='auto' with device='cpu' selected CUDA on a CUDA build.

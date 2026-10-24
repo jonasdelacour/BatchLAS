@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
 #include <benchmarks/bench_utils.hh>
@@ -48,7 +49,7 @@ static int bench_ld_pad_for(const char* var) {
 // A padded matrix must be FILLED, not merely allocated.
 //
 // Matrix<T>(rows, cols, batch, ld) allocates UNINITIALIZED memory
-// (matrix.hh:429-430), while the unpadded arm uses Matrix<T>::Random. Left as
+// (matrix.hh:430-431), while the unpadded arm uses Matrix<T>::Random. Left as
 // it was, every pad-0-vs-pad-N comparison in this file varied the data content
 // as well as the leading dimension -- so an "ld penalty" could in principle have
 // been a denormal-arithmetic penalty instead. Same-pad comparisons (native vs

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Paired-ratio race between candidates of one cell (docs/design/tiered-tuning.md). Host-only.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/device/detail/group_blas_common.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
@@ -556,7 +557,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
 // dst := src^H (src^T for real T, which keeps the existing transpose kernel).
 template <typename T>
 void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, const MatrixView<T, MatrixFormat::Dense>& dst) {
-    if constexpr (!internal::is_complex<T>::value) {
+    if constexpr (!detail::is_complex<T>::value) {
         (void)transpose(ctx, src, dst);
     } else {
         auto& dst_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(dst);
@@ -788,7 +789,7 @@ Event gesvd_native_impl(Queue& ctx,
     // Complex: gebrd reduces to a REAL bidiagonal, so the real bdsdc/bdsqr solve it into real
     // scratch that expand_real_block widens; the normal-equations branch is real-only.
     using Real = typename base_type<T>::type;
-    constexpr bool kComplex = internal::is_complex<T>::value;
+    constexpr bool kComplex = detail::is_complex<T>::value;
     {
         const int32_t m = static_cast<int32_t>(a_in.rows());
         const int32_t n = static_cast<int32_t>(a_in.cols());
@@ -1224,7 +1225,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
 
     using Real = typename base_type<T>::type;
-    constexpr bool kComplex = internal::is_complex<T>::value;
+    constexpr bool kComplex = detail::is_complex<T>::value;
     {
         const size_t m = static_cast<size_t>(a.rows());
         const size_t n = static_cast<size_t>(a.cols());
@@ -1426,7 +1427,7 @@ int gesvd_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a,
     const int batch = static_cast<int>(a.batch_size());
     const auto dev = ctx.device();
     // Every type and device: ormbr's pack kernels put the batch in grid z.
-    if constexpr (internal::is_complex<T>::value) return select::grid_capped_chunk(ctx, batch, batch);
+    if constexpr (detail::is_complex<T>::value) return select::grid_capped_chunk(ctx, batch, batch);
     if (dev.type != DeviceType::GPU) return select::grid_capped_chunk(ctx, batch, batch);
     const int64_t m = a.rows(), n = a.cols(), k = std::min(m, n);
     jobu = canonical_jobu(jobu, m, k);
@@ -1564,7 +1565,7 @@ Event gesvd_cta(Queue& ctx,
                 Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     // Its normal-equations branch is real-only; complex general is the blocked family's.
-    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
+    if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
@@ -1648,7 +1649,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobu,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
-    if constexpr (internal::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
+    if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
     if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Batched Side::Left TRMM that skips the zero half of A with a loop bound, not a mask: an output

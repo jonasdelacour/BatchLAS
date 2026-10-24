@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched TRSM: the register-resident CTA solver (V1) and the
 // host-blocked driver (V2). See docs/perf/trsm.md.
 //

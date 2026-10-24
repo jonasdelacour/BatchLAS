@@ -16,17 +16,17 @@ tables, which use `body3_ms / body5_ms`.
 
 `gemv` decides in `src/ops/gemv/gemv.cc` by flat selection (@ref design_flat_selection).
 `select::run` takes the first entry of the nearest row of `tuned/gemv.<device>.txt` that
-`can_run` admits. The last resort is `vendor`, then `direct` (`src/ops/gemv/choice.hh:30`). The
+`can_run` admits. The last resort is `vendor`, then `direct` (`src/ops/gemv/choice.hh:31`). The
 sm_89 table is transcribed, not timed (run `transcribed-424a45bc`); the sm_120 table was re-measured at deep
 on 2026-10-11 (`tuned/README.md`).
 
-| spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:55-66`) |
+| spelling | driver | bodies | `can_run` (`src/ops/gemv/gemv.cc:56-67`) |
 |---|---|---|---|
 | `cta` | `sycl_gemv::gemv_native_cta` | 3, 5 | native term, `gemv_cta_available<T>()`, `d.is_gpu && d.has_sg32 && transA != NoTrans` |
 | `direct` | `sycl_gemv::gemv_native_direct` | 1, 2, 4 | native term and `gemv_direct_available<T>()`; no `is_gpu` term |
 | `vendor` | `backend::gemv_vendor` | — | `!A.is_heterogeneous()`; no `complex<double>` term since WP3 ([Auto moved](#gemv-complex-double-vendor-route-change)) |
 
-`can_run` is correctness only, never a speed cutoff. The native term (`gemv.cc:55-57`) refuses a
+`can_run` is correctness only, never a speed cutoff. The native term (`gemv.cc:58-60`) refuses a
 heterogeneous `A`, negative extents and `batch < 1`, and requires x and y to match A in batch and
 length ([shape builder contract](#gemv-the-shape-builder-contract)). `m == 0 || n == 0` is not
 refused; it quick-returns.
@@ -81,9 +81,10 @@ entry points add +0.45% to link time, inside a 0.84 s spread.
 
 ### The cdouble window in the tables
 
-Keys are `trans:exact out:log red:log batch:log` (`src/ops/gemv/choice.hh:34`). `out` and `red` are the y and x
-lengths and swap with `transA` (`gemv.cc:27-35`); ConjTrans folds to `T` (`gemv.cc:37-44`). The
-grid (`src/ops/gemv/choice.hh:37-39`) straddles every edge: `out` 255/256, `red` 63/64 and 352/353, `batch` 319/320.
+Keys are `trans:exact out:log red:log batch:log` (`src/ops/gemv/choice.hh:35`). `out` and `red` are the y and x
+lengths and swap with `transA` (`gemv.cc:29-37`); ConjTrans folds to `T` (`gemv.cc:39-46`). The
+grid (`src/ops/gemv/choice.hh:38-40`) straddles every edge: `out` 255/256, `red` 63/64 and 352/353, `batch` 319/320. The rows below are
+`tuned/gemv.sm_89.txt` (transcribed):
 
 | rows | ranking |
 |---|---|
@@ -93,7 +94,8 @@ grid (`src/ops/gemv/choice.hh:37-39`) straddles every edge: `out` 255/256, `red`
 
 With the vendor present, `cta` ranks first only for `complex<double>`, `transA != NoTrans`,
 `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320`. `direct` never ranks first while the vendor
-can run. Without a vendor, `cta` takes every transposed GPU call.
+can run. Without a vendor, `cta` takes every transposed GPU call. These statements are sm_89 only: the deep
+`tuned/gemv.sm_120.txt` ranks `direct` first in 4172 of 9207 rows, `cta` in 2404 and `vendor` in 2631, in every type.
 
 The band is on `red_len` (`n` under NoTrans, `m` otherwise). A window written on `out_len` tests the
 wrong extent and inverts. `tests/gemv_candidates_tests.cc` (`GemvTranscribedTable.RowsHoldTheTranscribedPreference`)
@@ -103,11 +105,11 @@ checks the rows against the old preference.
 
 These are kernel-internal, not keys, families or `can_run` terms.
 
-**Body 4** (`gemv_seg_width`, `src/ops/gemv/kernels/gemv_native.cc:77-82`): `W` is the largest power of two with
+**Body 4** (`gemv_seg_width`, `src/ops/gemv/kernels/gemv_native.cc:78-83`): `W` is the largest power of two with
 `W*out_len <= 32`. `W == 1` means no segmentation, so body 4 serves `out_len <= 16` and body 1 takes
 17 and up. It also requires `Device::supports_sub_group_size(32)`, false on `native_cpu`.
 
-**Body 5** (`gemv_seg_trans_width`, `src/ops/gemv/kernels/gemv_native.cc:87-109`, `:134-159`) has three gates, all on
+**Body 5** (`gemv_seg_trans_width`, `src/ops/gemv/kernels/gemv_native.cc:88-110`, `:135-160`) has three gates, all on
 `red_len()` and transcribed cell by cell from a CSV:
 
 | gate | float | `complex<float>` | double | `complex<double>` |
@@ -119,12 +121,12 @@ These are kernel-internal, not keys, families or `can_run` terms.
 `W ∈ {2, 4, 8}` is instantiated; `W = 2` keeps `BATCHLAS_GEMV_SEGT=2` meaning `W = 2`.
 
 * **`BATCHLAS_GEMV_ROUTE`** takes `auto`, `native`, `vendor` or a spelling (`cta`, `direct`). A
-  spelling the shape cannot take throws `invalid_argument` (`src/select/select.hh:414-419`); `cta` on a
+  spelling the shape cannot take throws `invalid_argument` (`src/select/select.hh:432-433`); `cta` on a
   NoTrans call is an error, not a reroute. Only `native` or `vendor` with nothing of their class
   runnable falls back to Auto, with a warning.
 * **`BATCHLAS_GEMV_SEGT`** (`off` / `auto` / `2|4|8`) picks the body-5 spelling inside `cta` and
   bypasses all three gates. It is read on every launch, never latched (`gemv_segt_mode`,
-  `src/ops/gemv/kernels/gemv_native.cc:117-125`).
+  `src/ops/gemv/kernels/gemv_native.cc:118-126`).
 
 > **Note:** The trace or coverage spelling is the only record of which family ran. It does not name the body.
 
@@ -281,16 +283,16 @@ correctness evidence is `tests/gemv_tests.cc` and its breaks. Two contracts are 
 1. **Quick return.** The reference `?GEMV` returns when `m == 0 || n == 0 || (alpha == 0 && beta == 1)` and
    leaves `y` untouched. It does not compute `y = beta*y`. `A` is never read when `alpha == 0`. Tested on
    opposite arms: `n == 0` under NoTrans, `m == 0` under Trans.
-2. **No `__restrict__`.** `ortho.cc:198-203` passes `A_i` and `A_next` as views into one allocation.
+2. **No `__restrict__`.** `ortho.cc:228-237` passes `A_i` and `A_next` as views into one allocation.
    They are element-disjoint but alias at the object level.
 
 ### Blind guards found and closed
 
 1. **The pre-WP7 fixture (40 cases)** used a fixed 10×10 matrix, batch 5, `ld == rows`, `inc == 1`, square
    only, no `ConjTrans`, and real data only. Breaks `cross`, `conj`, `ld`, `xinc`, `yinc`, `segld`,
-   `segxinc` and `segyinc` all stayed green. `ConjTrans` is the live production path (`ortho.cc:123-124`).
-2. **The natural batch stride.** All 232 cases used `a_stride == ld*n`. `ortho.cc:189-191` passes
-   `A.stride() == m*A.cols()` against a view whose `ld*cols` is `m*i`. The `stride_pad` cases, one per
+   `segxinc` and `segyinc` all stayed green. `ConjTrans` is the live production path (`ortho.cc:153-154`).
+2. **The natural batch stride.** All 232 cases used `a_stride == ld*n`. `ortho.cc:228-229` passes
+   the parent's `A.stride()` with a view of `i` of its columns (or rows), so `stride != ld*cols`. The `stride_pad` cases, one per
    body, now cover it (break `padstride` turns 32 cases red).
 3. **No guard band past `y`.** Body 5's tail sub-group can run past the last output. Three breaks of its
    mask and clamp stayed green over 376 cases. `run_case` now allocates and poisons 64 guard elements.
@@ -320,7 +322,11 @@ cases red respectively; the rest are the green ones above. The earlier `preferre
 
 ### The known bad caller
 
-`src/ops/ortho/ortho.cc:190-195`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
+> **Note:** fixed: the transposed arm now builds `A_i` with `ld = A.ld()` and passes row `i`
+> (`src/ops/ortho/ortho.cc:228-231`; @ref design_known_defects, Defect 1, WP8). The paragraph below
+> records the defect as filed.
+
+`src/ops/ortho/ortho.cc:191-196`, in the `transA = Trans` branch, builds `A_i` as `i × m` with `ld = m` and
 passes `A(Slice(), i)` as `x`. That column has length `A.rows()`, so the lengths agree only when
 `A.rows() == m`. The call is structurally wrong under the vendor. It is not fixed, and no throw was added
 because it would crash a live path. The length checks make both native families unrunnable for it, so it

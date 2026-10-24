@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched GEMV. No is_gpu gate: Direct must build for native_cpu, so keep

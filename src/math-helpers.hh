@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <sycl/sycl.hpp>
@@ -14,7 +15,7 @@
 
 
 namespace batchlas {
-    namespace internal {
+    namespace detail {
         template <typename T>
         using base_float_t = typename base_type<T>::type;
 
@@ -107,7 +108,7 @@ namespace batchlas {
             });
             return ctx.get_event();
         }
-        
+
 
         template <typename T>
         inline constexpr auto nrm2(const sycl::group<1>& cta, const VectorView<T>& v)
@@ -154,7 +155,7 @@ namespace batchlas {
 
             for (int i = tid; i < N; i += bdim) {
                 const T xi = v(i, bid);
-                const R ax = sycl::fabs(static_cast<R>(internal::abs(xi)));
+                const R ax = sycl::fabs(static_cast<R>(detail::abs(xi)));
                 if (ax > tbig) {
                     const R t = ax * sbig;
                     part[0] += t * t;
@@ -220,7 +221,7 @@ namespace batchlas {
             }
             return result;
         }
-        
+
         template <RealScalar T>
         inline constexpr T safmin(){
             constexpr auto eps = std::numeric_limits<T>::epsilon();
@@ -259,7 +260,7 @@ namespace batchlas {
         template <typename T>
         inline constexpr T sbig() {
             constexpr T e = std::ceil( (std::numeric_limits<T>::max_exponent + std::numeric_limits<T>::digits - 1) * T(0.5) );
-            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e)); 
+            return ipow(std::numeric_limits<T>::radix, -static_cast<int>(e));
         }
 
         template <typename T>
@@ -334,8 +335,8 @@ namespace batchlas {
         {
             using R = base_float_t<T>;
 
-            const R f_abs = internal::abs(f);
-            const R g_abs = internal::abs(g);
+            const R f_abs = detail::abs(f);
+            const R g_abs = detail::abs(g);
 
             // G=0 => C=1, S=0, R=F.
             if (g_abs == R(0)) {
@@ -388,7 +389,7 @@ namespace batchlas {
                 const R fs = f_r / u;
                 const R gs = g_r / u;
                 const R d = sycl::sqrt(fs * fs + gs * gs);
-                const R c = internal::abs(fs) / d;
+                const R c = detail::abs(fs) / d;
                 const R r_unscaled = sycl::copysign(d, f_r);
                 const R s = gs / r_unscaled;
                 const R r = r_unscaled * u;

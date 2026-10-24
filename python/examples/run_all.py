@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Execute every example notebook and summarise the result.
 
 Each notebook verifies its own results against NumPy/SciPy and prints `[ok  ]`

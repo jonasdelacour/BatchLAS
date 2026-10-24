@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -17,7 +18,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemv_vendor; any s
 
 using GemvChoice = std::variant<Cta, Direct, Vendor>;  ///< fieldless: body and segment width W derived in the drivers
 
-template <class T>  /// Every compiled choice, in tie-break order: the transcribed ladder.
+template <typename T>  /// Every compiled choice, in tie-break order: the transcribed ladder.
 constexpr auto candidates() { return select::all_of<GemvChoice>(); }
 
 /// can_run's device terms (host-callable for tests). Cta body 3 is reqd_sub_group_size(32).

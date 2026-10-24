@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <python/batchlas/bindings/init.hh>
 #include <python/batchlas/bindings/support.hh>
 
@@ -7,7 +8,7 @@ namespace {
 
 template <typename T, MatrixFormat MF>
 DenseMatrix transpose_dense_like(const Matrix<T, MF>& input) {
-    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
+    Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
     auto out = batchlas::transpose(queue, input.view());
     queue.wait();
     if constexpr (MF == MatrixFormat::Dense) {
@@ -20,7 +21,7 @@ DenseMatrix transpose_dense_like(const Matrix<T, MF>& input) {
 template <typename T>
 DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(matrix_wrapper.storage).clone();
-    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
+    Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
     batchlas::lascl(queue, out.view(), cfrom, cto);
     queue.wait();
     return wrap_dense(std::move(out));
@@ -29,7 +30,7 @@ DenseMatrix dense_lascl_impl(const DenseMatrix& matrix_wrapper, T cfrom, T cto) 
 template <typename T>
 DenseVector dense_norm_impl(const DenseMatrix& matrix_wrapper, NormType norm_type) {
     const auto& matrix = std::get<DenseMatrixT<T>>(matrix_wrapper.storage);
-    Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
+    Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
     auto values = batchlas::norm<T, MatrixFormat::Dense>(queue, matrix.view(), norm_type);
     queue.wait();
     return wrap_vector_copy(values, matrix.batch_size(), 1);
@@ -201,7 +202,7 @@ void init_misc_ops(py::module_& module) {
                 return not_implemented<DenseMatrix>(
                     "dense transpose is currently available for float32 and float64 only");
             } else {
-                Queue& queue = acquire_queue(std::nullopt, Backend::AUTO);
+                Queue& queue = acquire_queue(std::nullopt, Backend::Auto);
                 auto out = batchlas::transpose(queue, typed_matrix.view());
                 queue.wait();
                 return wrap_dense(std::move(out));

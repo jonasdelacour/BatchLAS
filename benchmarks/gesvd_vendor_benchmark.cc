@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Head-to-head: BatchLAS's native small-matrix SVD against cuSOLVER's
 // gesvdjBatched, at identical shapes, in one process.
 //

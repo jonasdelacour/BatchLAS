@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that no installed header declares a type in the consumer's global namespace.
 
 Sibling guarantee to check_no_unprefixed_includes.py. That one keeps `batchlas`

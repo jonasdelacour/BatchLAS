@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>

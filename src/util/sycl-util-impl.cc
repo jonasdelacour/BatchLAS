@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <sycl/sycl.hpp>
 #include <numeric>
 #include <unordered_map>
@@ -213,7 +214,7 @@ std::ostream& operator<<(std::ostream& os, const Span<U>& vec) {
 
 template <typename T>
 bool Span<T>::operator==(const Span<T> other) const {
-    if(size_ != other.size_) return false;    
+    if(size_ != other.size_) return false;
     if(data() == other.data()) return true;
     if constexpr (std::is_floating_point_v<std::decay_t<T>>){
         return std::equal(begin(), end(), other.begin(), [](auto& a,auto& b){

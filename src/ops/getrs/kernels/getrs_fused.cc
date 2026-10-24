@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRS -- the fused narrow-RHS tier. One work-group per matrix does
 // the row permutation, the forward substitution and the back substitution in a single
 // kernel; the RHS and one nb x nb diagonal block are resident, L and U are streamed.

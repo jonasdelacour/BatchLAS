@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // geqrf (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-geqrf):
 // select::run takes the first entry of the nearest tuned/geqrf.<device>.txt row that can_run()
 // (can_run.hh) admits. Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local
@@ -25,13 +26,13 @@
 namespace batchlas {
 namespace ops::geqrf {
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
     return {{"form", m == n ? "sq" : (m > n ? "tall" : "wide")}, {"n", n}, {"aspect", aspect_of(m, n)}};
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_geqrf::geqrf_tiny_dispatch<T>(q, A, tau, ws); },
@@ -56,7 +57,7 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
 
 // Exactly the chosen family's need (R5). Never dereferences A or tau: band_reduction.cc sizes
 // through a null-data view (see geqrf_buffer_size_bound).
-template <Backend B, class T>
+template <Backend B, typename T>
 std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau) {
     return std::visit(overloaded{
         [&](Tiny) { return sycl_geqrf::geqrf_tiny_buffer_size<T>(q, A); },
@@ -73,7 +74,7 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 }  // namespace ops::geqrf
 
 template <Backend Back, typename T>
-Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> work_space) {
+Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     geqrf_validate_params<T>(A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
@@ -84,7 +85,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     return select::run<Back, T>(
         ops::geqrf::spec, ctx, key, ops::geqrf::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::geqrf::can_run<T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, work_space); });
+        [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
 template <Backend Back, typename T>

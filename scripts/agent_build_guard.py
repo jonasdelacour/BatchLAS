@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Claude Code PreToolUse hook (matcher Bash): refuse builds that OOM the box or link everything.
 
 Blocks (exit 2, reason on stderr):

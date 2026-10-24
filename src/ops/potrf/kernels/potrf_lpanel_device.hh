@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The native batched POTRF LPANEL kernel: LEFT-LOOKING, thread-per-row. Local memory holds

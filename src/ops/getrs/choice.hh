@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -17,7 +18,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getrs_vendor; al
 
 using GetrsChoice = std::variant<Cta, Blocked, Vendor>;  ///< natives: GPU, sub-group 32, conforming, not NETLIB
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<GetrsChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};  ///< last resort (§5.5): blocked, vendor

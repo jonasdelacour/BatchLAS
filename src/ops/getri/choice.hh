@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -16,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::getri_vendor; al
 
 using GetriChoice = std::variant<Blocked, Vendor>;  ///< both fieldless: the driver derives wg
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3): native first.
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3): native first.
 constexpr auto candidates() { return select::all_of<GetriChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};  ///< generality order (§5.5)

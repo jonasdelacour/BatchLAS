@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // batchlas_tune: measures every candidate of an op over its declared grid and writes the
 // per-device selection tables (docs/design/flat-kernel-selection.md §6). Usage, the raw JSONL
 // schema and the protocol are in tools/tune/README.md.
