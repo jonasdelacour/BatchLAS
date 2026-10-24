@@ -65,6 +65,18 @@ if [ "$force" != 1 ] && [ "$(cat "$stamp" 2>/dev/null || true)" = "$rev" ]; then
     exit 0
 fi
 
+# Hold the box-wide build lock for configure and build alike: a gate's ctest phase runs no
+# compiler, so the pgrep test alone would let this configure and check out beside it.
+lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
+[ -e "$lock" ] || { : > "$lock" && chmod 666 "$lock"; } 2>/dev/null || true
+exec 7<"$lock"
+if ! flock -n 7; then
+    log "the build lock is held ($(cat "$lock.info" 2>/dev/null || echo unknown holder)); skipping"
+    exit 0
+fi
+{ printf 'pid %s user %s since %s running scripts/prewarm_cache.sh\n' "$$" "$(id -un)" "$(date '+%F %T')" > "$lock.info"; } 2>/dev/null || true
+export BATCHLAS_BUILD_LOCK_HELD=1
+
 busy=$(pgrep -l '^(make|gmake|ninja|clang\+\+|clang-[0-9]+|icpx|acpp|ptxas|sycl-post-link|llvm-link|clang-offload-b|clang-linker-wr)$' || true)
 if [ -n "$busy" ]; then
     log "another build is running; skipping: $(printf '%s' "$busy" | head -n 3 | tr '\n' ' ')"
