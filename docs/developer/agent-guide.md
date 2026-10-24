@@ -290,8 +290,21 @@ sometimes running): fresh tree, no cache, 284-334 s.
   (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) is built **only at that final gate**.
 - Build only the target you work on (`--target stedc_tests`). Every test target is in the default
   target, so a plain build links them all.
-- An incremental relink of `libbatchlas_backends` after a one-line `select.cc` edit is ~17 s,
-  whatever `BATCHLAS_SYCL_LINK_JOBS` is (4: 17 s, 16: 18 s). Do not tune it.
+- **`BATCHLAS_SYCL_LINK_JOBS` matters for big links.** llvm-foreach runs batches of N modules and
+  waits for each batch's slowest, so a link costs the sum of its batch maxima. Default `auto` = the
+  logical cores, 4..32 (20 on the 4090 box). A one-module .so gains nothing (`select.cc` relink of
+  the old backends: 17 s at 4 and 16).
+- **The CPU AOT pass (`opencl-aot`) was most of a full-target link**: 942 of 1,186 CPU-seconds in
+  `libbatchlas_sycl`, 590 of 713 in `libbatchlas_backends`. Kernels whose every native `can_run` arm
+  needs `d.is_gpu` belong in a `NO_CPU_TARGETS` library: trsm and the level-3 seven are in
+  `batchlas_extensions_level3`. gemm keeps its CPU image (a vendor-free CPU queue runs it), so its
+  reg/wide rows are generated shard TUs (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`): one gemm
+  TU was two ~400 s modules. Measured on the 4090 box, one-line append, `--target
+  batchlas_components`: gemm kernel TU 1024 s -> 213 s, a header all gemm shards include -> 275 s,
+  trmm 520 s -> 66 s, trsm -> 62 s, gemm.cc 12 s.
+- To profile a device link per module, replay the driver's `-###` commands one stage at a time
+  and run each llvm-foreach item yourself (`sycl-post-link -split=auto` writes a `.table` naming each
+  module's `.sym`); per-module CPU AOT time is what to balance shards on.
 - `cmake --build --target A B C` with many targets can exit 0 and still skip some links. Check
   `test -x build/tests/<name>`, not the exit code.
 - Measured and ruled out (do not retry): Ninja (the Makefile null build is already 0.07 s), lld, PCH

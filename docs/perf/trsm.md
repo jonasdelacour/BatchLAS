@@ -107,7 +107,8 @@ Diagonal-block inversion is rejected at every tier; see [Negative results](#trsm
 The gate is: stack frame == 0, 0 spill bytes, and `registers * WG <= 65536` as a first screen (the table below). The binding rule is the per-sub-partition
 bound `ceil(warps/4)*32*regs <= 16384`, which is the same at WG = 256 but not in general
 ([agent guide, GPU kernel design facts](../developer/agent-guide.md#11-gpu-kernel-design-facts-sm_89-mostly-general)). Measure it with
-`scripts/register_probe.sh`, which replays the shared library's `link.txt`. A per-TU
+`scripts/register_probe.sh out.log '' batchlas_extensions_level3` (trsm's kernels left `batchlas_sycl` for that
+GPU-only library), which replays the shared library's `link.txt`. A per-TU
 `-Xcuda-ptxas -v` log is not a valid measurement. Device code is compiled at the shared-library device
 link, so such a log reports "argument unused" and no spill whatever the kernel does.
 

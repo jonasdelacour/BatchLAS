@@ -22,14 +22,26 @@ set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -Wno-option-ignored
 )
 # The SYCL device link runs llvm-foreach over the device modules sycl-post-link splits
-# out. Parallelising it is pure scheduling - the device images come out byte-identical
-# (factorization 26.5 s -> 17.0 s at N=4). It cannot split one module, so a library
-# dominated by one large image (latrd, posv, gesv) gains nothing, and executable links
-# carry no device code. N=4 is conservative against oversubscription under `make -j`.
+# out. Parallelising it is pure scheduling - the device images come out byte-identical.
+# llvm-foreach runs BATCHES of N and waits for each batch's slowest module, so a link pays
+# the sum of its batch maxima: backends at N=4 was 4 batches of CPU AOT (171+153+97 s). It
+# cannot split one module, so a library dominated by one image (latrd, posv, gesv) gains
+# nothing. auto = the logical cores, clamped to 4..32: after the gemm shards an opencl-aot job
+# peaks at 1.1 GB and a link has at most ~40 modules.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+set(_batchlas_link_jobs "${BATCHLAS_SYCL_LINK_JOBS}")
+if(_batchlas_link_jobs STREQUAL "auto")
+    cmake_host_system_information(RESULT _batchlas_link_jobs QUERY NUMBER_OF_LOGICAL_CORES)
+    if(_batchlas_link_jobs LESS 4)
+        set(_batchlas_link_jobs 4)
+    elseif(_batchlas_link_jobs GREATER 32)
+        set(_batchlas_link_jobs 32)
+    endif()
+endif()
 set(BATCHLAS_SYCL_BASE_LINK_OPTIONS -fsycl)
-if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
+if(_batchlas_link_jobs GREATER 1)
     list(APPEND BATCHLAS_SYCL_BASE_LINK_OPTIONS
-        -fsycl-max-parallel-link-jobs=${BATCHLAS_SYCL_LINK_JOBS})
+        -fsycl-max-parallel-link-jobs=${_batchlas_link_jobs})
 endif()
 
 # The per-architecture local-memory table. Its one caller is the tile cap below, which

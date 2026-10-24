@@ -28,6 +28,7 @@ add_library(batchlas_extensions_stedc_obj OBJECT)
 add_library(batchlas_extensions_cta_obj OBJECT)
 add_library(batchlas_extensions_posv_obj OBJECT)
 add_library(batchlas_extensions_gesv_obj OBJECT)
+add_library(batchlas_extensions_level3_obj OBJECT)
 add_library(batchlas_util_obj OBJECT)
 add_library(batchlas_extra_obj OBJECT)
 # src/ops/CMakeLists.txt target_sources()s the native BLAS kernels into this, so the
@@ -47,6 +48,7 @@ set(BATCHLAS_OBJECT_LIBS
     batchlas_extensions_cta_obj
     batchlas_extensions_posv_obj
     batchlas_extensions_gesv_obj
+    batchlas_extensions_level3_obj
     batchlas_util_obj
     batchlas_extra_obj
     batchlas_sycl_obj
@@ -56,6 +58,7 @@ set(BATCHLAS_NO_CPU_OBJECT_LIBS
     batchlas_extensions_cta_obj
     batchlas_extensions_posv_obj
     batchlas_extensions_gesv_obj
+    batchlas_extensions_level3_obj
 )
 
 if(TARGET batchlas_backends_cuda_obj)
@@ -179,11 +182,13 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/symm/symm.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/hemm/hemm.cc ops/herk/herk.cc ops/her2k/her2k.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/syrk/syrk.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/syr2k/syr2k.cc)
-target_sources(batchlas_selection_obj PRIVATE ops/trmm/trmm.cc)
+# The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
+# so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
+# were 590 of the backends link's 760 CPU-seconds and could never launch.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 
@@ -353,6 +358,13 @@ add_library(batchlas_extensions_gesv SHARED
 )
 batchlas_configure_component(batchlas_extensions_gesv NO_CPU_TARGETS)
 
+# ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}.cc from backends and trsm's kernels from sycl (see above
+# and src/ops/CMakeLists.txt): GPU-only.
+add_library(batchlas_extensions_level3 SHARED
+    $<TARGET_OBJECTS:batchlas_extensions_level3_obj>
+)
+batchlas_configure_component(batchlas_extensions_level3 NO_CPU_TARGETS)
+
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>
 )
@@ -382,6 +394,7 @@ set(BATCHLAS_COMPONENT_TARGETS
     batchlas_extensions_cta
     batchlas_extensions_posv
     batchlas_extensions_gesv
+    batchlas_extensions_level3
     batchlas_util
     batchlas_extra
     batchlas_sycl

@@ -23,6 +23,7 @@
 #   scripts/register_probe.sh out.log '' batchlas_extensions_cta
 #   scripts/register_probe.sh out.log '' batchlas_extensions_posv   # posv_tiny.cc
 #   scripts/register_probe.sh out.log '' batchlas_extensions_gesv   # gesv_tiny.cc
+#   scripts/register_probe.sh out.log '' batchlas_extensions_level3 # trsm, syrk, herk, trmm, ...
 #
 # The script now FAILS LOUDLY if the named target has no link.txt, rather than
 # probing the default and reporting a healthy-looking result for the wrong thing.

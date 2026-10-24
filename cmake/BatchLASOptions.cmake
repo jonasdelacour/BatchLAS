@@ -216,8 +216,14 @@ if(BATCHLAS_NVIDIA_ARCH STREQUAL "sm_50")
     set_property(CACHE BATCHLAS_NVIDIA_ARCH PROPERTY VALUE "")
     set(BATCHLAS_NVIDIA_ARCH "")
 endif()
-set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
-    "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
+set(BATCHLAS_SYCL_LINK_JOBS "auto" CACHE STRING
+    "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables, auto = the logical cores, 4..32")
+# 4 was the old fixed default; an existing cache still holds it, so it moves to auto once.
+if(BATCHLAS_SYCL_LINK_JOBS STREQUAL "4" AND NOT BATCHLAS_SYCL_LINK_JOBS_MIGRATED)
+    set_property(CACHE BATCHLAS_SYCL_LINK_JOBS PROPERTY VALUE "auto")
+    set(BATCHLAS_SYCL_LINK_JOBS "auto")
+endif()
+set(BATCHLAS_SYCL_LINK_JOBS_MIGRATED ON CACHE INTERNAL "BATCHLAS_SYCL_LINK_JOBS left its old default once")
 # DPC++ only (BatchLASDetectSYCL.cmake). OFF passes -mllvm -enable-global-offset=false to the
 # device link, so no kernel gets a `<name>_with_offset` twin: about half of every NVPTX device
 # link. Nothing in the tree launches with a SYCL 1.2.1 global offset (parallel_for(range, id,
