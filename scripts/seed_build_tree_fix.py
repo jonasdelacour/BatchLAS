@@ -10,7 +10,9 @@
 rewrite: every text file under DST_BUILD gets each OLD path replaced by its NEW path in one
 pass (longest OLD first, so a build dir inside its source dir and a destination inside the
 seed's source both map correctly). Byte-level; files holding a NUL byte are left alone; mode
-and mtime are kept, so make sees no regenerated input.
+and mtime are kept, so make sees no regenerated input. Except: a flags.make whose -D values
+changed (BATCHLAS_TUNED_SOURCE_DIR="/abs/tuned") gets mtime now, so that target recompiles;
+its objects hold the seed's path as a string literal and would read the seed's files.
 
 runpath: an ELF whose RUNPATH/RPATH names the seed would load the SEED's libraries until it is
 relinked. Entries under OLD_BUILD are rewritten in place to $ORIGIN-relative form (what
@@ -51,9 +53,14 @@ def is_skipped_name(name):
     return name.endswith(SKIP_SUFFIXES) or ".so." in name
 
 
+def defines(flags_make):
+    """The *_DEFINES lines of a flags.make: a path there is compiled into the object."""
+    return [ln for ln in flags_make.splitlines() if re.match(rb"\w+_DEFINES\s*=", ln)]
+
+
 def rewrite_tree(root, pairs):
     regex, table = build_pattern([(o.encode(), n.encode()) for o, n in pairs])
-    files = links = 0
+    files = links = stale = 0
     for dirpath, dirnames, filenames in os.walk(root):
         for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
             path = os.path.join(dirpath, name)
@@ -79,9 +86,13 @@ def rewrite_tree(root, pairs):
                 continue
             with open(path, "wb") as fh:
                 fh.write(fixed)
-            os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+            if name == "flags.make" and defines(fixed) != defines(data):
+                stale += 1
+            else:
+                os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
             files += 1
-    print("rewrite: %d file(s), %d symlink(s) updated" % (files, links))
+    print("rewrite: %d file(s), %d symlink(s) updated; %d target(s) with a path in a -D recompile"
+          % (files, links, stale))
     return 0
 
 
@@ -329,6 +340,20 @@ def self_test():
             expect("one pass, longest first, path boundary", fh.read(),
                    b"/r/B/.wt/x/build/src /r/B/.wt/x/src /r/B/.wt/x/build-acpp /r/B2 /r/B/.wt/x\n")
         expect("mtime kept", os.stat(f).st_mtime_ns, 1_000_000_000)
+        d = os.path.join(tmp, "t.dir")
+        os.mkdir(d)
+        for sub, body in (("inc", b"CXX_INCLUDES = -I/r/B/src\nCXX_DEFINES = -DX=1\n"),
+                          ("def", b"CXX_INCLUDES = -I/r/B/src\nCXX_DEFINES = -DP=\\\"/r/B/tuned\\\"\n")):
+            os.makedirs(os.path.join(d, sub))
+            g = os.path.join(d, sub, "flags.make")
+            with open(g, "wb") as fh:
+                fh.write(body)
+            os.utime(g, ns=(1, 1_000_000_000))
+        rewrite_tree(d, [("/r/B", "/r/W")])
+        expect("include-only rewrite keeps mtime", os.stat(os.path.join(d, "inc", "flags.make")).st_mtime_ns,
+               1_000_000_000)
+        expect("path in a -D bumps mtime", os.stat(os.path.join(d, "def", "flags.make")).st_mtime_ns > 1_000_000_000,
+               True)
     expect("origin form", fixed_runpath("/opt/l:/r/B/build/src", "/r/W/build/tests", "/r/B/build",
                                         "/r/W/build", "/r/B", "/r/W"), "/opt/l:$ORIGIN/../src")
     expect("same dir", fixed_runpath("/r/B/build/src", "/r/W/build/src", "/r/B/build", "/r/W/build",

@@ -98,6 +98,8 @@ run_tree() {
             note "$kind: not seeding: $dir exists without a CMakeCache.txt"
         elif [ "${have:-ON}" = "$want" ]; then
             "$here/seed_build_tree.sh" "${seed_dirty[@]}" "$seed_from" "$dir" || { note "$kind: seeding from $seed_from failed"; return 1; }
+            cp "$dir/CMakeCache.txt" "$dir/gate-seed-cache.txt"
+            cp "$dir/include/batchlas/backend_config.h" "$dir/gate-seed-config.h" 2>/dev/null || true
         else
             note "$kind: not seeding from $seed_from (BATCHLAS_ENABLE_VENDOR_BLAS=${have:-ON}, need $want)"
         fi
@@ -111,6 +113,20 @@ run_tree() {
         note "$kind: CONFIGURE FAILED ($dir/gate/configure.log)"; return 1
     fi
     note "$kind: configured $dir ($(grep -o 'Using SYCL targets:.*' "$dir/gate/configure.log" | head -n 1))"
+    if [ -f "$dir/gate-seed-cache.txt" ]; then
+        # A seed configured differently (a plain `cmake -B build` has ALLOW_UNSAFE_ENV=OFF,
+        # dev-tests ON) regenerates backend_config.h, which ~90% of objects include.
+        note "$kind: seed options changed by the gate configure: $(python3 -c '
+import re, sys
+def cache(p):
+    return dict(m.groups() for m in (re.match(r"((?:BATCHLAS|CMAKE_BUILD_TYPE)\w*):[A-Z]+=(.*)", l) for l in open(p)) if m)
+a, b = cache(sys.argv[1]), cache(sys.argv[2])
+print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(set(a) | set(b)) if a.get(k) != b.get(k)) or "none")
+' "$dir/gate-seed-cache.txt" "$dir/CMakeCache.txt")"
+        cmp -s "$dir/gate-seed-config.h" "$dir/include/batchlas/backend_config.h" ||
+            note "$kind: backend_config.h differs from the seed's: expect a near-full recompile (seed from a tree configured like the gate)"
+        rm -f "$dir/gate-seed-cache.txt" "$dir/gate-seed-config.h"
+    fi
 
     t0=$(date +%s); rc=0
     BATCHLAS_FULL_BUILD=1 "$here/b" -B "$dir" > "$dir/gate/build.out" 2>&1 || rc=$?
