@@ -46,7 +46,7 @@ Auto on sm_89:
 ### Choices (flat selection, P3.4)
 
 The vocabulary is `src/ops/gemm/choice.hh`, listed in tie-break order. `src/ops/gemm/gemm.cc` validates the
-views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
+views, calls `select::run` (`gemm.cc:209-217`), and launches one kernel from `src/ops/gemm/kernels/gemm_kernels.cc`.
 
 | spelling | launcher | scalars | `can_run` beyond the common term (`gemm.cc`) |
 |---|---|---|---|
@@ -58,7 +58,7 @@ views, calls `select::run` (`gemm.cc:172-180`), and launches one kernel from `sr
 | `splitk:m=..:n=..:k=..:s=..` | `gemm_splitk`, a wide host tile over s k-slices plus a reduction (WP-L, *unmeasured*) | all | `grid`, s ∈ {2, 4, 8}, batch × s ≤ min(`max_groups_yz`, INT_MAX), a `splitk_host` row serving the form, the host's `max_wg` and local-memory terms, ldw × n ≤ INT_MAX, partials ≤ `scratch_budget` |
 | `vendor` | `backend::gemm_vendor` | all | `d.has_vendor` (`:121`) |
 
-The common native term (`gemm.cc:97-101`):
+The common native term (`gemm.cc:98-100`):
 
 ```cpp
 const bool device = d.is_gpu || !d.has_vendor;
@@ -128,7 +128,7 @@ Selection is the first runnable entry of the nearest row of `tuned/gemm.<device>
 `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, else `strided`. Every log key has
 weight 1 (work ~ m·n·k·batch). The last resort is `direct`, then `vendor` (CPU, and a lower-precision hint in a vendor build).
 gemm takes no workspace. A heterogeneous batch is split into homogeneous items before `select::run` in every
-build (`gemm.cc:156-164`), and each item chooses separately.
+build (`gemm.cc:189-197`), and each item chooses separately.
 
 The sm_89 table is transcribed. `tuned/gemm.sm_120.txt` comes from the `--tier deep` campaign
 (`tools/tune/gemm_spec.cc`): 32225 deep rows, plus 14733 `transcribed` rows where the lattice measured nothing near.
@@ -1317,9 +1317,9 @@ the batch and each group walks k serially. Pre-188 sm_120 cells: float NT 32×64
   the window.
 - **Tuning grid** (`choice.hh`, tuner only, not in the sm_89 transcription): Gram squares m = n ∈ {16, 32, 64} ×
   k ∈ {1024, 2048, 4096}, and 32 × {64..2048} both ways at k = 2048; panel forms, strided, every grid batch.
-  At batch 32768 batch × s ≥ 65536 refuses every s on CUDA, so split-k is timed at batch 128 and 2048 only, and a
-  call nearer the 32768 row (log distance: batch above about 8192) never picks it. Accepted: at that batch the
-  unsplit grid already fills the device.
+  At batch 32768 batch × s ≥ 65536 refused every s on CUDA when this grid was timed (split-k now runs such a batch
+  as slices), so split-k is timed at batch 128 and 2048 only, and a call nearer the 32768 row (log distance: batch
+  above about 8192) never picks it. Accepted: at that batch the unsplit grid already fills the device.
 
 **Registers** (`scripts/register_probe.sh`, sm_120 GPU-only tree, ptxas only): zero spill on all 544 entry
 functions of `libbatchlas_sycl`; every split body passes the four-partition gate at its host's work-group.

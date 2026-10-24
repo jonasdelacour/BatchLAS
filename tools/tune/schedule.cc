@@ -41,12 +41,6 @@ bool phased(const CellRecord& r, const std::set<std::string>& runs, Tier tier, c
     return phased(r, runs) && r.tier == tier && (mode.empty() || r.phases.mode == mode);
 }
 
-std::set<std::string> protocol_runs(const Ledger& l) {
-    std::set<std::string> out;
-    for (const RunMeta& m : l.runs)
-        if (m.protocol == kProtocol) out.insert(m.run_id);
-    return out;
-}
 
 // Ledger records grouped by their non-integer fields; within a group the integer fields give the
 // log distance. The phase history is kProtocol's cells with phases (a fallback cell is no sample).
@@ -149,7 +143,7 @@ double estimate_with(const TimeIndex& idx, const CellKey& key, const std::vector
     // The lean cell: one untimed and two cut runs, kWarmMinRounds warm rounds (capped), the reps.
     const int reps = ms.empty() ? 0 : lean_max_reps(*std::max_element(ms.begin(), ms.end()), p);
     double s = overhead_s + (ms.empty() ? 0 : kVerifyS);
-    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m);
+    for (double m : ms) s += reps * m * 1e-3 + lean_arm_fixed_s(m) + (reps + 3 + kWarmMinRounds) * kScrubS;
     return s;
 }
 
@@ -194,6 +188,7 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
                                     std::int64_t max_dim, const std::set<CellKey>* remeasure) {
     const TimeIndex idx(l);
     const auto best = best_records(l, family_hash);
+    const std::set<std::string> runs = protocol_runs(l);
     const double cap = cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::pair<double, PlannedCell>> out;
     for (const CellKey& key : cells) {
@@ -233,6 +228,10 @@ std::vector<PlannedCell> plan_round(const PlanSpec& spec, Tier tier, const std::
             c.reason = "remeasure";
             c.arms = live;
             if (b != best.end()) c.round = b->second->round;
+        } else if (b != best.end() && other_protocol(*b->second, runs)) {  // warm-L2 times: the whole cell again
+            c.reason = "protocol";
+            c.arms = live;
+            c.round = b->second->round;
         } else if (b != best.end() && tier_rank(b->second->tier) >= tier_rank(tier)) {
             const CellRecord& rec = *b->second;
             if (freshness(rec, family_hash) == Freshness::current) {

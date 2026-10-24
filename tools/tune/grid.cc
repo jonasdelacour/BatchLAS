@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <set>
+#include <stdexcept>
 #include <tuple>
 
 namespace batchlas::tune {
@@ -313,6 +314,58 @@ std::set<std::string> CalibrateRound::winners(const CellKey& u) const {
     std::set<std::string> out;
     if (index_)
         for (std::size_t r : index_->k_nearest(u, k_)) out.insert(winner_[r]);
+    return out;
+}
+
+std::vector<std::int64_t> batch_ladder(int cus, const std::vector<double>& classes, const std::vector<int>& extra) {
+    if (cus < 1) throw std::invalid_argument("batch ladder: the device's compute-unit count is unknown (--cus N)");
+    std::set<std::int64_t> b(extra.begin(), extra.end());
+    for (double c : classes) {
+        if (!(c > 0)) throw std::invalid_argument("batch ladder: a class multiplier must be positive");
+        b.insert(std::max<std::int64_t>(1, std::llround(c * double(cus))));
+    }
+    return {b.begin(), b.end()};
+}
+
+std::vector<int> with_slice_batches(std::vector<int> batches) {
+    batches.insert(batches.end(), {65536, 131072});
+    return batches;
+}
+
+std::vector<double> without_latency_class(const std::vector<double>& classes) {
+    std::vector<double> out;
+    for (double c : classes)
+        if (c >= 1) out.push_back(c);
+    return out.empty() ? classes : out;
+}
+
+std::vector<std::string> batch_strings(const std::vector<std::int64_t>& batches) {
+    std::vector<std::string> out;
+    for (std::int64_t b : batches) out.push_back(std::to_string(b));
+    return out;
+}
+
+std::vector<CellKey> rebatch(const std::vector<CellKey>& grid, const std::vector<std::string>& batches) {
+    std::vector<CellKey> order;
+    std::map<CellKey, std::vector<CellKey>> lines;  // line -> its cells, in grid order
+    for (const CellKey& c : grid) {
+        if (!key_get(c, kBatchAxis)) return grid;
+        CellKey rest;
+        for (const KV& kv : c)
+            if (kv.name != kBatchAxis) rest.push_back(kv);
+        auto& l = lines[rest];
+        if (l.empty()) order.push_back(rest);
+        l.push_back(c);
+    }
+    std::vector<CellKey> out;
+    for (const CellKey& rest : order) {
+        const auto& cells = lines[rest];
+        if (cells.size() == 1) {
+            out.push_back(cells.front());
+            continue;
+        }
+        for (const std::string& b : batches) out.push_back(key_with(cells.front(), kBatchAxis, b));
+    }
     return out;
 }
 

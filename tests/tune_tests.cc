@@ -333,7 +333,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "ca833842"}, {"potrf", "9b03460f"}, {"posv", "e589ffae"}, {"trsm", "707034a6"}};
+        {"gemm", "ca833842"}, {"potrf", "f8b5a0f5"}, {"posv", "e589ffae"}, {"trsm", "707034a6"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -764,42 +764,12 @@ TEST(TuneGuard, EveryOtherLineIsForeignIncludingUnparseableOnes) {
 
 AppScan foreign(std::vector<std::string> f) { return AppScan{std::move(f), false}; }
 
-TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
-    EXPECT_EQ(guard_before(foreign({"610696"}), false).refuse, "compute processes [610696]");
-    const GuardCheck ok = guard_before(foreign({}), false);
-    EXPECT_EQ(ok.refuse, "");
-    EXPECT_TRUE(ok.tolerated.empty());
-    EXPECT_EQ(guard_new_foreign(foreign({"610696"}), ok.tolerated), (std::vector<std::string>{"610696"}));
-    EXPECT_TRUE(guard_new_foreign(foreign({}), ok.tolerated).empty());
-}
-
-TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
-    const GuardCheck g = guard_before(foreign({"610696", "671125"}), true);
-    EXPECT_EQ(g.refuse, "");
-    EXPECT_EQ(g.tolerated, (std::vector<std::string>{"610696", "671125"}));
-    EXPECT_TRUE(guard_new_foreign(foreign({"671125", "610696"}), g.tolerated).empty());
-    EXPECT_TRUE(guard_new_foreign(foreign({"610696"}), g.tolerated).empty());  // one exited
-}
-
-TEST(TuneGuard, NewForeignPidDuringTheChildDiscards) {
-    const GuardCheck g = guard_before(foreign({"610696"}), true);
-    ASSERT_EQ(g.refuse, "");
-    EXPECT_EQ(guard_new_foreign(foreign({"610696", "700001"}), g.tolerated), (std::vector<std::string>{"700001"}));
-    EXPECT_EQ(guard_new_foreign(foreign({"[N/A]"}), g.tolerated), (std::vector<std::string>{"[N/A]"}));
-}
-
-// The whole-GPU figure (nvidia-smi) refuses above the ceiling whatever pids are tolerated.
-TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
-    const GuardCheck g = guard_before(foreign({"610696"}), true);
-    ASSERT_EQ(g.refuse, "");
-    EXPECT_EQ(foreign_active({{"", 57}}, g.tolerated, 5), (std::vector<std::string>{"GPU at 57%"}));
-    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
-    EXPECT_TRUE(foreign_active({{"", 5}}, g.tolerated, 5).empty());
-    EXPECT_TRUE(foreign_active({{"", 3}}, g.tolerated, 5).empty()) << "idle tolerated contexts at 3%";
-}
-
-TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
-    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), true).refuse, "compute processes [610696,[N/A]]");
+// An idle foreign context still time-slices with a measurement (docs/perf/batch-sensitivity.md):
+// any one refuses, unparseable entries included; there is no tolerance mode.
+TEST(TuneGuard, AnyForeignContextOnTheGpuRefuses) {
+    EXPECT_EQ(guard_refusal(foreign({"610696"})), "compute processes [610696]");
+    EXPECT_EQ(guard_refusal(foreign({"610696", "[N/A]"})), "compute processes [610696,[N/A]]");
+    EXPECT_EQ(guard_refusal(foreign({})), "");
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
@@ -832,24 +802,16 @@ TEST(TuneGuard, AFailedQueryRetriesWithDoublingBackoffUntilTheWaitExpires) {
 }
 
 // evidence: docs/design/tiered-tuning.md#engine-guard-retries-a-failed-nvidia-smi-query
-TEST(TuneGuard, ToleratedPidsAndTheWholeGpuAreActiveOnlyAboveTheCeiling) {
-    const std::vector<std::string> tol{"610696", "671125"};
-    EXPECT_TRUE(foreign_active({}, tol, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
-    EXPECT_TRUE(foreign_active({{"610696", 0}, {"671125", 5}}, tol, 5).empty()) << "idle tolerated pids, 5 is not above 5";
-    EXPECT_EQ(foreign_active({{"610696", 0}, {"671125", 6}}, tol, 5), (std::vector<std::string>{"671125 at 6%"}));
-    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, tol, 5),
+TEST(TuneGuard, AForeignPidIsActiveAtAnySmLoadTheWholeGpuAboveTheCeiling) {
+    EXPECT_TRUE(foreign_active({}, 5).empty()) << "NVML NOT_FOUND: no samples, idle";
+    EXPECT_EQ(foreign_active({{"700001", 1}}, 5), (std::vector<std::string>{"700001 at 1%"}));
+    EXPECT_TRUE(foreign_active({{"700001", 0}}, 5).empty()) << "a sample with no SM load (memory or video only)";
+    EXPECT_EQ(foreign_active({{"671125", 2}, {"671125", 37}, {"671125", 0}}, 5),
               (std::vector<std::string>{"671125 at 37%"}))
         << "one entry per pid, at its peak sample";
-    EXPECT_TRUE(foreign_active({{"", 5}}, {}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
-    EXPECT_EQ(foreign_active({{"", 6}}, {}, 5), (std::vector<std::string>{"GPU at 6%"}));
-    EXPECT_EQ(foreign_active({{"", 57}}, tol, 5), (std::vector<std::string>{"GPU at 57%"}));
-    EXPECT_EQ(foreign_active({{"671125", 6}}, tol, 10), std::vector<std::string>{}) << "the ceiling is the caller's";
-}
-
-TEST(TuneGuard, AnUntoleratedPidIsActiveAtAnySmLoad) {
-    EXPECT_EQ(foreign_active({{"700001", 1}}, {"610696"}, 5), (std::vector<std::string>{"700001 at 1%"}));
-    EXPECT_EQ(foreign_active({{"700001", 1}}, {}, 5), (std::vector<std::string>{"700001 at 1%"})) << "strict mode";
-    EXPECT_TRUE(foreign_active({{"700001", 0}}, {}, 5).empty()) << "a sample with no SM load (memory or video only)";
+    EXPECT_TRUE(foreign_active({{"", 5}}, 5).empty()) << "nvidia-smi's whole-GPU figure at the ceiling";
+    EXPECT_EQ(foreign_active({{"", 6}}, 5), (std::vector<std::string>{"GPU at 6%"}));
+    EXPECT_TRUE(foreign_active({{"", 6}}, 10).empty()) << "the ceiling is the caller's";
 }
 
 TEST(TuneGuard, BackendAutoPrefersNvmlAndFallsBackToNvidiaSmiWithAWarning) {
@@ -1797,6 +1759,15 @@ void write_run(const TempDir& d, Tier tier, const std::string& date, const CellR
     w.cell(c);
 }
 
+// A Ledger whose records (run id "") belong to a kProtocol run, as a cold run writes them.
+Ledger cold_ledger() {
+    Ledger l;
+    RunMeta m;
+    m.protocol = kProtocol;
+    l.runs.push_back(m);
+    return l;
+}
+
 CellRecord two_family_cell() {
     return cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("vendor", "v1", "ok", 2.0)},
                     {"lpanel:panel=8", "vendor"});
@@ -2290,7 +2261,7 @@ ArmOutcome arm(const std::string& name, const std::string& status, std::vector<d
 }  // namespace
 
 TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = two_family_cell();
     r.tier = Tier::deep;
     l.cells.push_back(r);
@@ -2321,9 +2292,58 @@ TEST(TuneSchedule, CurrentDeepCellIsSkippedByCoarse) {
     EXPECT_EQ(plan[0].tier, Tier::coarse);
 }
 
+// A measured record of another protocol (lean timed L2-warm operands) is re-measured in full at the
+// running tier whatever its tier and hashes, and a cold record outranks it at any tier; unhashed
+// tiers carry no protocol.
+TEST(TuneSchedule, AnotherProtocolsRecordIsReMeasuredAndRanksBelowACold) {
+    Ledger l;
+    RunMeta warm, cold;
+    warm.run_id = "w", warm.protocol = "lean";
+    cold.run_id = "c", cold.protocol = kProtocol;
+    l.runs = {warm, cold};
+    CellRecord r = two_family_cell();
+    r.tier = Tier::deep, r.run_id = "w", r.date = "2026-10-01";
+    l.cells.push_back(r);
+    const std::set<std::string> runs = protocol_runs(l);
+    EXPECT_TRUE(other_protocol(l.cells[0], runs));
+    auto plan = plan_round(plan_spec(kTwo), Tier::preview, {nkey(64)}, l, kHashes, 4, 0);
+    EXPECT_EQ(plan[0].reason, "protocol") << "a current deep lean record does not satisfy even preview";
+    EXPECT_EQ(plan[0].arms, kTwo);
+    EXPECT_EQ(plan[0].tier, Tier::preview);
+
+    CellRecord c = r;
+    c.tier = Tier::preview, c.run_id = "c", c.date = "2026-09-01";
+    l.cells.push_back(c);
+    const auto best = best_records(l, kHashes);
+    ASSERT_EQ(best.size(), 1u);
+    EXPECT_EQ(best.begin()->second->run_id, "c") << "an older cold preview record outranks a warm deep one";
+    EXPECT_EQ(plan_round(plan_spec(kTwo), Tier::preview, {nkey(64)}, l, kHashes, 4, 0)[0].reason, "skip:current");
+
+    l.cells[0].tier = Tier::transcribed;
+    EXPECT_FALSE(other_protocol(l.cells[0], runs)) << "an untimed tier is never re-measured for its protocol";
+}
+
+// The clock metadata of a cell round-trips through a ledger line; `throttled` is derived from it.
+TEST(TuneLedger, ClockMetadataRoundTrips) {
+    TempDir d;
+    CellRecord r = two_family_cell();
+    r.phases.clk = {8, 3, 8 * 1500.0};
+    r.throttle_reraces = 1;
+    write_run(d, Tier::deep, "2026-10-01", r, "20261001T000000-a-1");
+    const std::string text = read_file(d.led());
+    EXPECT_NE(text.find("\"clk_n\": 8"), std::string::npos) << text;
+    EXPECT_NE(text.find("\"throttled\": 1"), std::string::npos) << "3 of 8 capped is above 25%\n" << text;
+    const Ledger l = read_ledger(d.led(), "float");
+    ASSERT_EQ(l.cells.size(), 1u);
+    EXPECT_EQ(l.cells[0].phases.clk.n, 8);
+    EXPECT_EQ(l.cells[0].phases.clk.capped, 3);
+    EXPECT_DOUBLE_EQ(l.cells[0].phases.clk.mean_mhz(), 1500.0);
+    EXPECT_EQ(l.cells[0].throttle_reraces, 1);
+}
+
 TEST(TuneSchedule, PartlyStaleRacesOnlyChangedPlusTopTwo) {
     const std::vector<std::string> cands{"lpanel:panel=8", "lpanel:panel=16", "vendor", "wide:m=1", "cta"};
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = cell_rec({cres("lpanel:panel=8", "h1", "ok", 1.0), cres("lpanel:panel=16", "h1", "ok", 1.5),
                              cres("vendor", "v1", "ok", 2.0), cres("cta", "c1", "ok", 3.0), cres("old:x", "o1", "ok", 5.0)},
                             {"lpanel:panel=8", "lpanel:panel=16", "vendor", "cta", "old:x"});
@@ -2497,14 +2517,15 @@ TEST(TuneSchedule, EstimateUsesTheNearestRecordElseTheByteModel) {
     CellKey lower = nkey(100);
     lower.insert(lower.begin(), {"uplo", "L"});
     EXPECT_DOUBLE_EQ(estimate_ms(l, lower, "vendor", 1e9), 2.0) << "exact fields must match";
-    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s; one verify a cell.
+    // The lean model: (reps + 1 untimed + 2 cut runs) x ms, 2 warm rounds capped at 0.2 s, a scrub per
+    // run; one verify a cell.
     // 2 ms: 50 ms / 2 ms = 25 reps, capped at 16. 200 ms: 1 rep, raised to coarse's floor 4.
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"vendor"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS);
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS);
     l.cells.push_back(cell_rec({cres("vendor", "v1", "ok", 200.0)}, {"vendor"}, 4096));
-    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + kVerifyS);
+    EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor"}, 1e9, Tier::coarse, 0.49), 0.49 + 7 * 0.2 + 0.2 + 9 * kScrubS + kVerifyS);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(4096), {"vendor", "cta"}, 1e9, Tier::coarse, 0.49),
-                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3))
+                     0.49 + kVerifyS + (7 * 0.2 + 0.2) + (7 * 2.0e-3 + 2 * 2.0e-3) + 2 * 9 * kScrubS)
         << "cta (the 2 ms model) runs as many reps as the slowest arm: 4, not 16; one verification (the tie set)";
 }
 
@@ -2583,7 +2604,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
         r.phases.guard = 0.05, r.phases.ipc = 0.01, r.phases.start = 4.0, r.phases.mode = mode;
         return r;
     };
-    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS;  // coarse: 16 reps of 2 ms
+    const double model = 0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS;  // coarse: 16 reps of 2 ms
     bool hist = true;
     const Tier co = Tier::coarse;
     l.cells = {phased(64, 0.5, "old")};
@@ -2602,7 +2623,7 @@ TEST(TuneSchedule, EstimateUsesSameProtocolPhaseHistoryElseTheModel) {
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, upper, {"a"}, 1e9, co, 0.49, &hist), model) << "exact fields must match";
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, Tier::deep, 0.49, &hist),
-                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + kVerifyS) << "coarse history prices no deep cell (16 reps)";
+                     0.49 + 19 * 2.0e-3 + 2 * 2.0e-3 + 21 * kScrubS + kVerifyS) << "coarse history prices no deep cell (16 reps)";
     EXPECT_FALSE(hist);
     EXPECT_DOUBLE_EQ(cell_estimate_s(l, nkey(64), {"a"}, 1e9, co, 0.49, &hist, "fresh"), model) << "worker history, fresh run";
     EXPECT_FALSE(hist);
@@ -2798,7 +2819,7 @@ TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
 // with every candidate; the other cells keep their skip reasons.
 // evidence: docs/design/tiered-tuning.md#engine-re-measuring-named-cells
 TEST(TuneRemeasure, PlanRoundTreatsANamedCellAsMissing) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord r = two_family_cell();
     r.tier = Tier::deep;
     r.round = 3;
@@ -3005,7 +3026,7 @@ TEST(TuneMaxDim, TieredRunNeverMeasuresACellOverTheLimit) {
 }
 
 TEST(TuneSchedule, AllErrorRecordCountsAsMissing) {
-    Ledger l;
+    Ledger l = cold_ledger();
     CellRecord failed = cell_rec({cres("lpanel:panel=8", "h1", "error"), cres("vendor", "v1", "error")}, {});
     failed.tier = Tier::deep;
     l.cells.push_back(failed);
@@ -3759,6 +3780,47 @@ public:
 
 }  // namespace
 
+namespace {
+
+// Every race reports the SW power cap in `capped` of its 4 clock samples.
+class ThrottledMeasurer : public FakeMeasurer {
+public:
+    explicit ThrottledMeasurer(int capped_) : capped(capped_) {}
+    ArmBatch measure(const CellJob& j) override {
+        ArmBatch b = FakeMeasurer::measure(j);
+        b.phases.clk = {4, capped, 4 * 1200.0};
+        ++calls;
+        return b;
+    }
+    int capped, calls = 0;
+};
+
+}  // namespace
+
+// A race the power cap held in more than 25% of its samples runs once more (kThrottleReraces), and
+// the record says so; at 25% or below nothing is re-raced.
+TEST(TuneTieredDriver, AThrottledCellIsRacedOnceMore) {
+    for (const int capped : {1, 2, 4}) {
+        TempDir repo, ledger;
+        TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+        o.audit_fraction = 0;
+        ThrottledMeasurer m(capped);
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        (void)testing::internal::GetCapturedStdout();
+        const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
+        std::size_t raced = 0;
+        for (const CellRecord& c : l.cells) {
+            if (c.phases.clk.n == 0) continue;  // a single-candidate cell is not raced
+            ++raced;
+            EXPECT_EQ(c.throttle_reraces, capped > 1 ? 1 : 0) << capped << " " << key_text(c.key);
+            EXPECT_EQ(c.phases.clk.n, 4) << "the last race's samples only";
+        }
+        ASSERT_GT(raced, 0u);
+        EXPECT_EQ(std::size_t(m.calls), raced * (capped > 1 ? 2 : 1)) << capped << " of 4 capped";
+    }
+}
+
 TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
@@ -3766,7 +3828,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     std::string out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
     o.plan = false;
     o.tier = Tier::preview;
@@ -3784,7 +3846,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     testing::internal::CaptureStdout();
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
     out = testing::internal::GetCapturedStdout();
-    EXPECT_NE(out.find("(0 cells from lean phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
+    EXPECT_NE(out.find("(0 cells from lean-cold phase history, 7 from the model)"), std::string::npos) << "preview prices no coarse cell\n" << out;
     EXPECT_EQ(out.find("worker starts and audits"), std::string::npos) << out;
 
     // A changed family-b source: every preview lattice cell is raced again at preview, from history.
@@ -3799,7 +3861,7 @@ TEST(TuneTieredDriver, PlanSaysWhichCellsCameFromPhaseHistory) {
     out = testing::internal::GetCapturedStdout();
     ::close(fd);
     EXPECT_NE(out.find("(2 measure, 2 partial)"), std::string::npos) << out;
-    EXPECT_NE(out.find("(4 cells from lean phase history, 0 from the model)"), std::string::npos) << out;
+    EXPECT_NE(out.find("(4 cells from lean-cold phase history, 0 from the model)"), std::string::npos) << out;
     EXPECT_NE(out.find("est=1.25s (history)"), std::string::npos) << out;
     const double per_cell = 4.0 / double(l.cells.size());  // 1 worker start over every preview record
     char line[96];
@@ -5763,4 +5825,241 @@ TEST(TuneCalibrate, ReplayRefinesOnlyWhereTheDeviceDisagrees) {
     EXPECT_LT(calibrate_replay(universe({40, {}}), prior, scheme("calibrate8")).probes, cal.probes);
     EXPECT_EQ(calibrate_replay(universe({40, {}, 0.96}), prior, scheme("calibrate")).disagreed, 0u) << "4%: agrees";
     EXPECT_GT(calibrate_replay(universe({40, {}, 0.94}), prior, scheme("calibrate")).disagreed, 0u) << "6%: disagrees";
+}
+
+// The CU-aligned batch ladder. evidence: docs/design/tiered-tuning.md#engine-the-cu-aligned-batch-ladder
+TEST(TuneGrid, BatchLadderIsRoundedCuMultiplesPlusExtras) {
+    EXPECT_EQ(batch_ladder(188, default_batch_classes()), (std::vector<std::int64_t>{47, 376, 3008, 24064}));
+    EXPECT_EQ(batch_ladder(128, default_batch_classes()), (std::vector<std::int64_t>{32, 256, 2048, 16384}));
+    EXPECT_EQ(batch_ladder(188, without_latency_class(default_batch_classes())),
+              (std::vector<std::int64_t>{376, 3008, 24064}))
+        << "gemm and ormqr";
+    EXPECT_EQ(without_latency_class({0.25, 0.5}), (std::vector<double>{0.25, 0.5})) << "never an empty ladder";
+    EXPECT_EQ(batch_ladder(190, {0.25}), (std::vector<std::int64_t>{48})) << "47.5 rounds up, not down";
+    EXPECT_EQ(batch_ladder(2, {0.25, 1}), (std::vector<std::int64_t>{1, 2})) << "never below batch 1";
+    EXPECT_EQ(batch_ladder(188, {1, 0.25}, {4, 1, 47}), (std::vector<std::int64_t>{1, 4, 47, 188})) << "sorted, unique";
+    EXPECT_THROW(batch_ladder(0, default_batch_classes()), std::invalid_argument);
+    EXPECT_THROW(batch_ladder(188, {0}), std::invalid_argument);
+    EXPECT_EQ(batch_strings({1, 47}), (std::vector<std::string>{"1", "47"}));
+}
+
+TEST(TuneGrid, RebatchReplacesEveryMultiBatchLineAndKeepsSingleBatchLines) {
+    auto key = [](const char* t, int n, int b) {
+        return CellKey{{"trans", t}, {"n", std::to_string(n)}, {"batch", std::to_string(b)}};
+    };
+    // trans=C is declared at batch 1 only (syrk's vendor-first line); N takes the ladder whatever its old batches.
+    const std::vector<CellKey> grid{key("N", 4, 1), key("N", 4, 128), key("N", 8, 1), key("N", 8, 3), key("C", 4, 1)};
+    EXPECT_EQ(rebatch(grid, {"2", "64"}),
+              (std::vector<CellKey>{key("N", 4, 2), key("N", 4, 64), key("N", 8, 2), key("N", 8, 64), key("C", 4, 1)}));
+    const std::vector<CellKey> no_batch{{{"n", "4"}}, {{"n", "8"}}};
+    EXPECT_EQ(rebatch(no_batch, {"2"}), no_batch) << "an op without a batch key (geqrf) is untouched";
+}
+
+namespace {
+
+class FakeBatchSpec : public OpSpec {
+public:
+    std::string op() const override { return "fakebatch"; }
+    std::vector<std::string> key_names() const override { return {"n:log:3", "batch:log"}; }
+    std::vector<std::string> candidates(const std::string&) const override { return {"a", "b"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        return {{"n", {"1", "16"}}, {"batch", {"1", "3", "128"}}};
+    }
+    double bytes(const std::string&, const CellKey& k) const override { return double(key_int(k, "batch")) * 1e3; }
+    std::vector<int> ladder_extra_batches() const override { return {1}; }
+    std::vector<std::string> kernel_sources() const override { return {"k.cc", "b.cc"}; }
+    std::string spec_file() const override { return "fake_spec.cc"; }
+    std::vector<ArmOutcome> run_cell(const CellRequest&, Queue&) const override { return {}; }
+};
+
+const FakeBatchSpec kFakeBatch;
+
+class FakeGemmLikeSpec final : public FakeBatchSpec {  // gemm's and ormqr's hook: no latency class
+public:
+    std::string op() const override { return "fakebatch2"; }
+    std::vector<double> ladder_classes(const std::vector<double>& run) const override { return without_latency_class(run); }
+};
+
+const FakeGemmLikeSpec kFakeGemmLike;
+
+std::set<std::string> measured_batches(const std::vector<std::string>& keys) {
+    std::set<std::string> b;
+    for (const std::string& k : keys) b.insert(*key_get(*parse_key_arg(k), "batch"));
+    return b;
+}
+
+}  // namespace
+
+TEST(TuneTieredDriver, BatchLadderReplacesTheBatchAxisWithCuMultiples) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakebatch")) register_spec(&kFakeBatch);
+    o.ops = {"fakebatch"};
+    o.batch_classes = {0.25, 1, 8};
+    FakeMeasurer m;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &m), 0);
+    // 8 CUs: 2, 8, 64, plus the spec's extra 1. Round 0 (stride 2) is 1, 8 and the end 64; the n flip adds 2.
+    ASSERT_GE(m.keys.size(), 6u);
+    EXPECT_EQ(measured_batches({m.keys.begin(), m.keys.begin() + 6}), (std::set<std::string>{"1", "8", "64"}));
+    EXPECT_EQ(measured_batches(m.keys), (std::set<std::string>{"1", "2", "8", "64"}));
+    const Ledger l = read_ledger(ledger_file(ledger.str(), "fakebatch", "sm_fake"), "float");
+    ASSERT_EQ(l.runs.size(), 1u);
+    EXPECT_EQ(l.runs[0].grid, "n=1,16 batch=1,2,8,64") << "the run records the ladder as its lattice";
+
+    TempDir ledger2;
+    o.ledger_root = ledger2.str();
+    o.cus = 4;  // --cus beats the device's count
+    FakeMeasurer pinned;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &pinned), 0);
+    EXPECT_EQ(read_ledger(ledger_file(ledger2.str(), "fakebatch", "sm_fake"), "float").runs.at(0).grid,
+              "n=1,16 batch=1,4,32");
+
+    TempDir ledger3;
+    o.ledger_root = ledger3.str();
+    o.cus = 0;
+    o.batch_classes.clear();  // off (--batch-ladder off, or --batches): the choice.hh axis
+    FakeMeasurer off;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &off), 0);
+    EXPECT_EQ(measured_batches(off.keys), (std::set<std::string>{"1", "3", "128"}));
+    EXPECT_EQ(read_ledger(ledger_file(ledger3.str(), "fakebatch", "sm_fake"), "float").runs.at(0).grid, "n=1,16 batch=1,3,128");
+
+    TempDir ledger4;
+    o.ledger_root = ledger4.str();
+    if (!find_spec("fakebatch2")) register_spec(&kFakeGemmLike);
+    o.ops = {"fakebatch2"};
+    o.batch_classes = {0.25, 1, 8};
+    FakeMeasurer gemm_like;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &gemm_like), 0);
+    EXPECT_EQ(read_ledger(ledger_file(ledger4.str(), "fakebatch2", "sm_fake"), "float").runs.at(0).grid,
+              "n=1,16 batch=1,8,64")
+        << "the spec's ladder_classes drops the 0.25 class (2); the extra 1 stays";
+
+    o.batch_classes = default_batch_classes();
+    FakeMeasurer none;
+    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake", 0}, &none), std::invalid_argument) << "no CU count: refuse, not guess";
+}
+
+namespace {
+
+// dtype x n x batch: a (the per-item loop) wins batch 1 and 2, b from batch 4.
+OracleSet ladder_oracle() {
+    OracleSet o;
+    o.label = "syn";
+    const std::vector<std::string> ns{"1", "8"}, bs{"1", "2", "4", "8", "64", "512", "4096"};
+    for (const std::string& n : ns)
+        for (const std::string& b : bs) {
+            const double items = std::stod(b), loop = 0.01 * items, wide = 0.03 + 1e-5 * items;
+            o.cells[{{"dtype", "float"}, {"n", n}, {"batch", b}}].ms = {{"a", loop}, {"b", wide}};
+        }
+    o.axes = axis_specs({"dtype:exact", "n:log:3", "batch:log"}, {{"dtype", {"float"}}, {"n", ns}, {"batch", bs}});
+    return o;
+}
+
+}  // namespace
+
+TEST(TuneReplay, LadderMeasuresOnlyTheNearestBatchesAndScoresTheRest) {
+    const OracleSet o = ladder_oracle();
+    std::string text;
+    // 70 is nearest 64, 500 nearest 512; 1 is the extra the group holds; 3 is an extra it lacks.
+    const auto keep = nearest_batches(o, {70, 500}, {1, 3}, &text);
+    EXPECT_EQ(keep, (std::set<std::string>{"float |1", "float |64", "float |512"}));
+    EXPECT_EQ(text, "1,64,512");
+    Scheme s{"ladder", 0, false, 0};
+    s.batch_keep = keep;
+    const SlowdownReport r = slowdown_replay(o, s);
+    EXPECT_EQ(r.cells, 14u);
+    EXPECT_EQ(r.measured, 6u);
+    ASSERT_EQ(r.ratio.size(), 14u);
+    // Batch 2 and 4 read the batch-1 row (a: right at 2, 1.33x at 4). Batch 8 is 3 octaves from both 1 and 64: the tie
+    // goes to the smaller batch, so it takes a, 0.08 vs 0.03008 ms. 4096 reads 512 (b: right).
+    EXPECT_NEAR(r.worst, 0.08 / (0.03 + 8e-5), 1e-9) << r.worst_key;
+    EXPECT_NE(r.worst_key.find("batch=8 picked a"), std::string::npos) << r.worst_key;
+    Scheme with2 = s;
+    with2.batch_keep.insert("float |8");
+    EXPECT_EQ(slowdown_replay(o, with2).worst, 1.0) << "8 kept: 4 reads it (one octave) and is right";
+}
+
+TEST(TuneReplay, NonMonotoneBatchCellsAreDropped) {
+    OracleSet o = ladder_oracle();
+    const CellKey hot{{"dtype", "float"}, {"n", "8"}, {"batch", "64"}}, spike{{"dtype", "float"}, {"n", "1"}, {"batch", "2"}};
+    o.cells.at(hot).ms = {{"a", 3.0}, {"b", 2.0}};    // the fastest arm 2.0 > 5 x b's 0.0351 at batch 512: dropped
+    o.cells.at(spike).ms = {{"a", 0.02}, {"b", 1.0}};  // a is fine, b spikes > 5 x its 0.03004 at batch 4: dropped
+    const CellKey mild{{"dtype", "float"}, {"n", "1"}, {"batch", "4"}};
+    o.cells.at(mild).ms.at("b") = 0.12;  // 4x b at batch 8 (0.03008): kept, under the factor
+    EXPECT_EQ(drop_nonmonotone_batch(o, 5), 2u);
+    EXPECT_FALSE(o.cells.count(hot));
+    EXPECT_FALSE(o.cells.count(spike));
+    EXPECT_TRUE(o.cells.count(mild));
+    EXPECT_EQ(o.cells.size(), 12u);
+    EXPECT_EQ(drop_nonmonotone_batch(o, 5), 0u) << "idempotent";
+}
+
+TEST(TuneTieredDriver, LadderAppliesOnlyToAnEmptyLedgerOrOneWithALadderRun) {
+    RunMeta old_axis, ladder_run, other_ladder;
+    old_axis.grid = "n=1,16 batch=1,3,128";
+    ladder_run.grid = "n=1,16 batch=1,2,8,64";
+    other_ladder.grid = "n=1,16 batch=1,2,8,640";
+    const std::vector<std::string> ladder{"1", "2", "8", "64"};
+    EXPECT_TRUE(ladder_applies({}, ladder)) << "a new ledger";
+    EXPECT_FALSE(ladder_applies({old_axis}, ladder)) << "an old-axis ledger is not re-tuned by default";
+    EXPECT_TRUE(ladder_applies({old_axis, ladder_run}, ladder)) << "a ladder run happened: keep going";
+    EXPECT_FALSE(ladder_applies({other_ladder}, ladder)) << "batch=1,2,8,64 is not a prefix match of 1,2,8,640";
+}
+
+// --batch-ladder auto on an old-axis ledger keeps the choice.hh axis; a forced ladder re-races partly stale
+// old-axis rows inside the Region; a sample (--only-named) never takes the ladder.
+TEST(TuneTieredDriver, AutoLadderLeavesAnOldLedgerAloneAndAForcedOneReRacesItsStaleRows) {
+    TempDir repo, ledger;
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
+    if (!find_spec("fakebatch")) register_spec(&kFakeBatch);
+    o.ops = {"fakebatch"};
+    o.run_id = "20261021T000001-box-1";
+    FakeMeasurer old_axis;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &old_axis), 0);
+    EXPECT_EQ(measured_batches(old_axis.keys), (std::set<std::string>{"1", "3", "128"}));
+    const std::string file = ledger_file(ledger.str(), "fakebatch", "sm_fake");
+
+    o.batch_classes = {0.25, 1, 8};
+    o.ladder_auto = true;
+    o.run_id = "20261021T000002-box-1";
+    FakeMeasurer autom;
+    testing::internal::CaptureStdout();
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &autom), 0);
+    const std::string out = testing::internal::GetCapturedStdout();
+    EXPECT_TRUE(autom.keys.empty()) << "auto: the old axis, every cell current\n" << out;
+    EXPECT_NE(out.find("batch ladder off"), std::string::npos) << out;
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128");
+
+    std::ofstream(repo.path / "b.cc") << "b changed";  // a still wins: every record partly stale
+    o.ladder_auto = false;  // --batch-ladder default
+    o.run_id = "20261021T000003-box-1";
+    FakeMeasurer forced;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &forced), 0);
+    const std::set<std::string> got = measured_batches(forced.keys);
+    EXPECT_TRUE(got.count("8") && got.count("64")) << "the ladder";
+    EXPECT_TRUE(got.count("3") && got.count("128")) << "partly stale old-axis rows inside the Region are re-raced";
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,2,8,64");
+
+    o.ladder_auto = true;  // a ladder run is in the ledger now: auto keeps the ladder
+    o.run_id = "20261021T000004-box-1";
+    FakeMeasurer resumed;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &resumed), 0);
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,2,8,64");
+
+    o.only_named = true;
+    o.remeasure = {{"fakebatch.float", {{{"n", "16"}, {"batch", "128"}}}}};
+    o.run_id = "20261021T000005-box-1";
+    FakeMeasurer named;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake", 8}, &named), 0);
+    EXPECT_EQ(named.keys, (std::vector<std::string>{"n=16,batch=128"}));
+    EXPECT_EQ(read_ledger(file, "float").runs.back().grid, "n=1,16 batch=1,3,128") << "a sample keeps the choice.hh axis";
+}
+
+TEST(TuneReplay, NearestBatchesBreaksALogTieTowardTheSmallerBatch) {
+    OracleSet o;
+    o.label = "tie";
+    for (const char* b : {"32", "128"}) o.cells[{{"dtype", "float"}, {"n", "4"}, {"batch", b}}].ms = {{"a", 1.0}};
+    o.axes = axis_specs({"dtype:exact", "n:log:3", "batch:log"}, {{"dtype", {"float"}}, {"n", {"4"}}, {"batch", {"32", "128"}}});
+    EXPECT_EQ(nearest_batches(o, {64}, {}), (std::set<std::string>{"float |32"})) << "64 is one octave from both";
+    EXPECT_EQ(nearest_batches(o, {65}, {}), (std::set<std::string>{"float |128"}));
 }

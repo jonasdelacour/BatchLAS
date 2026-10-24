@@ -255,6 +255,35 @@ is needed in both directions (right inside the block, left at the bottom). Handl
 > **Note:** the test must use mixed-sign \f$d, e\f$, exact zeros and six decades of conditioning. A first version drew only
 > positive \f$d, e\f$ and passed with the bug present.
 
+## gesvd: L2 batch chunking {#gesvd-l2-batch-chunking}
+
+> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+
+The general blocked path runs the batch in parts; an item is A plus the requested U and V^H. Singular
+values offset by `b0*k`, U/V^H only when wanted, info only when requested; workspace for one part. The
+Hermitian arm and cta/jacobi are untouched.
+
+**Rule:** `GESVD_BLOCKED_L2_CHUNK_PERCENT` = 150 for real scalars. Complex general (native since the
+complex gebrd) is not L2-chunked (unmeasured), but every type's parts are capped at `max_groups_yz / 2`:
+without the cap ormbr's `PackPPanelKernel` aborted from batch 65505 at n = 40
+([defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
+
+Cold A/B, float, pinned blocked, ns per item, median of 2 retained alternating passes:
+
+| n | vectors | batch | off | 75 % | 150 % | 300 % |
+|---:|---|---:|---:|---:|---:|---:|
+| 64 | all | 4096 | 4732 | 1.041 | 0.999 | 1.002 |
+| 64 | all | 16384 | 4594 | 1.087 | 1.010 | 1.016 |
+| 128 | all | 1024 | 18207 | 1.009 | 1.001 | 1.000 |
+| 128 | all | 4096 | 18323 | 1.061 | 0.966 | 0.991 |
+| 128 | all | 8192 | 18076 | 1.093 | 0.975 | 0.996 |
+| 128 | none | 4096 | 13846 | 0.998 | 0.998 | 0.999 |
+| 128 | none | 16384 | 13681 | 1.017 | 1.021 | 1.004 |
+| 256 | all | 1024 | 147119 | 0.878 | 0.712 | 0.874 |
+
+75 % (the sm_120 rule) sets parts below saturation with vectors; 150 % is within 2.1% everywhere and
+0.71 at n=256. Re-measured with the shipped rule: n=128 b8192 0.975, n=256 b1024 0.709.
+
 ## gesvd: the unblocked-gebrd cliff {#gesvd-the-unblocked-gebrd-cliff}
 
 The blocked gebrd threshold is 1 (`gesvd_use_blocked_gebrd`, `src/ops/gesvd/kernels/gesvd_blocked.cc`). Blocked wins at every

@@ -45,8 +45,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // Correctness only (R3). Neither family serves complex Trans: ormqr_blocked throws `unsupported`
 // and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
 // off non-GPU queues; dimension checks are left to the drivers. Both run
-// each item at the top-level extents (no heterogeneous A or C). No batch term: past 65535 the
-// sub-ops take the vendor, or vendor-free may throw NoRouteError themselves (known-defects #16).
+// each item at the top-level extents (no heterogeneous A or C). No batch term: the sub-ops run a
+// batch past 65535 as slices, vendor-free too (known-defects #16).
 template <class T>
 bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
@@ -123,7 +123,10 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
         ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, A, C, trans); }, shape, key,
         [&](const auto& c) {
-            if (workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
+            // Blocked fits its batch part to the workspace it holds (a caller sized at a larger shape
+            // may hold less than this shape's part) and throws workspace_error itself below one item.
+            if (std::holds_alternative<ops::ormqr::Vendor>(c) &&
+                workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
                 throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
             // Both families sequence several launches.
             return select::on_in_order_queue(ctx, [&](Queue& q) {

@@ -16,10 +16,12 @@
 // synchronously), void clear_info(), void run(Span<std::byte>) (the public op, then wait), and
 // std::pair<double, int> verify() (residual on items 0 and batch-1, nonzero info count).
 
+#include <tools/tune/nvml_guard.hh>
 #include <tools/tune/race.hh>
 #include <tools/tune/spec.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/util/bench_structured.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
@@ -134,7 +136,8 @@ public:
         ws_.release();
         try {  // DPC++'s plain wait() leaves an async error pending on the Queue for a later cell
             p_.q.wait_and_throw();
-            if (p_.q.workspace_capacity() > 2 * wneed_) (void)p_.q.trim_workspace();  // blocks are never freed
+            // The scrub buffer stays in the arena across cells: allocated once per worker.
+            if (p_.q.workspace_capacity() > 2 * (wneed_ + bench::scrub_bytes(p_.q))) (void)p_.q.trim_workspace();
         } catch (const std::exception& e) {
             std::fprintf(stderr, "batchlas_tune: %s: an async error at the cell's end: %s\n", op_.c_str(), e.what());
         }
@@ -145,10 +148,7 @@ public:
     }
 
     bool once(ArmOutcome& a) {
-        return guarded(a, [&] {
-            p_.reset();
-            p_.run(ws_.span());
-        });
+        return guarded(a, [&] { (void)reset_and_run(); });
     }
 
     // Warm-up interleaved in the timed order: a per-arm warm-up made arm 0's first timed rep
@@ -192,6 +192,7 @@ public:
         if (ran) {
             a.ms.push_back(ms);
             a.slot.push_back(slot);
+            sample_clocks();
         }
         spent(&Phases::timed, c0);  // the call's wall, reset included: more than ms
         return ran;
@@ -218,13 +219,24 @@ private:
     std::size_t wneed_ = 1;
     WorkspaceLease ws_;
 
-    double reset_and_run() {  // ms of the run alone
+    // ms of the run alone, cold: inputs restored, then L2 scrubbed and the queue drained, so a
+    // read-only operand is not L2-resident from the previous rep (protocol kProtocol).
+    // evidence: docs/perf/batch-sensitivity.md#batch-sensitivity-the-cold-protocol
+    double reset_and_run() {
         p_.reset();
+        bench::scrub_l2(p_.q);
         const auto t0 = clock::now();
         p_.run(ws_.span());
         return std::chrono::duration<double, std::milli>(clock::now() - t0).count();
     }
 
+    // One NVML sample after each timed run: the SM clock and whether the SW power cap holds it.
+    static void sample_clocks() {
+        static const int gpu = nvml::visible_gpu();
+        if (gpu < 0) return;
+        if (const auto c = nvml::clocks(gpu))
+            cell_phases().clk += {1, (c->reasons & nvml::kSwPowerCap) ? 1 : 0, double(c->sm_mhz)};
+    }
     static void spent(double Phases::*f, clock::time_point t0) { cell_phases().add(f, seconds_since(t0)); }
     static void fail(ArmOutcome& a, const char* status, const std::string& why) {
         a.status = status;

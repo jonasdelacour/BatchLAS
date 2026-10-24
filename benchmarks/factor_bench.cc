@@ -29,6 +29,7 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/bench_structured.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -409,6 +410,7 @@ static int run(const Cfg& c) {
         // A fused solve overwrites A with the factor AND B with X, so both are restored.
         else if (is_solve_op(c.op)) { reset_A(); (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else reset_A();
+        bench::scrub_l2(*q);  // cold operands, as the tuner times them (docs/perf/batch-sensitivity.md)
     };
 
     // An arm's NAME is its pin, so --arms=vendor,cta,tiny needs no new flag per tier;

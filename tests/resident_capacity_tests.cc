@@ -560,7 +560,7 @@ TEST(LaunchCeiling, MetalGridRunsPastTheCudaGroupCapAndStopsAt32Bits) {
 // a wrong row 0; ld/stride padding and beta = 1 catch a derived accessor.
 TEST(LaunchCeiling, MetalGemmPinsServeABatchPastTheCudaGrid) {
     auto q = gpu_queue();
-    if (!q || !on_metal(*q)) GTEST_SKIP() << "CUDA refuses this batch (gemm_candidates_tests)";
+    if (!q || !on_metal(*q)) GTEST_SKIP() << "CUDA runs this batch as slices (gemm_candidates_tests)";
     constexpr int n = 16, ld = n + 3, stride = ld * n + 5, batch = 65537;
     auto a0 = [](int i, int l) { return float((i * 7 + l * 3) % 9 - 4); };
     auto bv = [](int l, int j) { return float((l * 5 + j * 11) % 7 - 3); };
