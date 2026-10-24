@@ -56,7 +56,7 @@ select::Key key_of(const MV<T>& A, const Job& j) {
 }
 
 // A batch whose items sit ld * cols apart: gesvdjBatched takes no stride argument.
-template <class T>
+template <typename T>
 bool packed(const MV<T>& M) {
     return M.batch_size() == 1 || M.stride() == static_cast<std::int64_t>(M.ld()) * M.cols();
 }
@@ -67,7 +67,7 @@ bool packed(const MV<T>& M) {
 // Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
 // runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);

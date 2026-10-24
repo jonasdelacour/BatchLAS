@@ -48,7 +48,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // off non-GPU queues; dimension checks are left to the drivers. Both run
 // each item at the top-level extents (no heterogeneous A or C). No batch term: the sub-ops run a
 // batch past 65535 as slices, vendor-free too (known-defects #16).
-template <class T>
+template <typename T>
 bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();

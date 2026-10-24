@@ -17,15 +17,15 @@
 
 namespace batchlas::ops::her2k {
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     return {{"n", C.rows()}, {"k", inner<T>(A, transA)}, {"batch", C.batch_size()}};
 }
@@ -33,7 +33,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3). Every family runs each item at the top-level (n, k), so none takes a
 // heterogeneous operand. Fold is chunked over the batch (grid z, scratch budget), so it refuses
 // only an item whose own n x n product does not fit; it runs over the public gemm, so ROCm too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
@@ -56,7 +56,7 @@ bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T
 
 /// Would her2k serve this call with a batched native route (not the per-item vendor loop)?
 /// False when nothing can run it. sytrd's rank-2k trailing update asks before issuing her2k.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool picks_batched_route(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose transA) {
     try {
         const Her2kChoice c = select::pick<B, T>(spec, q, key_of<T>(A, C, transA), candidates<T>(),

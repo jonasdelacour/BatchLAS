@@ -84,7 +84,7 @@ decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, 
 }
 
 // hemm, herk and her2k are complex-only (ComplexScalar): no real instantiation and no real table.
-template <class F>
+template <typename F>
 decltype(auto) with_complex_dtype(const std::string& op, const std::string& dtype, F&& f) {
     if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
 #if BATCHLAS_TUNE_FP64

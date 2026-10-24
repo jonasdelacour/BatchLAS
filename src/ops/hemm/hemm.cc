@@ -24,10 +24,10 @@ namespace ops::hemm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& C) {
     return {{"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -37,7 +37,7 @@ select::Key key_of(const MV<T>& C) {
 // at the top-level extents. So no family takes a heterogeneous operand. Expand is chunked over the
 // batch (grid z, scratch budget), so it refuses only an item whose own scratch does not fit.
 // rocBLAS has no ?hemm wrapper, so on ROCm only Expand (over rocBLAS gemm) runs.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
@@ -52,7 +52,7 @@ bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{

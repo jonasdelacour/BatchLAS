@@ -25,7 +25,7 @@ namespace {
 
 namespace HM = ops::hemm;
 
-template <class T>
+template <typename T>
 struct HemmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;

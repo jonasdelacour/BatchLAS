@@ -38,11 +38,11 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 template <Backend B>
 inline constexpr bool kExpandWired = select::native_gpu_backend<B> || B == Backend::ROCM;
 // ROCm's vendor arm symmetrizes a real copy (MatrixView::symmetrize is real-only).
-template <Backend B, class T>
+template <Backend B, typename T>
 inline constexpr bool kVendorWired =
     select::has_library<B>(spec.vendor) && !(B == Backend::ROCM && !std::is_floating_point_v<T>);
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& C) {
     return {{"form", form_of(C.rows(), C.cols())}, {"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -53,7 +53,7 @@ select::Key key_of(const MV<T>& C) {
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget) and grid z holds its batch, so the launch
 // chunks the batch and only an item whose own scratch does not fit is refused.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = kExpandWired<B>;

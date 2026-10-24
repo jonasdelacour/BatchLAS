@@ -28,15 +28,15 @@ namespace ops::herk {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     return {{"trans", transA == Transpose::NoTrans ? "N" : "C"}, {"n", C.rows()}, {"k", inner<T>(A, transA)},
             {"batch", C.batch_size()}};
@@ -46,7 +46,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // heterogeneous operand. The natives are chunked over the batch (grid z), Fold also over its
 // scratch budget, so Fold refuses only an item whose own n x n product does not fit. Gram is
 // portable SYCL wired for CUDA and SYCL; Fold runs over the public gemm, so ROCm too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& C,
              Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA);
@@ -72,7 +72,7 @@ bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const HerkChoice& c, const MV<T>& A, const MV<T>& C, float_t<T> alpha, float_t<T> beta,
              Uplo uplo, Transpose transA) {
     return std::visit(overloaded{

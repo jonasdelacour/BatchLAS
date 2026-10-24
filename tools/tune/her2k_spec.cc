@@ -26,7 +26,7 @@ namespace {
 
 namespace H2 = ops::her2k;
 
-template <class T>
+template <typename T>
 struct Her2kProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = float_t<T>;

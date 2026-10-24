@@ -27,11 +27,11 @@
 
 namespace batchlas::ops::level3 {
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 /// Items [first, first + count) of a homogeneous view: same extents, ld and stride.
-template <class T>
+template <typename T>
 MV<T> batch_range(const MV<T>& v, int first, int count) {
     return MV<T>(v.data_ptr() + static_cast<std::ptrdiff_t>(first) * v.stride(), v.rows(), v.cols(), v.ld(),
                  v.stride(), count);
@@ -46,7 +46,7 @@ int grid_chunk(const Queue& q) {
 
 /// f(first, count) per chunk of at most `chunk` items: batch / chunk launches, not batch. An
 /// out-of-order queue orders nothing between chunks, so there each one is waited out.
-template <class F>
+template <typename F>
 Event for_each_chunk(Queue& q, int batch, int chunk, F&& f) {
     if (batch <= chunk) return f(0, batch);
     Event last;
@@ -62,7 +62,7 @@ Event for_each_chunk(Queue& q, int batch, int chunk, F&& f) {
 /// conjugate transposes of each other, so one gemm and a mirrored read give her2k both terms.
 /// The other triangle is neither read nor written; the diagonal is real on exit, and its
 /// imaginary part is not an input (beta is real and C = C^H).
-template <class T, bool TwoSided>
+template <typename T, bool TwoSided>
 Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, Uplo uplo) {
     using real_t = float_t<T>;
     const int n = C.rows();
@@ -107,7 +107,7 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
 /// alpha B A + beta C (Right). Chunked so each chunk's scratch fits; @pre expansion_chunk >= 1.
 // The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on first
 // touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while enqueued.
-template <Backend B, class T, bool Conjugate>
+template <Backend B, typename T, bool Conjugate>
 Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
                   Uplo uplo) {
     const int k = A.rows(), batch = A.batch_size();
@@ -137,7 +137,7 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
 /// herk (TwoSided = false, Bop = A) and her2k (true): one gemm of op(A) op(Bop)^H over the whole
 /// n x n product into scratch, then fold_hermitian. The gemm cannot target C: it would write both
 /// triangles. Chunked as expand_gemm; @pre expansion_chunk >= 1.
-template <Backend B, class T, bool TwoSided>
+template <Backend B, typename T, bool TwoSided>
 Event gemm_fold(Queue& q, const MV<T>& A, const MV<T>& Bop, const MV<T>& C, T alpha, float_t<T> beta, Uplo uplo,
                 Transpose transA) {
     const int n = C.rows(), batch = C.batch_size();

@@ -71,7 +71,7 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
 
 // The native arms compile only for CUDA and SYCL (native_gpu_backend); can_run never admits the
 // other instantiations.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{

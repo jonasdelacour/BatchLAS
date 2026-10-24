@@ -24,7 +24,7 @@ using HerkChoice = std::variant<Gram, Triangular, Fold, Vendor>;  ///< fieldless
 
 /// Every compiled choice, in tie-break order. No complex<double> triangular: its 64 accumulators
 /// alone fill the 255-register file.
-template <class T>
+template <typename T>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, std::complex<float>>) return select::all_of<HerkChoice>();
     else return std::array<HerkChoice, 3>{Gram{}, Fold{}, Vendor{}};
@@ -48,14 +48,14 @@ inline constexpr int gram_threads(std::int64_t n) {  ///< lanes meeting the tria
     const int lanes = gram_tile(n) / (gram_tile(n) == 128 ? 8 : 4);
     return (lanes * (lanes + 1) / 2 + 31) / 32 * 32;
 }
-template <class T>
+template <typename T>
 constexpr std::int64_t gram_slm_bytes(std::int64_t n) {  ///< the staged [KC][tile] operand
     return std::int64_t(32) * gram_tile(n) * std::int64_t(sizeof(T));
 }
 
 inline constexpr int kFoldWg = 256;  ///< fold_hermitian's work-group (expand_group_shape)
 inline constexpr int kTriangularWg = 256;  ///< syrk_triangular_tiles' 16 x 16 work-group
-template <class T>
+template <typename T>
 constexpr std::int64_t triangular_slm_bytes() {  ///< two staged 8 x 128 operand tiles
     return std::int64_t(2) * 8 * 128 * std::int64_t(sizeof(T));
 }

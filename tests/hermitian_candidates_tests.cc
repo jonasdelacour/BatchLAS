@@ -37,14 +37,14 @@ using namespace batchlas;
 
 namespace {
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 const char* uplo_s(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
 
 // One operand in its own buffer of poison: ld = rows + pad, stride = ld * cols + gap. Items
 // it >= period repeat item it % period (period 0: all distinct).
-template <class T>
+template <typename T>
 struct Operand {
     int rows = 0, cols = 0, batch = 0, ld = 0, stride = 0;
     UnifiedVector<T> mem, mem0;
@@ -106,7 +106,7 @@ struct Operand {
 };
 
 // The outermost `op` trace line's choice for whatever `run` calls.
-template <class F>
+template <typename F>
 std::string traced_choice(const std::string& op, F&& run) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();

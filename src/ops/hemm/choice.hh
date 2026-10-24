@@ -17,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};  ///< backend::hemm_vendor (cubla
 
 using HemmChoice = std::variant<Expand, Vendor>;  ///< fieldless: expansion ld, chunk and gemm tile derived
 
-template <class T>  /// Every compiled choice, in tie-break order: the expansion, then the vendor loop.
+template <typename T>  /// Every compiled choice, in tie-break order: the expansion, then the vendor loop.
 constexpr auto candidates() { return select::all_of<HemmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};  ///< nothing in the row runs

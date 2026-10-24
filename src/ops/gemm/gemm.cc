@@ -93,7 +93,7 @@ inline bool reg_form(const RegCfg& c, Transpose ta, Transpose tb) {
 // vendor library exists it is the one that honours the hint (tensor cores), so the natives answer
 // it only when there is none. Any other pair (F64 on float, F32 on double, ...) is an error on
 // every path, as cuBLAS's enum_convert already makes it.
-template <class T>
+template <typename T>
 bool native_serves_precision(ComputePrecision p, bool has_vendor) {
     constexpr bool single = std::is_same_v<typename base_type<T>::type, float>;
     switch (p) {
@@ -163,7 +163,7 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
 // Runs `fn` on consecutive batch chunks of at most `chunk` items, so a native kernel that puts the
 // batch in grid z serves any batch. The chunks are disjoint in C and the views are the strided
 // ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call.
-template <class T, class Fn>
+template <typename T, typename Fn>
 Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, std::int64_t chunk, Fn&& fn) {
     const std::int64_t batch = A.batch_size();
     if (batch <= chunk) return fn(A, Bm, C);
@@ -181,7 +181,7 @@ Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C
     return last;
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Transpose ta, Transpose tb, ComputePrecision precision) {
     const std::int64_t grid = select::device_of<B>(q).max_groups_yz;

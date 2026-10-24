@@ -23,7 +23,7 @@
 namespace batchlas {
 namespace ops::her2k {
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const Her2kChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha,
              float_t<T> beta, Uplo uplo, Transpose transA) {
     return std::visit(select::overloaded{

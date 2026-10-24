@@ -26,7 +26,7 @@ namespace {
 
 namespace H = ops::herk;
 
-template <class T>
+template <typename T>
 struct HerkProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using R = float_t<T>;

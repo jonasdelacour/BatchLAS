@@ -21,18 +21,18 @@ struct Vendor : select::NoFields<"vendor"> {};          ///< backend::syr2k_vend
 using Syr2kChoice = std::variant<Triangular, Vendor>;  ///< fieldless: the aligned/predicated leg is derived
 
 /// Every compiled choice, in tie-break order; complex<double> has no triangular (registers, 64 KB SLM).
-template <class T>
+template <typename T>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, std::complex<double>>) return std::array<Syr2kChoice, 1>{Vendor{}};
     else return select::all_of<Syr2kChoice>();
 }
 
 /// Is the per-item vendor loop linked for (B, T)? rocblas.cc wraps the real ?syr2k only.
-template <Backend B, class T>
+template <Backend B, typename T>
 inline constexpr bool vendor_wired = select::has_library<B>(select::Lib::level3) &&
                                      !(B == Backend::ROCM && !std::is_floating_point_v<T>);
 
-template <class T>
+template <typename T>
 constexpr std::int64_t triangular_slm_bytes() {  ///< four staged 8 x 128 operand tiles
     return std::int64_t(4) * 8 * 128 * std::int64_t(sizeof(T));
 }
