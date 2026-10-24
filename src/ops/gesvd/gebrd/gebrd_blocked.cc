@@ -114,7 +114,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                          int32_t block_size) {
     using Real = typename base_type<T>::type;
     using gebrd_detail::conj;
-    constexpr bool kComplex = internal::is_complex<T>::value;
+    constexpr bool kComplex = detail::is_complex<T>::value;
 
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
 
@@ -188,7 +188,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     Real sigma_partial = Real(0);
                     for (int32_t r = gi + 1 + lid; r < m; r += local_size) {
                         const T ari = A(r, gi, b);
-                        sigma_partial += internal::norm_squared(ari);
+                        sigma_partial += detail::norm_squared(ari);
                     }
                     const Real sigma = batchlas::portable::reduce_over_group(g, sigma_partial, sycl::plus<Real>());
 
@@ -211,7 +211,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     scale_q = batchlas::portable::group_broadcast(g, scale_q);
 
                     if (lid == 0) {
-                        D(gi, b) = internal::real_part(beta_q);
+                        D(gi, b) = detail::real_part(beta_q);
                         TAUQ(gi, b) = tau_q;
                     }
 
@@ -276,7 +276,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     Real sigma_r_partial = Real(0);
                     for (int32_t c = gi + 2 + lid; c < n; c += local_size) {
                         const T aic = A(gi, c, b);
-                        sigma_r_partial += internal::norm_squared(aic);
+                        sigma_r_partial += detail::norm_squared(aic);
                     }
                     const Real sigma_r = batchlas::portable::reduce_over_group(g, sigma_r_partial, sycl::plus<Real>());
 
@@ -299,7 +299,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                     scale_p = batchlas::portable::group_broadcast(g, scale_p);
 
                     if (lid == 0) {
-                        E(gi, b) = internal::real_part(beta_p);
+                        E(gi, b) = detail::real_part(beta_p);
                         TAUP(gi, b) = tau_p;
                         A(gi, gi + 1, b) = T(1);
                     }

@@ -77,8 +77,8 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
 
     const auto shape = backend::detail::expand_group_shape(n);
     const sycl::range<3> global(static_cast<std::size_t>(batch),
-                                static_cast<std::size_t>(internal::ceil_div(n, shape.cols) * shape.cols),
-                                static_cast<std::size_t>(internal::ceil_div(n, shape.rows) * shape.rows));
+                                static_cast<std::size_t>(detail::ceil_div(n, shape.cols) * shape.cols),
+                                static_cast<std::size_t>(detail::ceil_div(n, shape.rows) * shape.rows));
     const sycl::range<3> local(1, static_cast<std::size_t>(shape.cols), static_cast<std::size_t>(shape.rows));
 
     q->parallel_for(sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {

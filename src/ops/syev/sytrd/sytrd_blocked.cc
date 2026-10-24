@@ -757,7 +757,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                 bool rank2k_issued = false;
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
-                        if constexpr (internal::is_complex<T>::value) {
+                        if constexpr (detail::is_complex<T>::value) {
                             // her2k's per-item vendor loop inverts the win. Ask her2k's
                             // own selection and keep the GEMM pair when it picks that loop.
                             // Per panel, not hoisted: n2 shrinks every iteration.

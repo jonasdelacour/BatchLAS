@@ -151,7 +151,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
             const int32_t b = static_cast<int32_t>(tid[0]);
             for (int32_t i = 0; i < n; ++i) {
                 Real sigma = Real(0);
-                for (int32_t r = i + 1; r < m; ++r) sigma += internal::norm_squared(A(r, i, b));
+                for (int32_t r = i + 1; r < m; ++r) sigma += detail::norm_squared(A(r, i, b));
                 const auto lq = gebrd_detail::larfg_real_beta(A(i, i, b), sycl::sqrt(sigma), m - i);
                 for (int32_t r = i + 1; r < m; ++r) A(r, i, b) *= lq.scale;
                 A(i, i, b) = T(1);
@@ -163,7 +163,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                     dot *= ctau;
                     for (int32_t r = i; r < m; ++r) A(r, c, b) -= A(r, i, b) * dot;
                 }
-                D(i, b) = internal::real_part(lq.beta);
+                D(i, b) = detail::real_part(lq.beta);
                 A(i, i, b) = lq.beta;
                 TAUQ(i, b) = lq.tau;
                 if (i >= n - 1) {
@@ -172,7 +172,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                 }
                 for (int32_t c = i + 1; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
                 Real sigma_r = Real(0);
-                for (int32_t c = i + 2; c < n; ++c) sigma_r += internal::norm_squared(A(i, c, b));
+                for (int32_t c = i + 2; c < n; ++c) sigma_r += detail::norm_squared(A(i, c, b));
                 const auto rp = gebrd_detail::larfg_real_beta(A(i, i + 1, b), sycl::sqrt(sigma_r), n - (i + 1));
                 for (int32_t c = i + 2; c < n; ++c) A(i, c, b) *= rp.scale;
                 A(i, i + 1, b) = T(1);
@@ -184,7 +184,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                     for (int32_t c = i + 1; c < n; ++c) A(r, c, b) -= dot * conj(A(i, c, b));
                 }
                 for (int32_t c = i + 2; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
-                E(i, b) = internal::real_part(rp.beta);
+                E(i, b) = detail::real_part(rp.beta);
                 A(i, i + 1, b) = rp.beta;
                 TAUP(i, b) = rp.tau;
             }
@@ -207,7 +207,7 @@ Event gebrd_unblocked(Queue& ctx,
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup);
     } else {
         return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);
