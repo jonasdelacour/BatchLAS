@@ -361,9 +361,11 @@ that area's objects.
   `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` a complete library rather than a link error.
 - **An empty vendor object library is a CMake error.** "A CUDA device is present" is not enough to
   create the CUDA backend library. It requires at least one enabled CUDA math library.
-- **`batchlas_extensions_cta_obj` is the only object library built with `NO_CPU_TARGETS`.** Its kernels
-  are GPU-only (32-lane CTA and tiny tiers). Nothing warns if a source is moved out of that list; it
-  silently gains a CPU image. `batchlas_sycl_obj` keeps the CPU target, because the native-CPU image is
+- **The object libraries in `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) are built with
+  `NO_CPU_TARGETS`:** `batchlas_extensions_cta_obj`, plus `batchlas_extensions_posv_obj` and
+  `batchlas_extensions_gesv_obj` (`posv_tiny.cc`, `gesv_tiny.cc`, split out of cta to shorten its
+  device link). Their kernels are GPU-only (32-lane CTA and tiny tiers). Nothing warns if a source is
+  moved out of those lists; it silently gains a CPU image. `batchlas_sycl_obj` keeps the CPU target, because the native-CPU image is
   what makes a vendor-free CPU build complete.
 - **A source sits with the sources whose device symbols it calls.** The shared library is the
   device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body`, so they must be in

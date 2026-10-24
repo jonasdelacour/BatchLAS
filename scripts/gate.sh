@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
 # Pre-push gate on persistent trees: configure once, rebuild incrementally, full ctest, ledger diff.
 #
-#   scripts/gate.sh [--only full|vf] [--seed-from TREE] [--parallel]
+#   scripts/gate.sh [--only full|vf] [--seed-from TREE [--seed-allow-dirty]] [--parallel]
 #
 #   build-gate     full targets, preset dev-tests (the ledger tests/known-failures.txt was
 #                  recorded under it); full ctest, slow suites included; gated by
 #                  .github/ci/compare_failures.py
-#   build-gate-vf  the same plus -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF; ctest -LE slow. It has no
+#   build-gate-vf  the same plus -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF; ctest -LE slow (the heavy
+#                  case tiers included: their vendor-free arms run nowhere else). It has no
 #                  ledger (see the nightly CI job), so it gates on build success and reports
 #                  failing names, plus the diff against this tree's previous gate run.
 #
 #   --seed-from T  seed a tree that does not exist yet from built tree T (scripts/seed_build_tree.sh),
 #                  only when T's BATCHLAS_ENABLE_VENDOR_BLAS matches that tree's
+#   --seed-allow-dirty  pass --allow-dirty to the seeding (T's checkout has uncommitted files)
 #   --parallel     scripts/ctest_gpus.sh instead of serial ctest (validated on threadripper02 only)
 #
 # Environment: BATCHLAS_GATE_CUDA (default ON), BATCHLAS_GATE_PRESET (default dev-tests),
-# BATCHLAS_GATE_DIR / BATCHLAS_GATE_VF_DIR (default build-gate / build-gate-vf).
+# BATCHLAS_GATE_DIR / BATCHLAS_GATE_VF_DIR (default build-gate / build-gate-vf),
+# BATCHLAS_GATE_CXX (compiler for a new tree; default /opt/dpcpp-cuda/bin/clang++ when present).
+# Every configure forces the gate's shape (full CPU+GPU targets, every test, split libraries,
+# no offset twins), so a GPU-only or smoke seed cannot turn the gate into a smaller run.
 # The box-wide build lock (/tmp/batchlas-build.lock) is held for the whole gate, ctest included:
 # a build beside a full ctest is how the 2x4090 box was OOM-killed (docs/ci.md).
 # Exit 0 only when every selected tree built and the full tree's ledger diff is clean.
@@ -26,13 +31,15 @@ here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/.." && pwd)
 only=""
 seed_from=""
+seed_dirty=()
 parallel=0
 while [ "$#" -gt 0 ]; do
     case $1 in
         --only) only=$2; shift 2 ;;
         --seed-from) seed_from=$(cd "$2" && pwd); shift 2 ;;
+        --seed-allow-dirty) seed_dirty=(--allow-dirty); shift ;;
         --parallel) parallel=1; shift ;;
-        -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gate: unknown argument $1" >&2; exit 64 ;;
     esac
 done
@@ -43,6 +50,10 @@ full_dir=${BATCHLAS_GATE_DIR:-build-gate}
 vf_dir=${BATCHLAS_GATE_VF_DIR:-build-gate-vf}
 preset=${BATCHLAS_GATE_PRESET:-dev-tests}
 cuda=${BATCHLAS_GATE_CUDA:-ON}
+cxx=${BATCHLAS_GATE_CXX:-}
+[ -n "$cxx" ] || [ ! -x /opt/dpcpp-cuda/bin/clang++ ] || cxx=/opt/dpcpp-cuda/bin/clang++
+shape=(-DBATCHLAS_CPU_TARGET=auto -DBATCHLAS_TEST_TARGET_SET=all -DBATCHLAS_SYCL_GLOBAL_OFFSET=OFF)
+[ "$(uname -s)" = Darwin ] || shape+=(-DBATCHLAS_MONOLITHIC_LIBRARY=OFF)
 summary_dir=$full_dir; [ "$only" != vf ] || summary_dir=$vf_dir
 summary="$root/$summary_dir/gate-summary.txt"
 t_start=$(date +%s)
@@ -86,15 +97,16 @@ run_tree() {
         if [ -e "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
             note "$kind: not seeding: $dir exists without a CMakeCache.txt"
         elif [ "${have:-ON}" = "$want" ]; then
-            "$here/seed_build_tree.sh" "$seed_from" "$dir" || { note "$kind: seeding from $seed_from failed"; return 1; }
+            "$here/seed_build_tree.sh" "${seed_dirty[@]}" "$seed_from" "$dir" || { note "$kind: seeding from $seed_from failed"; return 1; }
         else
             note "$kind: not seeding from $seed_from (BATCHLAS_ENABLE_VENDOR_BLAS=${have:-ON}, need $want)"
         fi
     fi
 
+    [ -f "$dir/CMakeCache.txt" ] || [ -z "$cxx" ] || extra+=("-DCMAKE_CXX_COMPILER=$cxx")
     mkdir -p "$dir/gate"
     t0=$(date +%s)
-    if ! cmake --preset "$preset" -B "$dir" -DBATCHLAS_ENABLE_CUDA="$cuda" \
+    if ! cmake --preset "$preset" -B "$dir" -DBATCHLAS_ENABLE_CUDA="$cuda" "${shape[@]}" \
             -DBATCHLAS_LINK_DEPENDS_NO_SHARED=OFF "${extra[@]}" > "$dir/gate/configure.log" 2>&1; then
         note "$kind: CONFIGURE FAILED ($dir/gate/configure.log)"; return 1
     fi

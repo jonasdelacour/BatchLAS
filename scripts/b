@@ -130,9 +130,19 @@ for t in "${targets[@]}"; do
     if [ ! -x "$path" ]; then
         echo "b: ERROR: target $t built 'successfully' but $path is missing or not executable" >&2
         missing=1
-    elif [ -n "$(find "$tdir" -name '*.o' -newer "$path" -print -quit 2>/dev/null)" ]; then
-        echo "b: ERROR: $path is older than an object of $t: the link was skipped" >&2
-        missing=1
+    else
+        # The objects come from build.make's `<output>: <obj>.o` rules: a library links
+        # CMakeFiles/<t>_obj.dir objects, which the target's own .dir does not hold.
+        stale=""
+        while IFS= read -r o; do
+            case $o in /*) ;; *) o="$build/$o" ;; esac
+            if [ "$o" -nt "$path" ]; then stale=$o; break; fi
+        done < <(sed -n 's/^[^#][^:]*: \(.*\.o\)$/\1/p' "$tdir/build.make" 2>/dev/null)
+        [ -n "$stale" ] || stale=$(find "$tdir" -name '*.o' -newer "$path" -print -quit 2>/dev/null || true)
+        if [ -n "$stale" ]; then
+            echo "b: ERROR: $path is older than $stale, an object of $t: the link was skipped" >&2
+            missing=1
+        fi
     fi
 done
 [ "$missing" -eq 0 ] || exit 70

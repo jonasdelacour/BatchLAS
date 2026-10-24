@@ -11,9 +11,11 @@ untracked files. src/ops/<op>/** and include/batchlas/blas/functions/<op>.hh map
 test binaries (tests named <op>_*, plus aliases below), then to every op whose sources call
 it, transitively: sub-ops call the public gemm, so a gemm change also runs potrf, geqrf,
 syev and the rest. Shared code (Queue, Matrix, mempool, sg_partition, include/batchlas/util,
-src/select, src/sycl, src/util, cmake/, ...) falls back to the default target and
-`ctest -LE slow`. The regex names the quick entries and their route-pinned `_native` reruns;
---heavy adds the `<name>_heavy` case tiers (tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS).
+src/select, src/sycl, src/util, cmake/, ...) falls back to the full build and the quick tier
+`ctest -LE 'slow|heavy'`. A changed header (src/ops/**, include/**, tests/*.hh) also selects
+every test whose .cc includes it, directly or through a tests/*.hh. The regex names the quick
+entries and their route-pinned `_native` reruns; --heavy adds the `<name>_heavy` case tiers
+(tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS). Builds go through scripts/b.
 This is an iteration aid: the pre-push gate is still the full run (agent guide section 8).
 """
 
@@ -131,6 +133,52 @@ def tests_for(name, targets, seen=None):
     return found
 
 
+def test_target(stem, targets):
+    stem = "verify_tests" if stem == "verify_residuals_tests" else stem
+    return stem if stem in targets else None
+
+
+def include_spellings(path):
+    """Root-based spellings of PATH in an #include (agent guide section 12)."""
+    names = {path}
+    if path.startswith("include/"):
+        names.add(path[len("include/"):])
+    return names
+
+
+def test_includers(headers, targets):
+    """Registered tests whose tests/*.cc include one of HEADERS, also through tests/*.hh."""
+    tdir = os.path.join(REPO, "tests")
+    texts = {}
+    for f in os.listdir(tdir):
+        if f.endswith((".cc", ".hh")):
+            with open(os.path.join(tdir, f), encoding="utf-8", errors="replace") as fh:
+                texts["tests/" + f] = fh.read()
+    want, todo = set(), list(headers)
+    while todo:
+        h = todo.pop()
+        if h in want:
+            continue
+        want.add(h)
+        pat = re.compile(r"^\s*#\s*include\s*[<\"](%s)[>\"]"
+                         % "|".join(re.escape(n) for n in include_spellings(h)), re.M)
+        for name, text in texts.items():
+            if name.endswith(".hh") and name not in want and pat.search(text):
+                todo.append(name)
+    found = set()
+    for name, text in texts.items():
+        if not name.endswith(".cc"):
+            continue
+        for h in want:
+            pat = r"^\s*#\s*include\s*[<\"](%s)[>\"]" % "|".join(re.escape(n) for n in include_spellings(h))
+            if re.search(pat, text, re.M):
+                t = test_target(os.path.basename(name)[:-len(".cc")], targets)
+                if t:
+                    found.add(t)
+                break
+    return found
+
+
 def classify(path, ops, targets):
     """('shared', why) | ('ops', {op or sub-op names}) | ('tests', {binaries}) | ('ignored', why)."""
     if path.startswith(IGNORED_PREFIXES) or path.endswith(".md"):
@@ -151,8 +199,10 @@ def classify(path, ops, targets):
         return "ops", {"ormqr"}
     m = re.match(r"tests/([^/]+)\.cc$", path)
     if m:
-        stem = "verify_tests" if m.group(1) == "verify_residuals_tests" else m.group(1)
-        return ("tests", {stem}) if stem in targets else ("ignored", "not a registered test")
+        stem = test_target(m.group(1), targets)
+        return ("tests", {stem}) if stem else ("ignored", "not a registered test")
+    if re.match(r"tests/[^/]+\.hh$", path):
+        return "tests", test_includers([path], targets)
     m = re.match(r"tuned/([a-z0-9_]+)\.", path)
     if m:
         return "ops", {m.group(1), "tuned_tables"}
@@ -178,6 +228,8 @@ def affected(paths, heavy):
             binaries |= set(what)
         else:
             touched_ops |= set(what)
+            if path.endswith((".hh", ".h")):
+                binaries |= test_includers([path], targets)
     closure, todo = set(touched_ops), list(touched_ops)
     while todo:
         for caller in graph.get(todo.pop(), ()):
@@ -219,12 +271,10 @@ def main(argv):
     res["base"], res["paths"] = base, paths
     b = args.build_dir
     if res["shared"]:
-        res["build_cmd"] = "cmake --build %s -j8" % b
-        res["ctest_cmd"] = "ctest --test-dir %s -LE slow" % b
-        if args.heavy:
-            res["ctest_cmd"] += " && ctest --test-dir %s -L heavy" % b
+        res["build_cmd"] = "BATCHLAS_FULL_BUILD=1 scripts/b -B %s" % b
+        res["ctest_cmd"] = "ctest --test-dir %s -LE %s" % (b, "slow" if args.heavy else "'slow|heavy'")
     elif res["targets"]:
-        res["build_cmd"] = "cmake --build %s --target %s -j8" % (b, " ".join(res["targets"]))
+        res["build_cmd"] = "scripts/b -B %s %s" % (b, " ".join(res["targets"]))
         res["ctest_cmd"] = "ctest --test-dir %s -R '%s' --output-on-failure" % (b, res["ctest_regex"])
     else:
         res["build_cmd"] = res["ctest_cmd"] = ""

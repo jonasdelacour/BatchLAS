@@ -55,7 +55,21 @@ CASES = [
     ("cmake --build --preset dev", PASS),           # build preset lists targets
     ("cmake --build --preset dev-tests", BLOCK),    # builds everything
     ("scripts/gate.sh --only full", PASS),
-    ("sh scripts/gate.sh; cmake --build build-gate", PASS),
+    ("sh scripts/gate.sh; cmake --build build-gate", BLOCK),
+    ("cat scripts/gate.sh; cmake --build build -j8", BLOCK),
+    ("cmake --build build --target all -j8", BLOCK),
+    ("cmake --build build --target -j8", BLOCK),
+    ("cmake --build build --target stedc_tests all -j8", BLOCK),
+    ("cmake --build build --target stedc_tests posv_tests -j8", PASS),
+    ("export BATCHLAS_FULL_BUILD=1; cmake --build build -j8", PASS),
+    ("BATCHLAS_FULL_BUILD=1 true; cmake --build build -j8", BLOCK),
+    ("echo BATCHLAS_FULL_BUILD=1; cmake --build build", BLOCK),
+    # heredoc bodies are text, unless a shell reads them
+    ("cat > /tmp/x.sh <<'EOF2'\ncmake --build build\nEOF2", PASS),
+    ("cat > /tmp/x.sh <<EOF\nmake -j\ncmake --build build -j $(nproc)\nEOF\nls", PASS),
+    ("cat <<-EOF > notes\n\tmake -j20\n\tEOF\nmake -j20", BLOCK),
+    ("bash <<'EOF'\ncmake --build build\nEOF", BLOCK),
+    ("cat <<EOF | sh\nmake -j32\nEOF", BLOCK),
     # not builds
     ("scripts/b stedc_tests", PASS),
     ("BATCHLAS_FULL_BUILD=1 scripts/b -B build-gate", PASS),

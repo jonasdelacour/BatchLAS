@@ -50,7 +50,8 @@ constexpr int kWorstRegsPerThread = 255;
 // The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =
 // 8,192 of its 16,384. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
-              "re-run scripts/register_probe.sh before raising the tiny work-group size");
+              "re-run scripts/register_probe.sh out.log '' batchlas_extensions_posv "
+              "before raising the tiny work-group size");
 
 // The same flat compile-time ceiling potrf_tiny carries, for the same reason: the tier
 // allocates no local memory, so no budget walk applies to it.

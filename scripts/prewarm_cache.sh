@@ -94,22 +94,27 @@ for spec in $trees; do
     args=(-S . -B "$name")
     [ -z "$preset" ] || args=(--preset "$preset" -B "$name")
     [ -z "$cxx" ] || args+=("-DCMAKE_CXX_COMPILER=$cxx")
+    # Logs inside the build tree, which is ignored: an untracked file at the worktree root
+    # would make scripts/seed_build_tree.sh refuse this checkout as a dirty seed.
+    mkdir -p "$name"
+    cfg_log="$dir/$name/prewarm-configure.log"
+    err_log="$dir/$name/prewarm-build.err"
     log "configure $name ${preset:+(preset $preset)} at ${rev:0:12}"
-    if ! nice -n 19 cmake "${args[@]}" > "$dir/$name.configure.log" 2>&1; then
-        log "configure of $name failed: $dir/$name.configure.log"; status=1; continue
+    if ! nice -n 19 cmake "${args[@]}" > "$cfg_log" 2>&1; then
+        log "configure of $name failed: $cfg_log"; status=1; continue
     fi
-    if ! grep -q 'Using SYCL targets:.*nvidia_gpu' "$dir/$name.configure.log" && [ "${BATCHLAS_PREWARM_ALLOW_CPU:-0}" != 1 ]; then
-        log "$name configured without a CUDA target (see $dir/$name.configure.log); not warming a cache nobody uses"
+    if ! grep -q 'Using SYCL targets:.*nvidia_gpu' "$cfg_log" && [ "${BATCHLAS_PREWARM_ALLOW_CPU:-0}" != 1 ]; then
+        log "$name configured without a CUDA target (see $cfg_log); not warming a cache nobody uses"
         status=1; continue
     fi
     log "build $name (-j$jobs, nice 19)"
     rc=0
     BATCHLAS_FULL_BUILD=1 BATCHLAS_BUILD_JOBS=$jobs BATCHLAS_BUILD_LOCK_WAIT=0 BATCHLAS_MIN_MEM_GB=$min_gb \
-        BATCHLAS_MEM_WAIT_MAX=0 nice -n 19 "$here/b" -B "$name" > /dev/null 2>"$dir/$name.build.err" || rc=$?
+        BATCHLAS_MEM_WAIT_MAX=0 nice -n 19 "$here/b" -B "$name" > /dev/null 2>"$err_log" || rc=$?
     if [ "$rc" -eq 75 ] || [ "$rc" -eq 69 ]; then
         log "build of $name deferred (lock busy or memory short); will retry next run"; exit 0
     elif [ "$rc" -ne 0 ]; then
-        log "build of $name failed (exit $rc): $(tail -n 1 "$dir/$name.build.err")"; status=1
+        log "build of $name failed (exit $rc): $(tail -n 1 "$err_log")"; status=1
     fi
 done
 

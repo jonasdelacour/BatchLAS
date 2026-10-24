@@ -148,14 +148,16 @@ cmake -B build .
 cmake --build build --target stedc_tests -j8
 ctest --test-dir build -R '^stedc_tests$' --output-on-failure
 
-# Before pushing, build and run everything. The final gate is a full-target
-# tree (not BATCHLAS_CPU_TARGET=none), plus the vendor-free tree
-# (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF) built only now. One test per GPU slot (§8)
-# where ctest_gpus.sh has been validated (threadripper02); on the 2x4090 box, and
-# wherever configure printed "GPU test resources: none", keep it serial.
-cmake --build build -j8
-scripts/ctest_gpus.sh --test-dir build      # threadripper02
-ctest --test-dir build                       # 2x4090 box (OOM history, docs/ci.md)
+# Before pushing, build and run everything with scripts/gate.sh, never on an
+# iteration tree such as build/. Its two persistent trees: build-gate (full targets,
+# full ctest, ledger diff) and build-gate-vf (-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF,
+# -LE slow), both with BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF, so every executable is
+# relinked against the .so it tests (that option is ON, and executables are not
+# relinked, in every other tree). One test per GPU slot (--parallel, §8) only where
+# ctest_gpus.sh has been validated (threadripper02); on the 2x4090 box, and wherever
+# configure printed "GPU test resources: none", keep it serial (the default).
+scripts/gate.sh                  # 2x4090 box (OOM history, docs/ci.md)
+scripts/gate.sh --parallel       # threadripper02
 
 # Also before pushing, if you touched cmake/, include/ or the install rules:
 # the packaging gate. These are the same checks CI runs (.github/workflows/ci.yml).
@@ -309,10 +311,15 @@ sometimes running): fresh tree, no cache, 284-334 s.
 ## 8. Testing Policy
 
 - **Do not run the full ctest by default.** Scope to what you changed: one case
-  `./build/tests/X --gtest_filter=...` -> one binary `ctest -R '^X$'` (`-R` is a substring regex, so
-  anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> `-LE slow` -> full only
-  before pushing or after touching shared code (`Queue`, `Matrix`/`MatrixView`, the mempool,
-  `sg_partition`, `include/batchlas/util`).
+  `./build/tests/X --gtest_filter=...` -> one binary `ctest -R '^X(_heavy)?$'` (`-R` is a substring
+  regex, so anchor it) -> one component `-L util|blas|ortho|tridiag|eig|sparse` -> the quick tier
+  `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
+  (`Queue`, `Matrix`/`MatrixView`, the mempool, `sg_partition`, `include/batchlas/util`).
+  `scripts/affected_tests.py` maps a diff to the binaries and prints the `scripts/b` and ctest lines.
+- **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` (`tests/CMakeLists.txt`) is two ctest entries:
+  `X` runs its quick cases and `X_heavy` (label `heavy`) its saturating-batch race guards and
+  AutoReads table sweeps. `ctest -R '^X$'` is the quick half only; before claiming a binary green,
+  run `X_heavy` too. `-LE slow` includes every heavy entry.
 - **On threadripper02, run multi-test scopes through `scripts/ctest_gpus.sh`** (same arguments as
   ctest, e.g. `scripts/ctest_gpus.sh -LE slow`; `--test-dir <build>` first, default `build/`).
   - Configure writes `<build>/ctest_resources.json` from `nvidia-smi --list-gpus`

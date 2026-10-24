@@ -113,10 +113,16 @@ endif()
 # A test or benchmark executable is not relinked when only a BatchLAS .so it links changed:
 # every library edit used to relink ~150 executables. The library still builds first.
 option(BATCHLAS_LINK_DEPENDS_NO_SHARED
-    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable that fails loudly at load time ('undefined symbol') instead of relinking; turn OFF for gate/CI trees"
+    "Do not relink executables when only a shared library they link changed (faster dev loop). Trade-off: a symbol removed or renamed in a .so leaves a stale executable, which fails at load time ('undefined symbol') instead of relinking (in-tree executables are linked -z now for that); scripts/gate.sh turns it OFF"
     ON)
 if(BATCHLAS_LINK_DEPENDS_NO_SHARED)
     set(CMAKE_LINK_DEPENDS_NO_SHARED ON)
+    # Lazy binding would find a symbol missing from a .so only when the call runs, and a
+    # case that never runs it (skipped, filtered, another tier) would stay green. BIND_NOW
+    # makes every executable resolve all of its own references when it is loaded.
+    if(UNIX AND NOT APPLE)
+        add_link_options("$<$<STREQUAL:$<TARGET_PROPERTY:TYPE>,EXECUTABLE>:-Wl,-z,now>")
+    endif()
 else()
     set(CMAKE_LINK_DEPENDS_NO_SHARED OFF)
 endif()

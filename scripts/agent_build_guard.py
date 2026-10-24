@@ -5,9 +5,10 @@ Blocks (exit 2, reason on stderr):
   * `cmake --build` / `make` with -j/--parallel/--jobs above the cap (8), with no number
     (unbounded), or with a computed value such as -j$(nproc); also CMAKE_BUILD_PARALLEL_LEVEL or
     MAKEFLAGS above the cap on the same command line;
-  * an untargeted `cmake --build <dir>` (no --target/-t; a --preset whose build preset lists
-    targets counts as targeted) unless the command carries BATCHLAS_FULL_BUILD=1 or runs
-    scripts/gate.sh.
+  * an untargeted `cmake --build <dir>` (no --target/-t, or only `all`; a --preset whose build
+    preset lists targets counts as targeted) unless that simple command carries
+    BATCHLAS_FULL_BUILD=1, or an earlier `export BATCHLAS_FULL_BUILD=1` on the line set it.
+Heredoc bodies are text, not commands, unless the heredoc feeds a shell (bash <<EOF).
 Everything else passes (exit 0), and so does anything this script fails to parse.
 The cap is BATCHLAS_HOOK_MAX_JOBS in the hook's own environment (e.g. settings.json "env" on a
 box with measured headroom), never something the command line can set.
@@ -39,6 +40,30 @@ def max_jobs():
         return int(os.environ.get("BATCHLAS_HOOK_MAX_JOBS", "8"))
     except ValueError:
         return 8
+
+
+HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+SHELLS = re.compile(r"(^|[\s;&|(/])(ba|da|z)?sh([\s;&|)]|$)")
+
+
+def split_heredocs(command):
+    """(command with heredoc bodies removed, [bodies fed to a shell])."""
+    lines, out, shell_bodies, i = command.split("\n"), [], [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        for m in HEREDOC.finditer(line):
+            strip_tabs, word, body = m.group(1) == "-", m.group(3), []
+            while i < len(lines):
+                end = lines[i].lstrip("\t") if strip_tabs else lines[i]
+                i += 1
+                if end == word:
+                    break
+                body.append(lines[i - 1])
+            if SHELLS.search(line):
+                shell_bodies.append("\n".join(body))
+    return "\n".join(out), shell_bodies
 
 
 def tokenize(command):
@@ -148,7 +173,7 @@ def preset_has_targets(name):
 
 def scan_cmake_build(args, cap, full_ok):
     """ARGS are the words after `cmake`; returns a reason or None."""
-    targeted = False
+    targets = []
     preset = None
     native = []
     i = 0
@@ -176,8 +201,12 @@ def scan_cmake_build(args, cap, full_ok):
             err = check_jobs(jobs_value(a[2:]), "cmake --build " + a, cap)
             if err:
                 return err
-        elif a in ("--target", "-t") or a.startswith("--target="):
-            targeted = True
+        elif a.startswith("--target="):
+            targets.append(a.split("=", 1)[1])
+        elif a in ("--target", "-t"):
+            while i + 1 < len(args) and not args[i + 1].startswith("-"):
+                i += 1
+                targets.append(args[i])
         elif a == "--preset" and i + 1 < len(args):
             preset = args[i + 1]
         elif a.startswith("--preset="):
@@ -186,11 +215,13 @@ def scan_cmake_build(args, cap, full_ok):
     err = scan_make_args(native, cap)
     if err:
         return err
+    targeted = bool(targets) and "all" not in targets
     if preset and preset_has_targets(preset):
         targeted = True
     if not targeted and not full_ok:
         return ("untargeted `cmake --build` builds the library AND every test and benchmark "
-                "executable (~150 links); name the targets you will run (--target X), or set "
+                "executable (~150 links, and so does --target all); name the targets you will "
+                "run (--target X), or set "
                 "BATCHLAS_FULL_BUILD=1 if you really mean everything")
     return None
 
@@ -210,22 +241,30 @@ def env_parallel_reason(assigns, cap):
 
 
 def reason_for(command, cap, depth=0):
-    full_ok = "BATCHLAS_FULL_BUILD=1" in command or re.search(r"(^|[\s/])gate\.sh\b", command)
+    command, shell_bodies = split_heredocs(command)
+    if depth < 3:
+        for body in shell_bodies:
+            err = reason_for(body, cap, depth + 1)
+            if err:
+                return err
     try:
         tokens = tokenize(command)
     except ValueError:
         return None
     all_assigns = [t for t in tokens if ASSIGN.match(t)]
+    exported_full = False
     for words in simple_commands(tokens):
         assigns, rest = strip_prefix(words)
         if not rest:
             continue
         base = os.path.basename(rest[0])
         if base == "export":
+            exported_full |= "BATCHLAS_FULL_BUILD=1" in rest[1:]
             continue
         is_build = False
         if base == "cmake" and "--build" in rest[1:]:
             is_build = True
+            full_ok = exported_full or "BATCHLAS_FULL_BUILD=1" in assigns
             err = scan_cmake_build(rest[1:], cap, full_ok)
         elif base in ("make", "gmake"):
             is_build = True

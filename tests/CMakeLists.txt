@@ -167,6 +167,7 @@ endif()
 #   ctest -LE slow          # everything except the known-expensive binaries
 #   ctest -L tridiag -LE slow
 #   ctest -L heavy          # only the <name>_heavy case tiers (BATCHLAS_HEAVY_TESTS below)
+#   ctest -LE 'slow|heavy'  # the quick iteration tier: -LE slow without the heavy cases
 #
 # COMPONENT: which part of the library a test covers. Pick the label matching
 # the subsystem you changed; if you touched a shared low-level piece (Queue,
@@ -223,13 +224,16 @@ set(BATCHLAS_SLOW_TESTS
 #   sytrd_sb2st_hh_tests   5.8 s, 9 tests
 
 # Case-level tiers. A binary in BATCHLAS_HEAVY_TESTS is registered twice: <name> runs
-# --gtest_filter=-<HEAVY> and <name>_heavy (labels slow;heavy) runs --gtest_filter=<HEAVY>.
+# --gtest_filter=-<HEAVY> and <name>_heavy (label heavy) runs --gtest_filter=<HEAVY>.
 # One pattern list feeds both filters, so the two are exact complements by construction.
 # The heavy tier holds the saturating-batch race guards (agent guide section 8 rule 5) and
 # the AutoReads table-routing guards: it is part of the pre-push gate, never optional.
-# Measured (2x RTX 4090, serial, 2026-10-23 full run): these patterns move 1463 s of
-# case time out of `-LE slow`, which falls from ~1990 s to ~430 s (~335 s without the
-# route-native reruns); gemm_candidates_tests keeps 43 s of its 1057 s.
+# Deliberately NOT labelled slow: every `-LE slow` run (PR CI, the vendor-free trees,
+# route_diff.sh, batchlas_coverage) keeps the cases it ran before the split, and only a
+# run that opts in with `-LE 'slow|heavy'` drops them.
+# Measured (2x RTX 4090, serial, 2026-10-23 full run): these patterns move 1463 s of case
+# time out of the quick tier, which is ~430 s against ~1990 s for `-LE slow` (~335 s
+# without the route-native reruns); gemm_candidates_tests keeps 43 s of its 1057 s.
 set(BATCHLAS_HEAVY_TEST_PATTERNS
     *Saturating*
     *AutoReads*
@@ -444,8 +448,13 @@ function(batchlas_add_test_target test_name)
         # tests/ctest_gpu_env.sh renames it from BATCHLAS_GTEST_XML_STEM, so it needs the
         # launcher even without GPU slots. Not on Apple: SIP strips DYLD_* through /bin/sh.
         set(_heavy_cmd ${_cmd})
+        set(_heavy_env_mod "")
         if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
             set(_heavy_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
+        elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
+            # No sh: append the stem to a directory-mode GTEST_OUTPUT in ctest itself. A
+            # single-file or unset GTEST_OUTPUT gets a value gtest rejects with a warning.
+            set(_heavy_env_mod "GTEST_OUTPUT=string_append:${test_name}_heavy.xml")
         endif()
         add_test(NAME ${test_name}_heavy COMMAND ${_heavy_cmd} "--gtest_filter=${BATCHLAS_HEAVY_TEST_FILTER}")
         list(APPEND _entries ${test_name}_heavy)
@@ -484,13 +493,16 @@ function(batchlas_add_test_target test_name)
         set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "${_env}")
     endif()
     if(_heavy)
-        set(_heavy_labels ${_labels} slow heavy)
+        set(_heavy_labels ${_labels} heavy)
         list(REMOVE_DUPLICATES _heavy_labels)
         list(APPEND _env "BATCHLAS_GTEST_XML_STEM=${test_name}_heavy")
         set_tests_properties(${test_name}_heavy PROPERTIES
             LABELS "${_heavy_labels}"
             ENVIRONMENT "${_env}"
             SKIP_REGULAR_EXPRESSION "Running 0 tests from 0 test suites")
+        if(_heavy_env_mod)
+            set_tests_properties(${test_name}_heavy PROPERTIES ENVIRONMENT_MODIFICATION "${_heavy_env_mod}")
+        endif()
     endif()
 endfunction()
 

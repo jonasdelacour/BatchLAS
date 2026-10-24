@@ -436,6 +436,8 @@ def self_test():
                 fh.write(_heavy_junit(base_status, heavy_status))
         heavy = ["--gtest-dir", gdir, "--known", hknown]
         cases += [
+            (["--known", hknown, "--junit", os.path.join(tmp, "heavy_run.xml")], 0,
+             "with no gtest layer a gemm_x:: ledger line coarse-matches a failing gemm_x_heavy"),
             (heavy + ["--junit", os.path.join(tmp, "heavy_run.xml")], 0,
              "a gemm_x_heavy case matches its gemm_x:: ledger line"),
             (heavy + ["--junit", os.path.join(tmp, "heavy_fail.xml")], 1,
@@ -585,6 +587,12 @@ def main(argv):
             #    into a binary-level one, which is what this ledger exists to
             #    prevent. Handled at the call site, where args are in scope.
             coarse = by_ident.get(binary)
+            # A case in a <name>_heavy tier is still ledgered as <name>::Case: with no gtest
+            # layer the only failing ctest entry it can match is the tier's.
+            heavy = by_ident.get(binary + HEAVY_SUFFIX)
+            if (coarse is None or coarse.outcome != FAILED) and heavy is not None \
+                    and heavy.outcome == FAILED:
+                coarse, binary = heavy, binary + HEAVY_SUFFIX
             if coarse is not None and coarse.outcome == FAILED and coarse.ran \
                     and _is_process_death(coarse.detail):
                 new_failures.append(

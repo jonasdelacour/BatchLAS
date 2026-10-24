@@ -55,7 +55,8 @@ static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSi
 // evidence: docs/perf/lu.md#lu-p2-the-register-bound-is-assumed-not-probed
 constexpr int kWorstRegsPerThread = 224;   // per SUB-PARTITION: 32 x 224 = 7,168 of 16,384
 static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
-              "re-run scripts/register_probe.sh before raising the tiny work-group size");
+              "re-run scripts/register_probe.sh out.log '' batchlas_extensions_gesv "
+              "before raising the tiny work-group size");
 
 // cdouble stops at 16 for the same reason getrf_tiny does: 32 rows of a 16-byte scalar
 // is already 128 registers before the RHS. evidence: docs/perf/lu.md#d3-why-cdouble-stops-at-n16
