@@ -16,6 +16,8 @@
 #                                            e.g. the consumer_package_tests script)
 #   <ctest-test>::<Suite>.<Case>             one gtest case inside that test's binary
 #   ...either form may carry  ;type_param=<exact gtest XML type_param attribute>
+#   A case run by a <name>_heavy entry (tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS) is still
+#   listed under <name>: compare_failures.py folds <name>_heavy.xml back onto the executable.
 #   '#' starts a comment; blank lines ignored.
 #
 # WHY GTEST-CASE GRANULARITY AND NOT CTEST-TEST GRANULARITY

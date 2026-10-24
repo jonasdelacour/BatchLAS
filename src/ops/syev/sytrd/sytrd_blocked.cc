@@ -822,6 +822,7 @@ size_t sytrd_blocked_buffer_size(Queue& ctx,
                                  int32_t block_size) {
     validate_sytrd_dims(a, d, e, tau);
 
+    if (block_size == 0) block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM;  // the header default
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 8:
@@ -852,6 +853,7 @@ Event sytrd_blocked(Queue& ctx,
         throw batchlas::invalid_argument("sytrd_blocked: requires an in-order Queue");
     }
 
+    if (block_size == 0) block_size = tuning::SYTRD_BLOCK_SIZE_MEDIUM;  // the header default
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 8:

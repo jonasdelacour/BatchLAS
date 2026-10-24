@@ -647,7 +647,7 @@ also uses a literal the tuning parameter does not reach (see [stedc: open debts]
 | small-n bake-off (phase A), both precisions (973 measurements) | `benchmarks/results/syev_retune_phaseA.jsonl` (Git LFS) |
 | syev-context block-size sweep (phase B), float | `benchmarks/results/syev_retune_phaseB_float.jsonl` (Git LFS) |
 | driver for both, with its resource caps | a one-off driver, removed |
-| builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `build/presets/cuda` |
+| builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `cuda` (`build-cuda`; then `build/presets/cuda`) |
 | commits | `80737301` plan, `afc8ae35` baselines, `c42e5ce9`, `8c24626f` WP4, `405b4120` WP3, `f28a3fcd` WP1, `af8768b0` / `be327f5b` results (PR 68); `73eb5510` per-type routing (PR 65); `924b3a59` constant retune |
 
 Phase B is complete except n = 256; only the float file is committed (double phase-B figures appear only on this

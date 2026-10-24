@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Build wrapper for agents and humans: named targets, a -j cap, one build per box.
+#
+#   scripts/b [-B builddir] [-j N] target...      (default builddir: ./build)
+#   BATCHLAS_FULL_BUILD=1 scripts/b [-B builddir]  (every target; the gate does this)
+#
+# Environment:
+#   BATCHLAS_BUILD_JOBS=N       parallelism (default 8; capped at 8 unless BATCHLAS_ALLOW_WIDE=1)
+#   BATCHLAS_MIN_MEM_GB=N       wait while MemAvailable is below this (default 16)
+#   BATCHLAS_MEM_WAIT_MAX=S     give up after S seconds of waiting for memory (default 1800; 0 = refuse)
+#   BATCHLAS_BUILD_LOCK_WAIT=0  exit 75 at once instead of queueing behind another build
+#   BATCHLAS_BUILD_LOCK=PATH    the box-wide lock (default /tmp/batchlas-build.lock)
+#
+# Exit codes: the build's own status; 64 usage; 69 not enough memory; 70 a requested
+# executable/library is missing after a "successful" build; 75 lock busy (with LOCK_WAIT=0).
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+set -eu
+set -o pipefail
+
+usage() {
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2
+    exit 64
+}
+
+build=build
+jobs=${BATCHLAS_BUILD_JOBS:-8}
+targets=()
+while [ "$#" -gt 0 ]; do
+    case $1 in
+        -B) [ "$#" -ge 2 ] || usage; build=$2; shift 2 ;;
+        -B*) build=${1#-B}; shift ;;
+        -j) [ "$#" -ge 2 ] || usage; jobs=$2; shift 2 ;;
+        -j*) jobs=${1#-j}; shift ;;
+        -h|--help) usage ;;
+        --) shift; targets+=("$@"); break ;;
+        -*) echo "b: unknown option $1" >&2; usage ;;
+        *) targets+=("$1"); shift ;;
+    esac
+done
+
+case $jobs in ''|*[!0-9]*|0) echo "b: -j / BATCHLAS_BUILD_JOBS must be a positive integer, got '$jobs'" >&2; exit 64 ;; esac
+if [ "$jobs" -gt 8 ] && [ "${BATCHLAS_ALLOW_WIDE:-0}" != 1 ]; then
+    echo "b: capping -j$jobs at -j8 (heavy SYCL TUs exceed 14 GB each; BATCHLAS_ALLOW_WIDE=1 overrides)" >&2
+    jobs=8
+fi
+
+if [ "${#targets[@]}" -eq 0 ] && [ "${BATCHLAS_FULL_BUILD:-0}" != 1 ]; then
+    cat >&2 <<'EOF'
+b: no target given. A plain build links the library AND every test and benchmark
+executable (~150 links), most of which you are not about to run.
+  scripts/b stedc_tests                 # the library plus one test binary
+  scripts/b -B build-x batchlas_components
+Set BATCHLAS_FULL_BUILD=1 to really build everything (the pre-push gate: scripts/gate.sh).
+EOF
+    exit 64
+fi
+
+if [ ! -f "$build/CMakeCache.txt" ]; then
+    echo "b: $build is not a configured CMake build tree (no CMakeCache.txt)" >&2
+    exit 64
+fi
+build=$(cd "$build" && pwd)
+
+case ${LIBRARY_PATH:-} in
+    *hpc_sdk*|*nvhpc*)
+        echo "b: unsetting LIBRARY_PATH (NVIDIA HPC SDK libgomp poisons -fopenmp links; agent guide Known Pitfalls)" >&2
+        unset LIBRARY_PATH ;;
+esac
+
+lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
+info="$lock.info"
+me="pid $$ user $(id -un) since $(date '+%F %T') building '${targets[*]:-<everything>}' in $build"
+if [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
+    [ -e "$lock" ] || { : > "$lock" && chmod 666 "$lock"; } 2>/dev/null || true
+    exec 9<"$lock"
+    if ! flock -n 9; then
+        holder=$(cat "$info" 2>/dev/null || echo "unknown holder")
+        if [ "${BATCHLAS_BUILD_LOCK_WAIT:-1}" = 0 ]; then
+            echo "b: another build holds $lock ($holder); not waiting (BATCHLAS_BUILD_LOCK_WAIT=0)" >&2
+            exit 75
+        fi
+        echo "b: waiting for $lock, held by: $holder" >&2
+        waited=$(date +%s)
+        flock 9
+        echo "b: got the lock after $(( $(date +%s) - waited )) s" >&2
+    fi
+    { printf '%s\n' "$me" > "$info" && chmod 666 "$info"; } 2>/dev/null || true
+fi
+
+mem_avail_gb() {
+    awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo
+}
+min_gb=${BATCHLAS_MIN_MEM_GB:-16}
+max_wait=${BATCHLAS_MEM_WAIT_MAX:-1800}
+start_wait=$(date +%s)
+while [ "$(mem_avail_gb)" -lt "$min_gb" ]; do
+    elapsed=$(( $(date +%s) - start_wait ))
+    if [ "$elapsed" -ge "$max_wait" ]; then
+        echo "b: MemAvailable $(mem_avail_gb) GB < ${min_gb} GB after ${elapsed} s; refusing (zero swap: an OOM kill takes the session with it)" >&2
+        exit 69
+    fi
+    echo "b: MemAvailable $(mem_avail_gb) GB < ${min_gb} GB; waiting (largest users below)" >&2
+    ps -eo user,rss,comm --sort=-rss | head -n 6 >&2 || true
+    sleep 30
+done
+
+mkdir -p "$build/logs"
+tag=$(printf '%s' "${targets[*]:-all}" | tr -c 'A-Za-z0-9_.-' '+' | cut -c1-80)
+log="$build/logs/$(date +%Y%m%d-%H%M%S)-$tag.log"
+t0=$(date +%s)
+cmd=(cmake --build "$build" -j "$jobs")
+[ "${#targets[@]}" -eq 0 ] || cmd+=(--target "${targets[@]}")
+echo "b: ${cmd[*]}   (log: $log)" >&2
+rc=0
+"${cmd[@]}" 2>&1 | tee "$log" || rc=$?
+t1=$(date +%s)
+printf 'b: exit %s after %dm%02ds (%s)\n' "$rc" $(( (t1 - t0) / 60 )) $(( (t1 - t0) % 60 )) "$log" >&2
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# cmake --build with several targets can exit 0 and skip links (agent guide section 7).
+missing=0
+for t in "${targets[@]}"; do
+    linkfile=$(find "$build" -path "*/CMakeFiles/$t.dir/link.txt" -print -quit 2>/dev/null || true)
+    [ -n "$linkfile" ] || continue
+    tdir=${linkfile%/link.txt}
+    outdir=${tdir%/CMakeFiles/*}
+    out=$(tr ' ' '\n' < "$linkfile" | grep -A1 -x -- '-o' | sed -n 2p || true)
+    [ -n "$out" ] || continue
+    case $out in /*) path=$out ;; *) path="$outdir/$out" ;; esac
+    if [ ! -x "$path" ]; then
+        echo "b: ERROR: target $t built 'successfully' but $path is missing or not executable" >&2
+        missing=1
+    else
+        # The objects come from build.make's `<output>: <obj>.o` rules: a library links
+        # CMakeFiles/<t>_obj.dir objects, which the target's own .dir does not hold.
+        stale=""
+        while IFS= read -r o; do
+            case $o in /*) ;; *) o="$build/$o" ;; esac
+            if [ "$o" -nt "$path" ]; then stale=$o; break; fi
+        done < <(sed -n 's/^[^#][^:]*: \(.*\.o\)$/\1/p' "$tdir/build.make" 2>/dev/null)
+        [ -n "$stale" ] || stale=$(find "$tdir" -name '*.o' -newer "$path" -print -quit 2>/dev/null || true)
+        if [ -n "$stale" ]; then
+            echo "b: ERROR: $path is older than $stale, an object of $t: the link was skipped" >&2
+            missing=1
+        fi
+    fi
+done
+[ "$missing" -eq 0 ] || exit 70

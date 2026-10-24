@@ -8,6 +8,7 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/backend_config.h>
+#include <batchlas/tuning_params.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>

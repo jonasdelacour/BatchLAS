@@ -23,6 +23,7 @@
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/util/resident_capacity.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <algorithm>
 #include <cctype>
@@ -49,6 +50,7 @@ using namespace batchlas;
 namespace {
 
 namespace og = batchlas::ops::gemm;
+namespace ub = test_utils::usm_bulk;
 using C = og::GemmChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -431,12 +433,22 @@ struct Problem {
     UnifiedVector<T> mem;
     UnifiedVector<T> mem0;
     UnifiedVector<T*> pa, pb, pc;
+    ub::Pristine<T> pristine;  // mem0's contents, run-length on the host
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, pa.data()}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch, pb.data()}; }
     MVof<T> Cv() { return {mem.data() + c.off, c.rows, c.cols, c.ld, c.stride, s.batch, pc.data()}; }
     static std::size_t at(const Region& r, int it, int i, int j) {
         return r.off + std::size_t(it) * r.stride + std::size_t(j) * r.ld + i;
+    }
+    // The first element of mem (`got`: its host copy, else downloaded) not bit-identical to
+    // mem0's, C's m x n of every item skipped when skip_c.
+    std::optional<std::size_t> first_change(bool skip_c, const T* got = nullptr) const {
+        using H = typename ub::Pristine<T>::Hole;
+        if (!got) got = ub::download(mem.data(), mem.size(), 0);
+        std::optional<H> hole;
+        if (skip_c) hole = H{c.off, std::size_t(c.ld), std::size_t(s.m), std::size_t(s.n)};
+        return pristine.first_change(got, mem.size(), hole);
     }
 };
 
@@ -445,28 +457,29 @@ T poison() {
     return MatrixView<T, MatrixFormat::Dense>::make(RealOf<T>(-999), RealOf<T>(777));
 }
 
+// segs: (offset, batch stride) of each region of whole items, ascending. Only the representatives
+// draw, in the order of one pass over the batch; the rest of the batch is copied from them.
 template <typename T>
-void init(Problem<T>& p, std::size_t total) {
+void init(Problem<T>& p, std::size_t total, std::initializer_list<std::pair<std::size_t, std::size_t>> segs) {
     using R = RealOf<T>;
     const Spec& s = p.s;
     p.alpha = MatrixView<T, MatrixFormat::Dense>::make(R(1.25), R(-0.5));
     p.beta = s.beta_zero ? T(0) : MatrixView<T, MatrixFormat::Dense>::make(R(-0.75), R(0.25));
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    p.mem = UnifiedVector<T>(total, s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>());
+    const T fill = s.nan_poison ? MatrixView<T, MatrixFormat::Dense>::make(nan, nan) : poison<T>();
     p.pa = UnifiedVector<T*>(s.batch, nullptr);
     p.pb = UnifiedVector<T*>(s.batch, nullptr);
     p.pc = UnifiedVector<T*>(s.batch, nullptr);
+    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), fill, segs);
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
-    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    for (int it = 0; it < s.batch; ++it) {
-        const int r = it % reps;
+    for (int it = 0; it < reps; ++it) {
         auto put = [&](const Region& g, bool is_c) {
             for (int j = 0; j < g.cols; ++j)
                 for (int i = 0; i < g.rows; ++i) {
-                    T& v = p.mem[Problem<T>::at(g, it, i, j)];
-                    if (it != r) v = p.mem[Problem<T>::at(g, r, i, j)];
-                    else if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
+                    T& v = p.pristine.at(Problem<T>::at(g, it, i, j));
+                    if (is_c && s.nan_c) v = MatrixView<T, MatrixFormat::Dense>::make(nan, nan);
                     else {
                         const auto re = u(gen), im = u(gen);
                         v = MatrixView<T, MatrixFormat::Dense>::make(re, im);
@@ -477,7 +490,16 @@ void init(Problem<T>& p, std::size_t total) {
         if (p.b.off != p.a.off) put(p.b, false);
         put(p.c, true);
     }
+    p.mem = UnifiedVector<T>(total);
+    p.pristine.write(p.mem.data());
     p.mem0 = p.mem;
+}
+
+// The first element at which two equally sized UnifiedVectors differ bit for bit.
+template <typename T>
+std::optional<std::size_t> first_diff(const UnifiedVector<T>& x, const UnifiedVector<T>& y) {
+    if (x.size() != y.size()) return std::min(x.size(), y.size());
+    return ub::first_diff(ub::download(x.data(), x.size(), 0), ub::download(y.data(), y.size(), 1), x.size());
 }
 
 std::size_t up4(std::size_t v) { return (v + 3) / 4 * 4; }
@@ -503,7 +525,8 @@ Problem<T> make_problem(const Spec& s) {
     p.a = region(8, ar, ac, s.layout);
     p.b = region(end(p.a), br, bc, s.layout_b.value_or(s.layout));
     p.c = region(end(p.b), s.m, s.n, s.layout);
-    init(p, end(p.c) + 4);
+    init(p, end(p.c) + 4,
+         {{p.a.off, std::size_t(p.a.stride)}, {p.b.off, std::size_t(p.b.stride)}, {p.c.off, std::size_t(p.c.stride)}});
     return p;
 }
 
@@ -543,7 +566,7 @@ Problem<T> make_panel(Spec s, int parent) {
     p.b = s.tb == kN ? u12 : l21;
     p.c = {std::size_t(s.k) * ld + r0 + s.k, s.m, s.n, ld, stride};          // A22
     EXPECT_EQ(s.m, s.n) << "a panel update is square";
-    init(p, std::size_t(stride) * s.batch);
+    init(p, std::size_t(stride) * s.batch, {{0, std::size_t(stride)}});
     return p;
 }
 
@@ -577,19 +600,19 @@ void expect_gemm(Queue& ctx, const Problem<T>& p, const std::string& what) {
         items = {0, 1, s.batch / 2, s.batch - 1};
     }
     ASSERT_TRUE(items_ok(ctx, p, items)) << what;
-    std::vector<char> inc(p.mem.size(), 0);
-    for (int it = 0; it < s.batch; ++it)
-        for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.m; ++i) inc[Problem<T>::at(p.c, it, i, j)] = 1;
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    const auto moved = p.first_change(true, got);
+    ASSERT_FALSE(moved.has_value()) << what << ": wrote outside C at element " << moved.value_or(0);
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
-            for (int j = 0; j < s.n; ++j)
-                for (int i = 0; i < s.m; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[Problem<T>::at(p.c, it, i, j)],
-                                          p.mem[Problem<T>::at(p.c, it % s.period, i, j)]))
-                        << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            for (int j = 0; j < s.n; ++j) {
+                const T* x = got + Problem<T>::at(p.c, it, 0, j);
+                const T* r = got + Problem<T>::at(p.c, it % s.period, 0, j);
+                if (std::memcmp(x, r, std::size_t(s.m) * sizeof(T)) == 0) continue;
+                int i = 0;
+                while (same_bits(x[i], r[i])) ++i;
+                FAIL() << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
+            }
 }
 
 const char* layout_word(Layout l) {
@@ -684,6 +707,11 @@ protected:
         g_slm_per_item = select::device_of<B>(*this->ctx).family == "apple" ? 8 : 0;
         g_max_wg = int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
         g_cuda_cc = this->ctx->device().cuda_compute_capability();
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     static bool expect_runs(const C& c, const Spec& s) {
@@ -707,10 +735,12 @@ protected:
     // stages, whose 8-byte copies need 8-byte bases); copied back for expect_gemm.
     void run_pinned_base8(const C& c, Problem<T>& p) {
         constexpr std::size_t reals = sizeof(T) / sizeof(RealOf<T>);
-        UnifiedVector<RealOf<T>> raw(reals * p.mem.size() + 1, RealOf<T>(0));
+        UnifiedVector<RealOf<T>> raw(reals * p.mem.size() + 1);
+        const RealOf<T> zero(0);
+        ub::copy(raw.data(), &zero, sizeof zero, raw.data());
         T* base = reinterpret_cast<T*>(raw.data() + 1);
         ASSERT_EQ(reinterpret_cast<std::uintptr_t>(base) % 16u, sizeof(RealOf<T>));
-        std::memcpy(base, p.mem.data(), p.mem.size() * sizeof(T));
+        ub::copy(base, p.mem.data(), p.mem.size() * sizeof(T), base);
         UnifiedVector<T*> pa(p.s.batch, nullptr), pb(p.s.batch, nullptr), pc(p.s.batch, nullptr);
         auto view = [&](const Region& g, UnifiedVector<T*>& ptrs) {
             return MVof<T>(base + g.off, g.rows, g.cols, g.ld, g.stride, p.s.batch, ptrs.data());
@@ -720,7 +750,7 @@ protected:
             (void)gemm<B, T>(*this->ctx, view(p.a, pa), view(p.b, pb), view(p.c, pc), p.alpha, p.beta, p.s.ta, p.s.tb);
             this->ctx->wait();
         }
-        std::memcpy(p.mem.data(), base, p.mem.size() * sizeof(T));
+        ub::copy(p.mem.data(), base, p.mem.size() * sizeof(T), base);
     }
     std::string auto_choice(const Spec& s) {
         const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
@@ -1210,8 +1240,8 @@ TYPED_TEST(GemmCandidates, SmallEveryBucketEveryFormAtSaturatingBatch) {
                     const C small{og::Small{}};
                     if (!TestFixture::expect_runs(small, s)) {
                         EXPECT_FALSE(this->pin_accepted(small, p)) << name(small, s) << " was accepted";
-                        for (std::size_t e = 0; e < p.mem.size(); ++e)
-                            ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << name(small, s) << ": refused but wrote " << e;
+                        const auto e = p.first_change(false);
+                        ASSERT_FALSE(e.has_value()) << name(small, s) << ": refused but wrote " << e.value_or(0);
                         ++refused;
                         continue;
                     }
@@ -1924,8 +1954,8 @@ TYPED_TEST(GemmCandidates, SplitKEveryHostEveryFormAtSaturatingBatchAndSliceEdge
                 ++nan_checked;
                 auto again = make_problem<T>(s);
                 this->run_pinned(c, again);
-                for (std::size_t e = 0; e < p.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(p.mem[e], again.mem[e])) << name(c, s) << ": a repeated call differs at " << e;
+                const auto e = first_diff(p.mem, again.mem);
+                ASSERT_FALSE(e.has_value()) << name(c, s) << ": a repeated call differs at " << e.value_or(0);
                 ++repeated;
             }
     }

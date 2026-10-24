@@ -13,7 +13,7 @@ set(EXTENSIONS_CTA_SOURCES
     # template a split would link by duplicating the body into both TUs and break
     # only when someone marks one SYCL_EXTERNAL -- "the device-link note below: a source must
     # sit with the sources whose device symbols it calls". This library is also
-    # the only one configured NO_CPU_TARGETS (src/CMakeLists.txt, NO_CPU_TARGETS foreach), and
+    # configured NO_CPU_TARGETS (src/CMakeLists.txt, BATCHLAS_NO_CPU_OBJECT_LIBS), and
     # potrf's native route is GPU-only, so a native_cpu image of these templates
     # would be dead weight.
     potrf/kernels/potrf_cta.cc
@@ -23,10 +23,7 @@ set(EXTENSIONS_CTA_SOURCES
     # helpers are inline templates shared with the getrf/geqrf tiny kernels, so all
     # three must sit with the sources whose device symbols they call.
     potrf/kernels/potrf_tiny.cc
-    # WP6/P2: the FUSED factor-and-solve tier. Same cluster as potrf_tiny.cc -- it
-    # reuses tiny_device.hh's inline helpers and is GPU-only, so a native_cpu image
-    # of it would be dead weight (this library is the only NO_CPU_TARGETS one).
-    posv/kernels/posv_tiny.cc
+    # posv_tiny.cc (WP6/P2) is NOT here: EXTENSIONS_POSV_SOURCES below.
     # WP6/P3: the LEFT-LOOKING panel leaf. Same device-code cluster again -- the tests
     # compare it against potrf_cta_body on the same matrices, and it is the blocked
     # driver's intended replacement leaf.
@@ -51,7 +48,7 @@ set(EXTENSIONS_CTA_SOURCES
     # it: geqrf_tiny.cc reuses geqrf_cta_device.hh's LarfgScalars/geqrf_larfg_scalars
     # verbatim rather than re-deriving the LAPACK real-beta tau convention, so it shares
     # a device-code cluster with the pair above. It is also GPU-only, which is what this
-    # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt, NO_CPU_TARGETS foreach) wants.
+    # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt) wants.
     geqrf/kernels/geqrf_tiny.cc
     # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
     # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
@@ -72,15 +69,12 @@ set(EXTENSIONS_CTA_SOURCES
     # above -- it shares NO device symbol with getrf_cta.cc (its whole body is inline
     # in the lambda, and it borrows only lu_cabs1, an inline template) -- so the rule
     # "a source must sit with the sources whose device symbols it calls" does
-    # not place it. What places it is that this object library is the only one
-    # configured NO_CPU_TARGETS (src/CMakeLists.txt, NO_CPU_TARGETS foreach) and the tier is GPU-only:
+    # not place it. What places it is that this object library is
+    # configured NO_CPU_TARGETS (src/CMakeLists.txt) and the tier is GPU-only:
     # a native_cpu image of these templates would be dead weight. The file's own rule
     # is "the cluster, not the topic", so the reason is stated rather than assumed.
     getrf/kernels/getrf_tiny.cc
-    # WP6/P2: the FUSED factor-and-solve tier. HERE for getrf_tiny.cc's reason, not
-    # for the shared-device-symbol one: it borrows only lu_cabs1, an inline template,
-    # and the tier is GPU-only.
-    gesv/kernels/gesv_tiny.cc
+    # gesv_tiny.cc (WP6/P2) is NOT here: EXTENSIONS_GESV_SOURCES below.
     # WP6/P4, the register-resident PANEL leaf for the blocked driver. HERE by the
     # cluster rule and not by the GPU-only one: getrf_panel_reg_device.hh includes
     # getrf_cta_device.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this
@@ -173,6 +167,20 @@ set(EXTENSIONS_LATRD_SOURCES
     syev/sytrd/latrd_lower_panel.cc
 )
 
+# posv_tiny.cc and gesv_tiny.cc get a NO_CPU_TARGETS library each, for latrd's reason: each
+# is one sycl-post-link module that llvm-foreach cannot split, and together they were most of
+# the cta device link (posv ~319 s, gesv ~131 s, the other 37 cta modules ~260 s). Out of cta,
+# an edit to any other cta TU no longer re-runs their codegen, and the two link in parallel.
+# Both are clusters of their own: every device helper they use (tiny_device.hh, lu_cabs1,
+# potrf/getrf device headers) is an inline template, and neither calls a SYCL_EXTERNAL.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+set(EXTENSIONS_POSV_SOURCES
+    posv/kernels/posv_tiny.cc
+)
+set(EXTENSIONS_GESV_SOURCES
+    gesv/kernels/gesv_tiny.cc
+)
+
 set(EXTENSIONS_SYTRD_SOURCES
     syev/sytrd/sytrd_blocked.cc
     syev/sytrd/sytrd_sy2sb.cc
@@ -194,6 +202,8 @@ target_sources(batchlas_extensions_sytrd_obj PRIVATE ${EXTENSIONS_SYTRD_SOURCES}
 target_sources(batchlas_extensions_latrd_obj PRIVATE ${EXTENSIONS_LATRD_SOURCES})
 target_sources(batchlas_extensions_stedc_obj PRIVATE ${EXTENSIONS_STEDC_SOURCES})
 target_sources(batchlas_extensions_cta_obj PRIVATE ${EXTENSIONS_CTA_SOURCES})
+target_sources(batchlas_extensions_posv_obj PRIVATE ${EXTENSIONS_POSV_SOURCES})
+target_sources(batchlas_extensions_gesv_obj PRIVATE ${EXTENSIONS_GESV_SOURCES})
 
 # One device-link unit. Keeping it small matters: this is the .so whose device
 # link ptxas runs on, and it already measures ~43.4 s with gemm_kernels.cc alone
@@ -202,19 +212,74 @@ target_sources(batchlas_extensions_cta_obj PRIVATE ${EXTENSIONS_CTA_SOURCES})
 # gemv_native.cc goes HERE, in the ordinary list, and not into a
 # NO_CPU_TARGETS object library, however tempting the link time makes that.
 # batchlas_sycl_obj is built with batchlas_apply_object_options() with no
-# NO_CPU_TARGETS flag (src/CMakeLists.txt, NO_CPU_TARGETS foreach), i.e. for
+# NO_CPU_TARGETS flag (src/CMakeLists.txt, BATCHLAS_NO_CPU_OBJECT_LIBS), i.e. for
 # -fsycl-targets=nvidia_gpu_sm_89,native_cpu. The native_cpu image is the whole
 # WP7 deliverable: 20 of the 40 vendor-free gemv_tests failures are
 # GemvMatrixViewTest/0..3 on a native_cpu Device("cpu") queue, and a GPU-only
 # native gemv closes the other 20 while leaving the suite red and the burn-down
 # unmoved. Measure the device-link delta and report it; do not pay for it by
 # dropping the CPU target.
+#
+# gemm is many TUs, not one: sycl-post-link splits by source, so one gemm TU was two device
+# modules of ~875 kernels whose CPU AOT (opencl-aot, ~400 s each) ran in one llvm-foreach job.
+# Each shard below is a generated TU instantiating the listed reg rows (R<i>), wide rows
+# (<type>:<i>) or wide half-rows (<type>:<i>/<half>) of gemm_rows.hh; every row in exactly one
+# shard (gemm_kernels.cc static_asserts the row counts). Shards are balanced on measured CPU AOT
+# cost: one per complex row, and complex<float> row 8 (the v2 tiles, ~107 s alone) in halves.
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
+set(BATCHLAS_GEMM_SHARDS
+    "reg_0|R0 R2 R4 R6 R8 R10 R12"
+    "reg_1|R1 R3 R5 R7 R9 R11"
+    "wide_float|float:0 float:1 float:2 float:3 float:4 float:5 float:6 float:7 float:8"
+    "wide_double|double:0 double:1 double:2 double:3 double:4 double:5 double:6 double:7 double:8"
+)
+foreach(_i RANGE 7)
+    list(APPEND BATCHLAS_GEMM_SHARDS "wide_cfloat_${_i}|cfloat:${_i}" "wide_cdouble_${_i}|cdouble:${_i}")
+endforeach()
+list(APPEND BATCHLAS_GEMM_SHARDS "wide_cfloat_8a|cfloat:8/0" "wide_cfloat_8b|cfloat:8/1" "wide_cdouble_8|cdouble:8")
+set(_gemm_shard_sources "")
+foreach(_shard IN LISTS BATCHLAS_GEMM_SHARDS)
+    string(REPLACE "|" ";" _parts "${_shard}")
+    list(GET _parts 0 _name)
+    list(GET _parts 1 _rows)
+    string(REPLACE " " ";" _rows "${_rows}")
+    set(BATCHLAS_GEMM_SHARD_LINES "")
+    foreach(_row IN LISTS _rows)
+        if(_row MATCHES "^R([0-9]+)$")
+            string(APPEND BATCHLAS_GEMM_SHARD_LINES "BATCHLAS_GEMM_REG_ROW(${CMAKE_MATCH_1})\n")
+        elseif(_row MATCHES "^(float|double|cfloat|cdouble):([0-9]+)(/([01]))?$")
+            set(_t "${CMAKE_MATCH_1}")
+            set(_i "${CMAKE_MATCH_2}")
+            set(_h "${CMAKE_MATCH_4}")
+            if(_t STREQUAL "cfloat")
+                set(_t "std::complex<float>")
+            elseif(_t STREQUAL "cdouble")
+                set(_t "std::complex<double>")
+            endif()
+            if(_h STREQUAL "")
+                string(APPEND BATCHLAS_GEMM_SHARD_LINES "BATCHLAS_GEMM_WIDE_ROW(${_t}, ${_i})\n")
+            else()
+                string(APPEND BATCHLAS_GEMM_SHARD_LINES "BATCHLAS_GEMM_WIDE_HALF(${_t}, ${_i}, ${_h})\n")
+            endif()
+        else()
+            message(FATAL_ERROR "BATCHLAS_GEMM_SHARDS: bad row '${_row}' in shard ${_name}")
+        endif()
+    endforeach()
+    set(_out "${PROJECT_BINARY_DIR}/generated/gemm/gemm_${_name}.cc")
+    configure_file(gemm/kernels/gemm_shard.cc.in "${_out}" @ONLY)
+    list(APPEND _gemm_shard_sources "${_out}")
+endforeach()
+
 set(SYCL_SOURCES
     gemm/kernels/gemm_kernels.cc
-    trsm/kernels/trsm_native.cc
-    trsm/kernels/trsm_sg_left.cc
+    ${_gemm_shard_sources}
     gemv/kernels/gemv_native.cc
     spmm/kernels/spmm_native.cc
 )
 
 target_sources(batchlas_sycl_obj PRIVATE ${SYCL_SOURCES})
+
+# trsm's native kernels are GPU-only (every native arm of its can_run needs d.is_gpu), so they sit in
+# the NO_CPU level-3 library with the level-3 seven: a trsm edit no longer relinks gemm, and their
+# CPU images (~83 CPU-seconds of opencl-aot, never launched) are gone.
+target_sources(batchlas_extensions_level3_obj PRIVATE trsm/kernels/trsm_native.cc trsm/kernels/trsm_sg_left.cc)

@@ -34,10 +34,10 @@ vendor-free build.
 
 | | Compiler | CUDA | GPU / arch | OS | Status |
 | --- | --- | --- | --- | --- | --- |
-| Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Library, tests and benchmarks built and run here daily |
+| Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 26.04 | Library, tests and benchmarks built and run here daily |
 | Second GPU box | same toolchain (threadripper02) | 13.2 | NVIDIA RTX PRO 6000, `sm_120` | Linux | Built and tested; `sm_120` tuning tables measured here |
 | CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export and public headers only; nothing configured, compiled or run |
-| CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
+| CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 26.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
 | CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** (see the warning above). Not built by CI |
 | AMD / ROCm | — | — | — | — | Code paths exist; not built or run |
 | Apple GPU (macOS) | AdaptiveCpp `develop` at `9ec394ef` plus local patches 0001-0013 ([below](#macos-apple-gpu-through-adaptivecpp-metal)), Homebrew `llvm@21` 21.1.8 / `lld@21`, Command Line Tools only (no Xcode) | — | Apple M5 Max (`applegpu_g17s`), Metal | macOS 27.0.1 | Library and full test suite built and run (`acpp-metal-tests`); float and complex<float> on the GPU, double on the host through Homebrew OpenBLAS 0.3.34. Not built by CI |
@@ -58,6 +58,9 @@ cmake --preset dev
 cmake --build --preset dev
 ```
 
+Each preset builds into `build-<preset>` at the top of the checkout (`build-dev-tests`,
+`build-cuda`, ...), the same depth as `build/`, so the trees share ccache entries.
+
 | preset | builds |
 | --- | --- |
 | `dev` | default `RelWithDebInfo` library |
@@ -76,8 +79,9 @@ and `release`, which run the arm a release build runs.
 
 `dev-gpu` is 13-25% off a cold build of the default target on one 4-GPU box, but it is **GPU
 coverage only**: about half of every typed test suite is not instantiated and `ctest` still reports
-green. Use `dev-tests` or `cuda` for the pre-push gate, plus a vendor-free tree
-(`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) at that gate only.
+green. The pre-push gate is `scripts/gate.sh`: `dev-tests` in `build-gate` plus a vendor-free tree
+(`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) in `build-gate-vf`, both rebuilt incrementally.
+"Tests" below has the iteration loop.
 
 ## CMake options
 
@@ -117,7 +121,11 @@ cmake --build build -j8
 | `BATCHLAS_CCACHE_BASEDIR` | ccache base directory (default: deepest common parent of source and build directories, or `$HOME` if that is `/`) |
 | `BATCHLAS_TEST_GPUS` | GPUs written to `<build>/ctest_resources.json` for `scripts/ctest_gpus.sh`: `auto` (`nvidia-smi --list-gpus`), a count, or `0` to disable. Needs a `[cuda:gpu]` in `sycl-ls`, else a count is a configure error |
 | `BATCHLAS_TEST_GPU_SLOTS` | concurrent GPU tests per device under `scripts/ctest_gpus.sh` |
-| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link (default `4`, `1` disables) |
+| `BATCHLAS_SYCL_LINK_JOBS` | parallelism of the DPC++ SYCL device link: `auto` (default; the logical cores, clamped to 4..32), a count, or `1` to disable |
+| `BATCHLAS_SYCL_GLOBAL_OFFSET` | DPC++: keep the `_with_offset` twin of every kernel (SYCL 1.2.1 global offsets). Default `OFF`: `-mllvm -enable-global-offset=false`, which roughly halves NVPTX device-link time ([build performance](../design/build-performance.md)) |
+| `BATCHLAS_PRIVATE_TMPDIR` | run every compile and link with `TMPDIR` in a per-command directory under `<build>/.tmp`, removed afterwards (default `ON`; keeps device-link temporaries out of a tmpfs `/tmp`) |
+| `BATCHLAS_LINK_DEPENDS_NO_SHARED` | do not relink executables when only a BatchLAS `.so` they link changed (default `ON`; executables and the component `.so` link `-z now`, so a removed symbol fails at load). `scripts/gate.sh` turns it `OFF` |
+| `CMAKE_BUILD_RPATH_USE_ORIGIN` | build-tree RUNPATHs relative to `$ORIGIN` (BatchLAS defaults it to `ON`), so a copied tree (`scripts/seed_build_tree.sh`) loads its own libraries |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted; `ACPP` without an `acpp` compiler takes `acpp` from `PATH`, else `/opt/adaptivecpp/bin`, also replacing a cached compiler (`ccmake`); CMake then resets the cache and the value reads `AUTO` |
 | `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
 | `BATCHLAS_ENABLE_METAL` | AdaptiveCpp only: `AUTO` (default; dispatch an Apple GPU as `Backend::SYCL` when `acpp-info` lists a Metal device), `ON` (require it; configure fails without one) or `OFF` (needs the GPU hidden with `ACPP_VISIBILITY_MASK=omp`; configure fails while `acpp-info` lists it) |
@@ -218,18 +226,28 @@ the `CPATH` leak) are in @ref dev_agent_guide, "Known Pitfalls".
 ```bash
 cmake --preset dev-tests
 cmake --build --preset dev-tests
-ctest --test-dir build/presets/dev-tests --output-on-failure
+ctest --test-dir build-dev-tests --output-on-failure
 ```
 
 `fast-dev` builds only the smoke subset (`util_span_tests`, `util_vector_tests`, `matrix_tests`,
 `mempool_tests`, `backend_dispatch_tests`, `options_api_tests`, `settings_tests`,
 `linalg_layer_tests`; `BATCHLAS_SMOKE_TEST_TARGETS` in `tests/CMakeLists.txt`). None covers
-a specific algorithm. To iterate on one algorithm, build the library plus that one test:
+a specific algorithm. To iterate on one algorithm, build the library plus that one test
+(`scripts/b` names targets, caps `-j8` and takes a box-wide build lock):
 
 ```bash
-cmake --build build/presets/dev-tests --target stedc_tests -j8
-ctest --test-dir build/presets/dev-tests -R '^stedc_tests$' --output-on-failure
+scripts/b -B build-dev-tests stedc_tests
+ctest --test-dir build-dev-tests -R '^stedc_tests(_heavy)?$' --output-on-failure
+scripts/affected_tests.py --print-build-cmd --print-ctest-cmd --build-dir build-dev-tests
+ctest --test-dir build-dev-tests -LE 'slow|heavy'    # the quick tier
+CUDA_VISIBLE_DEVICES=0 scripts/gate.sh               # before pushing
 ```
+
+Binaries in `BATCHLAS_HEAVY_TESTS` (`tests/CMakeLists.txt`) register two entries: `X` (quick cases)
+and `X_heavy` (label `heavy`: saturating-batch and table-routing guards). `-LE slow` keeps the heavy
+entries; `-LE 'slow|heavy'` drops them. `scripts/seed_build_tree.sh` copies a built tree into a new
+worktree so its first build is incremental, and `scripts/prewarm_cache.sh` keeps ccache warm for
+`origin/main` ([agent guide](../developer/agent-guide.md), sections 6-8).
 
 With a `[cuda:gpu]` in `sycl-ls`, `scripts/ctest_gpus.sh` runs one test per GPU slot. Labels,
 the smoke set and the GPU slots: [tests/README.md](../../tests/README.md).

@@ -98,7 +98,7 @@ if(NOT BATCHLAS_OPENBLAS_CORETYPE STREQUAL "")
         "set BATCHLAS_BLAS_HEALTH=off to silence it, =error to make it throw.")
 endif()
 
-# A split build (BATCHLAS_MONOLITHIC_LIBRARY=OFF) installs the 14 component .so
+# A split build (BATCHLAS_MONOLITHIC_LIBRARY=OFF) installs the 16 component .so
 # into a SECOND export set so BatchLAS::batchlas stays the only name worth
 # spelling. It has to be included FIRST: BatchLAS::batchlas' link interface
 # names those imported targets, and the export CMake generates for a foreign

@@ -15,7 +15,6 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
-#include <batchlas/tuning_params.hh>
 
 #include <batchlas/internal/ormqr_blocked.hh>
 

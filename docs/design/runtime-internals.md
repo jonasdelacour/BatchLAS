@@ -350,10 +350,11 @@ that area's objects.
 | Object library | Holds |
 | --- | --- |
 | `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; the target `generate_export_header()` is keyed on (@ref design_symbol_visibility) |
-| `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU |
+| `batchlas_selection_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc` but the level-3 seven, and the generated tuned-tables TU |
+| `batchlas_extensions_level3_obj` | `src/ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}/<op>.cc` (entry points plus their native kernels) and `src/ops/trsm/kernels/`, GPU-only |
 | `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | vendor wrapper TUs; the CUDA and ROCm libraries exist only when a vendor library of that family is enabled |
-| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
-| `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,trsm,gemv,spmm}/kernels/` |
+| `batchlas_extensions_*_obj` (eigen, factorization, tridiag, sytrd, latrd, stedc, cta, posv, gesv) | native drivers and kernels under `src/ops/` (lists are by device-code cluster, not by folder) and `src/kernels/common/` |
+| `batchlas_sycl_obj` | native BLAS kernels: `src/ops/{gemm,gemv,spmm}/kernels/`; gemm's reg and wide rows are generated shard TUs (`BATCHLAS_GEMM_SHARDS`, `src/ops/CMakeLists.txt`) |
 | `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/`: `UTIL_SOURCES` (queue, settings, SYCL utilities) and `EXTRA_SOURCES` (norms, cond, transpose, random matrices) |
 
 - **Selection is compiled unconditionally.** `batchlas_selection_obj` has no vendor condition. Its
@@ -361,9 +362,13 @@ that area's objects.
   `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` a complete library rather than a link error.
 - **An empty vendor object library is a CMake error.** "A CUDA device is present" is not enough to
   create the CUDA backend library. It requires at least one enabled CUDA math library.
-- **`batchlas_extensions_cta_obj` is the only object library built with `NO_CPU_TARGETS`.** Its kernels
-  are GPU-only (32-lane CTA and tiny tiers). Nothing warns if a source is moved out of that list; it
-  silently gains a CPU image. `batchlas_sycl_obj` keeps the CPU target, because the native-CPU image is
+- **The object libraries in `BATCHLAS_NO_CPU_OBJECT_LIBS` (`src/CMakeLists.txt`) are built with
+  `NO_CPU_TARGETS`:** `batchlas_extensions_cta_obj`, plus `batchlas_extensions_posv_obj` and
+  `batchlas_extensions_gesv_obj` (`posv_tiny.cc`, `gesv_tiny.cc`, split out of cta to shorten its
+  device link), and `batchlas_extensions_level3_obj` (every native arm of trsm and the level-3
+  seven needs `d.is_gpu` in its `can_run`; their CPU images were most of the backends link). Their kernels are
+  GPU-only. Nothing warns if a source is
+  moved out of those lists; it silently gains a CPU image. `batchlas_sycl_obj` keeps the CPU target, because the native-CPU image is
   what makes a vendor-free CPU build complete.
 - **A source sits with the sources whose device symbols it calls.** The shared library is the
   device-link unit. `potrf_blocked.cc` and `potrf_cta.cc` share `potrf_cta_body`, so they must be in

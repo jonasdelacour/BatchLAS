@@ -36,7 +36,7 @@ python3 benchmarks/benchviz compare before after
 `benchviz` runs the harness binaries it finds, searched in this order:
 
 1. `build/` of the checkout it runs from;
-2. `build/presets/{benchmarks,dev-tests}`;
+2. `build-benchmarks/` and `build-dev-tests/`;
 3. when the checkout is a worktree, the main checkout's `build/`.
 
 `run --build-dir <dir>` overrides the search. The measured code is the code **last compiled**

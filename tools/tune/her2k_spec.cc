@@ -122,7 +122,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/her2k/her2k.cc"
         // her2k fold calls the public gemm: its native kernels and can_run count too.
-        // family: fold "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // family: fold "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/her2k_spec.cc"; }

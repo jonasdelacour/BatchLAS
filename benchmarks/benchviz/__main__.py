@@ -41,7 +41,7 @@ def _csv_list(s: str, allowed) -> list:
 
 
 def default_build_dirs() -> list:
-    cands = [REPO / "build", REPO / "build" / "presets" / "benchmarks", REPO / "build" / "presets" / "dev-tests"]
+    cands = [REPO / "build", REPO / "build-benchmarks", REPO / "build-dev-tests"]
     # A worktree's own build first, then the main checkout's.
     main = os.environ.get("BATCHLAS_MAIN_CHECKOUT")
     if not main:  # a worktree's common .git sits in the main checkout
@@ -316,7 +316,7 @@ def cmd_info(a):
     print(f"benchviz from {REPO}")
     dirs = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
     if not dirs:
-        print("no build directory found (looked in build/, build/presets/*)")
+        print("no build directory found (looked in build/, build-benchmarks/, build-dev-tests/)")
     for d in dirs:
         print("binaries: " + describe_build(build_info(d)))
     for name in list_campaigns(Path(a.root)):

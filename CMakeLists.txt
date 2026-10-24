@@ -4,6 +4,7 @@ include(cmake/BatchLASCompilerBootstrap.cmake)
 
 project(BatchLAS VERSION 0.1.0 LANGUAGES CXX)
 
+include(cmake/BatchLASTmpdir.cmake)
 include(cmake/BatchLASCcache.cmake)
 include(cmake/BatchLASOptions.cmake)
 if(BATCHLAS_SYCL_IMPL_ACPP)

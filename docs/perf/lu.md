@@ -596,7 +596,7 @@ Comparing a pivot sequence elementwise with another implementation is well posed
 
 This is the one site for the tiny tier's R7 figure. `docs/perf/potrf.md` and `docs/perf/qr.md` point here.
 
-`time cmake --build build/presets/dev-tests --target batchlas_extensions_cta --parallel 4` after touching `getrf_tiny.cc`: **167.4 s**, against a 117-125 s baseline: +34% to +43% for the library with all three tiers.
+`time cmake --build build-dev-tests --target batchlas_extensions_cta --parallel 4` after touching `getrf_tiny.cc`: **167.4 s**, against a 117-125 s baseline: +34% to +43% for the library with all three tiers.
 
 | tier | entry functions | ptxas | share of library |
 |---|---:|---:|---:|
@@ -796,7 +796,7 @@ n = 17 is the bracketing non-winner, at 0.45-0.84x. It is the first order served
 
 ### LU: P2: the register bound is assumed, not probed
 
-`gesv_tiny.cc` carries `kWorstRegsPerThread = 224` and `posv_tiny.cc` carries 256, each in a static assert against the 65,536-register per-block file at `kTinyWgSize = 64`. Neither was measured; they are getrf_tiny's 143 and potrf_tiny's 176 plus margin. The real gate is the probe's stack-frame column: `scripts/register_probe.sh` on `batchlas_extensions_cta` must report frame 0 and spill 0 for every `GesvTinyKernel` and `PosvTinyKernel` before either tier is timed. A non-zero frame shows up as a slowdown, never as a wrong answer.
+`gesv_tiny.cc` carries `kWorstRegsPerThread = 224` and `posv_tiny.cc` carries 256, each in a static assert against the 65,536-register per-block file at `kTinyWgSize = 64`. Neither was measured; they are getrf_tiny's 143 and potrf_tiny's 176 plus margin. The real gate is the probe's stack-frame column: `scripts/register_probe.sh out.log '' batchlas_extensions_gesv` and `... batchlas_extensions_posv` must report frame 0 and spill 0 for every `GesvTinyKernel` and `PosvTinyKernel` before either tier is timed. Each tier is in its own library since the cta split; a probe of `batchlas_extensions_cta` contains neither kernel, and its clean report says nothing about them. A non-zero frame shows up as a slowdown, never as a wrong answer.
 
 ## The N=4 bucket and the CTA band
 
