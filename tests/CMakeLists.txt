@@ -248,7 +248,8 @@ set(BATCHLAS_HEAVY_TEST_PATTERNS
     *SameAsInOrder*
     *FreshChildAgreesWithAWorkerAfterALargerLaunch*
     *EigenvaluesOnlyLowerMatchesNetlib*
-    *GradedHermitianRunsAtN512*)
+    *GradedHermitianRunsAtN512*
+    *PastTheGrid*)
 string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
 # Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
 # binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy
@@ -262,7 +263,8 @@ set(BATCHLAS_HEAVY_TESTS
     potrf_candidates_tests potrf_tests spmm_candidates_tests spmm_tests syev_blocked_tests
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
-    tune_race_gpu_tests verify_tests)
+    tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
+    syev_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
