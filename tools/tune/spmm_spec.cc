@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // spmm for the tuner (GPU tables only; the cpu tables stay transcribed): a square m x m CSR A with
 // min(m, 8) sorted, scattered columns per row (a hashed start, stride m / r; items cycle through four
 // patterns, item 0 and batch-1 differ), values, B and C0 from MatrixView::fill_random (complex parts
@@ -40,7 +41,7 @@ Transpose trans_of(const std::string& w, bool complex) {
     return complex ? Transpose::ConjTrans : Transpose::Trans;
 }
 
-template <class T>
+template <typename T>
 struct SpmmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     using SV = MatrixView<T, MatrixFormat::CSR>;
@@ -113,7 +114,7 @@ public:
     std::string op() const override { return "spmm"; }
     std::vector<std::string> key_names() const override { return {P::key_names.begin(), P::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(P::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(P::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"transA", {"N", "T"}}, {"transB", {"N", "T"}}, {"m", ints(P::grid_m)},
@@ -144,7 +145,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/spmm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             constexpr bool kComplex = !std::is_same_v<T, typename base_type<T>::type>;
             SpmmProblem<T> p(q, trans_of(*key_get(req.key, "transA"), kComplex),
                              trans_of(*key_get(req.key, "transB"), kComplex), int(key_int(req.key, "m")),

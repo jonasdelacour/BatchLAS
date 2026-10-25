@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """benchviz: BatchLAS vs vendor LAPACK -- run, plot, watch.
 
     python3 benchmarks/benchviz serve                      # dashboard on :8765

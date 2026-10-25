@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // What a call throws when nothing in this build can serve it: no native kernel for

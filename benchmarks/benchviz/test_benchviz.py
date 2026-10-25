@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """python3 -m unittest discover -s benchmarks/benchviz"""
 import os
 import sys

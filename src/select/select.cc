@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: MIT
 #include <src/select/select.hh>
 
+#include <src/util/internal-api.hh>
 #include <src/util/resident_capacity.hh>
 
 #include <batchlas/settings.hh>
@@ -105,16 +107,6 @@ std::mutex& state_mutex() {
     return *m;
 }
 
-std::set<std::string>& warned() {
-    static auto* s = new std::set<std::string>();
-    return *s;
-}
-
-bool warn_once(const std::string& tag) {
-    std::lock_guard<std::mutex> lock(state_mutex());
-    return warned().insert(tag).second;
-}
-
 struct TableState {
     std::optional<std::vector<std::pair<std::string, std::string>>> test_builtin;
     int generation = 0;
@@ -139,9 +131,9 @@ std::vector<const Table*> load_tables(TableState& st, std::string_view op, std::
     auto consider = [&](const std::string& name, auto&& read_text, bool is_override) {
         const auto f = split_file_name(name);
         if (f[0].empty()) {
-            if (is_override && warned().insert("tuned_name:" + dir + "/" + name).second)
-                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR: skipping %s (not <op>.<device>.txt)\n",
-                             name.c_str());
+            if (is_override)
+                ::batchlas::detail::warn_once("tuned_name:" + dir + "/" + name,
+                                              "BATCHLAS_TUNED_DIR: skipping " + name + " (not <op>.<device>.txt)");
             return;
         }
         if (f[0] != op) return;
@@ -151,7 +143,14 @@ std::vector<const Table*> load_tables(TableState& st, std::string_view op, std::
         if (it == st.parsed.end()) {
             ++st.parses;
             std::vector<const Table*> parts;
-            for (Table& part : parse_tables(read_text(), name)) {
+            std::vector<Table> parsed;
+            try {
+                parsed = parse_tables(read_text(), name);
+            } catch (const internal_error& e) {
+                if (!is_override) throw;
+                throw invalid_argument(std::string("BATCHLAS_TUNED_DIR: ") + e.what());
+            }
+            for (Table& part : parsed) {
                 auto* t = new Table(std::move(part));
                 t->is_override = is_override;
                 parts.push_back(t);
@@ -170,9 +169,8 @@ std::vector<const Table*> load_tables(TableState& st, std::string_view op, std::
     if (!dir.empty()) {
         std::error_code ec;
         if (!std::filesystem::is_directory(dir, ec)) {
-            if (warned().insert("tuned_dir:" + dir).second)
-                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR=%s is not a directory; ignoring it\n",
-                             dir.c_str());
+            ::batchlas::detail::warn_once("tuned_dir:" + dir,
+                                          "BATCHLAS_TUNED_DIR=" + dir + " is not a directory; ignoring it");
         } else {
             for (const auto& ent : std::filesystem::directory_iterator(dir, ec)) {
                 if (!ent.is_regular_file() || ent.path().extension() != ".txt") continue;
@@ -311,7 +309,7 @@ Table parse_one(std::string_view text, std::string_view file, bool by_dtype) {
     bool have_keys = false;
     int line_no = 0;
     auto fail = [&](const std::string& why) {
-        throw std::runtime_error(t.file + ":" + std::to_string(line_no) + ": " + why);
+        throw internal_error(t.file + ":" + std::to_string(line_no) + ": " + why);
     };
     for (std::string_view raw : detail::split(text, '\n')) {
         ++line_no;
@@ -451,7 +449,7 @@ std::vector<Table> parse_tables(std::string_view text, std::string_view file) {
     for (TableRow& r : rows) {
         const std::string& dtype = r.keys[0];
         if (dtype != "float" && dtype != "double" && dtype != "cfloat" && dtype != "cdouble")
-            throw std::runtime_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
+            throw internal_error(all.file + ":" + std::to_string(r.line) + ": unknown dtype '" + dtype + "'");
         auto t = std::find_if(out.begin(), out.end(), [&](const Table& x) { return x.dtype == dtype; });
         if (t == out.end()) {
             Table part = all;
@@ -480,7 +478,11 @@ const TableRow* Table::nearest(const Key& key) const {
     std::string memo_key;
     for (std::size_t i = 0; i < keys.size(); ++i) {
         const auto it = std::find_if(key.begin(), key.end(), [&](const KeyField& f) { return f.name == keys[i].name; });
-        if (it == key.end()) throw std::invalid_argument(file + ": key '" + keys[i].name + "' not supplied by the op");
+        if (it == key.end()) {
+            const std::string what = file + ": key '" + keys[i].name + "' not supplied by the op";
+            if (is_override) throw invalid_argument("BATCHLAS_TUNED_DIR: " + what);
+            throw internal_error(what);
+        }
         kv[i] = it->value;
         memo_key += it->value;
         memo_key += '\x1f';
@@ -570,17 +572,16 @@ void note_decision(std::string_view op, std::string spelling, std::string detail
 }
 
 void note_borrow(std::string_view op, std::string_view dtype, const Device& d, const Table& t) {
-    if (!warn_once("borrow:" + std::string(op))) return;
-    std::fprintf(stderr, "batchlas: %.*s has no %.*s table for %s; borrowing %s (run tools/tune to tune this device)\n",
-                 static_cast<int>(op.size()), op.data(), static_cast<int>(dtype.size()), dtype.data(),
-                 d.key.c_str(), t.device.c_str());
+    ::batchlas::detail::warn_once("borrow:" + std::string(op),
+                                  std::string(op) + " has no " + std::string(dtype) + " table for " + d.key +
+                                      "; borrowing " + t.device + " (run tools/tune to tune this device)");
 }
 
 void warn_pin_fallback(std::string_view op, std::string_view word, const Device& d) {
-    if (!warn_once(std::string(word) + ":" + std::string(op))) return;
-    const int ol = static_cast<int>(op.size()), wl = static_cast<int>(word.size());
-    std::fprintf(stderr, "batchlas: %.*s pinned \"%.*s\", but no %.*s candidate can run this shape on %s; "
-                 "using the automatic choice\n", ol, op.data(), wl, word.data(), wl, word.data(), d.key.c_str());
+    const std::string w(word);
+    ::batchlas::detail::warn_once(w + ":" + std::string(op), std::string(op) + " pinned \"" + w + "\", but no " + w +
+                                                              " candidate can run this shape on " + d.key +
+                                                              "; using the automatic choice");
 }
 
 std::string table_tag(const Table& t, const Device& d, bool own_table_exists) {
@@ -690,10 +691,7 @@ void use_embedded_tables() {
     ++tables_state().generation;
 }
 
-void reset_warnings() {
-    std::lock_guard<std::mutex> lock(state_mutex());
-    warned().clear();
-}
+void reset_warnings() { ::batchlas::detail::reset_warnings(); }
 
 std::size_t parse_count() {
     std::lock_guard<std::mutex> lock(state_mutex());

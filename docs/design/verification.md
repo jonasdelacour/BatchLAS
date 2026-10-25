@@ -1,34 +1,35 @@
 # Verification library {#design_verification}
 
-> **Status:** implemented 2026-10-09 (tests, benchmarks and the tuner verify through it; tolerances
-> calibrated on threadripper02, RTX PRO 6000 sm_120); dense checks on a SYCL device since
-> 2026-10-11 · scope: one verification facility · machine-independent
+> **Status:** current · checked 2026-10-21 · tolerances calibrated 2026-10-09 on threadripper02
+> (RTX PRO 6000, sm_120)
 
-BatchLAS checks its own results in three places: the tests, the benchmark harnesses and the
-tuner, which refuses to time a wrong answer. Each grew its own input generators, references,
-residuals and tolerances. This page specifies one facility, `batchlas::verify`, that all three use.
+BatchLAS checks its own results in three places: the tests, the benchmark harnesses
+(`benchmarks/factor_bench.cc`, the `*_acc` and accuracy harnesses) and the tuner (all 19
+`tools/tune/*_spec.cc`), which refuses to time a wrong answer. All three use one facility: residual
+checks as `MatrixView` statics, and `batchlas::verify` for the tolerance policy and the LAPACKE
+references. In a test the entry point is `EXPECT_VERIFY` (`tests/test_utils.hh`).
 
-## Why one facility
+## Verification: the copies it replaced
 
-A survey of the tree on 2026-10-09 (branch `tuning-deep-sm120`) found:
+Survey of 2026-10-09 (branch `tuning-deep-sm120`), before the library:
 
 | Concept | Copies | Differences between copies |
 | --- | --- | --- |
 | promotion and complex helpers (`up`, `ab`, `cj`, `mk`, `Prom`) | ~30 | some promote to double, some keep working precision |
-| NaN-propagating maximum | 2 | tests use `std::max`, which drops NaN: `syev_cta_tests.cc:69`, `syev_blocked_tests.cc:128,142`, `getrf_tests.cc:323,1689` pass a NaN residual |
+| NaN-propagating maximum | 2 | tests used `std::max`, which drops NaN: `syev_cta_tests.cc:70`, `syev_blocked_tests.cc:129,143`, `getrf_tests.cc:325,1691` passed a NaN residual |
 | seeded generator | 8, plus ~25 `std::mt19937` sites | |
 | SPD and permuted-LU inputs | 2 each, plus per-test variants | identical code, different buffer types |
 | factorization residuals (potrf, getrf) | 4 and 4+ | pivot layout, Upper/Lower support |
-| solve residual | 7 | only one handles getri and large-n probe columns |
-| BLAS componentwise backward error | 8 inline | tests use an absolute `k·eps·bound` instead |
+| solve residual | 7 | only one handled getri and large-n probe columns |
+| BLAS componentwise backward error | 8 inline | tests used an absolute `k·eps·bound` instead |
 | orthogonality | ~12 | Frobenius in the tuner, elementwise max in the tests |
 | eigen residual | 6 | two denominators |
 | LAPACKE references (`?syevd`, `?gesvd`, `?sterf`, `?getrf`) | ~10 | |
 | tolerances | 3 schemes, 20+ constants | fixed per type vs `c·n·eps` with c from 4 to 200 |
 
-`tools/tune/residuals.hh` (since deleted) was a port of `benchmarks/factor_bench.cc`. "Is LAPACKE
-available" was decided under three macro names; `BATCHLAS_VERIFY_HAVE_LAPACKE` (set by
-`batchlas::verify`) replaced them.
+`tools/tune/residuals.hh` (a port of `benchmarks/factor_bench.cc`) and the fixed per-type
+`test_utils::tolerance` are deleted. "Is LAPACKE available" is one switch,
+`BATCHLAS_VERIFY_HAVE_LAPACKE`, set by `batchlas::verify`.
 
 ## Verification: decisions
 
@@ -37,47 +38,46 @@ available" was decided under three macro names; `BATCHLAS_VERIFY_HAVE_LAPACKE` (
 | Where the checks live | static functions of `MatrixView<T, MatrixFormat::Dense>` (`include/batchlas/blas/matrix.hh`, implementation `src/util/matrix_checks.cc`); every utility a check needs is a `Matrix`/`MatrixView` member or static, or an existing library function. `batchlas::verify` keeps only the tolerance policy and the LAPACKE references |
 | Data | the library's own `MatrixView` and `VectorView`; no other matrix, batch, operand or item type. A site holding raw buffers builds a view over them |
 | Memory | host-readable views (unified or host allocations); the caller waits on its queue first. A check promotes its items with `MatrixView::astype<promoted_type>(items)` |
-| Queue | the caller's: every check that launches kernels takes `Queue& ctx` first and waits before it returns (at least once per item group); on an out-of-order Queue it runs on an in-order sibling that first waits on ctx's pending work (`select::on_in_order_queue`), which costs one Queue construction per call, so pass item spans rather than loop per item. `product` takes `const Queue&` and returns its Event without waiting; `values_error`, `pivot_ratio` and `pivots_valid` are host loops and take no Queue. On a device without fp64 (an Apple GPU, see [no-fp64 devices](#verification-no-fp64-device)) the check waits on `ctx` and runs on a per-thread CPU queue instead |
+| Queue | the caller's: every check that launches kernels takes `Queue& ctx` first and waits before it returns (at least once per item group); on an out-of-order Queue it runs on an in-order sibling that first waits on ctx's pending work (`select::on_in_order_queue`), which costs one Queue construction per call, so pass item spans rather than loop per item. `product` takes `const Queue&` and returns its Event without waiting; `values_error`, `pivot_ratio` and `pivots_valid` are host loops and take no Queue. On a device without fp64 the check runs on a CPU queue ([no-fp64 devices](#verification-no-fp64-device)) |
 | Arithmetic | every check promotes to `double` / `std::complex<double>` |
 | Maxima | NaN-propagating everywhere: a NaN anywhere in a check fails it |
 | Items checked | `default_items()` (`{0, batch/2, batch−1}`) by default; an explicit list otherwise, `all_items()` for every item. Check a batch with one call over its items, not one call per item: each call waits on the queue |
 | Empty item set | a batch-0 operand with defaulted items checks nothing: every check returns 0 (passes), `form_q` returns a batch-0 `Matrix`, `pivots_valid` returns true. One policy for `MatrixView` and `VectorView` operands (`VectorView::default_items()` is `{}` for batch 0) |
 | Operand structure | operands are read as stored. A check against a triangle or a mirrored matrix applies `triangularize`, `hermitize` or `symmetrize` to a copy first; `trsm_residual` (`Uplo`, `Diag`), `potrf_residual` (`Uplo`) and `eigen_residual` (lower triangle) take the structure their factor or input has |
 | Tolerance | `c · f(n) · eps(T)` per check kind, one named entry per kind (below); no fixed per-type bounds |
-| Inputs | `MatrixView` fills: `fill_random`, `fill_random_spd`, `fill_random_pivoted` (dominant, rows a random n-cycle per item), `fill_graded_hermitian` (condition 10^c) |
-| Independence | promotion (`astype`), transforms, `fill_identity`, `fill_random`, `linalg::axpby_into`, `linalg::triangular_mask_into` and `norm` (Frobenius) are library utilities; no routed operation (gemm, potrf, ...) is called. Products (`MatrixView::product`, op() by index map), the componentwise backward error, reflector application and row interchanges are `matrix_checks.cc`'s own kernels, so no check runs through the op it judges |
+| Inputs | `MatrixView` fills (device kernels, deterministic in the seed): `fill_random`, `fill_random_spd`, `fill_random_pivoted` (dominant, rows a random n-cycle per item), `fill_graded_hermitian` (condition \f$10^c\f$); verify has no generators |
+| Independence | promotion (`astype`), transforms, `fill_identity`, `fill_random`, `linalg::axpby_into`, `linalg::triangular_mask_into` and `norm` (Frobenius) are library utilities; no routed operation (gemm, potrf, ...) is called. Products (`MatrixView::product`, op() by index map), the componentwise backward error, reflector application and row interchanges are `matrix_checks.cc`'s own SYCL kernels, so no check runs through the op it judges |
 
-## Layout
+## Verification: layout
 
 | Where | Contents |
 | --- | --- |
-| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`; one item, or a list of items packed in order), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `svd_residual` (`‖A − U·diag(s)·Vh‖_F / ‖A‖_F` over the leading min(m, n) singular triplets, judged as `factorization` at n = max(m, n)), `solve_residual` (an empty B for getri; 8 seeded probe columns above 2^28 multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator` (over an item list, like the others), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
+| `MatrixView` statics | `product`; `potrf_residual`, `getrf_residual` (packed 1-based int32 pivots), `qr_residual`, `form_q` (Q's first columns from geqrf storage, a `Matrix<promoted_type>`; one item, or a list of items packed in order), `qr_reconstruction` (`‖A − Q·triu(R)‖_F / ‖A‖_F`), `similarity_residual` (`‖A − Q·B·Qᴴ‖_F / ‖A‖_F`, judged as `factorization`), `svd_residual` (`‖A − U·diag(s)·Vh‖_F / ‖A‖_F` over the leading min(m, n) singular triplets, judged as `factorization` at n = max(m, n)), `solve_residual` (an empty B for getri; 8 seeded probe columns above \f$2^{28}\f$ multiply-adds per item), `lu_solve_residual` (`op(P·L·U)` formed per item), `gemm_backward_error` / `gemv_backward_error` / `spmm_backward_error` (componentwise, `|r| / (|α||A||B| + |β||C|)`, C's triangle optional), `gemm_max_denominator` (over an item list, like the others), `rank2k_backward_error` (her2k and syr2k over one triangle), `trsm_residual`, `orthogonality`, `eigen_residual`, `values_error`, `pivots_valid`, `pivot_ratio` (`max cabs1(L(i,k)U(k,k)) / cabs1(U(k,k))`, the partial-pivoting property no residual sees); scalar helpers `promoted_type`, `up`, `make`, `conj`, `cabs1`, `finite` |
 | `MatrixView` / `VectorView` members | `all_items()`, `default_items()` (both views); `MatrixView::astype<U>(items)` (the listed items, promoted and packed) |
-| `verify/tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()`, `eps<T>()`, `nanmax` |
-| `verify/reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`) and singular values (`?gesdd`) of `double` or `std::complex<double>` data only (any other type does not compile), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` tau, `?sterf`; each on a packed vector or on `(view, item)`. Each returns `false` without LAPACKE, empty input included, and the caller skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws `batchlas::unsupported` when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
+| `include/batchlas/verify/tolerance.hh` | `enum class Check` (seven kinds, below), `bound<T>(Check, n[, Slack])`, `pass<T>(Check, n, value[, Slack])` (recorded), `within<T>` (the same comparison, never recorded), `Slack`, `pivot_ratio_bound<T>()`, `eps<T>()`, `nanmax` |
+| `include/batchlas/verify/reference.hh` | LAPACKE: eigenvalues (`?syevd`/`?heevd`) and singular values (`?gesdd`) of `double` or `std::complex<double>` data only (any other type does not compile), `?getrf` pivots in the data's own precision (`s/d/c/zgetrf`: float data never reaches the host dgetrf, see @ref perf_lu), `?geqrf` tau, `?sterf`; each on a packed vector or on `(view, item)`. Each returns `false` without LAPACKE, empty input included, and the caller skips, so a check without a reference never passes. With LAPACKE (`have_reference`) `false` is a failed reference and the caller fails. A double reference other than `?sterf` throws `batchlas::unsupported` when the host dgemm probe (shared with the NETLIB backend, `src/backends/host_blas_health.hh`) fails (OpenBLAS 0.3.20 on Cooperlake without `OPENBLAS_CORETYPE`): its blocked code runs on that dgemm |
 
-CMake target `batchlas::verify`: a small host library (`src/verify/reference.cc`, the dgemm probe)
-carrying LAPACKE and the `BATCHLAS_VERIFY_HAVE_LAPACKE` switch; not installed.
-`tests/test_utils.hh` adds the one gtest wrapper, `EXPECT_VERIFY(T, kind, n, value)` and
+CMake target `batchlas::verify` (`cmake/BatchLASVerify.cmake`): a small static host library
+(`src/verify/reference.cc`, the dgemm probe) carrying LAPACKE and `BATCHLAS_VERIFY_HAVE_LAPACKE`; not
+installed. `tests/test_utils.hh` adds the one gtest wrapper, `EXPECT_VERIFY(T, kind, n, value)` and
 `EXPECT_VERIFY_SLACK(T, kind, n, value, Slack{factor, "reason"})`; a failure prints value, bound,
 kind, n and the slack.
 
-Every check returns the worst value over the checked items as a `double`; the caller compares it
-with `bound`. Items are processed in groups that keep each promoted operand under 2^25 elements.
+Every check returns the worst value over the checked items as a `double`; the caller compares it with
+`bound`. Items are processed in groups that keep each promoted operand under \f$2^{25}\f$ elements.
 
 ## Checks on a device without fp64 {#verification-no-fp64-device}
 
 The checks promote to `double`, and a Metal build has no double kernels for the GPU
-(`BATCHLAS_HAS_DEVICE_FP64=0`). `check_queue()` in `src/util/matrix_checks.cc` therefore waits on
-the caller's queue and returns a leaked, per-thread CPU `Queue` (the AdaptiveCpp OpenMP device) when
+(`BATCHLAS_HAS_DEVICE_FP64=0`). `check_queue()` in `src/util/matrix_checks.cc` therefore waits on the
+caller's queue and returns a leaked, per-thread CPU `Queue` (the AdaptiveCpp OpenMP device) when
 `ctx.device().supports_fp64()` is false. Every promoted allocation, kernel and Frobenius norm of the
 check runs there. The operands stay where they are: library matrices are USM shared, which the host
-device reads in place. A `malloc_device` operand is not host-readable and must be copied first.
-The checks are not demoted to `float`, which would make them as inexact as the code they judge.
-The fp64 policy this answers is in
-[AdaptiveCpp Metal](sycl-implementations.md#sycl-impl-metal-fp64-policy).
+device reads in place. A `malloc_device` operand is not host-readable and must be copied first. The
+checks are not demoted to `float`, which would make them as inexact as the code they judge. The fp64
+policy this answers: [AdaptiveCpp Metal](sycl-implementations.md#sycl-impl-metal-fp64-policy).
 
-## Tolerance kinds
+## Verification: tolerance kinds
 
 `bound<T>(kind, n) = c · f(n) · eps(T)`, with `eps(T)` the unit roundoff of T's real type:
 
@@ -91,52 +91,47 @@ The fp64 policy this answers is in
 | `eigen_residual` | `‖AV − VΛ‖_F / ‖A‖_F` | n | 32 |
 | `values` | `max |λ − λ_ref| / ‖A‖_2` (eigenvalues and singular values) | n | 32 |
 
-Each c is the smallest power of two at least 4× the largest `value / (f(n)·eps)` recorded over
-the migrated tests' passing cases (all dtypes, the ladder of sizes they use); see
+Each c is the smallest power of two at least 4× the largest `value / (f(n)·eps)` recorded over the
+tests' passing cases (all dtypes, the ladder of sizes they use); see
 [calibration](#verification-calibration). Only rows recorded with factor 1 enter a kind's maximum;
-slacked rows (factor ≠ 1, below) are listed separately, so a slacked site cannot inflate its
-kind's c. A calibrated c more than 4× away from the specified one is reported, not adopted.
+slacked rows (factor ≠ 1) are listed separately, so a slacked site cannot inflate its kind's c. A
+calibrated c more than 4× away from the specified one is reported, not adopted.
 
-Orthogonality is two kinds because the two sources differ by an order of magnitude: a product of
-Householder reflectors is orthogonal to a few ulps per column, while vectors accumulated over many
-sweeps of rotations (or rebuilt by divide and conquer) lose orthogonality with the sweep count.
-One c for both is either 8× too loose for QR or red for the Jacobi solvers (measured below).
+- **Two orthogonality kinds.** A product of Householder reflectors is orthogonal to a few ulps per
+  column; vectors accumulated over many rotation sweeps (or rebuilt by divide and conquer) lose
+  orthogonality with the sweep count. One c for both is either 8× too loose for QR or red for the
+  Jacobi solvers (measured below).
+- **Their n.** `orthogonality` takes the rows of Q: Householder error grows with the reflector length.
+  `orthogonality_rotations` takes the vectors checked, the columns of Q (for a row check, the columns
+  of Qᴴ), as it was calibrated; counting rows would loosen thin and partial sets (stein's kb of n,
+  gesvd's thin U) by up to 32×.
+- **`blas` grows as k + 2**, not k: the α and β scalings and the complex multiply add roundings that a
+  k = 1 cell hits (cdouble rows reached 0.88 of `4·k·eps` at k = 1).
 
-The two orthogonality kinds count n as each was calibrated. `orthogonality` takes the number of rows
-of Q: Householder error grows with the reflector length (the QR sites and factor_bench always passed
-m). `orthogonality_rotations` takes the number of vectors checked, the columns of Q (for a row check,
-the columns of Qᴴ): its c was calibrated that way, and counting rows would loosen thin and partial
-sets of vectors (stein's kb of n, gesvd's thin U) by up to 32×.
+**Slack.** A site whose quantity legitimately sits off its kind's bound passes `Slack{factor, reason}`:
+`bound<T>(kind, n, slack) = factor · bound<T>(kind, n)`. The factor may be above or below 1; it must
+be finite and positive, and the reason is mandatory (`batchlas::invalid_argument` otherwise). With
+`BATCHLAS_VERIFY_RECORD=<path>` (a raw `getenv` on every check, not the settings snapshot) every `pass`
+appends `kind dtype n value bound factor reason`: `value` raw (never divided by the factor), `bound`
+the kind's unslacked bound, `factor` 1 and `reason` `-` for the plain overloads, whitespace in a reason
+written as `_`. Every factor above 1 goes to the user for a decision. `within<T>` makes the same
+comparison without recording, for predicates evaluated on results expected to be wrong.
 
-The `blas` growth is k + 2, not k: the α and β scalings and the complex multiply add roundings
-that a k = 1 cell hits (cdouble rows reached 0.88 of `4·k·eps` at k = 1).
-
-**Slack.** A site whose quantity legitimately sits off its kind's bound passes
-`Slack{factor, reason}`: `bound<T>(kind, n, slack) = factor · bound<T>(kind, n)`. The factor may be
-above or below 1 (a site may also tighten); it must be finite and positive, and the reason is
-mandatory (`batchlas::invalid_argument` otherwise). With `BATCHLAS_VERIFY_RECORD=<path>` every `pass`
-appends `kind dtype n value bound factor reason`: `value` is the raw value (never divided by the
-factor), `bound` the kind's unslacked bound, `factor` 1 and `reason` `-` for the plain overloads,
-and whitespace in a reason is written as `_`. The calibration excludes every row with factor ≠ 1
-from its kind's maximum and lists it separately (site reason, factor, raw `value / (f(n)·eps)`);
-every factor above 1 goes to the user for a decision. `within<T>` makes the same comparison
-without recording, for predicates evaluated on results that are expected to be wrong.
-
-**Pivot ratio.** `pivot_ratio` is not a `c · f(n) · eps` quantity: cabs1 partial pivoting keeps it
-at most 1 in exact arithmetic, so `pivot_ratio_bound<T>() = 1 + 64 eps(T)` (32 machine epsilons).
-The slack covers the factor's own rounding: `L(i,k) = A′(i,k) / U(k,k)` is computed in T (LAPACK
-and most kernels form the reciprocal of the pivot, then scale), so `L(i,k)·U(k,k)` recovers
-`A′(i,k)` only to a few ulps of T. The product itself is formed in double and adds nothing.
+**Pivot ratio.** `pivot_ratio` is not a `c · f(n) · eps` quantity: cabs1 partial pivoting keeps it at
+most 1 in exact arithmetic, so `pivot_ratio_bound<T>() = 1 + 64 eps(T)` (32 machine epsilons). The
+slack covers the factor's own rounding: `L(i,k) = A′(i,k) / U(k,k)` is computed in T (LAPACK and most
+kernels form the reciprocal of the pivot, then scale), so `L(i,k)·U(k,k)` recovers `A′(i,k)` only to
+a few ulps of T. The product itself is formed in double and adds nothing.
 
 ## Verification: calibration
 
-Recorded 2026-10-09 with `BATCHLAS_VERIFY_RECORD` over the migrated test binaries on threadripper02
-(RTX PRO 6000, sm_120), one file per migration stage: LU (`getrf`, `getrs`, `gesv`, `getri` and
-their candidate tests; 119,879 rows), QR and Cholesky (`geqrf`, `orgqr`, `ormqr`, `potrf`, `posv`
-and candidates; 18,125), eigen and SVD (`syev*`, `sytrd*`, `gesvd*`, `gesvdj_cta`, `bdsdc`,
-`bdsqr`; 70,736), BLAS (`device_blas`, `gemm`, `gemv`, `spmm`, `syrk`, `syr2k`, `symm`, `trmm`,
-`trsm` and candidates; 30,074). "Need" is the largest `value / (f(n)·eps)` over the factor-1 rows of
-the kind; "rule" is the smallest power of two ≥ 4 × the larger need of the two classes.
+Recorded 2026-10-09 with `BATCHLAS_VERIFY_RECORD` over the test binaries on threadripper02 (RTX PRO
+6000, sm_120), one file per area: LU (`getrf`, `getrs`, `gesv`, `getri` and their candidate tests;
+119,879 rows), QR and Cholesky (`geqrf`, `orgqr`, `ormqr`, `potrf`, `posv` and candidates; 18,125),
+eigen and SVD (`syev*`, `sytrd*`, `gesvd*`, `gesvdj_cta`, `bdsdc`, `bdsqr`; 70,736), BLAS
+(`device_blas`, `gemm`, `gemv`, `spmm`, `syrk`, `syr2k`, `symm`, `trmm`, `trsm` and candidates;
+30,074). "Need" is the largest `value / (f(n)·eps)` over the factor-1 rows of the kind; "rule" is the
+smallest power of two ≥ 4 × the larger need of the two classes.
 
 | Kind | Need, float/cfloat | Need, double/cdouble | Rule | c | Change |
 | --- | --- | --- | --- | --- | --- |
@@ -148,18 +143,16 @@ the kind; "rule" is the smallest power of two ≥ 4 × the larger need of the tw
 | `eigen_residual` | 5.09 (float, n = 31) | 4.14 (cdouble, n = 32) | 32 | 32 | none |
 | `values` | 3.87 (float, n = 12) | 4.66 (cdouble, n = 32) | 32 | 32 | none |
 
-The `orthogonality` maximum comes from 1 × 1 Q (a single reflector, a few ulps of
-`|q|² − 1`); above n = 1 its need is 2.8 (cdouble), which alone would round to 16. The
-orthogonality rows of the eigen and SVD file were recorded under the single kind before the split
-and are re-labelled `orthogonality_rotations` (every orthogonality check in those binaries is now
-that kind). Before the split, 26 cases (Jacobi syev, `gesvdj_cta`, the Jacobi and CTA families of
-`syev_candidates`, `BdsdcTest.Graded`, `GesvdGeneralComplexTest.GeneralComplexAboveThirtyTwo`) were
-red at c = 16 with needs from 16.3 to 59.4.
+The `orthogonality` maximum comes from 1 × 1 Q (a single reflector, a few ulps of `|q|² − 1`); above
+n = 1 its need is 2.8 (cdouble), which alone would round to 16. The eigen and SVD file's
+orthogonality rows are re-labelled `orthogonality_rotations` (every orthogonality check in those
+binaries is that kind). At a single kind with c = 16, 26 cases (Jacobi syev, `gesvdj_cta`, the Jacobi
+and CTA families of `syev_candidates`, `BdsdcTest.Graded`,
+`GesvdGeneralComplexTest.GeneralComplexAboveThirtyTwo`) were red, with needs from 16.3 to 59.4.
 
-**Re-check after the final pass** (the per-kind n convention above; `ortho`, `trmm`, `syevx`, the
-syev CTA and Jacobi eigenvalues, `syev`'s and `gesvd`'s known spectra newly on the library): 213,235
-rows over 22 changed test binaries (20 of them record), 2026-10-09, same machine. Every kind's need
-stays at or below c/4, so no c changes:
+**Re-check with the per-kind n convention** (`ortho`, `trmm`, `syevx`, the syev CTA and Jacobi
+eigenvalues, `syev`'s and `gesvd`'s known spectra on the library): 213,235 rows over 22 test binaries
+(20 of them record), 2026-10-09, same machine. Every need stays at or below c/4, so no c changes:
 
 | Kind | Need, float/cfloat | Need, double/cdouble |
 | --- | --- | --- |
@@ -171,8 +164,8 @@ stays at or below c/4, so no c changes:
 | `eigen_residual` | 5.09 (float, n = 31) | 4.14 (cdouble, n = 32) |
 | `values` | 4.62 (float, n = 31, Jacobi) | 4.66 (cdouble, n = 32) |
 
-The only `orthogonality` site that changed from columns to rows is `orgqr_tests` (4 × 4, factor 1);
-`ortho_tests` is new on the library. No bound moved by more than 4× through the n convention.
+The only `orthogonality` site that counts rows rather than columns is `orgqr_tests` (4 × 4, factor 1).
+No bound moved by more than 4× through the n convention.
 
 **Accepted slack.** Every site whose factor is not 1, with the user's decision of 2026-10-09:
 
@@ -181,27 +174,36 @@ The only `orthogonality` site that changed from columns to rows is `orgqr_tests`
 | `tests/bdsdc_tests.cc` `GradedWithVectorsHighCondition` | `orthogonality_rotations` | 8 float, 0.5 double | 2048 n eps, 128 n eps | graded κ ~ 1e6 divide and conquer at n = 64: the repair's Gram-Schmidt accumulates error; measured need 1246 float (4.75e-3), 71.5 double |
 | `tests/gesvd_tests.cc` `gesvd_cta_slack` (real `cta` pins) | `orthogonality_rotations` | 0.25 float, 0.5 double | 64 n eps, 128 n eps | the cta provider always takes the normal-equations bidiagonal path, which squares the condition number; measured need 52 float, 113 double |
 | `tests/gesvd_tests.cc` `expect_orthonormal_columns` under `BATCHLAS_GESVD_BIDIAG=normal`, float | `orthogonality_rotations` | 0.5 | 128 n eps | normal equations square the condition number; measured on one site only (`ThinTallUnderNormalEquationsBidiag`, n = 48): need 7.18 (2.05e-5); a whole-binary sweep under `BATCHLAS_GESVD_BIDIAG=normal` is not measured |
-| `tests/geqrf_tests.cc` `orth_slack`, `tests/orgqr_tests.cc` `orth_slack` | `orthogonality` | ≤ 1 | the file's old `0.5 (m+k) eps / √k`, at most the kind's bound | tightening: keeps each file's pre-migration tolerance |
+| `tests/geqrf_tests.cc` `orth_slack`, `tests/orgqr_tests.cc` `orth_slack` | `orthogonality` | ≤ 1 | the file's old `0.5 (m+k) eps / √k`, at most the kind's bound | tightening: keeps each file's pre-library tolerance |
 | `tests/geqrf_tests.cc` `residual_slack`, `tests/geqrf_candidates_tests.cc` `tol`, `tests/orgqr_tests.cc` `recon_slack` | `factorization` | ≤ 1 | the file's old `0.5 (m+n) eps` with its tiny-order floor | tightening (docs/perf/qr.md) |
 | `tests/potrf_tests.cc` `kLeafSlack` | `factorization` | 0.5 | 8 n eps | tightening: the leaf tolerance 4 n eps of docs/perf/potrf.md |
 | `tests/device_blas_tests.cc` `tighten` | `blas` | ≤ 1 | the old absolute tolerance | tightening: exact small-integer data |
 
-The tail migration (the last tests on the library) kept every older bound that was stricter than the
-kind's as a `Slack` with factor ≤ 1 and the old bound as its reason: gemm and gemv float against the
-old vendor-comparison tolerance (`vendor_comparison_tolerance`, `vendor_comparison_slack`), the sytrd
-eig(T)-vs-eig(A) float bound of 1e-6 relative, device_blas's exact data, the sb2st float spectra
-(1/16 per chase step, at most 1; double stays at factor 1), trsm's vendor-substitute
-`‖AX − B‖ / ‖B‖ < 1e-5`, the float spectrum bounds of lanczos, ritz_values, steqr, syev_blocked,
-syevx and sytrd_blocked, and ormqr_blocked's float reconstruction (`recon_slack`, 1/64). `git grep
-'Slack{'` lists them with their reasons. Where the old check was entrywise and the library's is
-normwise, the slack keeps the old power only on average. ormqr_blocked's 1/64 catches a single
-`1e-5` error in a Q entry in column j only where ‖R(j,:)‖ is at least 0.76 of the average row norm
-(j ≤ 45 of 64 on random input; a deliberate one-entry break was caught in every float case). A
-column with a small row of R, near the end, no longer is.
+The bdsdc and gesvd factors were accepted as 128×/8× and 4×/8× of c = 16 under the single kind; on
+`orthogonality_rotations` they keep each accepted absolute bound (2048, 128, 64, 128 n eps), not 16×
+looser.
 
-The bdsdc and gesvd factors were accepted as 128×/8× and 4×/8× of c = 16 before the split; they
-are re-expressed on `orthogonality_rotations` so that each absolute bound is the one accepted
-(2048, 128, 64, 128 n eps), not 16× looser.
+**Tightening slacks** (factor ≤ 1, the older stricter bound as the reason; `git grep 'Slack{'` lists
+them, 26 sites in 10 test files on 2026-10-21): gemm and gemv float against the old vendor-comparison
+tolerance (`vendor_comparison_tolerance`, `vendor_comparison_slack`), the sytrd eig(T)-vs-eig(A) float
+bound of 1e-6 relative, device_blas's exact data, the sb2st float spectra (1/16 per chase step, at
+most 1; double stays at factor 1), trsm's vendor-substitute `‖AX − B‖ / ‖B‖ < 1e-5`, the float
+spectrum bounds of lanczos, ritz_values, steqr, syev_blocked, syevx and sytrd_blocked, and
+ormqr_blocked's float reconstruction (`recon_slack`, 1/64). Where the old check was entrywise and the
+library's is normwise, the slack keeps the old power only on average: ormqr_blocked's 1/64 catches a
+single `1e-5` error in a Q entry in column j only where ‖R(j,:)‖ is at least 0.76 of the average row
+norm (j ≤ 45 of 64 on random input; a deliberate one-entry break was caught in every float case); a
+column with a small row of R, near the end, is not caught. ormqr's identity applications are judged by
+`qr_reconstruction` against the input and `orthogonality`, not componentwise (Q's near-zero entries
+make an elementwise relative error meaningless).
+
+**Tuner specs.** `svd_residual` keeps the `factorization` constant 16: its measured need is 3.73
+float / 1.29 double over gesvd_tests and 5.17 / 5.68 over the tuner's native arms, but 25.3 for
+cuSOLVER's 2x2 Hermitian double cells, which the tuner therefore records `bad` (the rule would give
+128, an 8x loosening that needs the maintainer's acceptance; not adopted). The `cta` arm is `bad` on
+square vectors cells too: U's orthogonality goes like eps·κ² on the normal-equations path
+([gesvd defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa)), up to 2.3e4
+n eps; no slack.
 
 **Kept outside the library.** Local references that are deliberately not `batchlas::verify`:
 
@@ -218,7 +220,8 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/sytrd_blocked_tests.cc` `TrailingUpdateRoutesAgree` relation | `syr2k ≤ 4 · gemm + 16 u` compares two measured errors (each route is also checked at its kind) |
 | `tests/syevx_tests.cc` LOBPCG instrumentation tests | staged vs host-read history (rates, residual norms, Ritz values): non-eigen quantities from two paths of the code under test |
 | `tests/cond_tests.cc` log10 and `ztol` checks | the random log-cond tolerances against the generator's target, the log10 tolerances and the band-structure zero checks are properties of the inputs and the estimator, not a residual |
-| `tests/norm_tests.cc` `expect_norm_close`, `tests/potrf_tests.cc` `host_real` / `host_imag` | a four-line scalar relative error (judged at `blas`) and scalar part accessors: the library has no scalar-vs-scalar error or part accessor |
+| `tests/matrix_tests.cc` `fill_graded_hermitian` spectrum ratio (`w.back() / w.front()` against \f$10^{c}\f$, 1%) | a property of the input generator, like the cond targets above; the spectrum itself is judged at `values` |
+| `tests/norm_tests.cc` `expect_norm_close` | a four-line scalar relative error (judged at `blas`): the library has no scalar-vs-scalar error |
 | `tests/linalg_layer_tests.cc` `NormMatchesTheHostFrobeniusNorm`, `CondMatchesTheDiagonalReference` | one scalar per item against a closed form on exact small-integer data: no scalar-vs-scalar kind |
 | `tests/device_blas_tests.cc` `expect_vector_near` / `expect_matrix_near` and the gemv/dot/conj spot checks | hand-computed results on small-integer data, exact in float: any error is a bug, and a componentwise kind would loosen them |
 | `tests/iluk_tests.cc` MILU diagonal value, generator Hermitian symmetry, host-vs-device factor entries, the 2D-Laplacian smallest eigenvalue | one exactly computable factor entry; a property of the input generator; two factorization implementations compared entry by entry (intermediate output); an iterative LOBPCG run judged at its own convergence tolerance, not a residual |
@@ -227,43 +230,19 @@ are re-expressed on `orthogonality_rotations` so that each absolute bound is the
 | `tests/gesvd_tests.cc` `DefaultProviderKeepsSingularValuesAtHighCondition` `sv_rel_tol` | per-singular-value relative error on graded input (kappa 1e5) against the closed-form spectrum: the quantity the normal-equations path destroys; a normwise `values_error` scaled by sigma_max cannot see the small values, and no relative-accuracy kind exists |
 | `tests/device_blas_tests.cc` Auto-vs-Generic and group-vs-item policy comparisons (gemv, ger, syr2k `EXPECT_NEAR` at 1e-4/1e-5) | two execution policies of the same op compared result to result: each policy's arithmetic must agree elementwise, which a backward error against the inputs would loosen |
 
-## Rollout
-
-One PR to main (`verify-library`). The library and its first users (the tuner's potrf, posv, trsm and
-gemm specs, `benchmarks/factor_bench.cc`; `tools/tune/residuals.hh` and factor_bench's inline copies
-deleted; the three LAPACKE macros became `BATCHLAS_VERIFY_HAVE_LAPACKE`) landed first. The tests were
-then migrated per area (LU; QR and Cholesky; eigen, SVD and tridiagonal; BLAS) on task branches merged
-into it, and the library was extended mid-way where a migration needed it (`view`, `form_q`,
-`qr_reconstruction`, the `Transpose` solve overload, `rank2k_backward_error`, `geqrf_tau`,
-`Slack`; later `lu_solve_residual`, `pivot_ratio`, working-precision `getrf_pivots` and the split
-orthogonality kinds). A final pass moved the remaining local checks onto it
-(syevx, ortho, trmm, the syev CTA and Jacobi eigenvalue references, gesvd's singular-value bounds,
-syev's closed-form spectra, the candidates tests' scalar helpers, getrf's LAPACKE pivots). A tail pass moved the last users of the fixed per-type `test_utils::tolerance` (deleted) onto it, ormqr's identity applications among them: `op(Q)` judged by `qr_reconstruction` against the input and `orthogonality`, not componentwise (Q's near-zero entries make an elementwise relative error meaningless).
-
-The tiered-tuning PR (19 specs) follows it and writes its specs against this library, so
-`lu_residuals.hh`, `qr_common.hh` and `host_reference.hh` from the `tuning-deep-sm120` branch
-never land. It added the item-list `form_q` (ormqr's and geqrf's Q for one batch call) and
-`svd_residual` (gesvd's reconstruction). `svd_residual` keeps the `factorization` constant 16: its
-measured need is 3.73 float / 1.29 double over gesvd_tests and 5.17 / 5.68 over the tuner's native
-arms, but 25.3 for cuSOLVER's 2x2 Hermitian double cells, which the tuner therefore records `bad`
-(the rule would give 128, an 8x loosening that needs the maintainer's acceptance; not adopted).
-The `cta` arm is `bad` on square vectors cells too: U's orthogonality goes like eps·κ² on the
-normal-equations path (docs/perf/gesvd.md, defect A), up to 2.3e4 n eps; no slack.
-
 ## Verification: acceptance
 
 - **Inputs are library fills.** Test inputs come from `MatrixView::fill_random`, `fill_random_spd`,
-  `fill_random_pivoted` and `fill_graded_hermitian` (device kernels, deterministic in the seed);
-  verify has no generators. Inputs of sweeps archived before 2026-10-11 do not reproduce.
-- **Every check proven.** Each residual has a test with a correct input (passes) and one
-  deliberate corruption per axis it reads: a perturbed element, a wrong `ld`, a wrong batch
-  `stride`, the last item (not item 0) corrupted, a NaN. Each must fail.
-- **Results unchanged for migrated sites.** A migrated tuner spec gives the same verdict on every
-  cell of a preview run of its op; factor_bench's `residual` column moves by no more than
-  rounding; a migrated test keeps its case list, and the repo's deliberate-break rule (agent
-  guide §8) is re-run for it.
-- **One switch.** No `HAVE_LAPACKE` macro other than `BATCHLAS_VERIFY_HAVE_LAPACKE` remains, and
-  a vendor-free, LAPACKE-free configure still builds with the references returning `false`.
-- **No new copies.** After each step, grep finds one definition of each migrated helper: a
-  `MatrixView`/`VectorView` member or static, or `include/batchlas/verify/` (`nanmax`, the
-  tolerances, the references).
+  `fill_random_pivoted` and `fill_graded_hermitian`. Inputs of sweeps archived before 2026-10-11 do
+  not reproduce.
+- **Every check proven.** Each residual has a test with a correct input (passes) and one deliberate
+  corruption per axis it reads: a perturbed element, a wrong `ld`, a wrong batch `stride`, the last
+  item (not item 0) corrupted, a NaN. Each must fail.
+- **Results unchanged for migrated sites.** A migrated tuner spec gives the same verdict on every cell
+  of a preview run of its op; factor_bench's `residual` column moves by no more than rounding; a
+  migrated test keeps its case list, and the deliberate-break rule (@ref dev_agent_guide §8) is re-run
+  for it.
+- **One switch.** No `HAVE_LAPACKE` macro other than `BATCHLAS_VERIFY_HAVE_LAPACKE`, and a vendor-free,
+  LAPACKE-free configure still builds with the references returning `false`.
+- **No new copies.** Grep finds one definition of each helper: a `MatrixView`/`VectorView` member or
+  static, or `include/batchlas/verify/` (`nanmax`, the tolerances, the references).

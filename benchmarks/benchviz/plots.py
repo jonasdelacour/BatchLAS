@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Figures for one campaign, derived from results.jsonl alone, in the house
 style (style.py). Per op: speedup_n, throughput_n, heatmap, and for the
 rectangular ops speedup_2d and throughput_2d. Per precision: summary_<t>.

@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: MIT
 // Every table embedded from tuned/<op>.<device>.txt (docs/design/tuning-data.md,
 // docs/design/flat-kernel-selection.md §8.4). No GPU.
 
 #include <gtest/gtest.h>
 
+#include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 
 #include <src/ops/gemm/choice.hh>
@@ -47,7 +49,7 @@ using batchlas::ScopedEnvVar;
 
 namespace {
 
-template <class Array>
+template <typename Array>
 std::vector<std::string> spellings(const Array& cands) {
     std::vector<std::string> out;
     for (const auto& c : cands) out.push_back(sel::to_string(c));
@@ -378,7 +380,7 @@ const sel::Table& embedded(const std::string& op, const std::string& dtype, cons
             if (e.name == name)
                 for (sel::Table& t : sel::parse_tables(e.text, e.name))
                     if (t.dtype == dtype) it = cache.emplace(id, std::move(t)).first;
-    if (it == cache.end()) throw std::runtime_error(id + " is not embedded");
+    if (it == cache.end()) throw batchlas::internal_error(id + " is not embedded");
     return it->second;
 }
 

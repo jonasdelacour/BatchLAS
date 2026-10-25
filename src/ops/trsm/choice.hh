@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -18,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::trsm_vendor; nee
 
 using TrsmChoice = std::variant<Cta, SgLeft, Blocked, Vendor>;  ///< fieldless: buckets, wg ladder, outer block derived
 
-template <class T>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
+template <typename T>  /// Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() { return select::all_of<TrsmChoice>(); }
 
 inline constexpr select::OpSpec spec{Op::trsm, select::Lib::level3};  ///< last resort (§5.5): blocked, vendor (CPU)

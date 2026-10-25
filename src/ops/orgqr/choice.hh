@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -16,7 +17,7 @@ struct Vendor : select::NoFields<"vendor"> {};    ///< backend::orgqr_vendor; an
 
 using OrgqrChoice = std::variant<Blocked, Vendor>;  ///< fieldless: orgqr_nb is derived from type and min(m, n)
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3).
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3).
 constexpr auto candidates() { return select::all_of<OrgqrChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};  ///< §5.5: vendor is the general one

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRF, the register-resident tier for order n <= 32: one matrix per
 // SubGroupPartition<N>, row r in lane r of a `D rA[N]`, pivoting by lazy relabel.
 // evidence: docs/perf/lu.md#lu-the-tiny-tier

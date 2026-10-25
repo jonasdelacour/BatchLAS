@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Run a campaign: one process per (cell, arm), results appended as JSONL.
 
 ONE PROCESS PER ARM PER CELL, for the reasons run_factor_grid.sh gives: the SLM

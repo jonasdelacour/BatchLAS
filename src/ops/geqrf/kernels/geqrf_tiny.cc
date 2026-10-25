@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GEQRF: the TINY tier -- square m == n <= 32, one matrix per
 // SubGroupPartition<N>, the whole matrix in registers between the load and the store.
 // evidence: docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that every cited evidence anchor is a live link in the generated site.
 
 .github/ci/check_evidence_anchors.py proves that `evidence: docs/<page>.md#<a>`

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched CSR SpMM, C = alpha*op(A)*op(B) + beta*C. TRAPS: A.nnz() is the batch-max

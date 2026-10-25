@@ -1,5 +1,7 @@
 # Algorithms {#algorithms_index}
 
+> **Status:** current · section index
+
 Derivations and pseudo-algorithms for the implemented methods. Performance: @ref perf_evidence.
 
 | Page | What you find there |

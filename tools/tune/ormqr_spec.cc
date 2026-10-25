@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // ormqr for the tuner (src/ops/ormqr/choice.hh): reflectors and tau from one untimed public geqrf
 // (Auto) of a MatrixView::fill_random m x k matrix, MatrixView::fill_random C (complex parts both),
 // every ld padded by ld_pad, block_size_hint 0 so blocked derives its WY width as a library caller's
@@ -12,6 +13,7 @@
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -33,7 +35,7 @@ Transpose trans_of(const std::string& w) {
     return w == "N" ? Transpose::NoTrans : (w == "T" ? Transpose::Trans : Transpose::ConjTrans);
 }
 
-template <class T>
+template <typename T>
 struct OrmqrProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -99,7 +101,7 @@ public:
         return {ops::ormqr::key_names.begin(), ops::ormqr::key_names.end()};
     }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(ops::ormqr::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(ops::ormqr::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"side", {"L", "R"}},         {"trans", {"N", "T", "C"}},
@@ -113,7 +115,7 @@ public:
         std::erase_if(cells, [&](const CellKey& c) {
             return key_int(c, "k") > key_int(c, "m") || (cplx && *key_get(c, "trans") == "T");
         });
-        if (cells.empty()) throw std::invalid_argument("ormqr: the --grid values leave no cell with k <= m");
+        if (cells.empty()) throw batchlas::invalid_argument("ormqr: the --grid values leave no cell with k <= m");
         return cells;
     }
     double bytes(const std::string& dtype, const CellKey& c) const override {  // A0, A, C0, C
@@ -151,9 +153,9 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/ormqr_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             const int m = int(key_int(req.key, "m")), k = int(key_int(req.key, "k"));
-            if (k > m) throw std::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
+            if (k > m) throw batchlas::invalid_argument("ormqr: k > m reflectors do not fit Q's order");
             const Side side = *key_get(req.key, "side") == "R" ? Side::Right : Side::Left;
             OrmqrProblem<T> p(q, side, trans_of(*key_get(req.key, "trans")), m, k, int(key_int(req.key, "q")),
                               int(key_int(req.key, "batch")), req.ld_pad);

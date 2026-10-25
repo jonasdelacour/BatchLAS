@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // A batched gemm, checked against a hand-computed reference, from a standalone
 // consumer project that knows nothing about BatchLAS's build tree.
 //

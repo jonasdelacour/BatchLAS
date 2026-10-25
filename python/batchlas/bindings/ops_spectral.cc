@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <python/batchlas/bindings/init.hh>
 #include <python/batchlas/bindings/support.hh>
 
@@ -902,7 +903,7 @@ void init_spectral_ops(py::module_& module) {
         const Uplo uplo = parse_uplo(uplo_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         // Only device capabilities are queried here, so the backend is irrelevant.
-        Queue& queue = acquire_queue(device_name, Backend::AUTO);
+        Queue& queue = acquire_queue(device_name, Backend::Auto);
         return visit_dense(matrix, [&](auto tag, const auto& typed_matrix) {
             using scalar_type = typename decltype(tag)::type;
             const auto view = typed_matrix.view();

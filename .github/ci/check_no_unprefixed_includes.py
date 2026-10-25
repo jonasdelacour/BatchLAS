@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Check that nothing spells a BatchLAS header without the `batchlas/` prefix.
 
 Every public header lives under include/batchlas/ and installs to

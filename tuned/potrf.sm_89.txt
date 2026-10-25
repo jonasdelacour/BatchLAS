@@ -1,5 +1,5 @@
-# op=potrf device=sm_89 batchlas=5dc7f884 kernels=9b03460f family_kernels=tiny:71bcd611,cta:4de6022c,lpanel:bc5de6e1,blocked:87cf39e6,vendor:51a1414d date=2026-10-22
-# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:12,converted:241,prior:0,transcribed:0
+# op=potrf device=sm_89 batchlas=d00a27d6 kernels=4ee0f94f family_kernels=tiny:679bb063,cta:5a6117de,lpanel:c70d8e3e,blocked:829c392a,vendor:0f6d01ae date=2026-10-24
+# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_89.jsonl tiers=deep:12,coarse:0,calibrate:0,preview:0,custom:0,converted:241,prior:0,transcribed:0
 # keys: dtype:exact uplo:exact n:log:3 batch:log
 dtype=float uplo=L n=1 batch=65536 | tiny 0.01758 | vendor 0.06896 # converted
 dtype=float uplo=L n=2 batch=65536 | tiny 0.01742 | vendor 0.08738 # converted
@@ -88,18 +88,18 @@ dtype=float uplo=U n=20 batch=32768 | tiny 0.2254 | vendor 0.7253 # converted
 dtype=float uplo=U n=24 batch=32768 | tiny 0.2395 | vendor 0.8488 # converted
 dtype=float uplo=U n=28 batch=32768 | tiny 0.2727 | vendor 0.9888 # converted
 dtype=float uplo=U n=32 batch=32768 | tiny 0.3417 | vendor 1.132 # converted
-dtype=float uplo=U n=96 batch=128 | vendor 0.07680 | blocked 0.1195 # custom
-dtype=float uplo=U n=96 batch=512 | vendor 0.1179 | blocked 0.1848 # custom
-dtype=float uplo=U n=128 batch=128 | vendor 0.1013 | blocked 0.1400 # custom
-dtype=float uplo=U n=128 batch=512 | vendor 0.1753 | blocked 0.2372 # custom
-dtype=float uplo=U n=192 batch=128 | vendor 0.1697 | blocked 0.2726 # custom
-dtype=float uplo=U n=192 batch=512 | vendor 0.4546 | blocked 0.5932 # custom
-dtype=float uplo=U n=256 batch=128 | vendor 0.2544 | blocked 0.4173 # custom
-dtype=float uplo=U n=256 batch=512 | vendor 0.9161 | blocked 1.058 # custom
-dtype=float uplo=U n=384 batch=128 | vendor 0.6107 | blocked 0.7281 # custom
-dtype=float uplo=U n=384 batch=512 | blocked 2.540 | vendor 2.901 # custom
-dtype=float uplo=U n=512 batch=128 | vendor 1.229 | blocked 1.261 # custom
-dtype=float uplo=U n=512 batch=512 | blocked 4.691 | vendor 6.293 # custom
+dtype=float uplo=U n=96 batch=128 | vendor 0.07613 | blocked 0.1233 # deep
+dtype=float uplo=U n=96 batch=512 | vendor 0.1220 | blocked 0.1958 # deep
+dtype=float uplo=U n=128 batch=128 | vendor 0.1114 | blocked 0.1604 # deep
+dtype=float uplo=U n=128 batch=512 | vendor 0.1986 | blocked 0.2778 # deep
+dtype=float uplo=U n=192 batch=128 | vendor 0.1905 | blocked 0.3058 # deep
+dtype=float uplo=U n=192 batch=512 | vendor 0.4444 | blocked 0.6484 # deep
+dtype=float uplo=U n=256 batch=128 | vendor 0.2632 | blocked 0.4321 # deep
+dtype=float uplo=U n=256 batch=512 | vendor 0.8675 | blocked 1.061 # deep
+dtype=float uplo=U n=384 batch=128 | vendor 0.5939 | blocked 0.7320 # deep
+dtype=float uplo=U n=384 batch=512 | blocked 2.591 | vendor 2.901 # deep
+dtype=float uplo=U n=512 batch=128 | blocked 1.223 | vendor 1.189 # deep
+dtype=float uplo=U n=512 batch=512 | blocked 4.963 | vendor 6.113 # deep
 dtype=double uplo=L n=1 batch=32768 | vendor 0.05775 | tiny 0.08076 # converted
 dtype=double uplo=L n=2 batch=32768 | tiny 0.08077 | vendor 0.09353 # converted
 dtype=double uplo=L n=3 batch=32768 | tiny 0.08090 | vendor 0.1318 # converted

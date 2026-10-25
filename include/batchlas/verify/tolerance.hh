@@ -17,7 +17,7 @@
 namespace batchlas::verify {
 
 /// Unit roundoff of T's real type: 2^-24 for float, 2^-53 for double.
-template <class T> constexpr double eps() { return std::numeric_limits<float_t<T>>::epsilon() * 0.5; }
+template <typename T> constexpr double eps() { return std::numeric_limits<float_t<T>>::epsilon() * 0.5; }
 
 /// max(a, b), NaN if either is NaN (std::max drops a NaN second argument, so a poisoned value would pass).
 inline double nanmax(double a, double b) {
@@ -61,7 +61,7 @@ inline const char* kind_name(Check kind) {
     return "unknown";
 }
 
-template <class T> constexpr const char* dtype_name() {
+template <typename T> constexpr const char* dtype_name() {
     if constexpr (is_std_complex_v<T>) return std::is_same_v<float_t<T>, float> ? "cfloat" : "cdouble";
     else return std::is_same_v<T, float> ? "float" : "double";
 }
@@ -114,39 +114,39 @@ inline void record(const char* kind, const char* dtype, int n, double value, dou
 }  // namespace detail
 
 /// c(kind) * f(n) * eps<T>(): f(n) = n (below 1 counts as 1), except blas, f(k) = k + 2 (k below 0 counts as 0).
-template <class T> double bound(Check kind, int n) {
+template <typename T> double bound(Check kind, int n) {
     const double f = kind == Check::blas ? double(n < 0 ? 0 : n) + 2.0 : double(n < 1 ? 1 : n);
     return detail::coefficient(kind) * f * eps<T>();
 }
 
 /// slack.factor * bound<T>(kind, n). @throws batchlas::invalid_argument for an empty reason or a factor <= 0.
-template <class T> double bound(Check kind, int n, Slack slack) {
+template <typename T> double bound(Check kind, int n, Slack slack) {
     detail::check_slack(slack);
     return slack.factor * bound<T>(kind, n);
 }
 
 /// pass without recording: for predicates evaluated on results expected to be wrong.
-template <class T> bool within(Check kind, int n, double value) { return !std::isnan(value) && value <= bound<T>(kind, n); }
+template <typename T> bool within(Check kind, int n, double value) { return !std::isnan(value) && value <= bound<T>(kind, n); }
 
-template <class T> bool within(Check kind, int n, double value, Slack slack) {
+template <typename T> bool within(Check kind, int n, double value, Slack slack) {
     return !std::isnan(value) && value <= bound<T>(kind, n, slack);
 }
 
 /// True when @p value is not NaN and within bound<T>(kind, n). With `BATCHLAS_VERIFY_RECORD=<path>`
 /// set, appends "kind dtype n value bound 1 -" to that file (calibration input).
-template <class T> bool pass(Check kind, int n, double value) {
+template <typename T> bool pass(Check kind, int n, double value) {
     detail::record(detail::kind_name(kind), detail::dtype_name<T>(), n, value, bound<T>(kind, n), 1.0, "-");
     return within<T>(kind, n, value);
 }
 
 /// pass against the slacked bound; records the raw value, the kind's bound, the factor and the reason.
-template <class T> bool pass(Check kind, int n, double value, Slack slack) {
+template <typename T> bool pass(Check kind, int n, double value, Slack slack) {
     detail::check_slack(slack);
     detail::record(detail::kind_name(kind), detail::dtype_name<T>(), n, value, bound<T>(kind, n), slack.factor, slack.reason);
     return within<T>(kind, n, value, slack);
 }
 
 /// Bound of pivot_ratio: 1 + 64 eps<T>() (32 machine epsilons), the slack of a cabs1 comparison in T.
-template <class T> double pivot_ratio_bound() { return 1.0 + 64.0 * eps<T>(); }
+template <typename T> double pivot_ratio_bound() { return 1.0 + 64.0 * eps<T>(); }
 
 }  // namespace batchlas::verify

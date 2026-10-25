@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // AdaptiveCpp generic (SSCP) backend. Stage 1 compiles one target-agnostic IR, so the NVPTX choice
 // moves from the preprocessor to the JIT: on_ptx() is a JIT-reflection constant. The PTX leg is

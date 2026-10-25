@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched ORGQR, blocked tier: Q = H_1 H_2 ... H_k I_{m x n}, i.e. the
 // routed ormqr applied to an identity. evidence: docs/perf/qr.md#qr-the-vendor-baseline
 //

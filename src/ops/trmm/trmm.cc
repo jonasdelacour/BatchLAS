@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // trmm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/trmm.<device>.txt row that can_run() admits. Triangular is the Side::Left tile kernel that
 // skips the zero half of A (trmm_triangular_tiles.hh); Expand materialises op(A)'s triangle into scratch and
@@ -7,6 +8,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trmm.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/level3/batched.hh>
@@ -29,16 +31,16 @@ namespace ops::trmm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // The extent of B the triangular order does not occupy.
-template <class T>
+template <typename T>
 std::int64_t rhs_count(const MV<T>& B, Side side) {
     return side == Side::Left ? B.cols() : B.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
     return {{"side", side == Side::Left ? "L" : "R"}, {"order", A.rows()}, {"q", rhs_count<T>(B, side)},
             {"batch", A.batch_size()}};
@@ -50,7 +52,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 // budget; triangular puts its tile list in grid y, which no chunking shrinks.
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
@@ -70,7 +72,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
 // op(A)'s triangle written densely into a workspace lease (zeros opposite it, ones on a Unit
 // diagonal), then one strided-batched gemm at beta = 0: the caller's A may hold anything in the
 // storage TRMM must not read, so the gemm cannot be pointed at it.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side, Uplo uplo,
                     Transpose transA, Diag diag) {
     const int k = A.rows(), batch = A.batch_size();
@@ -94,7 +96,7 @@ Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
     });
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side,
              Uplo uplo, Transpose transA, Diag diag) {
     return std::visit(overloaded{
@@ -107,13 +109,13 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
                                                                      transA, diag);
                 });
             else
-                throw std::logic_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: triangular is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Expand) -> Event {
             if constexpr (select::native_gpu_backend<B>)
                 return launch_expand<B, T>(q, A, Bm, C, alpha, side, uplo, transA, diag);
             else
-                throw std::logic_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("trmm: expand is wired for native GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (select::has_library<B>(spec.vendor))
@@ -130,7 +132,7 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, typename T>
 Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
-    (void)backend::shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
+    (void)backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, B, C, side);
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
     // and the cuBLAS loop faults on one.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();

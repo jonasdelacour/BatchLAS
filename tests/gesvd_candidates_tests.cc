@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every gesvd candidate, pinned: docs/design/flat-kernel-selection.md §8, phase 5. The limit
 // oracle reads the drivers' own ceilings; which kernel ran is read back from the select trace
 // or a bit-for-bit comparison with the direct driver, never assumed from an accepted pin.
@@ -163,11 +164,14 @@ template <typename T>
 void expect_solved(Svd<T>& p, const std::string& what) {
     const double tol = std::is_same_v<RealOf<T>, float> ? 2e-3 : 1e-9;
     const Spec& s = p.s;
+    double scale = 0;
     for (int b = 0; b < s.batch; ++b) {
         ASSERT_EQ(p.info[b], 0) << what << " item " << b;
-        for (int l = 0; l < p.k; ++l)
-            ASSERT_NEAR(double(p.sv[std::size_t(b) * p.k + l]), p.sigma[b][l], tol * 2) << what << " item " << b << " sigma " << l;
+        for (double sig : p.sigma[b]) scale = std::max(scale, sig);
     }
+    const VectorView<RealOf<T>> w(p.sv.data(), p.k, s.batch, 1, p.k);
+    EXPECT_VERIFY(T, verify::Check::values, p.k, MVof<RealOf<T>>::values_error(w, p.sigma, scale, w.all_items()))
+        << what << ": singular values";
     if (s.ju == SvdVectors::None || s.jv == SvdVectors::None) return;
     double worst = 0;
     for (int b = 0; b < s.batch; ++b)
@@ -181,7 +185,7 @@ void expect_solved(Svd<T>& p, const std::string& what) {
     EXPECT_LE(worst, tol * 10) << what << ": reconstruction";
 }
 
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -198,7 +202,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("gesvd ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no gesvd trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");

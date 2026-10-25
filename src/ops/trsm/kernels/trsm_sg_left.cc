@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The Side::Left sub-group TRSM kernel. It lives in its own TU because it needs
 // the raised pragma-unroll threshold (src/CMakeLists.txt): without it the N x QC
 // broadcast loop is not unrolled and x[] / nL[] go to a stack frame (520 B at

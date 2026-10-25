@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Exception classes, route pins, settings reload and the build-feature report."""
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ def test_exception_hierarchy_mirrors_error_hh():
 
 
 def test_invalid_argument_is_translated():
-    with pytest.raises(bl.InvalidArgumentError, match="GESV: A must be square"):
+    with pytest.raises(bl.InvalidArgumentError, match="gesv: A must be square"):
         bl.gesv(np.ones((2, 3, 4)), np.ones((2, 3, 1)))
 
 

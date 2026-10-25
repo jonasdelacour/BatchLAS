@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Bidiagonal SVD via stedc, NOT a port of LAPACK's dlasd*: the perfect-shuffled
 // Golub-Kahan matrix [0 B^T; B 0] is tridiagonal with zero diagonal and
 // off-diagonal (d_0, e_0, d_1, ..., d_{n-1}), eigenvalues +/- sigma_i. Nothing is
@@ -364,7 +365,7 @@ Event bdsdc(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {
         const int32_t n = static_cast<int32_t>(d.size());

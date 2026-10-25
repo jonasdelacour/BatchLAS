@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <src/linalg-impl.hh>
@@ -9,8 +10,9 @@
 namespace batchlas::backend::shape {
 
 // The level-3 shape checks shared by every backend. E is the exception type.
-// The public entries (level3.cc, symm/syrk/syr2k/trmm) already throw std::invalid_argument
-// up front; netlib's host-task copy (std::runtime_error) is a second check.
+// The public entries (level3.cc, symm/syrk/syr2k/trmm) and the cuBLAS/rocBLAS families throw
+// batchlas::invalid_argument; netlib's host-task copy runs after the public check, so a throw
+// there is a batchlas::internal_error.
 // evidence: docs/perf/level3.md#level-3-one-set-of-shape-validators
 
 // What symm/hemm/trmm derive: C is m x n and A is square of order k.
@@ -27,7 +29,7 @@ struct RankShape {
 };
 
 // Batch checks. The message names every batch size: that is the whole diagnostic.
-template <class E>
+template <typename E>
 inline void check_batch(const char* op, int batch_a, int batch_c) {
     if (batch_a != batch_c) {
         throw E(std::string(op) + ": batch size mismatch (A=" + std::to_string(batch_a) +
@@ -35,7 +37,7 @@ inline void check_batch(const char* op, int batch_a, int batch_c) {
     }
 }
 
-template <class E>
+template <typename E>
 inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
     if (batch_a != batch_b || batch_a != batch_c) {
         throw E(std::string(op) + ": batch size mismatch (A=" + std::to_string(batch_a) +
@@ -46,7 +48,7 @@ inline void check_batch(const char* op, int batch_a, int batch_b, int batch_c) {
 
 // symm / hemm / trmm: C <- alpha * A * B or alpha * B * A, with A square and B
 // and C both m x n. Check order (square, batch, shapes) is part of the contract.
-template <class E, typename T>
+template <typename E, typename T>
 inline ProductShape validate_product(const char* op,
                                      const MatrixView<T, MatrixFormat::Dense>& A,
                                      const MatrixView<T, MatrixFormat::Dense>& B,
@@ -70,7 +72,7 @@ inline ProductShape validate_product(const char* op,
 // syrk / herk: C <- alpha * op(A) * op(A)^T-or-^H + beta * C, C square.
 //
 // `hermitian` rejects Transpose::Trans: A * A^T would be complex-symmetric.
-template <class E, typename T>
+template <typename E, typename T>
 inline RankShape validate_rank_k(const char* op,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& C,
@@ -97,7 +99,7 @@ inline RankShape validate_rank_k(const char* op,
 
 // syr2k / her2k: as the rank-k form, with B carrying the second term and
 // required to have op(A)'s shape.
-template <class E, typename T>
+template <typename E, typename T>
 inline RankShape validate_rank_2k(const char* op,
                                   const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B,

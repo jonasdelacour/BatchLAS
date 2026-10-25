@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // AMDGCN backend: SYCL adaptor over backend_amdgcn_core.hh, included by
 // sg_partition.hh on the AMDGCN device pass only. Masked is free and the

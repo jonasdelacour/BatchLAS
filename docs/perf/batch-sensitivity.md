@@ -72,7 +72,7 @@ Warm vs cold, ns per item:
 ### Batch sensitivity: C2, one work-group per item and the wave sawtooth
 
 Every native launch is `ceil(batch/G)` work-groups, one work-group, sub-group or tile per item, with a
-serial per-item critical path (`potrf_cta.cc:121`, `getrf_cta.cc:147`, `getrs_fused.cc:237`). The GPU
+serial per-item critical path (`potrf_cta.cc:122`, `getrf_cta.cc:148`, `getrs_fused.cc:238`). The GPU
 holds \f$C = \text{SMs} \times \text{residency} \times \text{items/WG}\f$ items at once, so
 \f$T(B) \approx T_0 + \lceil B/C \rceil T_\text{wave}\f$: flat below C (per-item time ~ 1/B), a step at
 each multiple of C. Per-item lanes are chosen from n alone; only trsm's V1 ladder and the gemv/spmm
@@ -118,7 +118,7 @@ it. Host time minus nsys kernel time at b128 is a fixed 6.3-7.8 us:
 
 - Pipelined, the library path still costs 5.1-6.1 us per gemm 32^3 call against a 2.4 us kernel: about
   3.5-4 us of host path (selection, arena lease, checks) beyond a raw launch.
-- Every batched vendor call pays `MatrixView::init_data_ptr_array` (`src/matrix.cc:2408-2426`), a
+- Every batched vendor call pays `MatrixView::init_data_ptr_array` (`src/matrix.cc:2409-2427`), a
   `parallel_for` plus `.wait()`: +5-11 us. Native blocked drivers inherit it when a child routes to the
   vendor at small batch (potrf blocked b128: 2 syncs).
 - Multi-launch drivers pay ~1.8-5 us host time per launch: getrf n=128 `blocked` 14 kernels per call,

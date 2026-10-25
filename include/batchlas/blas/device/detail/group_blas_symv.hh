@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <batchlas/blas/device/detail/group_blas_common.hh>
@@ -216,7 +217,7 @@ inline constexpr void symv(const Group& group,
         sycl::group_barrier(group);
     }
 }
-            
+
 } // namespace detail::generic
 
 namespace detail {

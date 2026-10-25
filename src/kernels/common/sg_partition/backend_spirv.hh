@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // SPIR-V backend (Intel GPUs, the OpenCL CPU device); device pass only.
 //

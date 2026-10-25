@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched POTRF: the LPANEL tier's launcher and capability surface; the device code
 // is in potrf_lpanel_device.hh. This TU must stay in EXTENSIONS_CTA_SOURCES next to
 // potrf_cta.cc and potrf_blocked.cc -- one device-code cluster, because the blocked driver's

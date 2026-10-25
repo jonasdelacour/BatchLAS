@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """NumPy/SciPy-flavoured front end of the C++ ``batchlas::linalg`` layer.
 
 Every function runs the matching ``batchlas::linalg`` wrapper on the device and

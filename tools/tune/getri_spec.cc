@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // getri for the tuner (docs/design/flat-kernel-selection.md §6.1): MatrixView::fill_random_pivoted A
 // factored once, untimed, by the public getrf under Auto, then C = inv(A) checked on the default items
 // by MatrixView::solve_residual with an empty B (|| A0 C - I ||, seeded probe columns above 2^28
@@ -8,6 +9,7 @@
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -26,7 +28,7 @@ namespace {
 
 namespace I = ops::getri;
 
-template <class T>
+template <typename T>
 struct GetriProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -54,7 +56,7 @@ struct GetriProblem {
         (void)getrf<kBackend, T>(q, LUv, piv.to_span(), fws.to_span(), info.to_span());
         q.wait();
         for (int b = 0; b < batch; ++b)
-            if (info[std::size_t(b)] != 0) throw std::runtime_error("getri input: getrf reported a singular item");
+            if (info[std::size_t(b)] != 0) throw batchlas::convergence_error("getri input: getrf reported a singular item");
     }
     std::size_t workspace() { return getri_buffer_size<kBackend, T>(q, Av); }
     void reset() {  // A is read only, restored anyway so one arm cannot corrupt the next one's input
@@ -81,7 +83,7 @@ public:
     std::string op() const override { return "getri"; }
     std::vector<std::string> key_names() const override { return {I::key_names.begin(), I::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(I::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(I::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> n, b;
@@ -114,7 +116,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/getri_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             GetriProblem<T> p(q, int(key_int(req.key, "n")), int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::solve, p.n);
             if (req.mode == "race") return run_race<I::GetriChoice>("getri", p, req, tol);

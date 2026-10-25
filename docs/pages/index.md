@@ -1,7 +1,7 @@
 # BatchLAS documentation {#mainpage}
 
 \htmlonly
-<div class="bl-hero"><p>Batched dense and sparse linear algebra for SYCL: thousands of small-to-medium problems in one call. Each call is routed, per op, size and batch, between native SYCL kernels and the vendor library (cuBLAS, cuSOLVER, cuSPARSE, rocBLAS, netlib), whichever measured faster.</p></div>
+<div class="bl-hero"><p>Batched dense and sparse linear algebra for SYCL: thousands of small-to-medium problems in one call. Each call is routed, per op, size and batch, between native SYCL kernels and the vendor library (cuBLAS, cuSOLVER, cuSPARSE, host LAPACK), whichever measured faster.</p></div>
 <div class="bl-cards">
 <a class="bl-card" href="guide_index.html"><p class="bl-card-title">User guide</p><p>Build, install, and call BatchLAS from C++ or Python.</p><span class="bl-card-link">Get started &rarr;</span></a>
 <a class="bl-card" href="group__api__reference.html"><p class="bl-card-title">API reference</p><p>Every function, type and option, grouped by operation family.</p><span class="bl-card-link">Browse the API &rarr;</span></a>
@@ -32,11 +32,22 @@ Every entry point enqueues and returns an Event. Matrices are column-major in de
 | Family | Operations |
 | --- | --- |
 | Batched BLAS | gemm, gemv, symm, syrk, syr2k, trmm, trsm, hemm, herk, her2k |
-| Factorizations and solves | potrf, posv, getrf, getrs, getri, gesv, geqrf, orgqr, ormqr |
-| Eigenvalues and SVD | syev, syevx (selected range), gesvd (one-sided Jacobi and blocked) |
-| Sparse and spectral | spmm, lanczos, steqr, stedc, ritz_values, ILU(k) |
-| Utilities | ortho, matrix generators, norms, condition numbers |
+| Factorizations and solves | potrf, posv, getrf, getrs, getri, gesv, inv, geqrf, orgqr, ormqr |
+| Eigenvalues and SVD | syev, syevx (selected range), lanczos, ritz_values, gesvd (one-sided Jacobi and blocked) |
+| Tridiagonal and bidiagonal | sytrd, steqr, stedc, stebz, stein, tridiagonal_solver, gebrd, bdsqr, bdsdc |
+| Sparse | spmm (CSR), ILU(k) |
+| Utilities | ortho, norms, condition numbers, transpose, matrix generators, the `linalg::` layer |
 | Python | pybind11 package with NumPy and SciPy interop (@ref python_examples) |
+
+## Backends
+
+| Backend | Device | Notes |
+| --- | --- | --- |
+| CUDA | NVIDIA GPU | native kernels plus cuBLAS, cuSOLVER, cuSPARSE; tuned on sm_89 and sm_120 |
+| SYCL | Apple GPU through AdaptiveCpp Metal | native kernels only; float and complex<float> |
+| NETLIB | CPU | host LAPACKE and CBLAS plus native kernels |
+
+DPC++ and AdaptiveCpp 25.10 build the same tree (@ref guide_build).
 
 ## Performance against cuSOLVER
 

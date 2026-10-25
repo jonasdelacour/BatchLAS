@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // trsm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.2): select::run takes
 // the first entry of the nearest tuned/trsm.<device>.txt row that can_run() admits. Cta and SgLeft
 // are register-resident solvers for order <= 32; Blocked solves 32-wide diagonal blocks with Cta and
@@ -22,17 +23,17 @@ namespace ops::trsm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // The right-hand-side count: the extent of B the triangular order does not occupy.
-template <class T>
+template <typename T>
 std::int64_t rhs_count(const MV<T>& B, Side side) {
     return side == Side::Left ? B.cols() : B.rows();
 }
 
 // ConjTrans folds to T: the kernels differ from Trans only in a conjugation (trsm_canonical.hh).
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& B, Side side, Transpose transA) {
     return {{"side", side == Side::Left ? "L" : "R"}, {"trans", transA == Transpose::NoTrans ? "N" : "T"},
             {"order", A.rows()}, {"q", rhs_count<T>(B, side)}, {"batch", A.batch_size()}};
@@ -41,7 +42,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side, Transpose transA) 
 // Correctness only (R3): false means the driver would throw or answer wrongly. One launch covers
 // the batch with a single (order, q, ld, stride), so no native family takes a heterogeneous
 // batch, and neither does the vendor, which runs at the full storage order (known-defects #12).
-template <class T>
+template <typename T>
 bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, Side side) {
     const std::int64_t order = A.rows(), q = rhs_count<T>(B, side);
     const bool native = d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 &&
@@ -60,7 +61,7 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T alpha, Side side, Uplo uplo,
              Transpose transA, Diag diag) {
     return std::visit(overloaded{

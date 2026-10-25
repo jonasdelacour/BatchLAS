@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
@@ -14,7 +15,7 @@ static void BM_Ortho(minibench::State& state) {
 
     // arg4 SELECTS THE TRSM SIDE, and without it half of trsm's routing table
     // is unreachable from the only caller that exercises it end to end.
-    // ortho.cc:205,289 pick `is_A_trans ? Side::Left : Side::Right`, and
+    // ortho.cc:206,290 pick `is_A_trans ? Side::Left : Side::Right`, and
     // is_A_trans is just transA != NoTrans -- so a benchmark hardcoding NoTrans
     // measures Side::Right exclusively. The float Side::Left window is real
     // traffic for anyone calling ortho on row-vectors, and it had no

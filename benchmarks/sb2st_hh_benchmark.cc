@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Splits the Householder stage-2 cost: the chase (sytrd_sb2st_hh) versus the
 // Q2 back-transform (unmqr_hb2st), so it is clear which one to optimise.
 
@@ -32,7 +33,7 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
     const int kd = static_cast<int>(state.range(2));
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    const int nrefl = std::max(1, internal::sb2st_hh_num_reflectors(n, kd));
+    const int nrefl = std::max(1, detail::sb2st_hh_num_reflectors(n, kd));
 
     Matrix<T> ab = Matrix<T>::Random(kd + 1, n, false, batch);
     Matrix<T> ab_tri(2, n, batch);
@@ -41,13 +42,13 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
     Vector<Real> d(n, batch);
     Vector<Real> e(std::max(1, n - 1), batch);
     UnifiedVector<std::byte> ws(
-        internal::sytrd_sb2st_hh_buffer_size<B, T>(*q, n, kd, batch));
+        detail::sytrd_sb2st_hh_buffer_size<B, T>(*q, n, kd, batch));
 
     state.SetKernel(q, bench::pristine(ab), std::move(ab_tri), std::move(d),
                     std::move(e), std::move(vmat), std::move(tau), Uplo::Lower, kd,
                     std::move(ws),
                     [](Queue& qq, auto&&... xs) {
-                        (void)internal::sytrd_sb2st_hh<B, T>(qq, std::forward<decltype(xs)>(xs)...);
+                        (void)detail::sytrd_sb2st_hh<B, T>(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
     // Per-matrix, so a row compares directly against the syev profile without a
@@ -62,7 +63,7 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     const int kd = static_cast<int>(state.range(2));
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
-    const auto sched = internal::build_sb2st_hh_schedule(n, kd);
+    const auto sched = detail::build_sb2st_hh_schedule(n, kd);
     const int nrefl = std::max<int>(1, static_cast<int>(sched.size()));
 
     UnifiedVector<int32_t> starts(sched.size());
@@ -71,7 +72,7 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
         starts[k] = sched[k].start;
         lens[k] = sched[k].len;
     }
-    const auto wave_host = internal::build_sb2st_hh_wave_offsets(sched, n);
+    const auto wave_host = detail::build_sb2st_hh_wave_offsets(sched, n);
     UnifiedVector<int32_t> waves(wave_host.size());
     for (size_t k = 0; k < wave_host.size(); ++k) waves[k] = wave_host[k];
 
@@ -88,7 +89,7 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     const size_t nw = wave_host.size();
     state.SetKernel(q, std::move(vmat), std::move(tau), bench::pristine(Z), n, kd,
                     [sp, lp, wp, nr, nw](Queue& qq, auto&&... xs) {
-                        (void)internal::unmqr_hb2st<B, T>(qq, std::forward<decltype(xs)>(xs)...,
+                        (void)detail::unmqr_hb2st<B, T>(qq, std::forward<decltype(xs)>(xs)...,
                                                     Span<const int32_t>(sp, nr),
                                                     Span<const int32_t>(lp, nr),
                                                     Span<const int32_t>(wp, nw));

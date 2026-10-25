@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The occupancy rule shared by every local-memory-resident kernel: the capacity walk in
 // src/util/resident_capacity.hh, the per-type ceilings it produces for potrf / getrf /
 // geqrf, the G-packing helper, and the one launch property that packing can break.

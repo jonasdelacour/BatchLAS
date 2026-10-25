@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>

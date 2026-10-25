@@ -11,28 +11,28 @@ decisions, the numbers they rest on, and the rejected alternatives.
 
 ## Choices and routing {#choices-flat-selection-p33}
 
-Routing is in `src/ops/trsm/trsm.cc`. The choice vocabulary is `src/ops/trsm/choice.hh:14-19`, in
-tie-break order. `can_run` (`trsm.cc:45-61`) is correctness only. Every native family also requires
+Routing is in `src/ops/trsm/trsm.cc`. The choice vocabulary is `src/ops/trsm/choice.hh:15-20`, in
+tie-break order. `can_run` (`trsm.cc:46-62`) is correctness only. Every native family also requires
 `d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 && A.batch_size() >= 1`
-(`trsm.cc:47-48`).
+(`trsm.cc:48-49`).
 
 | spelling | implementation | `can_run` beyond the common term |
 |---|---|---|
-| `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) (`trsm.cc:49-53`) |
-| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) (`trsm.cc:54-57`) |
-| `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1` (`trsm.cc:58`) |
-| `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked, and homogeneous A and B (`d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous()`, `trsm.cc:59`) |
+| `cta` | `sycl_trsm::trsm_native_v1_dispatch` (V1) | `max_wg >= 32`, order <= `trsm_cta_max_n<T>()` (32) (`trsm.cc:50-54`) |
+| `sg_left` | `sycl_trsm::trsm_native_sg_left_dispatch` ([sub-group Left kernel](blackwell.md#trsm-sub-group-left-kernel)) | `Side::Left`, `has_sg32`, order <= `kTrsmSgLeftMaxN` (32), `max_wg >= kTrsmSgLeftWgSize` (128) (`trsm.cc:55-58`) |
+| `blocked` | `sycl_trsm::trsm_native_blocked` (V2) with the public `gemm` injected | `max_wg >= 32`, `trsm_blocked_available<T>()`, `trsm_cta_max_n<T>() >= 1` (`trsm.cc:59`) |
+| `vendor` | `backend::trsm_vendor` | a level-3 vendor library is linked, and homogeneous A and B (`d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous()`, `trsm.cc:60`) |
 
 Selection takes the first runnable entry of the nearest row of `tuned/trsm.<device>.txt`
 (@ref selection_tables). The key is `side:exact trans:exact order:log:2 q:log batch:log`
-(`src/ops/trsm/choice.hh:26-27`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
+(`src/ops/trsm/choice.hh:27-28`). `q` is `B.cols()` for `Side::Left` and `B.rows()` for `Side::Right`. ConjTrans
 folds to `T`. uplo and diag are not keys. The last resort is `blocked`, then `vendor`. The CPU has no
 native family. trsm takes no workspace. `A.batch_size() != B.batch_size()` throws `invalid_argument`
 in `trsm_validate_params`.
 
 ### What the tables say
 
-Grid: batch from 128 up (`src/ops/trsm/choice.hh:31-34`). Provenance is in `tuned/README.md`.
+Grid: batch from 128 up (`src/ops/trsm/choice.hh:32-35`). Provenance is in `tuned/README.md`.
 
 | table | source | first entry |
 |---|---|---|
@@ -52,12 +52,12 @@ calls lie below the table's smallest batch. See [the batch floor](#the-batch-flo
 
 ### The shape builder and the field mapping {#the-shape-builder-and-the-field-mapping}
 
-* **Key.** `key_of` (`trsm.cc:36-39`) builds `side`, `trans` (ConjTrans folds to `T`, since the
+* **Key.** `key_of` (`trsm.cc:37-40`) builds `side`, `trans` (ConjTrans folds to `T`, since the
   kernels differ only in a conjugation), `order` = `A.rows()`, `q` = `rhs_count` and `batch` =
   `A.batch_size()`.
 * **`can_run`** reads the views directly and never dereferences `data_ptr()`. Device facts (`is_gpu`,
   `has_sg32`, `max_wg`, `has_vendor`) come from the memoized `select::describe`.
-* **Coverage row.** `trsm.cc:96-97` maps `m = B.rows()`, `n = B.cols()`, `k` = triangular order, plus
+* **Coverage row.** `trsm.cc:99-100` maps `m = B.rows()`, `n = B.cols()`, `k` = triangular order, plus
   transA, uplo, side and diag. `select::run` fills in the backend that actually ran.
 
 ### Tuning knobs and environment {#tuning-knobs-and-environment}
@@ -71,7 +71,7 @@ calls lie below the table's smallest batch. See [the batch floor](#the-batch-flo
 * `BATCHLAS_TRSM_VARIANT` is read by nothing. Setting it pins nothing.
 * `BATCHLAS_TRSM_OUTER_NB` is V2's outer block width, a tuning knob and not a selection one
   (`trsm_outer_block`, `trsm_native.cc`). The default is 128 for `Side::Left` and `cta_max_n` (32) for
-  `Side::Right`, rounded down to whole CTA blocks. A value of 0 means unset. It is read per call and
+  `Side::Right`, rounded down to whole CTA blocks. A value of 0 means unset. It is read per call from the settings snapshot (`settings().geometry.trsm_outer_nb`) and
   never latched. A function-local static would hide a later change, so an A/B harness or a
   `ScopedEnvVar` test would silently measure one arm twice.
 
@@ -82,7 +82,7 @@ calls lie below the table's smallest batch. See [the batch floor](#the-batch-flo
 **V1** (`cta`): one work-group per matrix and rhs slice, one work-item per independent solve. The
 solution vector lives in registers as `T x[N]`. The canonical triangle is staged once into SLM and
 broadcast. The 24 canonical `(side, uplo, transA, diag)` cases fold into one recurrence through
-`canonicalise()` (`src/ops/trsm/trsm_canonical.hh:19`, shared with `sg_left`). The index map is
+`canonicalise()` (`src/ops/trsm/trsm_canonical.hh:20`, shared with `sg_left`). The index map is
 `rho(s) = fwd ? s : order-1-s`.
 
 **V2** (`blocked`): a host-side two-level driver. The outer level blocks at `OUTER_NB` and issues a
@@ -90,7 +90,7 @@ trailing GEMM. Each outer panel is solved by the inner `nb = cta_max_n = 32` loo
 its own shorter prefix. The crossover is a capacity limit, not a tuned choice.
 
 The grid is `batch * ceil(q/WG)`, never batch alone. The work-group ladder walks `{256,128,64,32}` and
-takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/ops/trsm/trsm_native.hh:36-46`).
+takes the first `cand` with `bs*ceil(q/cand) >= 4*CU` (`trsm_v1_ladder_wg`, `src/ops/trsm/trsm_native.hh:37-47`).
 On sm_120 it also skips a rung that leaves over half its lanes without an rhs column
 ([ladder cap](blackwell.md#trsm-v1-ladder-cap)).
 
@@ -98,7 +98,7 @@ The work-group size cannot exceed 256. The worst instantiation, `complex<double>
 registers: `226*256 = 57,856` of 65,536 per block, the whole-block count. The enforced check is the
 per-sub-partition bound `ceil(warps/4)*32*regs <= 16384`, `resident::sm89_fits` (2 x 32 x 232 = 14,848 of 16,384;
 [the LU page](lu.md#the-register-cap-that-binds-is-per-sub-partition)). It is a `static_assert` at
-`trsm_native.cc:94`.
+`trsm_native.cc:96`.
 
 Diagonal-block inversion is rejected at every tier; see [Negative results](#trsm-negative-results).
 
@@ -139,7 +139,7 @@ The defect is LSU/L1 transaction count, not DRAM. DRAM traffic is 0.75-0.85x of 
 `2*q*n*sizeof(T)*batch`, because the bytes a lane skips at step `s` are read at steps `s+1..s+7` from
 cache. Vectorised loads and wider tiles aim at the wrong resource.
 
-Staging is gated to float (`trsm_stage_left`, `trsm_native.cc:58`). For complex it costs registers:
+Staging is gated to float (`trsm_stage_left`, `trsm_native.cc:60`). For complex it costs registers:
 `complex<float>` N=32 gains a 464 B frame and `complex<double>` a 232 B one. Complex also cannot gain
 more than 2x, since over-fetch is `32/sizeof(T)` lanes per sector. Float loses only because 32/4 = 8.
 With the gate, complex measures 1.00-1.01x. Tile height is 16 for `sizeof(T) <= 4` and 8 otherwise.
@@ -290,8 +290,8 @@ All 8 step-13 losers satisfy `q*batch >= 524288`, and no cell below that loses. 
 work threshold and not an order cap. Neither side is DRAM-bound there (11-26% of peak), so the cause was
 re-read amplification escaping L2. The cause was not in trsm. V2 called `sycl_gemm::gemm_custom`, the
 native entry point, which bypassed gemm's routing. Step 16 injects the **routed** gemm instead.
-`trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/ops/trsm/trsm_native.hh:64-70`), and the
-`blocked` arm of `launch` (`src/ops/trsm/trsm.cc:69-79`) passes the public `gemm`. At n=512, q=1024,
+`trsm_native_blocked` takes a mandatory `TrsmTrailingGemm<T>` (`src/ops/trsm/trsm_native.hh:67-72`), and the
+`blocked` arm of `launch` (`src/ops/trsm/trsm.cc:70-80`) passes the public `gemm`. At n=512, q=1024,
 batch=512, float, the solve went from 18.8 ms to 11.19 ms, against the vendor's 14.28 ms. The injected
 GEMM has no per-call cost: cuBLAS uses `cublasGemmStridedBatchedEx`, and the solve issues 15 GEMM calls.
 
@@ -387,7 +387,7 @@ The lesson, twice over: confirm which kernel runs before explaining why it is sl
 
 V1 staged the canonical triangle into SLM with a loop strided by `lane`. Lane `s` then read
 `sLc[tri_idx(s,s)]`, a value written by a different lane, with no barrier in between. `sDiv[0]` had the same
-problem. The fix is one `sycl::group_barrier` (`src/ops/trsm/kernels/trsm_native.cc:185`), commit `c7d6d91`, 2026-08-21.
+problem. The fix is one `sycl::group_barrier` (`src/ops/trsm/kernels/trsm_native.cc:186`), commit `c7d6d91`, 2026-08-21.
 
 | | max relative diff vs vendor | items wrong | native residual |
 |---|---|---|---|
@@ -406,7 +406,7 @@ blocked potrf panel solve at n=1024, batch=256 gives wg=256, and the race fires 
 deleted. The reproducer goes through V2: order **48** (final V1 block of order 16), q=976, batch=128.
 Orders whose final block lands in the N=16 bucket (48, 77, 80, 109) fail 90-128 of 128 items, while 32,
 33, 64, 65, 96 and 155 pass. The guard is `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
-(`tests/trsm_tests.cc:474`). It was verified red with the barrier deleted.
+(`tests/trsm_tests.cc:486`). It was verified red with the barrier deleted.
 
 ### The bucket ladder that truncated {#the-bucket-ladder-that-truncated}
 
@@ -457,8 +457,8 @@ but V2 calls the direct entry on its diagonal blocks.
    type-blind. Since P3.3 those calls run native on sm_89, including the real-type batch=1 cells that the profile
    puts at 0.229-0.852x.
 6. **Every complex "vendor" ratio is native against another BatchLAS kernel.** `trsm_vendor` in
-   `src/backends/cublas.cc` (the complex branch from `:654`) diverts both complex types to a hand-written
-   sequential per-RHS SYCL substitution. `cublasCtrsmBatched` and `cublasZtrsmBatched` (`:764`) are unreachable.
+   `src/backends/cublas.cc` (the complex branch from `:655`) diverts both complex types to a hand-written
+   sequential per-RHS SYCL substitution. `cublasCtrsmBatched` and `cublasZtrsmBatched` (`:765`) are unreachable.
    The diversion rests on an uncited comment about NaNs under SYCL/USM interop. The 8-52x complex ratios at
    large order are not a vendor-independence result. Whether the diversion is still warranted is open.
 7. **complex<float> `Side::Right` at orders 8-16 (1.01-1.05x) is a roofline tie, not a defect.** Native runs at
@@ -473,11 +473,11 @@ but V2 calls the direct entry on its diagonal blocks.
     rest is exposed load latency on operand B, monotonic in stride. Ranking native above vendor in gemm's
     strided rows is arguable, not a win.
 12. ~~**Heterogeneous-batch gate.**~~ Withdrawn 2026-09-15: the gate is armed. The native `can_run` has the term
-    (`trsm.cc:47`), and `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc:686`)
+    (`trsm.cc:48`), and `TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc:664`)
     pins it. The vendor's `can_run` has had it too since WP3 ([known-defects 12](../design/known-defects.md#defect-12-vendor-families-accepted-a-heterogeneous-batch)).
 13. ~~**`OpShape::compute_units` is dead.**~~ Closed: `OpShape` was deleted with the route layer. A speed rule
     belongs in the tables, never in `can_run`.
-14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`include/batchlas/blas/matrix.hh:1466-1476`). Reported and
+14. **`MatrixView::operator()(Slice,Slice)` passes the parent pointer array** (`include/batchlas/blas/matrix.hh:912-922`). Reported and
     left alone. V2 passes the parent's `ld` and `stride` at every sub-view, because the constructor defaults
     `stride` to `ld*cols` when 0 is passed.
 15. **No extension is vendor-free through WP3.** `ortho_tests` is blocked by `potrf`, `geqrf`, `orgqr` and `syev`.
@@ -488,7 +488,7 @@ but V2 calls the direct entry on its diagonal blocks.
     non-`potrf` part is about 20x. `posv` and `gesv` have no vendor family of their own. Their `blocked`
     family composes sub-ops that select for themselves. The arm named `blocked` pins only the outer route, so
     both legs stay on Auto. The pins for the other arms are `{POTRF=vendor, TRSM=vendor}` and
-    `{POTRF=tiny, TRSM=cta}` (`benchmarks/factor_bench.cc:213-221`).
+    `{POTRF=tiny, TRSM=cta}`, each `native` where the shape exceeds it (`benchmarks/factor_bench.cc:222-228`).
 
     Data: `benchmarks/results/p2_posv_float.csv` (float, n=17, batch=16384, 7 reps, all `bad = 0`, residuals
     3.4e-08 to 5.0e-08). `rel_sd` is at most 0.0035, and the rows the argument rests on are all at or below
@@ -519,7 +519,7 @@ but V2 calls the direct entry on its diagonal blocks.
     interleaved in one process. Flat in q, and about 20x the vendor at q=1, confirms the hypothesis. Tracking the
     vendor refutes it and moves the cost into the composition itself.
 18. ~~**`trsm_op_shape` never set `s.backend`.**~~ Resolved by flat selection: the coverage row carries the backend
-    (`TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags`, `tests/trsm_candidates_tests.cc:879`).
+    (`TrsmCandidates.CoverageRowCarriesBackendKeyAndNativeFlags`, `tests/trsm_candidates_tests.cc:889`).
 
 ---
 
@@ -554,8 +554,8 @@ columns `type,side,route,n,q,batch,ms,sd_pct`, and `sd_pct <= 10` is the cleanli
   take a `flock` and drop any leg with a cell above 10% sd.
 * Harness rows are registered as `BM_TRSM_StarvedRight`, not `BM_TRSM_OrthoRightStarved`, because `--name`
   matches by substring and the latter would pull profile-only rows into the saturated grid
-  (`benchmarks/trsm_benchmark.cc:152-155`).
-* `trsm_announce_route_env()` (`benchmarks/trsm_benchmark.cc:94-107`) prints the pin once per process, so a log
+  (`benchmarks/trsm_benchmark.cc:153-156`).
+* `trsm_announce_route_env()` (`benchmarks/trsm_benchmark.cc:97-109`) prints the pin once per process, so a log
   records which leg it measured. An unknown pin throws at the first call.
 * `ncu --kernel-name` matches the mangled name. `regex:TrsmCtaKernel` matches nothing, and ncu then emits no
   metrics. Use `--kernel-name-base demangled` (`experiments/wp3_s12/profile.sh`).

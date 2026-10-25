@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
@@ -19,7 +20,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                            const VectorView<typename base_type<T>::type>& e,
                            const VectorView<T>& tauq,
                            const VectorView<T>& taup) {
-    static_assert(!internal::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
+    static_assert(!detail::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
 
     const int32_t m = static_cast<int32_t>(a.rows());
@@ -45,7 +46,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha = A(i, i, b);
-                const auto left_scalars = internal::larfg(alpha, sycl::sqrt(sigma), m - i);
+                const auto left_scalars = detail::larfg(alpha, sycl::sqrt(sigma), m - i);
                 const Real tau_l = left_scalars.tau;
                 const Real beta_l = left_scalars.beta;
                 if (tau_l != Real(0)) {
@@ -85,7 +86,7 @@ Event gebrd_unblocked_real(Queue& ctx,
                 }
 
                 const Real alpha_r = A(i, i + 1, b);
-                const auto right_scalars = internal::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
+                const auto right_scalars = detail::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
                 const Real tau_r = right_scalars.tau;
                 const Real beta_r = right_scalars.beta;
                 if (tau_r != Real(0)) {
@@ -150,7 +151,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
             const int32_t b = static_cast<int32_t>(tid[0]);
             for (int32_t i = 0; i < n; ++i) {
                 Real sigma = Real(0);
-                for (int32_t r = i + 1; r < m; ++r) sigma += internal::norm_squared(A(r, i, b));
+                for (int32_t r = i + 1; r < m; ++r) sigma += detail::norm_squared(A(r, i, b));
                 const auto lq = gebrd_detail::larfg_real_beta(A(i, i, b), sycl::sqrt(sigma), m - i);
                 for (int32_t r = i + 1; r < m; ++r) A(r, i, b) *= lq.scale;
                 A(i, i, b) = T(1);
@@ -162,7 +163,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                     dot *= ctau;
                     for (int32_t r = i; r < m; ++r) A(r, c, b) -= A(r, i, b) * dot;
                 }
-                D(i, b) = internal::real_part(lq.beta);
+                D(i, b) = detail::real_part(lq.beta);
                 A(i, i, b) = lq.beta;
                 TAUQ(i, b) = lq.tau;
                 if (i >= n - 1) {
@@ -171,7 +172,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                 }
                 for (int32_t c = i + 1; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
                 Real sigma_r = Real(0);
-                for (int32_t c = i + 2; c < n; ++c) sigma_r += internal::norm_squared(A(i, c, b));
+                for (int32_t c = i + 2; c < n; ++c) sigma_r += detail::norm_squared(A(i, c, b));
                 const auto rp = gebrd_detail::larfg_real_beta(A(i, i + 1, b), sycl::sqrt(sigma_r), n - (i + 1));
                 for (int32_t c = i + 2; c < n; ++c) A(i, c, b) *= rp.scale;
                 A(i, i + 1, b) = T(1);
@@ -183,7 +184,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
                     for (int32_t c = i + 1; c < n; ++c) A(r, c, b) -= dot * conj(A(i, c, b));
                 }
                 for (int32_t c = i + 2; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
-                E(i, b) = internal::real_part(rp.beta);
+                E(i, b) = detail::real_part(rp.beta);
                 A(i, i + 1, b) = rp.beta;
                 TAUP(i, b) = rp.tau;
             }
@@ -206,7 +207,7 @@ Event gebrd_unblocked(Queue& ctx,
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup);
     } else {
         return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);

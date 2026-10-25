@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Helpers for scripts/seed_build_tree.sh: path rewrite, RUNPATH fix-up, source mtimes.
 
   seed_build_tree_fix.py rewrite DST_BUILD OLD=NEW...

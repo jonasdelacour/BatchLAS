@@ -40,7 +40,7 @@ namespace detail {
 // Every double reference except ?sterf runs blocked code on the host dgemm, which OpenBLAS 0.3.20
 // gets wrong on Cooperlake without OPENBLAS_CORETYPE: a wrong reference fails a correct result or
 // passes a wrong one, so refuse it. evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
-template <class D> void require_host_dgemm() {
+template <typename D> void require_host_dgemm() {
 #if BATCHLAS_VERIFY_HAVE_LAPACKE
     if constexpr (std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>) {
         static const std::string defect = host_dgemm_defect();
@@ -52,14 +52,14 @@ template <class D> void require_host_dgemm() {
 
 namespace detail {
 // Item @p item of @p A as a packed std::vector, converted to U.
-template <class U, class T> std::vector<U> item_vector(const MatrixView<T, MatrixFormat::Dense>& A, int item) {
+template <typename U, typename T> std::vector<U> item_vector(const MatrixView<T, MatrixFormat::Dense>& A, int item) {
     const auto m = A.template astype<U>(std::span<const int>(&item, 1));
     return std::vector<U>(m.data().data(), m.data().data() + std::size_t(A.rows()) * std::size_t(A.cols()));
 }
 }  // namespace detail
 
 /// Ascending eigenvalues of the n x n Hermitian @p a (column-major, ld = n, both triangles valid; destroyed).
-template <class D>
+template <typename D>
     requires(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>)
 bool eigenvalues(int n, std::vector<D>& a, std::vector<double>& w) {
     w.assign(static_cast<std::size_t>(n), 0.0);
@@ -78,7 +78,7 @@ bool eigenvalues(int n, std::vector<D>& a, std::vector<double>& w) {
 }
 
 /// Descending singular values of the m x n @p a (column-major, ld = m; destroyed).
-template <class D>
+template <typename D>
     requires(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>)
 bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
     s.assign(static_cast<std::size_t>(std::min(m, n)), 0.0);
@@ -104,7 +104,7 @@ bool singular_values(int m, int n, std::vector<D>& a, std::vector<double>& s) {
 /// which sends float data to dgetrf). The view overload below does this for you.
 // Never promote float data to dgetrf: OpenBLAS 0.3.20's dgetrf on Cooperlake Xeons (its broken dgemm
 // kernel) is wrong from n = 10 while sgetrf is not. evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
-template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vector<std::int32_t>& ipiv) {
+template <typename E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vector<std::int32_t>& ipiv) {
     static_assert(std::is_same_v<E, float> || std::is_same_v<E, double> || std::is_same_v<E, std::complex<float>> ||
                       std::is_same_v<E, std::complex<double>>,
                   "getrf_pivots: float, double, complex<float> or complex<double> only");
@@ -133,14 +133,14 @@ template <class E> bool getrf_pivots(int m, int n, std::vector<E>& a, std::vecto
 }
 
 /// getrf_pivots of item @p item of a dense view, copied in the view's own precision.
-template <class T> bool getrf_pivots(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<std::int32_t>& ipiv) {
+template <typename T> bool getrf_pivots(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<std::int32_t>& ipiv) {
     auto a = detail::item_vector<T>(A, item);
     return getrf_pivots(A.rows(), A.cols(), a, ipiv);
 }
 
 /// LAPACK geqrf of the m x n @p a (column-major, ld = m; overwritten by R and the reflectors) and its
 /// min(m, n) @p tau.
-template <class D> bool geqrf_tau(int m, int n, std::vector<D>& a, std::vector<D>& tau) {
+template <typename D> bool geqrf_tau(int m, int n, std::vector<D>& a, std::vector<D>& tau) {
     static_assert(std::is_same_v<D, double> || std::is_same_v<D, std::complex<double>>,
                   "geqrf_tau: double or complex<double> only");
     tau.assign(static_cast<std::size_t>(std::min(m, n)), D(0));
@@ -171,19 +171,19 @@ inline bool tridiagonal_eigenvalues(std::vector<double>& d, std::vector<double>&
 }
 
 /// eigenvalues() of item @p item of the Hermitian @p A (both triangles valid), promoted.
-template <class T> bool eigenvalues(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& w) {
+template <typename T> bool eigenvalues(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& w) {
     auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
     return eigenvalues(A.rows(), a, w);
 }
 
 /// singular_values() of item @p item of @p A, promoted.
-template <class T> bool singular_values(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& s) {
+template <typename T> bool singular_values(const MatrixView<T, MatrixFormat::Dense>& A, int item, std::vector<double>& s) {
     auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);
     return singular_values(A.rows(), A.cols(), a, s);
 }
 
 /// geqrf_tau() of item @p item of @p A, promoted; the factor is discarded.
-template <class T>
+template <typename T>
 bool geqrf_tau(const MatrixView<T, MatrixFormat::Dense>& A, int item,
                std::vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>& tau) {
     auto a = detail::item_vector<typename MatrixView<T, MatrixFormat::Dense>::promoted_type>(A, item);

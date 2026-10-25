@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -11,9 +12,8 @@
 /// reason), `catch (const batchlas::exception&)` (anything BatchLAS diagnosed), and
 /// `catch (const std::exception&)` (that, plus `std::bad_alloc` and `sycl::exception`, which are
 /// deliberately not wrapped).
-/// @note Not yet covered: the kernel-selection layer throws plain `std::invalid_argument` for a
-///       bad `BATCHLAS_<OP>_ROUTE` pin and `std::runtime_error` when no kernel can run; neither
-///       matches `catch (const batchlas::exception&)`. batchlas::NoRouteError
+/// @note Kernel selection throws batchlas::invalid_argument for a bad `BATCHLAS_<OP>_ROUTE` pin
+///       and batchlas::unsupported when no kernel can run. batchlas::NoRouteError
 ///       (`<batchlas/no_route.hh>`, nothing compiled in can serve the call) is a batchlas::unsupported.
 /// @see @ref design_error_model
 /// @ingroup api_errors
@@ -99,7 +99,7 @@ public:
 /// @brief Base of the runtime arm: the call failed for a reason that is not a bad argument.
 ///
 /// Catch a child to say which reason. Derives from `std::runtime_error` (Python `RuntimeError`),
-/// and every runtime class stays inside it. Nothing throws a bare `error` today.
+/// and every runtime class stays inside it. The library never throws a bare `error`.
 /// @ingroup api_errors
 class BATCHLAS_API error : public detail::exception_bridge<std::runtime_error> {
 public:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // trsm for the tuner (flat-kernel-selection-phase3-plan.md §1.2, §3): a strongly diagonally
 // dominant triangular A (other triangle poisoned with a large finite value), random B, alpha with
 // an imaginary part, and the componentwise backward error of op(A) X = alpha B (Left) or
@@ -30,7 +31,7 @@ namespace S = ops::trsm;
 
 constexpr int kMaxCheckedRhs = 32;  // host check cost is order^2 per rhs; sample the rest
 
-template <class T>
+template <typename T>
 struct TrsmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -135,7 +136,7 @@ public:
     std::string op() const override { return "trsm"; }
     std::vector<std::string> key_names() const override { return {S::key_names.begin(), S::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_dtype(dtype, []<class T>() { return spellings(S::candidates<T>()); });
+        return with_dtype(dtype, []<typename T>() { return spellings(S::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         std::vector<std::string> o, r, b;
@@ -170,7 +171,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/trsm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_dtype(req.dtype, [&]<class T>() {
+        return with_dtype(req.dtype, [&]<typename T>() {
             auto get = [&](std::string_view name, const char* dflt) {
                 const std::string* v = key_get(req.key, name);
                 return v ? *v : std::string(dflt);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // P2: the fused factor-and-solve tier for POSV and the composed choices, pinned. There is
 // no batched vendor posv and no `potrs` op, so the only oracles here are a host residual
 // and potrf itself. Selection, and the drivers' refusals (old P6), are tested in

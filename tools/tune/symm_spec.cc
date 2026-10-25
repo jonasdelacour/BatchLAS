@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // symm for the tuner (real only): C = alpha A B + beta C, A symmetric m x m held in its lower
 // triangle (MatrixView::fill_random, the strict upper triangle then poisoned with a large finite
 // value), B and C0 fill_random, beta = 0.75 so C is read. side and uplo are not table keys: fixed at
@@ -13,6 +14,7 @@
 
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -31,7 +33,7 @@ namespace {
 
 namespace Y = ops::symm;
 
-template <class T>
+template <typename T>
 struct SymmProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -95,7 +97,7 @@ public:
     std::string op() const override { return "symm"; }
     std::vector<std::string> key_names() const override { return {Y::key_names.begin(), Y::key_names.end()}; }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_real_dtype("symm", dtype, []<class T>() { return spellings(Y::candidates<T>()); });
+        return with_real_dtype("symm", dtype, []<typename T>() { return spellings(Y::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         return {{"form", {Y::grid_form.begin(), Y::grid_form.end()}},
@@ -144,10 +146,10 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/symm_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_real_dtype("symm", req.dtype, [&]<class T>() {
+        return with_real_dtype("symm", req.dtype, [&]<typename T>() {
             const int m = int(key_int(req.key, "m")), n = int(key_int(req.key, "n"));
             if (*key_get(req.key, "form") != Y::form_of(m, n))
-                throw std::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
+                throw batchlas::invalid_argument("symm: form " + *key_get(req.key, "form") + " contradicts m, n");
             SymmProblem<T> p(q, m, n, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.m);
             if (req.mode == "race") return run_race<Y::SymmChoice>("symm", p, req, tol);

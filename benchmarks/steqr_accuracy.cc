@@ -1,6 +1,8 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
 #include <benchmarks/accuracy_utils.hh>
+#include <batchlas/error.hh>
 #include <batchlas/verify/reference.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
@@ -71,7 +73,7 @@ Options parse_args(int argc, char** argv) {
             } else if (val == "exp") {
                 opt.scheme = SteqrUpdateScheme::EXP;
             } else {
-                throw std::invalid_argument("Invalid --scheme value (use pg, exp, or pg_guarded)");
+                throw batchlas::invalid_argument("Invalid --scheme value (use pg, exp, or pg_guarded)");
             }
         } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);
@@ -339,7 +341,7 @@ int run_accuracy(const Options& opt) {
         }
         q->wait();
 
-        auto call_lapack_variant = [&](Vector<Real>& out, const char* func_name, 
+        auto call_lapack_variant = [&](Vector<Real>& out, const char* func_name,
                                         int (*func_ptr)(int, Real*, Real*)) {
             const Real nan_val = std::numeric_limits<Real>::quiet_NaN();
             for (int b = 0; b < cur_batch; ++b) {

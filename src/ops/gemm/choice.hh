@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -106,7 +107,7 @@ inline constexpr unsigned kWideNoTTTCCC = kWideAll & ~(kWideTT | kWideTC | kWide
 
 /// The scalars a wide config compiles for, as a bit set over float, double, complex<float>, complex<double>.
 inline constexpr unsigned kWideF = 1, kWideD = 2, kWideCF = 4, kWideCD = 8, kWideAllScalars = 0xF;
-template <class T>
+template <typename T>
 constexpr unsigned wide_scalar_bit() {
     static_assert(std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::complex<float>> ||
                       std::is_same_v<T, std::complex<double>>,
@@ -125,7 +126,7 @@ struct WideCfg {
     constexpr int threads() const { return (m / ttm) * (n / ttn); }
     template <bool Complex>
     constexpr bool has(int a, int b) const { return ((Complex ? forms : real) & wide_bit(a, b)) != 0; }
-    template <class T>
+    template <typename T>
     constexpr bool compiles() const { return (scalars & wide_scalar_bit<T>()) != 0; }
 };
 // Real CC (its TT) everywhere. evidence: docs/perf/gemm.md#gemm-wp-t-tt-tc-and-cc-on-the-small-transposed-tiles
@@ -149,7 +150,7 @@ static_assert([] {
 
 /// Does this row run wide v2 (GemmWide64Body) for T? 64x64 for every scalar but double, and every
 /// v2 row for the scalars it compiles.
-template <class T>
+template <typename T>
 constexpr bool wide_v2_row(const WideCfg& c) {
     return (c.m == 64 && c.n == 64 && !std::is_same_v<T, double>) || (c.v2 && c.compiles<T>());
 }
@@ -162,21 +163,21 @@ inline constexpr std::array<int, 3> kSplitKSlices{2, 4, 8};
 /// The partials' column stride: m rounded to 4, so a slice's columns are whole 16-byte granules.
 constexpr std::int64_t splitk_ld(std::int64_t m) { return (m + 3) / 4 * 4; }
 /// One item's partials (all s slices), bytes; can_run holds them to Device::scratch_budget / batch.
-template <class T>
+template <typename T>
 constexpr std::int64_t splitk_item_bytes(std::int64_t m, std::int64_t n, int s) {
     return splitk_ld(m) * n * s * std::int64_t(sizeof(T));
 }
 
-template <class T>
+template <typename T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
 
 /// Does config c compile (op(A), op(B)) for scalar T? A real T compiles no T form.
-template <class T>
+template <typename T>
 constexpr bool wide_compiles(const WideCfg& c, int a, int b) {
     return c.compiles<T>() && (is_complex_v<T> || (a != 1 && b != 1)) && c.has<is_complex_v<T>>(a, b);
 }
 /// Does config c serve (op(A), op(B)) for scalar T? A real T folds to C (the build it compiles).
-template <class T>
+template <typename T>
 constexpr bool wide_serves(const WideCfg& c, int a, int b) {
     if constexpr (is_complex_v<T>) return wide_compiles<T>(c, a, b);
     else return wide_compiles<T>(c, a == 0 ? 0 : 2, b == 0 ? 0 : 2);
@@ -184,7 +185,7 @@ constexpr bool wide_serves(const WideCfg& c, int a, int b) {
 
 /// Shared stages of a wide config's k x (m + n) tile: two for wide v2 (wide_v2_row) and for a
 /// transposed tile other than 64x64 whose two stages fit 40 KiB; else one.
-template <class T>
+template <typename T>
 constexpr int wide_stages(const WideCfg& c) {
     if (wide_v2_row<T>(c)) return 2;
     if (c.m == 64 && c.n == 64) return 1;
@@ -193,7 +194,7 @@ constexpr int wide_stages(const WideCfg& c) {
 
 /// Local memory a wide config asks for, at most; gemm_kernels.cc static_asserts it against the
 /// kernels. Wide v2's float and complex<float> element leg pads a k-contiguous operand's rows by 16 B.
-template <class T>
+template <typename T>
 constexpr std::int64_t wide_slm_bytes(const WideCfg& c) {
     const std::int64_t pad = wide_v2_row<T>(c) && sizeof(T) <= 8 ? 2 * 16 : 0;
     return std::int64_t(wide_stages<T>(c)) * c.k * ((c.m + c.n) * std::int64_t(sizeof(T)) + pad);
@@ -206,7 +207,7 @@ inline constexpr int kSmallTiledMaxDim = 56;  // float NN above 32: one matrix p
 
 /// The work-group `small` launches: the batched kernel's 128 lanes, or the float NN tiled leg's
 /// (NB/4)^2 with NB = 48 or 56 (small_batched.hh).
-template <class T>
+template <typename T>
 constexpr int small_wg(bool nn, int max_dim) {
     if (!std::is_same_v<T, float> || !nn || max_dim <= 32 || max_dim > kSmallTiledMaxDim) return kSmallWg;
     const int nb = max_dim <= 48 ? 48 : 56;
@@ -218,16 +219,16 @@ inline constexpr int kTiledWg = 256;
 inline constexpr std::int64_t kMaxGridBatch = 65535;
 
 /// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
-template <class T>
+template <typename T>
 constexpr bool small_needs_sg32(bool nn, int max_dim) {
     return !(std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim);
 }
 /// small's ceiling for T: 32 for a 16-byte scalar (small_batched.hh's kSmallMaxDimFor says why).
-template <class T>
+template <typename T>
 constexpr int small_max_dim() { return sizeof(T) >= 16 ? 32 : kSmallMaxDim; }
 /// Local memory small asks for: 128 / (2 NB) slots of NB x (NB + 1), NB the bucket of max_dim, or
 /// the float NN tiled leg's 2 NB (NB + 4) (gemm_kernels.cc static_asserts both).
-template <class T>
+template <typename T>
 constexpr std::int64_t small_slm_bytes(bool nn, int max_dim) {
     if (std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim) {
         const std::int64_t nb = max_dim <= 48 ? 48 : 56;
@@ -237,7 +238,7 @@ constexpr std::int64_t small_slm_bytes(bool nn, int max_dim) {
     return (kSmallWg / (2 * nb)) * nb * (nb + 1) * std::int64_t(sizeof(T));
 }
 /// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
-template <class T>
+template <typename T>
 bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
     if (max_dim < 1 || max_dim > small_max_dim<T>()) return false;
     const int mx = static_cast<int>(max_dim);
@@ -247,7 +248,7 @@ bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
 }
 
 /// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
-template <class T>
+template <typename T>
 constexpr auto candidates() {
     constexpr std::size_t wides = [] {
         std::size_t w = 0;

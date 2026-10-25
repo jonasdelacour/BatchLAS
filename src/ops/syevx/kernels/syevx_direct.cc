@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syevx_direct: partial symmetric eigensolve by full decomposition + selection;
 // the universal fallback (every scalar type, range and jobz).
 // evidence: docs/design/syevx.md#syevx-small-n-why-direct-is-the-answer

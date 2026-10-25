@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cusparse_matrixview.cc
 #include <src/linalg-impl.hh>
 #include <batchlas/util/sycl-vector.hh>

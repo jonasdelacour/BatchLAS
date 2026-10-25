@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // batchlas::Settings -- readiness audit A-3. ~106 BATCHLAS_* variables were read at
 // ~77 scattered getenv sites, so ambient process state silently chose which kernel ran
 // and whether arguments were validated, with no programmatic equivalent and no way

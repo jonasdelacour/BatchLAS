@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Stage-2 band -> tridiagonal by Householder bulge chasing, retaining the
 // reflectors for the eigenvector back-transform. See sytrd_sb2st_hh.hh for the
 // rationale and for the schedule, which is validated in
@@ -34,13 +35,13 @@
 #include <batchlas/settings.hh>
 
 namespace batchlas {
-namespace internal {
+namespace detail {
 
 namespace {
 
 template <typename T>
 inline T real_part_as_T(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return T(x.real(), typename base_type<T>::type(0));
     } else {
         return x;
@@ -50,7 +51,7 @@ inline T real_part_as_T(const T& x) {
 template <typename T>
 inline typename base_type<T>::type abs2(const T& x) {
     using R = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         return static_cast<R>(x.real()) * static_cast<R>(x.real()) +
                static_cast<R>(x.imag()) * static_cast<R>(x.imag());
     } else {
@@ -63,7 +64,7 @@ inline typename base_type<T>::type abs2(const T& x) {
 template <typename Group, typename T>
 inline T group_sum(Group g, T v) {
     using R = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         const R re = batchlas::portable::reduce_over_group(g, static_cast<R>(v.real()), sycl::plus<R>());
         const R im = batchlas::portable::reduce_over_group(g, static_cast<R>(v.imag()), sycl::plus<R>());
         return T(re, im);
@@ -79,7 +80,7 @@ class Sb2stHhChaseKernel;
 template <typename T>
 inline T shuffle_xor(sycl::sub_group sg, T v, uint32_t mask) {
     using R = typename base_type<T>::type;
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         const R re = sycl::permute_group_by_xor(sg, static_cast<R>(v.real()), mask);
         const R im = sycl::permute_group_by_xor(sg, static_cast<R>(v.imag()), mask);
         return T(re, im);
@@ -198,7 +199,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 sycl::group_barrier(wg);
 
                 // Hermitian input: force a real diagonal before we start.
-                if constexpr (internal::is_complex<T>::value) {
+                if constexpr (detail::is_complex<T>::value) {
                     for (int32_t j = lid; j < n; j += kWg) {
                         AB[j * ldw] = real_part_as_T(AB[j * ldw]);
                     }
@@ -356,7 +357,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                     const Real ss = batchlas::portable::reduce_over_group(wg, partial, sycl::plus<Real>());
                     const Real xnorm = sycl::sqrt(ss);
                     const T alpha = bget(r0, col);
-                    const auto res = internal::larfg<T>(alpha, xnorm, m);
+                    const auto res = detail::larfg<T>(alpha, xnorm, m);
 
                     // v[0] = 1, v[k] = x[k] * scale. Read the column before it is
                     // overwritten below.
@@ -414,7 +415,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 for (int32_t j = lid; j < n; j += kWg) {
                     const T diag = bget(j, j);
                     ABt(0, j) = real_part_as_T(diag);
-                    if constexpr (internal::is_complex<T>::value) {
+                    if constexpr (detail::is_complex<T>::value) {
                         Dv(j, b) = static_cast<Real>(diag.real());
                     } else {
                         Dv(j, b) = static_cast<Real>(diag);
@@ -423,7 +424,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 for (int32_t j = lid; j < n - 1; j += kWg) {
                     const T sub = bget(j + 1, j);
                     ABt(1, j) = sub;  // signed: the phase pass consumes this
-                    Ev(j, b) = internal::abs(sub);
+                    Ev(j, b) = detail::abs(sub);
                 }
                 if (lid == 0 && n > 0) ABt(1, n - 1) = T(0);
             });
@@ -669,12 +670,12 @@ namespace {
 // means "no opinion"; every unswept cell and every real type returns 0, so real
 // scalars take byte-for-byte the path they took before. Only cfloat n == 512 was
 // measured, so the bucket is an equality; do not stretch it across n.
-// internal::is_complex rather than a base_type/is_same_v dance (the idiom public
+// detail::is_complex rather than a base_type/is_same_v dance (the idiom public
 // headers use, where is_complex is not visible): here it is visible (math-helpers.hh).
 // evidence: docs/perf/sytrd.md#sytrd-sb2st-per-type-wave-geometry
 template <typename T>
 constexpr int32_t sb2st_back_tile_for(int32_t n) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
             if (n == 512) return 2;
         }
@@ -684,7 +685,7 @@ constexpr int32_t sb2st_back_tile_for(int32_t n) {
 
 template <typename T>
 constexpr int32_t sb2st_back_subs_for(int32_t n) {
-    if constexpr (internal::is_complex<T>::value) {
+    if constexpr (detail::is_complex<T>::value) {
         if constexpr (std::is_same_v<typename base_type<T>::type, float>) {
             if (n == 512) return 4;
         }
@@ -910,5 +911,5 @@ BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SB2ST_HH_INSTANTIATE)
 
 #undef SB2ST_HH_INSTANTIATE
 
-} // namespace internal
+} // namespace detail
 } // namespace batchlas

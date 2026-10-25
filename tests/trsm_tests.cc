@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/error.hh>
 #include <batchlas/sycl_interop.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -41,7 +43,7 @@ class TrsmOperationsTest : public test_utils::BatchLASTest<Config> {
 protected:
     using ScalarType = typename Config::ScalarType;
     static constexpr Backend BackendType = Config::BackendVal;
-    
+
     const int rows = 8;
     const int cols = 8;
     const int ld = 8;
@@ -51,7 +53,7 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
     }
-    
+
     ::testing::AssertionResult verifyTrsmResult(const MatrixView<ScalarType, MatrixFormat::Dense>& A,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B,
                           const MatrixView<ScalarType, MatrixFormat::Dense>& B_original,
@@ -73,7 +75,7 @@ protected:
                 }
             }
         }
-        
+
         if (!anyChanges) {
             if (trace_enabled) {
                 std::cerr << "TRSM TRACE: output appears unchanged for batch " << batch_idx
@@ -134,13 +136,13 @@ protected:
                 }
             }
         }
-        
+
         auto B_original = B_matrix.clone();
 
         if (test_batch_size == 1) {
             auto A_view = A_matrix.view();
             auto B_view = B_matrix.view();
-            
+
             try {
                 (void)trsm(*(this->ctx),
                                   A_view,
@@ -153,11 +155,11 @@ protected:
         } else {
             auto A_parent_view = A_matrix.view();
             auto B_parent_view = B_matrix.view();
-            
+
             for (int b = 0; b < test_batch_size; ++b) {
                 auto A_view = A_parent_view.batch_item(b);
                 auto B_view = B_parent_view.batch_item(b);
-                
+
                 try {
                     (void)trsm(*(this->ctx),
                                       A_view,
@@ -430,7 +432,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
             return gemm<kGpu, T>(c, ga, gb, gc, al, be, ta, tb, p);
 #else
             (void)c, (void)ga, (void)gb, (void)gc, (void)al, (void)be, (void)ta, (void)tb, (void)p;
-            throw std::logic_error("RunTrsmBlocked: no CUDA or SYCL backend in this build");
+            throw batchlas::unsupported("RunTrsmBlocked: no CUDA or SYCL backend in this build");
 #endif
         });
     ctx->wait();

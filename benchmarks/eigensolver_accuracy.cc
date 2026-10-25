@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/linalg.hh>
 #include <benchmarks/accuracy_utils.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
 #include <src/queue.hh>
@@ -95,7 +97,7 @@ Options parse_args(int argc, char** argv) {
             } else if (val == "exp") {
                 opt.scheme = SteqrUpdateScheme::EXP;
             } else {
-                throw std::invalid_argument("Invalid --scheme value (use pg or exp)");
+                throw batchlas::invalid_argument("Invalid --scheme value (use pg or exp)");
             }
         } else if (arg.starts_with("--backend")) {
             opt.backend = get_value(arg);
@@ -484,7 +486,7 @@ int run_accuracy(const Options& opt) {
                     steqr_params.cta_update_scheme = opt.scheme;
                     steqr_params.cta_shift_strategy = parse_shift_strategy(opt.cta_shift);
                     params.leaf_steqr_params = steqr_params;
-                    
+
                     UnifiedVector<std::byte> ws(
                         stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
                     (void)stedc<B, Real>(*q,

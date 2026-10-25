@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The REGISTER panel leaf: one panel ROW per work-item, the m x N panel in registers

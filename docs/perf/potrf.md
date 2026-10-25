@@ -19,7 +19,7 @@ Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel
   sm_120 from the deep run, sm_89 from `converted` rows of the forced-route archive (`sm89_potrf_archive.jsonl`, in git
   history before the tuning-data migration). Provenance: `tuned/README.md`.
   `BATCHLAS_TUNED_DIR=<dir>` replaces the tables without a rebuild.
-* **`can_run()`** (`potrf.cc:32-57`) is correctness only. Speed thresholds live only in the tables.
+* **`can_run()`** (`potrf.cc:34-59`) is correctness only. Speed thresholds live only in the tables.
 * **Pins:** `BATCHLAS_POTRF_ROUTE=auto|native|vendor|<spelling>` (`lpanel:panel=8` or `lpanel:8`). A pin that does not
   parse or cannot run the shape throws `std::invalid_argument`. `native` or `vendor` with no runnable candidate of that
   class falls back to Auto with a warning. The old aliases (`native:tiny`, `native:cta`, `native:lpanel`,
@@ -31,21 +31,26 @@ Candidates (`src/ops/potrf/choice.hh`): `tiny`, `cta`, `lpanel:panel=8`, `lpanel
 
 * Everything: square view (the entry throws on `m != n` first); `d.is_gpu`; `d.has_sg32`; a homogeneous batch; and
   `n >= 1 && batch >= 1` (the panel loop is undefined at `n = 0`).
-* `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= 64` (`:40-41`).
-* `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (`:43`).
-* `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)` (`:44-48`).
-* `blocked`: `Uplo::Lower`, `potrf_blocked_available<T>()`, `cta_max_n >= 1` (`:50-53`).
-* `vendor`: `d.has_vendor && !A.is_heterogeneous()` (`:56`).
+* `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= 64` (`:42-43`).
+* `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (`:45`).
+* `lpanel`: `Uplo::Lower` and `n <= potrf_lpanel_max_n_for_slm<T>(...)` (`:48-50`).
+* `blocked`: `Uplo::Lower`, `potrf_blocked_available<T>()`, `cta_max_n >= 1` (`:54-55`).
+* `vendor`: `d.has_vendor && !A.is_heterogeneous()` (`:57`).
 
 There is no `uplo` term on `cta` or `tiny`: Upper is the same recurrence on `S(i,c) = conj(A(c,i))`, a load and store
 transform. `blocked` has no lower order bound, because a correctness gate must not refuse a shape the driver serves.
 
 ### Current rankings (sm_89)
 
-* `tiny` ranks first for every `n <= 32`, both `uplo`.
-* `cta` ranks first at most cells of `33 <= n <= 65`; `vendor` at n = 44, 48 (batch 8192) and 64.
-* `vendor` ranks first from n = 72 through 384; `blocked` at n = 512.
-* Double: `tiny` first at `n <= 16`; `vendor` from n = 17 to `blocked` at n = 512. The margin is under 1%, inside the noise.
+* Float and cfloat: `tiny` ranks first at `n <= 32`, both `uplo` (except `cta` in one float and two cfloat
+  `uplo=L` rows at n = 24).
+* Float `uplo=L`: `cta` ranks first at most cells of `33 <= n <= 65`; `vendor` at n = 44, 48 (batch 8192) and 64;
+  `vendor` from n = 72 through 384; `blocked` at n = 512.
+* Cfloat `uplo=L`: `cta` at n = 33 (and one n = 36 row); `vendor` from n = 36 through 512 (one `blocked` row at 512).
+* Double: `tiny` first at `n <= 16` (except `uplo=L` n = 1, 9, 10: `vendor`); `vendor` from n = 17 to `blocked` at
+  n = 512. The margin is under 1%, inside the noise.
+* Cdouble `uplo=L`: `tiny` at `2 <= n <= 16` (not 9); `cta` at n = 20-32; `vendor` from n = 128.
+* Upper rows exist only for `n <= 32` (`n <= 16` for double and cdouble), all `tiny`.
 * `lpanel` never ranks first on sm_89: the archive has no current-kernel LPanel timings. It runs only when pinned.
 
 ### Known gaps
@@ -95,9 +100,9 @@ float up to 35) and LPanel above that. The tables above replace them.
 
 | | float | double | cfloat | cdouble |
 |---|---|---|---|---|
-| CTA `NB`/`TS` (`potrf_cta.cc:38`) | 8/4 | 8/4 | 8/4 | 8/2 |
+| CTA `NB`/`TS` (`potrf_cta.cc:42-45`) | 8/4 | 8/4 | 8/4 | 8/2 |
 | CTA fit ceiling, advertised / resident | 77 / 155 | 54 / 109 | 54 / 109 | 38 / 77 |
-| blocked `nb` (`potrf_blocked.cc:44`) | 128 | 96 | 96 | 64 |
+| blocked `nb` (`potrf_blocked.cc:51-54`) | 128 | 96 | 96 | 64 |
 | blocked `W` | 128 | 32 | 32 | 16 |
 
 No `nb` equals a fit ceiling; sizing `nb` from the fit ceiling is measurably wrong for every type. A vendor-free build,
@@ -106,8 +111,8 @@ and a bare `native` pin, take the first runnable non-vendor entry of the row. A 
 ## The SLM budget and the fit ceilings {#the-slm-budget-and-the-fit-ceilings}
 
 * `local_mem_size` is **101,376 B**. The budget used is `local_mem_size - 4096` = **97,280 B**
-  (`select::Device::slm_budget`). `kPotrfReferenceSlmBudget` (`potrf_cta.cc:47`) serves only `potrf_cta_max_n<T>()`.
-* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:90-91` for every `nvidia_gpu_sm_*` target) is wrong
+  (`select::Device::slm_budget`). `kPotrfReferenceSlmBudget` (`potrf_cta.cc:50`) serves only `potrf_cta_max_n<T>()`.
+* `device_limits.hh`'s 49,152 (set by `cmake/BatchLASDetectSYCL.cmake:56-57` for every `nvidia_gpu_sm_*` target) is wrong
   here by 2.06x. No decision reads it.
 * The advertised ceiling is the first miss of a walk with `break`, not `continue`: `potrf_hole_padded` is not monotone
   (47,200 → 49,920 while 49,700 stays 49,700).
@@ -142,7 +147,7 @@ hole (ceiling 101,376).
 > **Warning:** the attribute is sticky per CUfunction. potrf's kernel takes `n` at runtime, so one CUfunction serves every
 > `n`. A 49,064 B launch fails cold and passes after a 65,536 B launch of the same function. The outcome depends on order.
 
-* The pad (`src/ops/potrf/potrf_slm_hole.hh:10-16`, applied at `potrf_cta.cc:123`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
+* The pad (`src/ops/potrf/potrf_slm_hole.hh:11-17`, applied at `potrf_cta.cc:124`) maps a request in `(47104, 49664]` to 49,920 B. It is inert today (`ptxas` reports no
   `smem` for any of the eight potrf instantiations) but stays, because one `reduce_over_group` reintroduces the hole.
 * No automated test can cover the hole: any earlier launch above 48 KB masks it.
 * The geqr2 panel shipped without the pad and hit the hole; it now uses potrf's band ([qr.md](qr.md)).
@@ -182,7 +187,7 @@ blocks per SM, so it binds before registers. Vendor-free, float `n = 128` pays a
 
 ### The L ladder {#the-l-ladder}
 
-`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`src/ops/potrf/kernels/potrf_cta.cc:51-52`, `:93-107`): the elements the
+`L` (work-items per matrix) is `Ntiles_0 * TS^2 / 24`, capped at 256 (`src/ops/potrf/kernels/potrf_cta.cc:52-53`, `:97-107`): the elements the
 first trailing update touches, at 24 per work-item. A tile count would be the wrong unit, because `TS` varies by type.
 
 | cell (native µs, batch 4096) | L32 | L64 | L128 | L256 |
@@ -209,8 +214,8 @@ Right-looking, `Uplo::Lower`, `j = 0, nb, 2nb, ...`:
   block into scratch with a triangular fold, then a direct rectangle gemm).
 
 The seams are required `std::function` injections (`PotrfTrailingGemm`, `PotrfPanelSolve`,
-`src/ops/potrf/potrf_native.hh:107-118`); an empty seam throws. The launch passes the public `gemm` and `trsm`
-(`src/ops/potrf/potrf.cc:70-78`), so each child takes its own table's choice. The trailing update is 65-95% of a
+`src/ops/potrf/potrf_native.hh:108-124`); an empty seam throws. The launch passes the public `gemm` and `trsm`
+(`src/ops/potrf/potrf.cc:72-80`), so each child takes its own table's choice. The trailing update is 65-95% of a
 vendor-free blocked factorisation. The fold exists because `herk` has no native family and a square gemm would write the
 upper triangle, which `potrf(Lower)` must not touch.
 
@@ -355,11 +360,11 @@ The panel solve is only 5-22% of a vendor-free blocked potrf, so a 2x faster pan
 69-75 of 256 items bad (float), 15/256 (double), non-deterministic; every failing column is `== 1 (mod nb)`.
 
 * **Mechanism** (`src/ops/trsm/kernels/trsm_native.cc`): the CTA kernel staged its triangle with a lane-strided loop, then read the
-  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`src/ops/trsm/kernels/trsm_native.cc:206`).
+  diagonal back with no barrier. **Fix:** one `sycl::group_barrier(it.get_group())` after staging (`src/ops/trsm/kernels/trsm_native.cc:186`).
   Max rel diff against vendor goes from 6.05e+16 to 4.27e-07.
 * **How it hid:** trsm's work-group width comes from `{256,128,64,32}`, and every earlier test ran at `wg = 32`, one
   sub-group, where the race cannot show. Guard: `TrsmNativeBlocked.MultiSubGroupWorkGroupStagesItsTriangleCorrectly`
-  (`tests/trsm_tests.cc:451`).
+  (`tests/trsm_tests.cc:486`).
 
 **2. `beta = 0` read unwritten scratch.** The `W x W` diagonal gemm (`alpha = -1, beta = 0`) writes `ws.product`. A native
 gemm's `LinearEpilogue::apply` reads `prior` unconditionally, and `0 * NaN = NaN`, although cuBLAS does not read C at
@@ -420,7 +425,7 @@ Workspace sizes come from `potrf_cta_buffer_size` and `potrf_blocked_buffer_size
 13. **The route diff was never run.** Owed: one `ctest` run per side under `BATCHLAS_COVERAGE_OUT`, compared with
     `scripts/route_diff.sh`, without a reconfigure.
 14. **B6 is unfalsifiable on this hardware.** The barrier ending `potrf_lpanel_body`'s panel loop
-    (`src/ops/potrf/kernels/potrf_lpanel_device.hh:159-168`) measured green at batch 1024 to 16384, because the eight dependent
+    (`src/ops/potrf/kernels/potrf_lpanel_device.hh:178-188`) measured green at batch 1024 to 16384, because the eight dependent
     prefetch loads cover the window on this card. Record it as *unfalsifiable*, never *covered*. Closing it needs a probe
     that widens the hazard window on purpose. See [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel).
 
@@ -513,7 +518,7 @@ advertised 77 and leaves the single CTA launch. cuSOLVER takes 0.2708 ms there, 
 ### The shared helper: budget, slice, walk and pack {#the-shared-helper-budget-slice-walk-and-pack}
 
 `src/util/resident_capacity.hh` holds the capacity rule for potrf, getrf and geqrf. It is `constexpr` and free of SYCL
-headers. `select::Device` takes its `slm_budget` from `device_slm_budget` (`src/select/select.cc:234-236`).
+headers. `select::Device` takes its `slm_budget` from `device_slm_budget` (`src/select/select.cc:290-292`).
 
 | helper | what it answers |
 |---|---|
@@ -606,7 +611,7 @@ barriers and zero static shared**, so the 48 KB hole is unreachable.
 | **cfloat** | 3.43 | 4.34 | 6.02 | **7.43** | 2.10 | 1.57 | 1.62 | 1.23 | 1.26 | 1.30 |
 
 * The window is `1 <= n <= 32`. n = 1 already wins 3.4-3.9x, so no lower bracket is needed.
-* The ceiling is the tier's, not a measured loss: `can_run` refuses n = 33 (`potrf.cc:40`). A wider register kernel is
+* The ceiling is the tier's, not a measured loss: `can_run` refuses n = 33 (`potrf.cc:42`). A wider register kernel is
   untested, not refuted.
 * float n = 3 was discarded: its tiny arm exceeded the 10% `rel_sd` gate.
 
@@ -640,7 +645,7 @@ scripts/register_probe.sh out.log '' batchlas_extensions_cta` (sm_89). Every cel
 | cdouble | 8 / 16 | 84 / 128 | 5,376 / 8,192 |
 
 cdouble N = 32 is not instantiated. The worst cell is cfloat N = 32 (166 registers). `kTinyWorstProbedRegs = 176` and a
-`static_assert` on `kTinyWgSize * kTinyWorstProbedRegs <= 65536` make widening the work-group fail to compile. cfloat N = 32
+`static_assert(resident::sm89_fits(kTinyWorstProbedRegs, kTinyWgSize))` (`potrf_tiny.cc:54-55`) make widening the work-group fail to compile. cfloat N = 32
 has 6 blocks per SM at wg = 64 (25% occupancy, 12 resident matrices), against about 20 for `potrf_cta` at n = 32 float: the
 first cell to check in any grid.
 
@@ -704,7 +709,7 @@ holds `n` and is the tightest of 8/16/32. It cannot check a pinned `S`.
 
 `src/ops/potrf/kernels/potrf_lpanel.cc` and `potrf_lpanel_device.hh`: a left-looking, thread-per-row panel kernel. One work-group
 holds one `n x NB` panel in local memory, factors it in place, and re-reads the already-factored columns from global
-memory. `NB = 8` for every type; `NB = 16` is float only. `Uplo::Upper` is refused by `can_run` (`potrf.cc:46`) because the
+memory. `NB = 8` for every type; `NB = 16` is float only. `Uplo::Upper` is refused by `can_run` (`potrf.cc:48`) because the
 left-looking update reads the lower triangle; no in-tree caller asks for Upper.
 
 ### Footprint and the two caps {#footprint-and-the-two-caps}
@@ -967,7 +972,7 @@ row; and nrhs 2 and 3 were not timed.
 
 ### posv tiny-tier register bound: assumed, then measured {#the-posv-tiny-tier-is-not-register-resident-for-cdouble}
 
-`posv_tiny.cc` declared `kWorstRegsPerThread = 256`, above the 255-register ISA ceiling, so no kernel could report it. The
+`posv_tiny.cc:49` declares `kWorstRegsPerThread = 255`, the ISA ceiling (a declared 256 could not be reported by any kernel). The
 probe (see [the probe's own gate](#the-probes-own-gate-could-not-fail)) found the tier's instantiations are not
 register-resident:
 

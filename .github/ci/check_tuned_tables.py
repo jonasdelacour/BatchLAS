@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Warn about stale tuned selection tables (docs/design/tuning-data.md#tuning-data-kernel-hash).
 
     python3 .github/ci/check_tuned_tables.py              # warnings only, always exits 0

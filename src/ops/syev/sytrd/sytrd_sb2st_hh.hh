@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Stage-2 band -> tridiagonal by Householder bulge chasing, reflectors RETAINED for Z := Q2 Z
@@ -15,7 +16,7 @@
 #include <vector>
 
 namespace batchlas {
-namespace internal {
+namespace detail {
 
 // One stored reflector. `sweep` is kept because one sweep's reflectors act on disjoint
 // row ranges (starts stride by kd, length <= kd) and can be applied concurrently.
@@ -117,5 +118,5 @@ BATCHLAS_INTERNAL_API Event unmqr_hb2st(Queue& ctx,
                                         Span<const int32_t> lens,
                                         Span<const int32_t> waves);
 
-} // namespace internal
+} // namespace detail
 } // namespace batchlas

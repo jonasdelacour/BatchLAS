@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched GETRS: the row interchange plus two ROUTED trsm solves the
 // facade injects. Auto takes it where tuned/getrs.* ranks it first, and a vendor-free
 // build always has a getrs. This TU must share no device symbol with the

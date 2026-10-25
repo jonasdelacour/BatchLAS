@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syrk for the tuner (real only): C = alpha op(A) op(A)^T + beta C on the lower triangle, A and
 // C0 from MatrixView::fill_random, C0's strict upper triangle and ld padding then poisoned with a
 // large finite value, beta = 0.75 so C is read. trans C is the real Trans spelled C (the key keeps
@@ -12,6 +13,7 @@
 
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -30,7 +32,7 @@ namespace {
 
 namespace K = ops::syrk;
 
-template <class T>
+template <typename T>
 struct SyrkProblem {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     Queue& q;
@@ -93,7 +95,7 @@ public:
     std::vector<int> ladder_extra_batches() const override { return with_slice_batches({1, 2, 4, 8}); }
     static std::vector<int> batches() { return with_slice_batches({K::grid_batch.begin(), K::grid_batch.end()}); }
     std::vector<std::string> candidates(const std::string& dtype) const override {
-        return with_real_dtype("syrk", dtype, []<class T>() { return spellings(K::candidates<T>()); });
+        return with_real_dtype("syrk", dtype, []<typename T>() { return spellings(K::candidates<T>()); });
     }
     std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
         auto ints = [](const auto& xs) {
@@ -148,12 +150,12 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/syrk_spec.cc"; }
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
-        return with_real_dtype("syrk", req.dtype, [&]<class T>() {
+        return with_real_dtype("syrk", req.dtype, [&]<typename T>() {
             const std::string& t = *key_get(req.key, "trans");
             const Transpose trans = t == "N" ? Transpose::NoTrans : t == "T" ? Transpose::Trans : Transpose::ConjTrans;
             const int n = int(key_int(req.key, "n")), k = int(key_int(req.key, "k"));
             if (*key_get(req.key, "form") != K::form_of(n, k))
-                throw std::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
+                throw batchlas::invalid_argument("syrk: form " + *key_get(req.key, "form") + " contradicts n, k");
             SyrkProblem<T> p(q, trans, n, k, int(key_int(req.key, "batch")), req.ld_pad);
             const double tol = verify::bound<T>(verify::Check::blas, p.k);
             if (req.mode == "race") return run_race<K::SyrkChoice>("syrk", p, req, tol);

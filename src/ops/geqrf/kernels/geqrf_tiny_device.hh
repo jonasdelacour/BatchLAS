@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Device helpers for the register-resident GEQRF ("tiny") tier. geqrf_cta_device.hh's

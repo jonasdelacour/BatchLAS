@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 #include <batchlas/export.hh>
 #include <complex>
@@ -1565,7 +1566,7 @@ namespace batchlas {
                                           Span<T> singular_values_out,
                                           bool want_vectors);
 
-    
+
     /**
      * @brief ORMBR/UNMBR-style application of bidiagonal reduction reflectors. Supports
      *        `vect='Q'` (tauq, CTA/blocked ORMQR path) and `vect='P'` (taup, blocked

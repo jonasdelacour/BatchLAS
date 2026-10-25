@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
@@ -59,7 +60,7 @@ TYPED_TEST(TrmmTest, AllCombinations) {
                 for (auto diag : {Diag::NonUnit, Diag::Unit}) {
                     // generate A for the current uplo/diag
                     Matrix<T> A = Matrix<T, MatrixFormat::Dense>::RandomTriangular(n, uplo, diag, batchSize);
-                    
+
 
                     // compute C = trmm(A,B) with the current combination
                     trmm(*(this->ctx),

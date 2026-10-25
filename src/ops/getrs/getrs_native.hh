@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Native batched GETRS declarations: the composed tier (row permutation + two routed

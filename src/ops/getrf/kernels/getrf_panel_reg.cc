@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The REGISTER-RESIDENT GETRF panel leaf, a DROP-IN for getrf_panel_factorize and not
 // a tier -- same ipiv contract, same read-modify-written `info`, same cabs1 pivot metric,
 // so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm; the default is

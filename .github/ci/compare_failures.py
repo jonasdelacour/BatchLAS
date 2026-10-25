@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Gate a ctest run against tests/known-failures.txt, so a not-green tree can still have CI.
 
 THE DEFECT THIS EXISTS FOR

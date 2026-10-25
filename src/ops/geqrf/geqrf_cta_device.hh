@@ -1,8 +1,9 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // All of the native batched GEQRF panel's device code: LAPACK ?GEQR2 over a `Tile`,
 // instantiated on a local_accessor (CTA tier) and a raw pointer (blocked panel leaf).
-// Deliberately NOT internal::larfg -- that preserves alpha's phase where clarfg/zlarfg
+// Deliberately NOT detail::larfg -- that preserves alpha's phase where clarfg/zlarfg
 // and the vendors return a REAL beta, and tau is a contract ormqr/orgqr/ormbr/sy2sb read.
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 

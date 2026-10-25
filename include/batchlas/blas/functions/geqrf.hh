@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -57,7 +58,7 @@ template <typename T>
 inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GEQRF: Matrix dimensions cannot be negative (rows=" +
+            "geqrf: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }
@@ -79,7 +80,7 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @param A           batch of m x n matrices; overwritten with R and the reflectors
 /// @param tau         reflector scalars, `k * batch` elements; item b's
 ///                    \f$ \tau_i \f$ is `tau[b * k + i]`
-/// @param work_space  device-accessible scratch of at least geqrf_buffer_size() bytes
+/// @param workspace  device-accessible scratch of at least geqrf_buffer_size() bytes
 /// @return event of the last enqueued kernel
 /// @pre `tau.size() >= min(m, n) * A.batch_size()` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
@@ -90,7 +91,7 @@ template <Backend B, typename T>
 BATCHLAS_API Event geqrf(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          Span<T> tau,
-                         Span<std::byte> work_space);
+                         Span<std::byte> workspace);
 
 /// @brief Workspace, in bytes, that geqrf() needs for this shape on this queue.
 /// @ingroup api_qr_lowlevel
@@ -113,7 +114,7 @@ template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,
                                 const MatrixView<T,MatrixFormat::Dense>& A,
                                 Span<T> tau,
-                                Span<std::byte> work_space);
+                                Span<std::byte> workspace);
 
 
 /// @brief Workspace query of the vendor arm of geqrf().

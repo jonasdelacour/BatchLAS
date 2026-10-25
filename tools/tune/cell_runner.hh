@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The child side of one cell (docs/design/flat-kernel-selection.md §6.1, §6.3): probe every
@@ -21,6 +22,7 @@
 #include <tools/tune/spec.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/error.hh>
 #include <batchlas/util/bench_structured.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -55,7 +57,7 @@ inline constexpr Backend kBackend = Backend::SYCL;
 #define BATCHLAS_TUNE_FP64 BATCHLAS_HAS_DEVICE_FP64
 #endif
 
-template <class F>
+template <typename F>
 decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
     if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
@@ -64,31 +66,31 @@ decltype(auto) with_dtype(const std::string& dtype, F&& f) {
     if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
 #else
     if (dtype == "double" || dtype == "cdouble")
-        throw std::invalid_argument("dtype '" + dtype + "' needs device fp64, which this build lacks");
+        throw batchlas::invalid_argument("dtype '" + dtype + "' needs device fp64, which this build lacks");
 #endif
-    throw std::invalid_argument("unknown dtype '" + dtype + "'");
+    throw batchlas::invalid_argument("unknown dtype '" + dtype + "'");
 }
 
 // symm, syrk and syr2k are real-only (RealScalar): no complex instantiation and no complex table.
-template <class F>
+template <typename F>
 decltype(auto) with_real_dtype(const std::string& op, const std::string& dtype, F&& f) {
     if (dtype == "float") return f.template operator()<float>();
 #if BATCHLAS_TUNE_FP64
     if (dtype == "double") return f.template operator()<double>();
 #else
-    if (dtype == "double") throw std::invalid_argument(op + ": 'double' needs device fp64, which this build lacks");
+    if (dtype == "double") throw batchlas::invalid_argument(op + ": 'double' needs device fp64, which this build lacks");
 #endif
-    throw std::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
+    throw batchlas::invalid_argument(op + " is real-only: no '" + dtype + "' (float, double)");
 }
 
 // hemm, herk and her2k are complex-only (ComplexScalar): no real instantiation and no real table.
-template <class F>
+template <typename F>
 decltype(auto) with_complex_dtype(const std::string& op, const std::string& dtype, F&& f) {
     if (dtype == "cfloat") return f.template operator()<std::complex<float>>();
 #if BATCHLAS_TUNE_FP64
     if (dtype == "cdouble") return f.template operator()<std::complex<double>>();
 #endif
-    throw std::invalid_argument(op + " is complex-only: no '" + dtype + "' (cfloat, cdouble)");
+    throw batchlas::invalid_argument(op + " is complex-only: no '" + dtype + "' (cfloat, cdouble)");
 }
 
 // A non-lattice grid() (form derived from the extents) under `--grid name=v1:v2`: the overrides
@@ -98,7 +100,7 @@ inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> c
     const auto ax = s.axes();
     for (const auto& [name, values] : overrides)
         if (std::none_of(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; }))
-            throw std::invalid_argument(s.op() + " has no grid axis '" + name + "'");
+            throw batchlas::invalid_argument(s.op() + " has no grid axis '" + name + "'");
     std::vector<CellKey> out;
     for (CellKey& key : cells)
         if (std::all_of(key.begin(), key.end(), [&](const auto& kv) {
@@ -106,11 +108,11 @@ inline std::vector<CellKey> filter_cells(const OpSpec& s, std::vector<CellKey> c
                 return it == overrides.end() || std::find(it->second.begin(), it->second.end(), kv.value) != it->second.end();
             }))
             out.push_back(std::move(key));
-    if (out.empty()) throw std::invalid_argument(s.op() + ": the --grid filters leave no cell of the declared grid");
+    if (out.empty()) throw batchlas::invalid_argument(s.op() + ": the --grid filters leave no cell of the declared grid");
     return out;
 }
 
-template <class Choice, std::size_t N>
+template <typename Choice, std::size_t N>
 std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
     std::vector<std::string> out;
     for (const Choice& c : candidates) out.push_back(select::to_string(c));
@@ -119,7 +121,7 @@ std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
 
 // The arms of one cell in one process: probe, warm-up, timed runs and verification, shared by
 // the fixed-rep protocol (run_arms) and the race (run_race).
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 class ArmBench {
 public:
     using clock = std::chrono::steady_clock;
@@ -244,7 +246,7 @@ private:
     }
     // Every call goes through here: a refused pin is "skipped", anything else "error". The pin is
     // strict: `vendor` is also a class word, which would otherwise time Auto under vendor's name.
-    template <class F>
+    template <typename F>
     bool guarded(ArmOutcome& a, F&& f) {
         if (a.status != "ok") return false;
         try {
@@ -261,7 +263,7 @@ private:
     }
 };
 
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     ArmBench<Choice, Problem> b(op, p, req.arms);
     auto& arms = b.arms;
@@ -290,7 +292,7 @@ std::vector<ArmOutcome> run_arms(const std::string& op, Problem& p, const CellRe
 // lean_max_reps cap. Then only the arms that can rank first (verify_next) and req.verify are
 // verified: one that fails is "bad" and leaves the row, the rest keep their medians (a gross loser:
 // of its two cut rounds), unverified arms flagged so.
-template <class Choice, class Problem>
+template <typename Choice, typename Problem>
 std::vector<ArmOutcome> run_race(const std::string& op, Problem& p, const CellRequest& req, double tol) {
     std::vector<std::string> names;
     for (const std::string& s : req.seed_order)

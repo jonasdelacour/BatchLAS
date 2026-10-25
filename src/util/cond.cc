@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -94,7 +95,7 @@ namespace batchlas
                         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                         // is already ordered after this one and the Event carries nothing the caller needs.
                         (void)inv<B>(ctx, A, Ainv, inv_workspace);
-                        
+
                         (void)norm(ctx, Ainv, norm_type, A_inv_norms);
                         (void)norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
@@ -175,7 +176,7 @@ namespace batchlas
         COND_INSTANTIATE(back, BATCHLAS_UNPAREN fp, MatrixFormat::Dense)
 
     BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(COND_INSTANTIATE_FOR_TYPE)
-    
+
 
 } // namespace batchlas
 

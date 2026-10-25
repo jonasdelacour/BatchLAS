@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every syev candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-syev. Inputs have a known spectrum (A = Q diag(lambda) Q^H with a
 // host Householder Q), so no reference goes through the code under test. Which kernel ran is
@@ -201,7 +202,7 @@ std::string label(const Spec& s) {
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
 
 // The outermost syev trace line for whatever `run` calls, and the choice it names.
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -218,7 +219,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("syev ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no syev trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");
@@ -725,7 +726,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                      std::invalid_argument)
             << select::to_string(c);
     }
-    // The syev_supports_* bindings ask can_run with Backend::AUTO, so only the is_gpu term refuses.
+    // The syev_supports_* bindings ask can_run with Backend::Auto, so only the is_gpu term refuses.
     {
         auto sq = make_eig<T>(s);
         EXPECT_FALSE(batchlas::ops::syev::detail::syev_supports_cta<T>(*this->ctx, sq.A()));

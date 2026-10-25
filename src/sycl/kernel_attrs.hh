@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Kernel attributes and loop pragmas; on DPC++ each expands to exactly the spelling it replaced.
 #include <src/sycl/sscp_target.hh>   // batchlas::sycl_impl::on_ptx(), target_arch()

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -58,17 +59,17 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
-            "POTRF: Matrix dimensions cannot be negative (rows=" +
+            "potrf: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument(
-            "POTRF: A must be square, got " + std::to_string(A.rows()) + "x" +
+            "potrf: A must be square, got " + std::to_string(A.rows()) + "x" +
             std::to_string(A.cols()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
         throw batchlas::invalid_argument(
-            "POTRF: Invalid uplo parameter: " +
+            "potrf: Invalid uplo parameter: " +
             std::to_string(static_cast<int>(uplo)));
     }
 }

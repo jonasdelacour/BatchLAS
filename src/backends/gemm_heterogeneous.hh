@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The heterogeneous-batch GEMM loop, shared by every backend and the vendor-free
@@ -66,7 +67,7 @@ Event gemm_heterogeneous_loop(Queue& ctx,
                               Transpose transB,
                               LaunchItem&& launch_item) {
     if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-        throw batchlas::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
+        throw batchlas::invalid_argument("gemm: incompatible per-batch matrix dimensions for heterogeneous dispatch");
     }
 
     bool launched = false;

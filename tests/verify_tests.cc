@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests of batchlas::verify (docs/design/verification.md): tolerances, LAPACKE references, and
 // MatrixView's verification scalars and item lists.
 
@@ -31,7 +32,7 @@ using batchlas::verify::Check;
 
 namespace {
 const double kNaN = std::numeric_limits<double>::quiet_NaN();
-template <class T> using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename T> using MV = MatrixView<T, MatrixFormat::Dense>;
 }
 
 TEST(Scalar, NanmaxPropagates) {
@@ -393,7 +394,7 @@ namespace {
 using cfloat = std::complex<float>;
 using cdouble = std::complex<double>;
 
-template <class T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
+template <typename T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
 
 }  // namespace
 
@@ -402,9 +403,9 @@ template <class T> T sentinel() { return MV<T>::make(-777.0, -555.0); }
 // eigenvalues/singular_values read D as double or complex<double>: any other D would be reinterpreted
 // and read past the buffer, so it must not compile.
 namespace {
-template <class D>
+template <typename D>
 constexpr bool takes_eigenvalues = requires(std::vector<D>& a, std::vector<double>& w) { batchlas::verify::eigenvalues(4, a, w); };
-template <class D>
+template <typename D>
 constexpr bool takes_singular_values =
     requires(std::vector<D>& a, std::vector<double>& w) { batchlas::verify::singular_values(4, 4, a, w); };
 }  // namespace
@@ -512,7 +513,7 @@ TEST(Reference, GetrfPivotsUseCabs1ForComplex) {
 }
 
 namespace {
-template <class T> void getrf_pivots_of_permutation() {
+template <typename T> void getrf_pivots_of_permutation() {
     const int p[4] = {2, 0, 3, 1};
     std::vector<T> a(16, T(0));
     for (int j = 0; j < 4; ++j) a[j * 4 + p[j]] = MV<T>::make(1.0, -1.0);
@@ -574,7 +575,7 @@ TEST(Reference, GetrfPivotsOfAViewItemStayInPrecision) {
 namespace {
 // LAPACK's own factor and pivots of A0 must reproduce A0 through lu_solve_residual (X = I, B0 = A0):
 // pins the library's interchange order to LAPACK's rather than to a test's own loop.
-template <class T> void lu_convention_matches_lapack() {
+template <typename T> void lu_convention_matches_lapack() {
     constexpr int n = 8, ld = 11;
     std::vector<T> a0(ld * n, sentinel<T>()), eye(ld * n, sentinel<T>());
     batchlas::Queue ctx;

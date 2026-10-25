@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Fail if NVPTX device code calls SPIR-V builtins out of line.
 
     scripts/check_device_calls.py build/                  # scan build/src/libbatchlas*.so or *.dylib (split or monolithic)

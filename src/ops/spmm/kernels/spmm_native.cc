@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched CSR SpMM kernels: gather (transA == NoTrans), plus scale and
 // scatter (transposed). CSR indexing and beta == 0 / alpha == 0 semantics:
 // evidence: docs/perf/spmm.md#spmm-the-kernel-contract

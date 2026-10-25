@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched LU -- getrf, getrs and getri: both getrf tiers (CTA and
 // blocked), both getrs arms (composed and fused narrow-RHS), and getri.
 // Every numerical test drives the native dispatch entry points DIRECTLY against a
@@ -53,8 +54,8 @@ template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
 
-template <class T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
-template <class R> inline std::complex<R> scale(std::complex<R> v, double f) {
+template <typename T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
+template <typename R> inline std::complex<R> scale(std::complex<R> v, double f) {
     return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
 }
 
@@ -64,23 +65,23 @@ template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 
 // The fixtures hold raw pointers at padded ld and odd strides; these hand one item to the library.
-template <class T>
+template <typename T>
 VectorView<int32_t> pivots_of(const int* ipiv, int count) {
     return VectorView<int32_t>(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(ipiv)), count, 1);
 }
-template <class T>
+template <typename T>
 double factor_residual(Queue& ctx, const T* A0, const T* F, const int* ipiv, int m, int n, int ld) {
     return MVof<T>::getrf_residual(ctx, MVof<T>(const_cast<T*>(A0), m, n, ld), MVof<T>(const_cast<T*>(F), m, n, ld), pivots_of<T>(ipiv, std::min(m, n)));
 }
-template <class T>
+template <typename T>
 double solve_residual(Queue& ctx, const T* A0, const T* X, const T* B0, int n, int nrhs, int lda, int ldb, Transpose op) {
     return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb), MVof<T>(const_cast<T*>(B0), n, nrhs, ldb));
 }
-template <class T>
+template <typename T>
 double inverse_residual(Queue& ctx, const T* A0, const T* C, int n, int lda, int ldc) {
     return MVof<T>::solve_residual(ctx, MVof<T>(const_cast<T*>(A0), n, n, lda), MVof<T>(const_cast<T*>(C), n, n, ldc), MVof<T>(nullptr, 0, 0, 1));
 }
-template <class T>
+template <typename T>
 double lu_solve_residual(Queue& ctx, const T* F, const int* ipiv, const T* X, const T* B0, int n, int nrhs, int ldf,
                          int ldb, Transpose op) {
     return MVof<T>::lu_solve_residual(ctx, MVof<T>(const_cast<T*>(F), n, n, ldf), pivots_of<T>(ipiv, n), op, MVof<T>(const_cast<T*>(X), n, nrhs, ldb),
@@ -330,7 +331,7 @@ protected:
     }
 
     // Run one tier DIRECTLY. `pass_info` false exercises the info_target
-    // fallback, of which src/ops/inv/inv.cc:48 is a real instance.
+    // fallback, of which src/ops/inv/inv.cc:49 is a real instance.
     void run_cta(Lu<T>& p, bool pass_info = true) {
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -597,7 +598,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         << "this test's local-memory formula is not the library's; every byte "
            "count below names some other size and the ladder proves nothing";
 
-    // The hole band's endpoints, from getrf_cta.cc:136-138.
+    // The hole band's endpoints, from getrf_cta.cc:137-139.
     constexpr std::size_t kLo = 47104, kHi = 49664, kPadTo = 49920;
 
     struct Row { std::size_t bytes; int m, n; };
@@ -771,7 +772,7 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
                 << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
             this->ctx->wait();
 
-            const double res = lu_solve_residual<T>(*this->ctx, 
+            const double res = lu_solve_residual<T>(*this->ctx,
                 p.buf.data(), reinterpret_cast<const int*>(p.piv.data()),
                 rhs.buf.data(), rhs.b0.data(), n, nrhs, p.ld, rhs.ld, op);
             if (verbose())
@@ -1890,7 +1891,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                     this->ctx->wait();
 
                     for (int b = 0; b < batch; ++b) {
-                        const double res = solve_residual<T>(*this->ctx, 
+                        const double res = solve_residual<T>(*this->ctx,
                             p.a0.data() + size_t(b) * p.stride,
                             rhs.buf.data() + size_t(b) * rhs.stride,
                             rhs.b0.data() + size_t(b) * rhs.stride,
@@ -2406,7 +2407,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
             << "getri must refuse C aliasing A: C is zeroed before A's triangles are read";
         // A DISTINCT C, so the alias gate above cannot fire first. Passing A as
         // both operands made this assertion vacuous: it threw on the aliasing
-        // check at getri_blocked.cc:193 and never reached the empty-seam refusal
+        // check at getri_blocked.cc:194 and never reached the empty-seam refusal
         // at :204, so deleting that refusal entirely left the test green -- and a
         // direct caller that forgot the injection would then call an empty
         // std::function rather than getting a diagnostic.
@@ -2805,7 +2806,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                                 rhs.buf[size_t(b) * rhs.stride + size_t(c) * rhs.ld + i])))
                                 << "a NEARLY singular factor produced a non-finite answer at kz="
                                 << kz << " transA=" << int(op) << " b=" << b;
-                    const double res = lu_solve_residual<T>(*this->ctx, 
+                    const double res = lu_solve_residual<T>(*this->ctx,
                         p.buf.data() + size_t(b) * p.stride,
                         reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * n,
                         rhs.buf.data() + size_t(b) * rhs.stride,
@@ -3030,7 +3031,7 @@ void expect_pad_untouched(const Lu<T>& p, const char* what) {
 // residual and no pivot-growth bound can see: both candidates are equally good
 // pivots, so only the INDEX distinguishes LAPACK's answer from the other one.
 // Row 0 and row 2 of column 0 carry equal cabs1 and different values.
-template <class T>
+template <typename T>
 void tiny_tie_pair(T& a, T& b) {
     if constexpr (std::is_same_v<RealOf<T>, T>) {
         a = MVof<T>::make(3.0, 0.0);

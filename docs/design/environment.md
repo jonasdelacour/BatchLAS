@@ -1,9 +1,11 @@
 # Environment variables {#design_environment}
 
-> **Status:** current · updated 2026-10-06
+> **Status:** current · checked 2026-10-21
 
 Every `BATCHLAS_*` variable the library reads is captured once into `batchlas::Settings`
-(`include/batchlas/settings.hh`, `src/util/settings.cc`). The user guide is
+(`include/batchlas/settings.hh`, `src/util/settings.cc`, the library's only reader of `BATCHLAS_*`
+variables; loader design: [settings loader](runtime-internals.md#runtime-internals-the-settings-loader)).
+The user guide is
 [Configuration](../cpp-api.md#configuration). Test and benchmark-only variables are not listed,
 except [`BATCHLAS_VERIFY_RECORD`](#environment-verify-record-is-read-raw), which is read raw.
 
@@ -136,19 +138,24 @@ Fields are in the `unsafe` group. See [the unsafe group and its gate](#environme
 
 ## Route pins are raw strings {#environment-route-pins-are-raw-strings}
 
-`Settings::routing` holds one raw `EnvValue` per op, in the order of `RoutingSettings::ops`.
-The names are built from the op (`BATCHLAS_` + op + `_ROUTE`), so a grep for string literals
-misses them. `select::detail::pin_text` and `resolve_pin` (`src/select`) parse the value:
+`Settings::routing` holds one raw `EnvValue` per op, in the order of `RoutingSettings::ops`
+(`include/batchlas/settings.hh:85`, 19 ops: gemm, gemv, trsm, trmm, symm, syrk, syr2k, potrf,
+posv, getrf and the rest of that array). The names are built from the op (`BATCHLAS_` + upper-cased
+op + `_ROUTE`, `src/util/settings.cc:84-94`), so a grep for string literals misses them.
+`select::detail::pin_text` and `resolve_pin` (`src/select/select.hh:325, 408`) parse the value:
 
 - The value is trimmed and case-folded. An empty value is `auto`.
 - A spelling that does not parse, is not a compiled candidate, or cannot run the shape throws
-  `std::invalid_argument`.
+  `batchlas::invalid_argument` (which derives from `std::invalid_argument`).
 - `native` and `vendor` warn once and fall back to `auto` when nothing in their class can run.
 
-Tests pin a route with `ScopedPin` (`src/select/select.hh`), which wins over the environment.
+Tests pin a route with `select::ScopedPin` (`src/select/select.hh:453`), which wins over the
+environment on its thread and nests. A `StrictPin` scoped pin (the tuner's arms) makes a class word
+that cannot serve the shape throw instead of falling back.
 Python pins with `batchlas.set_route(op, spelling)` or the `batchlas.route(op, spelling)` context
-manager: both set the variable in `os.environ` and with `::setenv`, then call
-`detail::reload_settings()` (also exposed as `batchlas.reload_settings()`).
+manager (`python/batchlas/_api.py`): both set the variable in `os.environ` and with `::setenv`,
+then call `detail::reload_settings()` (also exposed as `batchlas.reload_settings()`);
+`batchlas.route_pin(op)` reads the current pin.
 To add a pinned op, add its name to `RoutingSettings::ops`. `BATCHLAS_<OP>_VARIANT`,
 `BATCHLAS_<OP>_PROVIDER`, `BATCHLAS_GEMM_SYCL_KERNEL`, `BATCHLAS_GEMM_EXPERIMENTAL`,
 `BATCHLAS_GEMM_CUBLASDX_KERNEL`, `BATCHLAS_SYEV_SMALL_KERNEL` and `BATCHLAS_SYEV_CTA_MAX_N` are
@@ -235,7 +242,9 @@ numbers silently:
 
 **Gate.** Without the CMake option `BATCHLAS_ALLOW_UNSAFE_ENV` (default `OFF`), these fields keep
 their safe values, and each variable that is set prints one warning. Only the unsafe direction is
-refused. `configure()` is not gated.
+refused (`BATCHLAS_BLAS_HEALTH=error` passes). `configure()` is not gated. The `dev` preset turns
+the option `ON` and every preset inherits it, except `cuda` and `release`, which set it back `OFF`
+so the pre-push gate runs what a release build runs (`CMakePresets.json`).
 
 ## Two knobs that look unsafe {#environment-two-knobs-that-look-unsafe-and-are-not}
 

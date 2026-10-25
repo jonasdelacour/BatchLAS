@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // Shared device helpers for the register-resident "tiny" factorization tier
@@ -40,7 +41,7 @@ constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the ti
 
 // COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
 // lane guard belongs INSIDE it. Complex shuffles as two reals: permute/select reject an
-// aggregate (gesvdj_cta.cc:94).
+// aggregate (gesvdj_cta.cc:95).
 template <typename D, std::size_t P>
 inline D tiny_bcast(SubGroupPartition<P> part, D v, uint32_t src) {
     if constexpr (sycl_device::dev_is_complex_v<D>) {
@@ -201,7 +202,7 @@ inline tiny_r4<R> tiny_r4_pack(D a, D b, D c, D d) {
         rA[((v) * ::batchlas::tiny_native::tiny_r4_width<D>() + 3) % (NC)])
 
 // The partition index UNIQUE IN THE WORK-GROUP. The `sg_id *` term is load-bearing
-// (steqr_cta.cc:82-86): part.get_group_linear_id() repeats across a work-group's
+// (steqr_cta.cc:83-87): part.get_group_linear_id() repeats across a work-group's
 // sub-groups, so without it half the batch is never touched. Armed in all three tiers.
 template <std::size_t P>
 inline int tiny_partition_id(const sycl::sub_group& sg, SubGroupPartition<P> part) {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <src/ops/gemm/gemm_kernels.hh>

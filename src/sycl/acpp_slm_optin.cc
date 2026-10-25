@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // BATCHLAS_ACPP_SLM_OPTIN only: libbatchlas_acpp_slm_optin.so. AdaptiveCpp 25.10 never raises a
 // kernel's dynamic local memory limit, so on CUDA every launch above 48 KiB fails (CU:1). This
 // library interposes the driver's cuLaunchKernel (ELF symbol interposition: it is DT_NEEDED

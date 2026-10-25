@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/util/env.hh>
@@ -63,7 +64,7 @@ static void BM_SYEV(minibench::State& state) {
     const Uplo uplo = parse_uplo(static_cast<int>(state.range(5)));
 
     // Bare ::setenv + explicit reload, not a ScopedEnvVar: minibench runs the kernel
-    // registered below many times AFTER this setup call returns (minibench.hh:312 vs
+    // registered below many times AFTER this setup call returns (minibench.hh:313 vs
     // :333-386), so a guard scoped here would restore the env before the first timed
     // iteration and every case would measure the tuned default. The reload is what
     // makes the writes visible at all: settings() snapshots the env once, before main().

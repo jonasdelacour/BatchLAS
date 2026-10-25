@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <iostream>
@@ -59,27 +60,27 @@ TYPED_TEST(RitzValuesTest, DiagonalMatrix) {
 
     // Create trial vectors V (identity matrix - the actual eigenvectors)
     auto V = Matrix<ScalarType, MatrixFormat::Dense>::Identity(n, batch);
-    
-    
+
+
     // Expected Ritz values are the diagonal entries
     std::vector<RealType> expected(k);
     for (int j = 0; j < k; ++j) {
         expected[j] = RealType(j + 1);
     }
-    
+
     // Allocate output for Ritz values
     Vector<RealType> ritz_vals(k, batch);
-    
+
     // Compute workspace size and allocate
     size_t workspace_size = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals);
     UnifiedVector<std::byte> workspace(workspace_size);
-    
+
     // Compute Ritz values
     (void)ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals, workspace);
     this->ctx->wait();
-    
+
     // Ritz values of exact eigenvectors are eigenvalues: Check::values against the closed form,
     // ||A||_2 = 5. The kind's float bound is 4.8e-5 absolute, so the Slack keeps the old power.
     const std::vector<std::vector<double>> ref{std::vector<double>(expected.begin(), expected.end())};
@@ -101,15 +102,15 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     constexpr int n = 10;
     constexpr int batch = 2;
     constexpr int k = 3; // Test with first 3 trial vectors
-    
+
     RealType a = RealType(2.0), b = RealType(-1.0), c = RealType(-1.0);
     auto A = Matrix<ScalarType, MatrixFormat::Dense>::TriDiagToeplitz(n, a, b, c, batch);
-    
+
     // Create trial vectors V using the analytical eigenvectors
     // For a tridiagonal Toeplitz matrix, eigenvector j has components:
     // v_i = sin(j*(i+1)*pi/(n+1))
     Matrix<ScalarType, MatrixFormat::Dense> V(n, k, batch);
-    
+
     for (int bat = 0; bat < batch; ++bat) {
         for (int j = 0; j < k; ++j) {
             for (int i = 0; i < n; ++i) {
@@ -119,26 +120,26 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
             }
         }
     }
-    
+
     // Compute expected Ritz values (eigenvalues)
     std::vector<RealType> expected(k);
     for (int j = 0; j < k; ++j) {
         expected[j] = a - RealType(2.0) * std::sqrt(b * c) * std::cos((j + 1) * M_PI / (n + 1));
     }
-    
+
     // Allocate output for Ritz values
     Vector<RealType> ritz_vals(k, batch);
-    
+
     // Compute workspace size and allocate
     size_t workspace_size = ritz_values_buffer_size<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals);
     UnifiedVector<std::byte> workspace(workspace_size);
-    
+
     // Compute Ritz values
     (void)ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals, workspace);
     this->ctx->wait();
-    
+
     const std::vector<std::vector<double>> ref(batch, std::vector<double>(expected.begin(), expected.end()));
     const double norm2 = double(a) + 2.0 * std::cos(M_PI / (n + 1));
     using MV = MatrixView<ScalarType, MatrixFormat::Dense>;

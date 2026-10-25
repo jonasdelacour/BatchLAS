@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Host-only tests of the tuner core (tools/tune/tune_core.cc; flat-kernel-selection.md §6):
 // the §6.3 tie rule and rotation, the §6.2 bisection, the JSONL records, kernel hash v2, the
 // ledger, and the round trip through scripts/sweep_to_table.py. No GPU.
@@ -13,6 +14,8 @@
 #include <tools/tune/worker.hh>
 
 #include <gtest/gtest.h>
+#include <batchlas/error.hh>
+
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -273,7 +276,7 @@ TEST(TuneHash, KernelBlockFromFileMergesDeps) {
     try {
         kernel_block_from_file(d.string(), "tools/tune/nope_spec.cc");
         FAIL() << "expected a throw";
-    } catch (const std::runtime_error& e) {
+    } catch (const batchlas::invalid_argument& e) {
         EXPECT_NE(std::string(e.what()).find("tools/tune/nope_spec.cc"), std::string::npos);
     }
 }
@@ -325,7 +328,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
     const auto h3 = family_hashes(d.string(), b, fams);
     for (const char* f : {"cta", "tiny", "vendor"}) EXPECT_NE(h3.at(f), h2.at(f)) << f;
     fs::remove(d / "tiny.cc");
-    EXPECT_THROW(family_hashes(d.string(), b, fams), std::runtime_error);
+    EXPECT_THROW(family_hashes(d.string(), b, fams), batchlas::invalid_argument);
 }
 
 // Hash v2 values of the shipped sources (the tables' kernels=): the family markers in the specs
@@ -333,7 +336,7 @@ TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
 TEST(TuneHash, OpLevelHashUnchangedByFamilyPrefixes) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     const std::map<std::string, std::string> pinned{
-        {"gemm", "348839df"}, {"potrf", "f8b5a0f5"}, {"posv", "e589ffae"}, {"trsm", "707034a6"}};
+        {"gemm", "6ac7cd06"}, {"potrf", "4ee0f94f"}, {"posv", "3ec88e04"}, {"trsm", "935570af"}};
     for (const auto& [op, want] : pinned) {
         const KernelBlock b = parse_kernel_block(read_file(fs::path(repo) / "tools/tune" / (op + "_spec.cc")));
         EXPECT_EQ(kernel_hash(repo, b.all), want) << op;
@@ -1338,9 +1341,9 @@ TEST(TuneReplay, ShrinkingAnAxisShrinksTheLatticeAndCostsTheDroppedCells) {
     const ReplayReport r = replay(rc, axes, Tier::preview, p);
     EXPECT_EQ(r.cells_measured, 2u);
     EXPECT_GT(r.table_misrank, 0.0) << "n=16 and up read n=8, which loses there";
-    EXPECT_THROW(shrink_axis(axes, "n", "3", true), std::invalid_argument);
-    EXPECT_THROW(shrink_axis(axes, "zz", "2", false), std::invalid_argument);
-    EXPECT_THROW(shrink_axis(axes, "n", "0", false), std::invalid_argument);
+    EXPECT_THROW(shrink_axis(axes, "n", "3", true), batchlas::invalid_argument);
+    EXPECT_THROW(shrink_axis(axes, "zz", "2", false), batchlas::invalid_argument);
+    EXPECT_THROW(shrink_axis(axes, "n", "0", false), batchlas::invalid_argument);
 }
 
 TEST(TuneReplay, TableMisrankCountsUnmeasuredCells) {
@@ -1798,7 +1801,7 @@ TEST(TuneLedger, AGitLfsPointerIsNamed) {
     try {
         (void)read_ledger(d.led(), "float");
         ADD_FAILURE() << "read an LFS pointer as a ledger";
-    } catch (const std::runtime_error& e) {
+    } catch (const batchlas::invalid_argument& e) {
         EXPECT_NE(std::string(e.what()).find("Git LFS pointer: run git lfs pull"), std::string::npos) << e.what();
     }
 }
@@ -1912,7 +1915,7 @@ TEST(TuneLedger, MalformedMiddleLineThrows) {
     write_run(d, Tier::deep, "2026-10-01", two_family_cell(), "20261001T000000-a-1");
     append_to(fs::path(d.led()), "{\"kind\": \"cell\", \"oops\n");
     append_to(fs::path(d.led()), two_family_cell().ranked.empty() ? "" : "{\"kind\": \"audit\"}\n");
-    EXPECT_THROW(read_ledger(d.led(), "float"), std::runtime_error);
+    EXPECT_THROW(read_ledger(d.led(), "float"), batchlas::invalid_argument);
 }
 
 TEST(TuneLedger, EmptyRankingIsARecordNotARerun) {
@@ -2114,7 +2117,7 @@ TEST(TuneLedger, ImportSchema1KeysCellsByTheGridAxesLikeTheDriver) {
         << "every axis in axis order; a missing fixed axis takes its only value";
     auto with_side = axes;
     with_side.push_back({"side", {"L", "R"}});  // not fixed: a record without it has no key
-    EXPECT_THROW(import_schema1(raw, d.str() + "/side", now, "k1", Tier::deep, with_side), std::runtime_error);
+    EXPECT_THROW(import_schema1(raw, d.str() + "/side", now, "k1", Tier::deep, with_side), batchlas::invalid_argument);
 }
 
 TEST(TuneLedger, ReopenAfterTornTailStaysReadable) {
@@ -2858,9 +2861,9 @@ TEST(TuneRemeasure, ReadsOpDtypeKeyLinesAndRefusesMalformedOnes) {
     EXPECT_EQ(k.at("gemv.cdouble"), (std::set<CellKey>{{{"m", "4"}}}));
     for (const char* bad : {"trsm float\n", "trsm float n=8 extra\n", "trsm float n\n"}) {
         std::ofstream(f) << bad;
-        EXPECT_THROW((void)read_remeasure_keys(f.string()), std::runtime_error) << bad;
+        EXPECT_THROW((void)read_remeasure_keys(f.string()), batchlas::invalid_argument) << bad;
     }
-    EXPECT_THROW((void)read_remeasure_keys((d.path / "missing").string()), std::runtime_error);
+    EXPECT_THROW((void)read_remeasure_keys((d.path / "missing").string()), batchlas::invalid_argument);
 }
 
 TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPastTheBudget) {
@@ -2904,9 +2907,9 @@ TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPas
 
     o.remeasure = {{"fakeop.float", {{{"m", "4"}}}}};
     FakeMeasurer none;
-    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "a key with the wrong fields";
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), batchlas::invalid_argument) << "a key with the wrong fields";
     o.remeasure = {{"fakeop.double", {{{"n", "4"}}}}};
-    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), std::runtime_error) << "an op and dtype not in the run";
+    EXPECT_THROW((void)run_tiered(o, {"sm_fake", "Fake"}, &none), batchlas::invalid_argument) << "an op and dtype not in the run";
     EXPECT_TRUE(none.keys.empty());
 }
 
@@ -4047,7 +4050,7 @@ class FakeRealSpec : public FakeSpec {
 public:
     std::string op() const override { return "fakereal"; }
     std::vector<std::string> candidates(const std::string& d) const override {
-        if (d != "float") throw std::invalid_argument("fakereal is real-only: no '" + d + "' (float)");
+        if (d != "float") throw batchlas::invalid_argument("fakereal is real-only: no '" + d + "' (float)");
         return {"a", "b"};
     }
 };
@@ -4080,7 +4083,7 @@ TEST(TuneTieredDriver, AMultiOpRunSkipsTheDtypesASpecRefusesWithOneNote) {
     EXPECT_FALSE(read_ledger(ledger_file(ledger.str(), "fakereal", "sm_fake"), "float").cells.empty());
     EXPECT_TRUE(read_ledger(ledger_file(ledger.str(), "fakereal", "sm_fake"), "cfloat").cells.empty());
     o.ops = {"fakereal"};
-    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake"}, &m), std::invalid_argument) << "a single-op run still refuses";
+    EXPECT_THROW(run_tiered(o, {"sm_fake", "Fake"}, &m), batchlas::invalid_argument) << "a single-op run still refuses";
 }
 
 // ---- the ld audit (spec.hh kLdAuditPad) ------------------------------------------------------
@@ -4097,7 +4100,7 @@ public:
     std::vector<ArmOutcome> run_cell(const CellRequest& req, Queue& q) const override {
         calls.push_back(req);
         queues.push_back(&q);
-        if (req.mode == "verify" && throw_on_verify) throw std::runtime_error("device lost");
+        if (req.mode == "verify" && throw_on_verify) throw batchlas::device_error("device lost");
         std::vector<ArmOutcome> out;
         for (const std::string& a : req.arms) {
             ArmOutcome o = arm(a, "ok", {1.0});

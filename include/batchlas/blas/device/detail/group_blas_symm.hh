@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 #include <batchlas/blas/device/detail/group_blas_common.hh>

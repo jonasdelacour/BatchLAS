@@ -1,5 +1,7 @@
 # Architecture and design {#architecture_index}
 
+> **Status:** current · section index
+
 Design records: decisions and their rationale. Measured evidence is in @ref perf_evidence.
 
 ## Kernel selection
@@ -41,7 +43,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | --- | --- |
 | @subpage design_cpu_target_detection "CPU target detection" | How the build decides whether CPU SYCL kernels exist, and which tests depend on it. |
 | @subpage design_build_performance "Build performance" | Header-structure decisions that keep consumer TUs cheap (e.g. why the umbrella header excludes device code). |
-| @subpage design_sycl_implementations "Two SYCL implementations" | Building with DPC++ or AdaptiveCpp from one tree: gaps, interop seam, A/B protocol, phases, decisions. Measurements: @ref perf_sycl_implementations. |
+| @subpage design_sycl_implementations "Two SYCL implementations" | Building with DPC++ or AdaptiveCpp from one tree: gaps, interop seam, Apple Metal, A/B protocol, decisions. Measurements: @ref perf_sycl_implementations. |
 
 ## Defects and history
 

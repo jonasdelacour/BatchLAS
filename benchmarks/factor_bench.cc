@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // P0 of docs/design/small-n-factorization-plan.md: the in-tree, correct,
 // saturation-aware A/B harness for the batched factorizations
 // (potrf / getrf / getrs / geqrf / orgqr / gesv / posv) at n = 4..512.
@@ -29,6 +30,7 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/util/bench_structured.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -148,7 +150,7 @@ static const char* op_text(OpKind k) {
 //
 // It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
 // snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
-template <class Choice>
+template <typename Choice>
 static bool select_pin_parsed(OpKind k) {
     const char* raw = settings().routing.route(op_text(k)).get();
     if (raw == nullptr) return false;
@@ -314,7 +316,7 @@ template <typename T>
 static int run(const Cfg& c) {
 #if !BATCHLAS_HAS_GPU_BACKEND
     (void)c;
-    throw std::runtime_error("factor_bench measures a GPU backend; this build has none");
+    throw batchlas::unsupported("factor_bench measures a GPU backend; this build has none");
 #else
     auto q = std::make_shared<Queue>(Device("gpu"), BE);
     using MV = MatrixView<T, MatrixFormat::Dense>;

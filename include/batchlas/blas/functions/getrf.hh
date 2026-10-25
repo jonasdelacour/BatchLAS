@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -59,7 +60,7 @@ template <typename T>
 inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
         throw batchlas::invalid_argument(
-            "GETRF: Matrix dimensions cannot be negative (rows=" +
+            "getrf: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
 }
@@ -90,7 +91,7 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 ///                    factored whole, min(m, n) pivots per item packed at stride min(m, n),
 ///                    by the native kernels on a GPU queue and by the NETLIB and ROCm vendors
 /// @param pivots      pivot output, at least `min(m, n) * batch` `int64_t` elements
-/// @param work_space  device-accessible scratch of at least getrf_buffer_size() bytes
+/// @param workspace   device-accessible scratch of at least getrf_buffer_size() bytes
 /// @param info        per-item LAPACK status, one int32 per batch item: 0 on
 ///                    success, i > 0 if U(i,i) is exactly zero (1-based; the
 ///                    factorization completed but U is singular). Empty span =
@@ -110,7 +111,7 @@ template <Backend B, typename T>
 BATCHLAS_API Event getrf(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<int64_t> pivots,
-                         Span<std::byte> work_space,
+                         Span<std::byte> workspace,
                          Span<int32_t> info);
 
 /// @brief getrf() without per-item status (`info` not requested).
@@ -120,14 +121,14 @@ template <Backend B, typename T>
 inline Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             Span<int64_t> pivots,
-            Span<std::byte> work_space) {
-        return getrf<B,T>(ctx, A, pivots, work_space, Span<int32_t>{});
+            Span<std::byte> workspace) {
+        return getrf<B,T>(ctx, A, pivots, workspace, Span<int32_t>{});
 }
 
 /// @brief Workspace, in bytes, that getrf() needs for this shape on this queue.
 /// @param ctx  queue the factorization will run on (kernel selection reads its device)
 /// @param A    batch of n x n matrices to be factorized
-/// @return bytes to pass as the `work_space` span of getrf()
+/// @return bytes to pass as the `workspace` span of getrf()
 /// @ingroup api_factorizations_lowlevel
 template <Backend B, typename T>
 BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
@@ -147,7 +148,7 @@ template <Backend B, typename T>
 BATCHLAS_API Event getrf_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
                                 Span<int64_t> pivots,
-                                Span<std::byte> work_space,
+                                Span<std::byte> workspace,
                                 Span<int32_t> info_out);
 
 

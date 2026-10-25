@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // filepath: /home/jonaslacour/BatchLAS/src/backends/cublas_matrixview.cc
 //#include <batchlas/blas/linalg.hh>
 #include <src/linalg-impl.hh>
@@ -13,6 +14,7 @@
 #include <vector>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/error.hh>
 #include <complex>
 
 #include <src/backends/batch_launch.hh>
@@ -50,7 +52,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
 
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
+            throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
         }
 
         auto [m, k] = get_effective_dims(A, transA);
@@ -135,7 +137,7 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
         static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
 
         // The complex slots are the complex-symmetric ?symm (no conjugate; hemm_vendor is Hermitian).
@@ -183,7 +185,7 @@ namespace batchlas {
                            Uplo uplo) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
         static_cast<void>(k);  // cublas?hemm takes A's order from side
         // The two real slots have no callee: BLAS has no real ?hemm, and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
@@ -216,7 +218,7 @@ namespace batchlas {
                       Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
         // The two real slots have no callee: BLAS has no real ?herk (that is syrk), and T is complex.
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -248,7 +250,7 @@ namespace batchlas {
                        Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
+        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
 
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
             handle.setStream(stream);
@@ -286,7 +288,7 @@ namespace batchlas {
                            Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+        const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
 
         // The complex slots are the complex-symmetric ?syrk (A A^T; herk_vendor is A A^H).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
@@ -331,7 +333,7 @@ namespace batchlas {
                             Transpose transA) {
         static LinalgHandle<Back> handle;
 
-        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+        const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
 
         // The complex slots are the complex-symmetric ?syr2k (her2k_vendor is the Hermitian one).
         impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
@@ -378,7 +380,7 @@ namespace batchlas {
                            Diag diag) {
         static LinalgHandle<Back> handle;
 
-        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
+        const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("trmm", A, B, C, side);
         (void)k;
 
         // The per-batch cublas?trmm loop only: the expansion plus gemm is trmm's own
@@ -590,13 +592,13 @@ namespace batchlas {
     Event geqrf_vendor(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
         Span<T> tau,
-        Span<std::byte> work_space) {
+        Span<std::byte> workspace) {
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
         auto k = std::min(m, n);
         auto batch_size = A.batch_size();
-        auto pool = BumpAllocator(work_space);
+        auto pool = BumpAllocator(workspace);
         if (batch_size <= 1) {
             handle.setStream(ctx);  // the query below runs on whatever stream the static handle last had
             cusolverDnParams_t params;
@@ -843,24 +845,24 @@ namespace batchlas {
         const MatrixView<T,MatrixFormat::Dense>& B,
         Transpose transA,
         Span<int64_t> pivots,
-        Span<std::byte> work_space) {
+        Span<std::byte> workspace) {
             static LinalgHandle<Back> handle;
             auto n = A.rows();
             auto nrhs = B.cols();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // ONE ARM FOR EVERY BATCH SIZE, and the deleted `batch_size <= 1`
             // special case was a CRASH, not an optimisation.
             //
             // It called cusolverDnXgetrs, whose ipiv is GENUINE int64, and handed
             // it `pivots.data()` raw. Every getrf in this tree writes PACKED
             // 1-based int32 into that same span -- getrf_vendor below at :1508
-            // does `pivots.as_span<int>()`, and so do rocsolver.cc:227 and both
+            // does `pivots.as_span<int>()`, and so do rocsolver.cc:228 and both
             // native tiers -- so at batch 1 the solve read two packed pivots per
             // int64 slot as one row index and indexed out of bounds.
             // `getrf<CUDA,float>` then `getrs<CUDA,float>` at n=40, nrhs=3,
             // batch=1 -- the exact sequence linalg::solve issues
-            // (linalg-ops.hh:343-344) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
+            // (linalg-ops.hh:344-345) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
             // (exit 134). cublas?getrsBatched reads the packed int32 the getrf
             // actually wrote and is correct at batchCount = 1, so the two-arm
             // split bought nothing and cost the only pivot format the family
@@ -886,7 +888,7 @@ namespace batchlas {
             });
             return ctx.create_event_after_external_work();
         }
-    
+
     template <Backend Back, typename T>
     size_t getrs_vendor_buffer_size(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
@@ -899,12 +901,12 @@ namespace batchlas {
     Event getrf_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A,
         Span<int64_t> pivots,
-        Span<std::byte> work_space,
+        Span<std::byte> workspace,
         Span<int32_t> info_out) {
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // cuBLAS's infoArray is a genuine per-item device array with LAPACK
             // semantics (0 = ok, >0 = the column where U went exactly singular).
             // It used to be pool scratch that nothing ever read.
@@ -931,7 +933,7 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& A,
         const MatrixView<T, MatrixFormat::Dense>& C, //C is overwritten with inverse of A
         Span<int64_t> pivots,
-        Span<std::byte> work_space,
+        Span<std::byte> workspace,
         Span<int32_t> info_out) {
             if (A.data_ptr() == C.data_ptr()) {
                 throw batchlas::invalid_argument("getri_vendor (CUBLAS): cublas<t>getriBatched is out of place; C aliases A");
@@ -939,7 +941,7 @@ namespace batchlas {
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
-            auto pool = BumpAllocator(work_space);
+            auto pool = BumpAllocator(workspace);
             // Same story as getrf_vendor: cuBLAS writes a per-item infoArray
             // (>0 = U(i,i) is exactly zero, so this item has no inverse) and the
             // result was thrown away, leaving the caller a matrix of infinities.

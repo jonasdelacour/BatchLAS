@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // hemm (flat-kernel-selection.md §4.3, §12): select::run takes the first entry of the nearest
 // tuned/hemm.<device>.txt row that can_run() admits. Expand writes the Hermitian matrix that A's
 // referenced triangle stands for into scratch and hands it to the public gemm (one strided-batched
@@ -6,6 +7,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/hemm.hh>
+#include <batchlas/error.hh>
 
 #include <src/backends/level3_shape.hh>
 #include <src/expansion_budget.hh>
@@ -23,10 +25,10 @@ namespace ops::hemm {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& C) {
     return {{"m", C.rows()}, {"n", C.cols()}, {"batch", C.batch_size()}};
 }
@@ -36,7 +38,7 @@ select::Key key_of(const MV<T>& C) {
 // at the top-level extents. So no family takes a heterogeneous operand. Expand is chunked over the
 // batch (grid z, scratch budget), so it refuses only an item whose own scratch does not fit.
 // rocBLAS has no ?hemm wrapper, so on ROCm only Expand (over rocBLAS gemm) runs.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
@@ -51,7 +53,7 @@ bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>
     }, c);
 }
 
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
@@ -59,7 +61,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
                 return level3::expand_gemm<B, T, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);
             else
-                throw std::logic_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
+                throw batchlas::internal_error("hemm: expand is wired for GPU backends only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
             if constexpr (B != Backend::ROCM && select::has_library<B>(spec.vendor))
@@ -75,7 +77,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
-    backend::shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
+    backend::shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
     // An empty problem is a no-op in every build and under any pin, as symm's is.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = C.batch_size(), .uplo = uplo,

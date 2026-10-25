@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Tests for gesvdj_cta, the one-sided Jacobi SVD.
 // Checks are the batchlas::verify kinds at their library bounds: svd_residual at
 // Check::factorization, orthogonality at Check::orthogonality_rotations and LAPACKE

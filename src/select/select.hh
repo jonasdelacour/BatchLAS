@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -11,6 +12,7 @@
 #include <src/select/vendor.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/queue-dispatch.hh>
+#include <batchlas/error.hh>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
@@ -77,7 +79,7 @@ const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
 }
 
 /// The dtype key of a table row (the first, exact key of every tuned file): float, double, cfloat or cdouble.
-template <class T>
+template <typename T>
 constexpr std::string_view dtype_name() {
     if constexpr (std::is_same_v<T, float>) return "float";
     else if constexpr (std::is_same_v<T, double>) return "double";
@@ -107,7 +109,7 @@ struct NoFields {
 };
 
 /// Every alternative of a field-less choice variant, in declaration (= tie-break) order.
-template <class Choice>
+template <typename Choice>
 constexpr auto all_of() {
     return [&]<std::size_t... I>(std::index_sequence<I...>) {
         return std::array<Choice, sizeof...(I)>{Choice{std::variant_alternative_t<I, Choice>{}}...};
@@ -115,14 +117,14 @@ constexpr auto all_of() {
 }
 
 /// std::visit over a choice with one lambda per family.
-template <class... F>
+template <typename... F>
 struct overloaded : F... { using F::operator()...; };
-template <class... F>
+template <typename... F>
 overloaded(F...) -> overloaded<F...>;
 
 namespace detail {
 
-template <class Choice, class F>
+template <typename Choice, typename F>
 void for_each_family(F&& f) {
     [&]<std::size_t... I>(std::index_sequence<I...>) {
         (f(std::type_identity<std::variant_alternative_t<I, Choice>>{}), ...);
@@ -150,13 +152,13 @@ inline bool parse_int(std::string_view t, int& out) {
 }  // namespace detail
 
 /// The family name of @p c, e.g. "lpanel" for `lpanel:panel=8`.
-template <class Choice>
+template <typename Choice>
 std::string_view family_of(const Choice& c) {
     return std::visit([](const auto& a) { return std::decay_t<decltype(a)>::name; }, c);
 }
 
 /// Output spelling, always the long form: family[:field=value]...
-template <class Choice>
+template <typename Choice>
 std::string to_string(const Choice& c) {
     return std::visit([](const auto& a) {
         using A = std::decay_t<decltype(a)>;
@@ -174,7 +176,7 @@ std::string to_string(const Choice& c) {
 
 /// Accepts the long form and positional shorthand ("lpanel:8"); exact case, no whitespace.
 /// @return the choice, or nullopt with the reason in `*err` (when non-null).
-template <class Choice>
+template <typename Choice>
 std::optional<Choice> parse(std::string_view text, std::string* err = nullptr) {
     const auto tok = detail::split(text, ':');
     std::optional<Choice> out;
@@ -279,18 +281,18 @@ struct Table {
     /// Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
     /// dropped from the right until some row matches, possibly all of them), then min
     /// sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
-    /// @throws std::invalid_argument if @p key lacks a table key.
+    /// @throws batchlas::internal_error (invalid_argument for an override table) if @p key lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
     const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
 /// Parses one single-dtype table: op and device from the header or file name, dtype from the header.
-/// @throws std::runtime_error `"<file>:<line>: <reason>"`.
+/// @throws batchlas::internal_error `"<file>:<line>: <reason>"`.
 BATCHLAS_API Table parse_table(std::string_view text, std::string_view file);
 
 /// Parses one tuned table file, named op.device.txt with the exact key dtype first, into one
 /// Table per dtype without that key.
-/// @throws std::runtime_error as parse_table does.
+/// @throws batchlas::internal_error as parse_table does.
 BATCHLAS_API std::vector<Table> parse_tables(std::string_view text, std::string_view file);
 
 /// A `tuned/*.txt` file compiled into the library: its basename and text.
@@ -329,8 +331,8 @@ BATCHLAS_API bool trace_open(std::string_view op, const std::string& spelling, b
                              const coverage::Shape& shape, const NativeFacts& facts, const Key& fields);
 BATCHLAS_API void trace_close();
 
-// A bad spelling in a table is a build defect, so it fails loudly on first use.
-template <class Choice>
+// A bad spelling in a built-in table is a build defect, so it fails loudly on first use.
+template <typename Choice>
 void validate(const Table& t) {
     static std::mutex mu;
     static std::set<const Table*> done;  // tables are never freed, so pointers stay unique
@@ -339,19 +341,21 @@ void validate(const Table& t) {
     for (const auto& row : t.rows)
         for (const auto& e : row.ranked) {
             std::string err;
-            if (!parse<Choice>(e.spelling, &err))
-                throw std::runtime_error(t.file + ":" + std::to_string(row.line) + ": " + err);
+            if (parse<Choice>(e.spelling, &err)) continue;
+            const std::string what = t.file + ":" + std::to_string(row.line) + ": " + err;
+            if (t.is_override) throw ::batchlas::invalid_argument("BATCHLAS_TUNED_DIR: " + what);
+            throw ::batchlas::internal_error(what);
         }
     done.insert(&t);
 }
 
-template <class Choice, std::size_t N>
+template <typename Choice, std::size_t N>
 bool is_candidate(const Choice& c, const std::array<Choice, N>& candidates) {
     return std::find(candidates.begin(), candidates.end(), c) != candidates.end();
 }
 
 // The ranked walk of §5.4, then the last resort. nullopt only when native_only.
-template <class Choice, std::size_t N, class CanRun>
+template <typename Choice, std::size_t N, typename CanRun>
 std::optional<Choice> walk(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
                            const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
                            bool native_only) {
@@ -392,14 +396,14 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
         return c;
     }
     if (native_only) return std::nullopt;
-    throw std::runtime_error(std::string(op) + ": no runnable kernel on " + d.key);
+    throw ::batchlas::unsupported(std::string(op) + ": no runnable kernel on " + d.key);
 }
 
 // §5.2 / R6. nullopt means "auto": the caller runs the normal walk. The class words
 // `native` and `vendor` fall back to auto with a warning; every other spelling throws.
 // `strict` (the tuner's arms): a class word that cannot serve the shape throws too, and
 // `vendor` must resolve to the candidate spelled `vendor`.
-template <class Choice, std::size_t N, class CanRun>
+template <typename Choice, std::size_t N, typename CanRun>
 std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
                                   const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
                                   const std::string& text, const std::string& source, bool strict = false) {
@@ -408,7 +412,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
     const std::string refused = where + " (strict): no " + text + " candidate can run this shape on " + d.key;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;
-        if (strict) throw std::invalid_argument(refused);
+        if (strict) throw ::batchlas::invalid_argument(refused);
         warn_pin_fallback(op, "native", d);
         return std::nullopt;
     }
@@ -418,18 +422,18 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
                 if (trace_enabled()) note_decision(op, to_string(k), "", "pinned");
                 return k;
             }
-        if (strict) throw std::invalid_argument(refused);
+        if (strict) throw ::batchlas::invalid_argument(refused);
         warn_pin_fallback(op, "vendor", d);  // a vendor-free build: `vendor` falls back to Auto
         return std::nullopt;
     }
     std::string err;
     const std::optional<Choice> c = parse<Choice>(text, &err);
-    if (!c) throw std::invalid_argument(where + " is not a valid choice: " + err);
+    if (!c) throw ::batchlas::invalid_argument(where + " is not a valid choice: " + err);
     if (!is_candidate(*c, candidates))
-        throw std::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " + std::string(op) + " " +
-                                    std::string(dtype) + " candidate");
+        throw ::batchlas::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " + std::string(op) +
+                                           " " + std::string(dtype) + " candidate");
     if (!can_run(*c))
-        throw std::invalid_argument(where + ": " + to_string(*c) + " cannot run this shape on " + d.key);
+        throw ::batchlas::invalid_argument(where + ": " + to_string(*c) + " cannot run this shape on " + d.key);
     if (trace_enabled()) note_decision(op, to_string(*c), "", "pinned");
     return c;
 }
@@ -439,12 +443,12 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 // ---- pins (§5.2) ------------------------------------------------------------------------
 
 /// Tag for a strict ScopedPin: a class word ("native", "vendor") that cannot serve the shape
-/// throws std::invalid_argument instead of falling back to auto.
+/// throws batchlas::invalid_argument instead of falling back to auto.
 struct StrictPin {};
 
 /// RAII pin for @p op: wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer
 /// pin on exit. Takes a choice, or any pin word ("auto", "native", "vendor", a spelling).
-template <class Choice>
+template <typename Choice>
 class ScopedPin {
 public:
     ScopedPin(std::string_view op, std::string_view word, StrictPin) : op_(op) {
@@ -464,8 +468,8 @@ private:
 
 /// The only selection algorithm: the pin, else the first candidate passing @p can_run in the nearest
 /// row of each table in borrow order, else the first runnable candidate in @p rules' last-resort order.
-/// @throws std::invalid_argument for a bad pin (R6); std::runtime_error when nothing can run.
-template <class Choice, std::size_t N, class CanRun>
+/// @throws batchlas::invalid_argument for a bad pin (R6); batchlas::unsupported when nothing can run.
+template <typename Choice, std::size_t N, typename CanRun>
 Choice choose(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
               const std::array<Choice, N>& candidates, CanRun&& can_run, const Rules& rules = {}) {
     std::string source;
@@ -488,7 +492,7 @@ struct NativeFacts {
 using detail::NativeFacts;
 
 /// Over the op's candidates: any non-vendor compiled, and any of those passing can_run.
-template <class Choice, std::size_t N, class CanRun>
+template <typename Choice, std::size_t N, typename CanRun>
 NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_run) {
     NativeFacts f{false, 0};
     for (const Choice& c : candidates)
@@ -505,7 +509,7 @@ NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_r
 /// `fields` are the key fields the line shows (posv: n, nrhs, batch); empty prints n and batch.
 class TraceScope {
 public:
-    template <class Choice>
+    template <typename Choice>
     TraceScope(std::string_view op, const Choice& c, const coverage::Shape& shape, NativeFacts facts = {},
                const Key& fields = {}) {
         if (detail::trace_enabled() || coverage::dynamic_enabled())
@@ -535,7 +539,7 @@ struct OpSpec {
 };
 
 /// The Vendor arm of an op without its library: record the miss and throw NoRouteError.
-template <Backend B, class T>
+template <Backend B, typename T>
 [[noreturn]] void no_vendor(const OpSpec& op) {
     throw_no_vendor_route<T>(op.op, B, library_name<B>(op.vendor));
 }
@@ -543,13 +547,13 @@ template <Backend B, class T>
 /// choose(), with "nothing runnable" in a build without the op's library reported as
 /// NoRouteError plus a coverage `miss` row (the vendor-free burn-down reads them).
 /// can_run(choice, device) is the op's R3 predicate. `<op>_buffer_size` calls this (R5).
-template <Backend B, class T, class Choice, std::size_t N, class CanRun>
+template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun>
 Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
     auto ok = [&](const Choice& c) { return can_run(c, d); };
     try {
         return choose(op.name(), dtype_name<T>(), d, key, candidates, ok, op.rules);
-    } catch (const std::runtime_error&) {
+    } catch (const ::batchlas::unsupported&) {
         if (op.vendor != Lib::none && !has_library<B>(op.vendor) &&
             std::none_of(candidates.begin(), candidates.end(), ok))
             no_vendor<B, T>(op);
@@ -557,7 +561,7 @@ Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<
     }
 }
 
-template <Backend B, class T, class Choice, std::size_t N, class CanRun>
+template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun>
 Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<Choice, N>& candidates,
             CanRun&& can_run) {
     ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal
@@ -567,7 +571,7 @@ Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<C
 /// A public entry point after validation: pick, open the trace/coverage scope (the shape's
 /// scalar and backend are filled here; `trace_fields` as for TraceScope), then launch(choice)
 /// inside it, so children nest under this line. @return whatever @p launch returns.
-template <Backend B, class T, class Choice, std::size_t N, class CanRun, class Launch>
+template <Backend B, typename T, typename Choice, std::size_t N, typename CanRun, typename Launch>
 decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
                    CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
     ::batchlas::detail::require_device_fp64<T>(q, std::string(op.name()).c_str());  // <NETLIB> on Metal

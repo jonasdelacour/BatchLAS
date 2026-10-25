@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syevx_filtered: Chebyshev-filtered subspace iteration.
 //
 // evidence: docs/perf/syevx.md#syevx-tier-3-filtered

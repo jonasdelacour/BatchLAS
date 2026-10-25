@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // The only header above kernel level that names a SYCL implementation (DPC++ or AdaptiveCpp).
 // Every helper expands on DPC++ to the exact calls it replaced.
@@ -99,7 +100,7 @@ inline void* native_stream(const sycl::queue& q) {
 
 // Stream for host-only vendor calls (workspace queries) that must not be enqueued.
 // DPC++: get_native (throws on a backend mismatch). acpp: native_stream(), possibly nullptr.
-template <Native N, class Q>
+template <Native N, typename Q>
 auto query_stream(Q& q) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     return native_stream(q);
@@ -113,7 +114,7 @@ auto query_stream(Q& q) {
 // finished (host side) when this returns. f is copied, so it captures by value; it must not
 // submit to q. Q is QueueImpl: an untraced submit_and_record keeps vendor work out of the kernel trace, as on
 // DPC++, while still recording the queue's last event.
-template <Native N, class Q, class F>
+template <Native N, typename Q, typename F>
 void run_native(Q& q, F f) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     struct State {
@@ -177,7 +178,7 @@ inline sycl::event submit_barrier(sycl::queue& q, const std::vector<sycl::event>
 // answer. acpp has no kernel_id query and the device limit (1024) aborts a register-heavy kernel
 // at launch, so it answers 256: 8 warps fit the register gate even at 255 registers per thread,
 // ceil(8/4)*32*255 <= 16384 (docs/developer/agent-guide.md §11).
-template <class K>
+template <typename K>
 std::size_t kernel_max_wg_size(const sycl::context& ctx, const sycl::device& dev) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     (void)ctx;
@@ -201,11 +202,11 @@ inline bool skip_empty_launch([[maybe_unused]] sycl::handler& h, [[maybe_unused]
 #endif
     return false;
 }
-template <class Name, int D, class... Rest>
+template <typename Name, int D, typename... Rest>
 void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
     if (!skip_empty_launch(h, r.get_global_range().size())) h.parallel_for<Name>(r, std::forward<Rest>(rest)...);
 }
-template <int D, class... Rest>
+template <int D, typename... Rest>
 void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
     if (!skip_empty_launch(h, r.get_global_range().size())) h.parallel_for(r, std::forward<Rest>(rest)...);
 }

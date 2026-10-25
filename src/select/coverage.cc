@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <src/select/coverage.hh>
 
 #include <src/select/vendor.hh>
@@ -85,7 +86,7 @@ const char* backend_name(Backend b) {
         case Backend::SYCL:   return "SYCL";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
-        case Backend::AUTO:   return "AUTO";
+        case Backend::Auto:   return "AUTO";
         default:              return "?";
     }
 }

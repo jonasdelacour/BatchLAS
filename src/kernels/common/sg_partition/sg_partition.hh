@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 // Chunked sub-group partitions: BatchLAS's own replacement for DPC++'s
 // sycl::ext::oneapi::experimental::chunked_partition.

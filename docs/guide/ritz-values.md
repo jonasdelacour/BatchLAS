@@ -1,8 +1,7 @@
 # Ritz values (Rayleigh quotients) {#guide_ritz_values}
 
-> **Status:** current · signatures verified against
-> `include/batchlas/blas/extensions.hh` (lines 1621-1672) and `src/ops/ritz_values/ritz_values.cc`
-> on 2026-09-30.
+> **Status:** current · signatures checked against `include/batchlas/blas/extensions.hh` and
+> `src/ops/ritz_values/ritz_values.cc` on 2026-10-21.
 
 `ritz_values` returns the Rayleigh quotient of every trial-vector column, for dense or CSR
 operators and batched inputs.
@@ -20,8 +19,7 @@ batch item:
   real part is stored, so the output is `float` for `std::complex<float>` and `double` for
   `std::complex<double>`.
 - For Hermitian \f$A\f$ and \f$v_j\f$ near an eigenvector, \f$\theta_j\f$ is second-order accurate.
-  `stedc_tests` uses it to recompute eigenvalues from returned eigenvectors; Python exposes it as
-  `batchlas.ritz_values(a, vectors)`.
+  Python exposes it as `batchlas.ritz_values(a, vectors)`.
 - Columns are independent: the result is \f$\operatorname{diag}(V^H A V)\f$ divided by
   \f$\operatorname{diag}(V^H V)\f$, not the eigenvalues of \f$V^H A V\f$. Columns need not be
   normalised or orthogonal.
@@ -56,8 +54,8 @@ Vector<float> theta = ritz_values<Backend::CUDA, float>(ctx, A, V);
 float theta_j_b = theta(j, b);   // column j of batch item b
 ```
 
-It is declared for `MatrixView`, plus one owning-`Matrix` twin so that the partially-explicit
-`ritz_values<B, T>(ctx, A, V)` compiles (`include/batchlas/blas/extensions.hh:2018-2023`).
+It is declared for `MatrixView`; an owning `Matrix` binds to it as its base, so
+`ritz_values<B, T>(ctx, A, V)` takes either.
 
 ### Workspace form
 
@@ -104,17 +102,21 @@ Shape mismatches fail an `assert`, so a release build does not diagnose them.
 
 - Scalar types: `float`, `double`, `std::complex<float>`, `std::complex<double>`.
 - Formats of `A`: `Dense`, `CSR`.
-- Backends: `NETLIB`, `CUDA`, `ROCM`, each only when compiled in
-  (`src/ops/ritz_values/ritz_values.cc:182-192`). There is no `Backend::SYCL` or `Backend::MKL` instantiation.
+- Backends: `NETLIB`, `CUDA`, `ROCM` and `SYCL`, each only when compiled in; `SYCL` instantiates
+  `float` and `complex<float>` only, unless the build has device fp64. There is no `Backend::MKL`
+  instantiation.
 
 ## Tests
 
-`tests/ritz_values_tests.cc` checks a diagonal matrix with identity trial vectors and a
-\f$10 \times 10\f$ tridiagonal Toeplitz matrix (\f$a = 2, b = c = -1\f$) at batch 2 against
-\f$\lambda_j = a - 2\sqrt{bc}\cos\!\big(j\pi/(n+1)\big)\f$, over every compiled backend and scalar
-type. Both are dense: the CSR path has no test (open debt; `spmm_tests` covers `spmm` only).
+`tests/ritz_values_tests.cc`, over every compiled backend and scalar type:
+
+| Case | Operator | Checks |
+| --- | --- | --- |
+| `DiagonalMatrix` | dense \f$5 \times 5\f$ diagonal, identity trial vectors, batch 1 | the diagonal |
+| `TridiagonalMatrix` | dense \f$10 \times 10\f$ tridiagonal Toeplitz (\f$a = 2, b = c = -1\f$), batch 2 | \f$\lambda_j = a - 2\sqrt{bc}\cos\!\big(j\pi/(n+1)\big)\f$ |
+| `SparseExactWorkspaceInPoisonedArena` | CSR \f$37 \times 37\f$ Toeplitz, \f$k = 5\f$ eigenvectors, batch 3 | the analytic values, in a workspace of exactly `ritz_values_buffer_size` bytes filled with `0x7f` |
 
 `lanczos` and `syevx_lobpcg.cc` compute their Ritz values internally; the in-tree callers of
-`ritz_values` are the tests and the Python binding. Not implemented: an optional residual norm
+`ritz_values` are its tests and the Python binding. Not implemented: an optional residual norm
 \f$\lVert A v - \theta v \rVert\f$, skipping the denominator for orthonormal \f$V\f$, and blocked
 evaluation for very large \f$k\f$.

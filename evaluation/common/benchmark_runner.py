@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MIT
 """Shared minibench process and CSV plumbing for evaluation scripts."""
 
 from __future__ import annotations

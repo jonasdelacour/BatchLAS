@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Generate the site's navigation tree and full-text search index from Doxygen's output.
 
 The theme (docs/theme/bl-site.js) replaces Doxygen's tree view and symbol search with a

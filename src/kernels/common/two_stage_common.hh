@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Helpers shared by syev_two_stage and syevx_direct_subset. Both run the Householder
 // chase in both jobz modes at a real band width kd: choose_two_stage_kd_for_job is not
 // safe for a path that never applies stage-2 reflectors.

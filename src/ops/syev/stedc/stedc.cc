@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -222,7 +223,7 @@ void stedc_merge_step(Queue& ctx,
             if(std::abs(eigenvalues(j + 1, bid) - eigenvalues(j, bid)) <= abs_tol) {
                 auto f = v(j + 1, bid);
                 auto g = v(j, bid);
-                auto [c, s, r] = internal::lartg(f, g);
+                auto [c, s, r] = detail::lartg(f, g);
                 sycl::group_barrier(cta);
                 if (tid == 0) {
                     v(j, bid) = T(0.0);
@@ -252,7 +253,7 @@ void stedc_merge_step(Queue& ctx,
                           util::get_raw_ptr(norm_mem) + n,
                           sycl::maximum<T>());
 
-        auto v_norm = internal::nrm2<T>(cta, v);
+        auto v_norm = detail::nrm2<T>(cta, v);
         for (int k = tid; k < n; k += bdim) { norm_mem[k] = std::abs(v(k, bid) / v_norm); }
         auto v_max = batchlas::portable::joint_reduce(cta,
                         util::get_raw_ptr(norm_mem),
@@ -422,7 +423,7 @@ void stedc_merge_step(Queue& ctx,
                             Qbid(i, eig) = v(i, bid) / Qbid(i, eig);
                         }
 
-                        auto nrm2 = internal::nrm2(cta, Qview(Slice{0, dd}, eig));
+                        auto nrm2 = detail::nrm2(cta, Qview(Slice{0, dd}, eig));
                         for(int i = tid; i < dd; i += static_cast<int>(bdim))
                         {
                             Qbid(i, eig) /= nrm2;

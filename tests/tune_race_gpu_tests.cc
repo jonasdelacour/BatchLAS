@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // The tuner's GPU side (docs/design/tiered-tuning.md): the child-side race against the fixed-rep
 // protocol at one cell, the persistent worker's round trip, and the carve-out guard (a fresh child
 // agrees with a worker that ran a larger launch first).
@@ -14,6 +15,8 @@
 #include <tools/tune/worker.hh>
 
 #include <gtest/gtest.h>
+#include <batchlas/error.hh>
+
 #include <unistd.h>
 
 #include <algorithm>
@@ -176,7 +179,7 @@ struct SleepProblem {
         const std::string arm = batchlas::select::detail::pin_text("sleepop", &src).value_or("");
         const int ms = arm == "slow" || arm == "wrongslow" ? 50 : arm == "mid" ? 15 : arm == "wobble" && runs[arm] % 2 ? 10 : 5;
         ++runs[arm];
-        if (arm == "dies" && runs[arm] >= 4) throw std::runtime_error("dies");
+        if (arm == "dies" && runs[arm] >= 4) throw batchlas::device_error("dies");
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         if (arm != "silent" && arm != "wrongslow") out = 42;
     }

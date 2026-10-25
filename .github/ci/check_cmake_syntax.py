@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Syntax-check every CMake list file in the repository.
 
 Catches the class of mistake that only shows up when somebody configures the

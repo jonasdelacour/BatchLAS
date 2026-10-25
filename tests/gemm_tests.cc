@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/matrix.hh>
@@ -117,7 +118,7 @@ constexpr double vendor_comparison_tolerance() {  // the old test_utils::toleran
     else return std::is_same_v<T, float> ? 1e-5 : 1e-10;
 }
 
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 ::testing::AssertionResult GemmMatchesDefinition(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0,
                                                  const VC& C, T alpha, T beta, int k, double tol_scale = 100) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -131,7 +132,7 @@ template <typename T, class VA, class VB, class VC0, class VC>
 }
 
 // Small-integer data makes every product and sum exact, so the answer must be bit-exact.
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 void ExpectGemmExact(Queue& ctx, const VA& A, Transpose ta, const VB& B, Transpose tb, const VC0& C0, const VC& C, T alpha,
                      T beta) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -222,7 +223,7 @@ protected:
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
-        
+
         if (!this->ctx) {
             return;
         }
@@ -231,7 +232,7 @@ protected:
         A_data = UnifiedVector<ScalarType>(rows * cols * batch_size);
         B_data = UnifiedVector<ScalarType>(cols * cols * batch_size);
         C_data = UnifiedVector<ScalarType>(rows * cols * batch_size, static_cast<ScalarType>(0));
-        
+
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < rows; ++i) {
                 for (int j = 0; j < cols; ++j) {
@@ -239,7 +240,7 @@ protected:
                 }
             }
         }
-        
+
         for (int b = 0; b < batch_size; ++b) {
             for (int i = 0; i < cols; ++i) {
                 for (int j = 0; j < cols; ++j) {
@@ -310,7 +311,7 @@ TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->cols, this->cols, this->ld);
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld);
-    
+
     // Perform C = A * B (which should equal A since B is identity)
     (void)gemm(*(this->ctx),
                       A_view,
@@ -332,14 +333,14 @@ TYPED_TEST(GemmTest, BatchedGemm) {
     MatrixView<ScalarType, MatrixFormat::Dense> A_view(this->A_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     MatrixView<ScalarType, MatrixFormat::Dense> B_view(this->B_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
     MatrixView<ScalarType, MatrixFormat::Dense> C_view(this->C_data.data(), this->rows, this->cols, this->ld, this->rows * this->cols, this->batch_size);
-    
+
     // Adding the ComputePrecision parameter
     (void)gemm(*(this->ctx),
                       A_view,
                       B_view,
                       C_view,
                       {.alpha = ScalarType(1.0), .beta = ScalarType(0.0)});
-    
+
     this->ctx->wait();
 
     for (int i = 0; i < this->rows * this->cols * this->batch_size; ++i)
@@ -1169,12 +1170,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
 // this file produces one -- they all build standalone Matrix objects, where
 // ld == rows by construction. That matters for two separate reasons:
 //
-//   * can_use_128x128_fast_path (register_128x128.hh:71-91) tests ld % 4 and a
+//   * can_use_128x128_fast_path (register_128x128.hh:72-92) tests ld % 4 and a
 //     16-byte base pointer, NOT contiguity, so the ALIGNED leg can and does
 //     fire on a strided sub-view. Nothing has ever checked that it is right
 //     there.
 //   * MatrixView::operator()(Slice, Slice) offsets the base by
-//     c_start*ld + r_start (matrix.hh:1129-1141), so an odd r_start breaks the
+//     c_start*ld + r_start (matrix.hh:1130-1142), so an odd r_start breaks the
 //     16-byte alignment and drops the same call onto the PREDICATED leg.
 //
 // Both legs are exercised below, and everything of the parent outside the

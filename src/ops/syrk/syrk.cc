@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // syrk (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
 // tuned/syrk.<device>.txt row that can_run() admits. Gram puts all of C in one tile sized to n
 // (n <= 128) and stages A once; Triangular walks 128-wide tiles of the requested triangle only.
@@ -5,6 +6,7 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syrk.hh>
+#include <batchlas/error.hh>
 
 #include <src/ops/level3/batched.hh>
 #include <src/ops/syrk/choice.hh>
@@ -25,16 +27,16 @@ namespace ops::syrk {
 
 using select::overloaded;
 
-template <class T>
+template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // op(A)'s inner extent: the reduction length of C = op(A) op(A)^T.
-template <class T>
+template <typename T>
 std::int64_t inner(const MV<T>& A, Transpose transA) {
     return transA == Transpose::NoTrans ? A.cols() : A.rows();
 }
 
-template <class T>
+template <typename T>
 select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA);
     const char* trans = transA == Transpose::NoTrans ? "N" : (transA == Transpose::Trans ? "T" : "C");
@@ -48,7 +50,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
 // at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 // Shapes are validated before this runs.
-template <Backend B, class T>
+template <Backend B, typename T>
 bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
@@ -69,7 +71,7 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
 
 // The native arms compile only for CUDA and SYCL (native_gpu_backend); can_run never admits the
 // other instantiations.
-template <Backend B, class T>
+template <Backend B, typename T>
 Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T alpha, T beta, Uplo uplo,
              Transpose transA) {
     return std::visit(overloaded{
@@ -81,7 +83,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
                                                                       uplo, transA);
                 });
             else
-                throw std::logic_error("syrk: gram is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: gram is wired for native GPU backends only");
         },
         [&](Triangular) -> Event {
             if constexpr (select::native_gpu_backend<B> && !std::is_same_v<T, std::complex<double>>)
@@ -91,7 +93,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
                                                                          beta, uplo, transA);
                 });
             else
-                throw std::logic_error("syrk: triangular is wired for native GPU backends only");
+                throw batchlas::internal_error("syrk: triangular is wired for native GPU backends only");
         },
         [&](Vendor) -> Event {
             if constexpr (vendor_wired<B, T>)
@@ -107,9 +109,9 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 template <Backend Back, FloatingOrComplexScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
-    (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
+    (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
-        throw std::invalid_argument("SYRK: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
+        throw batchlas::invalid_argument("syrk: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = n = C's order, k = op(A)'s inner extent.

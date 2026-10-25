@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every spmm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md#phase-5-spmm. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct driver, never assumed from the pin being accepted.
@@ -211,7 +212,7 @@ void expect_correct(Queue& ctx, const Problem<T>& p, const std::string& what) {
 }
 
 // The outermost spmm trace line for whatever `run` calls (a throw after the line is kept).
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr, bool* threw = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -233,7 +234,7 @@ std::string traced_line(F&& run, std::string* all = nullptr, bool* threw = nullp
         if (line.rfind("spmm ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no spmm trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr, bool* threw = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all, threw);
     const auto arrow = line.find(" -> ");

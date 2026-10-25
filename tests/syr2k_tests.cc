@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/linalg.hh>
@@ -29,7 +30,7 @@ TYPED_TEST_SUITE(Syr2kTest, Syr2kTestTypes);
 
 // The `uplo` triangle of C against alpha (op(A) op(B)^T + op(B) op(A)^T) + beta C0 in double, every item
 // (Check::blas, 2k terms per entry). The other triangle is not the answer; the poison tests check it.
-template <typename T, class VA, class VB, class VC0, class VC>
+template <typename T, typename VA, typename VB, typename VC0, typename VC>
 void expect_syr2k_matches(Queue& ctx, const VA& A, const VB& B, const VC0& C0, const VC& C, Uplo uplo, Transpose trans, T alpha,
                           T beta, int k) {
     using MV = MatrixView<T, MatrixFormat::Dense>;

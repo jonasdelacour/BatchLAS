@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /// @file
@@ -18,7 +19,7 @@ struct Vendor : select::NoFields<"vendor"> {};          ///< backend::trmm_vendo
 
 using TrmmChoice = std::variant<Triangular, Expand, Vendor>;  ///< row tile (trmm_row_tile) derived; natives: CUDA GPU
 
-template <class T>  /// Every compiled choice, in tie-break order (§6.3): triangular, expand, vendor.
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3): triangular, expand, vendor.
 constexpr auto candidates() { return select::all_of<TrmmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"expand", "triangular", "vendor"};  ///< nothing runs

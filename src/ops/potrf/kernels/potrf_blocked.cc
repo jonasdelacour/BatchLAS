@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Native batched POTRF: the blocked right-looking driver. Per panel j: the leaf potrf on the
 // ib x ib diagonal block, an info-merge/quench fixup, the panel solve L21 = A21 L11^{-H}, and
 // A22 -= L21 L21^H. Uplo::Upper is the same schedule on the transposed block rows: U12 =

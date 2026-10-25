@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 // Every symm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
 // docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct call, never assumed from the pin being accepted.
@@ -176,7 +177,7 @@ std::string label(const Spec& s) {
 std::string name(const C& c, const Spec& s) { return select::to_string(c) + " " + label(s); }
 
 // The outermost symm trace line for whatever `run` calls (nested gemm lines are indented).
-template <class F>
+template <typename F>
 std::string traced_line(F&& run, std::string* all = nullptr) {
     const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
     ::testing::internal::CaptureStderr();
@@ -193,7 +194,7 @@ std::string traced_line(F&& run, std::string* all = nullptr) {
         if (line.rfind("symm ", 0) == 0 && line.find(" -> ") != std::string::npos) return line;
     return "<no symm trace line in: " + err + ">";
 }
-template <class F>
+template <typename F>
 std::string traced_choice(F&& run, std::string* all = nullptr) {
     const std::string line = traced_line(std::forward<F>(run), all);
     const auto arrow = line.find(" -> ");
@@ -220,7 +221,7 @@ std::string old_auto(int m, int n, int batch) {
 // spelling pin throws invalid_argument (the vendor class word falls back to Auto), Auto throws
 // runtime_error, or NoRouteError without a vendor library, and C is left untouched.
 // On ff340fc6 the cuBLAS loop answered the consistent all-three case off by 2.56.
-template <Backend B, class T>
+template <Backend B, typename T>
 void expect_heterogeneous_has_no_route(Queue& ctx) {
     const int n = 16, batch = 4;
     auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 3);

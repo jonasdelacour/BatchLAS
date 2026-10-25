@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
 """Scan the PTX AdaptiveCpp JIT-compiled for out-of-line calls, missing kernels and stack arrays.
 
     scripts/check_acpp_jit.py --appdb DIR                  # scan an existing ACPP_APPDB_DIR

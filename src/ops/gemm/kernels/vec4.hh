@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 // The 4-wide register value of the reg: and small gemm tiles: a clang ext_vector, or under

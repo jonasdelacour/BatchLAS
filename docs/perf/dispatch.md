@@ -10,25 +10,26 @@ table edges. How ops choose in general: @ref design_flat_selection and @ref api_
 ## The vendor-availability gate
 
 `src/select/vendor.hh` checks availability per library, not per device family. On NVIDIA, `getrf`/`getri` come from
-cuBLAS and `potrf`/`syev` from cuSOLVER; on AMD all come from rocSOLVER (`src/select/vendor.hh:29-41`):
+cuBLAS and `potrf`/`syev` from cuSOLVER; on AMD all come from rocSOLVER (`src/select/vendor.hh:30-42`):
 
 ```cpp
-template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k
+template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k (ROCm: not the last three, level3.cc)
 inline constexpr bool level3_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
+    B == Backend::CUDA   ? kHasCudaVendor :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
     B == Backend::NETLIB ? kHasNetlib : false;
 ```
 
-- `factorization_`, `solver_` and `sparse_` are siblings; `kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`.
+- `factorization_`, `solver_` and `sparse_` are siblings; `kHasNetlib = BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS`;
+  `kHasCudaVendor` is cuBLAS, cuSOLVER and cuSPARSE together (configure rejects a partial set).
 - Each `OpSpec` names its library (`select::Lib::level3` for the level-3 four). Selection sets
   `select::Device::has_vendor`, which every `vendor` family's `can_run` reads. The `vendor` launch compiles the
   vendor call only under `if constexpr (select::has_library<B>(spec.vendor))`, so an absent library is not compiled.
 - With nothing runnable, `select::throw_no_vendor_route<T>` records a coverage miss and throws
   `batchlas::NoRouteError` (`include/batchlas/no_route.hh`).
-- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:96-98`) gates where `ormqr_blocked.cc`,
+- `select::level3_tile_substitution_enabled<B, T>` (`src/select/vendor.hh:104-106`) gates where `ormqr_blocked.cc`,
   `ortho.cc` and `sytrd_blocked.cc` swap a gemm for a level-3 tile kernel, and the static coverage table's float
-  native rows: CUDA and (float or a cuBLAS build). It is narrower than where those kernels now run vendor-free;
+  native rows: a native GPU backend (`CUDA` or `SYCL`) and (float, or CUDA with cuBLAS). It is narrower than where those kernels now run vendor-free;
   widening it would change ortho's and ormqr's choices, which are unmeasured.
 
 ## Level-3 route arms {#level-3-route-arms}
@@ -36,34 +37,36 @@ inline constexpr bool level3_vendor_available =
 `src/ops/<op>/choice.hh` lists each op's families, and `src/ops/<op>/<op>.cc` holds `key_of`, `can_run`, the
 launch and the workspace. `select::run` takes the first runnable entry of the nearest row of
 `tuned/<op>.<device>.txt`. Every family is fieldless. Derived legs (gram's tile width, the triangular
-kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and her2k still choose by hand in
-`cublas.cc` (vendor builds only) and have no `BATCHLAS_<OP>_ROUTE`.
+kernels' aligned/predicated leg, `trmm_row_tile`) stay derived. hemm, herk and her2k select from their own tables
+the same way since 2026-10-22.
 
 | op | candidates, tie-break order | keys | last resort |
 |---|---|---|---|
-| `symm` | `expand` (mirror A's triangle into scratch, then the public `gemm`), `vendor`; float and double | `form:exact m:log n:log batch:log` | `expand, vendor` |
-| `syrk` | float `gram, triangular, vendor`; double `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` | `triangular, gram, vendor` |
-| `syr2k` | float `triangular, vendor`; double `vendor` | `n:log:2 k:log batch:log` | `triangular, vendor` |
+| `symm` | `expand` (mirror A's triangle into scratch, then the public `gemm`), `vendor`; all four types (complex is complex-symmetric) | `form:exact m:log n:log batch:log` | `expand, vendor` |
+| `syrk` | `gram, triangular, vendor`; complex<double> `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` | `triangular, gram, vendor` |
+| `syr2k` | `triangular, vendor`; complex<double> `vendor` | `n:log:2 k:log batch:log` | `triangular, vendor` |
 | `trmm` | `triangular` (`Side::Left` tile kernel), `expand` (expand the triangle, then the public `gemm`), `vendor` (the `cublas?trmm` loop); all four types | `side:exact order:log:2 q:log batch:log` | `expand, triangular, vendor` |
 
 `form` is `sq` when `2*min >= max` over C's `m, n` (symm) or over `n, k` (syrk), else `tall` or `wide`. The
 `expand` families' inner GEMMs go through the public `gemm` and take its table's choice.
 
-**`can_run` is correctness only.** Every native family needs `B == Backend::CUDA`, a GPU queue, a homogeneous
+**`can_run` is correctness only.** Every native family needs a native GPU backend
+(`select::native_gpu_backend<B>`: CUDA or SYCL; symm's `expand` also ROCm), a GPU queue, a homogeneous
 batch (tile kernels index `base + batch * stride`) and extents >= 1. The batch is grid z (y for gram), where one
-launch of 65536 throws `Number of work-groups exceed limit`; every native launch chunks a larger batch into sub-views of at most `max_groups_yz` items (`src/ops/level3/batched.hh`), so the batch is no term.
+launch of 65536 throws `Number of work-groups exceed limit`; every native launch chunks a larger batch into
+sub-views of at most `max_groups_yz` items (`src/ops/level3/batched.hh`), so the batch is no term.
 
 | op | family | further terms | where |
 |---|---|---|---|
-| `symm` | `expand` | `max_wg >= 256` (8 x 32 group); `expansion_fits(q, k, batch, bytes)` (int-linearised grid, `BATCHLAS_EXPAND_MAX_BYTES` or a quarter of memory) | `src/ops/symm/symm.cc:44-56` |
-| `syrk` | `gram` | `syrk_gram_supported` (square C, `n <= 128`; past it the kernel answers wrongly rather than throwing); `max_wg >= gram_threads(n)`; SLM tile fits | `src/ops/syrk/syrk.cc:57-60` |
-| `syrk` | `triangular` | float only; `max_wg >= 256`; `T(T+1)/2 <= 65535` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:60-63` |
-| `syr2k` | `triangular` | float only; `max_wg >= 256`; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:53-56` |
-| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles | `src/ops/trmm/trmm.cc:60-63` |
-| `trmm` | `expand` | `max_wg >= 256`; `expansion_fits` | `src/ops/trmm/trmm.cc:64-69` |
-| all four | `vendor` | the level-3 library is linked, **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:57`, `src/ops/syrk/syrk.cc:64`, `src/ops/syr2k/syr2k.cc:57`, `src/ops/trmm/trmm.cc:70` |
+| `symm` | `expand` | `max_wg >= 256` (8 x 32 group); one item's scratch fits (`expansion_chunk(q, k, 1, max_groups_yz) >= 1`: int-linearised grid, `BATCHLAS_EXPAND_MAX_BYTES` or a quarter of memory) | `src/ops/symm/symm.cc:59-64` |
+| `syrk` | `gram` | `syrk_gram_supported` (square C, `n <= 128`; past it the kernel answers wrongly rather than throwing); `max_wg >= gram_threads(n)`; SLM tile fits | `src/ops/syrk/syrk.cc:60-63` |
+| `syrk` | `triangular` | not complex<double>; `max_wg >= 256`; SLM fits; `T(T+1)/2 <= max_groups_yz` tiles, `T = ceil(n/128)` (n = 46208 runs, 46209 throws) | `src/ops/syrk/syrk.cc:64-67` |
+| `syr2k` | `triangular` | not complex<double>; `max_wg >= 256`; SLM fits; the same tile ceiling. A real `ConjTrans` is folded to `Trans` in the launch | `src/ops/syr2k/syr2k.cc:55-60` |
+| `trmm` | `triangular` | `Side::Left`; `ceil(m/tile_m) * ceil(q/128) <= max_groups_yz` tiles | `src/ops/trmm/trmm.cc:63-66` |
+| `trmm` | `expand` | `max_wg >= 256`; one item's scratch fits | `src/ops/trmm/trmm.cc:67` |
+| all four | `vendor` | the level-3 library is linked (rocBLAS: real syrk/syr2k/symm only), **and a homogeneous batch** (every vendor loop runs each item at the top-level extents, a wrong answer for a heterogeneous batch) | `src/ops/symm/symm.cc:65`, `src/ops/syrk/syrk.cc:68`, `src/ops/syr2k/syr2k.cc:61`, `src/ops/trmm/trmm.cc:68` |
 
-syrk is real-only, so `ConjTrans` reaches its kernels as `Trans`. It is not a `can_run` term; the exact `trans` key
+A real `ConjTrans` reaches syrk's kernels as `Trans`; a complex one throws `invalid_argument` (that is herk). It is not a `can_run` term; the exact `trans` key
 keeps real `ConjTrans` on the vendor.
 
 **What the tables rank.** The sm_89 level-3 tables are **transcribed, untimed** (run `transcribed-ff340fc6`,
@@ -155,11 +158,11 @@ The old triangular gate (`syrk_prefer_triangular_tiles` at `ff340fc6`, `kTriangu
 > **Warning:** `n >= 257` is the edge the rows carry, but the supporting measurement says "from n = 384 up every
 > saturated shape won" (`experiments/GEMM_TO_LEVEL3_SURVEY.md`). The band **257 <= n <= 383** ranks `triangular`
 > first with no bracketing cell. Every shape there takes the predicated path: the unpredicated fast path needs
-> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:37-45`),
+> `n % 128 == 0`, `k % 8 == 0` and 4-element alignment on both operands (`src/ops/syrk/kernels/syrk_triangular_tiles.hh:39-47`),
 > and the sweep never sampled the predicated path. On `tall`/`wide` rows, n = 256 (`tiles_per_side == 2`) ranks
 > `vendor` first, a recorded 0.89x pre-existing loss on the tile route.
 
-The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/ops/syrk/kernels/syrk_gram_tiles.hh:29`). It is now a `can_run`
+The Gram gate was `C.rows() <= kGramMaxTile` (128, `src/ops/syrk/kernels/syrk_gram_tiles.hh:30`). It is now a `can_run`
 term and the row edge: every row with `n <= 128` ranks `gram` first, float and double. Float, against the GEMM
 spelling (`experiments/TRMM_SYRK_BATCHED_KERNELS.md`):
 
@@ -221,8 +224,8 @@ untimed.
 
 ### herk and her2k crossovers
 
-hemm, herk and her2k choose by hand in the cuBLAS-gated TU. The predicates below are the same expansion decision as
-above, with different constants.
+hemm, herk and her2k chose by hand in the cuBLAS-gated TU until 2026-10-22; their tables transcribe the rules
+below. The predicates are the same expansion decision as above, with different constants.
 
 | predicate | shipped condition | evidence | bracketing non-winner |
 |---|---|---|---|
@@ -236,8 +239,8 @@ is gone, since `fold` now chunks the batch to its scratch budget.
 > **Note:** `her2k_gemm_preferred` was swept over square rank-k shapes. The `sytrd_blocked` panel issues narrow ones
 > (`k = ib = nb` in {16, 24, 32}, n2 up to 480), where the fold adds an `n2^2 x batch` write and read that the two
 > direct GEMMs never pay. Those cells are unmeasured. `complex<double>` is excluded from this route for the same
-> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:778-783`; the her2k
-> call and its fit check are at `:830-845`).
+> reason: its scratch is 16 bytes per element and unmeasured (`src/ops/syev/sytrd/sytrd_blocked.cc:708-718`; the her2k
+> call and its fit check are at `:761-774`).
 
 ## Negative results {#dispatch-negative-results}
 
@@ -254,7 +257,7 @@ Built, measured, rejected.
 | `syr2k` for the `sytrd_blocked` trailing update, in `double` | 7.7x and 7.4x slower at n2=256, batch 1024; 1.9x slower at n2=512, batch 512; 1.55x faster only at n2=2048, batch 32 | Rejected for `double`. Float ships: 1.25x–1.66x on the update, 1.07x–1.27x end to end. The float path drops the upper-triangle symmetrize pass: nothing in the `sytrd_blocked` pipeline reads A's upper triangle, so the pass cost more than half the win |
 | `syr2k` at n = 1024 after WP1 S2, reported 10.9% faster | Repeating the step gave a 5.65–6.40 ms spread: noise | Not a win. Repeat flattering results as carefully as alarming ones |
 | `route_compiled.hh`'s prediction that one flag "becomes true for every backend" | Too wide in type (only float moved) and in backend (the facade gate was guarded on `Backend::CUDA`) | Replaced by the scalar `select::level3_tile_substitution_enabled<B, T>` |
-| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:157-161` records that no build option exists |
+| Compile-time coverage gate | `resolve_route` was an inline template; weak-symbol interposition let an uninstrumented copy replace the library's, giving a file with a correct header and zero `reached` rows | Runtime bool in exactly one TU (`src/select/coverage.cc`). `cmake/BatchLASOptions.cmake:198-204` records that no build option exists |
 
 ## Correctness findings {#dispatch-correctness-findings}
 
@@ -301,7 +304,7 @@ the buffer size and the call could disagree (see the correctness finding above).
 that fails `can_run` throws, and `ormqr_buffer_size` runs the same `select::pick` as the call.
 
 `ormqr` has no measured window. Its tables rank `blocked`, then `vendor`, in every row where `blocked` can run, and
-`vendor` alone on the complex `trans=T` rows, where `blocked`'s `can_run` refuses (`src/ops/ormqr/choice.hh:14`).
+`vendor` alone on the complex `trans=T` rows, where `blocked`'s `can_run` refuses (`src/ops/ormqr/choice.hh:15`).
 
 ## Buffer-size queries {#dispatch-buffer-size-queries-and-the-route-they-size}
 
@@ -360,11 +363,11 @@ kernels (`NoRouteError`), not dispatch faults.
 Later, the level-3 wave added vendor-free routes for float syr2k at batch 1, double symm and syrk `n <= 128`, and
 every trmm dtype on both sides (flat-kernel-selection.md §12).
 
-The four level-3 entry-point TUs (`src/ops/{symm,syrk,syr2k,trmm}/<op>.cc`) are compiled into `batchlas_selection_obj`
-whatever vendor library is present (`src/CMakeLists.txt:167-171`); `BACKEND_COMMON_SOURCES`
+The seven level-3 entry-point TUs (`src/ops/{symm,hemm,herk,her2k,syrk,syr2k,trmm}/<op>.cc`) are compiled into
+`batchlas_extensions_level3_obj` whatever vendor library is present (`src/CMakeLists.txt:189-191`); `BACKEND_COMMON_SOURCES`
 (`src/backends/CMakeLists.txt:1-3`) holds only `backend_handle_instantiations.cc`. The vendor TUs keep their library
 gates (`src/backends/CMakeLists.txt:13-35`), because `BACKEND_CUDA_SOURCES` feeds an object library that is not
-created when no CUDA math library is present (`src/CMakeLists.txt:16-18`).
+created unless cuBLAS, cuSOLVER and cuSPARSE are all present (`BATCHLAS_HAS_CUDA_VENDOR_TUS`, `src/CMakeLists.txt:16-18`).
 
 ## Open debts
 
