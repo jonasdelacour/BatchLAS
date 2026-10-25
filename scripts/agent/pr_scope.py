@@ -80,6 +80,9 @@ def main():
                       % (len(headers), " ".join(headers)))
 
     diff = git("diff", "-U0", *rng, "--", "tests/")
+    for p in git("ls-files", "--others", "--exclude-standard", "--", "tests/").splitlines():
+        with open(os.path.join(REPO, p), errors="replace") as f:  # untracked: every line is new
+            diff += "\n+++ b/%s\n" % p + "".join("+" + l for l in f)
     current, removed, added = "", [], set()
     for line in diff.splitlines():
         if line.startswith("+++ "):
