@@ -3,7 +3,8 @@
 > **Status:** current · RTX 4090 box and threadripper02 unless a line says otherwise · moved here from the root `AGENTS.md` on 2026-10-07; `.claude/CLAUDE.md` imports it.
 
 Terse working rules for agents and contributors: toolchain, build performance, testing policy,
-routing architecture, measurement rules, GPU kernel facts and repository conventions.
+routing architecture, measurement rules, GPU kernel facts, repository conventions and agent
+workflow rules (§14, with the tools in `scripts/agent/` and the project skills in `.claude/skills/`).
 
 **TL;DR.** Build dependencies: CMake >=3.17 (>=3.21 for `cmake --preset`), a C++20 compiler with
 SYCL 2020 support **and a backend for your GPU vendor**; optionally netlib LAPACKE + CBLAS (the
@@ -441,8 +442,12 @@ A TU that a CPU queue can run (gemm, gemv, spmm, NETLIB paths) must keep its CPU
   skips the other types. Both are GTEST_SKIPs (case list unchanged), but the coverage is silently gone.
 - **main is not green.** Accepted failures are in `tests/known-failures.txt`; CI diffs against that
   ledger (`docs/ci.md`). Compare failing test **names** against a baseline, never pass/fail counts.
-  To attribute a failure: save your diff, `git checkout <base> -- <files>`, rebuild only that test
-  target, re-run, compare names.
+  Failures that reproduce on main only on one machine are in `tests/known-failures-host-<host>.txt`
+  (short hostname). `compare_failures.py` reads that file on top of the main ledger when `--known`
+  is not given, and marks its entries `[host]`. To attribute anything else, run
+  `python3 scripts/agent/attribute_failures.py --tree build-gate <ctest names>`. It builds only
+  those binaries in a cached base worktree seeded from your tree, runs both trees N times, and
+  prints PRE-EXISTING / NEW / FLAKY / FIXED per gtest case. Never rebuild main by hand for this.
 - `syev_cta_tests` has a concurrency-dependent wrong-answer flake (a few percent of runs under
   `ctest -j2` on the 4090 box), so it is `RUN_SERIAL` (`BATCHLAS_RUN_SERIAL_TESTS` in
   `tests/CMakeLists.txt`). 0 of 15 concurrent runs on threadripper02 does not rule out a few-percent
@@ -746,8 +751,8 @@ is the open 2.7x.
   `docs/developer/`; raw data -> `benchmarks/results/` (LFS). A new page opens `# Title {#area_topic}`
   plus a one-line status. Math is `\f$…\f$` / `\f[…\f]`, not `$…$`.
 - **No Markdown outside `docs/`** except a directory `README.md` (never at the root),
-  `.claude/CLAUDE.md` (it only imports this page) and `.github/`, which holds the project README
-  (`check_markdown_locations.py`). No root Markdown at all, so no root plan files: put conclusions in
+  `.claude/CLAUDE.md` (it only imports this page), the project skills in `.claude/skills/`, and
+  `.github/`, which holds the project README (`check_markdown_locations.py`). No root Markdown at all, so no root plan files: put conclusions in
   the area page.
 - **Source layout** (table: `docs/extending.md`): `src/ops/<op>/` holds `<op>.cc`, `choice.hh` and
   headers shared by the op's kernels; `kernels/` holds its kernel TUs and single-consumer headers.
@@ -778,9 +783,19 @@ is the open 2.7x.
   header.
 - `nm -DC ... | awk '{print $3}'` truncates demangled names at the first space, and `nm -C` cannot
   demangle concept-constrained templates. Diff full mangled names (`scripts/facade_symbol_check.sh`).
-- In worktree-isolated agent sessions, the Bash guard refuses heredocs, `for` loops with computed
-  arguments and awk programs. Write scripts to `$CLAUDE_JOB_DIR/tmp` and run them. Wait on a PID with
-  `kill -0`, not `pgrep -f` (it matches itself).
+- In worktree-isolated agent sessions, the Bash guard refuses many command shapes:
+  - heredocs, including any heredoc whose text mentions `git`
+  - `for` loops with computed arguments, `$VAR` or `$(...)` where an option may stand
+  - awk programs and `<(...)`
+  - `cd X; git ...` and `git -C <another checkout>`
+  - compound commands that mix `git` with other tools
+  - `grep hash`
+
+  Run one plain command per call, use the tracked tools in `scripts/agent/` (README there), and
+  for edits use the Edit tool rather than a `python3 - <<EOF` patch. Only when nothing else fits,
+  write a script to `$CLAUDE_JOB_DIR/tmp` and run it. Wait on background work with
+  `scripts/agent/wait_for.sh` run in the background, never a sleep loop or `pgrep -f` (it
+  matches itself).
 
 ## 13. Primary-Machine Facts (the RTX 4090 box; re-check on any other machine)
 
@@ -788,7 +803,9 @@ is the open 2.7x.
   Ubuntu 26.04 (upgraded 2026-10-20/21: GCC 15, gtest 1.17; a tree or ccache from before it fails
   test links with an undefined `MakeAndRegisterTestInfo`, so rebuild it), DPC++ at
   `/opt/dpcpp-cuda`, CUDA 13.2, no ROCm headers, MAGMA 2.10 Release/sm_89 at
-  `~/magma/build-rel89`. Device 0 drives the display: measure on device 1.
+  `~/magma/build-rel89`. Device 0 drives the display, which does not matter for timing while only
+  light graphics processes run on it (a terminal or PDF viewer under ~1 GiB). Measure on whichever
+  GPU is free; device 1 is often the other user's. `scripts/agent/gpu_health.sh` lists both.
 - The box is shared with another user who runs GPU sweeps. Check `nvidia-smi` before timing anything
   and coordinate before a reboot. `perf` and `gdb -p` do not work (perf_event_paranoid, ptrace): use
   the UR trace.
@@ -803,6 +820,48 @@ in the tree was measured on sm_89** (some tables on sm_120). On a different GPU,
 GEMM verdicts invert, treat the tuned tables (hemm/herk/her2k's transcribe hand-written windows) as
 hypotheses. Re-measure at saturation before quoting any ratio, and record the machine alongside new
 data in `benchmarks/results/`.
+
+## 14. Agent Workflow Rules
+
+Distilled from the agent sessions behind PRs #187-#196. Tools: `scripts/agent/README.md`.
+Project skills: `/sync-main`, `/fanout`, `/tune`, `/prepush` (`.claude/skills/`).
+
+- **Start from current main.** A session-start checkout can be days behind; one ran 131
+  commits behind and never saw the build tooling this guide describes. `git fetch origin` first
+  and branch from `origin/main`. Read anything newer with `git show origin/main:<path>`.
+- **Check the machine before GPU work.** Run `scripts/agent/gpu_health.sh`. On a FAIL, tell the
+  user at once. Do not carry on "compile-verified": PR #188 shipped 6 h of kernels nobody ran.
+- **Never wait blind.**
+  - Run long jobs with `run_in_background`; the harness notifies you when they exit.
+  - Watch a log with `scripts/agent/wait_for.sh --log F --stall-min M` so a hung cell reports
+    itself. One sat unnoticed for 5.5 h.
+  - Check in with the user every ~2-3 h of autonomous wall time.
+- **Keep the PR the size of the ask.** Do none of the following without asking the user first:
+  - add new helper headers or classes, or custom code in a benchmark where an established class
+    exists
+  - port main's code into the PR's style
+  - loosen a tolerance
+  - add or remove a ledger entry
+  - commit campaign data (`benchmarks/results/` beyond the tuning ledgers)
+
+  `scripts/agent/pr_scope.py` lists all of these. Paste its REVIEW lines into your report before
+  every push.
+- **Generated files are regenerated, never hand-edited or hand-merged:**
+  - `tuned/*.txt`: `scripts/sweep_to_table.py`
+  - TuneHash pins: `scripts/agent/repin_tune_hashes.py`
+- **CI runs nothing you could not have run.** `scripts/agent/prepush.sh` runs the strict docs
+  build with CI's pinned Doxygen, the tuned-table checks and `run_local_checks.sh`. After pushing,
+  read the verdict with `scripts/agent/ci_failures.sh <pr>`, and fix failures before the user
+  reports them.
+- **Ask before building alternatives.** For a UI or report request with several possible
+  designs, show a sketch per option and ask which one first. Do not build them all as finished
+  artifacts. Embed tooling in benchviz rather than generating report files (the user's
+  preference).
+- **Subagents: pre-flight the base and own the shared files** (`/fanout`). A base that does not
+  build here is the first task, not N agents' discovery.
+- **Digest, don't dump.** Use `scripts/agent/conflicts.py` for merges and
+  `scripts/agent/wf_dump.py` for workflow output. Read only the sections you need. Persist
+  long evidence to files and quote paths.
 
 ## License
 

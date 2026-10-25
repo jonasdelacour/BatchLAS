@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/agent/session_start.sh\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/agent_build_guard.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(scripts/agent/gpu_health.sh:*)",
+      "Bash(scripts/agent/session_start.sh:*)",
+      "Bash(scripts/agent/tune_procs.sh)",
+      "Bash(scripts/agent/wait_for.sh:*)",
+      "Bash(scripts/agent/ci_failures.sh:*)",
+      "Bash(scripts/agent/prepush.sh:*)",
+      "Bash(python3 scripts/agent/pr_scope.py:*)",
+      "Bash(python3 scripts/agent/conflicts.py)",
+      "Bash(python3 scripts/agent/conflicts.py show:*)",
+      "Bash(python3 scripts/agent/vendor_gaps.py:*)",
+      "Bash(python3 scripts/agent/wf_dump.py:*)",
+      "Bash(python3 scripts/agent/repin_tune_hashes.py --check)",
+      "Bash(python3 scripts/affected_tests.py:*)"
+    ]
+  }
+}

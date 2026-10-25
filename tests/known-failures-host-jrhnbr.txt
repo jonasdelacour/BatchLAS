@@ -1,0 +1,39 @@
+# Known failures of `main` on the 2x RTX 4090 box (hostname JRHNBR). A debt ledger, like
+# tests/known-failures.txt, read ON TOP of it by .github/ci/compare_failures.py when the short
+# hostname matches and --known is not given; its entries print as [host].
+#
+# Why a separate file: these reproduce on this box's full-target tree (spir64_x86_64 +
+# nvidia_gpu_sm_89, dev-tests preset, ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu') and have not
+# been checked on threadripper02 or in CI, which runs no GPU ctest. Four PRs (#191, #192, #194,
+# #195) each spent 25-90 min rebuilding main to prove these were not theirs.
+#
+# Unlike the main ledger this may name a WHOLE ctest test: a binary that aborts writes no gtest
+# XML, so there is no case to name. That masks every case in it -- keep such entries few, and
+# delete each one the day its binary stops aborting (compare_failures reports it NEWLY PASSING).
+#
+# Recorded 2026-10-25 by scripts/gate.sh --only full on main 6478aed7 (build-gate, 143 tests).
+# Same set as the #194 gate on 0832ea91 (2026-10-24), which attributed each to main.
+
+# --- CPU (NETLIB, Backend 6) instantiations launch GPU-only CTA kernels ---------------------------
+# "No kernel named _ZTSN8batchlas14SteqrCTAKernelIfLm16ELb1EEE" / "...Sytd2CTAKernelIfLm8ELb0EEE":
+# the CTA kernels now live in NO_CPU_TARGETS libraries (#196, docs/developer/agent-guide.md §7
+# "Component libraries"), but the NETLIB path on the opencl:cpu queue still reaches them.
+# steqr_tests then segfaults (no XML), so it is listed whole. A real defect, not the box.
+steqr_tests
+syev_blocked_tests::SyevBlockedTest/0.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<float,(batchlas::Backend)6>
+syev_blocked_tests::SyevBlockedTest/1.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<double,(batchlas::Backend)6>
+syev_blocked_tests::SyevBlockedTest/2.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<std::complex<float>,(batchlas::Backend)6>
+syev_blocked_tests::SyevBlockedTest/3.EigenvaluesOnlyLowerMatchesNetlib;type_param=(anonymous namespace)::SyevBlockedConfig<std::complex<double>,(batchlas::Backend)6>
+
+# --- DPC++ assertion in adjustNDRangePerKernel (commands.cpp:2246) --------------------------------
+# The process aborts on the runtime's own assert while launching on the opencl:cpu device.
+# Not yet attributed to a kernel; whole tests because the abort leaves no gtest XML.
+gesvd_tests
+ormqr_cta_tests
+sytrd_cta_tests
+util_device_queue_tests
+
+# --- tuned table content, not this box ------------------------------------------------------------
+# gemm.sm_120.txt has 0 timed double rows (tests/tuned_tables_tests.cc:481). Host-independent:
+# move to tests/known-failures.txt or retune, but CI runs no ctest, so it was first seen here.
+tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger

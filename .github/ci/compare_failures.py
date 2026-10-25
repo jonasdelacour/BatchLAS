@@ -90,6 +90,7 @@ Exit code 0 = gated clean (warnings are still possible), 1 = gate failed.
 import argparse
 import os
 import re
+import socket
 import shutil
 import subprocess
 import sys
@@ -127,6 +128,16 @@ def cache_value_of(build_dir, name, keep_empty=False):
 def sycl_impl_of(build_dir):
     """BATCHLAS_SYCL_IMPL_RESOLVED from a configured tree's cache, or None."""
     return cache_value_of(build_dir, "BATCHLAS_SYCL_IMPL_RESOLVED")
+
+
+# A per-machine supplement, read on top of the default ledger only (never with --known): defects
+# that reproduce on one box's driver, DPC++ build or GPU and nowhere else (the 2x4090 box's
+# native_cpu and SYCL-assertion crashes). It may name a whole ctest test, which the main ledger
+# avoids, because a crashed binary writes no gtest XML to name a case from.
+def default_host_ledger():
+    host = socket.gethostname().split(".", 1)[0].lower()
+    path = os.path.join(REPO, "tests", "known-failures-host-%s.txt" % host)
+    return path if os.path.isfile(path) else None
 
 
 def default_ledger(impl, gpu_family):
@@ -444,6 +455,20 @@ def self_test():
             (heavy + ["--junit", os.path.join(tmp, "heavy_fail.xml")], 1,
              "gemm_x failing with no failing case of its own is not excused by gemm_x_heavy"),
         ]
+        crash = os.path.join(tmp, "crash.xml")
+        with open(crash, "w") as fh:
+            fh.write('<?xml version="1.0"?>\n<testsuite tests="1"><testcase name="alpha" '
+                     'classname="alpha" status="fail"><failure message="Subprocess aborted"/>'
+                     '</testcase></testsuite>\n')
+        host = os.path.join(tmp, "host.txt")
+        with open(host, "w") as fh:
+            fh.write("alpha\n")
+        cases += [
+            (["--junit", crash], 1, "a crashed test is new without a host ledger"),
+            (["--junit", crash, "--host-ledger", host], 0, "the host ledger excuses the crash"),
+            (["--junit", junit, "--host-ledger", host], 1,
+             "a host entry that passes is NEWLY PASSING, as in the main ledger"),
+        ]
         for extra, expect, why in cases:
             try:
                 got = main(base + extra)
@@ -469,6 +494,10 @@ def main(argv):
                         help="the ledger (default: tests/known-failures.txt, "
                              "tests/known-failures-acpp.txt for an AdaptiveCpp build, or "
                              "tests/known-failures-acpp-metal.txt for an AdaptiveCpp Metal build)")
+    parser.add_argument("--host-ledger", metavar="FILE",
+                        help="per-machine supplement read on top of the ledger (default: "
+                             "tests/known-failures-host-<short hostname>.txt when it exists and "
+                             "--known is not given; 'none' disables it)")
     parser.add_argument("--sycl-impl", choices=("DPCPP", "ACPP"),
                         help="the SYCL implementation the run was built with; picks the default "
                              "ledger (default: read from --build-dir, else DPCPP)")
@@ -515,11 +544,18 @@ def main(argv):
     family = family.upper() if family else None
     if family == "METAL" and impl is None:
         impl = "ACPP"  # Metal is reachable only through AdaptiveCpp.
+    if args.host_ledger is None and args.known is None:
+        args.host_ledger = default_host_ledger()
+    if args.host_ledger == "none":
+        args.host_ledger = None
     if args.known is None:
         args.known = default_ledger(impl, family)
     print("compare_failures: ledger %s (SYCL implementation %s%s)"
           % (os.path.relpath(args.known, REPO), impl or "DPCPP, by default",
              ", GPU family " + family if family else ""))
+    if args.host_ledger:
+        print("compare_failures: host ledger %s (on top; entries marked [host])"
+              % os.path.relpath(args.host_ledger, REPO))
 
     if not args.junit and not args.gtest_dir:
         print("compare_failures: nothing to read -- pass --junit and/or --gtest-dir")
@@ -555,14 +591,21 @@ def main(argv):
     if ledger.startswith(".."):                    # ledger outside the repo (a test fixture)
         ledger = args.known
     entries, ledger_findings = read_known(args.known)
+    entries = [(i, t, n, ledger, "") for i, t, n in entries]
     errors += ledger_findings
+    if args.host_ledger:
+        host_entries, host_findings = read_known(args.host_ledger)
+        host_name = os.path.relpath(args.host_ledger, REPO)
+        entries += [(i, t, n, host_name, "  [host]") for i, t, n in host_entries]
+        errors += host_findings
     by_ident = reconcile(junit_results, gtest_results, gtest_binaries)
 
     known_failures, newly_passing, listed_skipped, not_reported = [], [], [], []
     warnings, consumed = [], set()
     new_failures, skipped, vacuous = [], [], []
 
-    for ident, type_param, lineno in entries:
+    host_whole_tests = {e[0] for e in entries if e[4] and "::" not in e[0]}
+    for ident, type_param, lineno, ledger, mark in entries:
         binary = ident.split("::", 1)[0]
         result = by_ident.get(ident)
         if result is not None and not result.ran:
@@ -594,6 +637,9 @@ def main(argv):
             if (coarse is None or coarse.outcome != FAILED) and heavy is not None \
                     and heavy.outcome == FAILED:
                 coarse, binary = heavy, binary + HEAVY_SUFFIX
+            if coarse is not None and coarse.outcome == FAILED and coarse.ran \
+                    and _is_process_death(coarse.detail) and binary in host_whole_tests:
+                continue  # the host ledger names this whole test: its own entry excuses the death
             if coarse is not None and coarse.outcome == FAILED and coarse.ran \
                     and _is_process_death(coarse.detail):
                 new_failures.append(
@@ -632,7 +678,7 @@ def main(argv):
             continue
         consumed.add(ident)
         if result.outcome == FAILED:
-            known_failures.append("%s%s" % (ident, "  (%s)" % result.detail if result.detail else ""))
+            known_failures.append("%s%s%s" % (ident, "  (%s)" % result.detail if result.detail else "", mark))
             if type_param is None and result.type_param is not None:
                 warnings.append("%s:%d: %s is a typed test with no "
                                 "`;type_param=` pin -- paste in the observed spelling: "
@@ -720,7 +766,7 @@ def main(argv):
               "unavoidable rather than optional. A warning inside a green tick is how the "
               "SytrdBlockedLatrdGridCudaTest entry went stale in the first place: the GPU job "
               "uploads its report only on failure, so on a green run the warning exists nowhere "
-              "but in scrollback." % (len(newly_passing), ledger))
+              "but in scrollback." % (len(newly_passing), "the ledger named beside each"))
     for text in errors:
         print(text)
 
