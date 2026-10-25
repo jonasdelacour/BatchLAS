@@ -751,7 +751,7 @@ is the open 2.7x.
   `docs/developer/`; raw data -> `benchmarks/results/` (LFS). A new page opens `# Title {#area_topic}`
   plus a one-line status. Math is `\f$…\f$` / `\f[…\f]`, not `$…$`.
 - **No Markdown outside `docs/`** except a directory `README.md` (never at the root),
-  `.claude/CLAUDE.md` (it only imports this page), the project skills in `.claude/skills/`, and
+  `.claude/CLAUDE.md` (it imports @ref dev_agent_core), the project skills in `.claude/skills/`, the tier agents in `.claude/agents/`, and
   `.github/`, which holds the project README (`check_markdown_locations.py`). No root Markdown at all, so no root plan files: put conclusions in
   the area page.
 - **Source layout** (table: `docs/extending.md`): `src/ops/<op>/` holds `<op>.cc`, `choice.hh` and

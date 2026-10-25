@@ -106,6 +106,30 @@ python3 scripts/agent/doc_section.py --find 'splitk'          # which sections m
 - Regenerate generated files (`scripts/sweep_to_table.py`, `repin_tune_hashes.py`) (§14).
 - Ask before building alternative designs; embed tooling in benchviz (§14).
 
+## Core: subagent and workflow tiers
+
+Every subagent and every workflow `agent()` call runs on a tier chosen for its task. The tiers are
+the project agents in `.claude/agents/`; `scripts/agent_tier_guard.py` (PreToolUse hook) blocks
+an Agent call or a Workflow script that picks none.
+
+| Tier | Model, effort | For |
+| --- | --- | --- |
+| `scout` | haiku, low | read-only locating: files, symbols, call sites, log lines, counts |
+| `mechanic` | sonnet, medium | a precisely specified edit, regeneration, named build + test |
+| `engineer` | opus, high | implementation and debugging that needs judgement (kernels, routing, tests, perf) |
+| `verifier` | opus, high | refuting one claim, diff or measurement |
+| `architect` | opus, xhigh | design and hardest root causes; rarely |
+
+- Agent tool: `subagent_type: "<tier>"`. Anything else (`general-purpose`, `Explore`, `Plan`)
+  must pass both `model` and `effort`; this page is the instruction that authorises setting
+  `effort`. `fork`, `claude-code-guide` and `statusline-setup` keep their own definitions.
+- Workflow: `agent(prompt, {agentType: '<tier>', ...})`, or both `model` and `effort`. Give
+  the cheap stages (scan, list, extract, format) `scout` or `mechanic`, and spend `verifier`
+  or `architect` only on judge and verify stages.
+- Pick the cheapest tier that can do the task, and escalate one tier on a failed or shallow
+  result rather than starting high. A `// tier-guard: off <reason>` line disables the
+  workflow check for that script.
+
 ## Core: keeping context small
 
 - Read docs by section (`doc_section.py`) and source by range (`Read` offset/limit, `grep -n`

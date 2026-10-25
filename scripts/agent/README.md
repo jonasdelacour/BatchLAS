@@ -18,6 +18,7 @@ Each script replaces a procedure that agent sessions hand-wrote, often several t
 | `tune_procs.sh` | finding the tuner that holds a GPU lock, orphaned workers, killing a run tree |
 | `vendor_gaps.py` | re-written `losses.py` scripts: where the vendor still beats native, from the tuned tables |
 | `prune_worktrees.sh` | 60+ stale worktrees; removes only clean, merged ones (`--apply`) |
-| `claude-settings.json` | template for `.claude/settings.json`: registers `session_start.sh`, the build guard `scripts/agent_build_guard.py`, and read-only allow rules |
+| `claude-settings.json` | template for `.claude/settings.json`: registers `session_start.sh`, the build guard `scripts/agent_build_guard.py`, the tier guard `scripts/agent_tier_guard.py`, and read-only allow rules |
+| `../agent_tier_guard.py` | subagents and workflow stages launched on the session's model and effort whatever the task: blocks an Agent call or Workflow `agent()` that picks no tier from `.claude/agents/` (scout, mechanic, engineer, verifier, architect) |
 
 The per-host failure ledger `tests/known-failures-host-<host>.txt` is read by `.github/ci/compare_failures.py` on top of `tests/known-failures.txt`, so `scripts/gate.sh` no longer reports this box's known crashes as new.
