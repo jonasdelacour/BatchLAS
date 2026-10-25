@@ -1,6 +1,6 @@
 # Agent environment guide {#dev_agent_guide}
 
-> **Status:** current · RTX 4090 box and threadripper02 unless a line says otherwise · moved here from the root `AGENTS.md` on 2026-10-07; `.claude/CLAUDE.md` imports it.
+> **Status:** current · RTX 4090 box and threadripper02 unless a line says otherwise · moved here from the root `AGENTS.md` on 2026-10-07; since 2026-10-25 `.claude/CLAUDE.md` imports its digest @ref dev_agent_core, and agents read this page by section (`scripts/agent/doc_section.py agent-guide §N`).
 
 Terse working rules for agents and contributors: toolchain, build performance, testing policy,
 routing architecture, measurement rules, GPU kernel facts, repository conventions and agent
@@ -860,8 +860,9 @@ Project skills: `/sync-main`, `/fanout`, `/tune`, `/prepush` (`.claude/skills/`)
 - **Subagents: pre-flight the base and own the shared files** (`/fanout`). A base that does not
   build here is the first task, not N agents' discovery.
 - **Digest, don't dump.** Use `scripts/agent/conflicts.py` for merges and
-  `scripts/agent/wf_dump.py` for workflow output. Read only the sections you need. Persist
-  long evidence to files and quote paths.
+  `scripts/agent/wf_dump.py` for workflow output. Read only the sections you need
+  (`scripts/agent/doc_section.py <page> [§N|anchor|title]`). Persist long evidence to files and
+  quote paths. The context-size rules are in @ref dev_agent_core ("Core: keeping context small").
 
 ## License
 

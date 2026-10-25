@@ -13,6 +13,7 @@ Each script replaces a procedure that agent sessions hand-wrote, often several t
 | `conflicts.py` | whole conflict diffs dumped into context, and ad-hoc per-hunk resolvers |
 | `repin_tune_hashes.py` | hand-`sed` of the TuneHash pins in `tests/tune_tests.cc` |
 | `ci_failures.sh` / `pr_edit.sh` | empty `gh run view --log`, `gh pr edit` failing on the Projects-classic GraphQL error |
+| `doc_section.py` | whole-page Reads and `sed -n` ranges of 70-200 KB `docs/perf` pages and of the agent guide: prints an outline, one section by §N/anchor/title, or which sections mention a term |
 | `wf_dump.py` | ad-hoc JSON unwrapping of Workflow output and reading 50k-character results whole |
 | `tune_procs.sh` | finding the tuner that holds a GPU lock, orphaned workers, killing a run tree |
 | `vendor_gaps.py` | re-written `losses.py` scripts: where the vendor still beats native, from the tuned tables |

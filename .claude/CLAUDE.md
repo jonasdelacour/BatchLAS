@@ -1,1 +1,1 @@
-@../docs/developer/agent-guide.md
+@../docs/developer/agent-core.md

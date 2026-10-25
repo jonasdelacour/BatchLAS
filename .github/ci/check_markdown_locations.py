@@ -14,7 +14,7 @@ conclusions were quoted from memory. This gate stops the next one.
 WHAT IS ALLOWED OUTSIDE docs/
 -----------------------------
     README.md          in any directory but the root (a directory's own entry point)
-    .claude/CLAUDE.md  agent memory; it only imports docs/developer/agent-guide.md
+    .claude/CLAUDE.md  agent memory; it only imports docs/developer/agent-core.md
     .claude/skills/**  project skills (SKILL.md), read in place by Claude Code
     .github/**         the project README, skills and templates read in place
 

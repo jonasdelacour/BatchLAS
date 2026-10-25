@@ -96,7 +96,7 @@ never hidden behind a browser's cached stylesheet.
 | Invariants, deliberate oddities, traps | a short code comment plus an evidence pointer | none |
 
 - **Markdown lives under `docs/`.** Exceptions: a directory `README.md` (never one at the root),
-  `.claude/CLAUDE.md` (only imports the [agent guide](agent-guide.md)) and files under `.github/`
+  `.claude/CLAUDE.md` (only imports the [agent core rules](agent-core.md)) and files under `.github/`
   (the project README is `.github/README.md`). `.github/ci/check_markdown_locations.py` enforces
   this. No plan files at the root: write the plan's conclusions into the page for its area and
   keep task lists out of the tree.
