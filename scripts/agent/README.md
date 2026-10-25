@@ -13,10 +13,12 @@ Each script replaces a procedure that agent sessions hand-wrote, often several t
 | `conflicts.py` | whole conflict diffs dumped into context, and ad-hoc per-hunk resolvers |
 | `repin_tune_hashes.py` | hand-`sed` of the TuneHash pins in `tests/tune_tests.cc` |
 | `ci_failures.sh` / `pr_edit.sh` | empty `gh run view --log`, `gh pr edit` failing on the Projects-classic GraphQL error |
+| `doc_section.py` | whole-page Reads and `sed -n` ranges of 70-200 KB `docs/perf` pages and of the agent guide: prints an outline, one section by §N/anchor/title, or which sections mention a term |
 | `wf_dump.py` | ad-hoc JSON unwrapping of Workflow output and reading 50k-character results whole |
 | `tune_procs.sh` | finding the tuner that holds a GPU lock, orphaned workers, killing a run tree |
 | `vendor_gaps.py` | re-written `losses.py` scripts: where the vendor still beats native, from the tuned tables |
 | `prune_worktrees.sh` | 60+ stale worktrees; removes only clean, merged ones (`--apply`) |
-| `claude-settings.json` | template for `.claude/settings.json`: registers `session_start.sh`, the build guard `scripts/agent_build_guard.py`, and read-only allow rules |
+| `claude-settings.json` | template for `.claude/settings.json`: registers `session_start.sh`, the build guard `scripts/agent_build_guard.py`, the tier guard `scripts/agent_tier_guard.py`, and read-only allow rules |
+| `../agent_tier_guard.py` | subagents and workflow stages launched on the session's model and effort whatever the task: blocks an Agent call or Workflow `agent()` that picks no tier from `.claude/agents/` (scout, mechanic, engineer, verifier, architect) |
 
 The per-host failure ledger `tests/known-failures-host-<host>.txt` is read by `.github/ci/compare_failures.py` on top of `tests/known-failures.txt`, so `scripts/gate.sh` no longer reports this box's known crashes as new.

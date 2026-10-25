@@ -13,6 +13,7 @@ Past fan-outs lost 94-147 minutes per agent to a base that did not link. The usu
   - Build the targets every agent will need on the base commit (`scripts/b -B <tree> <targets>`) and run one smoke test.
   - A base that does not build here is the first work package. Do not hand it to N agents.
 - **Size it.** Give each agent one op or work package with a disjoint file set. Name the shared files (`tests/tune_tests.cc`, `tuned/`, `include/batchlas/tuning_params.hh`, `src/ops/CMakeLists.txt`) and give each one a single owner.
+- **Tier every agent** (`.claude/agents/`, table in `docs/developer/agent-core.md`): `subagent_type: "<tier>"` on the Agent tool, `agentType: '<tier>'` in a workflow `agent()`. scout for locating, mechanic for specified edits, engineer for work packages, verifier for refuting, architect only for design. `scripts/agent_tier_guard.py` blocks an untiered launch.
 - **Timebox.** Pick a check-in point (about 2-3 h of wall time). Tell the user the plan, the agent count and when you will report.
 
 ## Brief clauses (paste into every brief, after the task-specific part)

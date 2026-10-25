@@ -14,8 +14,9 @@ conclusions were quoted from memory. This gate stops the next one.
 WHAT IS ALLOWED OUTSIDE docs/
 -----------------------------
     README.md          in any directory but the root (a directory's own entry point)
-    .claude/CLAUDE.md  agent memory; it only imports docs/developer/agent-guide.md
+    .claude/CLAUDE.md  agent memory; it only imports docs/developer/agent-core.md
     .claude/skills/**  project skills (SKILL.md), read in place by Claude Code
+    .claude/agents/**  project subagent definitions (model tiers), read in place by Claude Code
     .github/**         the project README, skills and templates read in place
 
 Nothing at all at the repository root: the project README is .github/README.md,
@@ -49,7 +50,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 SUFFIXES = (".md", ".markdown")
 ANYWHERE_BUT_ROOT = ("README.md",)
 ALLOWED_FILES = (".claude/CLAUDE.md",)
-ALLOWED_TREES = ("docs/", ".github/", ".claude/skills/")
+ALLOWED_TREES = ("docs/", ".github/", ".claude/skills/", ".claude/agents/")
 
 
 def allowed(rel):
@@ -84,6 +85,8 @@ SELF_TEST_CASES = [
     (".github/skills/x/SKILL.md", True, "agent skills are read in place"),
     (".claude/skills/x/SKILL.md", True, "project skills are read in place"),
     (".claude/skillsx/a.md", False, "a lookalike of .claude/skills/ is not it"),
+    (".claude/agents/scout.md", True, "project subagent definitions are read in place"),
+    (".claude/agentsx.md", False, "a lookalike of .claude/agents/ is not it"),
     ("README.md", False, "no Markdown at the root, README included"),
     ("AGENTS.md", False, "the agent guide lives in docs/developer/"),
     ("CLAUDE.md", False, "root CLAUDE.md: use .claude/CLAUDE.md"),
@@ -133,7 +136,7 @@ def main(argv=None):
     for rel in offenders:
         print("%s:1: error: Markdown outside docs/. Move it to docs/<area>/<topic>.md "
               "(see docs/developer/documentation.md#where-things-go); only a non-root "
-              "README.md, .claude/CLAUDE.md, .claude/skills/ and .github/ are exempt." % rel)
+              "README.md, .claude/CLAUDE.md, .claude/skills/, .claude/agents/ and .github/ are exempt." % rel)
     print("check_markdown_locations: %d Markdown file(s), %d outside docs/"
           % (len(files), len(offenders)))
     return 1 if offenders else 0

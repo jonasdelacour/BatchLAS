@@ -15,3 +15,4 @@ Process, tooling and working rules for contributors. @ref dev_agent_guide is the
 | @subpage tune_tool_readme "batchlas_tune" | The tuner that measures the selection tables. |
 | @subpage tuning_harness "Tuning harness" | Regenerating the `tuning_params.hh` constants. |
 | @subpage dev_agent_guide "Agent environment guide" | Toolchain, build, testing, measurement, kernel facts. |
+| @subpage dev_agent_core "Agent core rules" | The digest of the agent guide that every agent session loads. |

@@ -1,6 +1,6 @@
 # Agent environment guide {#dev_agent_guide}
 
-> **Status:** current · RTX 4090 box and threadripper02 unless a line says otherwise · moved here from the root `AGENTS.md` on 2026-10-07; `.claude/CLAUDE.md` imports it.
+> **Status:** current · RTX 4090 box and threadripper02 unless a line says otherwise · moved here from the root `AGENTS.md` on 2026-10-07; since 2026-10-25 `.claude/CLAUDE.md` imports its digest @ref dev_agent_core, and agents read this page by section (`scripts/agent/doc_section.py agent-guide §N`).
 
 Terse working rules for agents and contributors: toolchain, build performance, testing policy,
 routing architecture, measurement rules, GPU kernel facts, repository conventions and agent
@@ -751,7 +751,7 @@ is the open 2.7x.
   `docs/developer/`; raw data -> `benchmarks/results/` (LFS). A new page opens `# Title {#area_topic}`
   plus a one-line status. Math is `\f$…\f$` / `\f[…\f]`, not `$…$`.
 - **No Markdown outside `docs/`** except a directory `README.md` (never at the root),
-  `.claude/CLAUDE.md` (it only imports this page), the project skills in `.claude/skills/`, and
+  `.claude/CLAUDE.md` (it imports @ref dev_agent_core), the project skills in `.claude/skills/`, the tier agents in `.claude/agents/`, and
   `.github/`, which holds the project README (`check_markdown_locations.py`). No root Markdown at all, so no root plan files: put conclusions in
   the area page.
 - **Source layout** (table: `docs/extending.md`): `src/ops/<op>/` holds `<op>.cc`, `choice.hh` and
@@ -860,8 +860,9 @@ Project skills: `/sync-main`, `/fanout`, `/tune`, `/prepush` (`.claude/skills/`)
 - **Subagents: pre-flight the base and own the shared files** (`/fanout`). A base that does not
   build here is the first task, not N agents' discovery.
 - **Digest, don't dump.** Use `scripts/agent/conflicts.py` for merges and
-  `scripts/agent/wf_dump.py` for workflow output. Read only the sections you need. Persist
-  long evidence to files and quote paths.
+  `scripts/agent/wf_dump.py` for workflow output. Read only the sections you need
+  (`scripts/agent/doc_section.py <page> [§N|anchor|title]`). Persist long evidence to files and
+  quote paths. The context-size rules are in @ref dev_agent_core ("Core: keeping context small").
 
 ## License
 

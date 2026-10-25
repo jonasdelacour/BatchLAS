@@ -187,7 +187,7 @@ jobs:
         # Plans and result write-ups used to pile up as root *.md files that the
         # site never published and no check ever read, so their numbers were
         # quoted from memory. The documentation site under docs/ is the one
-        # place that material goes; a non-root README.md, .claude/CLAUDE.md, .claude/skills/
+        # place that material goes; a non-root README.md, .claude/CLAUDE.md, .claude/skills/, .claude/agents/
         # and .github/ are the only exemptions. Python only, so it
         # lives in this job rather than needing Doxygen.
         run: python3 .github/ci/check_markdown_locations.py
