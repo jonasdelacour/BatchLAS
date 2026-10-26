@@ -8,6 +8,7 @@
 #   scripts/agent/dispatch.sh logs HOST NAME [N]             last N assistant messages (default 8)
 #   scripts/agent/dispatch.sh report HOST NAME               the session's .dispatch/report.md
 #   scripts/agent/dispatch.sh stop HOST NAME
+#   scripts/agent/dispatch.sh rm HOST NAME                   remove the worktree and local branch
 #
 # HOST: jrhnbr (2x RTX 4090, shared), tr02 (threadripper02: CPU and build work only, its GPUs
 # are hidden and --gpu is refused, since GPU load has crashed it), mac (Apple M5 Max, Metal).
@@ -178,7 +179,8 @@ cmd_hosts() {
             if command -v free >/dev/null; then free -g | sed -n 2p | tr -s ' ' | cut -d' ' -f2,7 | sed 's/^/mem total,avail GB /'
             else echo \"mem \$((\$(sysctl -n hw.memsize) >> 30)) GB\"; fi
             echo \"dispatches running: \$($(count_running "$h"))\"
-            [ -e /tmp/batchlas-build.lock.info ] && echo \"build lock: \$(cat /tmp/batchlas-build.lock.info)\"
+            command -v flock >/dev/null && [ -e /tmp/batchlas-build.lock ] && ! flock -n /tmp/batchlas-build.lock true &&
+                echo \"build lock held: \$(cat /tmp/batchlas-build.lock.info 2>/dev/null)\"
             command -v nvidia-smi >/dev/null && timeout 20 nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader | sed 's/^/gpu /'
             true" 2>&1 | grep -v 'stdio forwarding\|Connection closed\|channel 0' || echo "(unreachable)"
     done
@@ -194,5 +196,9 @@ case "$sub" in
         on "$1" "cat $(repo_of "$1")/.claude/worktrees/dispatch-$2/.dispatch/report.md" ;;
     stop) [ "$#" -ge 2 ] || die "stop HOST NAME"
         on "$1" "pkill -P \$(cat $(repo_of "$1")/.claude/worktrees/dispatch-$2/.dispatch/pid)" ;;
-    *) sed -n '3,16p' "$0"; exit 2 ;;
+    rm) [ "$#" -ge 2 ] || die "rm HOST NAME"
+        d="$(repo_of "$1")/.claude/worktrees/dispatch-$2"
+        on "$1" "[ -f $d/.dispatch/pid ] && kill -0 \$(cat $d/.dispatch/pid) 2>/dev/null && { echo 'still running; stop it first'; exit 1; }
+            cd $(repo_of "$1") && git worktree remove --force $d && git branch -D dispatch/$2" ;;
+    *) sed -n '3,17p' "$0"; exit 2 ;;
 esac
