@@ -12,9 +12,9 @@
 namespace batchlas::ops::sygst {
 
 /// LAPACK's blocked ?sygst/?hegst on the uplo triangles only: per nb block the SLM diagonal kernel,
-/// then trsm (itype 1) or trmm (2, 3), hemm/symm and her2k/syr2k on the panel and trailing parts.
+/// then trsm (itype 1) or trmm (2, 3), gemm and her2k/syr2k on the panel and trailing parts.
 struct Blocked {
-    int nb = 32;  ///< block order; the diagonal kernel takes at most 32, a larger nb recurses once
+    int nb = 32;  ///< block order; the diagonal kernel takes at most 32, a larger block recurses
     static constexpr std::string_view name = "blocked";
     static constexpr std::array<std::string_view, 1> fields{"nb"};
     std::array<int, 1> values() const { return {nb}; }
@@ -28,7 +28,7 @@ using SygstChoice = std::variant<Blocked, TwoSided, Vendor>;  ///< the children 
 
 template <class T>  /// Tie-break order (§6.3): native first, vendor last.
 constexpr auto candidates() {
-    return std::array<SygstChoice, 5>{Blocked{16}, Blocked{32}, Blocked{64}, TwoSided{}, Vendor{}};
+    return std::array<SygstChoice, 6>{Blocked{32}, Blocked{64}, Blocked{128}, Blocked{256}, TwoSided{}, Vendor{}};
 }
 
 /// The CPU (no table, never borrows) takes the library first; blocked needs a GPU.

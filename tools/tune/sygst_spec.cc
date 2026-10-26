@@ -103,8 +103,8 @@ public:
         // common "src/ops/sygst/sygst.cc"
         // twosided calls the public trsm (itype 1) and trmm (2, 3): their native kernels count too.
         // family: twosided "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
-        // blocked also calls the public hemm/symm, her2k/syr2k and trmm (and, through them, gemm).
-        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh" "src/ops/hemm/hemm.cc" "src/ops/hemm/choice.hh" "src/ops/symm/symm.cc" "src/ops/symm/choice.hh" "src/ops/her2k/her2k.cc" "src/ops/her2k/choice.hh" "src/ops/syr2k/syr2k.cc" "src/ops/syr2k/choice.hh" "src/ops/syr2k/kernels/syr2k_triangular_tiles.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/choice.hh" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/kernels/common/triangular_tiles.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // blocked also calls the public gemm, her2k/syr2k and trmm.
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh" "src/ops/her2k/her2k.cc" "src/ops/her2k/choice.hh" "src/ops/syr2k/syr2k.cc" "src/ops/syr2k/choice.hh" "src/ops/syr2k/kernels/syr2k_triangular_tiles.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/choice.hh" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/kernels/common/triangular_tiles.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc" "src/ops/gemm/kernels/gemm_kernels.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/sygst_spec.cc"; }

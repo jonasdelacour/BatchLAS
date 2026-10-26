@@ -28,6 +28,7 @@ set(BENCHMARK_TARGETS
     her2k_benchmark
     syrk_benchmark
     syr2k_benchmark
+    sygst_benchmark
     trmm_benchmark
     gemv_benchmark
     spmm_benchmark

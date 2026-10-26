@@ -366,8 +366,8 @@ TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
                 }
 }
 
-// The blocked family pinned at every nb, orders straddling each edge it has (the diagonal kernel's 32,
-// nb 16, 32, 64 and their multiples), every itype and triangle, on an ill-conditioned B (cond ~1e3
+// The blocked family pinned at every nb, orders straddling each edge it has (the diagonal kernel's
+// compile-time orders 8, 16, 32, nb 32 to 256, a two-level recursion at 260), every itype and triangle, on an ill-conditioned B (cond ~1e3
 // float, ~1e6 double), padded ld and stride, complex data with nonzero imaginary parts. It reads and
 // writes only the uplo triangles: every element of A outside its triangle and all of B keep their bits.
 // Deliberate breaks and their red sets: docs/perf/sygvd.md#sygst-the-deliberate-breaks.
@@ -375,10 +375,10 @@ TYPED_TEST(SygvdTest, SygstBlockedMatchesTheDefinitionAcrossBlockEdges) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
     const double dec = std::is_same_v<RealOf<T>, float> ? 1.5 : 3.0;
-    for (const std::string fam : {"blocked:nb=16", "blocked:nb=32", "blocked:nb=64"})
+    for (const std::string fam : {"blocked:nb=32", "blocked:nb=64", "blocked:nb=128", "blocked:nb=256"})
         for (int itype : {1, 2, 3})
             for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-                for (int n : {1, 7, 16, 17, 31, 32, 33, 48, 64, 65, 97, 130}) {
+                for (int n : {1, 7, 8, 16, 17, 31, 32, 33, 48, 64, 65, 97, 128, 130, 260}) {
                     auto g = make_gen<T>(n, 3, uplo, 11u + n * 17 + itype, false, dec);
                     if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
                     const UnifiedVector<T> factor_bits = g.b;
@@ -393,16 +393,17 @@ TYPED_TEST(SygvdTest, SygstBlockedMatchesTheDefinitionAcrossBlockEdges) {
                 }
 }
 
-// 1024 identical items on the blocked family, each bit-identical to item 0: n = 5 packs six items per
-// diagonal work-group (the last group part-filled), n = 20 one, n = 40 two blocks and every child.
+// 1024 identical items on the blocked family, each bit-identical to item 0: n = 5 packs up to 25 items
+// per diagonal work-group (the last part-filled), n = 16 the order-16 instance, n = 20 the generic
+// order, n = 40 two blocks (orders 32 and 8) and every child.
 // The workspace query is exact: itype 2's panel product, one byte short, throws.
 TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
     if constexpr (BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
-    for (const std::string fam : {"blocked:nb=16", "blocked:nb=32"})
+    for (const std::string fam : {"blocked:nb=32", "blocked:nb=64"})
         for (int itype : {1, 2})
-            for (int n : {5, 20, 40}) {
+            for (int n : {5, 16, 20, 40}) {
                 const Uplo uplo = itype == 1 ? Uplo::Upper : Uplo::Lower;
                 auto g = make_gen<T>(n, 1024, uplo, 515u + n, true);
                 if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
@@ -423,7 +424,7 @@ TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
             if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
             {
                 const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "100");
-                ASSERT_TRUE(this->run_sygst(g, itype, "blocked:nb=16"));
+                ASSERT_TRUE(this->run_sygst(g, itype, "blocked:nb=32"));
             }
             const std::string at = std::string("chunked itype=") + std::to_string(itype) + " uplo=" + ul(uplo);
             EXPECT_VERIFY_SLACK(T, verify::Check::factorization, 40, this->sygst_residual(g, itype), graded_slack()) << at;
@@ -448,7 +449,7 @@ TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const std::string out = dir + "/cov";
-    const std::vector<std::pair<int, std::string>> runs{{40, "blocked:nb=16"}, {70, "blocked:nb=64"}, {50, "twosided"}};
+    const std::vector<std::pair<int, std::string>> runs{{40, "blocked:nb=32"}, {70, "blocked:nb=64"}, {140, "blocked:nb=128"}, {50, "twosided"}};
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_SYGST_ROUTE", nullptr);
