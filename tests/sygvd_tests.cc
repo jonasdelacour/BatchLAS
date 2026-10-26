@@ -327,6 +327,8 @@ TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
 // must equal jobz=V's (whose residual is checked) within the values bound.
 // ARMED BREAK: in src/ops/sygvd/sygvd.cc compose(), give the itype-3 trmm `Transpose::NoTrans` for Upper.
 // SEEN: RED for compose itype 3 Upper only, all 8 configs; vendor GREEN.
+// ARMED BREAK (2026-10-26): in compose(), B.hermitize(q, uplo) after potrf. SEEN: RED here for compose only,
+// every itype, both triangles, n > 1, all 8 configs (B's poisoned triangle); vendor GREEN.
 TYPED_TEST(SygvdTest, SygvdSolvesEveryItypeOnEveryFamily) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;

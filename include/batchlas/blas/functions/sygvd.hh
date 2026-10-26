@@ -31,6 +31,15 @@ using sygvd_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense
 template <typename T> using sygvd_factored = sygvd<T>;
 template <typename T> using sygvd_factored_buffer_size = sygvd_buffer_size<T>;
 template <typename T>
+using sygvd_masked = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+                           const MatrixView<T, MatrixFormat::Dense>&, Span<typename base_type<T>::type>, int, JobType,
+                           Uplo, Span<std::byte>, Span<int32_t>, Span<const uint8_t>);
+template <typename T>
+using sygvd_masked_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+                                        const MatrixView<T, MatrixFormat::Dense>&, Span<typename base_type<T>::type>,
+                                        int, JobType, Uplo, Span<const uint8_t>);
+template <typename T> using sygvd_factored_masked = sygvd_masked<T>;
+template <typename T> using sygvd_factored_masked_buffer_size = sygvd_masked_buffer_size<T>;
 template <typename T> using sygvd_vendor = sygvd<T>;
 template <typename T> using sygvd_vendor_buffer_size = sygvd_buffer_size<T>;
 }  // namespace sig
@@ -113,20 +122,57 @@ inline Event hegvd(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     return sygvd<Back, T>(ctx, A, B, eigenvalues, itype, jobz, uplo, work_space, info);
 }
 
+/// @brief sygvd() on the active items only (`mask[b] != 0`); an inactive item's A, B, eigenvalues and info
 ///        are not touched (bit-identical on return). The active items are gathered into packed copies in
 ///        the workspace, solved by sygvd() on that k-item batch (which selects for k items), and scattered back.
+/// @param mask  one entry per item, nonzero = active; host-readable and complete (read on the host first)
+/// @throws batchlas::invalid_argument if @p mask holds fewer than `A.batch_size()` entries, and as sygvd()
 /// @throws batchlas::workspace_error if @p work_space is shorter than sygvd_masked_buffer_size()
+/// @see syev_masked(), @ref design_masked_batches
+/// @ingroup api_eigen
+template <Backend Back, typename T>
+BATCHLAS_API Event sygvd_masked(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz, Uplo uplo,
+                                Span<std::byte> work_space, Span<int32_t> info, Span<const uint8_t> mask);
+
 /// @brief Workspace, in bytes, that sygvd_masked() needs for these operands under every mask (the largest
 ///        need over every count of active items; the mask's contents do not change it). Query once per
 ///        batch; costs one sygvd_buffer_size() per item count (host only).
 /// @ingroup api_eigen_lowlevel
+template <Backend Back, typename T>
+BATCHLAS_API size_t sygvd_masked_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& B,
+                                             Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz,
+                                             Uplo uplo, Span<const uint8_t> mask);
+
+/// @brief sygvd_factored() on the active items only: the SCC loop's call (fixed factor, per-item
+///        convergence). @p B is read and never written, inactive items untouched.
+/// @ingroup api_eigen
+template <Backend Back, typename T>
+BATCHLAS_API Event sygvd_factored_masked(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                         const MatrixView<T, MatrixFormat::Dense>& B,
+                                         Span<typename base_type<T>::type> eigenvalues, int itype, JobType jobz,
+                                         Uplo uplo, Span<std::byte> work_space, Span<int32_t> info,
+                                         Span<const uint8_t> mask);
+
 /// @brief Workspace, in bytes, that sygvd_factored_masked() needs for these operands under every mask, as
 ///        sygvd_masked_buffer_size().
 /// @ingroup api_eigen_lowlevel
+template <Backend Back, typename T>
+BATCHLAS_API size_t sygvd_factored_masked_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                                      const MatrixView<T, MatrixFormat::Dense>& B,
+                                                      Span<typename base_type<T>::type> eigenvalues, int itype,
+                                                      JobType jobz, Uplo uplo, Span<const uint8_t> mask);
+
 BATCHLAS_DISPATCH_ON_QUEUE(sygvd)
 BATCHLAS_DISPATCH_ON_QUEUE(sygvd_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(sygvd_factored)
 BATCHLAS_DISPATCH_ON_QUEUE(sygvd_factored_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sygvd_masked)
+BATCHLAS_DISPATCH_ON_QUEUE(sygvd_masked_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(sygvd_factored_masked)
+BATCHLAS_DISPATCH_ON_QUEUE(sygvd_factored_masked_buffer_size)
 BATCHLAS_DISPATCH_ON_QUEUE(hegvd)
 
 }  // namespace batchlas

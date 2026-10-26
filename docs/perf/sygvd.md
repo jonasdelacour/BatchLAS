@@ -20,6 +20,8 @@ solves \f$ H C = S C \varepsilon \f$ (itype 1, `jobz = V`, `uplo = U`) per molec
 - **`sygvd_factored(A, F, W, itype, jobz, uplo, ws, info)`**: the S-fixed case. Factor `B` once with
   `potrf` and call this every iteration. `F` is read and never written. It always composes, because no
   vendor library takes a factored B.
+- **`sygvd_masked`, `sygvd_factored_masked`** solve only the items whose mask entry is nonzero and leave
+  the rest bit-identical. They are for the SCC loop, whose molecules converge at different iterations
   (@ref design_masked_batches). Their buffer-size query is the same for every mask, so it is made once.
 - **`hegst`, `hegvd`** are the complex spellings, with the same backend-deducing overloads
   (`hegvd(ctx, ...)`).

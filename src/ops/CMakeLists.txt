@@ -142,6 +142,8 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     sytrf/kernels/sytrf_kernels.cc
     # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
     sygvd/kernels/sygvd_native.cc
+    # Masked batches (syev_masked, sygvd_masked): one gather/scatter kernel, CPU image kept for NETLIB.
+    ../kernels/common/batch_mask.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:

@@ -191,6 +191,7 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `sygst(ctx, A, B, itype, uplo, ws)` | `A := L⁻¹·A·L⁻ᴴ` / `U⁻ᴴ·A·U⁻¹` (itype 1) or `Lᴴ·A·L` / `U·A·Uᴴ` (2, 3) from `potrf`'s factor in `B` (LAPACK `?sygst`, @ref perf_sygvd) | `uplo` triangle of `A`; `B` read-only |
 | `sygvd(ctx, A, B, W, itype, jobz, uplo, ws, info)` | `A·x = λ·B·x` (itype 1), `A·B·x = λ·x` (2), `B·A·x = λ·x` (3), B positive definite (LAPACK `?sygvd`; `hegvd` is the same call) | `W` ascending; `A` gets eigenvectors (`Xᴴ·B·X = I`; itype 3 `Xᴴ·B⁻¹·X = I`); `B` gets its Cholesky factor; `info` `n + i` for a non-positive-definite `B` |
 | `sygvd_factored(ctx, A, F, W, itype, jobz, uplo, ws, info)` | `sygvd` with `B` already factored by `potrf` (factor once, solve many times) | as `sygvd`; `F` read-only |
+| `syev_masked(ctx, A, W, jobz, uplo, ws, info, mask)` / `sygvd_masked(..., info, mask)` / `sygvd_factored_masked(..., info, mask)` | the unmasked call on the items with `mask[b] != 0` only (@ref design_masked_batches) | as the unmasked call for active items; inactive items untouched |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` and `S` are the **real**
 counterpart of `T` (n·batch and min(m,n)·batch).

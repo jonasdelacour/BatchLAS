@@ -472,8 +472,8 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> real_only{};
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
-                           "herk", "her2k", "sytrf", "sysv", "sygst", "sygvd"})
+                           "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm",
+                           "hemm", "herk", "her2k", "sytrf", "sysv", "sygst", "sygvd"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;

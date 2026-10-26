@@ -183,6 +183,7 @@ target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/syev/syev_masked.cc)
 # The level-3 seven carry their own native kernels, and every native arm's can_run needs d.is_gpu,
 # so they build GPU-only (BATCHLAS_NO_CPU_OBJECT_LIBS) in a library of their own: their CPU images
 # were 590 of the backends link's 713 CPU-seconds and could never launch.
@@ -192,6 +193,7 @@ target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syr
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/sytrf/sytrf.cc ops/sysv/sysv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/sygst/sygst.cc ops/sygvd/sygvd.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sygvd/sygvd_masked.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 

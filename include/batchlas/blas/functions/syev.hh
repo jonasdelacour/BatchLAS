@@ -2,6 +2,7 @@
 #pragma once
 
 #include <batchlas/export.hh>
+#include <cstdint>
 #include <cstdlib>
 #include <optional>
 #include <stdexcept>
@@ -34,6 +35,13 @@ using syev_buffer_size = size_t(Queue&,
                                 const MatrixView<T, MatrixFormat::Dense>&,
                                 Span<typename base_type<T>::type>,
                                 JobType, Uplo);
+
+template <typename T>
+using syev_masked = Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Span<typename base_type<T>::type>,
+                          JobType, Uplo, Span<std::byte>, Span<int32_t>, Span<const uint8_t>);
+template <typename T>
+using syev_masked_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
+                                       Span<typename base_type<T>::type>, JobType, Uplo, Span<const uint8_t>);
 
 // backend::syev_vendor / syev_vendor_buffer_size share these signatures.
 template <typename T> using syev_vendor = syev<T>;
@@ -120,6 +128,42 @@ BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
                                      JobType jobtype,
                                      Uplo uplo);
 
+/**
+ * @brief syev() on the active items of the batch only: item b is solved where `mask[b] != 0`; an inactive
+ *        item's A, eigenvalues and info are not touched (bit-identical on return).
+ *
+ * For a batch whose items finish at different times (an SCC loop's molecules converge at different
+ * iterations): re-solve the rest without compacting the batch yourself. The active items are gathered
+ * into a packed batch in the workspace (same `ld` and stride), solved by syev() on that k-item batch
+ * (which selects its family for k items, pins included), and scattered back, so an inactive item costs no
+ * kernel work. With every item active this is syev(); with none it is a no-op.
+ * @param mask  one entry per item, nonzero = active; host-readable (USM shared or host memory), and the
+ *              work that wrote it complete: it is read on the host before anything is enqueued
+ * @throws batchlas::invalid_argument if @p mask holds fewer than `descrA.batch_size()` entries, if
+ *         @p eigenvalues holds fewer than n * batch values, and as syev()
+ * @throws batchlas::workspace_error if @p workspace is shorter than syev_masked_buffer_size()
+ * @see @ref design_masked_batches
+ * @ingroup api_eigen
+ */
+template <Backend B, typename T>
+BATCHLAS_API Event syev_masked(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& descrA,
+                               Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo,
+                               Span<std::byte> workspace, Span<int32_t> info, Span<const uint8_t> mask);
+
+/**
+ * @brief Workspace, in bytes, that syev_masked() needs for these operands under *every* mask: the largest
+ *        need over every count of active items (each count sized as the packed call would select it).
+ *
+ * Query it once per batch and reuse it while items drop out. The mask's contents do not change the result;
+ * a mask shorter than the batch is refused as by syev_masked(). Costs one syev_buffer_size() per item
+ * count (host only).
+ * @ingroup api_eigen_lowlevel
+ */
+template <Backend B, typename T>
+BATCHLAS_API size_t syev_masked_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                            Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo,
+                                            Span<const uint8_t> mask);
+
 } // namespace batchlas
 
 namespace batchlas::backend {
@@ -175,5 +219,7 @@ namespace batchlas {
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_masked)
+BATCHLAS_DISPATCH_ON_QUEUE(syev_masked_buffer_size)
 
 }  // namespace batchlas
