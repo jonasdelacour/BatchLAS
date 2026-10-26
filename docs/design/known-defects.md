@@ -24,7 +24,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | 11 | `src/ops/gemm/kernels/epilogue_linear.hh:14-15`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | every `can_run` in `src/ops/`, `src/ops/{hemm,herk,her2k}/` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
-| 14 | Hermitian drivers in gesvd and syev | syev: fixed at the public entry; `gesvd_cta` Upper: open, wrong answer under Auto |
+| 14 | Hermitian drivers in gesvd and syev | fixed in the drivers (`sytrd_cta` load, `sytrd_sy2sb` update) |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | blocked geqrf/orgqr/ormqr part loops | fixed: parts capped at half the grid (reproduced on sm_89) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
@@ -271,43 +271,51 @@ With large finite poison in the triangle the caller did not name:
 - `syev_cta` with Upper (n = 5, 17, 32) reads the lower triangle. `syev_blocked` with Lower at
   n <= 32 reads the upper. `syev_two_stage` with Lower at n = 40 reads the upper.
 
-Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. Before the syev fix,
+Auto reached some of these. gesvd sent Hermitian Upper n <= 32 to `cta`. Before the fix,
 Auto sent cfloat n = 9..32 and cdouble n <= 32 to `syev_cta`, and `two_stage` with Lower was its
 choice for jobz=N above n = 320 and for float V with n = 449..1024. `linalg::eigh`, `eigvalsh` and
 the Hermitian `linalg::svd` mirror the named triangle on their copy first
 (`MatrixView::hermitize`), so they were never affected.
 
-- **syev fix:** the public `syev` (`src/ops/syev/syev.cc`) runs `A.hermitize(q, uplo)` before every
-  native family, so each one sees the same Hermitian matrix. The vendor family reads only `uplo`
-  and is not mirrored. The documented contract: the other triangle may be overwritten, and the
-  diagonal's imaginary part is taken as zero. The drivers themselves still read the other triangle
-  when called directly (`syev_cta`, `syev_blocked`, `syev_two_stage`); only the entry is fixed.
+- **Fix (2026-10-26), in the drivers:** the public `syev` mirrors nothing; each driver reads only
+  the named triangle.
+  - `sytrd_cta` (`src/ops/syev/sytrd/sytrd_cta.cc`, the tile load): each lane loads its row of the
+    named triangle, coalesced, and writes the conjugate into the other half of the SLM tile; the
+    diagonal's imaginary part is dropped, as `{c,z}hetrd` does. This serves `syev_cta` Upper,
+    `syev_blocked` Lower at n <= 32 (`sytrd_blocked` hands n <= 32 to `sytrd_cta` Lower) and
+    `gesvd_cta` Hermitian Upper. The reduction loops are unchanged.
+  - `sytrd_sy2sb` (`src/ops/syev/sytrd/sytrd_sy2sb.cc`): the two full-block `ormqr` calls on the
+    trailing block are replaced by LAPACK `dsytrd_sy2sb`'s two-sided update, which reads only the
+    lower triangle: Y = A22 V T (`symm`/`hemm`, Lower), W = Y - V (T^H V^H Y) / 2, then
+    A22 -= V W^H + W V^H (`syr2k`/`her2k`, or the gemm pair whose lower result depends only on
+    lower entries). `syevx`'s direct subset path shares it.
+  - Upper on `blocked` and `two_stage`, and Lower on `syev_cta`, still go through an in-place
+    O(n^2) pass that reads the named triangle and writes the other (`uplo_mirror.hh`,
+    `syev_cta.cc`): the Lower-only (resp. Upper-only) pipelines are served that way, which reads
+    nothing unnamed. The documented contract stands: the other triangle may be overwritten.
 - **Tests:** `SyevTest.AutoIgnoresUnreferencedTriangle` (n = 5, 32, 40) and its heavy-tier half
   `SyevTest.AutoReadsOnlyTheNamedTriangleAtLargeN` (n = 400, 1024, GPU backends only)
   (`tests/syev_tests.cc`: Auto, both `uplo`, both jobz, poison 9e3 against
-  \f$\lVert A\rVert_2 = 1\f$, strided batch), and `SyevCandidates.OtherTriangleIsNeverRead`
-  (every pinned family, no skip list since the fix). NETLIB instantiations run only the small half:
-  their route is reference LAPACK, which reads only `uplo` and is never mirrored. In a build
-  without LAPACKE (vendor-free) NETLIB syev has no route, so NETLIB skips the small half too and
-  runs neither.
-- **Measured red set without the entry mirror** (2026-10-25, sm_89, full-target tree, `tuned/`
-  tables of ab235065): under Auto, float and double fail at n = 400 and 1024 Lower N (`two_stage`)
-  and float also at n = 1024 Lower V (`two_stage`, Auto's float V choice there); cfloat fails at
-  n = 32 Upper V and N (`cta`) and at n = 400 and 1024 Lower N; cdouble at n = 5 Upper V and N,
-  n = 32 Upper N (`cta`; its n = 32 V row is the vendor) and n = 400 and 1024 Lower N. So jobz=V is
-  caught wherever Auto picks a reading driver with vectors (float `two_stage` n = 1024, complex
-  `cta`); the real types have no such route at n <= 40 and are caught only in the heavy tier. Every
-  other Auto shape (`jacobi`, `cta_fused`, `blocked` above n = 32, the vendor) stays green: those
-  routes do not read the poison. `OtherTriangleIsNeverRead` fails for exactly `cta` Upper
-  (n = 5, 17, 32), `blocked` Lower (n = 5, 17, 32) and `two_stage` Lower (n = 40), both jobz,
-  all four dtypes. gesvd: `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
-  (`tests/gesvd_candidates_tests.cc`), still skipped for its two drivers.
-- **gesvd fix needs:** the same entry mirror for `gesvd_cta` Upper, or reading only the named
-  triangle in that driver.
+  \f$\lVert A\rVert_2 = 1\f$, strided batch), `SyevCandidates.OtherTriangleIsNeverRead` (every
+  pinned family, no skip list) and `GesvdCandidates.HermitianFamiliesIgnoreTheUnreferencedTriangle`
+  (re-enabled; `PinnedCandidatesStraddleTheirLimits` poisons `cta` Upper too). NETLIB
+  instantiations run only the small half: their route is reference LAPACK, which reads only
+  `uplo`. In a build without LAPACKE (vendor-free) NETLIB syev has no route and runs neither.
+- **Red set of the unfixed drivers** (2026-10-25, sm_89, full-target tree, `tuned/` tables of
+  ab235065, no entry mirror): under Auto, float and double fail at n = 400 and 1024 Lower N
+  (`two_stage`) and float also at n = 1024 Lower V; cfloat fails at n = 32 Upper V and N (`cta`)
+  and at n = 400 and 1024 Lower N; cdouble at n = 5 Upper V and N, n = 32 Upper N (`cta`; its
+  n = 32 V row is the vendor) and n = 400 and 1024 Lower N. Every other Auto shape (`jacobi`,
+  `cta_fused`, `blocked` above n = 32, the vendor) stays green: those routes do not read the
+  poison. `OtherTriangleIsNeverRead` fails for exactly `cta` Upper (n = 5, 17, 32), `blocked`
+  Lower (n = 5, 17, 32) and `two_stage` Lower (n = 40), both jobz, all four dtypes; the gesvd test
+  for `cta herm=U` at 8x8 and 32x32.
+- **Known test gap:** `OtherTriangleIsNeverRead` stops at n = 40, a single short sy2sb panel; a
+  full or second panel is reached only by the heavy Auto test (jobz=N, and float V at n = 1024).
 - **gesvd blocked fixed 2026-10-22:** the Hermitian arm mirrors Lower into Upper before
   `syev_blocked` (Upper is mirrored the other way inside it), and `can_run` admits Upper.
   `PinnedCandidatesStraddleTheirLimits` now poisons blocked at every n, both triangles.
-- **Status:** syev fixed at the entry; open for `gesvd_cta` Upper.
+- **Status:** fixed in the drivers for syev and gesvd.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
