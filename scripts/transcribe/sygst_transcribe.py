@@ -3,7 +3,8 @@
 generated from the ledger (no timing): double <- float and cdouble <- cfloat on sm_89; all four dtypes on
 sm_120 from the matching sm_89 measured dtype; and, for sm_89 float/cfloat, the grid cells the deep run
 skipped over the memory cap (copied from the nearest measured row). Keys: the choice.hh grid at every
-combination of the table's exact keys (itype, uplo) the measured rows hold, plus every measured key.
+combination of the table's exact keys (itype, uplo) the measured rows hold, plus every measured key and
+every key an earlier transcribed run of the ledger wrote (so no older ranking outlives this run).
 Ranking at a key: the measured row there, else the nearest with the same exact keys
 (3 |dlog n| + |dlog batch|). Wrote runs transcribed-fd79f23c (keys n, batch) and the later itype x uplo
 run (tuned/README.md). Run from the repository root:
@@ -55,12 +56,28 @@ def key_text(key):
 plan = {"sm_89": {"float": "float", "cfloat": "cfloat", "double": "float", "cdouble": "cfloat"},
         "sm_120": {"float": "float", "double": "float", "cfloat": "cfloat", "cdouble": "cfloat"}}
 rid = "transcribed-" + sha
+
+
+def earlier_keys(dev, dt, combos):
+    """Keys of the earlier transcribed cells of (dev, dt): each gets this run's ranking, not an older one."""
+    got = set()
+    for line in open(os.path.join(args.ledger_dir, "sygst.%s.jsonl" % dev)):
+        rec = json.loads(line) if line.strip() else {}
+        if rec.get("kind") != "cell" or rec.get("dtype") != dt or rec.get("tier") != "transcribed":
+            continue
+        kv = dict(f.split("=") for f in rec["key"].split(","))
+        if all(e in kv for e in exact) and tuple(kv[e] for e in exact) in combos:
+            got.add((tuple(kv[e] for e in exact), int(kv["n"]), int(kv["batch"])))
+    return got
+
+
 for dev, dts in plan.items():
     out = []
     for dt, frm in dts.items():
         src = measured[frm]
         combos = sorted({k[0] for k in src})
-        keys = sorted(set((c, n, b) for c in combos for n in grid_n for b in grid_b) | set(src))
+        keys = sorted(set((c, n, b) for c in combos for n in grid_n for b in grid_b) | set(src) |
+                      earlier_keys(dev, dt, set(combos)))
         if dev == "sm_89" and dt == frm:
             keys = [k for k in keys if k not in src]  # only the cells the measured run skipped
         why = "no timing: %s %s rows copy the nearest measured sm_89 %s row%s (docs/perf/sygvd.md#sygst-measured)" % (
