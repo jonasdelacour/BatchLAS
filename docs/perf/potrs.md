@@ -98,9 +98,14 @@ complex<float>, Lower, batch 16384:
 | 64 |  |  |  |  |  | f 1.19 |  | f 1.09 |
 | 96 | f 2.07 |  | f 2.01 |  |  | f 1.46 |  | f 1.24 |
 
-Reading: `fused` wins from n = 17 up (1.1-2.8x) except a few n 26-32 cells at nrhs >= 5, and at every n
-for nrhs 1-2 in float; `trsm` wins n <= 16 at nrhs >= 5 in float and nrhs >= 2-3 in complex<float> (up to
-2.4x at complex<float> n = 12-16, nrhs 8). The step at n = 16/17 is trsm's: both orders run its
+Reading, over all 1252 deep rows of the table (both triangles, every batch): `fused` wins from n = 17 up
+(1.1-2.8x) in float, where one of its 368 rows ranks `trsm` first (Upper n = 32, nrhs 8, batch 2048,
+1.05x), and in complex<float> at nrhs 1-4. In complex<float> at nrhs 5-8 `trsm` holds the other 86 of
+the 87 deep rows with n >= 17 that rank it first: n = 28-128 at batch 32 and 256, 32-96 at 2048 and
+24-32 at 16384, up to 1.39x (Upper n = 128, nrhs 8, batch 32). Up to n = 16, `trsm` wins float at
+nrhs >= 3 from n = 4 at batch 2048 and 16384 only (up to 1.8x; `fused` takes every float cell at nrhs
+1-2), and complex<float> at nrhs >= 2 from n = 2-4 (up to 2.6x at n = 12-16, nrhs 6-8, batch 16384) and
+at nrhs = 1 for n = 5, 6, 8, 14 and 16 at batch 16384 and Upper n = 16 at 2048 (up to 1.41x). The step at n = 16/17 is trsm's: both orders run its
 register-resident `cta` kernel (`BATCHLAS_SELECT_TRACE`), which moves from the 16 to the 32 bucket there
 (`smallest_bucket_ge`, `trsm_native.cc`) and doubles its time per item, while the fused solve is smooth in n.
 
