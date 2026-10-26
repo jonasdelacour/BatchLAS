@@ -70,10 +70,15 @@ esac
 lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
 info="$lock.info"
 me="pid $$ user $(id -un) since $(date '+%F %T') building '${targets[*]:-<everything>}' in $build"
+# macOS has no flock(1); perl's flock(2) on the inherited fd 9 holds until this shell exits.
+lock9() {
+    if command -v flock >/dev/null; then flock "$@" 9
+    else perl -MFcntl=:flock -e 'open(my $f, "<&=", 9) or exit 2; exit(flock($f, LOCK_EX | ($ARGV[0] eq "-n" ? LOCK_NB : 0)) ? 0 : 1)' -- "${1:-}"; fi
+}
 if [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
     [ -e "$lock" ] || { : > "$lock" && chmod 666 "$lock"; } 2>/dev/null || true
     exec 9<"$lock"
-    if ! flock -n 9; then
+    if ! lock9 -n; then
         holder=$(cat "$info" 2>/dev/null || echo "unknown holder")
         if [ "${BATCHLAS_BUILD_LOCK_WAIT:-1}" = 0 ]; then
             echo "b: another build holds $lock ($holder); not waiting (BATCHLAS_BUILD_LOCK_WAIT=0)" >&2
@@ -81,16 +86,18 @@ if [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
         fi
         echo "b: waiting for $lock, held by: $holder" >&2
         waited=$(date +%s)
-        flock 9
+        lock9
         echo "b: got the lock after $(( $(date +%s) - waited )) s" >&2
     fi
     { printf '%s\n' "$me" > "$info" && chmod 666 "$info"; } 2>/dev/null || true
 fi
 
 mem_avail_gb() {
-    awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo
+    if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo
+    else vm_stat | awk -v pg="$(sysctl -n hw.pagesize)" '/^Pages (free|inactive|speculative|purgeable):/ { gsub("\\.", "", $NF); n += $NF } END { printf "%d", n * pg / 1073741824 }'; fi
 }
-min_gb=${BATCHLAS_MIN_MEM_GB:-16}
+# macOS swaps and compresses, and its free+inactive estimate is conservative: a lower floor.
+[ -r /proc/meminfo ] && min_gb=${BATCHLAS_MIN_MEM_GB:-16} || min_gb=${BATCHLAS_MIN_MEM_GB:-8}
 max_wait=${BATCHLAS_MEM_WAIT_MAX:-1800}
 start_wait=$(date +%s)
 while [ "$(mem_avail_gb)" -lt "$min_gb" ]; do
@@ -100,7 +107,7 @@ while [ "$(mem_avail_gb)" -lt "$min_gb" ]; do
         exit 69
     fi
     echo "b: MemAvailable $(mem_avail_gb) GB < ${min_gb} GB; waiting (largest users below)" >&2
-    ps -eo user,rss,comm --sort=-rss | head -n 6 >&2 || true
+    ps -eo user,rss,comm | sort -k2 -nr | head -n 6 >&2 || true
     sleep 30
 done
 

@@ -9,7 +9,7 @@
 #
 #   scripts/seed_build_tree.sh ~/BatchLAS/build build       # from inside a fresh worktree
 #
-# Steps: cp -a --reflink=auto; rewrite the seed's absolute source/build paths in every text
+# Steps: cp -a --reflink=auto (cp -ac, an APFS clone, on macOS); rewrite the seed's absolute source/build paths in every text
 # file (CMakeCache.txt, Makefiles, flags.make, link.txt, depend files, CTestTestfile.cmake,
 # the batchlas-ccache wrapper); patch seed RUNPATHs to $ORIGIN form (scripts/seed_build_tree_fix.py);
 # give unchanged sources the seed checkout's mtimes and touch every file that differs from
@@ -88,17 +88,19 @@ changed_sets() {
 }
 
 echo "seed: copying $src_build -> $dst_build"
+if cp --reflink=auto --version >/dev/null 2>&1; then clone() { cp -a --reflink=auto "$@"; }
+else clone() { cp -ac "$@" 2>/dev/null || cp -a "$@"; }; fi
 mkdir -p "$dst_build"
 # Nested trees (build/presets/* from before the depth-1 preset layout) are not copied.
 for entry in "$src_build"/* "$src_build"/.[!.]*; do
     [ -e "$entry" ] || [ -L "$entry" ] || continue
     name=${entry##*/}
-    case $name in logs|Testing) continue ;; _deps|CMakeFiles) cp -a --reflink=auto "$entry" "$dst_build/"; continue ;; esac
+    case $name in logs|Testing) continue ;; _deps|CMakeFiles) clone "$entry" "$dst_build/"; continue ;; esac
     if [ -d "$entry" ] && [ ! -e "$old_src/$name" ] && [ -n "$(find "$entry" -maxdepth 2 -name CMakeCache.txt -print -quit)" ]; then
         echo "seed: skipping nested build tree $entry"
         continue
     fi
-    cp -a --reflink=auto "$entry" "$dst_build/"
+    clone "$entry" "$dst_build/"
 done
 
 pairs=("$old_build=$dst_build" "$old_src=$dst_src")
@@ -140,7 +142,8 @@ if [ "${#build_targets[@]}" -gt 0 ]; then
     python3 "$fix" runpath "$dst_build" "$old_build" "$dst_build" "$old_src" "$dst_src" --check
     sample=$(find "$dst_build/tests" -maxdepth 1 -type f -name '*_tests' -perm -u+x -print -quit 2>/dev/null || true)
     if [ -n "$sample" ]; then
-        rp=$(readelf -d "$sample" | grep -E 'RUNPATH|RPATH' || true)
+        if command -v readelf >/dev/null; then rp=$(readelf -d "$sample" | grep -E 'RUNPATH|RPATH' || true)
+        else rp=$(otool -l "$sample" | grep -A2 LC_RPATH | grep -o 'path [^ ]*' | tr '\n' ' ' || true); fi
         echo "seed: sample $sample: ${rp:-no RUNPATH}"
     fi
 fi

@@ -58,8 +58,11 @@ EOF
 EOF
             ;;
         mac) cat <<'EOF'
-- Host Mac Studio: Apple M5 Max, 18 cores, 36 GB, AdaptiveCpp Metal, no GPU FP64. Build with
-  -j18 at most, never an unbounded -j (it has kernel-panicked this machine).
+- Host Mac Studio: Apple M5 Max, 18 cores, 36 GB, AdaptiveCpp (CPU OpenMP + Metal backends), no
+  GPU FP64; also the user's desktop. Build through scripts/b only (-j18, box-wide lock, memory
+  floor), never an unbounded -j (it has kernel-panicked this machine). Owns: acpp/Metal builds and
+  tests, CPU-backend correctness incl. FP64, code and test writing, Python/benchviz, docs. CUDA
+  results and sm_89 timing come from jrhnbr, not here.
 EOF
             ;;
     esac
@@ -92,7 +95,7 @@ cmd_start() {
     case "$host" in
         tr02) env="export CUDA_VISIBLE_DEVICES= ONEAPI_DEVICE_SELECTOR=opencl:cpu" ;;
         jrhnbr) env="export ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'${gpu:+ CUDA_VISIBLE_DEVICES=$gpu}" ;;
-        mac) env="export BATCHLAS_BUILD_JOBS=18 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential'" ;;
+        mac) env="export BATCHLAS_BUILD_JOBS=18 BATCHLAS_ALLOW_WIDE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential'" ;;
     esac
 
     on "$host" "set -e; cd $repo; git fetch -q origin
@@ -101,15 +104,15 @@ cmd_start() {
         ex=\$(git rev-parse --git-common-dir)/info/exclude
         grep -qx '.dispatch/' \$ex 2>/dev/null || echo '.dispatch/' >> \$ex
         mkdir -p $wt/.dispatch
-        if [ $host != mac ] && [ -d $repo/build ]; then cd $wt && scripts/seed_build_tree.sh --allow-dirty $repo/build build > .dispatch/seed.log 2>&1 || echo 'seed failed: see .dispatch/seed.log'; fi" ||
+        seed=\${BATCHLAS_SEED_BUILD:-$repo/build}
+        if [ -d \$seed ]; then cd $wt && scripts/seed_build_tree.sh --allow-dirty \$seed build > .dispatch/seed.log 2>&1 || echo 'seed failed: see .dispatch/seed.log'; fi" ||
         die "worktree setup failed on $host"
 
     {
         echo "You are a dispatched BatchLAS session started from the Mac Studio. Work autonomously;"
         echo "nobody answers questions or permission prompts, so make reasonable assumptions and note them."
         rules_of "$host"
-        if [ "$host" = mac ]; then seeded="no build tree yet (seed_build_tree.sh is GNU-only)"
-        else seeded="build tree seeded in ./build (.dispatch/seed.log)"; fi
+        seeded="build tree seeded in ./build (.dispatch/seed.log)"
         echo "- Worktree $wt, branch dispatch/$name from $base, $seeded. LFS files are"
         echo "  pointers; run \`git lfs pull\` if the task needs them."
         echo "- Commit on your branch and \`git push -u origin dispatch/$name\`. Never push main; open"
