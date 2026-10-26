@@ -361,13 +361,6 @@ protected:
 
 TYPED_TEST_SUITE(GesvdCandidates, Types);
 
-// Pre-existing driver defect (gesvd.md, "Found"): cta with Upper reads the UNREFERENCED triangle,
-// so those straddles store the full Hermitian matrix. Blocked mirrors either triangle first.
-bool reads_the_other_triangle(const C& c, char h, int n) {
-    static_cast<void>(n);
-    return std::holds_alternative<gs::Cta>(c) && h == 'U';
-}
-
 // Shapes straddling cta's 32, jacobi's 32 (cdouble with vectors) and 64, square and not.
 const std::vector<std::pair<int, int>> kStraddle{{1, 1}, {8, 8}, {32, 32}, {33, 33}, {64, 64}, {65, 65},
                                                  {32, 8}, {8, 32}, {40, 20}, {20, 40}, {65, 8}};
@@ -385,7 +378,7 @@ TYPED_TEST(GesvdCandidates, PinnedCandidatesStraddleTheirLimits) {
                 for (const auto& jobs : kJobs) {
                     Spec s{m, n, 2, h, jobs[0], jobs[1]};
                     s.seed = 11u + m * 7u + n;
-                    s.poison = !reads_the_other_triangle(c, h, n);
+                    s.poison = true;
                     auto p = make_svd<T>(s);
                     const bool want = this->expect_runs(c, s);
                     const std::string what = name(c, s);
@@ -406,8 +399,7 @@ TYPED_TEST(GesvdCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // The defect itself: every Hermitian-capable family with poison in the unreferenced triangle.
-// Disabled until cta Upper honours the triangle; every other pair passes.
-TYPED_TEST(GesvdCandidates, DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle) {
+TYPED_TEST(GesvdCandidates, HermitianFamiliesIgnoreTheUnreferencedTriangle) {
     using T = typename TestFixture::T;
     for (const C& c : {C{gs::Cta{}}, C{gs::Blocked{}}})
         for (char h : {'L', 'U'})

@@ -165,8 +165,8 @@ A wrapper that launches more than once (copy, then factor) runs its body through
 `detail::on_in_order_queue` (`batchlas/util/sycl-device-queue.hh`), the mechanism the multi-launch
 drivers use. On an out-of-order `Queue` the factorisation would otherwise read the copy before it is
 written. Guard: `LinalgWrappers.OutOfOrder*` in `tests/linalg_layer_tests.cc`. The Hermitian
-wrappers mirror the named triangle onto their copy (`hermitize`), because some drivers read the
-other one ([defect 14](known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle)).
+wrappers mirror the named triangle onto their copy (`hermitize`), a guard from before the syev and
+gesvd drivers read only the named triangle ([defect 14](known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle)).
 
 ### api conventions: linalg::solve keeps its Transpose branch
 

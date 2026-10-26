@@ -22,7 +22,7 @@ namespace batchlas {
 enum class Op : uint8_t {
     gemm, gemv, trsm, trmm, symm, hemm, syrk, herk, syr2k, her2k,
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm,
-    gesv, posv, sygvd, sygst, sytrf, sysv, potri, sytrs,
+    gesv, posv, sygvd, sygst, sytrf, sysv, potri, potrs, sytrs,
     COUNT
 };
 
@@ -60,7 +60,7 @@ inline constexpr std::string_view op_name(Op o) {
         case Op::gesv:  return "gesv";   case Op::posv:  return "posv";
         case Op::sygvd: return "sygvd";  case Op::sygst: return "sygst";
         case Op::sytrf: return "sytrf";  case Op::sysv:  return "sysv";
-        case Op::potri: return "potri";  case Op::sytrs: return "sytrs";
+        case Op::potri: return "potri";  case Op::potrs: return "potrs";  case Op::sytrs: return "sytrs";
         case Op::COUNT: return "?";
     }
     return "?";

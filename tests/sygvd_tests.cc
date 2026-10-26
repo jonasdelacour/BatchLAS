@@ -11,6 +11,7 @@
 #include <batchlas/blas/functions/sygvd.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/no_route.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -21,15 +22,22 @@
 #include <src/ops/potrf/choice.hh>
 #include <src/ops/sygst/choice.hh>
 #include <src/ops/sygvd/choice.hh>
+#include <src/select/coverage.hh>
 #include <src/select/select.hh>
 
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace batchlas;
@@ -57,7 +65,13 @@ constexpr double grade() { return std::is_same_v<RealOf<T>, float> ? 1.0 : 2.0; 
 
 // cond(B) <= 4 * 10^(2 grade): the generalized residual and normalization scale with it.
 template <typename T>
-verify::Slack cond_slack() { return {4.0 * std::pow(10.0, 2.0 * grade<T>()), "generalized problem: error ~ cond(B)"}; }
+verify::Slack cond_slack(double decades = grade<T>()) {
+    return {4.0 * std::pow(10.0, 2.0 * decades), "generalized problem: error ~ cond(B)"};
+}
+
+// sygst's residual on a graded B = D S D follows S, not cond(B): measured at most 9x the bound at
+// cond(B) 1e6 (double), under 1x at 1e3 (float); far tighter than cond_slack, so a subtle defect shows.
+inline verify::Slack graded_slack() { return {32.0, "graded B: the reduction's error follows the scaled S"}; }
 
 // A and B at padded ld and a stride that is not ld*n. The other triangle, the ld pads and the inter-item
 // gaps hold a large finite value a kernel would happily consume.
@@ -89,7 +103,7 @@ T poison() { return MV<T>::make(9.0e3, -7.0e3); }
 
 // identical: every item is item 0's data (the saturating-batch shape).
 template <typename T>
-Gen<T> make_gen(int n, int batch, Uplo uplo, unsigned seed, bool identical = false) {
+Gen<T> make_gen(int n, int batch, Uplo uplo, unsigned seed, bool identical = false, double decades = grade<T>()) {
     using R = RealOf<T>;
     Gen<T> g;
     g.n = n, g.batch = batch, g.uplo = uplo;
@@ -110,7 +124,7 @@ Gen<T> make_gen(int n, int batch, Uplo uplo, unsigned seed, bool identical = fal
         }
         std::vector<T> A(static_cast<size_t>(n) * n), S(static_cast<size_t>(n) * n);
         std::vector<double> D(n);
-        for (int i = 0; i < n; ++i) D[i] = std::pow(10.0, grade<T>() * (n > 1 ? double(i) / (n - 1) - 0.5 : 0.0));
+        for (int i = 0; i < n; ++i) D[i] = std::pow(10.0, decades * (n > 1 ? double(i) / (n - 1) - 0.5 : 0.0));
         for (int j = 0; j < n; ++j) {
             A[j + static_cast<size_t>(j) * n] = MV<T>::make(d(gen), 0.0);
             S[j + static_cast<size_t>(j) * n] = MV<T>::make(2.5 + 0.5 * std::fabs(d(gen)), 0.0);
@@ -253,6 +267,62 @@ protected:
         return true;
     }
 
+    // sygst's result against its definition: itype 1 ||A0 - Q C Q^H|| / ||A0||, itypes 2, 3
+    // ||C - Q A0 Q^H|| / ||C||, with C mirrored from A's uplo triangle and Q the factor (or its ^H).
+    double sygst_residual(Gen<T>& g, int itype) {
+        const int n = g.n, nb = g.batch;
+        Matrix<T> C(n, n, nb), F(n, n, nb), A0 = packed(g.A0, n);
+        for (int it = 0; it < nb; ++it)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    const bool own = g.owned(i, j);
+                    C(i, j, it) = own ? g.at_a(it, i, j) : MV<T>::conj(g.at_a(it, j, i));
+                    if (i == j) C(i, j, it) = MV<T>::make(double(std::real(C(i, j, it))));
+                    F(i, j, it) = own ? g.at_b(it, i, j) : T(0);
+                }
+        Matrix<T> Q(n, n, nb);
+        const bool qh = (itype == 1) != (g.uplo == Uplo::Lower);  // Q = F^H
+        for (int it = 0; it < nb; ++it)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) Q(i, j, it) = qh ? MV<T>::conj(F(j, i, it)) : F(i, j, it);
+        const std::vector<int> all = A0.view().all_items();
+        return itype == 1 ? MV<T>::similarity_residual(q(), A0, Q, C, all) : MV<T>::similarity_residual(q(), C, Q, A0, all);
+    }
+
+    // Every element of A's storage outside its uplo triangle (the other triangle, ld pads, item gaps)
+    // still holds the poison bit for bit.
+    void expect_a_outside_triangle_poisoned(Gen<T>& g, const std::string& at) {
+        for (size_t e = 0; e < g.a.size(); ++e) {
+            const int r = static_cast<int>(e % static_cast<size_t>(g.stra));
+            const int i = r % g.lda, j = r / g.lda;
+            if (j < g.n && i < g.n && g.owned(i, j)) continue;
+            ASSERT_TRUE(same_bits(g.a[e], poison<T>())) << at << ": A written at " << e << " (" << i << "," << j << ")";
+        }
+    }
+
+    // Whether can_run is documented false for a pinned sygst family on this backend: blocked off the
+    // GPU, vendor (LAPACKE) where it is not linked. Only these may skip; any other NoRouteError fails.
+    static bool sygst_unreachable(const std::string& fam) {
+        if (fam == "vendor") return !sygst_vendor_linked();
+        return BK == Backend::NETLIB && fam.rfind("blocked", 0) == 0;
+    }
+
+    // sygst under a pin with exactly the queried workspace; false on a NoRouteError, which is a
+    // failure unless sygst_unreachable(fam).
+    bool run_sygst(Gen<T>& g, int itype, const std::string& fam) {
+        select::ScopedPin<ops::sygst::SygstChoice> pin("sygst", fam);
+        try {
+            const size_t need = sygst_buffer_size<BK, T>(q(), g.A(), g.B(), itype, g.uplo);
+            UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
+            (void)sygst<BK, T>(q(), g.A(), g.B(), itype, g.uplo, Span<std::byte>(ws.data(), need));
+            q().wait();
+        } catch (const NoRouteError& e) {
+            if (!sygst_unreachable(fam)) ADD_FAILURE() << fam << " itype=" << itype << ": " << e.what();
+            return false;
+        }
+        return true;
+    }
+
     // The families a pin must reach on this backend; each element pins sygvd to one.
     std::vector<std::string> sygvd_families() const {
         std::vector<std::string> f{"compose"};
@@ -291,36 +361,139 @@ TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
                     size_t need = 0;
                     try {
                         need = sygst_buffer_size<BK, T>(this->q(), g.A(), g.B(), itype, uplo);
-                    } catch (const NoRouteError&) {
+                    } catch (const NoRouteError& e) {
+                        if (!TestFixture::sygst_unreachable(fam)) FAIL() << fam << ": " << e.what();
                         GTEST_SKIP() << "no sygst route in this build";
                     }
                     UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
                     (void)sygst<BK, T>(this->q(), g.A(), g.B(), itype, uplo, Span<std::byte>(ws.data(), need));
                     this->q().wait();
-                    // C mirrored from the uplo triangle; F the factor with the other triangle zeroed.
-                    Matrix<T> C(n, n, 3), F(n, n, 3), A0 = packed(g.A0, n);
-                    for (int it = 0; it < 3; ++it)
-                        for (int j = 0; j < n; ++j)
-                            for (int i = 0; i < n; ++i) {
-                                const bool own = g.owned(i, j);
-                                C(i, j, it) = own ? g.at_a(it, i, j) : MV<T>::conj(g.at_a(it, j, i));
-                                if (i == j) C(i, j, it) = MV<T>::make(double(std::real(C(i, j, it))));
-                                F(i, j, it) = own ? g.at_b(it, i, j) : T(0);
-                            }
-                    // Q such that the check is ||lhs - Q mid Q^H|| / ||lhs||.
-                    Matrix<T> Q(n, n, 3);
-                    const bool qh = (itype == 1) != (uplo == Uplo::Lower);  // Q = F^H
-                    for (int it = 0; it < 3; ++it)
-                        for (int j = 0; j < n; ++j)
-                            for (int i = 0; i < n; ++i) Q(i, j, it) = qh ? MV<T>::conj(F(j, i, it)) : F(i, j, it);
-                    const std::vector<int> all{0, 1, 2};
-                    const double r = itype == 1 ? MV<T>::similarity_residual(this->q(), A0, Q, C, all)
-                                                : MV<T>::similarity_residual(this->q(), C, Q, A0, all);
+                    const double r = this->sygst_residual(g, itype);
                     EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, r, cond_slack<T>())
                         << fam << " itype=" << itype << " uplo=" << ul(uplo) << " n=" << n;
                     for (size_t i = 0; i < g.b.size(); ++i)
                         ASSERT_TRUE(same_bits(g.b[i], factor_bits[i])) << fam << ": B written at " << i;
                 }
+}
+
+// The blocked family pinned at every nb, orders straddling each edge it has (the diagonal kernel's
+// compile-time orders 8, 16, 32, nb 32 to 256, a two-level recursion at 260), every itype and triangle, on an ill-conditioned B (cond ~1e3
+// float, ~1e6 double), padded ld and stride, complex data with nonzero imaginary parts. It reads and
+// writes only the uplo triangles: every element of A outside its triangle and all of B keep their bits.
+// Deliberate breaks and their red sets: docs/perf/sygvd.md#sygst-the-deliberate-breaks.
+TYPED_TEST(SygvdTest, SygstBlockedMatchesTheDefinitionAcrossBlockEdges) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    const double dec = std::is_same_v<RealOf<T>, float> ? 1.5 : 3.0;
+    for (const std::string fam : {"blocked:nb=32", "blocked:nb=64", "blocked:nb=128", "blocked:nb=256"})
+        for (int itype : {1, 2, 3})
+            for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                for (int n : {1, 7, 8, 16, 17, 31, 32, 33, 48, 64, 65, 97, 128, 130, 260}) {
+                    auto g = make_gen<T>(n, 3, uplo, 11u + n * 17 + itype, false, dec);
+                    if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
+                    const UnifiedVector<T> factor_bits = g.b;
+                    if (!this->run_sygst(g, itype, fam)) GTEST_SKIP() << "no sygst route in this build";
+                    const std::string at = fam + " itype=" + std::to_string(itype) + " uplo=" + ul(uplo) +
+                                           " n=" + std::to_string(n);
+                    EXPECT_VERIFY_SLACK(T, verify::Check::factorization, n, this->sygst_residual(g, itype),
+                                        graded_slack()) << at;
+                    this->expect_a_outside_triangle_poisoned(g, at);
+                    for (size_t i = 0; i < g.b.size(); ++i)
+                        ASSERT_TRUE(same_bits(g.b[i], factor_bits[i])) << at << ": B written at " << i;
+                }
+}
+
+// 1024 identical items on the blocked family, each bit-identical to item 0: n = 5 packs up to 25 items
+// per diagonal work-group (the last part-filled), n = 16 the order-16 instance, n = 20 the generic
+// order, n = 40 two blocks (orders 32 and 8) and every child.
+// The workspace query is exact: itype 2's panel product, one byte short, throws.
+TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
+    using T = typename TestFixture::T;
+    constexpr Backend BK = TestFixture::BK;
+    if constexpr (BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    for (const std::string fam : {"blocked:nb=32", "blocked:nb=64"})
+        for (int itype : {1, 2})
+            for (int n : {5, 16, 20, 40}) {
+                const Uplo uplo = itype == 1 ? Uplo::Upper : Uplo::Lower;
+                auto g = make_gen<T>(n, 1024, uplo, 515u + n, true);
+                if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
+                if (!this->run_sygst(g, itype, fam)) GTEST_SKIP() << "no sygst route in this build";
+                for (int it = 1; it < g.batch; ++it)
+                    for (int j = 0; j < n; ++j)
+                        for (int i = 0; i < n; ++i)
+                            if (g.owned(i, j))
+                                ASSERT_TRUE(same_bits(g.at_a(it, i, j), g.at_a(0, i, j)))
+                                    << fam << " itype=" << itype << " n=" << n << " item " << it;
+            }
+    // Passes of 100 items, the last taking the remainder (124), on distinct items: every item meets the
+    // definition and nothing outside A's triangle is written. (Children route by the pass's batch, so a
+    // bit comparison with one pass would compare different kernels.)
+    for (int itype : {1, 2})
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+            auto g = make_gen<T>(40, 1024, uplo, 77u + itype);
+            if (!this->factor(g)) GTEST_SKIP() << "no potrf route in this build";
+            {
+                const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "100");
+                ASSERT_TRUE(this->run_sygst(g, itype, "blocked:nb=32"));
+            }
+            const std::string at = std::string("chunked itype=") + std::to_string(itype) + " uplo=" + ul(uplo);
+            EXPECT_VERIFY_SLACK(T, verify::Check::factorization, 40, this->sygst_residual(g, itype), graded_slack()) << at;
+            this->expect_a_outside_triangle_poisoned(g, at);
+        }
+    select::ScopedPin<ops::sygst::SygstChoice> pin("sygst", "blocked:nb=32");
+    auto h = make_gen<T>(40, 4, Uplo::Lower, 1u);
+    const size_t need = sygst_buffer_size<BK, T>(this->q(), h.A(), h.B(), 2, Uplo::Lower);
+    ASSERT_GT(need, 0u);
+    UnifiedVector<std::byte> ws(need);
+    EXPECT_THROW(((void)sygst<BK, T>(this->q(), h.A(), h.B(), 2, Uplo::Lower, Span<std::byte>(ws.data(), need - 1))),
+                 batchlas::workspace_error);
+}
+
+// Each pinned family is the one that ran: the coverage `reached` row of each call names its spelling.
+// One call per family (a row is per shape class and spelling), across the itypes and both triangles.
+// threadsafe: the child re-executes the binary, so the device starts fresh.
+TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "blocked is a GPU family";
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+    const std::string dir = ::testing::TempDir() + "sygst_cov." + std::string(select::dtype_name<T>());
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string out = dir + "/cov";
+    struct Run {
+        int n, itype;
+        Uplo uplo;
+        std::string fam;
+    };
+    const std::vector<Run> runs{{40, 1, Uplo::Upper, "blocked:nb=32"}, {70, 2, Uplo::Upper, "blocked:nb=64"},
+                                {140, 3, Uplo::Lower, "blocked:nb=128"}, {270, 2, Uplo::Lower, "blocked:nb=256"},
+                                {50, 3, Uplo::Upper, "twosided"}};
+    auto child = [&] {
+        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+        const ScopedEnvVar clear("BATCHLAS_SYGST_ROUTE", nullptr);
+        batchlas::coverage::g_dynamic_enabled = true;
+        for (const auto& r : runs) {
+            auto g = make_gen<T>(r.n, 2, r.uplo, 9u + r.n);
+            if (!this->factor(g) || !this->run_sygst(g, r.itype, r.fam)) std::exit(3);
+        }
+        std::exit(0);
+    };
+    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    std::map<std::string, std::string> algo;  // n -> chosen_algo
+    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
+        std::ifstream in(ent.path());
+        for (std::string line; std::getline(in, line);) {
+            if (line.rfind("reached,sygst,", 0) != 0) continue;
+            std::vector<std::string> f;
+            std::stringstream ss(line);
+            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
+            ASSERT_GE(f.size(), 11u) << line;
+            algo[f[5]] = f[10];
+        }
+    }
+    std::filesystem::remove_all(dir);
+    ASSERT_EQ(algo.size(), runs.size());
+    for (const auto& r : runs) EXPECT_EQ(algo[std::to_string(r.n)], r.fam) << "n=" << r.n << " itype=" << r.itype;
 }
 
 // sygvd on Auto: every itype, both jobz, both triangles, n through the syev CTA width; jobz=N's values

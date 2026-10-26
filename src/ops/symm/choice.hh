@@ -2,8 +2,9 @@
 #pragma once
 
 /// @file
-/// @brief symm: expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
+/// @brief symm: mirror, expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
 
+#include <src/ops/symm/mirror_tile.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -14,15 +15,16 @@
 
 namespace batchlas::ops::symm {
 
+struct Mirror : select::NoFields<"mirror"> {};  ///< wide v2's gemm tile staging A's named triangle; no scratch
 struct Expand : select::NoFields<"expand"> {};  ///< expand_mirrored into scratch + the public gemm; scratch must fit
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::symm_vendor (cublas?symm / cblas_?symm loop)
 
-using SymmChoice = std::variant<Expand, Vendor>;  ///< fieldless: expansion ld and gemm tile derived; native: CUDA GPU
+using SymmChoice = std::variant<Mirror, Expand, Vendor>;  ///< fieldless: the tiles and the gemm derived; native: GPU
 
-template <typename T>  /// Every compiled choice, in tie-break order (§6.3): the expansion, then the vendor loop.
+template <typename T>  /// Every compiled choice, in tie-break order (§6.3): the scratch-free mirror, expand, vendor.
 constexpr auto candidates() { return select::all_of<SymmChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};  ///< nothing in the row runs
+inline constexpr std::array<std::string_view, 3> last_resort{"mirror", "expand", "vendor"};  ///< nothing in the row runs
 inline constexpr select::OpSpec spec{Op::symm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
 /// Keys: form exact (the transcribed squareish test as an axis); m, n: C's extents; batch. Side is no key (never read).

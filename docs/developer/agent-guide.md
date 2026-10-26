@@ -519,6 +519,7 @@ Per-op choices:
 | --- | --- |
 | trsm | `cta`, `sg_left`, `blocked`, `vendor` (a `cta` or `sg_left` pin above order 32 throws) |
 | posv | `tiny`/`cta`/`blocked`, no vendor family; its children select for themselves |
+| potrs | `fused` (one-launch solve, B in SLM) / `trsm` (two public trsm), no vendor family (`docs/perf/potrs.md#potrs-selection`) |
 | gemm | `direct`, `tiled`, `small`, `reg:m=..:n=..:k=..:u=..` (float), `wide:m=..:n=..:k=..`, `splitk:m=..:n=..:k=..:s=..` (k split into s slices, then one reduction), `vendor`; the aligned/predicated leg is derived inside the launcher, never a field (`docs/perf/gemm.md#choices-flat-selection-p34`) |
 | syrk | `gram` (n <= 128), `triangular` (float and double), `vendor`; keys `form` = sq\|tall\|wide and `trans` |
 | syr2k | `triangular` (float and double; a real ConjTrans runs as Trans), `vendor` |
@@ -536,7 +537,7 @@ heterogeneous batch on every backend (the loops run each item at the top-level e
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.
 
-**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 27 ops) takes `auto`,
+**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 28 ops) takes `auto`,
 `native`, `vendor` or a spelling (`lpanel:panel=8`, `lpanel:8`), case-folded and trimmed.
 
 - **A bad pin THROWS** (unparsable, not a compiled candidate, or cannot run the shape). Only the class

@@ -285,7 +285,7 @@ TYPED_TEST(HermitianCandidates, Her2kPinnedFamiliesStraddleTheirLimits) {
 }
 
 TYPED_TEST(HermitianCandidates, HemmPinnedFamiliesOnBothSides) {
-    for (const char* fam : {"expand", "vendor"})
+    for (const char* fam : {"mirror", "expand", "vendor"})
         for (auto [m, n] : {std::pair{1, 1}, std::pair{7, 33}, std::pair{33, 7}, std::pair{130, 40}})
             for (Side side : {Side::Left, Side::Right})
                 for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -500,7 +500,7 @@ TYPED_TEST(HermitianCandidates, ComplexSymmetricSyr2kFamilies) {
 TYPED_TEST(HermitianCandidates, ComplexSymmetricSymmFamilies) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
-    for (const char* fam : {"expand", "vendor"})
+    for (const char* fam : {"mirror", "expand", "vendor"})
         for (auto [m, n] : {std::pair{7, 33}, std::pair{130, 40}})
             for (Side side : {Side::Left, Side::Right})
                 for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {

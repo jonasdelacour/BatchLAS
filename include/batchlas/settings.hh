@@ -86,7 +86,7 @@ struct RoutingSettings {
     static constexpr std::array<std::string_view, 28> ops{
         "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
         "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm",
-        "hemm", "herk", "her2k", "sygvd", "sygst", "sytrf", "sysv", "potri", "sytrs"};
+        "hemm", "herk", "her2k", "sygvd", "sygst", "sytrf", "sysv", "potri", "potrs", "sytrs"};
 
     /// @brief `BATCHLAS_<OP>_ROUTE`, in `ops` order.
     std::array<EnvValue, ops.size()> values{};
