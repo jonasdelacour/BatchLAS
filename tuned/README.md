@@ -45,9 +45,11 @@ potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above);
 `30cc8e06` (both devices, @ref perf_sytrf); sytrf's `blocked` family is run
 `transcribed-sytrf-blocked` (both devices, no timing: `blocked` first from n = 256, second for 33..128, third for n <= 32);
 sytrs `transcribed-sytrs-d67ad754` (sm_89 double and cdouble, all of sm_120: the measured sm_89
-float / cfloat order, @ref perf_sytrf); sygst, sygvd `ab235065` (both devices, no timing: `twosided` and `compose` first everywhere, @ref perf_sygvd).
+float / cfloat order, @ref perf_sytrf; transcriber `scripts/transcribe/sytrs_transcribe.py`, commit
+`5b4d432a`, whose docstring gives both invocations; re-running them regenerates the rows
+byte-identically); sygst, sygvd `ab235065` (both devices, no timing: `twosided` and `compose` first everywhere, @ref perf_sygvd).
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
-([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
+([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history (sytrs's is in tree, above), for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
 ledgers is in the commit that added them (`git log -- scripts/migrate_tuning_data.py`).
 

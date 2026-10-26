@@ -296,6 +296,9 @@ unreferenced triangle poisoned with large finite values, complex with nonzero im
   64 | 65, 128 | 129, 256 | 257, nrhs 1, 8, 9: the per-item sub-group count 8 | 9),
   `SytrsWideRightHandSides` (nrhs = 300), `SytrsTwoByTwoAcrossTheLaneBoundary` (a 2 x 2 block forced
   at logical 31 | 32, 63 | 64, ... on dominant data, asserted present first),
+  `SytrsTwoByTwoWithInterchangeEveryFamily` (2 x 2 steps forced at (1, n - 1 - item) and
+  (n / 2, n / 2 + 3), n = 8, 33, 65, 129: row k + 1 interchanged with a row p != k + 1, the partner
+  asserted in ipiv first; `SytrsEveryFamily` likewise asserts a 2 x 2 block in every KKT item),
   `SytrsSaturatingBatchIsBitIdenticalToItemZero` (batch 1024, heavy tier: cta n = 32 and 100, sg
   n = 200, blocked n = 150, wg n = 40), `SytrsCeilingsStraddled` (pins at 128 | 129 and 256 | 257,
   Auto on both sides), `SytrsSkipListEveryFamily` (sysv compose with each sytrs family pinned: the
@@ -338,4 +341,16 @@ whose solve the table sends to that family):
 | `blocked` chunk loop drops the pivot offset of parts after the first | `SytrsBlockedChunksKeepEachItemsPivots` only |
 | `blocked` scatter ignores the skip list | `SytrsSkipListEveryFamily` (`blocked`), `SytrsBlockedChunks...` only |
 
-Logs: `break-<name>.log` in the evidence directory under [sytrs: measured](#sytrs-measured).
+The 2 x 2 interchange (2026-10-26, all eight typed instantiations, every break reverted). `cta` and
+`blocked` gather B through `build_perm`, `wg` swaps in `ldl_solve`; no break is narrow, because KKT
+factors also interchange their 2 x 2 rows:
+
+| break | red set |
+|---|---|
+| `build_perm` swaps row k instead of k + 1 at a 2 x 2 step | `SytrsTwoByTwoWithInterchangeEveryFamily` (`cta`, `blocked`), `SytrsTwoByTwoAcrossTheLaneBoundary`, `SytrsEveryFamily`, `SytrsWide...`, `SytrsSaturating...`, `SytrsSkipList...`, `SytrsBlockedChunks...`, `SytrsMalformed...`, `SytrsCtaCeilingStraddled` (2 of 8); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute`, `BlockedMatchesWgAndVendor`, `SaturatingBatch...`, `VendorFactorSolvesWithNativeSytrs`; `SytrsPinnedFamiliesAreReached` green |
+| `build_perm` drops the 2 x 2 interchange (p := k + 1) | the same set less `SytrsTwoByTwoAcrossTheLaneBoundary`, whose forced blocks have p = k + 1 |
+| `ldl_solve` (`wg`) swaps row k instead of k + 1 | `SytrsTwoByTwoWithInterchangeEveryFamily`, `SytrsEveryFamily`, `SytrsMalformed...`, `SytrsSaturating...`, `SytrsSkipList...` (`wg` rows), `SytrsCtaCeilingStraddled` (Auto at 129); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute` (`compose`), `BlockedMatchesWgAndVendor`, `SaturatingBatch...` (6 of 8); `SytrsTwoByTwoAcrossTheLaneBoundary` green |
+
+Logs: `break-<name>.log` in the evidence directory under [sytrs: measured](#sytrs-measured); the
+2 x 2 interchange breaks in `/home/jonaslacour/.claude/jobs/ad7932ae/tmp/leftovers/sytrs-2/`
+(`break-swap-row-k.log`, `break-drop-2x2-interchange.log`, `break-wg-swap-row-k.log`).

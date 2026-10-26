@@ -209,10 +209,22 @@ void expect_same_pivots(const Sys<T>& x, const Sys<T>& y, const std::string& wha
     for (int e = 0; e < x.n * x.batch; ++e) ASSERT_EQ(a[e], b[e]) << what << " at " << e;
 }
 
-// A 2 x 2 block forced at logical (k, k + 1) of item s of a dominant system: both diagonals zero and
-// a coupling that dominates both columns, so ?sytf2 takes kstep 2 there with no interchange.
+// The logical partner row the 2 x 2 block at logical k of item `item` interchanged with logical
+// k + 1 (k + 1 itself when none), or -1 when no block starts at k.
 template <typename T>
-void force_block(Sys<T>& p, int s, int k) {
+int block_partner(const Sys<T>& p, int item, int k) {
+    if (!block_at(p, item, k)) return -1;
+    const int* ip = reinterpret_cast<const int*>(p.piv.data()) + size_t(item) * p.n;
+    auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
+    return phys(-ip[phys(k)] - 1);
+}
+
+// A 2 x 2 block forced at logical step k of item s of a dominant system: diagonals k and r (default
+// k + 1) zero and a coupling (r, k) that dominates both columns, so ?sytf2 takes kstep 2 at k and
+// interchanges rows k + 1 and r (none when r = k + 1).
+template <typename T>
+void force_block(Sys<T>& p, int s, int k, int r = -1) {
+    if (r < 0) r = k + 1;
     auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
     auto put = [&](int li, int lj, T v) {
         const int i = phys(li), j = phys(lj);
@@ -222,8 +234,8 @@ void force_block(Sys<T>& p, int s, int k) {
         p.a[size_t(s) * p.stra + size_t(ij ? j : i) * p.lda + (ij ? i : j)] = v;
     };
     put(k, k, T{});
-    put(k + 1, k + 1, T{});
-    put(k + 1, k, MV<T>::make(2.0 * (p.n + 2), 0.25));
+    put(r, r, T{});
+    put(r, k, MV<T>::make(2.0 * (p.n + 2), 0.25));
     p.a_in.assign(p.a.begin(), p.a.end());
 }
 
@@ -756,11 +768,43 @@ TYPED_TEST(SytrfTest, SytrsEveryFamily) {
                         const std::string what = select::to_string(c) + " " + tag(uplo) + " gen=" +
                                                  std::to_string(int(gen)) + " n=" + std::to_string(n) +
                                                  " nrhs=" + std::to_string(nrhs);
-                        for (int bi = 0; bi < p.batch; ++bi) ASSERT_EQ(p.info[bi], 0) << what;
+                        for (int bi = 0; bi < p.batch; ++bi) {
+                            ASSERT_EQ(p.info[bi], 0) << what;
+                            if (gen == Gen::kkt) ASSERT_GT(pivot_kinds(p, bi).second, 0) << what << " item " << bi;
+                        }
                         EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
                         EXPECT_EQ(first_touched(p), -1) << what;
                     }
                 }
+}
+
+// A 2 x 2 step whose second row is interchanged with a row r != k + 1: the gather must move row
+// k + 1, not row k. Forced on a dominant system at (1, n - 1 - s) and, from n = 12, (n / 2, n / 2 + 3),
+// checked in ipiv first (else vacuous), then solved on every family.
+TYPED_TEST(SytrfTest, SytrsTwoByTwoWithInterchangeEveryFamily) {
+    using T = typename TestFixture::T;
+    if (this->solve_routes(8).empty()) GTEST_SKIP() << "no sytrs route in this build";
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (int n : {8, 33, 65, 129})
+            for (const auto& c : this->solve_routes(n)) {
+                auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 3100u + unsigned(n));
+                std::vector<std::pair<int, int>> forced[3];
+                for (int s = 0; s < p.batch; ++s) {
+                    forced[s].push_back({1, n - 1 - s});
+                    if (n >= 12) forced[s].push_back({n / 2, n / 2 + 3});
+                    for (const auto& [k, r] : forced[s]) force_block(p, s, k, r);
+                }
+                this->factor_auto(p);
+                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                for (int s = 0; s < p.batch; ++s) {
+                    ASSERT_EQ(p.info[s], 0) << what;
+                    for (const auto& [k, r] : forced[s])
+                        ASSERT_EQ(block_partner(p, s, k), r) << what << " item " << s << " k=" << k;
+                }
+                this->solve(p, c);
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+                EXPECT_EQ(first_touched(p), -1) << what;
+            }
 }
 
 // Wide right-hand sides: cta's sub-groups each take many columns, blocked's trsm a wide B.
