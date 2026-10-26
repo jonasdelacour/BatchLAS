@@ -1,7 +1,7 @@
-// potrs (solve with a Cholesky factor) and potri (inverse from one): residuals through
-// batchlas::verify, bit-for-bit agreement of potrs with posv on the same route, per-item info
-// with the other items undisturbed, padded ld and stride with a poisoned unreferenced triangle,
-// and a saturating batch. Both ops are native and vendor-free, so no oracle is a vendor library.
+// potri (inverse from a Cholesky factor; potrs's own cases are in potrs_tests.cc): residuals through
+// batchlas::verify, per-item info with the other items undisturbed, padded ld and stride with a
+// poisoned unreferenced triangle, and a saturating batch. The op is native and vendor-free, so no
+// oracle is a vendor library.
 // evidence: docs/perf/potri.md#potrs-and-potri
 #include <gtest/gtest.h>
 
@@ -232,113 +232,6 @@ using PotriTestTypes = typename test_utils::backend_types<PotriConfig>::type;
 }  // namespace
 
 TYPED_TEST_SUITE(PotriTest, PotriTestTypes);
-
-// potrs on the factor of potrf, Auto route, both triangles, an order ladder through both sides of
-// the fused ceiling (nrhs <= 8 and n * nrhs within SLM), padded ld and stride. The factor must be
-// read-only, a second right-hand-side set must reuse it, and B's pads must survive.
-// BREAK (run 2026-10-25): in src/ops/potrs/potrs.hh solve(), swap the two Upper trsm transposes. RED:
-// exactly the tests with an Upper case (this one, PotriInverts, PotriFull, BatchBeyond, posv's
-// PublicPosvSolvesOnBothTriangles), every type and backend; the posv comparison GREEN (shared solve).
-TYPED_TEST(PotriTest, PotrsSolvesAndReusesTheFactor) {
-    using T = typename TestFixture::T;
-    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-        for (int n : {1, 3, 8, 9, 20, 33, 70})
-            for (int nrhs : {1, 3, 8, 9, 20}) {
-                auto p = make_sys<T>(n, nrhs, 5, uplo, 100u + n * 31 + nrhs);
-                UnifiedVector<int32_t> info;
-                if (!this->factor(p, info)) continue;
-                const UnifiedVector<T> factor_bits = p.a;
-                (void)potrs<TestFixture::BK, T>(this->q(), p.A(), p.B(), uplo).wait();
-                this->q().wait();
-                for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0);
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->solve_res(p))
-                    << "n=" << n << " nrhs=" << nrhs << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
-                for (size_t i = 0; i < p.a.size(); ++i) ASSERT_TRUE(same_bits(p.a[i], factor_bits[i])) << "A written at " << i;
-                for (int it = 0; it < p.batch; ++it)
-                    for (size_t o = 0; o < static_cast<size_t>(p.strb); ++o) {
-                        const int col = static_cast<int>(o) / p.ldb, row = static_cast<int>(o) % p.ldb;
-                        if (col < p.nrhs && row < n) continue;
-                        ASSERT_TRUE(same_bits(p.b[static_cast<size_t>(it) * p.strb + o], MV<T>::make(RealOf<T>(-999), RealOf<T>(777))))
-                            << "B pad written at item " << it << " offset " << o;
-                    }
-                // The same factor, a second right-hand-side set.
-                auto p2 = make_sys<T>(n, nrhs, 5, uplo, 100u + n * 31 + nrhs);
-                p2.a = p.a;
-                for (int it = 0; it < p2.batch; ++it)
-                    for (int k = 0; k < p2.nrhs; ++k)
-                        for (int i = 0; i < n; ++i) {
-                            p2.rhs[it][i + static_cast<size_t>(k) * n] = MV<T>::make(double(i + 1), double(-k));
-                            p2.b[static_cast<size_t>(it) * p2.strb + static_cast<size_t>(k) * p2.ldb + i] = p2.rhs[it][i + static_cast<size_t>(k) * n];
-                        }
-                (void)potrs<TestFixture::BK, T>(this->q(), p2.A(), p2.B(), uplo).wait();
-                this->q().wait();
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->solve_res(p2)) << "second right-hand side n=" << n;
-            }
-}
-
-// potrs is the solve half of posv, bit for bit, on each posv route that shares its family: `cta`
-// where the fused solve fits (n = 8, nrhs = 4), `blocked` where it does not (nrhs = 16).
-// ARMED BREAK: make potrs::solve() ignore `fused` and always take the trsm pair. EXPECTED: RED
-// for the cta case only (the fused kernel and two trsm round differently), blocked case GREEN.
-TYPED_TEST(PotriTest, PotrsIsBitIdenticalToPosvOnTheSameRoute) {
-    using T = typename TestFixture::T;
-    using namespace ops::posv;
-    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-        for (auto [n, nrhs, blocked] : {std::tuple{8, 4, false}, std::tuple{20, 16, true}, std::tuple{9, 2, false}}) {
-            if (!blocked && !this->fused_ok()) continue;
-            auto p = make_sys<T>(n, nrhs, 7, uplo, 7u + n, false);
-            auto q2 = make_sys<T>(n, nrhs, 7, uplo, 7u + n, false);
-            UnifiedVector<int32_t> info;
-            {
-                const size_t need = posv_buffer_size<TestFixture::BK, T>(this->q(), p.A(), p.B(), uplo);
-                UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-                const select::ScopedPin<PosvChoice> pin("posv", blocked ? PosvChoice{Blocked{}} : PosvChoice{Cta{}});
-                info = UnifiedVector<int32_t>(7, int32_t(-1));
-                (void)posv<TestFixture::BK, T>(this->q(), p.A(), p.B(), uplo, Span<std::byte>(ws.data(), need), info.to_span()).wait();
-            }
-            UnifiedVector<int32_t> info2;
-            if (!this->factor(q2, info2)) continue;
-            (void)potrs<TestFixture::BK, T>(this->q(), q2.A(), q2.B(), uplo).wait();
-            this->q().wait();
-            for (size_t i = 0; i < p.a.size(); ++i) ASSERT_TRUE(same_bits(p.a[i], q2.a[i])) << "factor differs at " << i;
-            for (size_t i = 0; i < p.b.size(); ++i) ASSERT_TRUE(same_bits(p.b[i], q2.b[i])) << "X differs at " << i << " n=" << n << " nrhs=" << nrhs;
-        }
-}
-
-// posv composes potrf and potrs, so a non-positive-definite item is flagged in `info` at the minor
-// potrf names, and every other item's X is bit-identical to a batch without the bad item.
-// ARMED BREAK: in potrs::solve() skip the Lower NoTrans trsm. EXPECTED: RED here and in the posv
-// comparison above; the info assertions alone stay GREEN.
-TYPED_TEST(PotriTest, NonSpdItemIsFlaggedAndTheOthersAreUndisturbed) {
-    using T = typename TestFixture::T;
-    using namespace ops::posv;
-    for (bool blocked : {false, true})
-        for (int n : {8, 20}) {
-            if (!blocked && !this->fused_ok()) continue;
-            const int nrhs = blocked ? 16 : 4, bad = 2, batch = 5;
-            auto clean = make_sys<T>(n, nrhs, batch, Uplo::Lower, 41u + n);
-            auto dirty = make_sys<T>(n, nrhs, batch, Uplo::Lower, 41u + n);
-            for (int j = 0; j < n; ++j)  // item 2 loses positive-definiteness at minor n/2 + 1
-                if (j == n / 2) dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(j) * dirty.lda + j] = MV<T>::make(-1.0, 0.0);
-            UnifiedVector<int32_t> ic(batch, -1), id(batch, -1);
-            for (Sys<T>* s : {&clean, &dirty}) {
-                const size_t need = posv_buffer_size<TestFixture::BK, T>(this->q(), s->A(), s->B(), Uplo::Lower);
-                UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-                const select::ScopedPin<PosvChoice> pin("posv", blocked ? PosvChoice{Blocked{}} : PosvChoice{Cta{}});
-                (void)posv<TestFixture::BK, T>(this->q(), s->A(), s->B(), Uplo::Lower, Span<std::byte>(ws.data(), need),
-                                               (s == &clean ? ic : id).to_span()).wait();
-            }
-            this->q().wait();
-            for (int it = 0; it < batch; ++it) {
-                EXPECT_EQ(ic[it], 0);
-                EXPECT_EQ(id[it], it == bad ? n / 2 + 1 : 0) << "item " << it;
-                if (it == bad) continue;
-                for (size_t o = 0; o < static_cast<size_t>(dirty.strb); ++o)
-                    ASSERT_TRUE(same_bits(dirty.b[static_cast<size_t>(it) * dirty.strb + o], clean.b[static_cast<size_t>(it) * clean.strb + o]))
-                        << "item " << it << " disturbed by item " << bad << " at " << o;
-            }
-        }
-}
 
 // potri: A * A^-1 = I through verify, both triangles, Auto and each pin, an order ladder through the
 // fused ceiling (8), padded ld and stride, the unreferenced triangle poisoned and written by nobody.
