@@ -319,7 +319,6 @@ protected:
         std::vector<ops::sytrs::SytrsChoice> r;
         if (Bk != Backend::NETLIB) {
             if (cta_fits(n)) r.push_back(ops::sytrs::Cta{});
-            if (n <= sycl_sytrf::kSytrsSgMaxN) r.push_back(ops::sytrs::Sg{});
             r.push_back(ops::sytrs::Blocked{});
             r.push_back(ops::sytrs::Wg{});
         } else if (select::kHasNetlib) {
@@ -739,15 +738,14 @@ TYPED_TEST(SytrfTest, SytrsMalformedPivotsGiveNaN) {
 }
 
 // Every sytrs family on factors with interchanges (random) and 2 x 2 blocks in every item (kkt):
-// residual, the pads and the unreferenced triangle untouched. n straddles the register-tile steps
-// (32 | 33, 64 | 65) and the ceilings (cta 128 | 129, sg 256 | 257); nrhs straddles the sub-group
-// count per item (8 | 9).
+// residual, the pads and the unreferenced triangle untouched. n straddles cta's register-tile steps
+// (32 | 33, 64 | 65) and its ceiling (128 | 129); nrhs straddles cta's sub-group count (8 | 9).
 TYPED_TEST(SytrfTest, SytrsEveryFamily) {
     using T = typename TestFixture::T;
     if (this->solve_routes(4).empty()) GTEST_SKIP() << "no sytrs route in this build";
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (Gen gen : {Gen::random, Gen::kkt})
-            for (int n : {1, 3, 17, 32, 33, 64, 65, 128, 129, 256, 257})
+            for (int n : {1, 3, 17, 32, 33, 64, 65, 128, 129, 300})
                 for (int nrhs : {1, 8, 9}) {
                     if (gen == Gen::kkt && n < 3) continue;
                     if (TestFixture::Bk == Backend::NETLIB && (n > 65 || nrhs == 8)) continue;  // one family: LAPACKE
@@ -781,14 +779,14 @@ TYPED_TEST(SytrfTest, SytrsWideRightHandSides) {
             }
 }
 
-// A 2 x 2 block whose rows sit in different register slots (logical 31 | 32, 63 | 64, ...): cta's
-// D^-1 reads the partner across the lane-31 / lane-0 seam, sg's swap and D^-1 cross slots. Every family; the forced
+// A 2 x 2 block whose rows sit in different register slots of cta (logical 31 | 32, 63 | 64,
+// 95 | 96): D^-1 reads the partner across the lane-31 / lane-0 seam. Every family; the forced
 // block is checked first, or the case is vacuous.
 TYPED_TEST(SytrfTest, SytrsTwoByTwoAcrossTheLaneBoundary) {
     using T = typename TestFixture::T;
     if (this->solve_routes(4).empty()) GTEST_SKIP() << "no sytrs route in this build";
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-        for (int n : {64, 128, 256})
+        for (int n : {64, 128})
             for (const auto& c : this->solve_routes(n)) {
                 auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 2600u + unsigned(n));
                 for (int s = 0; s < p.batch; ++s)
@@ -804,7 +802,7 @@ TYPED_TEST(SytrfTest, SytrsTwoByTwoAcrossTheLaneBoundary) {
 
 // A saturating batch of identical KKT items: every item's X equals item 0's bit for bit, on cta's
 // local-memory kernel (n = 32 one register slot, n = 100 four; nrhs = 9, so sub-groups take two
-// columns), sg at n = 200 (eight register slots), blocked and wg.
+// columns), blocked (its trsm and chunked passes) and wg.
 TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
@@ -813,8 +811,7 @@ TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
         for (const auto& [c, n] : {std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Cta{}}, 32},
                                    std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Cta{}}, 100},
                                    std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Blocked{}}, 150},
-                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Wg{}}, 40},
-                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Sg{}}, 200}}) {
+                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Wg{}}, 40}}) {
             if (std::holds_alternative<ops::sytrs::Cta>(c) && !this->cta_fits(n)) continue;
             auto p = make_sys<T>(n, 9, batch, uplo, Gen::kkt, 4343u, /*identical=*/true);
             this->factor(p, ops::sytrf::Wg{});
@@ -828,31 +825,25 @@ TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
         }
 }
 
-// The register-tile ceilings straddled both ways: a cta pin runs at 128 and throws at 129 (when
-// local memory fits 128 at all), an sg pin runs at 256 and throws at 257, and Auto solves on both
-// sides of each.
-TYPED_TEST(SytrfTest, SytrsCeilingsStraddled) {
+// cta's ceiling straddled both ways: a pin runs at 128 and throws at 129 (when local memory fits
+// 128 at all), and Auto solves on both sides.
+TYPED_TEST(SytrfTest, SytrsCtaCeilingStraddled) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
-    const std::vector<std::pair<ops::sytrs::SytrsChoice, int>> edges{
-        {ops::sytrs::Cta{}, sycl_sytrf::kSytrsCtaMaxN}, {ops::sytrs::Sg{}, sycl_sytrf::kSytrsSgMaxN}};
-    for (const auto& [c, top] : edges)
-        for (int n : {top, top + 1}) {
-            const std::string what = select::to_string(c) + " n=" + std::to_string(n);
-            auto p = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
-            this->factor_auto(p);
-            const bool fits = n <= top && (!std::holds_alternative<ops::sytrs::Cta>(c) || this->cta_fits(n));
-            if (fits) {
-                this->solve(p, c);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 127})) << what;
-            } else {
-                EXPECT_ANY_THROW(this->solve(p, c)) << what;
-            }
-            auto a = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
-            this->factor_auto(a);
-            this->solve(a);
-            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, a, all_items(a))) << "auto " << what;
+    for (int n : {sycl_sytrf::kSytrsCtaMaxN, sycl_sytrf::kSytrsCtaMaxN + 1}) {
+        auto p = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
+        this->factor_auto(p);
+        if (this->cta_fits(n)) {
+            this->solve(p, ops::sytrs::Cta{});
+            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 127})) << "cta n=" << n;
+        } else {
+            EXPECT_ANY_THROW(this->solve(p, ops::sytrs::Cta{})) << "n=" << n;
         }
+        auto a = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
+        this->factor_auto(a);
+        this->solve(a);
+        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, a, all_items(a))) << "auto n=" << n;
+    }
 }
 
 // sysv's compose hands its sytrf status to sytrs as the skip list: on every sytrs family the
@@ -941,8 +932,7 @@ TYPED_TEST(SytrfTest, SytrsPinnedFamiliesAreReached) {
         std::filesystem::create_directories(dir);
         const std::string out = dir + "/cov";
         const std::vector<std::tuple<ops::sytrs::SytrsChoice, int, int, std::string>> runs{
-            {ops::sytrs::Cta{}, 16, 4, "cta"}, {ops::sytrs::Blocked{}, 48, 3, "blocked"}, {ops::sytrs::Wg{}, 40, 2, "wg"},
-            {ops::sytrs::Sg{}, 24, 5, "sg"}};
+            {ops::sytrs::Cta{}, 16, 4, "cta"}, {ops::sytrs::Blocked{}, 48, 3, "blocked"}, {ops::sytrs::Wg{}, 40, 2, "wg"}};
         auto child = [&] {
             const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
             batchlas::coverage::g_dynamic_enabled = true;

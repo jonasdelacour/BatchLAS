@@ -78,14 +78,6 @@ BATCHLAS_INTERNAL_API Event sytrs_cta_dispatch(Queue& ctx, const MatrixView<T, M
                                                const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
                                                Span<int64_t> pivots, const int32_t* skip_info = nullptr);
 
-// sytrs `sg`: one sub-group per (item, rhs slot), the factor read from A as stored (no local memory).
-inline constexpr int kSytrsSgMaxN = 256;
-
-template <typename T>
-BATCHLAS_INTERNAL_API Event sytrs_sg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                              const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
-                                              Span<int64_t> pivots, const int32_t* skip_info = nullptr);
-
 // Positional form of the routed batchlas::trsm (alpha third), injected by the facade.
 template <typename T>
 using SytrsSolveTrsm = std::function<Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&,

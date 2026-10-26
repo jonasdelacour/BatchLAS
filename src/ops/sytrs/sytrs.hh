@@ -46,7 +46,6 @@ bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && n <= sycl_sytrf::kSytrsCtaMaxN &&
                    static_cast<std::int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(static_cast<int>(n))) <= d.slm_budget;
         },
-        [&](Sg) { return native && n <= sycl_sytrf::kSytrsSgMaxN; },
         [&](Blocked) { return native; },  // its trsm selects for itself; the public trsm has a last resort
         [&](Wg) { return native; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
@@ -58,7 +57,6 @@ Event launch(Queue& q, const SytrsChoice& c, const MV<T>& A, const MV<T>& Bm, Up
              Span<std::byte> ws, const int32_t* skip) {
     return std::visit(overloaded{
         [&](Cta) { return sycl_sytrf::sytrs_cta_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
-        [&](Sg) { return sycl_sytrf::sytrs_sg_dispatch<T>(q, A, Bm, uplo, pivots, skip); },
         [&](Blocked) {
             return sycl_sytrf::sytrs_blocked_dispatch<T>(
                 q, A, Bm, uplo, pivots, ws, skip,
