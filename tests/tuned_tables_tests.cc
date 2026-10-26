@@ -761,6 +761,9 @@ TEST(TunedTables, PotriTranscribedTablesHoldExactlyTheChoiceGridAndTheFusedCeili
             }
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+}
+
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
 TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gesv = batchlas::ops::gesv;
