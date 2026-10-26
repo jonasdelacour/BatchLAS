@@ -26,6 +26,7 @@ add_executable(batchlas_tune_impl
     sygvd_spec.cc
     sytrf_spec.cc
     sysv_spec.cc
+    sytrs_spec.cc
     gesv_spec.cc
     gemv_spec.cc
     trmm_spec.cc

@@ -1,13 +1,15 @@
 // Native batched Bunch-Kaufman LDL^T: the CTA tier (one sub-group per matrix, the logical lower
 // triangle resident in local memory, n <= 32; with B it is sysv's fused factor-and-solve), the
 // work-group tier (one work-group per matrix, unblocked ?sytf2 in place in global memory, any n),
-// and sytrs (one work-group per right-hand side). All three run sytrf_device.hh's one algorithm.
+// and sytrs `wg` (one work-group per right-hand side). All run sytrf_device.hh's one algorithm;
+// sytrs `cta` and `blocked` are sytrs_kernels.cc.
 // evidence: docs/perf/sytrf.md
 //
 // Belongs in EXTENSIONS_FACTORIZATION_SOURCES: it shares no device symbol with any other cluster.
 
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/ops/sytrf/sytrf_device.hh>
+#include <src/ops/sytrf/sytrs_device.hh>
 
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
@@ -77,13 +79,17 @@ Span<int32_t> info_layout(Queue& ctx, BumpAllocator& pool, Span<int32_t> info_ou
     return pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
 }
 
-// One launch for sytrf's `cta` and sysv's `cta`: B is null for the factor alone.
+// One launch for sytrf's `cta` and sysv's `cta`: B is null for the factor alone. Sub-group 0
+// factors (sub-group collectives only, so the factor is the same with or without B); sysv's
+// work-group has one sub-group per right-hand side (at most kSytrsCtaMaxSg), which then solve in
+// parallel with sytrs `cta`'s converted solve (sytrs_device.hh).
 template <typename T>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int* piv, int32_t* info,
                  const MatrixView<T, MatrixFormat::Dense>* B) {
     using D = Dev<T>;
     using R = Real<T>;
     constexpr int kLdt = kSytrfCtaMaxN + 1;
+    constexpr int kN = kSytrfCtaMaxN;
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
     const bool upper = uplo == Uplo::Upper;
@@ -92,47 +98,57 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
     D* const bp = B ? reinterpret_cast<D*>(B->data_ptr()) : nullptr;
     const std::ptrdiff_t ldb = B ? B->ld() : 0, strb = B ? B->stride() : 0;
     const int nrhs = B ? static_cast<int>(B->cols()) : 0;
+    const int max_sg = std::max(1, std::min<int>(kSytrsCtaMaxSg,
+        static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)) / 32));
+    const int nsg = B ? std::min(max_sg, nrhs) : 1;
+    const int wg = 32 * nsg;
     ctx->submit([&](sycl::handler& h) {
-        sycl::local_accessor<D, 1> slm(sycl::range<1>(kLdt * kSytrfCtaMaxN + kSytrfCtaMaxN), h);
-        sycl::local_accessor<int, 1> slm_piv(sycl::range<1>(kSytrfCtaMaxN), h);
+        sycl::local_accessor<D, 1> slm(sycl::range<1>(kLdt * kN + kN), h);
+        sycl::local_accessor<int, 1> slm_piv(sycl::range<1>(4 * kN + 2), h);
         sycl::local_accessor<R, 1> red(sycl::range<1>(2), h);
         sycl::local_accessor<int, 1> redi(sycl::range<1>(1), h);
         batchlas::impl::parallel_for<SytrfCtaKernel<T>>(h,
-            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * kSytrfCtaWg),
-                              sycl::range<1>(kSytrfCtaWg)),
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
+                const auto sg = it.get_sub_group();
+                const int lane = static_cast<int>(sg.get_local_linear_id());
+                const int sgid = static_cast<int>(sg.get_group_linear_id());
                 D* const tp = &slm[0];
                 int* const pp = &slm_piv[0];
-                const Group<R> g{it, &red[0], &red[1], &redi[0], lid, kSytrfCtaWg};
+                const Group<R> g{it, &red[0], &red[1], &redi[0], lane, kSytrfCtaWg, /*sg_only=*/true};
                 const Tile<D> G{ap + b * stra, lda, n, upper};
                 const Tile<D> S{tp, kLdt, n, false};
-                for (int idx = lid; idx < n * n; idx += kSytrfCtaWg) {
+                for (int idx = lid; idx < n * n; idx += wg) {
                     const int i = idx % n, j = idx / n;
                     if (i >= j) S(i, j) = G(i, j);
                 }
-                g.bar();
-                int* const gp = piv + b * n;
-                const int st = sytrf_device::ldl_factor(S, n, upper, g, [&](int k, int v) {
-                    gp[k] = v;
-                    pp[k] = v;
-                });
-                for (int idx = lid; idx < n * n; idx += kSytrfCtaWg) {
-                    const int i = idx % n, j = idx / n;
-                    if (i >= j) G(i, j) = S(i, j);
+                sycl::group_barrier(it.get_group());
+                if (sgid == 0) {
+                    int* const gp = piv + b * n;
+                    const int st = sytrf_device::ldl_factor(S, n, upper, g, [&](int k, int v) {
+                        gp[k] = v;
+                        pp[k] = v;
+                    });
+                    for (int idx = lane; idx < n * n; idx += kSytrfCtaWg) {
+                        const int i = idx % n, j = idx / n;
+                        if (i >= j) G(i, j) = S(i, j);
+                    }
+                    if (lane == 0) {
+                        info[b] = st;
+                        pp[4 * kN + 1] = st;
+                    }
                 }
-                if (lid == 0) info[b] = st;
-                if (bp == nullptr || st != 0) return;
-                D* const bv = tp + kLdt * kSytrfCtaMaxN;
-                for (int c = 0; c < nrhs; ++c) {
-                    D* const col = bp + b * strb + static_cast<std::ptrdiff_t>(c) * ldb;
-                    for (int i = lid; i < n; i += kSytrfCtaWg) bv[i] = col[i];
-                    g.bar();
-                    sytrf_device::ldl_solve(S, n, upper, Vec<D>{bv, n, upper}, g, [&](int k) { return pp[k]; });
-                    for (int i = lid; i < n; i += kSytrfCtaWg) col[i] = bv[i];
-                    g.bar();
-                }
+                if (bp == nullptr) return;
+                sycl::group_barrier(it.get_group());
+                if (pp[4 * kN + 1] != 0) return;
+                const sytrf_device::Staged<D> L{tp, kLdt, n, tp + kLdt * kN, pp + kN, pp + 2 * kN, pp + 3 * kN};
+                for (int k = lid; k < n; k += wg) L.ps[k] = sytrf_device::logical_piv(pp[upper ? n - 1 - k : k], n, upper);
+                auto bar = [&] { sycl::group_barrier(it.get_group()); };
+                bar();
+                const bool ok = sytrf_device::ldl_convert<D>(L, n, L.ps, L.perm, L.kind, L.e, lid, wg, pp + 4 * kN, bar);
+                sytrf_device::solve_columns<1>(sg, lane, sgid, nsg, L, ok, upper, bp + b * strb, ldb, nrhs);
             });
     });
     return ctx.get_event();

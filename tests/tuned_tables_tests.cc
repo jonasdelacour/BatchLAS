@@ -32,6 +32,7 @@
 #include <src/ops/her2k/choice.hh>
 #include <src/ops/sytrf/choice.hh>
 #include <src/ops/sysv/choice.hh>
+#include <src/ops/sytrs/choice.hh>
 #include <src/ops/sygst/choice.hh>
 #include <src/ops/sygvd/choice.hh>
 #include <src/select/select.hh>
@@ -204,9 +205,10 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
-    // sytrf and sysv compile one candidate list for every dtype.
+    // sytrf, sysv and sytrs compile one candidate list for every dtype.
     if (op == "sytrf") return spellings(batchlas::ops::sytrf::candidates<float>());
     if (op == "sysv") return spellings(batchlas::ops::sysv::candidates<float>());
+    if (op == "sytrs") return spellings(batchlas::ops::sytrs::candidates<float>());
     // sygst and sygvd: fieldless families, one list for every dtype.
     if (op == "sygst") return spellings(batchlas::ops::sygst::candidates<float>());
     if (op == "sygvd") return spellings(batchlas::ops::sygvd::candidates<float>());
@@ -319,6 +321,7 @@ std::string key_spec(const std::string& op) {
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
     if (op == "sytrf") join(batchlas::ops::sytrf::key_names);
     if (op == "sysv") join(batchlas::ops::sysv::key_names);
+    if (op == "sytrs") join(batchlas::ops::sytrs::key_names);
     if (op == "sygst") join(batchlas::ops::sygst::key_names);
     if (op == "sygvd") join(batchlas::ops::sygvd::key_names);
     if (op == "hemm") join(batchlas::ops::hemm::key_names);
@@ -473,7 +476,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
-                           "herk", "her2k", "sytrf", "sysv", "sygst", "sygvd"})
+                           "herk", "her2k", "sytrf", "sysv", "sytrs", "sygst", "sygvd"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;

@@ -4,8 +4,8 @@
 /// @brief Batched symmetric indefinite factorization (sytrf, Bunch-Kaufman LDL^T) and solve (sytrs).
 /// @ingroup api_factorizations
 
-// sytrf is a routed op (src/ops/sytrf/); sytrs has no table and no route variable: the native kernel
-// serves every GPU call and LAPACKE the NETLIB backend. evidence: docs/perf/sytrf.md
+// sytrf and sytrs are routed ops (src/ops/sytrf/, src/ops/sytrs/; BATCHLAS_SYTRF_ROUTE,
+// BATCHLAS_SYTRS_ROUTE). evidence: docs/perf/sytrf.md
 
 #include <batchlas/export.hh>
 #include <cstdint>
@@ -147,10 +147,11 @@ inline Event sytrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
 /// @param B           batch of n x nrhs right-hand sides; overwritten with X
 /// @param uplo        the triangle sytrf() was called with
 /// @param pivots      pivots from sytrf(), `n * batch` entries
-/// @param work_space  device-accessible scratch of at least sytrs_buffer_size() bytes
+/// @param work_space  device-accessible scratch of at least sytrs_buffer_size() bytes (the `blocked`
+///                    route's converted factor and gathered B, per chunk of items; zero for the others)
 /// @return event of the last enqueued kernel
 /// @throws batchlas::invalid_argument if sytrs_validate_params() rejects the call
-/// @throws batchlas::unsupported on a GPU without sub-group size 32
+/// @throws batchlas::NoRouteError if no kernel can run the call (NETLIB without LAPACKE)
 /// @ingroup api_factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event sytrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
