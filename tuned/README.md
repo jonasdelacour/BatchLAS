@@ -30,7 +30,7 @@ Counts: 57 files, 28 per GPU device plus `spmm.cpu.txt`.
 | device | ledger tiers | where from |
 |---|---|---|
 | sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri, sytrf, sysv, sytrs, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; sytrf, sysv and sytrs: @ref perf_sytrf; sygst and sygvd: @ref perf_sygvd |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); sytrs float and cfloat `preview` (double, cdouble `transcribed` from them, @ref perf_sytrf) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); sytrs float and cfloat `preview` (double, cdouble `transcribed` from them) and sysv float and cfloat `preview` (2026-10-26, @ref perf_sytrf) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not

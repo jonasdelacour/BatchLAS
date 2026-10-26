@@ -80,6 +80,12 @@ python3 scripts/sweep_to_table.py --op sytrf --device sm_89
 python3 scripts/sweep_to_table.py --op sysv --device sm_89
 ```
 
+**sysv sm_89, re-swept 2026-10-26** (its `cta` solve and its `compose` child changed with sytrs):
+float and cfloat `preview`, run `20261026T152523-JRHNBR-1179869`, 691 measured rows (first entry
+`cta` 94 / 165, `compose` 185 / 247 for float / cfloat); `compose` wins much of n <= 32 too from
+nrhs = 16 (8 x 16 x 8192: 0.133 vs 0.169 ms), since its sytrs is now the routed `cta` or `blocked`.
+double, cdouble and sm_120 keep the transcribed rows above.
+
 ### sytrs: the tuned tables {#sytrs-selection}
 
 `tuned/sytrs.sm_89.txt` float and cfloat are a measured `preview` sweep (`tools/tune/sytrs_spec.cc`:
