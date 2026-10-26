@@ -119,10 +119,19 @@ namespace batchlas {
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
 
-                    // Load A into local memory (column-major).
+                    // Build the Hermitian tile from the named triangle only (defect 14): each lane
+                    // loads its row of that triangle, coalesced, and writes the conjugate mirror.
+                    // The diagonal's imaginary part is dropped, as {c,z}hetrd does.
                     if (lane < n) {
                         for (int32_t c = 0; c < n; ++c) {
-                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = A_prob(lane, c);
+                            if (Upper ? lane > c : lane < c) continue;
+                            T v = A_prob(lane, c);
+                            if (lane == c) {
+                                if constexpr (detail::is_complex<T>::value) v = T(v.real(), typename base_type<T>::type(0));
+                            } else {
+                                A_local[base_a + c + lane * static_cast<int32_t>(P)] = batchlas::device::detail::conj(v);
+                            }
+                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = v;
                         }
                         // Pad remaining columns to keep reads defined.
                         for (int32_t c = n; c < static_cast<int32_t>(P); ++c) {
