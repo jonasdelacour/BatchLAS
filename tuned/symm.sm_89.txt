@@ -1,5 +1,5 @@
-# op=symm device=sm_89 batchlas=26168c21 kernels=38f098e2 family_kernels=expand:bf2296b5,vendor:d8493aa8 date=2026-10-23
-# source=ledger:benchmarks/results/tuning/ledger/symm.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:14112
+# op=symm device=sm_89 batchlas=c7ac3d64 kernels=e0e24c27 family_kernels=mirror:13a25d24,expand:f04a715a,vendor:e8a4d7aa date=2026-10-26
+# source=ledger:benchmarks/results/tuning/ledger/symm.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:62,converted:0,prior:0,transcribed:13758
 # keys: dtype:exact form:exact m:log n:log batch:log
 dtype=float form=sq m=1 n=1 batch=1 | vendor - | expand - # transcribed
 dtype=float form=sq m=1 n=1 batch=2 | vendor - | expand - # transcribed
@@ -537,8 +537,6 @@ dtype=float form=sq m=16 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=8 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=8 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=8 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=8 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=8 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=8 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=16 batch=1 | vendor - | expand - # transcribed
@@ -546,8 +544,6 @@ dtype=float form=sq m=16 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=16 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=16 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=16 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=16 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=16 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=16 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=32 batch=1 | vendor - | expand - # transcribed
@@ -555,8 +551,6 @@ dtype=float form=sq m=16 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=32 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=32 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=32 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=32 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=32 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=32 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=64 batch=1 | vendor - | expand - # transcribed
@@ -564,8 +558,6 @@ dtype=float form=sq m=16 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=128 batch=1 | vendor - | expand - # transcribed
@@ -573,8 +565,6 @@ dtype=float form=sq m=16 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=255 batch=1 | vendor - | expand - # transcribed
@@ -582,8 +572,6 @@ dtype=float form=sq m=16 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=16 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=1 | expand - | vendor - # transcribed
@@ -591,8 +579,6 @@ dtype=float form=sq m=16 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=16 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=16 n=512 batch=1 | expand - | vendor - # transcribed
@@ -663,8 +649,6 @@ dtype=float form=sq m=32 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=8 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=8 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=8 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=8 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=8 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=8 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=16 batch=1 | vendor - | expand - # transcribed
@@ -672,8 +656,8 @@ dtype=float form=sq m=32 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=16 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=16 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=16 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=16 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=32 n=16 batch=128 | mirror 0.009556 | expand 0.01520 | vendor 0.4441 # custom
+dtype=float form=sq m=32 n=16 batch=1024 | mirror 0.02024 | expand 0.02684 | vendor 3.517 # custom
 dtype=float form=sq m=32 n=16 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=16 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=32 batch=1 | vendor - | expand - # transcribed
@@ -681,8 +665,8 @@ dtype=float form=sq m=32 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=32 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=32 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=32 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=32 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=32 n=32 batch=128 | mirror 0.01387 | expand 0.03286 | vendor 0.5417 # custom
+dtype=float form=sq m=32 n=32 batch=1024 | mirror 0.02731 | expand 0.05466 | vendor 4.284 # custom
 dtype=float form=sq m=32 n=32 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=32 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=64 batch=1 | vendor - | expand - # transcribed
@@ -690,8 +674,6 @@ dtype=float form=sq m=32 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=128 batch=1 | vendor - | expand - # transcribed
@@ -699,8 +681,6 @@ dtype=float form=sq m=32 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=255 batch=1 | vendor - | expand - # transcribed
@@ -708,8 +688,6 @@ dtype=float form=sq m=32 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=32 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=1 | expand - | vendor - # transcribed
@@ -717,8 +695,6 @@ dtype=float form=sq m=32 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=32 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=32 n=512 batch=1 | expand - | vendor - # transcribed
@@ -789,8 +765,6 @@ dtype=float form=sq m=64 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=8 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=8 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=8 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=8 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=8 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=8 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=16 batch=1 | vendor - | expand - # transcribed
@@ -798,8 +772,6 @@ dtype=float form=sq m=64 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=16 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=16 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=16 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=16 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=16 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=16 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=32 batch=1 | vendor - | expand - # transcribed
@@ -807,8 +779,8 @@ dtype=float form=sq m=64 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=32 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=32 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=32 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=32 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=64 n=32 batch=128 | mirror 0.01254 | expand 0.02262 | vendor 0.8256 # custom
+dtype=float form=sq m=64 n=32 batch=1024 | mirror 0.03875 | expand 0.07569 | vendor 6.567 # custom
 dtype=float form=sq m=64 n=32 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=32 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=64 batch=1 | vendor - | expand - # transcribed
@@ -816,8 +788,6 @@ dtype=float form=sq m=64 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=128 batch=1 | vendor - | expand - # transcribed
@@ -825,8 +795,6 @@ dtype=float form=sq m=64 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=255 batch=1 | vendor - | expand - # transcribed
@@ -834,8 +802,6 @@ dtype=float form=sq m=64 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=64 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=1 | expand - | vendor - # transcribed
@@ -843,8 +809,6 @@ dtype=float form=sq m=64 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=1 | expand - | vendor - # transcribed
@@ -852,8 +816,6 @@ dtype=float form=sq m=64 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=64 n=512 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=64 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -924,8 +886,6 @@ dtype=float form=sq m=128 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=16 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=16 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=16 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=16 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=16 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=16 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=32 batch=1 | vendor - | expand - # transcribed
@@ -933,8 +893,6 @@ dtype=float form=sq m=128 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=32 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=32 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=32 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=32 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=32 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=32 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=64 batch=1 | vendor - | expand - # transcribed
@@ -942,8 +900,6 @@ dtype=float form=sq m=128 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=128 batch=1 | vendor - | expand - # transcribed
@@ -951,8 +907,8 @@ dtype=float form=sq m=128 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=128 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=128 n=128 batch=128 | mirror 0.03594 | expand 0.04061 | vendor 1.387 # custom
+dtype=float form=sq m=128 n=128 batch=1024 | mirror 0.2323 | expand 0.3796 | vendor 11.11 # custom
 dtype=float form=sq m=128 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=255 batch=1 | vendor - | expand - # transcribed
@@ -960,8 +916,6 @@ dtype=float form=sq m=128 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=128 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=1 | expand - | vendor - # transcribed
@@ -969,8 +923,6 @@ dtype=float form=sq m=128 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=1 | expand - | vendor - # transcribed
@@ -978,8 +930,6 @@ dtype=float form=sq m=128 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=128 n=512 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=128 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1059,8 +1009,6 @@ dtype=float form=sq m=255 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=32 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=32 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=32 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=32 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=32 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=32 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=64 batch=1 | vendor - | expand - # transcribed
@@ -1068,8 +1016,6 @@ dtype=float form=sq m=255 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=128 batch=1 | vendor - | expand - # transcribed
@@ -1077,8 +1023,6 @@ dtype=float form=sq m=255 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=255 batch=1 | vendor - | expand - # transcribed
@@ -1086,8 +1030,6 @@ dtype=float form=sq m=255 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=sq m=255 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=1 | expand - | vendor - # transcribed
@@ -1095,8 +1037,6 @@ dtype=float form=sq m=255 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=1 | expand - | vendor - # transcribed
@@ -1104,8 +1044,6 @@ dtype=float form=sq m=255 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=255 n=512 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=255 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1194,8 +1132,6 @@ dtype=float form=sq m=256 n=64 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=64 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=1 | expand - | vendor - # transcribed
@@ -1203,8 +1139,6 @@ dtype=float form=sq m=256 n=128 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=1 | expand - | vendor - # transcribed
@@ -1212,8 +1146,6 @@ dtype=float form=sq m=256 n=255 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=1 | expand - | vendor - # transcribed
@@ -1221,8 +1153,6 @@ dtype=float form=sq m=256 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=1 | expand - | vendor - # transcribed
@@ -1230,8 +1160,6 @@ dtype=float form=sq m=256 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=512 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1239,8 +1167,6 @@ dtype=float form=sq m=256 n=1024 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=1024 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=1024 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=1024 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=1 | expand - | vendor - # transcribed
@@ -1248,8 +1174,6 @@ dtype=float form=sq m=256 n=2048 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=2048 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=256 n=2048 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=2048 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=256 n=4096 batch=1 | expand - | vendor - # transcribed
@@ -1320,8 +1244,6 @@ dtype=float form=sq m=512 n=64 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=64 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=1 | expand - | vendor - # transcribed
@@ -1329,8 +1251,6 @@ dtype=float form=sq m=512 n=128 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=1 | expand - | vendor - # transcribed
@@ -1338,8 +1258,6 @@ dtype=float form=sq m=512 n=255 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=1 | expand - | vendor - # transcribed
@@ -1347,8 +1265,6 @@ dtype=float form=sq m=512 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=512 batch=1 | expand - | vendor - # transcribed
@@ -1356,8 +1272,8 @@ dtype=float form=sq m=512 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=512 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=512 n=512 batch=128 | expand 0.9584 | mirror 1.155 | vendor 10.10 # custom
+dtype=float form=sq m=512 n=512 batch=1024 | expand 8.734 | mirror 9.944 | vendor 80.95 # custom
 dtype=float form=sq m=512 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1365,8 +1281,7 @@ dtype=float form=sq m=512 n=1024 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=1024 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=1024 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=1024 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=1024 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=1024 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=512 n=1024 batch=128 | expand 1.799 | mirror 2.314 | vendor 10.65 # custom
 dtype=float form=sq m=512 n=1024 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=1024 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=1 | expand - | vendor - # transcribed
@@ -1374,8 +1289,6 @@ dtype=float form=sq m=512 n=2048 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=2048 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=512 n=2048 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=2048 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=512 n=4096 batch=1 | expand - | vendor - # transcribed
@@ -1446,8 +1359,6 @@ dtype=float form=sq m=1024 n=64 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=64 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=1 | expand - | vendor - # transcribed
@@ -1455,8 +1366,6 @@ dtype=float form=sq m=1024 n=128 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=1 | expand - | vendor - # transcribed
@@ -1464,8 +1373,6 @@ dtype=float form=sq m=1024 n=255 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=1 | expand - | vendor - # transcribed
@@ -1473,8 +1380,6 @@ dtype=float form=sq m=1024 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=512 batch=1 | expand - | vendor - # transcribed
@@ -1482,8 +1387,7 @@ dtype=float form=sq m=1024 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=512 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=1024 n=512 batch=128 | expand 4.134 | mirror 4.810 | vendor 16.67 # custom
 dtype=float form=sq m=1024 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1491,8 +1395,7 @@ dtype=float form=sq m=1024 n=1024 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=1024 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=1024 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=1024 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=1024 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=1024 batch=1024 | expand - | vendor - # transcribed
+dtype=float form=sq m=1024 n=1024 batch=128 | expand 7.606 | mirror 9.421 | vendor 21.57 # custom
 dtype=float form=sq m=1024 n=1024 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=1024 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=1 | expand - | vendor - # transcribed
@@ -1500,8 +1403,6 @@ dtype=float form=sq m=1024 n=2048 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=2048 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=1024 n=2048 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=2048 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=1024 n=4096 batch=1 | expand - | vendor - # transcribed
@@ -1572,8 +1473,6 @@ dtype=float form=sq m=2048 n=64 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=64 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=64 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=64 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=64 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=64 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=64 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=64 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=1 | expand - | vendor - # transcribed
@@ -1581,8 +1480,6 @@ dtype=float form=sq m=2048 n=128 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=128 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=128 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=128 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=1 | expand - | vendor - # transcribed
@@ -1590,8 +1487,6 @@ dtype=float form=sq m=2048 n=255 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=255 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=255 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=255 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=1 | expand - | vendor - # transcribed
@@ -1599,8 +1494,6 @@ dtype=float form=sq m=2048 n=256 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=256 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=256 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=256 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=1 | expand - | vendor - # transcribed
@@ -1608,8 +1501,6 @@ dtype=float form=sq m=2048 n=512 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=512 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=512 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=512 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=1 | expand - | vendor - # transcribed
@@ -1617,8 +1508,6 @@ dtype=float form=sq m=2048 n=1024 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=1024 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=1024 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=1024 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=1 | expand - | vendor - # transcribed
@@ -1626,8 +1515,6 @@ dtype=float form=sq m=2048 n=2048 batch=2 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=3 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=4 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=8 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=2048 batch=128 | expand - | vendor - # transcribed
-dtype=float form=sq m=2048 n=2048 batch=1024 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=8192 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=2048 batch=32768 | expand - | vendor - # transcribed
 dtype=float form=sq m=2048 n=4096 batch=1 | expand - | vendor - # transcribed
@@ -2292,8 +2179,6 @@ dtype=float form=tall m=16 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2301,8 +2186,6 @@ dtype=float form=tall m=16 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=8 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2310,8 +2193,6 @@ dtype=float form=tall m=16 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=16 n=16 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=16 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2418,8 +2299,6 @@ dtype=float form=tall m=32 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2427,8 +2306,8 @@ dtype=float form=tall m=32 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=32 n=8 batch=128 | mirror 0.009367 | expand 0.01464 | vendor 0.3958 # custom
+dtype=float form=tall m=32 n=8 batch=1024 | mirror 0.01926 | expand 0.02267 | vendor 3.128 # custom
 dtype=float form=tall m=32 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2436,8 +2315,6 @@ dtype=float form=tall m=32 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=16 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2445,8 +2322,6 @@ dtype=float form=tall m=32 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=1 | vendor - | expand - # transcribed
@@ -2454,8 +2329,6 @@ dtype=float form=tall m=32 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=32 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=32 n=128 batch=1 | vendor - | expand - # transcribed
@@ -2544,8 +2417,6 @@ dtype=float form=tall m=64 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2553,8 +2424,8 @@ dtype=float form=tall m=64 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=64 n=8 batch=128 | mirror 0.01135 | expand 0.01647 | vendor 0.5701 # custom
+dtype=float form=tall m=64 n=8 batch=1024 | mirror 0.03073 | expand 0.03522 | vendor 4.530 # custom
 dtype=float form=tall m=64 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2562,8 +2433,8 @@ dtype=float form=tall m=64 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=64 n=16 batch=128 | mirror 0.01160 | expand 0.01656 | vendor 0.6691 # custom
+dtype=float form=tall m=64 n=16 batch=1024 | mirror 0.03302 | expand 0.04159 | vendor 5.317 # custom
 dtype=float form=tall m=64 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2571,8 +2442,6 @@ dtype=float form=tall m=64 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=1 | vendor - | expand - # transcribed
@@ -2580,8 +2449,6 @@ dtype=float form=tall m=64 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=1 | vendor - | expand - # transcribed
@@ -2589,8 +2456,6 @@ dtype=float form=tall m=64 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=1 | vendor - | expand - # transcribed
@@ -2598,8 +2463,6 @@ dtype=float form=tall m=64 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=1 | vendor - | expand - # transcribed
@@ -2607,8 +2470,6 @@ dtype=float form=tall m=64 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=64 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=64 n=512 batch=1 | vendor - | expand - # transcribed
@@ -2670,8 +2531,6 @@ dtype=float form=tall m=128 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2679,8 +2538,8 @@ dtype=float form=tall m=128 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=128 n=8 batch=128 | mirror 0.01753 | expand 0.02140 | vendor 0.9113 # custom
+dtype=float form=tall m=128 n=8 batch=1024 | mirror 0.07997 | expand 0.1427 | vendor 7.256 # custom
 dtype=float form=tall m=128 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2688,8 +2547,8 @@ dtype=float form=tall m=128 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=128 n=16 batch=128 | mirror 0.01772 | expand 0.02658 | vendor 1.104 # custom
+dtype=float form=tall m=128 n=16 batch=1024 | mirror 0.08191 | expand 0.1815 | vendor 8.801 # custom
 dtype=float form=tall m=128 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2697,8 +2556,8 @@ dtype=float form=tall m=128 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=128 n=32 batch=128 | mirror 0.03377 | expand 0.08696 | vendor 1.404 # custom
+dtype=float form=tall m=128 n=32 batch=1024 | mirror 0.1159 | expand 0.2479 | vendor 11.10 # custom
 dtype=float form=tall m=128 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=1 | vendor - | expand - # transcribed
@@ -2706,8 +2565,6 @@ dtype=float form=tall m=128 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=1 | vendor - | expand - # transcribed
@@ -2715,8 +2572,6 @@ dtype=float form=tall m=128 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=1 | vendor - | expand - # transcribed
@@ -2724,8 +2579,6 @@ dtype=float form=tall m=128 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=1 | vendor - | expand - # transcribed
@@ -2733,8 +2586,6 @@ dtype=float form=tall m=128 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=128 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=128 n=512 batch=1 | vendor - | expand - # transcribed
@@ -2796,8 +2647,6 @@ dtype=float form=tall m=255 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2805,8 +2654,8 @@ dtype=float form=tall m=255 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=255 n=8 batch=128 | mirror 0.05025 | expand 0.05851 | vendor 1.568 # custom
+dtype=float form=tall m=255 n=8 batch=1024 | mirror 0.2742 | expand 0.7919 | vendor 12.52 # custom
 dtype=float form=tall m=255 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2814,8 +2663,8 @@ dtype=float form=tall m=255 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=255 n=16 batch=128 | mirror 0.05059 | expand 0.07277 | vendor 1.955 # custom
+dtype=float form=tall m=255 n=16 batch=1024 | mirror 0.2829 | expand 0.8309 | vendor 15.62 # custom
 dtype=float form=tall m=255 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2823,8 +2672,8 @@ dtype=float form=tall m=255 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=255 n=32 batch=128 | mirror 0.05282 | expand 0.07871 | vendor 2.512 # custom
+dtype=float form=tall m=255 n=32 batch=1024 | mirror 0.3126 | expand 0.8726 | vendor 20.13 # custom
 dtype=float form=tall m=255 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=1 | vendor - | expand - # transcribed
@@ -2832,8 +2681,6 @@ dtype=float form=tall m=255 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=1 | vendor - | expand - # transcribed
@@ -2841,8 +2688,6 @@ dtype=float form=tall m=255 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=1 | vendor - | expand - # transcribed
@@ -2850,8 +2695,6 @@ dtype=float form=tall m=255 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=1 | vendor - | expand - # transcribed
@@ -2859,8 +2702,6 @@ dtype=float form=tall m=255 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=255 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=255 n=512 batch=1 | vendor - | expand - # transcribed
@@ -2922,8 +2763,6 @@ dtype=float form=tall m=256 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=8 batch=1 | vendor - | expand - # transcribed
@@ -2931,8 +2770,8 @@ dtype=float form=tall m=256 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=256 n=8 batch=128 | mirror 0.04747 | expand 0.05338 | vendor 1.576 # custom
+dtype=float form=tall m=256 n=8 batch=1024 | mirror 0.2602 | expand 0.7846 | vendor 12.58 # custom
 dtype=float form=tall m=256 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=16 batch=1 | vendor - | expand - # transcribed
@@ -2940,8 +2779,8 @@ dtype=float form=tall m=256 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=256 n=16 batch=128 | mirror 0.04867 | expand 0.06646 | vendor 1.959 # custom
+dtype=float form=tall m=256 n=16 batch=1024 | mirror 0.2676 | expand 0.8118 | vendor 15.65 # custom
 dtype=float form=tall m=256 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=32 batch=1 | vendor - | expand - # transcribed
@@ -2949,8 +2788,8 @@ dtype=float form=tall m=256 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=256 n=32 batch=128 | mirror 0.05088 | expand 0.07594 | vendor 2.490 # custom
+dtype=float form=tall m=256 n=32 batch=1024 | mirror 0.2836 | expand 0.8695 | vendor 19.91 # custom
 dtype=float form=tall m=256 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=1 | vendor - | expand - # transcribed
@@ -2958,8 +2797,6 @@ dtype=float form=tall m=256 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=1 | vendor - | expand - # transcribed
@@ -2967,8 +2804,6 @@ dtype=float form=tall m=256 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=1 | vendor - | expand - # transcribed
@@ -2976,8 +2811,6 @@ dtype=float form=tall m=256 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=1 | vendor - | expand - # transcribed
@@ -2985,8 +2818,6 @@ dtype=float form=tall m=256 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=1 | vendor - | expand - # transcribed
@@ -2994,8 +2825,6 @@ dtype=float form=tall m=256 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=256 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=256 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -3048,8 +2877,6 @@ dtype=float form=tall m=512 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=8 batch=1 | vendor - | expand - # transcribed
@@ -3057,8 +2884,8 @@ dtype=float form=tall m=512 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=512 n=8 batch=128 | mirror 0.1299 | expand 0.3744 | vendor 2.868 # custom
+dtype=float form=tall m=512 n=8 batch=1024 | mirror 0.9246 | expand 3.034 | vendor 22.92 # custom
 dtype=float form=tall m=512 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=16 batch=1 | vendor - | expand - # transcribed
@@ -3066,8 +2893,8 @@ dtype=float form=tall m=512 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=512 n=16 batch=128 | mirror 0.1330 | expand 0.3887 | vendor 3.635 # custom
+dtype=float form=tall m=512 n=16 batch=1024 | mirror 0.9434 | expand 3.094 | vendor 29.07 # custom
 dtype=float form=tall m=512 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=32 batch=1 | vendor - | expand - # transcribed
@@ -3075,8 +2902,8 @@ dtype=float form=tall m=512 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=512 n=32 batch=128 | mirror 0.1403 | expand 0.3885 | vendor 4.661 # custom
+dtype=float form=tall m=512 n=32 batch=1024 | mirror 0.9988 | expand 3.228 | vendor 37.29 # custom
 dtype=float form=tall m=512 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=1 | vendor - | expand - # transcribed
@@ -3084,8 +2911,6 @@ dtype=float form=tall m=512 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=128 batch=1 | vendor - | expand - # transcribed
@@ -3093,8 +2918,8 @@ dtype=float form=tall m=512 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=128 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=512 n=128 batch=128 | mirror 0.2674 | expand 0.4755 | vendor 9.842 # custom
+dtype=float form=tall m=512 n=128 batch=1024 | mirror 2.287 | expand 3.862 | vendor 78.85 # custom
 dtype=float form=tall m=512 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=1 | vendor - | expand - # transcribed
@@ -3102,8 +2927,6 @@ dtype=float form=tall m=512 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=1 | vendor - | expand - # transcribed
@@ -3111,8 +2934,6 @@ dtype=float form=tall m=512 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=1 | vendor - | expand - # transcribed
@@ -3120,8 +2941,6 @@ dtype=float form=tall m=512 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=512 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=512 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -3174,8 +2993,6 @@ dtype=float form=tall m=1024 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=8 batch=1 | vendor - | expand - # transcribed
@@ -3183,8 +3000,7 @@ dtype=float form=tall m=1024 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=1024 n=8 batch=128 | mirror 0.4657 | expand 1.499 | vendor 5.434 # custom
 dtype=float form=tall m=1024 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=16 batch=1 | vendor - | expand - # transcribed
@@ -3192,8 +3008,7 @@ dtype=float form=tall m=1024 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=1024 n=16 batch=128 | mirror 0.4750 | expand 1.519 | vendor 6.981 # custom
 dtype=float form=tall m=1024 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=32 batch=1 | vendor - | expand - # transcribed
@@ -3201,8 +3016,7 @@ dtype=float form=tall m=1024 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=1024 n=32 batch=128 | mirror 0.5031 | expand 1.549 | vendor 8.981 # custom
 dtype=float form=tall m=1024 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=1 | vendor - | expand - # transcribed
@@ -3210,8 +3024,6 @@ dtype=float form=tall m=1024 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=128 batch=1 | vendor - | expand - # transcribed
@@ -3219,8 +3031,7 @@ dtype=float form=tall m=1024 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=128 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=1024 n=128 batch=128 | mirror 1.143 | expand 1.702 | vendor 15.93 # custom
 dtype=float form=tall m=1024 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=1 | vendor - | expand - # transcribed
@@ -3228,8 +3039,6 @@ dtype=float form=tall m=1024 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=1 | vendor - | expand - # transcribed
@@ -3237,8 +3046,6 @@ dtype=float form=tall m=1024 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=1 | vendor - | expand - # transcribed
@@ -3246,8 +3053,6 @@ dtype=float form=tall m=1024 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=1024 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=1024 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -3300,8 +3105,6 @@ dtype=float form=tall m=2048 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=8 batch=1 | vendor - | expand - # transcribed
@@ -3309,8 +3112,7 @@ dtype=float form=tall m=2048 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=8 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=2048 n=8 batch=128 | mirror 2.040 | expand 6.041 | vendor 10.60 # custom
 dtype=float form=tall m=2048 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=16 batch=1 | vendor - | expand - # transcribed
@@ -3318,8 +3120,7 @@ dtype=float form=tall m=2048 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=16 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=2048 n=16 batch=128 | mirror 2.087 | expand 6.065 | vendor 13.71 # custom
 dtype=float form=tall m=2048 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=32 batch=1 | vendor - | expand - # transcribed
@@ -3327,8 +3128,7 @@ dtype=float form=tall m=2048 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=32 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=tall m=2048 n=32 batch=128 | mirror 2.111 | expand 6.724 | vendor 17.71 # custom
 dtype=float form=tall m=2048 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=1 | vendor - | expand - # transcribed
@@ -3336,8 +3136,6 @@ dtype=float form=tall m=2048 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=1 | vendor - | expand - # transcribed
@@ -3345,8 +3143,6 @@ dtype=float form=tall m=2048 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=1 | vendor - | expand - # transcribed
@@ -3354,8 +3150,6 @@ dtype=float form=tall m=2048 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=1 | vendor - | expand - # transcribed
@@ -3363,8 +3157,6 @@ dtype=float form=tall m=2048 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=1 | vendor - | expand - # transcribed
@@ -3372,8 +3164,6 @@ dtype=float form=tall m=2048 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=2048 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=2048 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -3426,8 +3216,6 @@ dtype=float form=tall m=4096 n=4 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=4 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=4 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=4 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=4 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=4 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=4 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=4 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=1 | vendor - | expand - # transcribed
@@ -3435,8 +3223,6 @@ dtype=float form=tall m=4096 n=8 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=8 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=8 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=8 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=1 | vendor - | expand - # transcribed
@@ -3444,8 +3230,6 @@ dtype=float form=tall m=4096 n=16 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=16 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=16 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=16 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=1 | vendor - | expand - # transcribed
@@ -3453,8 +3237,6 @@ dtype=float form=tall m=4096 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=1 | vendor - | expand - # transcribed
@@ -3462,8 +3244,6 @@ dtype=float form=tall m=4096 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=1 | vendor - | expand - # transcribed
@@ -3471,8 +3251,6 @@ dtype=float form=tall m=4096 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=1 | vendor - | expand - # transcribed
@@ -3480,8 +3258,6 @@ dtype=float form=tall m=4096 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=1 | vendor - | expand - # transcribed
@@ -3489,8 +3265,6 @@ dtype=float form=tall m=4096 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=tall m=4096 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=tall m=4096 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4083,8 +3857,6 @@ dtype=float form=wide m=16 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=1 | vendor - | expand - # transcribed
@@ -4092,8 +3864,6 @@ dtype=float form=wide m=16 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=1 | vendor - | expand - # transcribed
@@ -4101,8 +3871,6 @@ dtype=float form=wide m=16 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=1 | vendor - | expand - # transcribed
@@ -4110,8 +3878,6 @@ dtype=float form=wide m=16 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=1 | vendor - | expand - # transcribed
@@ -4119,8 +3885,6 @@ dtype=float form=wide m=16 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4128,8 +3892,6 @@ dtype=float form=wide m=16 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -4137,8 +3899,6 @@ dtype=float form=wide m=16 n=1024 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=1024 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=1024 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=1024 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=1 | vendor - | expand - # transcribed
@@ -4146,8 +3906,6 @@ dtype=float form=wide m=16 n=2048 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=2048 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=16 n=2048 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=2048 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=16 n=4096 batch=1 | vendor - | expand - # transcribed
@@ -4209,8 +3967,6 @@ dtype=float form=wide m=32 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=1 | vendor - | expand - # transcribed
@@ -4218,8 +3974,6 @@ dtype=float form=wide m=32 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=128 batch=1 | vendor - | expand - # transcribed
@@ -4227,8 +3981,8 @@ dtype=float form=wide m=32 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=128 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=wide m=32 n=128 batch=128 | mirror 0.01590 | expand 0.03678 | vendor 0.5473 # custom
+dtype=float form=wide m=32 n=128 batch=1024 | mirror 0.04952 | expand 0.06913 | vendor 4.331 # custom
 dtype=float form=wide m=32 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=1 | vendor - | expand - # transcribed
@@ -4236,8 +3990,6 @@ dtype=float form=wide m=32 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=1 | vendor - | expand - # transcribed
@@ -4245,8 +3997,6 @@ dtype=float form=wide m=32 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4254,8 +4004,8 @@ dtype=float form=wide m=32 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=512 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=wide m=32 n=512 batch=128 | mirror 0.02775 | expand 0.03991 | vendor 0.5472 # custom
+dtype=float form=wide m=32 n=512 batch=1024 | mirror 0.1920 | expand 0.2504 | vendor 4.420 # custom
 dtype=float form=wide m=32 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -4263,8 +4013,8 @@ dtype=float form=wide m=32 n=1024 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=1024 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=1024 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=1024 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=1024 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=1024 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=wide m=32 n=1024 batch=128 | mirror 0.05412 | expand 0.08860 | vendor 0.5615 # custom
+dtype=float form=wide m=32 n=1024 batch=1024 | mirror 0.3997 | expand 0.4287 | vendor 4.517 # custom
 dtype=float form=wide m=32 n=1024 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=1024 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=1 | vendor - | expand - # transcribed
@@ -4272,8 +4022,6 @@ dtype=float form=wide m=32 n=2048 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=2048 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=32 n=2048 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=2048 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=32 n=4096 batch=1 | vendor - | expand - # transcribed
@@ -4335,8 +4083,6 @@ dtype=float form=wide m=64 n=32 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=32 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=32 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=32 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=32 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=32 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=32 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=32 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=1 | vendor - | expand - # transcribed
@@ -4344,8 +4090,6 @@ dtype=float form=wide m=64 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=1 | vendor - | expand - # transcribed
@@ -4353,8 +4097,6 @@ dtype=float form=wide m=64 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=1 | vendor - | expand - # transcribed
@@ -4362,8 +4104,6 @@ dtype=float form=wide m=64 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=1 | vendor - | expand - # transcribed
@@ -4371,8 +4111,6 @@ dtype=float form=wide m=64 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4380,8 +4118,6 @@ dtype=float form=wide m=64 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -4389,8 +4125,6 @@ dtype=float form=wide m=64 n=1024 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=1024 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=1024 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=1024 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=1 | vendor - | expand - # transcribed
@@ -4398,8 +4132,6 @@ dtype=float form=wide m=64 n=2048 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=2048 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=64 n=2048 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=2048 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=64 n=4096 batch=1 | vendor - | expand - # transcribed
@@ -4470,8 +4202,6 @@ dtype=float form=wide m=128 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=1 | vendor - | expand - # transcribed
@@ -4479,8 +4209,6 @@ dtype=float form=wide m=128 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=1 | vendor - | expand - # transcribed
@@ -4488,8 +4216,6 @@ dtype=float form=wide m=128 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=1 | vendor - | expand - # transcribed
@@ -4497,8 +4223,6 @@ dtype=float form=wide m=128 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4506,8 +4230,8 @@ dtype=float form=wide m=128 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=512 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=wide m=128 n=512 batch=128 | mirror 0.1204 | expand 0.2115 | vendor 5.316 # custom
+dtype=float form=wide m=128 n=512 batch=1024 | mirror 0.8819 | expand 1.048 | vendor 41.91 # custom
 dtype=float form=wide m=128 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -4515,8 +4239,8 @@ dtype=float form=wide m=128 n=1024 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=1024 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=1024 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=1024 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=1024 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=1024 batch=1024 | vendor - | expand - # transcribed
+dtype=float form=wide m=128 n=1024 batch=128 | mirror 0.2161 | expand 0.2893 | vendor 5.361 # custom
+dtype=float form=wide m=128 n=1024 batch=1024 | mirror 1.754 | expand 1.924 | vendor 42.58 # custom
 dtype=float form=wide m=128 n=1024 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=1024 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=1 | vendor - | expand - # transcribed
@@ -4524,8 +4248,6 @@ dtype=float form=wide m=128 n=2048 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=2048 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=128 n=2048 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=2048 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=128 n=4096 batch=1 | vendor - | expand - # transcribed
@@ -4596,8 +4318,6 @@ dtype=float form=wide m=255 n=64 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=64 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=64 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=64 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=64 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=64 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=64 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=64 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=1 | vendor - | expand - # transcribed
@@ -4605,8 +4325,6 @@ dtype=float form=wide m=255 n=128 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=128 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=128 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=128 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=1 | vendor - | expand - # transcribed
@@ -4614,8 +4332,6 @@ dtype=float form=wide m=255 n=255 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=255 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=255 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=255 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=1 | vendor - | expand - # transcribed
@@ -4623,8 +4339,6 @@ dtype=float form=wide m=255 n=256 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=256 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=256 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=256 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=1 | vendor - | expand - # transcribed
@@ -4632,8 +4346,6 @@ dtype=float form=wide m=255 n=512 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=512 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=512 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=512 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=1 | vendor - | expand - # transcribed
@@ -4641,8 +4353,6 @@ dtype=float form=wide m=255 n=1024 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=1024 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=1024 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=1024 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=1 | vendor - | expand - # transcribed
@@ -4650,8 +4360,6 @@ dtype=float form=wide m=255 n=2048 batch=2 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=3 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=4 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=8 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=2048 batch=128 | vendor - | expand - # transcribed
-dtype=float form=wide m=255 n=2048 batch=1024 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=8192 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=2048 batch=32768 | vendor - | expand - # transcribed
 dtype=float form=wide m=255 n=4096 batch=1 | vendor - | expand - # transcribed
