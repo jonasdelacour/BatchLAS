@@ -74,7 +74,7 @@ inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, U
 /// @param full        also fill the other triangle with the conjugate transpose
 /// @param work_space  device-accessible scratch of at least potri_buffer_size() bytes
 /// @param info        per-item status as for LAPACK `?potri`: 0 on success, i > 0 if the factor's
-///                    diagonal entry i is exactly zero (that item's inverse is meaningless, the
+///                    diagonal entry i is exactly zero (that item is left unchanged, the
 ///                    others are unaffected). Empty span = not requested; otherwise at least
 ///                    one entry per item.
 /// @return event of the last enqueued kernel
@@ -92,7 +92,8 @@ BATCHLAS_API Event potri(Queue& ctx,
                          Span<int32_t> info);
 
 /// @brief Workspace, in bytes, that potri() needs for these operands under the family it picks:
-///        none for the one-launch kernel, one n x nb panel per item of one batch part for the blocked one.
+///        none for the one-launch kernel; for the blocked one, an n x nb panel and a packed triangle per
+///        item of one batch part (the triangle keeps a failed item unchanged) and an int per item.
 ///
 /// @throws batchlas::invalid_argument if potri_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel

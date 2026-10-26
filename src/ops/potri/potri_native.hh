@@ -1,6 +1,6 @@
 #pragma once
 
-// potri's kernels: the CTA trtri/lauum, the info scan, the finish. evidence: docs/perf/potri.md#potri-the-algorithm
+// potri's kernels: the CTA trtri/lauum and the finish. evidence: docs/perf/potri.md#potri-the-algorithm
 
 #include <src/util/internal-api.hh>
 #include <src/ops/potrf/potrf_slm_hole.hh>
@@ -55,20 +55,25 @@ constexpr int cta_max_n(std::size_t slm_budget, int max_wg) {
     return best;
 }
 
+// blocked keeps a zero-diagonal item unchanged: Trtri sets flags[b] (1-based) and copies a flagged item
+// to slot b (its packed uplo triangle); Lauum on the block at (origin, origin) copies it back.
+template <typename T>
+struct Stash {
+    T* slots = nullptr;
+    int32_t* flags = nullptr;
+    int n = 0;
+    int origin = 0;
+};
+
 // nb: Trtri's block order. info and full: Potri only; an item with an exactly zero diagonal entry
 // gets its 1-based index and is left unchanged; full writes the conjugate into the other triangle.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
-                                      CtaMode mode, int nb, bool full, Span<int32_t> info);
+                                      CtaMode mode, int nb, bool full, Span<int32_t> info, Stash<T> stash = {});
 
-// info[b] := 1-based first exactly-zero diagonal index, else 0.
-template <typename T>
-BATCHLAS_INTERNAL_API Event potri_diag_info(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                                            Span<int32_t> info);
-
-// The diagonal's imaginary part := 0; with full the other triangle := the uplo one's conjugate transpose.
+// Diagonal imaginary part := 0; full: other triangle := uplo's conjugate transpose. Skips skip[b] != 0.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
-                                         bool full);
+                                         bool full, const int32_t* skip = nullptr);
 
 }  // namespace batchlas::sycl_potri

@@ -3,14 +3,17 @@
 // potri's blocked family, LAPACK's ?potri: ?trtri (every diagonal block inverted by the CTA kernel
 // in one launch, then two trmm per block column) and ?lauum (trmm, gemm, a copy back, the CTA
 // kernel on the diagonal block and herk/syrk per block row). Only the uplo triangle is read or
-// written; W holds one off-diagonal panel per item (trmm is out of place). The batch runs in
-// L2-sized parts, so W is one part's. evidence: docs/perf/potri.md#potri-the-algorithm
+// written; W holds one off-diagonal panel per item (trmm is out of place). An item with an exactly
+// zero diagonal entry is left unchanged, as ?potri leaves it: the first CTA launch copies it to its
+// slot, the last one copies it back (sycl_potri::Stash). The batch runs in L2-sized parts, so W and
+// the slots are one part's. evidence: docs/perf/potri.md#potri-the-algorithm
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/error.hh>
 #include <batchlas/tuning_params.hh>
 #include <batchlas/util/mempool.hh>
 
@@ -30,15 +33,18 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 // Three pointer arrays: no call takes more than three views, and a vendor child fills each view's own.
 template <class T>
 struct Ws {
-    Span<T> w;
+    Span<T> w, slots;
     std::array<Span<T*>, 3> ptrs;
+    Span<int32_t> flags;  // the whole batch's, when the caller passes no info
 };
 
 template <class T>
-Ws<T> layout(Queue& q, BumpAllocator& pool, int n, int nb, int part) {
+Ws<T> layout(Queue& q, BumpAllocator& pool, int n, int nb, int part, int batch) {
     Ws<T> ws;
     ws.w = pool.allocate<T>(q, std::max<std::size_t>(1, static_cast<std::size_t>(n) * nb * part));
+    ws.slots = pool.allocate<T>(q, static_cast<std::size_t>(n) * (n + 1) / 2 * part);
     for (auto& p : ws.ptrs) p = pool.allocate<T*>(q, static_cast<std::size_t>(part));
+    ws.flags = pool.allocate<int32_t>(q, static_cast<std::size_t>(batch));
     return ws;
 }
 
@@ -56,12 +62,13 @@ int chunk(Queue& q, int n, int nb, int batch) {
 // The largest part: the last one takes the remainder, and under two chunks there is one.
 inline int part_of(int chunk, int batch) { return batch < 2 * chunk ? batch : chunk + batch % chunk; }
 
-// Zero at n <= nb: one block is the CTA kernel twice, in place.
+// Zero at n <= nb: one block is the cta family's launch, in place.
 template <class T>
 std::size_t workspace(Queue& q, const MV<T>& A, int nb) {
     const int n = A.rows(), batch = A.batch_size();
     if (n <= nb) return 0;
-    return workspace_bytes([&](BumpAllocator& p) { return layout<T>(q, p, n, nb, part_of(chunk<T>(q, n, nb, batch), batch)); });
+    return workspace_bytes(
+        [&](BumpAllocator& p) { return layout<T>(q, p, n, nb, part_of(chunk<T>(q, n, nb, batch), batch), batch); });
 }
 
 template <class T>
@@ -91,9 +98,9 @@ Event rank_k(Queue& q, const MV<T>& A, const MV<T>& C, Uplo uplo, Transpose tran
 }
 
 template <Backend B, class T>
-void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb) {
+void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb, const sycl_potri::Stash<T>& st) {
     const int n = p.n, nblk = (n + nb - 1) / nb;
-    (void)sycl_potri::potri_cta<T>(q, Ap, uplo, sycl_potri::CtaMode::Trtri, nb, false, {});
+    (void)sycl_potri::potri_cta<T>(q, Ap, uplo, sycl_potri::CtaMode::Trtri, nb, false, {}, st);
     if (uplo == Uplo::Lower) {
         // X21 = -X22 L21 X11, last block column first: X22 is already inverted.
         for (int blk = nblk - 2; blk >= 0; --blk) {
@@ -115,8 +122,9 @@ void trtri(Queue& q, const MV<T>& Ap, const Part<T>& p, Uplo uplo, int nb) {
     }
 }
 
+// The last diagonal block's Lauum is the part's last launch: it restores the flagged items.
 template <Backend B, class T>
-void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb) {
+void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb, sycl_potri::Stash<T> st) {
     const int n = p.n;
     const bool lower = uplo == Uplo::Lower;
     for (int i = 0; i < n; i += nb) {
@@ -137,7 +145,9 @@ void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb) {
             }
             (void)MV<T>::copy(q, panel, W);
         }
-        (void)sycl_potri::potri_cta<T>(q, Xii, uplo, sycl_potri::CtaMode::Lauum, ib, false, {});
+        st.origin = i;
+        (void)sycl_potri::potri_cta<T>(q, Xii, uplo, sycl_potri::CtaMode::Lauum, ib, false, {},
+                                       rest > 0 ? sycl_potri::Stash<T>{} : st);
         if (rest > 0) {
             const MV<T> Cii = p.sub(i, ib, i, ib, 2);
             if (lower) (void)rank_k<B, T>(q, p.sub(i + ib, rest, i, ib, 0), Cii, uplo, kAdj<T>);
@@ -150,31 +160,31 @@ void lauum(Queue& q, const Part<T>& p, Uplo uplo, int nb) {
 template <Backend B, class T>
 Event run(Queue& q, const MV<T>& A, Uplo uplo, int nb, bool full, Span<std::byte> ws_span, Span<int32_t> info) {
     const int n = A.rows(), batch = A.batch_size();
-    if (!info.empty()) (void)sycl_potri::potri_diag_info<T>(q, A, info);
     constexpr bool kCx = !std::is_same_v<T, typename base_type<T>::type>;
-    if (n <= nb) {
-        (void)sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Trtri, n, false, {});
-        Event e = sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Lauum, n, false, {});
-        if (full) return sycl_potri::potri_finish<T>(q, A, uplo, true);
-        return e;
-    }
+    // One block is the cta family's launch: info, the untouched failed item and full in one kernel.
+    if (n <= nb) return sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Potri, n, full, info);
+    // The Trtri launch writes flags[0, batch) unguarded: refuse a short span here, not only at the entry point.
+    if (!info.empty() && info.size() < static_cast<std::size_t>(batch))
+        throw batchlas::internal_error("potri: info span shorter than the batch reached the blocked driver");
     int c = chunk<T>(q, n, nb, batch);
     auto part_bytes = [&](int cc) {
-        return workspace_bytes([&](BumpAllocator& pl) { return layout<T>(q, pl, n, nb, part_of(cc, batch)); });
+        return workspace_bytes([&](BumpAllocator& pl) { return layout<T>(q, pl, n, nb, part_of(cc, batch), batch); });
     };
     while (c > 1 && part_bytes(c) > ws_span.size()) c = (c + 1) / 2;
     BumpAllocator pool(ws_span);
-    Ws<T> ws = layout<T>(q, pool, n, nb, part_of(c, batch));
+    Ws<T> ws = layout<T>(q, pool, n, nb, part_of(c, batch), batch);
+    int32_t* const flags = info.empty() ? ws.flags.data() : info.data();
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * c ? batch - b0 : c;
         // Never operator()(Slice, Slice): a 0 stride defaults to ld*cols on a sub-view.
         const Part<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(), A.ld(), A.stride(), cb, &ws, n, n * nb};
         const MV<T> Ap(p.a, n, n, p.ld, p.stride, cb, ws.ptrs[0].data());
-        trtri<B, T>(q, Ap, p, uplo, nb);
-        lauum<B, T>(q, p, uplo, nb);
+        const sycl_potri::Stash<T> st{ws.slots.data(), flags + b0, n, 0};
+        trtri<B, T>(q, Ap, p, uplo, nb, st);
+        lauum<B, T>(q, p, uplo, nb, st);
     }
     // herk leaves the diagonal's imaginary part to the kernel it picks: the finish zeroes it.
-    if (kCx || full) return sycl_potri::potri_finish<T>(q, A, uplo, full);
+    if (kCx || full) return sycl_potri::potri_finish<T>(q, A, uplo, full, flags);
     return q.get_event();
 }
 

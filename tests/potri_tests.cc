@@ -412,41 +412,56 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
             }
 }
 
-// info follows ?potri: the first exactly-zero factor diagonal, per item, and the other items'
-// inverses are bit-identical to a clean batch's, on every family.
+// info follows ?potri: the first exactly-zero factor diagonal, per item; that item comes back
+// unchanged (both triangles and its pads, as ?trtri returns before writing), with info and without
+// it, `full` or not, both triangles; the other items are bit-identical to a clean batch's, on every
+// family. The zero sits in each of blocked's diagonal blocks at n = 150.
+// BREAK (run 2026-10-26): blocked's last Lauum launch skips the restore; separately, potri_finish ignores
+// the flags. RED: this test only, every type CUDA+NETLIB (the second in the `full` cases alone).
 TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
     using T = typename TestFixture::T;
     for (const PotriChoice& c : potri_pins<T>())
-        for (int n : {5, 8, 20, 70, 150})
-            for (int zero_at : {0, n / 2, n - 1}) {
-                if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
-                const int bad = 1, batch = 4;
-                auto clean = make_sys<T>(n, 1, batch, Uplo::Lower, 5u + n);
-                UnifiedVector<int32_t> info;
-                if (!this->factor(clean, info)) continue;
-                auto dirty = make_sys<T>(n, 1, batch, Uplo::Lower, 5u + n);
-                dirty.a = clean.a;
-                dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(zero_at) * dirty.lda + zero_at] = MV<T>::make(0.0, 0.0);
-                UnifiedVector<int32_t> ic(batch, -1), id(batch, -1);
-                {
-                    const select::ScopedPin<PotriChoice> pin("potri", c);
-                    (void)this->run_potri(clean, false, &ic);
-                    (void)this->run_potri(dirty, false, &id);
-                }
-                for (int it = 0; it < batch; ++it) {
-                    EXPECT_EQ(ic[it], 0) << pin_name(c);
-                    EXPECT_EQ(id[it], it == bad ? zero_at + 1 : 0) << "item " << it << " " << pin_name(c);
-                    if (it == bad) continue;
-                    for (size_t o = 0; o < static_cast<size_t>(dirty.stra); ++o)
-                        ASSERT_TRUE(same_bits(dirty.a[static_cast<size_t>(it) * dirty.stra + o], clean.a[static_cast<size_t>(it) * clean.stra + o]))
-                            << "item " << it << " disturbed at " << o << " " << pin_name(c);
-                }
-            }
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (bool full : {false, true})
+                for (int n : {5, 8, 20, 70, 150})
+                    for (int zero_at : {0, n / 2, n - 1}) {
+                        if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
+                        const int bad = 1, batch = 4;
+                        const std::string what = pin_name(c) + " n=" + std::to_string(n) + " zero_at=" + std::to_string(zero_at) +
+                                                 (uplo == Uplo::Lower ? " L" : " U") + (full ? " full" : "");
+                        auto clean = make_sys<T>(n, 1, batch, uplo, 5u + n);
+                        UnifiedVector<int32_t> info;
+                        if (!this->factor(clean, info)) continue;
+                        auto dirty = make_sys<T>(n, 1, batch, uplo, 5u + n);
+                        dirty.a = clean.a;
+                        dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(zero_at) * dirty.lda + zero_at] = MV<T>::make(0.0, 0.0);
+                        auto quiet = make_sys<T>(n, 1, batch, uplo, 5u + n);
+                        quiet.a = dirty.a;
+                        const UnifiedVector<T> before = dirty.a;
+                        UnifiedVector<int32_t> ic(batch, -1), id(batch, -1);
+                        {
+                            const select::ScopedPin<PotriChoice> pin("potri", c);
+                            (void)this->run_potri(clean, full, &ic);
+                            (void)this->run_potri(dirty, full, &id);
+                            (void)this->run_potri(quiet, full);
+                        }
+                        for (int it = 0; it < batch; ++it) {
+                            EXPECT_EQ(ic[it], 0) << what;
+                            EXPECT_EQ(id[it], it == bad ? zero_at + 1 : 0) << "item " << it << " " << what;
+                            const auto& want = it == bad ? before : clean.a;
+                            for (const Sys<T>* s : {&dirty, &quiet})
+                                for (size_t o = 0; o < static_cast<size_t>(s->stra); ++o)
+                                    ASSERT_TRUE(same_bits(s->a[static_cast<size_t>(it) * s->stra + o], want[static_cast<size_t>(it) * clean.stra + o]))
+                                        << "item " << it << (it == bad ? " (the failed one)" : "") << " changed at " << o << " "
+                                        << what << (s == &quiet ? " without info" : "");
+                        }
+                    }
 }
 
 // The workspace is the chosen family's: none for cta, none for blocked at n <= nb, and for blocked
-// above it one part's n x nb panel per item, never n x n per item; it is enforced, and the
-// empty-batch, empty-problem and non-square cases are refused or no-ops, not wrong answers.
+// above it one part's n x nb panel and packed triangle (a failed item's copy) per item, below
+// n x (nb + n); it is enforced, and the empty-batch, empty-problem and non-square cases are refused
+// or no-ops, not wrong answers.
 TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
@@ -459,8 +474,8 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     }
     const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
     const size_t need = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
-    EXPECT_GE(need, sizeof(T) * 100 * 64 * 3);
-    EXPECT_LT(need, sizeof(T) * 100 * 100 * 3);
+    EXPECT_GE(need, sizeof(T) * (100 * 64 + 100 * 101 / 2) * 3);
+    EXPECT_LT(need, sizeof(T) * 100 * (64 + 100) * 3);
     MV<T> small_n(p.a.data(), 64, 64, p.lda, p.stra, 3, nullptr);
     EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), small_n, p.uplo)), 0u);
     UnifiedVector<std::byte> small(need / 2);

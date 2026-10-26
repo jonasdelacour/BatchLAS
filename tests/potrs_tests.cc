@@ -338,9 +338,10 @@ TYPED_TEST(PotrsTest, FusedMatchesPosvCtaAndTrsmMatchesPosvBlockedBitForBit) {
 }
 
 // posv composes potrf and the potrs solve, so a non-positive-definite item is flagged in `info` at the
-// minor potrf names, and every other item's X is bit-identical to a batch without the bad item.
-// ARMED BREAK: in potrs::solve() skip the Lower NoTrans trsm. EXPECTED: RED here (blocked) and in the
-// posv comparison above; the info assertions alone stay GREEN.
+// minor potrf names, and every other item's X is bit-identical to a batch without the bad item. Both
+// batches take the same solve, so a wrong solve stays GREEN here (EachFamilySolves catches it); this
+// guards info and cross-item isolation. ARMED BREAK: potrf's info names the minor 0-based (success
+// stays 0). EXPECTED: RED in this file only here, the bad item's info assertion, every type and both families.
 TYPED_TEST(PotrsTest, NonSpdItemIsFlaggedAndTheOthersAreUndisturbed) {
     using T = typename TestFixture::T;
     using namespace ops::posv;
