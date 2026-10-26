@@ -19,6 +19,7 @@
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/getri/choice.hh>
 #include <src/ops/potri/choice.hh>
+#include <src/ops/potri/potri_native.hh>
 #include <src/ops/gesv/choice.hh>
 #include <src/ops/gesvd/choice.hh>
 #include <src/ops/spmm/choice.hh>
@@ -742,25 +743,38 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
             }
 }
 
-// potri's table is transcribed on both devices (no timing): one row per grid cell, fused first where the
-// one-launch solve can run (n <= 8, potrs::fused_fits), blocked first above it. A retune replaces rows with
-// timed ones and this test goes with them.
-TEST(TunedTables, PotriTranscribedTablesHoldExactlyTheChoiceGridAndTheFusedCeiling) {
+// potri's tables (docs/perf/potri.md#potri-selection): sm_89 float and cfloat are timed (the deep
+// campaign, refinement rows included), the rest transcribed from them with a row per choice-grid cell; no row ranks cta first above the type's CTA ceiling on these 99 KB parts (can_run would
+// skip it, so such a row would only hide the runner-up's order), and blocked:nb=128 is float's alone.
+TEST(TunedTables, PotriTablesCoverTheChoiceGridAndRankCtaOnlyWhereItFits) {
     namespace potri = batchlas::ops::potri;
-    std::set<std::string> want;
-    for (int n : potri::grid_n)
-        for (int b : potri::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    constexpr std::size_t kSlm = 99 * 1024 - 4096;  // sm_89 and sm_120 LOCAL_MEM_SIZE less the reserve
+    namespace sp = batchlas::sycl_potri;
+    const std::map<std::string, int> ceiling{{"float", sp::cta_max_n<float>(kSlm, 1024)},
+                                             {"double", sp::cta_max_n<double>(kSlm, 1024)},
+                                             {"cfloat", sp::cta_max_n<std::complex<float>>(kSlm, 1024)},
+                                             {"cdouble", sp::cta_max_n<std::complex<double>>(kSlm, 1024)}};
     for (const char* dev : {"sm_89", "sm_120"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const sel::Table& t = embedded("potri", dt, dev);
             std::set<std::string> got;
+            std::size_t timed = 0;
             for (const auto& row : t.rows) {
                 got.insert(row.keys[0] + " " + row.keys[1]);
-                EXPECT_EQ(row.ranked.front().spelling, std::stoi(row.keys[0]) <= 8 ? "fused" : "blocked")
+                timed += row.timed;
+                const int n = std::stoi(row.keys[0]);
+                EXPECT_TRUE(row.ranked.front().spelling != "cta" || n <= ceiling.at(dt))
                     << dt << " " << dev << " " << row.keys[0] << " " << row.keys[1];
+                for (const auto& e : row.ranked)
+                    EXPECT_TRUE(e.spelling != "blocked:nb=128" || std::string(dt) == "float") << dt << " " << dev;
             }
-            EXPECT_EQ(got, want) << dt << " " << dev;
-            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            const bool measured = std::string(dev) == "sm_89" && (std::string(dt) == "float" || std::string(dt) == "cfloat");
+            // Measured: the cells over the campaign's operand cap have no row; the nearest measured one decides.
+            if (measured) EXPECT_GT(timed, 50u) << dt << " " << dev;
+            else EXPECT_EQ(timed, 0u) << dt << " " << dev;
+            for (int n : potri::grid_n)
+                for (int b : potri::grid_batch)
+                    EXPECT_TRUE(measured || got.count(std::to_string(n) + " " + std::to_string(b))) << dt << " " << dev << " " << n << " " << b;
         }
 }
 
