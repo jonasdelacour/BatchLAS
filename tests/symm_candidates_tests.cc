@@ -965,8 +965,41 @@ TEST(SymmTranscribedTable, HoldsTheChoiceGridAndTheTranscribedRule) {
                                                                      : old_auto<double>(rm, rn, std::stoi(row.keys[3]));
                 EXPECT_EQ(row.ranked.front().spelling, first) << t.file << ":" << row.line;
             }
-            EXPECT_EQ(got, want) << t.file;
-            EXPECT_EQ(t.rows.size(), want.size()) << t.file;
+            // Every row is a grid cell; a grid cell without a row is one a measured row displaced:
+            // sweep_to_table drops a transcribed row when a timed row of its form lies under 2 steps
+            // away on every log key, in steps of the timed rows' own lattice (lattice_index there).
+            for (const auto& g : got) EXPECT_TRUE(want.count(g)) << t.file << ": off-grid row " << g;
+            std::vector<std::vector<int>> lat(3);
+            std::vector<std::pair<std::string, std::vector<int>>> timed;
+            for (const auto& row : t.rows) {
+                if (!row.timed) continue;
+                std::vector<int> v{std::stoi(row.keys[1]), std::stoi(row.keys[2]), std::stoi(row.keys[3])};
+                for (int i = 0; i < 3; ++i) lat[i].push_back(v[i]);
+                timed.emplace_back(row.keys[0], v);
+            }
+            for (auto& l : lat) std::sort(l.begin(), l.end()), l.erase(std::unique(l.begin(), l.end()), l.end());
+            auto index = [](const std::vector<int>& l, int v) {
+                const auto hi = std::size_t(std::upper_bound(l.begin(), l.end(), v) - l.begin());
+                if (hi > 0 && l[hi - 1] == v) return double(hi - 1);
+                if (hi == 0) return -std::log2(double(l[0]) / v);
+                if (hi == l.size()) return double(l.size() - 1) + std::log2(double(v) / l.back());
+                return double(hi - 1) + std::log2(double(v) / l[hi - 1]) / std::log2(double(l[hi]) / l[hi - 1]);
+            };
+            for (const auto& w : want) {
+                if (got.count(w)) continue;
+                std::istringstream in(w);
+                std::string f;
+                std::vector<int> v(3);
+                in >> f >> v[0] >> v[1] >> v[2];
+                bool shadowed = false;
+                for (const auto& [tf, tv] : timed) {
+                    bool near = tf == f;
+                    for (int i = 0; i < 3 && near; ++i) near = std::abs(index(lat[i], v[i]) - index(lat[i], tv[i])) < 2;
+                    shadowed = shadowed || near;
+                }
+                EXPECT_TRUE(shadowed) << t.file << ": grid cell " << w << " has no row and no measured neighbour";
+            }
+            EXPECT_EQ(t.rows.size(), got.size()) << t.file;
         }
     }
     struct Spot { const char* dt; const char* form; int m, n, batch; const char* first; };
