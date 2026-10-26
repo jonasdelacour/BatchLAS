@@ -1,283 +1,449 @@
-# op=sygst device=sm_89 batchlas=ab235065 kernels=361473af family_kernels=twosided:103cfe9e,vendor:0850bb05 date=2026-10-25
-# source=ledger:benchmarks/results/tuning/ledger/sygst.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:280
+# op=sygst device=sm_89 batchlas=fd79f23c kernels=19ab6340 family_kernels=blocked:9b8642e3,twosided:75a6dc5a,vendor:2cb22cda date=2026-10-26
+# source=ledger:benchmarks/results/tuning/ledger/sygst.sm_89.jsonl tiers=deep:192,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:254
 # keys: dtype:exact n:log:3 batch:log
-dtype=float n=1 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=1 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=1 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=1 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=1 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=2 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=2 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=2 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=2 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=2 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=4 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=4 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=4 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=4 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=4 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=8 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=8 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=8 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=8 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=8 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=16 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=16 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=16 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=16 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=16 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=32 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=32 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=32 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=32 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=32 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=64 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=64 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=64 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=64 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=64 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=128 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=128 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=128 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=128 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=128 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=240 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=240 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=240 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=240 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=240 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=256 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=256 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=256 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=256 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=256 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=480 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=480 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=480 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=480 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=480 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=512 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=512 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=512 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=512 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=512 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=1024 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=1024 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=1024 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=1024 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=1024 batch=32768 | twosided - | vendor - # transcribed
-dtype=float n=1200 batch=128 | twosided - | vendor - # transcribed
-dtype=float n=1200 batch=512 | twosided - | vendor - # transcribed
-dtype=float n=1200 batch=2048 | twosided - | vendor - # transcribed
-dtype=float n=1200 batch=8192 | twosided - | vendor - # transcribed
-dtype=float n=1200 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=1 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=1 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=1 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=1 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=1 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=2 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=2 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=2 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=2 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=2 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=4 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=4 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=4 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=4 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=4 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=8 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=8 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=8 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=8 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=8 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=16 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=16 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=16 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=16 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=16 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=32 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=32 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=32 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=32 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=32 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=64 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=64 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=64 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=64 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=64 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=128 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=128 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=128 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=128 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=128 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=240 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=240 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=240 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=240 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=240 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=256 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=256 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=256 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=256 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=256 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=480 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=480 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=480 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=480 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=480 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=512 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=512 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=512 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=512 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=512 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=1024 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=1024 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=1024 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=1024 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=1024 batch=32768 | twosided - | vendor - # transcribed
-dtype=double n=1200 batch=128 | twosided - | vendor - # transcribed
-dtype=double n=1200 batch=512 | twosided - | vendor - # transcribed
-dtype=double n=1200 batch=2048 | twosided - | vendor - # transcribed
-dtype=double n=1200 batch=8192 | twosided - | vendor - # transcribed
-dtype=double n=1200 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=1 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=1 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=1 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=1 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=1 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=2 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=2 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=2 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=2 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=2 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=4 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=4 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=4 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=4 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=4 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=8 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=8 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=8 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=8 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=8 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=16 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=16 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=16 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=16 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=16 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=32 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=32 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=32 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=32 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=32 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=64 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=64 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=64 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=64 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=64 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=128 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=128 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=128 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=128 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=128 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=240 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=240 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=240 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=240 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=240 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=256 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=256 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=256 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=256 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=256 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=480 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=480 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=480 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=480 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=480 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=512 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=512 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=512 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=512 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=512 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=1024 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=1024 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=1024 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=1024 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=1024 batch=32768 | twosided - | vendor - # transcribed
-dtype=cfloat n=1200 batch=128 | twosided - | vendor - # transcribed
-dtype=cfloat n=1200 batch=512 | twosided - | vendor - # transcribed
-dtype=cfloat n=1200 batch=2048 | twosided - | vendor - # transcribed
-dtype=cfloat n=1200 batch=8192 | twosided - | vendor - # transcribed
-dtype=cfloat n=1200 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=1 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=1 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=1 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=1 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=1 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=2 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=2 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=2 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=2 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=2 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=4 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=4 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=4 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=4 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=4 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=8 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=8 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=8 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=8 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=8 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=16 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=16 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=16 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=16 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=16 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=32 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=32 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=32 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=32 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=32 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=64 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=64 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=64 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=64 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=64 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=128 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=128 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=128 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=128 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=128 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=240 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=240 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=240 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=240 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=240 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=256 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=256 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=256 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=256 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=256 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=480 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=480 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=480 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=480 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=480 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=512 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=512 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=512 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=512 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=512 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=1024 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=1024 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=1024 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=1024 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=1024 batch=32768 | twosided - | vendor - # transcribed
-dtype=cdouble n=1200 batch=128 | twosided - | vendor - # transcribed
-dtype=cdouble n=1200 batch=512 | twosided - | vendor - # transcribed
-dtype=cdouble n=1200 batch=2048 | twosided - | vendor - # transcribed
-dtype=cdouble n=1200 batch=8192 | twosided - | vendor - # transcribed
-dtype=cdouble n=1200 batch=32768 | twosided - | vendor - # transcribed
+dtype=float n=1 batch=128 | blocked:nb=64 0.01114 | blocked:nb=128 0.01102 | blocked:nb=256 0.01113 | blocked:nb=32 0.01154 | twosided 0.02017 # deep
+dtype=float n=1 batch=512 | blocked:nb=32 0.01137 | blocked:nb=128 0.01170 | blocked:nb=256 0.01187 | blocked:nb=64 0.01232 | twosided 0.03775 # deep
+dtype=float n=1 batch=2048 | blocked:nb=32 0.01128 | blocked:nb=64 0.01141 | blocked:nb=128 0.01137 | blocked:nb=256 0.01130 | twosided 0.02360 # deep
+dtype=float n=1 batch=8192 | blocked:nb=32 0.01232 | blocked:nb=64 0.01213 | blocked:nb=128 0.01238 | blocked:nb=256 0.01251 | twosided 0.03059 # deep
+dtype=float n=1 batch=32768 | blocked:nb=32 0.01869 | blocked:nb=64 0.01882 | blocked:nb=128 0.01857 | blocked:nb=256 0.01886 | twosided 0.06783 # deep
+dtype=float n=2 batch=128 | blocked:nb=32 0.01239 | blocked:nb=64 0.01236 | blocked:nb=128 0.01225 | blocked:nb=256 0.01248 | twosided 0.02326 # deep
+dtype=float n=2 batch=512 | blocked:nb=32 0.01264 | blocked:nb=64 0.01247 | blocked:nb=128 0.01236 | blocked:nb=256 0.01265 | twosided 0.02378 # deep
+dtype=float n=2 batch=2048 | blocked:nb=32 0.01220 | blocked:nb=64 0.01235 | blocked:nb=128 0.01211 | blocked:nb=256 0.01233 | twosided 0.02444 # deep
+dtype=float n=2 batch=8192 | blocked:nb=32 0.01453 | blocked:nb=64 0.01461 | blocked:nb=128 0.01449 | blocked:nb=256 0.01449 | twosided 0.02942 # deep
+dtype=float n=2 batch=32768 | blocked:nb=32 0.02686 | blocked:nb=64 0.02680 | blocked:nb=128 0.02700 | blocked:nb=256 0.02703 | twosided 0.06339 # deep
+dtype=float n=4 batch=128 | blocked:nb=32 0.01345 | blocked:nb=64 0.01326 | blocked:nb=128 0.01327 | blocked:nb=256 0.01343 | twosided 0.02324 # deep
+dtype=float n=4 batch=512 | blocked:nb=32 0.01346 | blocked:nb=64 0.01349 | blocked:nb=128 0.01365 | blocked:nb=256 0.01351 | twosided 0.02395 # deep
+dtype=float n=4 batch=2048 | blocked:nb=32 0.01354 | blocked:nb=64 0.01347 | blocked:nb=128 0.01347 | blocked:nb=256 0.01356 | twosided 0.02346 # deep
+dtype=float n=4 batch=8192 | blocked:nb=32 0.01998 | blocked:nb=64 0.02000 | blocked:nb=128 0.02008 | blocked:nb=256 0.02009 | twosided 0.02927 # deep
+dtype=float n=4 batch=32768 | blocked:nb=32 0.04593 | blocked:nb=64 0.04628 | blocked:nb=128 0.04616 | blocked:nb=256 0.04625 | twosided 0.06359 # deep
+dtype=float n=8 batch=128 | blocked:nb=32 0.009888 | blocked:nb=64 0.009866 | blocked:nb=128 0.009814 | blocked:nb=256 0.009883 | twosided 0.02289 # deep
+dtype=float n=8 batch=512 | blocked:nb=32 0.009722 | blocked:nb=64 0.009843 | blocked:nb=128 0.009870 | blocked:nb=256 0.009843 | twosided 0.02338 # deep
+dtype=float n=8 batch=2048 | blocked:nb=32 0.01092 | blocked:nb=64 0.01113 | blocked:nb=128 0.01094 | blocked:nb=256 0.01097 | twosided 0.02425 # deep
+dtype=float n=8 batch=8192 | blocked:nb=32 0.01401 | blocked:nb=64 0.01412 | blocked:nb=128 0.01406 | blocked:nb=256 0.01405 | twosided 0.03168 # deep
+dtype=float n=8 batch=32768 | blocked:nb=32 0.02933 | blocked:nb=64 0.02919 | blocked:nb=128 0.02924 | blocked:nb=256 0.02921 | twosided 0.07680 # deep
+dtype=float n=11 batch=512 | blocked:nb=32 0.01747 | blocked:nb=64 0.01761 | blocked:nb=128 0.01746 | blocked:nb=256 0.01769 | twosided 0.02369 # deep
+dtype=float n=13 batch=512 | blocked:nb=32 0.02168 | blocked:nb=64 0.02165 | blocked:nb=128 0.02187 | blocked:nb=256 0.02163 | twosided 0.02622 # deep
+dtype=float n=14 batch=512 | blocked:nb=32 0.02160 | blocked:nb=64 0.02139 | blocked:nb=128 0.02150 | blocked:nb=256 0.02166 | twosided 0.02202 # deep
+dtype=float n=15 batch=512 | blocked:nb=32 0.02154 | blocked:nb=64 0.02148 | blocked:nb=128 0.02143 | blocked:nb=256 0.02160 | twosided 0.02343 # deep
+dtype=float n=16 batch=128 | blocked:nb=32 0.01548 | blocked:nb=64 0.01557 | blocked:nb=128 0.01552 | blocked:nb=256 0.01560 | twosided 0.02653 # deep
+dtype=float n=16 batch=512 | blocked:nb=64 0.01528 | blocked:nb=256 0.01553 | blocked:nb=32 0.01587 | blocked:nb=128 0.01594 | twosided 0.02728 # deep
+dtype=float n=16 batch=2048 | blocked:nb=32 0.01726 | blocked:nb=64 0.01716 | blocked:nb=128 0.01725 | blocked:nb=256 0.01724 | twosided 0.02921 # deep
+dtype=float n=16 batch=8192 | blocked:nb=32 0.03270 | blocked:nb=64 0.03261 | blocked:nb=128 0.03279 | blocked:nb=256 0.03267 | twosided 0.05857 # deep
+dtype=float n=16 batch=32768 | blocked:nb=32 0.09026 | blocked:nb=64 0.08982 | blocked:nb=128 0.09003 | blocked:nb=256 0.09032 | twosided 0.1843 # deep
+dtype=float n=17 batch=512 | blocked:nb=32 0.02410 | blocked:nb=64 0.02440 | blocked:nb=128 0.02448 | blocked:nb=256 0.02429 | twosided 0.03933 # deep
+dtype=float n=19 batch=512 | blocked:nb=32 0.02749 | blocked:nb=64 0.02729 | blocked:nb=128 0.02764 | blocked:nb=256 0.02769 | twosided 0.04234 # deep
+dtype=float n=23 batch=512 | blocked:nb=32 0.03123 | blocked:nb=64 0.03133 | blocked:nb=128 0.03127 | blocked:nb=256 0.03130 | twosided 0.04351 # deep
+dtype=float n=23 batch=8192 | blocked:nb=32 0.1573 | blocked:nb=64 0.1573 | blocked:nb=128 0.1558 | twosided 0.1799 | blocked:nb=256 3.058 # deep
+dtype=float n=25 batch=8192 | blocked:nb=32 0.1764 | blocked:nb=64 0.1784 | blocked:nb=128 0.1763 | blocked:nb=256 0.1766 | twosided 0.1890 # deep
+dtype=float n=27 batch=8192 | twosided 0.2050 | blocked:nb=32 0.2194 | blocked:nb=64 0.2195 | blocked:nb=128 0.2210 | blocked:nb=256 0.2210 # deep
+dtype=float n=29 batch=8192 | twosided 0.2181 | blocked:nb=128 0.2379 | blocked:nb=32 0.2394 | blocked:nb=256 0.2394 | blocked:nb=64 0.2403 # deep
+dtype=float n=30 batch=8192 | twosided 0.2202 | blocked:nb=64 0.2445 | blocked:nb=32 0.2447 | blocked:nb=256 0.2448 | blocked:nb=128 0.2463 # deep
+dtype=float n=32 batch=128 | blocked:nb=32 0.02608 | blocked:nb=64 0.02618 | blocked:nb=128 0.02616 | blocked:nb=256 0.02625 | twosided 0.04760 # deep
+dtype=float n=32 batch=512 | blocked:nb=32 0.03002 | blocked:nb=64 0.03031 | blocked:nb=128 0.03003 | blocked:nb=256 0.03000 | twosided 0.04865 # deep
+dtype=float n=32 batch=2048 | blocked:nb=32 0.06273 | blocked:nb=64 0.06241 | blocked:nb=128 0.06273 | blocked:nb=256 0.06296 | twosided 0.06649 # deep
+dtype=float n=32 batch=8192 | blocked:nb=64 0.1980 | blocked:nb=128 0.1980 | blocked:nb=256 0.1979 | twosided 0.2178 | blocked:nb=32 3.060 # deep
+dtype=float n=32 batch=32768 | blocked:nb=32 0.7050 | blocked:nb=64 0.7024 | blocked:nb=128 0.7026 | blocked:nb=256 0.7036 | twosided 1.223 # deep
+dtype=float n=33 batch=128 | twosided 0.05953 | blocked:nb=64 0.06705 | blocked:nb=256 0.06728 | blocked:nb=32 0.06732 | blocked:nb=128 0.06746 # deep
+dtype=float n=33 batch=512 | twosided 0.05563 | blocked:nb=128 0.08991 | blocked:nb=256 0.09004 | blocked:nb=32 0.09033 | blocked:nb=64 0.09037 # deep
+dtype=float n=33 batch=2048 | twosided 0.1125 | blocked:nb=64 0.2070 | blocked:nb=256 0.2071 | blocked:nb=128 0.2071 | blocked:nb=32 0.2072 # deep
+dtype=float n=33 batch=8192 | twosided 0.3509 | blocked:nb=32 0.8763 | blocked:nb=128 0.8966 | blocked:nb=64 0.8977 | blocked:nb=256 0.9066 # deep
+dtype=float n=33 batch=32768 | twosided 2.145 | blocked:nb=32 3.564 | blocked:nb=64 3.626 | blocked:nb=128 3.638 | blocked:nb=256 3.830 # deep
+dtype=float n=46 batch=8192 | twosided 1.186 | blocked:nb=32 1.497 | blocked:nb=64 1.509 | blocked:nb=128 1.512 | blocked:nb=256 1.519 # deep
+dtype=float n=46 batch=32768 | twosided 4.771 | blocked:nb=32 5.999 | blocked:nb=64 6.041 | blocked:nb=128 6.048 | blocked:nb=256 6.091 # deep
+dtype=float n=54 batch=8192 | twosided 1.554 | blocked:nb=32 1.736 | blocked:nb=64 1.751 | blocked:nb=128 1.752 | blocked:nb=256 1.761 # deep
+dtype=float n=54 batch=32768 | twosided 6.140 | blocked:nb=32 6.850 | blocked:nb=64 6.885 | blocked:nb=128 6.892 | blocked:nb=256 6.923 # deep
+dtype=float n=59 batch=8192 | blocked:nb=32 1.803 | blocked:nb=64 1.811 | blocked:nb=128 1.812 | blocked:nb=256 1.820 | twosided 1.800 # deep
+dtype=float n=59 batch=32768 | blocked:nb=32 7.238 | blocked:nb=64 7.272 | blocked:nb=128 7.278 | blocked:nb=256 7.310 | twosided 7.113 # deep
+dtype=float n=64 batch=128 | twosided 0.09530 | blocked:nb=32 0.1082 | blocked:nb=64 0.1083 | blocked:nb=128 0.1088 | blocked:nb=256 0.1088 # deep
+dtype=float n=64 batch=512 | twosided 0.1123 | blocked:nb=64 0.1401 | blocked:nb=32 0.1403 | blocked:nb=128 0.1404 | blocked:nb=256 0.1407 # deep
+dtype=float n=64 batch=2048 | twosided 0.3099 | blocked:nb=32 0.3312 | blocked:nb=64 0.3319 | blocked:nb=128 0.3327 | blocked:nb=256 0.3333 # deep
+dtype=float n=64 batch=8192 | blocked:nb=32 1.341 | blocked:nb=64 1.343 | blocked:nb=128 1.348 | blocked:nb=256 1.367 | twosided 1.613 # deep
+dtype=float n=64 batch=32768 | blocked:nb=32 5.230 | blocked:nb=64 5.245 | blocked:nb=128 5.256 | blocked:nb=256 5.324 | twosided 7.021 # deep
+dtype=float n=76 batch=2048 | twosided 0.7157 | blocked:nb=32 0.8345 | blocked:nb=128 0.8362 | blocked:nb=256 0.8362 | blocked:nb=64 0.9763 # deep
+dtype=float n=83 batch=2048 | blocked:nb=32 0.9169 | blocked:nb=128 0.9223 | blocked:nb=256 0.9211 | twosided 0.9021 | blocked:nb=64 1.071 # deep
+dtype=float n=91 batch=2048 | blocked:nb=32 0.9909 | blocked:nb=128 0.9946 | blocked:nb=256 0.9967 | twosided 1.064 | blocked:nb=64 1.153 # deep
+dtype=float n=91 batch=8192 | blocked:nb=32 5.034 | blocked:nb=64 5.040 | blocked:nb=128 5.040 | blocked:nb=256 5.033 | twosided 5.029 # deep
+dtype=float n=108 batch=8192 | blocked:nb=32 6.562 | blocked:nb=64 6.494 | blocked:nb=128 6.588 | blocked:nb=256 6.595 | twosided 7.905 # deep
+dtype=float n=118 batch=8192 | blocked:nb=64 6.600 | blocked:nb=32 7.095 | blocked:nb=128 7.101 | blocked:nb=256 7.108 | twosided 9.091 # deep
+dtype=float n=128 batch=128 | twosided 0.2112 | blocked:nb=64 0.3208 | blocked:nb=32 0.3370 | blocked:nb=128 0.3371 | blocked:nb=256 0.3398 # deep
+dtype=float n=128 batch=512 | twosided 0.3397 | blocked:nb=64 0.4753 | blocked:nb=32 0.4944 | blocked:nb=256 0.4948 | blocked:nb=128 0.4949 # deep
+dtype=float n=128 batch=2048 | blocked:nb=32 1.695 | blocked:nb=128 1.655 | blocked:nb=256 1.658 | blocked:nb=64 2.694 | twosided 3.211 # deep
+dtype=float n=128 batch=8192 | blocked:nb=64 6.284 | blocked:nb=32 6.708 | blocked:nb=128 6.711 | blocked:nb=256 6.739 | twosided 7.651 # deep
+dtype=float n=139 batch=512 | blocked:nb=32 0.7368 | blocked:nb=64 0.7181 | twosided 0.7597 | blocked:nb=128 0.9284 | blocked:nb=256 1.155 # deep
+dtype=float n=139 batch=2048 | blocked:nb=32 2.755 | blocked:nb=64 2.712 | blocked:nb=128 3.597 | twosided 3.770 | blocked:nb=256 4.236 # deep
+dtype=float n=150 batch=512 | blocked:nb=64 0.7567 | blocked:nb=32 0.8098 | twosided 0.8303 | blocked:nb=128 0.9569 | blocked:nb=256 1.201 # deep
+dtype=float n=150 batch=2048 | blocked:nb=64 2.889 | blocked:nb=32 3.130 | blocked:nb=128 3.808 | twosided 4.179 | blocked:nb=256 4.636 # deep
+dtype=float n=175 batch=512 | blocked:nb=64 0.9886 | blocked:nb=128 1.145 | twosided 1.197 | blocked:nb=32 1.238 | blocked:nb=256 1.654 # deep
+dtype=float n=175 batch=2048 | blocked:nb=64 5.046 | blocked:nb=128 4.904 | blocked:nb=32 5.076 | twosided 6.000 | blocked:nb=256 6.871 # deep
+dtype=float n=189 batch=2048 | blocked:nb=64 4.173 | blocked:nb=128 4.890 | blocked:nb=32 5.295 | blocked:nb=256 6.218 | twosided 6.727 # deep
+dtype=float n=205 batch=512 | blocked:nb=64 1.501 | blocked:nb=128 1.473 | twosided 1.696 | blocked:nb=32 1.763 | blocked:nb=256 1.808 # deep
+dtype=float n=205 batch=2048 | blocked:nb=128 6.255 | blocked:nb=64 6.759 | blocked:nb=32 7.656 | blocked:nb=256 8.153 | twosided 8.533 # deep
+dtype=float n=222 batch=512 | blocked:nb=128 1.546 | blocked:nb=64 1.593 | twosided 1.872 | blocked:nb=32 1.899 | blocked:nb=256 1.953 # deep
+dtype=float n=240 batch=128 | twosided 0.5546 | blocked:nb=128 0.8801 | blocked:nb=64 0.9221 | blocked:nb=256 0.9960 | blocked:nb=32 1.150 # deep
+dtype=float n=240 batch=512 | blocked:nb=128 2.139 | twosided 2.209 | blocked:nb=64 2.346 | blocked:nb=256 2.494 | blocked:nb=32 2.946 # deep
+dtype=float n=240 batch=2048 | blocked:nb=128 8.589 | blocked:nb=64 9.483 | twosided 10.79 | blocked:nb=256 10.06 | blocked:nb=32 11.88 # deep
+dtype=float n=240 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=float n=256 batch=128 | twosided 0.5734 | blocked:nb=128 0.9277 | blocked:nb=256 0.9696 | blocked:nb=64 0.9705 | blocked:nb=32 1.233 # deep
+dtype=float n=256 batch=512 | blocked:nb=128 2.220 | twosided 2.297 | blocked:nb=64 2.466 | blocked:nb=256 2.470 | blocked:nb=32 3.140 # deep
+dtype=float n=256 batch=2048 | blocked:nb=128 8.911 | blocked:nb=64 9.976 | blocked:nb=256 9.978 | twosided 10.54 | blocked:nb=32 12.64 # deep
+dtype=float n=256 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=351 batch=128 | twosided 1.471 | blocked:nb=128 1.620 | blocked:nb=256 1.756 | blocked:nb=64 1.837 | blocked:nb=32 2.463 # deep
+dtype=float n=379 batch=128 | blocked:nb=128 1.843 | twosided 1.834 | blocked:nb=256 1.969 | blocked:nb=64 2.107 | blocked:nb=32 2.975 # deep
+dtype=float n=410 batch=128 | blocked:nb=128 2.334 | twosided 2.437 | blocked:nb=64 2.536 | blocked:nb=256 2.671 | blocked:nb=32 3.539 # deep
+dtype=float n=480 batch=128 | blocked:nb=128 2.716 | twosided 2.950 | blocked:nb=256 2.958 | blocked:nb=64 3.312 | blocked:nb=32 4.760 # deep
+dtype=float n=480 batch=512 | blocked:nb=128 10.96 | blocked:nb=256 11.82 | twosided 11.95 | blocked:nb=64 13.28 | blocked:nb=32 19.07 # deep
+dtype=float n=480 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=float n=480 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=float n=512 batch=128 | blocked:nb=128 2.999 | blocked:nb=256 3.070 | twosided 3.442 | blocked:nb=64 3.679 | blocked:nb=32 5.542 # deep
+dtype=float n=512 batch=512 | blocked:nb=128 12.62 | blocked:nb=256 12.30 | twosided 13.37 | blocked:nb=64 16.05 | blocked:nb=32 22.69 # deep
+dtype=float n=512 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=float n=512 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=float n=724 batch=128 | blocked:nb=128 6.405 | blocked:nb=256 6.444 | blocked:nb=64 8.449 | twosided 9.700 | blocked:nb=32 13.12 # deep
+dtype=float n=790 batch=128 | blocked:nb=128 8.072 | blocked:nb=256 8.044 | blocked:nb=64 10.21 | twosided 13.11 | blocked:nb=32 16.13 # deep
+dtype=float n=861 batch=128 | blocked:nb=256 8.834 | blocked:nb=128 9.214 | blocked:nb=64 12.43 | twosided 15.01 | blocked:nb=32 19.98 # deep
+dtype=float n=1024 batch=128 | blocked:nb=256 11.60 | blocked:nb=128 12.10 | blocked:nb=64 16.80 | twosided 21.44 | blocked:nb=32 28.02 # deep
+dtype=float n=1024 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=1024 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=1024 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=1200 batch=128 | blocked:nb=256 17.74 | blocked:nb=128 19.41 | blocked:nb=64 25.67 | twosided 36.77 | blocked:nb=32 42.25 # deep
+dtype=float n=1200 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=1200 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=float n=1200 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1 batch=128 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - | twosided - # transcribed
+dtype=double n=1 batch=512 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=double n=1 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=1 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=1 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=2 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=2 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=2 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=2 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=2 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=4 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=4 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=4 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=4 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=4 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=8 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=8 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=8 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=8 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=8 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=11 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=13 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=14 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=15 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=16 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=16 batch=512 | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - | blocked:nb=128 - | twosided - # transcribed
+dtype=double n=16 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=16 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=16 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=17 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=19 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=23 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=23 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | twosided - | blocked:nb=256 - # transcribed
+dtype=double n=25 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=27 batch=8192 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=29 batch=8192 | twosided - | blocked:nb=128 - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=64 - # transcribed
+dtype=double n=30 batch=8192 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - # transcribed
+dtype=double n=32 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=32 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=32 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=32 batch=8192 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=32 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=33 batch=128 | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - | blocked:nb=128 - # transcribed
+dtype=double n=33 batch=512 | twosided - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - | blocked:nb=64 - # transcribed
+dtype=double n=33 batch=2048 | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=32 - # transcribed
+dtype=double n=33 batch=8192 | twosided - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - # transcribed
+dtype=double n=33 batch=32768 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=46 batch=8192 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=46 batch=32768 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=54 batch=8192 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=54 batch=32768 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=59 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=59 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=64 batch=128 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=64 batch=512 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=64 batch=2048 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=64 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=64 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=76 batch=2048 | twosided - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - # transcribed
+dtype=double n=83 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - # transcribed
+dtype=double n=91 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - # transcribed
+dtype=double n=91 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=108 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=118 batch=8192 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=128 batch=128 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=128 batch=512 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - # transcribed
+dtype=double n=128 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=double n=128 batch=8192 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=128 batch=32768 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=139 batch=512 | blocked:nb=32 - | blocked:nb=64 - | twosided - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=139 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | twosided - | blocked:nb=256 - # transcribed
+dtype=double n=150 batch=512 | blocked:nb=64 - | blocked:nb=32 - | twosided - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=double n=150 batch=2048 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | twosided - | blocked:nb=256 - # transcribed
+dtype=double n=175 batch=512 | blocked:nb=64 - | blocked:nb=128 - | twosided - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=double n=175 batch=2048 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=32 - | twosided - | blocked:nb=256 - # transcribed
+dtype=double n=189 batch=2048 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=32 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=205 batch=512 | blocked:nb=64 - | blocked:nb=128 - | twosided - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=double n=205 batch=2048 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - | twosided - # transcribed
+dtype=double n=222 batch=512 | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=double n=240 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=240 batch=512 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=240 batch=2048 | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=240 batch=8192 | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=240 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=256 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=256 batch=512 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=256 batch=2048 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=256 batch=8192 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=256 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=351 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=379 batch=128 | blocked:nb=128 - | twosided - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=410 batch=128 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=double n=480 batch=128 | blocked:nb=128 - | twosided - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=480 batch=512 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=480 batch=2048 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=480 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=480 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=512 batch=128 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=512 batch=512 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=512 batch=2048 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=512 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=512 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=double n=724 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=790 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=861 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1024 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1024 batch=512 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1024 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1024 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1024 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1200 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1200 batch=512 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1200 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1200 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=double n=1200 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1 batch=128 | blocked:nb=32 0.01262 | blocked:nb=64 0.01271 | blocked:nb=128 0.01265 | blocked:nb=256 0.01276 | twosided 0.02311 # deep
+dtype=cfloat n=1 batch=512 | blocked:nb=32 0.01343 | blocked:nb=64 0.01366 | blocked:nb=128 0.01356 | blocked:nb=256 0.01341 | twosided 0.02701 # deep
+dtype=cfloat n=1 batch=2048 | blocked:nb=32 0.01373 | blocked:nb=64 0.01386 | blocked:nb=128 0.01362 | blocked:nb=256 0.01365 | twosided 0.03013 # deep
+dtype=cfloat n=1 batch=8192 | blocked:nb=32 0.01506 | blocked:nb=64 0.01502 | blocked:nb=128 0.01489 | blocked:nb=256 0.01494 | twosided 0.03912 # deep
+dtype=cfloat n=1 batch=32768 | blocked:nb=32 0.02675 | blocked:nb=64 0.02667 | blocked:nb=128 0.02670 | blocked:nb=256 0.02676 | twosided 0.07600 # deep
+dtype=cfloat n=2 batch=128 | blocked:nb=32 0.01461 | blocked:nb=64 0.01441 | blocked:nb=128 0.01428 | blocked:nb=256 0.01437 | twosided 0.02285 # deep
+dtype=cfloat n=2 batch=512 | blocked:nb=32 0.01459 | blocked:nb=64 0.01446 | blocked:nb=128 0.01449 | blocked:nb=256 0.01458 | twosided 0.02434 # deep
+dtype=cfloat n=2 batch=2048 | blocked:nb=32 0.01452 | blocked:nb=64 0.01455 | blocked:nb=128 0.01439 | blocked:nb=256 0.01464 | twosided 0.02430 # deep
+dtype=cfloat n=2 batch=8192 | blocked:nb=32 0.01900 | blocked:nb=64 0.01923 | blocked:nb=128 0.01913 | blocked:nb=256 0.01944 | twosided 0.03373 # deep
+dtype=cfloat n=2 batch=32768 | blocked:nb=32 0.04599 | blocked:nb=64 0.04604 | blocked:nb=128 0.04636 | blocked:nb=256 0.04638 | twosided 0.07388 # deep
+dtype=cfloat n=3 batch=32768 | blocked:nb=32 0.07368 | blocked:nb=64 0.07458 | blocked:nb=128 0.07473 | blocked:nb=256 0.07420 | twosided 0.07341 # deep
+dtype=cfloat n=4 batch=128 | blocked:nb=32 0.01575 | blocked:nb=64 0.01589 | blocked:nb=128 0.01586 | blocked:nb=256 0.01576 | twosided 0.02141 # deep
+dtype=cfloat n=4 batch=512 | blocked:nb=32 0.01595 | blocked:nb=64 0.01573 | blocked:nb=128 0.01588 | blocked:nb=256 0.01585 | twosided 0.02146 # deep
+dtype=cfloat n=4 batch=2048 | blocked:nb=32 0.01766 | blocked:nb=64 0.01769 | blocked:nb=128 0.01753 | blocked:nb=256 0.01786 | twosided 0.02443 # deep
+dtype=cfloat n=4 batch=8192 | blocked:nb=32 0.02984 | blocked:nb=64 0.02986 | blocked:nb=128 0.03002 | blocked:nb=256 0.03008 | twosided 0.03215 # deep
+dtype=cfloat n=4 batch=32768 | twosided 0.07511 | blocked:nb=64 0.09818 | blocked:nb=32 0.09842 | blocked:nb=128 0.09847 | blocked:nb=256 0.09934 # deep
+dtype=cfloat n=6 batch=32768 | twosided 0.08241 | blocked:nb=256 0.1709 | blocked:nb=128 0.1713 | blocked:nb=64 0.1717 | blocked:nb=32 0.1717 # deep
+dtype=cfloat n=7 batch=32768 | twosided 0.08903 | blocked:nb=128 0.2080 | blocked:nb=64 0.2083 | blocked:nb=32 0.2088 | blocked:nb=256 0.2092 # deep
+dtype=cfloat n=8 batch=128 | blocked:nb=32 0.01212 | blocked:nb=64 0.01192 | blocked:nb=256 0.01202 | blocked:nb=128 0.01228 | twosided 0.01831 # deep
+dtype=cfloat n=8 batch=512 | blocked:nb=32 0.01170 | blocked:nb=64 0.01155 | blocked:nb=128 0.01167 | blocked:nb=256 0.01161 | twosided 0.01773 # deep
+dtype=cfloat n=8 batch=2048 | blocked:nb=32 0.01273 | blocked:nb=64 0.01261 | blocked:nb=128 0.01269 | blocked:nb=256 0.01266 | twosided 0.01974 # deep
+dtype=cfloat n=8 batch=8192 | blocked:nb=32 0.01886 | blocked:nb=64 0.01887 | blocked:nb=128 0.01883 | blocked:nb=256 0.01899 | twosided 0.03545 # deep
+dtype=cfloat n=8 batch=32768 | blocked:nb=32 0.04531 | blocked:nb=64 0.04536 | blocked:nb=128 0.04589 | blocked:nb=256 0.04551 | twosided 0.09367 # deep
+dtype=cfloat n=9 batch=8192 | twosided 0.06298 | blocked:nb=128 0.07576 | blocked:nb=64 0.07611 | blocked:nb=32 0.07666 | blocked:nb=256 0.07702 # deep
+dtype=cfloat n=11 batch=8192 | twosided 0.06721 | blocked:nb=64 0.08947 | blocked:nb=32 0.09036 | blocked:nb=128 0.09039 | blocked:nb=256 0.09074 # deep
+dtype=cfloat n=16 batch=128 | blocked:nb=32 0.02247 | blocked:nb=64 0.02205 | blocked:nb=128 0.02222 | blocked:nb=256 0.02222 | twosided 0.02584 # deep
+dtype=cfloat n=16 batch=512 | blocked:nb=32 0.02372 | blocked:nb=64 0.02376 | blocked:nb=128 0.02380 | blocked:nb=256 0.02398 | twosided 0.03322 # deep
+dtype=cfloat n=16 batch=2048 | blocked:nb=32 0.04016 | blocked:nb=64 0.03985 | blocked:nb=128 0.04002 | blocked:nb=256 0.04002 | twosided 0.04533 # deep
+dtype=cfloat n=16 batch=8192 | twosided 0.1027 | blocked:nb=32 0.1251 | blocked:nb=64 0.1253 | blocked:nb=256 0.1256 | blocked:nb=128 0.1264 # deep
+dtype=cfloat n=16 batch=32768 | blocked:nb=32 0.4776 | blocked:nb=64 0.4776 | blocked:nb=128 0.4772 | blocked:nb=256 0.4794 | twosided 0.4707 # deep
+dtype=cfloat n=17 batch=8192 | blocked:nb=32 0.1717 | blocked:nb=64 0.1700 | blocked:nb=128 0.1709 | blocked:nb=256 0.1705 | twosided 0.2777 # deep
+dtype=cfloat n=19 batch=8192 | blocked:nb=32 0.1981 | blocked:nb=64 0.1965 | blocked:nb=128 0.1964 | blocked:nb=256 0.1969 | twosided 0.2995 # deep
+dtype=cfloat n=23 batch=8192 | blocked:nb=32 0.2960 | blocked:nb=64 0.2951 | blocked:nb=128 0.2965 | blocked:nb=256 0.2960 | twosided 0.3851 # deep
+dtype=cfloat n=32 batch=128 | blocked:nb=32 0.02931 | blocked:nb=64 0.02912 | blocked:nb=128 0.02910 | blocked:nb=256 0.02918 | twosided 0.07048 # deep
+dtype=cfloat n=32 batch=512 | blocked:nb=32 0.03780 | blocked:nb=64 0.03753 | blocked:nb=128 0.03768 | blocked:nb=256 0.03770 | twosided 0.09450 # deep
+dtype=cfloat n=32 batch=2048 | blocked:nb=32 0.1232 | blocked:nb=64 0.1226 | blocked:nb=128 0.1227 | blocked:nb=256 0.1231 | twosided 0.2306 # deep
+dtype=cfloat n=32 batch=8192 | blocked:nb=32 0.3999 | blocked:nb=64 0.4004 | blocked:nb=128 0.3988 | blocked:nb=256 0.3989 | twosided 0.8858 # deep
+dtype=cfloat n=32 batch=32768 | blocked:nb=32 1.484 | blocked:nb=64 1.480 | blocked:nb=128 1.481 | blocked:nb=256 1.484 | twosided 3.446 # deep
+dtype=cfloat n=33 batch=128 | blocked:nb=32 0.08306 | blocked:nb=64 0.08332 | blocked:nb=128 0.08322 | blocked:nb=256 0.08327 | twosided 0.08418 # deep
+dtype=cfloat n=33 batch=512 | blocked:nb=32 0.09661 | blocked:nb=64 0.09683 | blocked:nb=128 0.09657 | blocked:nb=256 0.09647 | twosided 0.1089 # deep
+dtype=cfloat n=33 batch=2048 | blocked:nb=32 0.2456 | blocked:nb=64 0.2462 | blocked:nb=128 0.2489 | blocked:nb=256 0.2486 | twosided 0.2849 # deep
+dtype=cfloat n=33 batch=8192 | blocked:nb=32 1.054 | blocked:nb=64 1.058 | blocked:nb=128 1.067 | blocked:nb=256 1.107 | twosided 1.235 # deep
+dtype=cfloat n=33 batch=32768 | blocked:nb=32 4.172 | blocked:nb=64 4.166 | blocked:nb=128 4.196 | blocked:nb=256 4.356 | twosided 4.843 # deep
+dtype=cfloat n=46 batch=2048 | blocked:nb=32 0.3670 | blocked:nb=64 0.3680 | blocked:nb=128 0.3749 | blocked:nb=256 0.3717 | twosided 0.4298 # deep
+dtype=cfloat n=46 batch=32768 | blocked:nb=32 6.692 | blocked:nb=64 6.707 | blocked:nb=128 6.775 | blocked:nb=256 6.747 | twosided 8.301 # deep
+dtype=cfloat n=54 batch=2048 | blocked:nb=32 0.5103 | blocked:nb=64 0.5146 | blocked:nb=128 0.5243 | blocked:nb=256 0.5199 | twosided 0.6679 # deep
+dtype=cfloat n=54 batch=32768 | blocked:nb=32 8.625 | blocked:nb=64 8.650 | blocked:nb=128 8.724 | blocked:nb=256 8.707 | twosided 12.36 # deep
+dtype=cfloat n=59 batch=2048 | blocked:nb=64 0.6391 | blocked:nb=128 0.6471 | blocked:nb=256 0.6432 | twosided 0.8435 | blocked:nb=32 3.207 # deep
+dtype=cfloat n=59 batch=8192 | blocked:nb=32 2.540 | blocked:nb=64 2.554 | blocked:nb=128 2.580 | blocked:nb=256 2.570 | twosided 3.832 # deep
+dtype=cfloat n=59 batch=32768 | blocked:nb=32 12.83 | blocked:nb=128 15.47 | blocked:nb=256 15.63 | blocked:nb=64 15.64 | twosided 15.65 # deep
+dtype=cfloat n=64 batch=128 | blocked:nb=32 0.1324 | blocked:nb=64 0.1321 | blocked:nb=128 0.1321 | blocked:nb=256 0.1326 | twosided 0.1400 # deep
+dtype=cfloat n=64 batch=512 | blocked:nb=32 0.1914 | blocked:nb=64 0.1896 | blocked:nb=128 0.1874 | blocked:nb=256 0.1886 | twosided 0.2538 # deep
+dtype=cfloat n=64 batch=2048 | blocked:nb=64 0.6380 | blocked:nb=128 0.6462 | blocked:nb=256 0.6452 | twosided 0.9827 | blocked:nb=32 6.560 # deep
+dtype=cfloat n=64 batch=8192 | blocked:nb=32 2.414 | blocked:nb=64 2.424 | blocked:nb=128 2.455 | blocked:nb=256 2.455 | twosided 4.061 # deep
+dtype=cfloat n=64 batch=32768 | blocked:nb=128 10.72 | blocked:nb=32 11.04 | blocked:nb=64 11.05 | blocked:nb=256 11.21 | twosided 16.17 # deep
+dtype=cfloat n=70 batch=128 | twosided 0.1752 | blocked:nb=32 0.1980 | blocked:nb=256 0.1987 | blocked:nb=128 0.1989 | blocked:nb=64 0.2238 # deep
+dtype=cfloat n=70 batch=512 | blocked:nb=32 0.2835 | blocked:nb=128 0.2845 | blocked:nb=256 0.2844 | blocked:nb=64 0.3247 | twosided 0.3615 # deep
+dtype=cfloat n=70 batch=2048 | blocked:nb=32 1.056 | blocked:nb=128 1.067 | blocked:nb=256 3.663 | blocked:nb=64 3.851 | twosided 1.975 # deep
+dtype=cfloat n=76 batch=128 | twosided 0.1871 | blocked:nb=32 0.2092 | blocked:nb=256 0.2094 | blocked:nb=128 0.2097 | blocked:nb=64 0.2323 # deep
+dtype=cfloat n=76 batch=512 | blocked:nb=32 0.3045 | blocked:nb=256 0.3053 | blocked:nb=64 0.3390 | twosided 0.3911 | blocked:nb=128 3.224 # deep
+dtype=cfloat n=76 batch=2048 | blocked:nb=32 1.150 | blocked:nb=128 1.164 | blocked:nb=256 1.160 | blocked:nb=64 1.480 | twosided 1.675 # deep
+dtype=cfloat n=91 batch=128 | twosided 0.2331 | blocked:nb=128 0.2584 | blocked:nb=256 0.2586 | blocked:nb=32 0.2588 | blocked:nb=64 0.2694 # deep
+dtype=cfloat n=91 batch=512 | blocked:nb=32 0.4186 | blocked:nb=64 0.4240 | blocked:nb=128 0.4190 | blocked:nb=256 0.4187 | twosided 0.5111 # deep
+dtype=cfloat n=91 batch=2048 | blocked:nb=32 1.679 | blocked:nb=128 1.689 | blocked:nb=256 1.689 | blocked:nb=64 1.749 | twosided 2.708 # deep
+dtype=cfloat n=91 batch=8192 | blocked:nb=32 6.840 | blocked:nb=64 6.929 | blocked:nb=128 6.867 | blocked:nb=256 6.857 | twosided 10.34 # deep
+dtype=cfloat n=99 batch=512 | blocked:nb=64 0.5541 | blocked:nb=32 0.6031 | blocked:nb=128 0.6038 | blocked:nb=256 0.6040 | twosided 0.6461 # deep
+dtype=cfloat n=99 batch=2048 | blocked:nb=32 2.325 | blocked:nb=64 2.259 | blocked:nb=256 2.337 | blocked:nb=128 2.340 | twosided 3.699 # deep
+dtype=cfloat n=99 batch=8192 | blocked:nb=64 8.828 | blocked:nb=32 9.555 | blocked:nb=256 9.590 | blocked:nb=128 9.600 | twosided 13.94 # deep
+dtype=cfloat n=108 batch=512 | blocked:nb=64 0.5919 | blocked:nb=32 0.6633 | blocked:nb=128 0.6651 | blocked:nb=256 0.6656 | twosided 0.7328 # deep
+dtype=cfloat n=108 batch=2048 | blocked:nb=64 2.356 | blocked:nb=32 2.631 | blocked:nb=256 2.632 | blocked:nb=128 2.637 | twosided 4.021 # deep
+dtype=cfloat n=108 batch=8192 | blocked:nb=64 9.286 | blocked:nb=32 10.32 | blocked:nb=128 10.35 | blocked:nb=256 10.36 | twosided 15.38 # deep
+dtype=cfloat n=118 batch=2048 | blocked:nb=64 2.734 | blocked:nb=32 3.247 | blocked:nb=128 3.254 | blocked:nb=256 3.256 | twosided 4.905 # deep
+dtype=cfloat n=128 batch=128 | twosided 0.3559 | blocked:nb=64 0.3882 | blocked:nb=128 0.4101 | blocked:nb=256 0.4104 | blocked:nb=32 0.4106 # deep
+dtype=cfloat n=128 batch=512 | blocked:nb=64 0.7254 | blocked:nb=32 0.8755 | blocked:nb=128 0.8763 | blocked:nb=256 0.8786 | twosided 1.044 # deep
+dtype=cfloat n=128 batch=2048 | blocked:nb=128 3.496 | blocked:nb=256 3.861 | blocked:nb=64 4.282 | blocked:nb=32 5.039 | twosided 5.250 # deep
+dtype=cfloat n=128 batch=8192 | blocked:nb=64 12.09 | blocked:nb=128 13.96 | blocked:nb=256 13.98 | blocked:nb=32 14.65 | twosided 19.89 # deep
+dtype=cfloat n=240 batch=128 | twosided 1.165 | blocked:nb=128 1.254 | blocked:nb=64 1.304 | blocked:nb=256 1.403 | blocked:nb=32 1.611 # deep
+dtype=cfloat n=240 batch=512 | blocked:nb=64 8.646 | blocked:nb=256 10.17 | blocked:nb=32 10.38 | twosided 10.47 | blocked:nb=128 10.47 # deep
+dtype=cfloat n=240 batch=2048 | blocked:nb=128 21.80 | twosided 22.48 | blocked:nb=64 23.83 | blocked:nb=256 24.47 | blocked:nb=32 33.18 # deep
+dtype=cfloat n=256 batch=128 | twosided 1.311 | blocked:nb=128 1.373 | blocked:nb=256 1.466 | blocked:nb=64 1.469 | blocked:nb=32 1.847 # deep
+dtype=cfloat n=256 batch=512 | blocked:nb=64 6.046 | blocked:nb=128 6.030 | twosided 6.242 | blocked:nb=32 7.471 | blocked:nb=256 8.028 # deep
+dtype=cfloat n=256 batch=2048 | blocked:nb=128 21.43 | blocked:nb=64 22.60 | blocked:nb=256 22.63 | twosided 24.84 | blocked:nb=32 28.86 # deep
+dtype=cfloat n=256 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=277 batch=128 | twosided 1.711 | blocked:nb=128 1.815 | blocked:nb=64 1.896 | blocked:nb=256 2.149 | blocked:nb=32 2.403 # deep
+dtype=cfloat n=277 batch=512 | blocked:nb=128 7.221 | blocked:nb=64 7.569 | blocked:nb=256 8.592 | twosided 8.667 | blocked:nb=32 9.594 # deep
+dtype=cfloat n=300 batch=128 | blocked:nb=128 2.015 | twosided 2.108 | blocked:nb=64 2.139 | blocked:nb=256 2.307 | blocked:nb=32 2.868 # deep
+dtype=cfloat n=300 batch=512 | blocked:nb=128 8.027 | blocked:nb=64 8.531 | blocked:nb=256 9.188 | twosided 9.942 | blocked:nb=32 11.46 # deep
+dtype=cfloat n=351 batch=128 | blocked:nb=128 2.721 | blocked:nb=256 2.910 | blocked:nb=64 3.081 | twosided 3.226 | blocked:nb=32 4.204 # deep
+dtype=cfloat n=351 batch=512 | blocked:nb=128 10.87 | blocked:nb=256 11.66 | blocked:nb=64 12.31 | twosided 14.63 | blocked:nb=32 16.83 # deep
+dtype=cfloat n=480 batch=128 | blocked:nb=128 5.173 | blocked:nb=256 5.227 | blocked:nb=64 6.146 | twosided 6.798 | blocked:nb=32 8.969 # deep
+dtype=cfloat n=480 batch=512 | blocked:nb=128 20.69 | blocked:nb=256 20.94 | blocked:nb=64 24.66 | twosided 28.47 | blocked:nb=32 35.96 # deep
+dtype=cfloat n=480 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=480 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=512 batch=128 | blocked:nb=128 5.727 | blocked:nb=256 5.567 | blocked:nb=64 6.855 | twosided 7.809 | blocked:nb=32 10.48 # deep
+dtype=cfloat n=512 batch=512 | blocked:nb=128 22.66 | blocked:nb=256 22.11 | blocked:nb=64 27.21 | twosided 32.57 | blocked:nb=32 41.63 # deep
+dtype=cfloat n=512 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=512 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=609 batch=128 | blocked:nb=128 9.153 | blocked:nb=256 8.920 | blocked:nb=64 11.21 | twosided 13.23 | blocked:nb=32 17.05 # deep
+dtype=cfloat n=664 batch=128 | blocked:nb=256 10.78 | blocked:nb=128 11.20 | blocked:nb=64 13.77 | twosided 16.54 | blocked:nb=32 20.88 # deep
+dtype=cfloat n=724 batch=128 | blocked:nb=256 13.09 | blocked:nb=128 13.76 | blocked:nb=64 17.13 | twosided 20.37 | blocked:nb=32 26.25 # deep
+dtype=cfloat n=1024 batch=128 | blocked:nb=256 26.83 | blocked:nb=128 31.33 | blocked:nb=64 39.91 | twosided 48.19 | blocked:nb=32 58.70 # deep
+dtype=cfloat n=1024 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1024 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1024 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1200 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1200 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cfloat n=1200 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=1 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=1 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=1 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=1 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=2 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=2 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=2 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=2 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=2 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=3 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=4 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=4 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=4 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=4 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=4 batch=32768 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=cdouble n=6 batch=32768 | twosided - | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=7 batch=32768 | twosided - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=cdouble n=8 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=128 - | twosided - # transcribed
+dtype=cdouble n=8 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=8 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=8 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=8 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=9 batch=8192 | twosided - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=cdouble n=11 batch=8192 | twosided - | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - # transcribed
+dtype=cdouble n=16 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=16 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=16 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=16 batch=8192 | twosided - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=128 - # transcribed
+dtype=cdouble n=16 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=17 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=19 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=23 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=32 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=32 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=32 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=32 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=32 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=33 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=33 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=33 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=33 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=33 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=46 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=46 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=54 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=54 batch=32768 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=59 batch=2048 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=59 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=59 batch=32768 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=cdouble n=64 batch=128 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=64 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=64 batch=2048 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=64 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=64 batch=32768 | blocked:nb=128 - | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=70 batch=128 | twosided - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - # transcribed
+dtype=cdouble n=70 batch=512 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=cdouble n=70 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=cdouble n=76 batch=128 | twosided - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - # transcribed
+dtype=cdouble n=76 batch=512 | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=128 - # transcribed
+dtype=cdouble n=76 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=cdouble n=91 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - | blocked:nb=64 - # transcribed
+dtype=cdouble n=91 batch=512 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=91 batch=2048 | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - # transcribed
+dtype=cdouble n=91 batch=8192 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=99 batch=512 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=99 batch=2048 | blocked:nb=32 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=128 - | twosided - # transcribed
+dtype=cdouble n=99 batch=8192 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - | twosided - # transcribed
+dtype=cdouble n=108 batch=512 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=108 batch=2048 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=256 - | blocked:nb=128 - | twosided - # transcribed
+dtype=cdouble n=108 batch=8192 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=118 batch=2048 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=128 batch=128 | twosided - | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=128 batch=512 | blocked:nb=64 - | blocked:nb=32 - | blocked:nb=128 - | blocked:nb=256 - | twosided - # transcribed
+dtype=cdouble n=128 batch=2048 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - | twosided - # transcribed
+dtype=cdouble n=128 batch=8192 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - | twosided - # transcribed
+dtype=cdouble n=128 batch=32768 | blocked:nb=64 - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=32 - | twosided - # transcribed
+dtype=cdouble n=240 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=240 batch=512 | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - | twosided - | blocked:nb=128 - # transcribed
+dtype=cdouble n=240 batch=2048 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=240 batch=8192 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=240 batch=32768 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=256 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=256 batch=512 | blocked:nb=64 - | blocked:nb=128 - | twosided - | blocked:nb=32 - | blocked:nb=256 - # transcribed
+dtype=cdouble n=256 batch=2048 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=256 batch=8192 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=256 batch=32768 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=277 batch=128 | twosided - | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=277 batch=512 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=300 batch=128 | blocked:nb=128 - | twosided - | blocked:nb=64 - | blocked:nb=256 - | blocked:nb=32 - # transcribed
+dtype=cdouble n=300 batch=512 | blocked:nb=128 - | blocked:nb=64 - | blocked:nb=256 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=351 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=351 batch=512 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=480 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=480 batch=512 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=480 batch=2048 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=480 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=480 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=512 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=512 batch=512 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=512 batch=2048 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=512 batch=8192 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=512 batch=32768 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=609 batch=128 | blocked:nb=128 - | blocked:nb=256 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=664 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=724 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1024 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1024 batch=512 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1024 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1024 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1024 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1200 batch=128 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1200 batch=512 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1200 batch=2048 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1200 batch=8192 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
+dtype=cdouble n=1200 batch=32768 | blocked:nb=256 - | blocked:nb=128 - | blocked:nb=64 - | twosided - | blocked:nb=32 - # transcribed
