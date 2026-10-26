@@ -129,7 +129,7 @@ Eig<T> make_eig(const Spec& s) {
                 for (int k = 0; k < n; ++k) a += q(i, k) * lam[k] * std::conj(q(j, k));
                 if (i == j) a = cd(a.real(), 0.0);
                 p.mem[p.at(it, i, j)] = MVof<T>::make(a.real(), a.imag());
-                // The mirror is the stored entry's exact conjugate, as the entry's hermitize writes it.
+                // The mirror is the stored entry's exact conjugate, as a Hermitian matrix holds it.
                 if (!s.poison_other && i != j) p.mem[p.at(it, j, i)] = MVof<T>::make(a.real(), -a.imag());
             }
         std::sort(lam.begin(), lam.end());
@@ -358,9 +358,9 @@ TYPED_TEST(SyevCandidates, PinnedCandidatesStraddleTheirLimits) {
                 }
 }
 
-// uplo's other triangle holds a large finite poison: every pinned family must ignore it. cta
-// (Upper), blocked (Lower, n <= 32) and two_stage (Lower, n > 32) read it when called directly;
-// the public entry mirrors the named triangle first, so no family is skipped here.
+// uplo's other triangle holds a large finite poison: every pinned family must ignore it. Before the
+// defect-14 fix cta (Upper), blocked (Lower, n <= 32, through sytrd_cta) and two_stage (Lower, sy2sb)
+// read it; the public entry does no mirror, so this reaches each driver's own loads.
 // evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
 TYPED_TEST(SyevCandidates, OtherTriangleIsNeverRead) {
     using T = typename TestFixture::T;

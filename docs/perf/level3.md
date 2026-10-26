@@ -26,6 +26,7 @@ extents; hemm's, herk's and her2k's also refuse ROCm (rocBLAS wraps none of them
 
 | op | spelling | driver | further `can_run` terms | dtypes |
 |---|---|---|---|---|
+| `symm` | `mirror` | `sycl_symm::symm_mirror`: wide v2's gemm tile staging A from its named triangle ([the mirror family](#level-3-the-mirror-family)), per chunk | `max_wg >= 256`; `mirror::slm_bytes<T>()` fits; ceil(m / tile) <= `max_groups_yz` (grid y) | all four (double: the 16x16 tiled kernel) |
 | `symm` | `expand` | `expand_mirrored`, then the public `gemm`, per chunk | `max_wg >= 256`; one item's scratch fits (`expansion_chunk >= 1`) | all four (complex is complex-symmetric) |
 | `symm` | `vendor` | `backend::symm_vendor`: `?symm` per item | | all four (ROCm: real only) |
 | `syrk` | `gram` | `syrk_gram_tiles`: one tile covers C | n <= `kGramMaxTile` (128); `max_wg >= gram_threads(n)`; tile fits SLM (`src/ops/syrk/syrk.cc:61-62`) | all four |
@@ -36,6 +37,7 @@ extents; hemm's, herk's and her2k's also refuse ROCm (rocBLAS wraps none of them
 | `trmm` | `triangular` | `trmm_triangular_tiles`: row tiles that skip the zero half | `max_wg >= 256`; `Side::Left`; `trmm_tile_groups` <= 65535 (`src/ops/trmm/trmm.cc:60-66`) | all four |
 | `trmm` | `expand` | `expand_triangular`, then `gemm` at beta 0, per chunk | `max_wg >= 256`; one item's scratch fits | all four |
 | `trmm` | `vendor` | `backend::trmm_vendor`: `cublas?trmm` per item | | all four |
+| `hemm` | `mirror` | `symm_mirror<T, Herm>`: the mirrored element conjugated, the diagonal real | as symm's `mirror` | cfloat, cdouble |
 | `hemm` | `expand` | `expand_mirrored<Conjugate>`, then the public `gemm`, per chunk | `max_wg >= 256`; one item's scratch fits | cfloat, cdouble |
 | `hemm` | `vendor` | `backend::hemm_vendor`: `?hemm` per item | not ROCm | cfloat, cdouble |
 | `herk` | `gram` | `syrk_gram_tiles<T, Conjugate>` | n <= 128; `max_wg >= gram_threads(n)` (8-wide thread tile at the 128 tile); tile fits SLM | cfloat, cdouble |
@@ -47,7 +49,7 @@ extents; hemm's, herk's and her2k's also refuse ROCm (rocBLAS wraps none of them
 | `her2k` | `vendor` | `backend::her2k_vendor`: `?her2k` per item | not ROCm | cfloat, cdouble |
 
 A real `ConjTrans` is `Trans` to both syrk tile kernels, so the exact `trans` key keeps it on the
-vendor. The last resort when nothing runs is `expand, vendor` (symm, hemm), `triangular, gram, vendor`
+vendor. The last resort when nothing runs is `mirror, expand, vendor` (symm, hemm), `triangular, gram, vendor`
 (syrk), `triangular, vendor` (syr2k), `expand, triangular, vendor` (trmm), `fold, triangular, gram, vendor`
 (herk) and `fold, triangular, vendor` (her2k). complex<double> has no `triangular`: 64 accumulators of 16 bytes
 fill the 255-register file alone, and her2k's four staged tiles would need 64 KB of SLM.
@@ -154,6 +156,72 @@ complex-symmetric syrk and syr2k cfloat rows are ranked from these herk and her2
 without the conjugate): `gram` first at n <= 64, `triangular` first up to n = 768, at batch >= 4 (syr2k batch >= 2).
 symm's complex rows copy hemm's rule. Vendor-free, `fold` and `expand` feed the native gemm; those builds were
 tested, not timed.
+
+## Level-3: the mirror family {#level-3-the-mirror-family}
+
+`mirror` (symm and hemm, 2026-10-26) computes the product without the n x n scratch copy `expand` writes. It
+exists for `syev_two_stage`'s sy2sb update `Y = A22 P` (Side::Left, Lower, A22 pn x pn, P pn x pk with pk <= 32),
+which reads only A22's lower triangle since defect 14: through `expand` that update copied pn^2 per panel, and
+through the transcribed `vendor` rows (every float `tall` row) it ran one `cublasSsymm` per item.
+
+### Level-3: mirror's tile loader {#level-3-mirror-tile-loader}
+
+`src/ops/symm/kernels/symm_mirror.cc` is wide v2's 64x64 double-buffered gemm (`register_64x64_k16_wide.hh`:
+its lane maps, `gload`/`sstore` staging into the swizzled k-major slab, the fragment loop and both epilogues)
+with its own loader for the symmetric operand (A on the Left, the gemm's B on the Right). Both of wide v2's
+staging maps write the same logical slab, so the loader picks one per slab, uniformly over the work-group:
+
+- a slab strictly inside the named triangle: the gemm's natural load (along i on the Left, along k on the Right);
+- a slab strictly inside the other triangle: the other map, which reads the mirror `A(kk, i)` contiguously
+  (hemm negates the imaginary parts in registers);
+- a slab touching the diagonal: element by element on the along-i map, the address chosen per element, hemm's
+  diagonal imaginary part zeroed. At m = 256 that is 4 of 16 slabs per row tile.
+
+The symmetric operand is staged unpadded (the Right side reuses the NT body's B layout), so the element leg's
+padded k-contiguous rows apply only to the dense operand. The gemm headers are not edited (sm_120's deep gemm
+records hash them). complex<double> takes the k = 8 slab (32 KiB); double has no wide v2 tile and runs gemm's
+16x16 tiled kernel with the same mirrored element read. Limits are in `src/ops/symm/mirror_tile.hh`.
+
+### Level-3: mirror measured on sm_89 {#level-3-mirror-measured-sm89}
+
+`batchlas_tune {symm --dtype float, hemm --dtype cfloat} --reps 8 --warm 0.5 --no-refine` (custom, every arm
+verified, GPU 1), median ms. The sy2sb panel shapes, n = 32:
+
+| op | m | batch | mirror | expand | vendor |
+|---|---|---|---|---|---|
+| symm float | 128 | 1024 | 0.091 | 0.202 | 11.1 |
+| symm float | 256 | 1024 | 0.281 | 0.871 | 19.9 |
+| symm float | 512 | 1024 | 0.983 | 3.22 | 37.3 |
+| symm float | 2048 | 128 | 2.15 | 6.72 | 17.7 |
+| symm float | 2048 | 8 | 0.138 | 0.389 | |
+| hemm cfloat | 256 | 1024 | 0.779 | 1.75 | 14.5 |
+| hemm cfloat | 1024 | 128 | 1.36 | 3.13 | 6.61 |
+| hemm cfloat | 512 | 8 | 0.068 | 0.052 | 0.214 |
+
+symm at m = 256, batch 1024 reads A at ~0.9 TB/s, near the 4090's DRAM roof. On the level-3 grid mirror wins
+every float cell with m or n <= 128 and every `tall` one; `expand` (its gemm on the 128x128 tiles) wins the
+square float cells from 512 up by 1.15-1.25x (1024 x 1024 x 128: 7.75 vs 9.06 ms), and hemm cfloat at
+512 x 512 by 1.06x. hemm at batch 8 and m 255..512 goes to `expand` (32-64 work-groups for mirror). The table
+rows are `custom` on the grid points m 32..2048, n 8..1024, batch 8 / 128 / 1024; double and cdouble keep their
+transcribed rows (FP64 is not tuned on 1:64 parts), and sm_120 keeps its deep table, now stale.
+
+### Level-3: mirror's deliberate breaks {#level-3-mirror-deliberate-breaks}
+
+`tests/symm_mirror_tests.cc` pins `mirror` on every scalar (hemm on complex), with A, B and C in large finite
+poison at ld = rows + 3 and a batch-stride gap, the unnamed triangle poisoned, hemm's diagonal given an imaginary
+part, complex alpha and beta, extents straddling the 64-row tile and the 16-deep slab, both legs (the kernel trace
+names the leg), beta = 0 over NaN, batch 1024 bit-identical, grid z at 65535 | 65536 items and grid y at
+65535 | 65535 + 1 row tiles (one row more is refused), and the coverage `reached` row. Each break below was one
+edit of `symm_mirror.cc`, rebuilt and run (2026-10-26, sm_89); `PinIsReachedPerCoverage` stays green under all.
+
+| break | red (of 6 cases per scalar) | green |
+|---|---|---|
+| a mirrored slab not conjugated (hemm) | cfloat, cdouble: 4 (every case with a slab off the diagonal) | float, double |
+| hemm's diagonal imaginary part kept (diagonal slab) | cfloat, cdouble: 5 | float, double |
+| the Right side's triangle not transposed (`lower_ik = lower`) | float, cfloat, cdouble: 4 | double (tiled kernel), the grid cases |
+| a diagonal slab classed inside the named triangle (`s0 >= k0`) | float, cfloat, cdouble: 5 | double |
+| the batch stride derived as ld x k | float, cfloat, cdouble: 5 | double |
+| double's tiled read ignoring `uplo` | double: 4 | float, cfloat, cdouble |
 
 ## Boundaries and their evidence
 
