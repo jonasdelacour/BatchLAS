@@ -30,7 +30,6 @@ using sygvd_buffer_size = size_t(Queue&, const MatrixView<T, MatrixFormat::Dense
                                  JobType, Uplo);
 template <typename T> using sygvd_factored = sygvd<T>;
 template <typename T> using sygvd_factored_buffer_size = sygvd_buffer_size<T>;
-template <typename T>
 template <typename T> using sygvd_vendor = sygvd<T>;
 template <typename T> using sygvd_vendor_buffer_size = sygvd_buffer_size<T>;
 }  // namespace sig
