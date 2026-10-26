@@ -29,7 +29,7 @@ Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-low
 | eigenvectors, n > 32 | `jobz=V` rows | float: blocked to 448, two-stage 449..1024, vendor above. double: blocked to 448, then vendor. complex<float>: blocked to 512, then vendor. complex<double>: blocked to 256, then vendor |
 | eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
 | vendor-free, double and complex<double>, n > 448 | the same rows, `vendor` skipped | `jobz=V`: blocked; `jobz=N`: two-stage (sm_89). See [the vendor-free double band](#syev-vendor-free-double-band) |
-| blocked / two-stage batch parts | `part_items`, `src/ops/syev/syev.cc` | a batch whose workspace passes `Device::scratch_budget` runs in parts that fit it |
+| blocked / two-stage batch parts | `syev_blocked_chunk`, `syev_two_stage_chunk` (the drivers) | each driver chunks its batch; a chunk whose workspace passes `Device::scratch_budget` is cut to parts that fit it |
 | n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
 | n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
 | backend scope | `can_run` | any non-NETLIB GPU backend; the n ≤ 32 three also need a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm and Apple GPUs have no table and borrow the nearest sm table with a warning (untested on ROCm) |
@@ -539,7 +539,8 @@ dropped), `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000` before the grid cap e
 - Re-measured with the shipped rule against `off`: cta float n=16 b16384 1.001 (one pass at 150 %; the
   sweep's 0.911 there was baseline noise, so read single-pass cells in the table with ~10% doubt), cfloat
   n=16 b131072 0.999, blocked float n=256 b2048 1.000.
-- syev two_stage and stedc are not chunked and not measured.
+- stedc is not chunked. syev two_stage is split only by `BATCHLAS_TUNE_L2_CHUNK_ITEMS` and the scratch-budget
+  cap ([vendor-free band](#syev-vendor-free-double-band)); neither is measured.
 - `steqr_buffer_size` reserves the `steqr_wg` rotation store on the CTA path (open, separate).
 
 ## syev: the vendor-free double band, n = 449 to 1600 {#syev-vendor-free-double-band}
@@ -581,20 +582,37 @@ vendor-free (`SyevTest.DoubleBandSaturatingFullereneShapes`, before the fix):
 The C120 workspace plus A (3.35 GB) does not fit a 24 GB card. The test still passed, because its
 `UnifiedVector` is managed memory and the driver oversubscribes. A device allocation of that size fails.
 
-Since the fix, `syev.cc` (`part_items`) runs the batch in parts when the chosen family's workspace
-exceeds `Device::scratch_budget`, the library's per-call lease of min(`MAX_MEM_ALLOC_SIZE`,
-`GLOBAL_MEM_SIZE` / 4), which is 6 GB on the 4090. Two sizing calls, at 1 and 2 items, give the slope
-and the first guess: half the items that fit, because the last part takes the remainder. The size is
-not linear at small batch everywhere (two_stage at n = 64 in the full build, whose children route to
-the vendor), so the guess halves until both part sizes fit the budget. The parts are independent solves that share one part-sized workspace, and a pointer array of their own (a `batch_range` view has none, and the vendor children of the full build read one), on the
-in-order queue. `syev_buffer_size` reports the larger of the two part sizes (a full part and the
-last one), because the family's own size is not monotone in the batch: blocked's inner chunk is
-grid-capped above 32767 items and `BATCHLAS_TUNE_L2_CHUNK_ITEMS` can force it. Eigenvalues are offset by
-`b0 n`, and a per-item `info` by `b0`. The vendor and the n ≤ 32 families are not split. On the 4090,
-C120 now runs in parts of about 240 items. C300 fits the budget and runs as one call, as before.
-On a device whose budget exceeds about 22.3 GiB (sm_120, 96 GB) C120 runs as one call, so the test
-seam `ops::syev::detail::ScopedPartBudget` (`src/ops/syev/parts.hh`) replaces the budget to force parts
-on any device.
+Since the fix, each driver chunks its own batch, as geqrf, ormqr, orgqr, gesvd, potrf, getrf and
+`syev_cta` do, and sizes its workspace for one chunk. The chunk is the driver's rule below the budget,
+then capped (`budget_capped_chunk`, `src/ops/syev/kernels/chunk_budget.hh`) when its largest part (a
+full chunk plus the remainder) passes `Device::scratch_budget`. That budget is the library's per-call
+lease of min(`MAX_MEM_ALLOC_SIZE`, `GLOBAL_MEM_SIZE` / 4), 6 GB on the 4090. The cap sizes candidates
+with the driver's own part layout (`syev_blocked_part_buffer_size`, `syev_two_stage_part_buffer_size`),
+not a slope: a bisection finds the most items one part holds, then the fewest near-even parts whose
+largest part holds no more and is sized to fit. Only a chunk sized to fit is returned (the size is not
+monotone in the items everywhere: the remainder, and children that chunk). C120 double `jobz=V`
+`blocked` on the 4090: at most 479 items fit, so 4 parts of 454, 454, 454 and 457.
+
+- `syev_blocked`: the L2 rule and the grid cap as before (`SYEV_BLOCKED_L2_CHUNK_PERCENT` = 0: one part
+  below 32768 items), then the budget cap.
+- `syev_two_stage`: no L2 rule was measured, so below the budget only `BATCHLAS_TUNE_L2_CHUNK_ITEMS`
+  splits it. One part is the original call on the caller's view, unchanged.
+
+The buffer-size query and the launch call the same chunk function, so they agree. Below the budget
+the chunk is the one the rule gave before the cap existed. Eigenvalues are offset by `b0 n`, and a
+per-item `info` by `b0`. The vendor and the n ≤ 32 families are not split. C300 fits the budget and
+runs as one call. On a device whose budget exceeds about 22.3 GiB (sm_120, 96 GB) C120 also runs as one
+call, so the test seam `ops::syev::detail::ScopedChunkBudget` (next to the drivers) replaces the budget
+to force the cap on any device.
+
+**Pointer arrays.** A `batch_range` view has no pointer array. `syev_blocked`'s children never read one:
+its loop always passed such views, and in the full tree `ChunksKeepEigenpairsPerItem` (parts 7, 7 and 9
+of a view without a pointer array) passes with every child gemm on the vendor. `two_stage`'s does: in the
+full tree `sytrd_sy2sb`'s panel `geqrf` routes to the vendor (`cublas<t>geqrfBatched`, double n = 64:
+`geqrf double form=sq n=32 -> vendor`), which reads the view's array, and the parts threw `data_ptrs target
+is null`. So when `two_stage` splits the batch, the driver gives the parts one pointer array of the
+largest part's length, after the part workspace (`syev_two_stage_chunk_bytes`). The vendor wrapper
+refills it from each part's base before the call. One part keeps the caller's view and array.
 
 **Tests** (`tests/syev_tests.cc`). Every input is a graded Hermitian matrix, `fill_graded_hermitian` with
 condition 10⁶. The band grid, the pins and the part-loop case store it through `fill_poisoned`: ld = n + 3,
@@ -613,12 +631,16 @@ through `EXPECT_VERIFY`: values, eigen residual and orthogonality.
   pinned family, both jobz, Upper. W and V of every item are bit-identical to item 0, and item 0
   verifies.
 - `DoubleBandSaturatingFullereneShapes` (heavy tier, double only): the C120 and C300 shapes under Auto,
-  `jobz=V`. The first and last items verify. It records `workspace_MiB_n<order>` in the gtest XML.
-- `BatchPartsUnderAScratchBudget` (quick tier, every scalar type): a `ScopedPartBudget` of 4.5 items'
-  workspace, capped below the whole batch's, cuts batch 7 at n = 64 into parts of 2, 2 and 3 where the
-  size is linear. Each family pinned, both uplo and jobz, a per-item `info` span poisoned with −1, and
-  every item verified. `syev_buffer_size` must fit the budget, be less than the whole batch's, and
-  (linear case) equal the 3-item size.
+  `jobz=V`. A native route's workspace must fit `scratch_budget`. The first and last items verify. It
+  records `workspace_MiB_n<order>` in the gtest XML.
+- `BatchPartsUnderAScratchBudget` (quick tier, every scalar type): batch 7 at n = 64 is split two ways,
+  by `BATCHLAS_TUNE_L2_CHUNK_ITEMS` = 2 and by a `ScopedChunkBudget` of 3.5 items' workspace (below the
+  whole batch's). Either way the parts are 2, 2 and 3, a middle part included. Each family pinned, both
+  uplo and jobz, a per-item `info` span poisoned with −1, and every item verified. `syev_buffer_size` must
+  equal the 3-item size (plus `two_stage`'s pointer array), and under the budget fit it.
+- `NativeFamiliesFitTheScratchBudgetAtFullereneShapes` (quick tier, every scalar type, sizes only): each
+  family pinned at C120 and C300, both jobz. The size must fit `scratch_budget`. Where the uncapped size
+  (the seam lifted to `SIZE_MAX`) passes it, the cap must have cut it. On the 4090 that is C120.
 - `VendorFreeCpuHasNoRoute` (vendor-free NETLIB only): `syev` and `syev_buffer_size` on the CPU queue
   throw `NoRouteError`, for both jobz.
 

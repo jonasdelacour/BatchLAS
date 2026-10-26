@@ -11,15 +11,19 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
+#include <batchlas/util/mempool.hh>
 #include <batchlas/tuning_params.hh>
 #include <src/select/vendor.hh>
-#include <src/ops/syev/parts.hh>
+#include <src/ops/syev/kernels/chunk_budget.hh>
+#include <src/select/select.hh>
 #include <batchlas/no_route.hh>
 #include <algorithm>
 #include <cstring>
 #include <complex>
 #include <initializer_list>
+#include <limits>
 #include <string>
+#include <utility>
 #include <iostream>
 #include <vector>
 #include <cmath>
@@ -1007,7 +1011,8 @@ TYPED_TEST(SyevTest, DoubleBandSaturatingBatchIsBitIdentical) {
 }
 
 // The two fullerene workloads at their own batch under Auto (double only: the Hamiltonians are real),
-// jobz = V, Lower: the route sizes its workspace for the whole call and solves. First and last items verify.
+// jobz = V, Lower: a native route's workspace fits the scratch budget, and the call solves. First and last
+// items verify.
 TYPED_TEST(SyevTest, DoubleBandSaturatingFullereneShapes) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
@@ -1036,6 +1041,10 @@ TYPED_TEST(SyevTest, DoubleBandSaturatingFullereneShapes) {
             const std::string route = traced_syev<B, T>(*this->ctx, A.view(), W, JobType::EigenVectors, Uplo::Lower);
             EXPECT_EQ(route.find("last resort"), std::string::npos) << where << ": " << route;
             if (!kVendor) EXPECT_TRUE(route == "blocked" || route == "two_stage") << where << ": " << route;
+            if (route == "blocked" || route == "two_stage")
+                EXPECT_LE(ws, static_cast<std::size_t>(batchlas::select::describe(this->ctx->device(), this->ctx->backend(),
+                                                                                 false).scratch_budget))
+                    << where << ": the chunk's workspace passes the scratch budget";
             for (const int b : {0, batch - 1}) {
                 const VectorView<Real> wb(&W[size_t(b) * n], n, 1);
                 const auto& A0 = b == 0 ? first : last;
@@ -1053,56 +1062,101 @@ TYPED_TEST(SyevTest, DoubleBandSaturatingFullereneShapes) {
     }
 }
 
-// The part loop on a batch small enough for the quick tier: a budget of 4.5 items' workspace (below the
-// whole batch's) cuts batch 7 into parts of 2, 2 and 3 where the size is linear, a middle part included;
-// each pinned family, poisoned strided storage, a per-item info span, and every item verified.
+// The drivers' chunk loop on a batch small enough for the quick tier, forced two ways: the tuning override
+// (BATCHLAS_TUNE_L2_CHUNK_ITEMS = 2) and a budget of 3.5 items' workspace, below the whole batch's, which
+// the budget cap must meet. Both cut batch 7 into parts of 2, 2 and 3 where the size is linear, a middle
+// part included; each pinned family, poisoned strided storage, a per-item info span, every item verified.
 TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
     using T = typename TestFixture::ScalarType;
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B == Backend::NETLIB) {
-        GTEST_SKIP() << "the part loop serves the native families, GPU kernels";
+        GTEST_SKIP() << "the chunk loop serves the native families, GPU kernels";
     } else {
         const int n = 64, batch = 7, ld = n + 3, stride = ld * n + 5;
-        for (const char* family : {"blocked", "two_stage"})
-            for (const BandCase& c : band_grid({n})) {
-                const std::string where = family + band_where(n, c.uplo, c.jobz);
-                const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
-                UnifiedVector<T> buf(size_t(stride) * batch, T(0));
-                UnifiedVector<T*> ptrs(batch, nullptr);
-                MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
-                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
-                const auto lambda = fill_poisoned<T>(*this->ctx, A, c.uplo, A0);
-                UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
-                const auto size_of = [&](int items) {
-                    return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo);
-                };
-                const std::size_t one = size_of(1), per = size_of(2) - one, three = size_of(3), whole = size_of(batch);
-                ASSERT_GT(per, 0u) << where;
-                const std::size_t budget_bytes = std::min(one + 3 * per + per / 2, whole - 1);
-                const bool linear = three == one + 2 * per && whole == one + 6 * per;
-                const ops::syev::detail::ScopedPartBudget budget(budget_bytes);
-                const std::size_t parted = size_of(batch);
-                // The parts' own pointer array (64-byte aligned, 3 items) follows the family's workspace.
-                const std::size_t ptr_bytes = 64 + 3 * sizeof(T*);
-                if (linear) EXPECT_EQ(parted, three + ptr_bytes) << where << ": the largest part is 3 items";
-                EXPECT_LE(parted, budget_bytes + 64 + batch * sizeof(T*))
-                    << where << " one=" << one << " per=" << per << " whole=" << whole;
-                EXPECT_LT(parted, whole) << where;
-                UnifiedVector<std::byte> ws(parted);
-                UnifiedVector<int32_t> info(batch, int32_t(-1));
-                (void)syev<B, T>(*this->ctx, A, W.to_span(), c.jobz, c.uplo, ws.to_span(), info.to_span());
-                this->ctx->wait();
-                for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << where << " item " << b;
-                const VectorView<Real> w(W.data(), n, batch);
-                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
-                if (c.jobz != JobType::EigenVectors) continue;
-                EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
-                    << where;
-                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(*this->ctx, A, A0.all_items()))
-                    << where;
-            }
+        for (const bool by_budget : {false, true})
+            for (const char* family : {"blocked", "two_stage"})
+                for (const BandCase& c : band_grid({n})) {
+                    const std::string where = family + band_where(n, c.uplo, c.jobz) + (by_budget ? " budget" : " items=2");
+                    const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
+                    UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                    UnifiedVector<T*> ptrs(batch, nullptr);
+                    MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                    Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                    const auto lambda = fill_poisoned<T>(*this->ctx, A, c.uplo, A0);
+                    UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                    const auto size_of = [&](int items) {
+                        return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo);
+                    };
+                    const std::size_t one = size_of(1), per = size_of(2) - one, three = size_of(3), whole = size_of(batch);
+                    ASSERT_GT(per, 0u) << where;
+                    ASSERT_LT(three, whole) << where;
+                    // two_stage's parts carry a pointer array (3 entries) after the part's own workspace.
+                    const std::size_t ptr_bytes =
+                        std::string(family) == "two_stage" ? BumpAllocator::allocation_size<T*>(*this->ctx, 3) : 0;
+                    const std::size_t budget_bytes = std::min(one + 2 * per + per / 2 + ptr_bytes, whole - 1);
+                    const bool linear = three == one + 2 * per && whole == one + 6 * per;
+                    const ScopedEnvVar items("BATCHLAS_TUNE_L2_CHUNK_ITEMS", by_budget ? nullptr : "2");
+                    const ops::syev::detail::ScopedChunkBudget budget(by_budget ? budget_bytes : 0);
+                    const std::size_t parted = size_of(batch);
+                    if (!by_budget || linear)
+                        EXPECT_EQ(parted, three + ptr_bytes) << where << ": the largest part is 3 items";
+                    if (by_budget) EXPECT_LE(parted, budget_bytes) << where << " one=" << one << " per=" << per << " whole=" << whole;
+                    UnifiedVector<std::byte> ws(parted);
+                    UnifiedVector<int32_t> info(batch, int32_t(-1));
+                    (void)syev<B, T>(*this->ctx, A, W.to_span(), c.jobz, c.uplo, ws.to_span(), info.to_span());
+                    this->ctx->wait();
+                    for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << where << " item " << b;
+                    const VectorView<Real> w(W.data(), n, batch);
+                    EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
+                    if (c.jobz != JobType::EigenVectors) continue;
+                    EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
+                        << where;
+                    EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(*this->ctx, A, A0.all_items()))
+                        << where;
+                }
+    }
+}
+
+// The budget cap at the fullerene shapes, size queries only (quick tier): each native family pinned, both
+// jobz, every scalar type. The size fits Device::scratch_budget, and where the uncapped size (the seam
+// lifted out of reach) passes it, as C120 does on a 24 GB card, the cap cut it.
+TYPED_TEST(SyevTest, NativeFamiliesFitTheScratchBudgetAtFullereneShapes) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "the native families are GPU kernels";
+    } else {
+        const auto budget = static_cast<std::size_t>(
+            batchlas::select::describe(this->ctx->device(), this->ctx->backend(), false).scratch_budget);
+        ASSERT_GT(budget, 0u);
+        int capped = 0;
+        for (const char* family : {"blocked", "two_stage"}) {
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
+            for (const std::pair<int, int> shape : {std::pair{480, 1819}, std::pair{1200, 76}})
+                for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                    const int n = shape.first, batch = shape.second;
+                    const std::string where = std::string(family) + " n=" + std::to_string(n) + " batch=" +
+                                              std::to_string(batch) + (jobz == JobType::EigenVectors ? " V" : " N");
+                    const MV A(nullptr, n, n, n, n * n, batch);  // sizing reads no element
+                    const auto size = [&] { return syev_buffer_size<B, T>(*this->ctx, A, Span<Real>{}, jobz, Uplo::Lower); };
+                    const std::size_t ws = size();
+                    std::size_t whole = 0;
+                    {
+                        const ops::syev::detail::ScopedChunkBudget lifted(std::numeric_limits<std::size_t>::max());
+                        whole = size();
+                    }
+                    EXPECT_LE(ws, budget) << where << " whole=" << whole;
+                    if (whole > budget) {
+                        ++capped;
+                        EXPECT_LT(ws, whole) << where;
+                    }
+                }
+        }
+        ::testing::Test::RecordProperty("capped_shapes", std::to_string(capped));
     }
 }
 
