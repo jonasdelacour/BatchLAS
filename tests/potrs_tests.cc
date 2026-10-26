@@ -457,8 +457,8 @@ TYPED_TEST(PotrsTest, CoverageRowNamesThePinnedFamily) {
 }
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with uplo, n, nrhs and
-// batch alone. BREAK (run 2026-10-26): key_of spells nrhs as 1. RED: exactly the nrhs probe of this test,
-// every CUDA type; every other potrs test GREEN.
+// batch alone. BREAK (run 2026-10-26): key_of spells nrhs as 1. RED: exactly the nrhs probe of this test
+// and AutoReadsTheShippedTable (its nrhs-straddling cells), every CUDA type; every other potrs test GREEN.
 TYPED_TEST(PotrsTest, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     if (!this->fits(64, 8)) GTEST_SKIP() << "the fused family cannot run on this queue";

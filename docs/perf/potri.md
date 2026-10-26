@@ -8,12 +8,12 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 ## potrs and potri {#potrs-and-potri}
 
 - **`potrs(A, B, uplo)`** is the second half of `posv`, exposed: `B := A^-1 B` from the factor in the
-  `uplo` triangle of `A`, no workspace, no `info`. It has no `Op` and no `BATCHLAS_POTRS_ROUTE`. It runs
-  the one-launch fused solve (`getrs_fused.cc`, both substitutions, B in SLM) where
-  `ops::potrs::fused_fits` holds (GPU with sub-group size 32, `nrhs <= 8`, `n * nrhs` within the SLM cap),
-  and two public `trsm` calls otherwise. `src/ops/potrs/potrs.hh` holds the one implementation: posv's
-  `cta` choice is `potrf` + `solve(fused = true)`, its `blocked` choice `potrf` + `solve(fused = false)`.
-  `PotrsIsBitIdenticalToPosvOnTheSameRoute` compares the two bit for bit on both families.
+  `uplo` triangle of `A`, no workspace, no `info`. Since 2026-10-26 it is a routed op (`Op::potrs`,
+  `BATCHLAS_POTRS_ROUTE`, measured tables): the one-launch fused solve (`getrs_fused.cc`, both
+  substitutions, B in SLM) or two public `trsm` calls, chosen per cell
+  ([potrs selection](potrs.md#potrs-selection)). `src/ops/potrs/potrs.hh` holds the one implementation:
+  posv's `cta` choice is `potrf` + `solve(fused = true)`, its `blocked` choice `potrf` + `solve(fused = false)`.
+  `FusedMatchesPosvCtaAndTrsmMatchesPosvBlockedBitForBit` (`tests/potrs_tests.cc`) compares them bit for bit.
 - **`potri(A, uplo, full, ws, info)`** follows LAPACK `?potri`: the factor in, the `uplo` triangle of the
   inverse out. `full = true` also writes the conjugate transpose into the other triangle. It forms the
   inverse by solving `A X = I` on an `n x n` identity per item held in the workspace
