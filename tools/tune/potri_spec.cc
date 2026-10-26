@@ -2,9 +2,9 @@
 // untimed, by the public potrf under Auto; the timed call turns the Lower factor into the Lower triangle of the
 // inverse, which is mirrored onto a copy and checked on the default items by MatrixView::solve_residual with an
 // empty B (|| A0 X - I ||; Check::solve, docs/design/verification.md). A is restored from the factor before every
-// run, so an arm that writes nothing cannot inherit a correct inverse. Both families' times include the public
-// trsm (and, for fused, the one-launch solve) they call; no candidate's time includes potrf.
-// Only Lower is tuned: Upper runs the same kernels on the transposed sweep and the table has no uplo key.
+// run, so an arm that writes nothing cannot inherit a correct inverse. blocked's times include the public trmm,
+// gemm and herk/syrk it calls; no candidate's time includes potrf.
+// Only Lower is tuned: Upper runs the same kernels on the conjugate-transposed sweep and the table has no uplo key.
 
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/error.hh>
@@ -91,9 +91,9 @@ public:
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {
         const double n = double(key_int(k, "n"));
-        return 5.0 * n * n * double(key_int(k, "batch")) * dtype_bytes(dtype);  // A0, L, A, X and the identity workspace
+        return 4.5 * n * n * double(key_int(k, "batch")) * dtype_bytes(dtype);  // A0, L, A, X and blocked's W
     }
-    FrontierPlan frontier() const override { return {1}; }  // as getri: the two families cross once per row
+    FrontierPlan frontier() const override { return {1}; }  // cta and blocked cross once per row
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin
         return {
@@ -103,17 +103,22 @@ public:
             // family: fused
             "src/ops/getrs/kernels/getrs_fused.cc",
             "src/ops/getrs/getrs_native.hh",
+            // family: blocked
+            "src/ops/potri/potri_blocked.hh",
             // common
+            "src/ops/potri/kernels/potri_cta.cc",
             "src/ops/potri/kernels/potri_native.cc",
             "src/ops/potri/potri_native.hh",
+            "src/ops/potrf/potrf_slm_hole.hh",
             "src/ops/potrs/potrs.hh",
             "src/ops/potri/choice.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/potri/potri.cc"
-        // blocked calls the public trsm: its native kernels count too.
-        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // blocked calls the public trmm, gemm, herk and syrk; its batch chunk comes from tuning_params.hh.
+        // family: blocked "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/ops/trmm/choice.hh" "src/ops/herk/choice.hh" "src/ops/syrk/choice.hh" "include/batchlas/tuning_params.hh"
+        // family: identity "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potri_spec.cc"; }
