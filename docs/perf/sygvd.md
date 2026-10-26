@@ -98,66 +98,98 @@ items at kb < 32). Orders 32, 16 and 8 are compile-time instances. At float n = 
 first version (one 32-wide group per item, a runtime order, scalar `F` loads) took 0.33 ms; this one
 takes 0.20 ms, against `twosided`'s 0.21 ms.
 
-**Workspace**, per pass of the L2 chunking that potrf uses (`blocked_chunk`, `BLOCKED_L2_CHUNK_PERCENT`):
+**Workspace**, per pass of the L2 chunking that potrf uses (`blocked_chunk`, `BLOCKED_L2_CHUNK_PERCENT`),
+but never fewer than 4 x CU items per pass (`kBlockedMinChunkCus`, [measured](#sygst-measured)):
 two pointer arrays for the vendor `trsm`, `H` (nb x nb per item) and, for itypes 2 and 3, `W` (n x nb per
 item). There is no n x n buffer. A single diagonal block (n <= min(nb, 32)) needs none.
 
 **can_run** (`src/ops/sygst/sygst.cc:57-60`): homogeneous batch, `n >= 1`, a GPU, a compiled `nb`,
 `max_wg >= 128`, and the diagonal kernel's shared memory at order min(n, 32) within `slm_budget`. All
 of these are correctness conditions. `twosided` (`:62`) stays as the second native family. The measured
-tables rank it first in 33 of 192 rows: float n = 27..76 (every batch at n = 33, batch >= 8192 at
-n = 27..54, batch <= 2048 at n = 64, 76) and n = 128..351 at batch 128 (128 also at 512), and cfloat
-n = 70..277 at batch 128 and a few n <= 16 cells at batch >= 8192. There the trailing BLAS-3 calls of
-`blocked` are too small to pay for their launches, and `twosided`'s two large `trsm` win.
+tables rank it first in 33 of 165 float itype-1 rows (n = 33..76 at most batches, n <= 351 at batch
+128) and 30 of 173 cfloat ones (n = 70..277 at batch 128, n <= 16 at batch >= 8192), where the trailing
+BLAS-3 calls of `blocked` are too small to pay for their launches. For itypes 2 and 3 it is first in 128
+of 292 float rows (n = 33..256 at batch <= 2048, up to 558 at batch 128, n = 33..128 above) and 22 of 322
+cfloat rows: there `twosided` runs two `trmm`, which work at gemm speed, not two `trsm`
+([why](#sygst-measured)).
 
 ## sygst: measured {#sygst-measured}
 
-RTX 4090 (sm_89, GPU 1, headless), CUDA 13.2, DPC++ `/opt/dpcpp-cuda`, 2026-10-26. Itype 1 Lower, the
-tuner's spec (`tools/tune/sygst_spec.cc`) under the cold protocol (L2 scrub before every sample),
-`batchlas_tune sygst --reps 16 --passes 2 --no-refine --cap-gib 8`. Each arm is pinned and verified;
-pass 2 runs the arms in reverse order. Time is pass 2's median. "Old" is `twosided`, the only CUDA route
-before this family. "Auto" is the first entry of the shipped table's nearest row. Raw data:
-`final_ab/` in the session's evidence directory, not committed.
+RTX 4090 (sm_89, GPU 1, headless), CUDA 13.2, DPC++ `/opt/dpcpp-cuda`, 2026-10-27. The table keys are
+itype, uplo, n and batch: itype 1 runs `trsm`, itypes 2 and 3 run `trmm`, and the earlier itype-1-only
+table sent itype 2/3 cells to `blocked` where `twosided` was 1.2x faster. The tables come from
+`batchlas_tune sygst --tier deep --dtype float` (run `20261026T230652-JRHNBR-1807408`, 457 cells) and
+`--dtype cfloat` (`20261026T230955-JRHNBR-1810656`, 495 cells), over itype 1, 2, 3 x uplo L, U, under
+the cold protocol (L2 scrub before every sample), then `scripts/sweep_to_table.py`.
 
-| dtype | n | batch | twosided (old) ms | best blocked ms (nb) | Auto picks | Auto ms | old / Auto | reps |
-|---|---:|---:|---:|---:|---|---:|---:|---:|
-| float | 8 | 128 | 0.05544 | 0.01878 (32) | `blocked:nb=32` | 0.01878 | 2.95x | 16 |
-| float | 8 | 1024 | 0.01799 | 0.009045 (64) | `blocked:nb=32` | 0.009173 | 1.96x | 16 |
-| float | 16 | 128 | 0.04115 | 0.01817 (64) | `blocked:nb=32` | 0.01846 | 2.23x | 16 |
-| float | 16 | 1024 | 0.03961 | 0.01959 (32) | `blocked:nb=64` | 0.02017 | 1.96x | 16 |
-| float | 32 | 128 | 0.04529 | 0.02486 (32) | `blocked:nb=32` | 0.02486 | 1.82x | 16 |
-| float | 32 | 1024 | 0.05059 | 0.03466 (32) | `blocked:nb=32` | 0.03466 | 1.46x | 16 |
-| float | 64 | 128 | 0.09255 | 0.1059 (64) | `twosided` | 0.09255 | 1.00x | 16 |
-| float | 64 | 1024 | 0.1765 | 0.1965 (32) | `twosided` | 0.1765 | 1.00x | 16 |
-| float | 128 | 128 | 0.2104 | 0.3196 (64) | `twosided` | 0.2104 | 1.00x | 16 |
-| float | 128 | 1024 | 0.7401 | 0.7642 (64) | `twosided` | 0.7401 | 1.00x | 16 |
-| float | 256 | 128 | 0.578 | 0.9317 (128) | `twosided` | 0.578 | 1.00x | 16 |
-| float | 256 | 1024 | 4.951 | 4.46 (128) | `blocked:nb=128` | 4.46 | 1.11x | 16 |
-| float | 480 | 128 | 2.997 | 2.73 (128) | `blocked:nb=128` | 2.73 | 1.10x | 16 |
-| float | 480 | 1024 | 24.76 | 22.07 (128) | `blocked:nb=128` | 22.07 | 1.12x | 16 |
-| float | 1024 | 128 | 21.73 | 11.65 (256) | `blocked:nb=256` | 11.65 | 1.87x | 16 |
-| cfloat | 8 | 128 | 0.08174 | 0.01889 (64) | `blocked:nb=32` | 0.02081 | 3.93x | 16 |
-| cfloat | 8 | 1024 | 0.0782 | 0.01581 (128) | `blocked:nb=32` | 0.02053 | 3.81x | 16 |
-| cfloat | 16 | 128 | 0.07553 | 0.02452 (32) | `blocked:nb=32` | 0.02452 | 3.08x | 16 |
-| cfloat | 16 | 1024 | 0.08469 | 0.03524 (32) | `blocked:nb=32` | 0.03524 | 2.40x | 16 |
-| cfloat | 32 | 128 | 0.1011 | 0.0333 (32) | `blocked:nb=32` | 0.0333 | 3.03x | 16 |
-| cfloat | 32 | 1024 | 0.1898 | 0.07843 (32) | `blocked:nb=32` | 0.07843 | 2.42x | 16 |
-| cfloat | 64 | 128 | 0.1602 | 0.1401 (128) | `blocked:nb=32` | 0.1408 | 1.14x | 16 |
-| cfloat | 64 | 1024 | 0.4503 | 0.3113 (32) | `blocked:nb=32` | 0.3113 | 1.45x | 16 |
-| cfloat | 128 | 128 | 0.38 | 0.3984 (64) | `twosided` | 0.38 | 1.00x | 16 |
-| cfloat | 128 | 1024 | 2.586 | 1.579 (64) | `blocked:nb=64` | 1.579 | 1.64x | 16 |
-| cfloat | 256 | 128 | 1.3 | 1.359 (128) | `twosided` | 1.3 | 1.00x | 16 |
-| cfloat | 256 | 1024 | 12.67 | 10.77 (128) | `blocked:nb=64` | 11.43 | 1.11x | 16 |
-| cfloat | 480 | 128 | 6.796 | 5.262 (128) | `blocked:nb=128` | 5.262 | 1.29x | 16 |
-| cfloat | 480 | 1024 | 56.02 | 41.57 (128) | `blocked:nb=128` | 41.57 | 1.35x | 16 |
-| cfloat | 1024 | 128 | 48.23 | 27.14 (256) | `blocked:nb=256` | 27.14 | 1.78x | 16 |
+**Auto against `twosided`** (the only CUDA route before `blocked`), `sygst_benchmark` warm
+(`--warmup=3 --min_iters=8`), 4 reps alternating the arm order after a discarded pass, under the timing
+lock; largest relative spread 8.8 %. Each cell is twosided / Auto and the family Auto took (`ts` is
+`twosided`, `bN` is `blocked:nb=N`); a `ts` cell compares an arm with itself. cfloat n = 1024 at batch
+1024 does not fit in 24 GB.
 
-The tables come from `batchlas_tune sygst --tier deep --dtype float` (run
-`20261026T141406-JRHNBR-940530`) and `--dtype cfloat` (`20261026T142225-JRHNBR-969703`), 96 cells each,
-`scripts/sweep_to_table.py`. double and cdouble are not timed on a 1:64-FP64 GPU (agent guide §10).
-Their sm_89 rows, every sm_120 row and the sm_89 float/cfloat grid cells past the tuner's memory cap
-are run `transcribed-fd79f23c` (untimed): each is a copy of the nearest sm_89 `deep` float or cfloat row,
-written by a one-off script that is not committed. `TunedTables.SygstTablesAreMeasuredOnSm89AndTranscribedFromIt` checks that relation.
+| dtype | itype | uplo | n 64 b 128 | n 64 b 1024 | n 256 b 128 | n 256 b 1024 | n 480 b 128 | n 480 b 1024 | n 1024 b 128 | n 1024 b 1024 |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| float | 1 | L | 1.00x ts | 1.00x ts | 1.05x ts | 1.33x b64 | 1.08x b128 | 1.76x b128 | 1.68x b256 | 2.87x b256 |
+| float | 1 | U | 1.00x ts | 1.00x ts | 1.00x ts | 1.29x b64 | 1.12x b128 | 1.62x b128 | 1.44x b256 | 2.27x b256 |
+| float | 2 | L | 0.99x ts | 1.00x ts | 1.04x ts | 1.00x ts | 0.90x b128 | 0.91x b128 | 1.25x b256 | 2.05x b256 |
+| float | 2 | U | 0.99x ts | 1.00x ts | 0.96x ts | 1.00x ts | 0.98x b128 | 1.09x b128 | 1.42x b128 | 2.30x b128 |
+| float | 3 | L | 0.99x ts | 1.00x ts | 1.00x ts | 1.00x ts | 0.91x b128 | 0.91x b128 | 1.25x b256 | 2.03x b256 |
+| float | 3 | U | 0.99x ts | 1.00x ts | 0.93x ts | 1.00x ts | 0.98x b128 | 1.09x b128 | 1.42x b128 | 2.30x b128 |
+| cfloat | 1 | L | 1.07x b32 | 1.44x b32 | 1.00x ts | 1.63x b64 | 1.31x b128 | 1.62x b128 | 1.78x b256 | - |
+| cfloat | 1 | U | 1.07x b32 | 1.49x b32 | 0.99x ts | 1.64x b64 | 1.32x b128 | 1.58x b128 | 1.65x b256 | - |
+| cfloat | 2 | L | 1.00x ts | 1.22x b32 | 1.13x b128 | 1.15x b128 | 1.30x b128 | 1.40x b128 | 1.74x b256 | - |
+| cfloat | 2 | U | 0.99x ts | 1.21x b32 | 1.05x b128 | 1.08x b64 | 1.36x b128 | 1.52x b128 | 1.86x b256 | - |
+| cfloat | 3 | L | 1.00x ts | 1.17x b32 | 1.13x b128 | 1.15x b128 | 1.37x b256 | 1.44x b256 | 1.75x b256 | - |
+| cfloat | 3 | U | 0.99x ts | 1.19x b32 | 1.05x b128 | 1.08x b64 | 1.36x b128 | 1.52x b128 | 1.87x b256 | - |
+
+Float n = 256, batch 1024, itype 2 Lower was 3.23 ms on `blocked:nb=128` against `twosided`'s 2.65 ms
+before the keys; Auto now takes `twosided`. One loss is left: float itypes 2 and 3 Lower at n = 480,
+0.90-0.91x warm. Cold, the tuner measured a tie there (batch 128: `blocked:nb=128` 1.776 ms, `twosided`
+1.799; batch 512: 6.786 against 6.762), and the table keeps its first entry.
+
+**Why `blocked` loses itypes 2 and 3 at small n.** `twosided` itype 2 is two `trmm`, which run at gemm
+speed, while itype 1's two `trsm` do not: at float n = 256, batch 1024, `twosided` takes 2.65 ms for
+itype 2 and 4.95 ms for itype 1. `blocked` halves the flops but issues dozens of small child calls per
+pass (the order-128 diagonal blocks recurse at 32). An nsys profile of `blocked:nb=128` itype 2 there
+(potrf's chunking, before the floor below) spends per call 1.11 ms in `sgemm` kernels (60 launches,
+most of them the products against `H`), 0.74 ms in `syr2k`, 0.50 ms in the diagonal kernels, 0.37 ms in `trmm`'s
+triangular tiles and 0.22 ms in the mirror kernel: 3.28 ms against `twosided`'s 2.69 ms. The `trmm` path
+is not the cost, and no single child is cheap to remove.
+
+**The chunk floor.** potrf's L2 chunk (75 % of L2 per pass, rounded up to the CU count) split float
+n = 256..480 at batch 1024 into parts of 128 to 256 items, and every child then ran on a small batch.
+Best `blocked` ms in tuner screens (cold, 16 reps, itype 1 and 2 Lower) at potrf's chunk, at forced
+512-item parts (`BATCHLAS_TUNE_L2_CHUNK_ITEMS=512`) and with no chunking:
+
+| dtype | itype | n | batch | potrf's chunk | 512 items | one pass |
+|---|---:|---:|---:|---:|---:|---:|
+| float | 1 | 256 | 1024 | 4.451 | 3.676 | 3.443 |
+| float | 1 | 256 | 4096 | 17.94 | 14.75 | 14.32 |
+| float | 1 | 480 | 1024 | 22.02 | 14.04 | 13.71 |
+| float | 2 | 256 | 4096 | 13.27 | 13.22 | 14.08 |
+| float | 2 | 480 | 1024 | 14.48 | 13.61 | 13.65 |
+| cfloat | 1 | 128 | 4096 | 5.748 | 5.728 | 7.03 |
+| cfloat | 1 | 256 | 1024 | 10.72 | 7.772 | 7.988 |
+| cfloat | 2 | 128 | 4096 | 4.91 | 4.906 | 5.987 |
+| cfloat | 2 | 480 | 1024 | 33.25 | 30.56 | 30.49 |
+
+One pass loses where items are small (cfloat n = 128, whose chunk is already 512); 512 items is never
+more than 7 % behind the better of the other two. `blocked_chunk` therefore keeps potrf's chunk but
+never goes below 4 x CU items (`kBlockedMinChunkCus`; 512 on the 4090). float n = 128, whose chunk is
+896, keeps it (at 512 it lost up to 26 %). `BATCHLAS_TUNE_L2_CHUNK_ITEMS` still forces the size.
+
+**Transcribed rows.** double and cdouble are not timed on a 1:64-FP64 GPU (agent guide §10). Their sm_89
+rows, every sm_120 row and the sm_89 float/cfloat cells past the tuner's memory cap are run
+`transcribed-7d0b0f84` (untimed), written by `scripts/transcribe/sygst_transcribe.py`: each is a copy of
+the nearest sm_89 `deep` float or cfloat row with the same itype and uplo, also at every key an earlier
+transcribed run wrote. `TunedTables.SygstTablesAreMeasuredOnSm89AndTranscribedFromIt` checks that
+relation. Its input table is the measured one: `sweep_to_table.py --ledger DIR` on a copy of the sm_89
+ledger holding only the float and cfloat lines, without their transcribed run lines (the earlier
+transcribed run shares the deep runs' date and sorts after them, so its two-key run line would otherwise
+head the float keys). Re-run that way on the ledgers before it, the script regenerates both
+byte-identically. Raw data (screens, A/B CSV, the measured table): `leftovers/sygst3/` in the
+session's evidence directory, not committed.
 
 ## sygst: the deliberate breaks {#sygst-the-deliberate-breaks}
 
@@ -203,8 +235,8 @@ uplo, `BATCHLAS_SYGST_ROUTE` pins) times one family. Still to time, on a quiet G
 - `batchlas_tune sygvd --dtype float,cfloat`.
   The specs are `tools/tune/{sygst,sygvd}_spec.cc`, with jobz a key for sygvd. sygvd times itype 1
   Upper, gfn2-xTB's call: uplo is not a key, and potrf (inside `compose`) routes Upper apart from Lower
-  (vendor rows at n 96..384 on sm_89). sygst times itype 1 Lower; its verify forms \f$ L C L^H \f$, and
-  an Upper sygst is a pair of trsm with the other transposes. These replace the transcribed rows.
+  (vendor rows at n 96..384 on sm_89). sygst times every itype and triangle (table keys since
+  2026-10-27). These replace the transcribed rows.
 - The gfn2 shapes (n = 480, batch 1819; n = 1200, batch 76) as `compose` against `vendor`, both pinned
   with `BATCHLAS_SYGVD_ROUTE`; also `sygvd_factored` against `sygvd` to price the potrf it saves.
 
@@ -219,8 +251,12 @@ uplo, `BATCHLAS_SYGST_ROUTE` pins) times one family. Still to time, on a quiet G
   (double), against a slack of 32 (the reduction's error on a graded B follows the scaled S, measured at
   most 9x the bound). A's storage outside its triangle and all of B keep their bits.
 - 1024 identical items on `blocked`, bit-identical to item 0 (n = 5 packs 25 items per work-group, 16, 20,
-  40), forced 100-item passes (`BATCHLAS_TUNE_L2_CHUNK_ITEMS`), and an exact workspace query.
-- `CoverageRowNamesEachPinnedSygstFamily`: the `reached` coverage row of each pinned call names its family.
+  40), forced 100-item passes (`BATCHLAS_TUNE_L2_CHUNK_ITEMS`, which bypasses the 4 x CU floor), and an
+  exact workspace query.
+- `CoverageRowNamesEachPinnedSygstFamily`: the `reached` coverage row of each pinned call names its family
+  (every `nb` and `twosided`, across itypes 1, 2, 3 and both triangles).
+- A `NoRouteError` under a sygst pin fails the test, except where `can_run` is documented false
+  (`blocked` on NETLIB, `vendor` where LAPACKE is not linked), which skips.
 - `sygvd` residuals and B-normalization for every itype, both jobz, both triangles and every pinned
   family, at n through the syev CTA width. B is graded (cond about 1e2 float, 1e4 double) and complex
   data has nonzero imaginary parts. The other triangle is poisoned with a large finite value, and ld and
