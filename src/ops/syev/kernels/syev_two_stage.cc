@@ -531,15 +531,20 @@ size_t syev_two_stage_part_buffer_size(Queue& ctx,
     return bytes;
 }
 
-// The part loop's workspace at `items` a part: the part's own layout, then, when the batch is split, the
-// parts' pointer array. A batch_range view has none, and sy2sb's panel geqrf reads one where it routes
-// to the vendor (cuBLAS geqrfBatched in the full build). evidence: docs/perf/syev.md#syev-vendor-free-double-band
+// The part loop's workspace at `chunk`: the larger part layout (chunk_bytes), then, when the batch is
+// split, the parts' pointer array, as long as the largest part. A batch_range view has none, and sy2sb's
+// panel geqrf reads one where it routes to the vendor (cuBLAS geqrfBatched in the full build).
+// evidence: docs/perf/syev.md#syev-vendor-free-double-band
 template <Backend B, typename T>
-std::size_t syev_two_stage_chunk_bytes(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, int items,
-                                       JobType jobz, Uplo uplo,
-                                       const StedcParams<typename base_type<T>::type>& stedc_params) {
-    const std::size_t part = syev_two_stage_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
-    return items < a.batch_size() ? part + BumpAllocator::allocation_size<T*>(ctx, items) : part;
+std::size_t syev_two_stage_part_bytes(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, int items,
+                                      JobType jobz, Uplo uplo,
+                                      const StedcParams<typename base_type<T>::type>& stedc_params) {
+    return syev_two_stage_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
+}
+
+template <typename T>
+std::size_t syev_two_stage_ptr_bytes(Queue& ctx, int largest, int batch) {
+    return largest < batch ? BumpAllocator::allocation_size<T*>(ctx, static_cast<std::size_t>(largest)) : 0;
 }
 
 // Items per part. There is no L2 rule (none was measured), so below the scratch budget only
@@ -550,9 +555,10 @@ int syev_two_stage_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a
                          const StedcParams<typename base_type<T>::type>& stedc_params) {
     const int batch = static_cast<int>(a.batch_size());
     const int chunk = static_cast<int>(tuning::blocked_chunk_items(batch, 0, 0, 0, 0));
-    return ops::syev::detail::budget_capped_chunk(chunk, batch, ops::syev::detail::chunk_budget(ctx), [&](int items) {
-        return syev_two_stage_chunk_bytes<B, T>(ctx, a, items, jobz, uplo, stedc_params);
-    });
+    return ops::syev::detail::budget_capped_chunk(
+        chunk, batch, ops::syev::detail::chunk_budget(ctx),
+        [&](int items) { return syev_two_stage_part_bytes<B, T>(ctx, a, items, jobz, uplo, stedc_params); },
+        [&](int largest) { return syev_two_stage_ptr_bytes<T>(ctx, largest, batch); });
 }
 
 } // namespace
@@ -574,8 +580,9 @@ Event syev_two_stage(Queue& ctx,
     // Each part is a complete solve of its items; they share the one part-sized workspace and pointer
     // array on the in-order queue syev_two_stage_part requires.
     const int largest = ops::syev::detail::largest_part(chunk, batch);
-    const std::size_t part_bytes =
-        syev_two_stage_part_buffer_size<B, T>(ctx, a_in.batch_range(0, largest), jobz, uplo, stedc_params);
+    const std::size_t part_bytes = ops::syev::detail::chunk_bytes(chunk, batch, [&](int items) {
+        return syev_two_stage_part_bytes<B, T>(ctx, a_in, items, jobz, uplo, stedc_params);
+    });
     if (ws.size() < part_bytes) throw batchlas::workspace_error("syev_two_stage: workspace smaller than one part");
     BumpAllocator tail(ws.subspan(part_bytes));
     T** ptrs = tail.allocate<T*>(ctx, static_cast<std::size_t>(largest)).data();
@@ -605,8 +612,9 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         return syev_two_stage_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
     const int chunk = syev_two_stage_chunk<B, T>(ctx, a, jobz, uplo, stedc_params);
     if (batch < 2 * chunk) return syev_two_stage_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
-    return syev_two_stage_chunk_bytes<B, T>(ctx, a, ops::syev::detail::largest_part(chunk, batch), jobz, uplo,
-                                            stedc_params);
+    return ops::syev::detail::chunk_bytes(chunk, batch, [&](int items) {
+               return syev_two_stage_part_bytes<B, T>(ctx, a, items, jobz, uplo, stedc_params);
+           }) + syev_two_stage_ptr_bytes<T>(ctx, ops::syev::detail::largest_part(chunk, batch), batch);
 }
 
 #define SYEV_TWO_STAGE_INSTANTIATE(back, fp) \

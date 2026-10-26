@@ -612,7 +612,7 @@ int syev_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, 
         tuning::SYEV_BLOCKED_L2_CHUNK_PERCENT)), batch);
     return ops::syev::detail::budget_capped_chunk(chunk, batch, ops::syev::detail::chunk_budget(ctx), [&](int items) {
         return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
-    });
+    }, [](int) { return std::size_t(0); });
 }
 
 } // namespace
@@ -664,8 +664,9 @@ size_t syev_blocked_buffer_size(Queue& ctx,
     if (n < 1 || batch < 1 || a.rows() != a.cols())
         return syev_blocked_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
     const int chunk = syev_blocked_chunk<B, T>(ctx, a, jobz, uplo, stedc_params);
-    return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, ops::syev::detail::largest_part(chunk, batch)),
-                                               jobz, uplo, stedc_params);
+    return ops::syev::detail::chunk_bytes(chunk, batch, [&](int items) {
+        return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
+    });
 }
 
 #define SYEV_BLOCKED_INSTANTIATE(back, fp) \
