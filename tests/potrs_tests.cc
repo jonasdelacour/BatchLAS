@@ -254,8 +254,12 @@ TYPED_TEST_SUITE(PotrsTest, PotrsTestTypes);
 // Each family pinned, and Auto, on graded SPD factors (condition 1e6 double, 1e3 single), both triangles,
 // an order ladder through the fused block edge (nb = 16: 16/17, 33 = 2*16 + 1, 130) and the accumulator
 // buckets (nrhs 1, 2, 3, 4, 5, 8; 9 and 20 past the fused width). The factor is read-only, B's pads survive.
-// BREAK (run 2026-10-26): in getrs_fused.cc's potrs body, read the Upper forward block from ld_a(j+s, j+t)
-// (the wrong triangle). RED: this test fused Upper only, every CUDA type; trsm and Lower GREEN.
+// BREAK (run 2026-10-26): getrs_fused.cc's potrs body stages the Upper forward block from ld_h(j+s, j+t), the
+// poisoned triangle. RED: the fused Upper cases of this test, ASecondRightHandSide and SaturatingBatch, every
+// CUDA type; trsm, Lower and the posv comparison (same kernel) GREEN.
+// BREAK (run 2026-10-26): the packed block solve gives every slot the group's first column (c = g * P). RED:
+// exactly the fused cases with nrhs >= 3 (P >= 2) here, in ASecondRightHandSide, PinnedCandidatesStraddle and
+// SaturatingBatch, every CUDA type; nrhs 1 and 2 (one slot) GREEN.
 TYPED_TEST(PotrsTest, EachFamilySolvesGradedSystemsOnBothTriangles) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_POTRS_ROUTE", nullptr);
@@ -519,7 +523,8 @@ TYPED_TEST(PotrsTest, AutoReadsTheShippedTable) {
 // sub-groups shows as a differing item; small batches cannot race). Each family pinned, at one block
 // (n = 16), several blocks (n = 40) and a 4-sub-group work-group (n = 130), both triangles.
 // BREAK (run 2026-10-26): drop the forward-pass barrier between the block staging and the block solve in
-// getrs_fused.cc's potrs body. RED: this test, fused only, CUDA.
+// getrs_fused.cc's potrs body. RED: this test and EachFamilySolves (fused), every CUDA type, and
+// PinnedCandidatesStraddle (double, cdouble); trsm and NETLIB GREEN.
 TYPED_TEST(PotrsTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     using T = typename TestFixture::T;
     if (TestFixture::BK == Backend::NETLIB) GTEST_SKIP() << "no shared-local-memory kernel runs on the host queue";
