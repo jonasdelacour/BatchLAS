@@ -25,12 +25,12 @@ and her2k are complex only) on sm_89 and sm_120. spmm also ships a CPU table. An
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
 checks this inventory.
 
-Counts: 55 files, 27 per GPU device plus `spmm.cpu.txt`.
+Counts: 57 files, 28 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
-| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri, sytrf, sysv, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; sytrf and sysv: @ref perf_sytrf; sygst and sygvd: @ref perf_sygvd |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri, sytrf, sysv, sytrs, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; sytrf, sysv and sytrs: @ref perf_sytrf; sygst and sygvd: @ref perf_sygvd |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); sytrs float and cfloat `preview` (double, cdouble `transcribed` from them) and sysv float and cfloat `preview` (2026-10-26, @ref perf_sytrf) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not
@@ -44,7 +44,8 @@ and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, do
 potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above); sytrf, sysv
 `30cc8e06` (both devices, @ref perf_sytrf); sytrf's `blocked` family is run
 `transcribed-sytrf-blocked` (both devices, no timing: `blocked` first from n = 256, second for 33..128, third for n <= 32);
-sygst, sygvd `ab235065` (both devices, no timing: `twosided` and `compose` first everywhere, @ref perf_sygvd).
+sytrs `transcribed-sytrs-d67ad754` (sm_89 double and cdouble, all of sm_120: the measured sm_89
+float / cfloat order, @ref perf_sytrf); sygst, sygvd `ab235065` (both devices, no timing: `twosided` and `compose` first everywhere, @ref perf_sygvd).
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
 ([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the

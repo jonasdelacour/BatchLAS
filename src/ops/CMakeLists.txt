@@ -138,8 +138,10 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # potri: two element-wise kernels (info scan, triangle store); no device symbol shared with any other TU.
     potri/kernels/potri_native.cc
     lascl/lascl.cc
-    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol.
+    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol
+    # outside this pair.
     sytrf/kernels/sytrf_kernels.cc
+    sytrf/kernels/sytrs_kernels.cc
     # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
     sygvd/kernels/sygvd_native.cc
 )

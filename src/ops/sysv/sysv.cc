@@ -1,6 +1,6 @@
 // sysv (flat-kernel-selection.md §4.3): select::run takes the first entry of the nearest
 // tuned/sysv.<device>.txt row that can_run() admits. Cta is the fused factor-and-solve kernel; Compose
-// is the public sytrf (which selects its own kernel) then sytrs. evidence: docs/perf/sytrf.md
+// is the public sytrf then the routed sytrs (each selects its own kernel). evidence: docs/perf/sytrf.md
 
 #include <batchlas/backend_config.h>
 
@@ -10,6 +10,7 @@
 
 #include <src/ops/sysv/choice.hh>
 #include <src/ops/sytrf/sytrf_native.hh>
+#include <src/ops/sytrs/sytrs.hh>
 #include <src/select/select.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
@@ -48,15 +49,18 @@ bool can_run(const SysvChoice& c, const select::Device& d, const MV<T>& A, const
 }
 
 // sytrs skips an item whose sytrf status is nonzero (LAPACK ?sysv keeps that B), so Compose always
-// needs the status: the caller's span when it is long enough, else one drawn here.
+// needs the status: the caller's span when it is long enough, else one drawn here. Then the routed
+// sytrf's workspace and the routed sytrs's.
 template <Backend Back, class T>
-Span<int32_t> compose_layout(Queue& q, BumpAllocator& pool, const MV<T>& A, Uplo uplo, Span<int32_t> info,
-                             Span<std::byte>* rest) {
+Span<int32_t> compose_layout(Queue& q, BumpAllocator& pool, const MV<T>& A, const MV<T>& Bm, Uplo uplo,
+                             Span<int32_t> info, Span<std::byte>* fws, Span<std::byte>* sws) {
     const auto batch = static_cast<std::size_t>(A.batch_size());
     Span<int32_t> st = info.size() >= batch ? info : pool.allocate<int32_t>(q, batch);
-    const std::size_t child = sytrf_buffer_size<Back, T>(q, A, uplo);
-    Span<std::byte> ws = pool.allocate<std::byte>(q, child);
-    if (rest) *rest = ws;
+    Span<std::byte> f = pool.allocate<std::byte>(q, sytrf_buffer_size<Back, T>(q, A, uplo));
+    const std::size_t solve = Bm.cols() > 0 ? ops::sytrs::buffer_size<Back, T>(q, A, Bm) : 0;
+    Span<std::byte> s = pool.allocate<std::byte>(q, solve);
+    if (fws) *fws = f;
+    if (sws) *sws = s;
     return st;
 }
 
@@ -67,26 +71,22 @@ Event launch(Queue& q, const SysvChoice& c, const MV<T>& A, const MV<T>& Bm, Upl
         [&](Cta) { return sycl_sytrf::sysv_cta_dispatch<T>(q, A, Bm, uplo, pivots, ws, info); },
         [&](Compose) {
             BumpAllocator pool(ws);
-            Span<std::byte> child;
-            const Span<int32_t> st = compose_layout<Back, T>(q, pool, A, uplo, info, &child);
-            (void)sytrf<Back, T>(q, A, uplo, pivots, child, st);
-            if constexpr (Back == Backend::NETLIB) {
-                if constexpr (select::kHasNetlib) return backend::sytrs_vendor<Back, T>(q, A, Bm, uplo, pivots, st.data());
-                else return sytrs<Back, T>(q, A, Bm, uplo, pivots, Span<std::byte>{});
-            } else {
-                return sycl_sytrf::sytrs_native_dispatch<T>(q, A, Bm, uplo, pivots, st.data());
-            }
+            Span<std::byte> fws, sws;
+            const Span<int32_t> st = compose_layout<Back, T>(q, pool, A, Bm, uplo, info, &fws, &sws);
+            Event e = sytrf<Back, T>(q, A, uplo, pivots, fws, st);
+            if (Bm.cols() == 0) return e;
+            return ops::sytrs::run<Back, T>(q, A, Bm, uplo, pivots, sws, st.data());
         },
     }, c);
 }
 
 template <Backend Back, class T>
-std::size_t workspace(Queue& q, const SysvChoice& c, const MV<T>& A, Uplo uplo) {
+std::size_t workspace(Queue& q, const SysvChoice& c, const MV<T>& A, const MV<T>& Bm, Uplo uplo) {
     return std::visit(overloaded{
         [&](Cta) { return sycl_sytrf::sytrf_native_buffer_size<T>(q, A); },
         [&](Compose) {
             return workspace_bytes([&](BumpAllocator& p) {
-                return compose_layout<Back, T>(q, p, A, uplo, Span<int32_t>{}, nullptr);
+                return compose_layout<Back, T>(q, p, A, Bm, uplo, Span<int32_t>{}, nullptr, nullptr);
             });
         },
     }, c);
@@ -124,7 +124,7 @@ size_t sysv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     const auto c = select::pick<Back, T>(
         ops::sysv::spec, ctx, ops::sysv::key_of<T>(A, B), ops::sysv::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::sysv::can_run<T>(k, d, A, B); });
-    return ops::sysv::workspace<Back, T>(ctx, c, A, uplo);
+    return ops::sysv::workspace<Back, T>(ctx, c, A, B, uplo);
 }
 
 #define SYSV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, sysv) BATCHLAS_INSTANTIATE_OP(B_, fp, sysv_buffer_size)
