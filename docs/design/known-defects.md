@@ -289,6 +289,12 @@ the Hermitian `linalg::svd` mirror the named triangle on their copy first
     lower triangle: Y = A22 V T (`symm`/`hemm`, Lower), W = Y - V (T^H V^H Y) / 2, then
     A22 -= V W^H + W V^H (`syr2k`/`her2k`, or the gemm pair whose lower result depends only on
     lower entries). `syevx`'s direct subset path shares it.
+  - Cost (2026-10-26, sm_89, `syev_two_stage_benchmark` jobz=V Lower kd = 32, base 024d64c1, alternating
+    rounds): with symm/hemm's `mirror` family ([level-3](../perf/level3.md#level-3-the-mirror-family)) the
+    lower-only update is faster than the old full-block one for float (n = 256..2048: 0.88-0.91x) and
+    cfloat (n = 256..1024: 0.93-0.94x). double at n = 480, batch 512 is 1.34x slower (809 -> 1084 ms):
+    the transcribed double symm rows rank the per-item cuBLAS loop first, and FP64 rows are not tuned on
+    this part. Accepted by the owner; a later FP64 pass that measures those rows removes it.
   - Upper on `blocked` and `two_stage`, and Lower on `syev_cta`, still go through an in-place
     O(n^2) pass that reads the named triangle and writes the other (`uplo_mirror.hh`,
     `syev_cta.cc`): the Lower-only (resp. Upper-only) pipelines are served that way, which reads
