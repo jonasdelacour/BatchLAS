@@ -10,12 +10,10 @@
 #include <batchlas/settings.hh>
 
 #include <src/ops/syev/choice.hh>
-#include <src/ops/syev/parts.hh>
 #include <src/ops/syev/vendor.hh>
 #include <src/select/select.hh>
 #include <src/util/template-instantiations.hh>
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -78,9 +76,9 @@ SteqrParams<T> cta_steqr_params() {
     return params;
 }
 
-// The family's own need for A as one call (R5).
+// Exactly the chosen family's need (R5).
 template <Backend B, typename T>
-std::size_t family_workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo) {
+std::size_t workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo) {
     return std::visit(overloaded{
         [&](Cta) { return syev_cta_buffer_size<B, T>(q, A, jobz, cta_steqr_params<T>()); },
         [&](CtaFused) { return syev_cta_fused_buffer_size<B, T>(q, A, jobz, cta_steqr_params<T>()); },
@@ -95,8 +93,8 @@ std::size_t family_workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span
 
 // Every arm clears or stores `info` itself, so the launch adds no clear of its own.
 template <Backend B, typename T>
-Event family_launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo,
-                    Span<std::byte> ws, Span<int32_t> info) {
+Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo,
+             Span<std::byte> ws, Span<int32_t> info) {
     return std::visit(overloaded{
         [&](Cta) { return syev_cta<B, T>(q, A, w, jobz, uplo, ws, cta_steqr_params<T>(), 0, info); },
         [&](CtaFused) { return syev_cta_fused<B, T>(q, A, w, jobz, uplo, ws, cta_steqr_params<T>(), 0, info); },
@@ -105,85 +103,6 @@ Event family_launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>>
         [&](TwoStage) { return syev_two_stage<B, T>(q, A, w, jobz, uplo, ws, StedcParams<Real<T>>{}, info); },
         [&](Vendor) { return ops::syev::detail::syev_vendor_or_throw<B, T>(q, A, w, jobz, uplo, ws, info); },
     }, c);
-}
-
-// The workspace of the part loop below at `part` items a part: the larger of a full part and the last
-// one (part + batch % part). The family's size is not monotone in the batch (blocked's inner chunk is
-// grid-capped and BATCHLAS_TUNE_L2_CHUNK_ITEMS-forced), so the last, larger part can need less.
-template <Backend B, typename T>
-std::size_t part_workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo,
-                           int part) {
-    return std::max(family_workspace<B, T>(q, c, A.batch_range(0, part), w, jobz, uplo),
-                    family_workspace<B, T>(q, c, A.batch_range(0, part + A.batch_size() % part), w, jobz, uplo));
-}
-
-// Items per part for blocked and two_stage. Both size their workspace for the whole batch (about
-// 7 n^2 per item for double eigenvectors: 22.8 GB at n = 480, batch 1819), so a batch whose
-// workspace passes the device's scratch budget runs in parts that each fit it. The slope from 1 to 2
-// items gives the first guess (half the items that fit: the last part takes the remainder); the size is
-// not linear at small batch everywhere (two_stage with the vendor children), so the guess halves until
-// both part sizes fit. 0 means one part. evidence: docs/perf/syev.md#syev-vendor-free-double-band
-template <Backend B, typename T>
-int part_items(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo) {
-    const int batch = A.batch_size();
-    if (!std::holds_alternative<Blocked>(c) && !std::holds_alternative<TwoStage>(c)) return 0;
-    if (batch < 4) return 0;
-    const std::size_t override_bytes = detail::part_budget_override();
-    const auto budget = override_bytes != 0 ? override_bytes
-                                            : static_cast<std::size_t>(
-                                                  select::describe(q.device(), q.backend(), false).scratch_budget);
-    if (budget == 0 || family_workspace<B, T>(q, c, A, w, jobz, uplo) <= budget) return 0;
-    const std::size_t one = family_workspace<B, T>(q, c, A.batch_range(0, 1), w, jobz, uplo);
-    const std::size_t two = family_workspace<B, T>(q, c, A.batch_range(0, 2), w, jobz, uplo);
-    std::size_t guess = std::size_t(batch) / 2;
-    if (two > one) {
-        const std::size_t per = two - one, base = one >= per ? one - per : 0;
-        guess = std::min(guess, budget > base ? (budget - base) / per / 2 : 1);
-    }
-    int part = static_cast<int>(std::max<std::size_t>(1, guess));
-    while (part > 1 && part_workspace<B, T>(q, c, A, w, jobz, uplo, part) > budget) part /= 2;
-    return part;
-}
-
-// A part view from batch_range has no pointer array, and the vendor children of the full build read
-// one (cuBLAS/cuSOLVER batched calls), so the parts carry their own, after the family's workspace.
-inline constexpr std::size_t kPartPtrAlign = 64;
-
-template <typename T>
-std::size_t part_ptr_bytes(int part, int batch) {
-    return kPartPtrAlign + static_cast<std::size_t>(part + batch % part) * sizeof(T*);
-}
-
-// Exactly what the launch below uses.
-template <Backend B, typename T>
-std::size_t workspace(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo) {
-    const int part = part_items<B, T>(q, c, A, w, jobz, uplo);
-    if (part == 0) return family_workspace<B, T>(q, c, A, w, jobz, uplo);
-    return part_workspace<B, T>(q, c, A, w, jobz, uplo, part) + part_ptr_bytes<T>(part, A.batch_size());
-}
-
-// The parts are independent solves sharing one part-sized workspace and pointer array on the in-order queue.
-template <Backend B, typename T>
-Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, JobType jobz, Uplo uplo,
-             Span<std::byte> ws, Span<int32_t> info) {
-    const int part = part_items<B, T>(q, c, A, w, jobz, uplo);
-    if (part == 0) return family_launch<B, T>(q, c, A, w, jobz, uplo, ws, info);
-    const int batch = A.batch_size();
-    const std::size_t n = static_cast<std::size_t>(A.rows());
-    const bool per_item_info = info.size() >= static_cast<std::size_t>(batch);
-    const std::size_t fam = part_workspace<B, T>(q, c, A, w, jobz, uplo, part);
-    const auto at = reinterpret_cast<std::uintptr_t>(ws.data() + fam);
-    T** ptrs = reinterpret_cast<T**>((at + kPartPtrAlign - 1) / kPartPtrAlign * kPartPtrAlign);
-    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
-        cb = batch - b0 < 2 * part ? batch - b0 : part;
-        const MV<T> sub = A.batch_range(b0, cb);
-        MV<T> view(sub.data_ptr(), sub.rows(), sub.cols(), sub.ld(), sub.stride(), cb, ptrs);
-        if (!sub.active_rows().empty() || !sub.active_cols().empty())
-            view = view.with_active_dims(sub.active_rows(), sub.active_cols());
-        (void)family_launch<B, T>(q, c, view, w.subspan(std::size_t(b0) * n, std::size_t(cb) * n), jobz, uplo,
-                                  ws.subspan(0, fam), per_item_info ? info.subspan(b0, cb) : Span<int32_t>{});
-    }
-    return q.get_event();
 }
 
 // Every driver refuses a non-square A, and the vendor would read rows() as the order.
@@ -222,10 +141,6 @@ Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typenam
                 throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
             // Blocked and TwoStage require an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                // Defect 14: several native drivers read the other triangle. Mirroring the named one
-                // (conjugated, real diagonal) first hands every family the same Hermitian matrix.
-                // The vendor reads only `uplo`. evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
-                if (!std::holds_alternative<ops::syev::Vendor>(c)) (void)A.hermitize(q, uplo);
                 return ops::syev::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
             });
         });
@@ -243,11 +158,6 @@ size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 namespace ops::syev::detail {
-
-std::size_t& part_budget_override() {
-    static std::size_t bytes = 0;
-    return bytes;
-}
 
 template <typename T>
 bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {

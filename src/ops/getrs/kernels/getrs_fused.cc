@@ -606,6 +606,15 @@ Event fused_launch_trans(Queue& ctx,
 
 template <typename T, int NR, bool Lower> class PotrsFusedKernel;
 
+// The lane slot of one right-hand side in the potrs block solve: the power of two >= jb, at least 4.
+inline int potrs_slot_width(int jb) { return jb <= 4 ? 4 : jb <= 8 ? 8 : jb <= 16 ? 16 : 32; }
+// Slots in use per sub-group: what the round-robin over cs sub-groups needs, at most 32 / w, so a call
+// with nrhs <= cs keeps the unpacked schedule. evidence: docs/perf/potrs.md#the-packed-block-solve
+inline int potrs_slots(int w, int nrhs, int cs) {
+    const int need = (nrhs + cs - 1) / cs;
+    return need < 32 / w ? need : 32 / w;
+}
+
 // POTRS: the two getrs phases posv needs, both NON-UNIT and without pivots. Lower runs
 // L y = b in the AXPY form (row-parallel, coalesced down L's columns) and L^H x = y in
 // the DOT form (column-parallel, one sub-group per column); Upper is the mirror image,
@@ -700,16 +709,24 @@ Event potrs_fused_launch(Queue& ctx,
                     it.barrier(sycl::access::fence_space::local_space);
 
                     if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + c * nz;
-                            D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
+                        // Up to P right-hand sides per sub-group, one per w-lane slot: a block of jb <= 16 rows
+                        // otherwise idles lanes jb..31. Each column's arithmetic is unchanged, bit for bit. An idle
+                        // lane must not divide: 0 / d takes the slow division path (FCHK). NR <= 2 never packs
+                        // (cs >= 2), and folding to the unpacked loop keeps its register count (occupancy).
+                        const int w = NR <= 2 ? 32 : potrs_slot_width(jb), P = NR <= 2 ? 1 : potrs_slots(w, nrhs, cs);
+                        const int l = NR <= 2 ? lane : lane % w, h = NR <= 2 ? 0 : lane / w;
+                        for (int g = c0; g * P < nrhs; g += cs) {
+                            const int c = g * P + h;
+                            const bool on = h < P && c < nrhs && l < jb;
+                            D* const yc = y + (c < nrhs ? c : 0) * nz;
+                            D v = on ? yc[j + l] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
-                                if (lane == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane > s && lane < jb)
-                                    v = dev_sub(v, dev_mul(blk[lane + s * bz], vs));
+                                if (on && l == s) v = dev_div(v, blk[s + s * bz]);
+                                const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
+                                if (on && l > s)
+                                    v = dev_sub(v, dev_mul(blk[l + s * bz], vs));
                             }
-                            if (lane < jb) yc[j + lane] = v;
+                            if (on) yc[j + l] = v;
                         }
                     }
                     it.barrier(sycl::access::fence_space::local_space);
@@ -768,15 +785,19 @@ Event potrs_fused_launch(Queue& ctx,
                     it.barrier(sycl::access::fence_space::local_space);
 
                     if (c_active) {
-                        for (int c = c0; c < nrhs; c += cs) {
-                            D* const yc = y + c * nz;
-                            D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
+                        const int w = NR <= 2 ? 32 : potrs_slot_width(jb), P = NR <= 2 ? 1 : potrs_slots(w, nrhs, cs);
+                        const int l = NR <= 2 ? lane : lane % w, h = NR <= 2 ? 0 : lane / w;
+                        for (int g = c0; g * P < nrhs; g += cs) {
+                            const int c = g * P + h;
+                            const bool on = h < P && c < nrhs && l < jb;
+                            D* const yc = y + (c < nrhs ? c : 0) * nz;
+                            D v = on ? yc[j0 + l] : dev_zero_of<D>();
                             for (int s = jb - 1; s >= 0; --s) {
-                                if (lane == s) v = dev_div(v, blk[s + s * bz]);
-                                const D vs = batchlas::portable::group_broadcast(sg, v, s);
-                                if (lane < s) v = dev_sub(v, dev_mul(blk[s + lane * bz], vs));
+                                if (on && l == s) v = dev_div(v, blk[s + s * bz]);
+                                const D vs = batchlas::portable::select_from_group(sg, v, h * w + s);
+                                if (on && l < s) v = dev_sub(v, dev_mul(blk[s + l * bz], vs));
                             }
-                            if (lane < jb) yc[j0 + lane] = v;
+                            if (on) yc[j0 + l] = v;
                         }
                     }
                     it.barrier(sycl::access::fence_space::local_space);
