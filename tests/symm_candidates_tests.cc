@@ -21,6 +21,7 @@
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/expansion_budget.hh>
 #include <src/ops/symm/choice.hh>
+#include <src/ops/symm/kernels/symm_mirror.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -285,7 +286,9 @@ protected:
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run instead of throwing (§5.3).
     static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<sy::Vendor>(c) && !kVendor; }
-    static bool expect_runs(const C& c) { return std::holds_alternative<sy::Expand>(c) || kVendor; }
+    static bool expect_runs(const C& c) {
+        return std::holds_alternative<sy::Expand>(c) || std::holds_alternative<sy::Mirror>(c) || kVendor;
+    }
 
     void run(Prob<T>& p) {
         (void)symm<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.side, p.s.uplo);
@@ -310,13 +313,17 @@ protected:
         return traced_choice([&] { run(p); });
     }
 
-    // The family's own code: Expand = expand_mirrored into an arena lease + the public gemm, with
-    // the expanded ld the launcher derives; Vendor = the library loop.
+    // The family's own code: Mirror = symm_mirror at the device's grid-z chunk; Expand =
+    // expand_mirrored into an arena lease + the public gemm, with the expanded ld the launcher
+    // derives; Vendor = the library loop.
     bool direct(const C& c, const MV& A, const MV& Bm, const MV& Cm, T alpha, T beta, Side side, Uplo uplo,
                 std::string* why = nullptr) {
         Queue& q = *this->ctx;
         try {
-            if (std::holds_alternative<sy::Expand>(c)) {
+            if (std::holds_alternative<sy::Mirror>(c)) {
+                const int chunk = int(std::min<std::int64_t>(select::device_of<B>(q).max_groups_yz, 1 << 30));
+                (void)sycl_symm::symm_mirror<T, false>(q, A, Bm, Cm, alpha, beta, side, uplo, chunk);
+            } else if (std::holds_alternative<sy::Expand>(c)) {
                 const int k = A.rows(), batch = A.batch_size(), ld = backend::detail::expanded_ld<T>(k);
                 UnifiedVector<T> scratch(std::size_t(ld) * k * std::max(batch, 1), T(0));
                 const MV full(scratch.data(), k, k, ld, ld * k, batch);
@@ -652,8 +659,18 @@ TYPED_TEST(SymmCandidates, ClassWordsAndSpellings) {
                                                                this->run(q);
                                                            }));
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
-    const std::pair<const char*, std::string> expect[] = {
-        {"EXPAND", "expand"}, {" expand ", "expand"}, {"native", "expand"}, {"vendor", vendor_pick}, {"Auto", auto_pick}};
+    // `native` walks the same row past the vendor (mirror or expand, whichever it ranks first).
+    const std::string native_pick = test_utils::shipped_table_pick<C>(
+        "symm", select::dtype_name<T>(), select::device_of<TestFixture::B>(*this->ctx), key,
+        [&] {
+            auto q = make_prob<T>(s);
+            this->run(q);
+        },
+        true);
+    ASSERT_NE(native_pick, "vendor");
+    const std::pair<const char*, std::string> expect[] = {{"EXPAND", "expand"},  {" expand ", "expand"},
+                                                          {"Mirror", "mirror"},  {"native", native_pick},
+                                                          {"vendor", vendor_pick}, {"Auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
             auto p = make_prob<T>(s);
@@ -721,7 +738,7 @@ TYPED_TEST(SymmCandidates, AutoReadsTheShippedTable) {
                                                                            this->run(q);
                                                                        });
             ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
-            if (!TestFixture::kVendor) EXPECT_EQ(want, "expand") << label(s);
+            if (!TestFixture::kVendor) EXPECT_NE(want, "vendor") << label(s);
             auto p = make_prob<T>(s);
             EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
             expect_symm(*this->ctx, p, "auto " + label(s));
@@ -779,8 +796,9 @@ TYPED_TEST(SymmCandidates, TraceKeyIsCsShape) {
     }
 }
 
-// With a table naming only the vendor, a vendor-free build takes the last resort, expand.
-TYPED_TEST(SymmCandidates, VendorFreeLastResortIsExpand) {
+// With a table naming only the vendor, a vendor-free build takes the last resort, mirror (it needs
+// no scratch, so it is first).
+TYPED_TEST(SymmCandidates, VendorFreeLastResortIsMirror) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
     const std::string dtype(select::dtype_name<T>());
@@ -797,7 +815,7 @@ TYPED_TEST(SymmCandidates, VendorFreeLastResortIsExpand) {
     for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 32, 32, 64}, Spec{Side::Right, Uplo::Upper, 3, 300, 1}}) {
         auto p = make_prob<T>(s);
         std::string all;
-        EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "expand") << label(s);
+        EXPECT_EQ(traced_choice([&] { this->run(p); }, &all), TestFixture::kVendor ? "vendor" : "mirror") << label(s);
         if (!TestFixture::kVendor) EXPECT_NE(all.find("last resort"), std::string::npos) << all;
         expect_symm(*this->ctx, p, "vendor-only table, " + label(s));
     }
@@ -882,11 +900,12 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
     const Spec s{Side::Left, Uplo::Lower, 8, 3, 4};
-    {
+    for (const C& native : {C{sy::Expand{}}, C{sy::Mirror{}}}) {
         auto p = make_prob<T>(s);
-        const Pin pin("symm", C{sy::Expand{}});
+        const Pin pin("symm", native);
         EXPECT_THROW(((void)symm<B, T>(*this->ctx, p.A(), p.B(), p.Cv(), p.alpha, p.beta, s.side, s.uplo)),
-                     std::invalid_argument);
+                     std::invalid_argument)
+            << select::to_string(native);
     }
     auto p = make_prob<T>(s);
     auto call = [&] {
