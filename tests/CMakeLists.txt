@@ -249,7 +249,8 @@ set(BATCHLAS_HEAVY_TEST_PATTERNS
     *FreshChildAgreesWithAWorkerAfterALargerLaunch*
     *EigenvaluesOnlyLowerMatchesNetlib*
     *GradedHermitianRunsAtN512*
-    *PastTheGrid*)
+    *PastTheGrid*
+    *DoubleBandEvery*)
 string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
 # Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
 # binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy

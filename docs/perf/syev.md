@@ -28,6 +28,8 @@ Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-low
 |---|---|---|
 | eigenvectors, n > 32 | `jobz=V` rows | float: blocked to 448, two-stage 449..1024, vendor above. double: blocked to 448, then vendor. complex<float>: blocked to 512, then vendor. complex<double>: blocked to 256, then vendor |
 | eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
+| vendor-free, double and complex<double>, n > 448 | the same rows, `vendor` skipped | `jobz=V`: blocked; `jobz=N`: two-stage (sm_89). See [the vendor-free double band](#syev-vendor-free-double-band) |
+| blocked / two-stage batch parts | `part_items`, `src/ops/syev/syev.cc` | a batch whose workspace passes `Device::scratch_budget` runs in parts that fit it |
 | n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
 | n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
 | backend scope | `can_run` | any non-NETLIB GPU backend; the n ≤ 32 three also need a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm and Apple GPUs have no table and borrow the nearest sm table with a warning (untested on ROCm) |
@@ -539,6 +541,95 @@ dropped), `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000` before the grid cap e
   n=16 b131072 0.999, blocked float n=256 b2048 1.000.
 - syev two_stage and stedc are not chunked and not measured.
 - `steqr_buffer_size` reserves the `steqr_wg` rotation store on the CTA path (open, separate).
+
+## syev: the vendor-free double band, n = 449 to 1600 {#syev-vendor-free-double-band}
+
+> **Status:** current · RTX 4090 (sm_89), DPC++ CUDA, vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) · checked 2026-10-25 · correctness only, nothing timed
+
+The fullerene workloads are double: C120 is n = 480 at batch about 1819, C300 is n = 1200 at batch
+about 76. With the vendor library, double `jobz=V` above 448 goes to cuSOLVER (rule table above). This
+section records what a build without it does there, for double and complex<double>.
+
+**Routes.** Nothing had to change in the tables or in `can_run`. Every sm_89 and sm_120 row in the band
+lists the native families after `vendor`: double and complex<double> `jobz=V` rows read
+`vendor | blocked | two_stage`, the `jobz=N` rows `two_stage | vendor | blocked`. The deep sm_120 rows
+reorder some cells (complex<double> `jobz=N` n = 449: `blocked | vendor | two_stage`). Vendor-free,
+`vendor` cannot run, so `select::choose` takes the next entry of the same row: on sm_89 `blocked` for
+eigenvectors and `two_stage` for eigenvalues only, on sm_120 whichever native family the deep row ranks
+first. It never reaches the last resort. `can_run` admits both families at any n ≥ 1 and any batch ≥ 1 on a GPU backend
+(`syev.cc`, `can_run`), with either uplo, because Upper is mirrored into Lower first.
+
+| band, vendor-free | `jobz=V` | `jobz=N` |
+|---|---|---|
+| double, 449 ≤ n ≤ 1600 (sm_89) | `blocked` (sytrd_blocked + stedc + ormqr_blocked) | `two_stage` (sy2sb + sb2st + stebz/stedc) |
+| complex<double>, 449 ≤ n ≤ 1600 (sm_89) | `blocked` | `two_stage` |
+| the CPU (NETLIB queue) | no route: `NoRouteError` by design | no route |
+
+The library build is unchanged: `vendor` first for `jobz=V`, `two_stage` first for `jobz=N`.
+
+**The defect this track fixed: workspace at the fullerene batch.** `blocked` and `two_stage` sized their
+workspace for the whole batch. `SYEV_BLOCKED_L2_CHUNK_PERCENT` is 0, so the
+[L2 chunking](#syev-l2-batch-chunking) never splits a blocked batch below the grid cap. For double
+eigenvectors that is 5.6 to 7.1 n² elements per item. Reported by `syev_buffer_size` under Auto,
+vendor-free (`SyevTest.DoubleBandSaturatingFullereneShapes`, before the fix):
+
+| shape | route | workspace |
+|---|---|---:|
+| n = 480, batch 1819 (C120) | blocked | 22831 MiB |
+| n = 1200, batch 76 (C300) | blocked | 4679 MiB |
+
+The C120 workspace plus A (3.35 GB) does not fit a 24 GB card. The test still passed, because its
+`UnifiedVector` is managed memory and the driver oversubscribes. A device allocation of that size fails.
+
+Since the fix, `syev.cc` (`part_items`) runs the batch in parts when the chosen family's workspace
+exceeds `Device::scratch_budget`, the library's per-call lease of min(`MAX_MEM_ALLOC_SIZE`,
+`GLOBAL_MEM_SIZE` / 4), which is 6 GB on the 4090. Two sizing calls, at 1 and 2 items, give the slope
+and the first guess: half the items that fit, because the last part takes the remainder. The size is
+not linear at small batch everywhere (two_stage at n = 64 in the full build, whose children route to
+the vendor), so the guess halves until both part sizes fit the budget. The parts are independent solves that share one part-sized workspace, and a pointer array of their own (a `batch_range` view has none, and the vendor children of the full build read one), on the
+in-order queue. `syev_buffer_size` reports the larger of the two part sizes (a full part and the
+last one), because the family's own size is not monotone in the batch: blocked's inner chunk is
+grid-capped above 32767 items and `BATCHLAS_TUNE_L2_CHUNK_ITEMS` can force it. Eigenvalues are offset by
+`b0 n`, and a per-item `info` by `b0`. The vendor and the n ≤ 32 families are not split. On the 4090,
+C120 now runs in parts of about 240 items. C300 fits the budget and runs as one call, as before.
+On a device whose budget exceeds about 22.3 GiB (sm_120, 96 GB) C120 runs as one call, so the test
+seam `ops::syev::detail::ScopedPartBudget` (`src/ops/syev/parts.hh`) replaces the budget to force parts
+on any device.
+
+**Tests** (`tests/syev_tests.cc`). Every input is a graded Hermitian matrix, `fill_graded_hermitian` with
+condition 10⁶. The band grid, the pins and the part-loop case store it through `fill_poisoned`: ld = n + 3,
+batch stride ld n + 5, and a −9e3 (complex: −9e3 + 7e3i) poison in the triangle `uplo` does not name.
+`DoubleBandSaturatingBatchIsBitIdentical` pads ld and stride but does not poison;
+`DoubleBandSaturatingFullereneShapes` uses natural storage (ld = n, stride n²) and no poison. Checks go
+through `EXPECT_VERIFY`: values, eigen residual and orthogonality.
+
+- `DoubleBandAutoIsServedByARow` (quick tier): Auto at n = 449 L V, 480 U V and 1200 U N. Vendor-free,
+  the trace must name `blocked` or `two_stage` and never `last resort`.
+- `DoubleBandPinnedNativeFamilies` (quick tier): `blocked` and `two_stage` pinned at n = 449, both uplo,
+  both jobz.
+- `DoubleBandEveryOrderUploAndJobz` (heavy tier, pattern `*DoubleBandEvery*`): Auto at n = 449, 480,
+  1024, 1200 and 1600, with both uplo and both jobz, plus both families pinned at n = 1200.
+- `DoubleBandSaturatingBatchIsBitIdentical` (heavy tier): 128 copies of one n = 480 item through each
+  pinned family, both jobz, Upper. W and V of every item are bit-identical to item 0, and item 0
+  verifies.
+- `DoubleBandSaturatingFullereneShapes` (heavy tier, double only): the C120 and C300 shapes under Auto,
+  `jobz=V`. The first and last items verify. It records `workspace_MiB_n<order>` in the gtest XML.
+- `BatchPartsUnderAScratchBudget` (quick tier, every scalar type): a `ScopedPartBudget` of 4.5 items'
+  workspace, capped below the whole batch's, cuts batch 7 at n = 64 into parts of 2, 2 and 3 where the
+  size is linear. Each family pinned, both uplo and jobz, a per-item `info` span poisoned with −1, and
+  every item verified. `syev_buffer_size` must fit the budget, be less than the whole batch's, and
+  (linear case) equal the 3-item size.
+- `VendorFreeCpuHasNoRoute` (vendor-free NETLIB only): `syev` and `syev_buffer_size` on the CPU queue
+  throw `NoRouteError`, for both jobz.
+
+Each runs vendor-free and in the full-target tree. In the full-target tree the NETLIB instantiation of
+the first test checks that n = 449 takes LAPACKE. Every other NETLIB case skips, because the CPU fill and
+the LAPACKE solve at these orders cost minutes. Vendor-free, NETLIB skips every case but
+`VendorFreeCpuHasNoRoute`.
+
+**Still to time** (on a quiet GPU, not done here): vendor-free `blocked` against `two_stage` for
+`jobz=V` at n = 480..1600, at batch ≥ 128 and at the fullerene batches; and the cost of the parts
+at C120 against one oversubscribed call.
 
 ## syev: open debts and unmeasured items
 

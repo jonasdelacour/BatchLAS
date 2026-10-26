@@ -13,6 +13,8 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/tuning_params.hh>
 #include <src/select/vendor.hh>
+#include <src/ops/syev/parts.hh>
+#include <batchlas/no_route.hh>
 #include <algorithm>
 #include <cstring>
 #include <complex>
@@ -22,6 +24,8 @@
 #include <vector>
 #include <cmath>
 #include <random>
+#include <initializer_list>
+#include <sstream>
 #include <type_traits>
 
 using namespace batchlas;
@@ -39,6 +43,15 @@ using SyevTestTypes = typename test_utils::backend_types<SyevConfig>::type;
 template <typename Config>
 class SyevTest : public test_utils::BatchLASTest<Config> {
 protected:
+    // A vendor-free build has no syev on the CPU: every native family is a GPU kernel, so a NETLIB
+    // queue throws NoRouteError by design (docs/perf/syev.md#syev-vendor-free-double-band).
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
+        const std::string name = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib && name != "VendorFreeCpuHasNoRoute")
+            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
+    }
 };
 
 TYPED_TEST_SUITE(SyevTest, SyevTestTypes);
@@ -781,5 +794,339 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatableAtSaturatingBatch) {
     } else {
         expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
             *this->ctx, {{"cta", 32, 1024}, {"blocked", 400, 64}, {"two_stage", 400, 64}});
+    }
+}
+
+// ---------------------------------------------------------------------------
+// P2.8: double and complex<double> for 449 <= n <= 1600 (the fullerene band: C120 n = 480 at
+// batch ~1819, C300 n = 1200 at batch ~76). A vendor-free build must serve it natively.
+// evidence: docs/perf/syev.md#syev-vendor-free-double-band
+// ---------------------------------------------------------------------------
+
+namespace {
+
+template <typename T>
+constexpr bool kDoubleScalar = std::is_same_v<typename base_type<T>::type, double>;
+
+// The choice the outermost syev select-trace line names, plus " (last resort)" when no row served it.
+template <typename F>
+std::string syev_route_of(F&& run) {
+    const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+    ::testing::internal::CaptureStderr();
+    try {
+        run();
+    } catch (...) {
+        (void)::testing::internal::GetCapturedStderr();
+        throw;
+    }
+    std::istringstream in(::testing::internal::GetCapturedStderr());
+    for (std::string line; std::getline(in, line);) {
+        const auto arrow = line.find(" -> ");
+        if (line.rfind("syev ", 0) != 0 || arrow == std::string::npos) continue;
+        const std::string tail = line.substr(arrow + 4);
+        return tail.substr(0, tail.find(' ')) + (line.find("last resort") != std::string::npos ? " (last resort)" : "");
+    }
+    return "<no syev trace line>";
+}
+
+template <Backend B, typename T, typename Real = typename base_type<T>::type>
+std::string traced_syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, UnifiedVector<Real>& W, JobType jobz,
+                        Uplo uplo) {
+    return syev_route_of([&] {
+        UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
+        (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+        ctx.wait();
+    });
+}
+
+// lambda_i = 10^(-6 i / (n - 1)), the spectrum fill_graded_hermitian(6.0) builds, sorted.
+std::vector<double> graded_lambda(int n) {
+    std::vector<double> lam(n);
+    for (int i = 0; i < n; ++i) lam[i] = std::pow(10.0, -6.0 * i / (n - 1));
+    std::sort(lam.begin(), lam.end());
+    return lam;
+}
+
+// One solve of a poisoned graded batch (fill_poisoned: condition 1e6, ld = n + 3, stride = ld n + 5),
+// checked through verify. Returns the route the trace names.
+template <Backend B, typename T>
+std::string solve_graded_band(Queue& ctx, int n, int batch, Uplo uplo, JobType jobz, const std::string& where) {
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const int ld = n + 3, stride = ld * n + 5;
+    UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+    UnifiedVector<T*> ptrs(batch, nullptr);
+    MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+    Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+    const auto lambda = fill_poisoned<T>(ctx, A, uplo, A0);
+    UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+    const std::string route = traced_syev<B, T>(ctx, A, W, jobz, uplo);
+    const VectorView<Real> w(W.data(), n, batch);
+    const std::string tag = where + " " + route;
+    EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << tag;
+    if (jobz == JobType::EigenVectors) {
+        EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(ctx, A0, A, w, A0.all_items())) << tag;
+        EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, A, A0.all_items())) << tag;
+    }
+    return route;
+}
+
+std::string band_where(int n, Uplo uplo, JobType jobz) {
+    return " n=" + std::to_string(n) + (uplo == Uplo::Lower ? " L" : " U") + (jobz == JobType::EigenVectors ? " V" : " N");
+}
+
+struct BandCase {
+    int n;
+    Uplo uplo;
+    JobType jobz;
+};
+
+std::vector<BandCase> band_grid(std::initializer_list<int> orders) {
+    std::vector<BandCase> cases;
+    for (const int n : orders)
+        for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) cases.push_back({n, uplo, jobz});
+    return cases;
+}
+
+// Auto: vendor-free, a GPU row must name a runnable native family (never the last resort); with the
+// library the GPU row is served as transcribed and the CPU takes LAPACKE.
+template <Backend B, typename T>
+void expect_band_auto(Queue& ctx, const std::vector<BandCase>& cases) {
+    constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
+    for (const BandCase& c : cases) {
+        const std::string where = band_where(c.n, c.uplo, c.jobz);
+        const std::string route = solve_graded_band<B, T>(ctx, c.n, 2, c.uplo, c.jobz, where);
+        if (B == Backend::NETLIB) {
+            EXPECT_EQ(route.rfind("vendor", 0), 0u) << where << ": " << route;
+        } else {
+            EXPECT_EQ(route.find("last resort"), std::string::npos) << where << ": " << route;
+            if (!kVendor) EXPECT_TRUE(route == "blocked" || route == "two_stage") << where << ": " << route;
+        }
+    }
+}
+
+// Each native family pinned, so both are exercised whatever the table ranks first.
+template <Backend B, typename T>
+void expect_band_pinned(Queue& ctx, const std::vector<BandCase>& cases) {
+    for (const char* family : {"blocked", "two_stage"}) {
+        const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
+        for (const BandCase& c : cases) {
+            const std::string where = family + band_where(c.n, c.uplo, c.jobz);
+            EXPECT_EQ((solve_graded_band<B, T>(ctx, c.n, 2, c.uplo, c.jobz, where)), family) << where;
+        }
+    }
+}
+
+}  // namespace
+
+// Quick tier: three Auto solves across the band (the CPU: n = 449 only, its fill and LAPACKE are
+// slow there) and every pinned (family, uplo, jobz) at n = 449.
+TYPED_TEST(SyevTest, DoubleBandAutoIsServedByARow) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!kDoubleScalar<T>) {
+        GTEST_SKIP() << "the band is a double / complex<double> requirement";
+    } else if constexpr (B == Backend::NETLIB) {
+        expect_band_auto<B, T>(*this->ctx, {{449, Uplo::Lower, JobType::EigenVectors}});
+    } else {
+        expect_band_auto<B, T>(*this->ctx, {{449, Uplo::Lower, JobType::EigenVectors},
+                                            {480, Uplo::Upper, JobType::EigenVectors},
+                                            {1200, Uplo::Upper, JobType::NoEigenVectors}});
+    }
+}
+
+TYPED_TEST(SyevTest, DoubleBandPinnedNativeFamilies) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!kDoubleScalar<T> || B == Backend::NETLIB) {
+        GTEST_SKIP() << "the native families are GPU kernels; the band is double / complex<double>";
+    } else {
+        expect_band_pinned<B, T>(*this->ctx, band_grid({449}));
+    }
+}
+
+// Heavy tier (*DoubleBandEvery*): Auto at every band order with both uplo and jobz, and both
+// families pinned at n = 1200.
+TYPED_TEST(SyevTest, DoubleBandEveryOrderUploAndJobz) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!kDoubleScalar<T> || B == Backend::NETLIB) {
+        GTEST_SKIP() << "the band is a double / complex<double> GPU requirement (LAPACKE: the quick case)";
+    } else {
+        expect_band_auto<B, T>(*this->ctx, band_grid({449, 480, 1024, 1200, 1600}));
+        expect_band_pinned<B, T>(*this->ctx, band_grid({1200}));
+    }
+}
+
+// Saturating batch (rule 5): 128 copies of one graded n = 480 item through each pinned native family;
+// every item's W and V is bit-identical to item 0's, and item 0 verifies.
+TYPED_TEST(SyevTest, DoubleBandSaturatingBatchIsBitIdentical) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!kDoubleScalar<T> || B == Backend::NETLIB) {
+        GTEST_SKIP() << "the native families are GPU kernels; the band is double / complex<double>";
+    } else {
+        const int n = 480, batch = 128, ld = n + 3, stride = ld * n + 5;
+        const std::vector<std::vector<double>> lam{graded_lambda(n)};
+        for (const char* family : {"blocked", "two_stage"})
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                const std::string where = family + band_where(n, Uplo::Upper, jobz);
+                const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
+                UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                UnifiedVector<T*> ptrs(batch, nullptr);  // the vendor children (full build) read data_ptrs
+                MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                Matrix<T, MatrixFormat::Dense> A0(n, n, 1);
+                A.batch_range(0, 1).fill_graded_hermitian(*this->ctx, 6.0, 4801u).wait();
+                for (int b = 1; b < batch; ++b) (void)MV::copy(*this->ctx, A.batch_range(b, 1), A.batch_range(0, 1));
+                (void)MV::copy(*this->ctx, A0, A.batch_range(0, 1));
+                this->ctx->wait();
+                UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                ASSERT_EQ((traced_syev<B, T>(*this->ctx, A, W, jobz, Uplo::Upper)), family) << where;
+                const VectorView<Real> w0(W.data(), n, 1);
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w0, lam, 1.0, A0.all_items())) << where;
+                if (jobz == JobType::EigenVectors)
+                    EXPECT_VERIFY(T, verify::Check::eigen_residual, n,
+                                  MV::eigen_residual(*this->ctx, A0, A.batch_range(0, 1), w0, A0.all_items()))
+                        << where;
+                int differ = 0;
+                for (int b = 1; b < batch; ++b) {
+                    const bool w_same = std::memcmp(&W[size_t(b) * n], &W[0], size_t(n) * sizeof(Real)) == 0;
+                    bool v_same = true;
+                    if (jobz == JobType::EigenVectors)
+                        for (int j = 0; j < n && v_same; ++j)
+                            v_same = std::memcmp(&buf[size_t(b) * stride + size_t(j) * ld], &buf[size_t(j) * ld],
+                                                 size_t(n) * sizeof(T)) == 0;
+                    differ += !(w_same && v_same);
+                }
+                EXPECT_EQ(differ, 0) << where << ": items differ from item 0";
+            }
+    }
+}
+
+// The two fullerene workloads at their own batch under Auto (double only: the Hamiltonians are real),
+// jobz = V, Lower: the route sizes its workspace for the whole call and solves. First and last items verify.
+TYPED_TEST(SyevTest, DoubleBandSaturatingFullereneShapes) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (!std::is_same_v<T, double> || B == Backend::NETLIB) {
+        GTEST_SKIP() << "the fullerene workloads are real double on the GPU";
+    } else {
+        constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
+        struct Shape {
+            int n, batch;
+        };
+        for (const Shape s : {Shape{480, 1819}, Shape{1200, 76}}) {
+            const int n = s.n, batch = s.batch;
+            const std::string where = "n=" + std::to_string(n) + " batch=" + std::to_string(batch);
+            const std::vector<std::vector<double>> lam{graded_lambda(n)};
+            Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+            A.view().fill_graded_hermitian(*this->ctx, 6.0, 1200u + unsigned(n)).wait();
+            Matrix<T, MatrixFormat::Dense> first(n, n, 1), last(n, n, 1);
+            (void)MV::copy(*this->ctx, first, A.view().batch_range(0, 1));
+            (void)MV::copy(*this->ctx, last, A.view().batch_range(batch - 1, 1));
+            this->ctx->wait();
+            UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+            const std::size_t ws = syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower);
+            ::testing::Test::RecordProperty("workspace_MiB_n" + std::to_string(n), std::to_string(ws >> 20));
+            const std::string route = traced_syev<B, T>(*this->ctx, A.view(), W, JobType::EigenVectors, Uplo::Lower);
+            EXPECT_EQ(route.find("last resort"), std::string::npos) << where << ": " << route;
+            if (!kVendor) EXPECT_TRUE(route == "blocked" || route == "two_stage") << where << ": " << route;
+            for (const int b : {0, batch - 1}) {
+                const VectorView<Real> wb(&W[size_t(b) * n], n, 1);
+                const auto& A0 = b == 0 ? first : last;
+                const auto V = A.view().batch_range(b, 1);
+                const std::string tag = where + " item " + std::to_string(b) + " " + route;
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(wb, lam, 1.0, A0.all_items())) << tag;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n,
+                              MV::eigen_residual(*this->ctx, A0, V, wb, A0.all_items()))
+                    << tag;
+                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n,
+                              MV::orthogonality(*this->ctx, V, A0.all_items()))
+                    << tag;
+            }
+        }
+    }
+}
+
+// The part loop on a batch small enough for the quick tier: a budget of 4.5 items' workspace (below the
+// whole batch's) cuts batch 7 into parts of 2, 2 and 3 where the size is linear, a middle part included;
+// each pinned family, poisoned strided storage, a per-item info span, and every item verified.
+TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "the part loop serves the native families, GPU kernels";
+    } else {
+        const int n = 64, batch = 7, ld = n + 3, stride = ld * n + 5;
+        for (const char* family : {"blocked", "two_stage"})
+            for (const BandCase& c : band_grid({n})) {
+                const std::string where = family + band_where(n, c.uplo, c.jobz);
+                const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
+                UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                UnifiedVector<T*> ptrs(batch, nullptr);
+                MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                const auto lambda = fill_poisoned<T>(*this->ctx, A, c.uplo, A0);
+                UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+                const auto size_of = [&](int items) {
+                    return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo);
+                };
+                const std::size_t one = size_of(1), per = size_of(2) - one, three = size_of(3), whole = size_of(batch);
+                ASSERT_GT(per, 0u) << where;
+                const std::size_t budget_bytes = std::min(one + 3 * per + per / 2, whole - 1);
+                const bool linear = three == one + 2 * per && whole == one + 6 * per;
+                const ops::syev::detail::ScopedPartBudget budget(budget_bytes);
+                const std::size_t parted = size_of(batch);
+                // The parts' own pointer array (64-byte aligned, 3 items) follows the family's workspace.
+                const std::size_t ptr_bytes = 64 + 3 * sizeof(T*);
+                if (linear) EXPECT_EQ(parted, three + ptr_bytes) << where << ": the largest part is 3 items";
+                EXPECT_LE(parted, budget_bytes + 64 + batch * sizeof(T*))
+                    << where << " one=" << one << " per=" << per << " whole=" << whole;
+                EXPECT_LT(parted, whole) << where;
+                UnifiedVector<std::byte> ws(parted);
+                UnifiedVector<int32_t> info(batch, int32_t(-1));
+                (void)syev<B, T>(*this->ctx, A, W.to_span(), c.jobz, c.uplo, ws.to_span(), info.to_span());
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << where << " item " << b;
+                const VectorView<Real> w(W.data(), n, batch);
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
+                if (c.jobz != JobType::EigenVectors) continue;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
+                    << where;
+                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(*this->ctx, A, A0.all_items()))
+                    << where;
+            }
+    }
+}
+
+// Vendor-free, the CPU has no syev family: the call and its size query throw NoRouteError, never a
+// silent answer (docs/perf/syev.md#syev-vendor-free-double-band). With netlib, LAPACKE serves it.
+TYPED_TEST(SyevTest, VendorFreeCpuHasNoRoute) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B != Backend::NETLIB) {
+        GTEST_SKIP() << "a CPU-queue requirement";
+    } else {
+        if (batchlas::select::kHasNetlib) GTEST_SKIP() << "netlib present: LAPACKE serves the CPU";
+        const int n = 64, batch = 2;
+        Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+        A.view().fill_graded_hermitian(*this->ctx, 6.0, 64u).wait();
+        UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
+        for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+            EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower)),
+                         batchlas::NoRouteError);
+            UnifiedVector<std::byte> ws(size_t(1) << 20);
+            EXPECT_THROW(((void)syev<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, ws.to_span(),
+                                           Span<int32_t>{})),
+                         batchlas::NoRouteError);
+        }
     }
 }
