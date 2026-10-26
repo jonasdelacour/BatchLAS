@@ -306,6 +306,7 @@ const std::map<std::string, std::vector<std::string>>& op_dependencies() {
         {"ormqr", {"gemm", "trmm"}},
         {"getri", {"trsm", "getrf"}},
         {"posv", {"potrf", "trsm"}},
+        {"potrs", {"trsm"}},
         {"gesv", {"getrf", "getrs"}},
         {"orgqr", {"ormqr"}},
         {"syev", {"gemm", "trmm", "syr2k", "geqrf", "ormqr"}},
