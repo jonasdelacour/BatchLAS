@@ -36,7 +36,8 @@ inline constexpr std::array<std::string_view, 3> kLastResort{"vendor", "blocked"
 
 inline constexpr select::OpSpec spec{Op::sygst, select::Lib::solver, select::Rules{kLastResort}};
 
-inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  ///< work ~ n^3 batch
+inline constexpr std::array<std::string_view, 4> key_names{"itype:exact", "uplo:exact", "n:log:3",
+                                                            "batch:log"};  ///< itype 1 trsm, 2, 3 trmm; ~n^3 batch
 
 inline constexpr std::array<int, 15> grid_n{1, 2, 4, 8, 16, 32, 33, 64, 128, 240, 256, 480, 512, 1024, 1200};
 inline constexpr std::array<int, 5> grid_batch{128, 512, 2048, 8192, 32768};

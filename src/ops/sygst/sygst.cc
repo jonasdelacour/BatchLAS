@@ -42,8 +42,8 @@ template <Backend B>
 inline constexpr bool vendor_linked = B == Backend::NETLIB && select::kHasNetlib;
 
 template <class T>
-select::Key key_of(const MV<T>& A) {
-    return {{"n", A.rows()}, {"batch", A.batch_size()}};
+select::Key key_of(const MV<T>& A, int itype, Uplo uplo) {
+    return {{"itype", itype}, {"uplo", uplo == Uplo::Lower ? "L" : "U"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
 inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 128 || nb == 256; }
@@ -72,16 +72,24 @@ constexpr Transpose kH = is_std_complex_v<T> ? Transpose::ConjTrans : Transpose:
 // Whether the call is one diagonal-kernel launch: no child, no workspace, no chunking.
 inline bool single_block(int n, int nb) { return n <= std::min(nb, sycl_sygst::kDiagMaxOrder); }
 
-// Items per pass: the panel and trailing parts hand A between children through L2, as potrf's do.
-// One diagonal block has no hand-off and never splits. Query and call both use it.
+// Fewest items per pass, in CUs: parts of 128 or 256 items starve the children (float n = 480, batch
+// 1024: 22.0 ms at potrf's chunk, 14.0 ms at 512). Here, not in tuning_params.hh, which getrf, potrf,
+// geqrf and syev hash as a kernel dependency. evidence: docs/perf/sygvd.md#sygst-measured
+inline constexpr std::int64_t kBlockedMinChunkCus = 4;
+
+// Items per pass: potrf's L2 chunk, at least kBlockedMinChunkCus x CU unless
+// BATCHLAS_TUNE_L2_CHUNK_ITEMS forces it. One diagonal block never splits. Query and call both use it.
 template <class T>
 int blocked_chunk(Queue& q, int n, int nb, int batch) {
     if (single_block(n, nb)) return batch;
     const auto dev = q.device();
-    return static_cast<int>(tuning::blocked_chunk_items(
+    const std::int64_t cu = std::max<std::int64_t>(1, dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    std::int64_t c = tuning::blocked_chunk_items(
         batch, static_cast<std::int64_t>(n) * (n + 1) * static_cast<std::int64_t>(sizeof(T)),
-        static_cast<std::int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
-        static_cast<std::int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+        static_cast<std::int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)), cu);
+    if (tuning::detail::tuning_env_override(settings().geometry.tune.l2_chunk_items, 0) <= 0)
+        c = std::max(c, kBlockedMinChunkCus * cu);
+    return static_cast<int>(batch >= 2 * c ? c : batch);
 }
 
 inline int blocked_part(int chunk, int batch) { return batch < 2 * chunk ? batch : chunk + batch % chunk; }
@@ -301,8 +309,8 @@ Event launch(Queue& q, const SygstChoice& c, const MV<T>& A, const MV<T>& Bf, in
 }
 
 template <Backend B, class T>
-SygstChoice pick(Queue& ctx, const MV<T>& A, const MV<T>& Bf) {
-    return select::pick<B, T>(spec, ctx, key_of<T>(A), candidates<T>(),
+SygstChoice pick(Queue& ctx, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo) {
+    return select::pick<B, T>(spec, ctx, key_of<T>(A, itype, uplo), candidates<T>(),
                               [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, Bf); });
 }
 
@@ -314,7 +322,7 @@ Event sygst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     sygst_validate_params<T>("sygst", A, B, itype, uplo);
     if (A.batch_size() == 0 || A.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    const select::Key key = ops::sygst::key_of<T>(A);
+    const select::Key key = ops::sygst::key_of<T>(A, itype, uplo);
     return select::run<Back, T>(
         ops::sygst::spec, ctx, key, ops::sygst::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::sygst::can_run<Back, T>(c, d, A, B); }, shape, key,
@@ -333,7 +341,7 @@ size_t sygst_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
                          const MatrixView<T, MatrixFormat::Dense>& B, int itype, Uplo uplo) {
     sygst_validate_params<T>("sygst_buffer_size", A, B, itype, uplo);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
-    return ops::sygst::workspace<Back, T>(ctx, ops::sygst::pick<Back, T>(ctx, A, B), A, itype);
+    return ops::sygst::workspace<Back, T>(ctx, ops::sygst::pick<Back, T>(ctx, A, B, itype, uplo), A, itype);
 }
 
 #define SYGST_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, sygst) BATCHLAS_INSTANTIATE_OP(B_, fp, sygst_buffer_size)

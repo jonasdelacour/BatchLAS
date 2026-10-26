@@ -790,8 +790,8 @@ TEST(TunedTables, SygvdTranscribedTablesHoldTheChoiceGridComposeFirst) {
         }
 }
 
-// sygst (docs/perf/sygvd.md#sygst-measured): sm_89 float and cfloat are timed at every grid cell of at
-// most 2 GiB of operands; every other dtype and device is transcribed from those rows (double from float,
+// sygst (docs/perf/sygvd.md#sygst-measured): sm_89 float and cfloat are timed at every itype x uplo x
+// grid cell of at most 2 GiB of operands; every other dtype and device is transcribed from those rows (double from float,
 // cdouble from cfloat, sm_120 from sm_89's), so a transcribed row at a measured key ranks exactly as the
 // measured one. Every grid cell has a transcribed row; on the timed tables the nearest timed row decides.
 TEST(TunedTables, SygstTablesAreMeasuredOnSm89AndTranscribedFromIt) {
@@ -802,26 +802,32 @@ TEST(TunedTables, SygstTablesAreMeasuredOnSm89AndTranscribedFromIt) {
         for (const auto& e : r.ranked) s.push_back(e.spelling);
         return s;
     };
-    std::map<std::string, std::map<std::string, Ranking>> measured;  // dtype -> "n b" -> ranking
+    auto join = [](const sel::TableRow& r) { return r.keys[0] + " " + r.keys[1] + " " + r.keys[2] + " " + r.keys[3]; };
+    std::vector<std::pair<std::string, double>> cells;  // "itype uplo n batch", n^2 batch
+    for (const char* it : {"1", "2", "3"})
+        for (const char* ul : {"L", "U"})
+            for (int n : sygst::grid_n)
+                for (int b : sygst::grid_batch)
+                    cells.emplace_back(std::string(it) + " " + ul + " " + std::to_string(n) + " " + std::to_string(b),
+                                       double(n) * n * b);
+    std::map<std::string, std::map<std::string, Ranking>> measured;  // dtype -> key -> ranking
     for (const char* dt : {"float", "cfloat"}) {
         const double elem = dt[0] == 'c' ? 8.0 : 4.0;
         std::set<std::string> timed;
         for (const auto& row : embedded("sygst", dt, "sm_89").rows)
             if (row.timed) {
-                timed.insert(row.keys[0] + " " + row.keys[1]);
-                measured[dt][row.keys[0] + " " + row.keys[1]] = ranking(row);
+                timed.insert(join(row));
+                measured[dt][join(row)] = ranking(row);
             }
-        for (int n : sygst::grid_n)
-            for (int b : sygst::grid_batch)
-                if (4.0 * n * n * b * elem <= 2.0 * (1u << 30))
-                    EXPECT_TRUE(timed.count(std::to_string(n) + " " + std::to_string(b))) << dt << " n=" << n << " b=" << b;
+        for (const auto& [key, n2b] : cells)
+            if (4.0 * n2b * elem <= 2.0 * (1u << 30)) EXPECT_TRUE(timed.count(key)) << dt << " " << key;
     }
     for (const char* dev : {"sm_89", "sm_120"})
         for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
             const std::string from = dt[0] == 'c' ? "cfloat" : "float";
             std::set<std::string> got;
             for (const auto& row : embedded("sygst", dt, dev).rows) {
-                const std::string key = row.keys[0] + " " + row.keys[1];
+                const std::string key = join(row);
                 got.insert(key);
                 if (row.timed) {
                     EXPECT_TRUE(std::string(dev) == "sm_89" && from == dt) << dt << " " << dev << " " << key;
@@ -830,9 +836,7 @@ TEST(TunedTables, SygstTablesAreMeasuredOnSm89AndTranscribedFromIt) {
                 if (measured[from].count(key)) EXPECT_EQ(ranking(row), measured[from][key]) << dt << " " << dev << " " << key;
             }
             if (std::string(dev) == "sm_89" && from == dt) continue;  // past the cap the nearest timed row decides
-            for (int n : sygst::grid_n)
-                for (int b : sygst::grid_batch)
-                    EXPECT_TRUE(got.count(std::to_string(n) + " " + std::to_string(b))) << dt << " " << dev << " n=" << n;
+            for (const auto& c : cells) EXPECT_TRUE(got.count(c.first)) << dt << " " << dev << " " << c.first;
         }
 }
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.

@@ -2,9 +2,11 @@
 """Append a `transcribed` run to the sygst ledgers from the measured sm_89 float/cfloat rows of a table
 generated from the ledger (no timing): double <- float and cdouble <- cfloat on sm_89; all four dtypes on
 sm_120 from the matching sm_89 measured dtype; and, for sm_89 float/cfloat, the grid cells the deep run
-skipped over the memory cap (copied from the nearest measured row). Keys: the choice.hh grid plus every
-measured key. Ranking at a key: the measured row there, else the nearest (3 |dlog n| + |dlog batch|).
-Wrote run transcribed-fd79f23c (tuned/README.md). Run from the repository root:
+skipped over the memory cap (copied from the nearest measured row). Keys: the choice.hh grid at every
+combination of the table's exact keys (itype, uplo) the measured rows hold, plus every measured key.
+Ranking at a key: the measured row there, else the nearest with the same exact keys
+(3 |dlog n| + |dlog batch|). Wrote runs transcribed-fd79f23c (keys n, batch) and the later itype x uplo
+run (tuned/README.md). Run from the repository root:
   scripts/transcribe/sygst_transcribe.py TABLE SHA DATE [--ledger-dir DIR]"""
 import argparse
 import json
@@ -22,8 +24,12 @@ grid_n = [1, 2, 4, 8, 16, 32, 33, 64, 128, 240, 256, 480, 512, 1024, 1200]
 grid_b = [128, 512, 2048, 8192, 32768]
 cands_all = "blocked:nb=32|blocked:nb=64|blocked:nb=128|blocked:nb=256|twosided|vendor"
 
-measured = {}  # dtype -> {(n, b): [spelling...]}
-for line in open(table_path).read().splitlines():
+lines = open(table_path).read().splitlines()
+keys_line = next(ln for ln in lines if ln.startswith("# keys:")).split()[3:]  # after 'dtype:exact'
+exact = [k.split(":")[0] for k in keys_line if k.split(":")[1] == "exact"]
+assert [k.split(":")[0] for k in keys_line if k.split(":")[1] == "log"] == ["n", "batch"], keys_line
+measured = {}  # dtype -> {(exact values, n, b): [spelling...]}
+for line in lines:
     if not line or line.startswith("#"):
         continue
     head, rest = line.split("|", 1)
@@ -31,15 +37,19 @@ for line in open(table_path).read().splitlines():
         continue
     kv = dict(f.split("=") for f in head.split())
     spell = [e.strip().split()[0] for e in rest.rsplit("#", 1)[0].split("|") if e.strip()]
-    measured.setdefault(kv["dtype"], {})[(int(kv["n"]), int(kv["batch"]))] = spell
+    measured.setdefault(kv["dtype"], {})[(tuple(kv[e] for e in exact), int(kv["n"]), int(kv["batch"]))] = spell
 assert measured.get("float") and measured.get("cfloat"), "no measured float/cfloat rows"
 
 
 def nearest(src, key):
     if key in src:
         return src[key]
-    d = lambda k: 3 * abs(math.log(k[0] / key[0])) + abs(math.log(k[1] / key[1]))
-    return src[min(src, key=d)]
+    d = lambda k: 3 * abs(math.log(k[1] / key[1])) + abs(math.log(k[2] / key[2]))
+    return src[min([k for k in src if k[0] == key[0]], key=d)]
+
+
+def key_text(key):
+    return ",".join(["%s=%s" % (e, v) for e, v in zip(exact, key[0])] + ["n=%d" % key[1], "batch=%d" % key[2]])
 
 
 plan = {"sm_89": {"float": "float", "cfloat": "cfloat", "double": "float", "cdouble": "cfloat"},
@@ -49,17 +59,18 @@ for dev, dts in plan.items():
     out = []
     for dt, frm in dts.items():
         src = measured[frm]
-        keys = sorted(set((n, b) for n in grid_n for b in grid_b) | set(src))
+        combos = sorted({k[0] for k in src})
+        keys = sorted(set((c, n, b) for c in combos for n in grid_n for b in grid_b) | set(src))
         if dev == "sm_89" and dt == frm:
             keys = [k for k in keys if k not in src]  # only the cells the measured run skipped
         why = "no timing: %s %s rows copy the nearest measured sm_89 %s row%s (docs/perf/sygvd.md#sygst-measured)" % (
             dev, dt, frm, "" if dt == frm else "; FP64 is not tuned on a 1:64 GPU")
         out.append({"kind": "run", "dtype": dt, "run_id": rid, "host": "", "device": dev, "device_name": "",
                     "batchlas": sha, "argv": "transcribed table tuned/sygst.%s.txt (%s)" % (dev, why), "date": date,
-                    "tier": "transcribed", "keys": "n:log:3 batch:log", "candidates": cands_all})
+                    "tier": "transcribed", "keys": " ".join(keys_line), "candidates": cands_all})
         for key in keys:
             spell = nearest(src, key)
-            rec = {"kind": "cell", "dtype": dt, "run_id": rid, "tier": "transcribed", "key": "n=%d,batch=%d" % key,
+            rec = {"kind": "cell", "dtype": dt, "run_id": rid, "tier": "transcribed", "key": key_text(key),
                    "round": 0, "date": date, "ranked": "|".join(spell), "cands": "|".join(spell)}
             for i in range(len(spell)):
                 rec.update({"h%d" % i: "", "s%d" % i: "ok", "r%d" % i: "", "m%d" % i: None, "lo%d" % i: None,

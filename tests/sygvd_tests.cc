@@ -300,7 +300,15 @@ protected:
         }
     }
 
-    // sygst under a pin with exactly the queried workspace; false on a NoRouteError.
+    // Whether can_run is documented false for a pinned sygst family on this backend: blocked off the
+    // GPU, vendor (LAPACKE) where it is not linked. Only these may skip; any other NoRouteError fails.
+    static bool sygst_unreachable(const std::string& fam) {
+        if (fam == "vendor") return !sygst_vendor_linked();
+        return BK == Backend::NETLIB && fam.rfind("blocked", 0) == 0;
+    }
+
+    // sygst under a pin with exactly the queried workspace; false on a NoRouteError, which is a
+    // failure unless sygst_unreachable(fam).
     bool run_sygst(Gen<T>& g, int itype, const std::string& fam) {
         select::ScopedPin<ops::sygst::SygstChoice> pin("sygst", fam);
         try {
@@ -308,7 +316,8 @@ protected:
             UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
             (void)sygst<BK, T>(q(), g.A(), g.B(), itype, g.uplo, Span<std::byte>(ws.data(), need));
             q().wait();
-        } catch (const NoRouteError&) {
+        } catch (const NoRouteError& e) {
+            if (!sygst_unreachable(fam)) ADD_FAILURE() << fam << " itype=" << itype << ": " << e.what();
             return false;
         }
         return true;
@@ -352,7 +361,8 @@ TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
                     size_t need = 0;
                     try {
                         need = sygst_buffer_size<BK, T>(this->q(), g.A(), g.B(), itype, uplo);
-                    } catch (const NoRouteError&) {
+                    } catch (const NoRouteError& e) {
+                        if (!TestFixture::sygst_unreachable(fam)) FAIL() << fam << ": " << e.what();
                         GTEST_SKIP() << "no sygst route in this build";
                     }
                     UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
@@ -440,6 +450,7 @@ TYPED_TEST(SygvdTest, SaturatingSygstBlockedIsBitIdenticalToItemZero) {
 }
 
 // Each pinned family is the one that ran: the coverage `reached` row of each call names its spelling.
+// One call per family (a row is per shape class and spelling), across the itypes and both triangles.
 // threadsafe: the child re-executes the binary, so the device starts fresh.
 TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
     using T = typename TestFixture::T;
@@ -449,14 +460,21 @@ TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const std::string out = dir + "/cov";
-    const std::vector<std::pair<int, std::string>> runs{{40, "blocked:nb=32"}, {70, "blocked:nb=64"}, {140, "blocked:nb=128"}, {50, "twosided"}};
+    struct Run {
+        int n, itype;
+        Uplo uplo;
+        std::string fam;
+    };
+    const std::vector<Run> runs{{40, 1, Uplo::Upper, "blocked:nb=32"}, {70, 2, Uplo::Upper, "blocked:nb=64"},
+                                {140, 3, Uplo::Lower, "blocked:nb=128"}, {270, 2, Uplo::Lower, "blocked:nb=256"},
+                                {50, 3, Uplo::Upper, "twosided"}};
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_SYGST_ROUTE", nullptr);
         batchlas::coverage::g_dynamic_enabled = true;
-        for (const auto& [n, fam] : runs) {
-            auto g = make_gen<T>(n, 2, Uplo::Lower, 9u + n);
-            if (!this->factor(g) || !this->run_sygst(g, 1, fam)) std::exit(3);
+        for (const auto& r : runs) {
+            auto g = make_gen<T>(r.n, 2, r.uplo, 9u + r.n);
+            if (!this->factor(g) || !this->run_sygst(g, r.itype, r.fam)) std::exit(3);
         }
         std::exit(0);
     };
@@ -475,7 +493,7 @@ TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
     }
     std::filesystem::remove_all(dir);
     ASSERT_EQ(algo.size(), runs.size());
-    for (const auto& [n, fam] : runs) EXPECT_EQ(algo[std::to_string(n)], fam) << "n=" << n;
+    for (const auto& r : runs) EXPECT_EQ(algo[std::to_string(r.n)], r.fam) << "n=" << r.n << " itype=" << r.itype;
 }
 
 // sygvd on Auto: every itype, both jobz, both triangles, n through the syev CTA width; jobz=N's values
