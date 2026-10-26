@@ -26,6 +26,7 @@ lives on as table rows.
 | [syev.md](syev.md) | `syev` (Jacobi CTA, fused CTA, blocked, two-stage; vendor) | **yes**: native small-n and blocked windows per type |
 | [syevx.md](syevx.md) | `syevx` (Direct, DirectSubset, Filtered, LOBPCG, stebz/stein) | n/a; no vendor arm for the selected-range solve |
 | [syfn.md](syfn.md) | `syfn` `syfn_from_eigen` (\f$ V f(\Lambda) V^H \f$) | n/a; a composition over `syev`, `herk`/`syrk` and `gemm`, no Op, untimed |
+| [sygvd.md](sygvd.md) | `sygst` `sygvd` `sygvd_factored` (generalized Hermitian-definite) | n/a; native compositions; vendor `?sygvd` per item; transcribed (untimed) tables |
 | [stedc.md](stedc.md) | `stedc` (divide and conquer, merge kernels) | n/a; no vendor arm |
 | [sytrd.md](sytrd.md) | `sytrd_blocked` + `latrd`, `sytrd_sy2sb`, `sytrd_sb2st_hh` and its Q2 back-transform | n/a; internal reductions under `syev` |
 | [ortho.md](ortho.md) | `ortho` (the Gram product and the algorithm rules) | n/a; the Gram product goes through `syrk` (real, small `k`) or `gemm`; host devices force Householder |
@@ -125,6 +126,8 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 @subpage perf_syev "syev"
 
 @subpage perf_syevx "syevx"
+
+@subpage perf_sygvd "sygvd (generalized eigenproblem)"
 
 @subpage perf_steqr "steqr"
 

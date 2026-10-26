@@ -22,6 +22,7 @@ endif()
 # partial set, so BATCHLAS_HAS_CUDA_VENDOR_TUS is the one gate.
 if(BATCHLAS_HAS_CUDA_VENDOR_TUS)
     list(APPEND BACKEND_CUDA_SOURCES cublas.cc cusolver.cc cusparse.cc)
+    list(APPEND BACKEND_CUDA_SOURCES cusolver_sygvd.cc)
 endif()
 
 if(BATCHLAS_HAS_ROCBLAS)

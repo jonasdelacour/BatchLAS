@@ -138,6 +138,8 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # potri: two element-wise kernels (info scan, triangle store); no device symbol shared with any other TU.
     potri/kernels/potri_native.cc
     lascl/lascl.cc
+    # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
+    sygvd/kernels/sygvd_native.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:
