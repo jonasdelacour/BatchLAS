@@ -42,14 +42,19 @@ syr2k, trmm `ff340fc6`. Later rule changes are their own transcribed runs: gesvd
 cfloat 33..64 puts `blocked` first, docs/perf/gesvd.md); the complex rows of symm, syrk and syr2k
 and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, docs/perf/level3.md).
 potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above), superseded by
-`c6aa0c2b` (cta and blocked:nb, provisional) and `f517330f` / `f517330f-gap` (2026-10-26: sm_89 double
-from the measured float ranking, cdouble from cfloat's, the over-cap float/cfloat cells from the nearest
-measured cell, every sm_120 row from sm_89's; @ref perf_potri).
+`c6aa0c2b` (cta and blocked:nb, provisional; `scripts/transcribe/potri_transcribe.py c6aa0c2b
+provisional --date 2026-10-26`) and `f517330f` / `f517330f-gap` (2026-10-26: sm_89 double from the
+measured float ranking, cdouble from cfloat's, the over-cap float/cfloat cells from the nearest measured
+cell, every sm_120 row from sm_89's; `scripts/transcribe/potri_transcribe.py f517330f measured --date
+2026-10-26`; @ref perf_potri).
 potrs `136b6464`: the sm_89 deep float and cfloat best records' order copied, untimed, to sm_89 double
 (from float) and cdouble (from cfloat) and to every sm_120 dtype (FP64 is not tuned on a 1:64 part; no
-sm_120 run; @ref perf_potrs).
+sm_120 run; `scripts/transcribe/potrs_transcribe.py 136b6464 2026-10-26`; @ref perf_potrs).
+Each of those three commands, run with `--ledger-dir` on a copy of the ledgers, appends lines
+byte-identical to its run's.
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
-([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
+([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The potri (`c6aa0c2b`, `f517330f`) and potrs transcribers are
+in `scripts/transcribe/` (committed in `a01aa47d`); the older ones' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
 ledgers is in the commit that added them (`git log -- scripts/migrate_tuning_data.py`).
 
