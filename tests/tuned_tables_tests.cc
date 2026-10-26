@@ -18,6 +18,7 @@
 #include <src/ops/gemv/choice.hh>
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/getri/choice.hh>
+#include <src/ops/potri/choice.hh>
 #include <src/ops/gesv/choice.hh>
 #include <src/ops/gesvd/choice.hh>
 #include <src/ops/spmm/choice.hh>
@@ -135,6 +136,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(getri::candidates<double>());
         if (dtype == "cfloat") return spellings(getri::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(getri::candidates<std::complex<double>>());
+    }
+    namespace potri = batchlas::ops::potri;
+    if (op == "potri") {
+        if (dtype == "float") return spellings(potri::candidates<float>());
+        if (dtype == "double") return spellings(potri::candidates<double>());
+        if (dtype == "cfloat") return spellings(potri::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(potri::candidates<std::complex<double>>());
     }
     namespace gesv = batchlas::ops::gesv;
     if (op == "gesv") {
@@ -290,6 +298,7 @@ std::string key_spec(const std::string& op) {
     if (op == "getrf") join(batchlas::ops::getrf::key_names);
     if (op == "getrs") join(batchlas::ops::getrs::key_names);
     if (op == "getri") join(batchlas::ops::getri::key_names);
+    if (op == "potri") join(batchlas::ops::potri::key_names);
     if (op == "gesv") join(batchlas::ops::gesv::key_names);
     if (op == "gesvd") join(batchlas::ops::gesvd::key_names);
     if (op == "spmm") join(batchlas::ops::spmm::key_names);
@@ -449,7 +458,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> real_only{};
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
+                           "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
                            "herk", "her2k"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
@@ -733,6 +742,25 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
             }
 }
 
+// potri's table is transcribed on both devices (no timing): one row per grid cell, fused first where the
+// one-launch solve can run (n <= 8, potrs::fused_fits), blocked first above it. A retune replaces rows with
+// timed ones and this test goes with them.
+TEST(TunedTables, PotriTranscribedTablesHoldExactlyTheChoiceGridAndTheFusedCeiling) {
+    namespace potri = batchlas::ops::potri;
+    std::set<std::string> want;
+    for (int n : potri::grid_n)
+        for (int b : potri::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded("potri", dt, dev);
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                got.insert(row.keys[0] + " " + row.keys[1]);
+                EXPECT_EQ(row.ranked.front().spelling, std::stoi(row.keys[0]) <= 8 ? "fused" : "blocked")
+                    << dt << " " << dev << " " << row.keys[0] << " " << row.keys[1];
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
 TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gesv = batchlas::ops::gesv;

@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 // P2: the fused factor-and-solve tier for POSV and the composed choices, pinned. There is
-// no batched vendor posv and no `potrs` op, so the only oracles here are a host residual
-// and potrf itself. Selection, and the drivers' refusals (old P6), are tested in
+// no batched vendor posv, and potrs (posv's second half) is tested in potri_tests.cc, so the
+// only oracles here are a host residual and potrf itself. Selection, and the drivers' refusals (old P6), are tested in
 // posv_candidates_tests.cc.
 // evidence: docs/perf/potrf.md#the-fused-posv-tier
 #include <gtest/gtest.h>
+
+#include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
@@ -189,10 +191,15 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the fused posv tier is GPU-only (src/ops/posv/posv.cc can_run)";
-        if (!this->ctx->device().supports_sub_group_size(32))
-            GTEST_SKIP() << "device does not offer sub-group size 32";
+        // NETLIB serves potrf and trsm through LAPACKE/CBLAS only: vendor-free, nothing runs on the host.
+        if (BackendType == Backend::NETLIB && !(BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS))
+            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS has no potrf or trsm route";
+    }
+
+    // posv's tiny and cta tiers need a GPU with sub-group size 32 (src/ops/posv/posv.cc can_run);
+    // the blocked tier and linalg::solve_spd run on any queue, NETLIB included.
+    bool native_ok() const {
+        return this->ctx->device().type == DeviceType::GPU && this->ctx->device().supports_sub_group_size(32);
     }
 
     int cap() const { return sycl_posv::posv_tiny_max_n<T>(); }
@@ -224,6 +231,7 @@ TYPED_TEST_SUITE(PosvTest, PosvTestTypes);
 // ARMED BREAK (R9): the local-memory transpose read guarded `lane < i - 1`. EXPECTED: RED
 // here for float and cfloat, P2 GREEN.
 TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -251,6 +259,7 @@ TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
 // P1 stays GREEN, because rsqrt.approx is still accurate enough for the residual
 // bound -- which is exactly why the bit-exact comparison has to exist.
 TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -283,6 +292,7 @@ TYPED_TEST(PosvTest, TinyFactorIsBitIdenticalToPotrf) {
 // ARMED BREAK (R9): replace either solve's `tiny_select(zero, D{}, ...)` with the bare
 // division. EXPECTED: finiteness RED on the zero_minor rows only, info GREEN.
 TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int shape = 0; shape < 2; ++shape) {
@@ -308,6 +318,7 @@ TYPED_TEST(PosvTest, TinyInfoReportsTheLeadingMinorAndLeavesXFinite) {
 // ARMED BREAK (R9): in tiny_device.hh's tiny_store_lower change `c <= lane` to `c < N`.
 // EXPECTED: RED for Uplo::Lower at every n.
 TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
@@ -325,6 +336,7 @@ TYPED_TEST(PosvTest, TinyWritesOnlyItsOwnTriangle) {
 // P5. Packed launches must cover every batch item; see gesv_tests.cc G5 for the
 // break this arms (tiny_device.hh's tiny_partition_id).
 TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (int n : {8, 16}) {
@@ -350,6 +362,7 @@ TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
 // ARMED BREAK (R9): swap ld_a/ld_h in potrs_fused_launch's backward staging.
 // EXPECTED: RED for every n > 1 on Lower, and on Upper wherever potrf ran native.
 TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
+    if (!this->native_ok()) GTEST_SKIP() << "the tiny and cta posv tiers are GPU-only";
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const select::ScopedPin<ops::posv::PosvChoice> pin("posv", ops::posv::Cta{});
@@ -396,7 +409,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
 // P8. The public op on the COMPOSED arm, both triangles: the only test that exercises
 // the Upper composition's transpose arguments. THE ROUTE IS PINNED because Auto now
 // sends n <= 32 to the fused tier, which would leave this guard covering n = 33 alone.
-// ARMED BREAK (R9): swap src/ops/posv/posv.cc's two Upper trsm calls.
+// ARMED BREAK (R9): swap the two Upper trsm calls in src/ops/potrs/potrs.hh solve().
 // EXPECTED: RED for Uplo::Upper only, GREEN for Lower.
 TYPED_TEST(PosvTest, PublicPosvSolvesOnBothTriangles) {
     using T = typename TestFixture::T;
