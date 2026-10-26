@@ -92,7 +92,7 @@ cmd_start() {
     case "$host" in
         tr02) env="export CUDA_VISIBLE_DEVICES= ONEAPI_DEVICE_SELECTOR=opencl:cpu" ;;
         jrhnbr) env="export ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'${gpu:+ CUDA_VISIBLE_DEVICES=$gpu}" ;;
-        mac) env="export BATCHLAS_BUILD_JOBS=18" ;;
+        mac) env="export BATCHLAS_BUILD_JOBS=18 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0='!gh auth git-credential'" ;;
     esac
 
     on "$host" "set -e; cd $repo; git fetch -q origin
