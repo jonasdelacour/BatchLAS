@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/uplo_mirror.hh>
+#include <src/ops/syev/kernels/chunk_budget.hh>
 #include <src/select/grid_chunk.hh>
 #include <src/kernels/common/info_span.hh>
 #include <batchlas/blas/functions.hh>
@@ -595,18 +596,35 @@ size_t syev_blocked_part_buffer_size(Queue& ctx,
 // n x n matrices) between launches through L2, and their children (gemm, syr2k, trmm) are routed at
 // this batch. The item is those three, not the part workspace (10-31 n^2 at n = 64-256, much of it
 // touched by one kernel only). The query and the call must agree, so both use it.
-// evidence: docs/perf/syev.md#syev-l2-batch-chunking
-template <typename T>
-int syev_blocked_chunk(Queue& ctx, int n, int batch) {
+// The part is then capped so its own workspace fits the scratch budget (C120: n = 480, batch 1819
+// is 22.8 GB as one part). evidence: docs/perf/syev.md#syev-l2-batch-chunking,
+// docs/perf/syev.md#syev-vendor-free-double-band
+template <Backend B, typename T>
+int syev_blocked_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, JobType jobz, Uplo uplo,
+                       const StedcParams<typename base_type<T>::type>& stedc_params) {
+    const int n = static_cast<int>(a.rows());
+    const int batch = static_cast<int>(a.batch_size());
     const auto dev = ctx.device();
-    return select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
+    const int chunk = select::grid_capped_chunk(ctx, static_cast<int>(tuning::blocked_chunk_items(
         batch, 3 * static_cast<int64_t>(n) * n * static_cast<int64_t>(sizeof(T)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)),
         tuning::SYEV_BLOCKED_L2_CHUNK_PERCENT)), batch);
+    return ops::syev::detail::budget_capped_chunk(chunk, batch, ops::syev::detail::chunk_budget(ctx), [&](int items) {
+        return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
+    });
 }
 
 } // namespace
+
+namespace ops::syev::detail {
+
+std::size_t& chunk_budget_override() {
+    static std::size_t bytes = 0;
+    return bytes;
+}
+
+}  // namespace ops::syev::detail
 
 template <Backend B, typename T>
 Event syev_blocked(Queue& ctx,
@@ -622,7 +640,7 @@ Event syev_blocked(Queue& ctx,
     const int batch = static_cast<int>(a_in.batch_size());
     // Each part is a complete solve of its items, so the parts are independent; they share the
     // one part-sized workspace on the in-order queue syev_blocked_part requires.
-    const int chunk = syev_blocked_chunk<T>(ctx, n, batch);
+    const int chunk = syev_blocked_chunk<B, T>(ctx, a_in, jobz, uplo, stedc_params);
     const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
@@ -645,9 +663,9 @@ size_t syev_blocked_buffer_size(Queue& ctx,
     const int batch = static_cast<int>(a.batch_size());
     if (n < 1 || batch < 1 || a.rows() != a.cols())
         return syev_blocked_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
-    const int chunk = syev_blocked_chunk<T>(ctx, n, batch);
-    return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, chunk + batch % chunk), jobz, uplo,
-                                               stedc_params);
+    const int chunk = syev_blocked_chunk<B, T>(ctx, a, jobz, uplo, stedc_params);
+    return syev_blocked_part_buffer_size<B, T>(ctx, a.batch_range(0, ops::syev::detail::largest_part(chunk, batch)),
+                                               jobz, uplo, stedc_params);
 }
 
 #define SYEV_BLOCKED_INSTANTIATE(back, fp) \

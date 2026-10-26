@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <src/ops/syev/uplo_mirror.hh>
+#include <src/ops/syev/kernels/chunk_budget.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/matrix.hh>
@@ -56,17 +57,15 @@ inline void validate_syev_two_stage_dims(const MatrixView<T, MatrixFormat::Dense
     }
 }
 
-} // namespace
-
 template <Backend B, typename T>
-Event syev_two_stage(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& a_in,
-                     Span<typename base_type<T>::type> eigenvalues,
-                     JobType jobz,
-                     Uplo uplo,
-                     const Span<std::byte>& ws,
-                     StedcParams<typename base_type<T>::type> stedc_params,
-                     Span<int32_t> info) {
+Event syev_two_stage_part(Queue& ctx,
+                          const MatrixView<T, MatrixFormat::Dense>& a_in,
+                          Span<typename base_type<T>::type> eigenvalues,
+                          JobType jobz,
+                          Uplo uplo,
+                          const Span<std::byte>& ws,
+                          StedcParams<typename base_type<T>::type> stedc_params,
+                          Span<int32_t> info) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.entry");
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
 
@@ -375,11 +374,11 @@ Event syev_two_stage(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t syev_two_stage_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& a,
-                                  JobType jobz,
-                                  Uplo uplo,
-                                  StedcParams<typename base_type<T>::type> stedc_params) {
+size_t syev_two_stage_part_buffer_size(Queue& ctx,
+                                       const MatrixView<T, MatrixFormat::Dense>& a,
+                                       JobType jobz,
+                                       Uplo uplo,
+                                       StedcParams<typename base_type<T>::type> stedc_params) {
     if (a.rows() != a.cols()) {
         throw batchlas::invalid_argument("syev_two_stage_buffer_size: A must be square.");
     }
@@ -530,6 +529,84 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
     }
 
     return bytes;
+}
+
+// The part loop's workspace at `items` a part: the part's own layout, then, when the batch is split, the
+// parts' pointer array. A batch_range view has none, and sy2sb's panel geqrf reads one where it routes
+// to the vendor (cuBLAS geqrfBatched in the full build). evidence: docs/perf/syev.md#syev-vendor-free-double-band
+template <Backend B, typename T>
+std::size_t syev_two_stage_chunk_bytes(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, int items,
+                                       JobType jobz, Uplo uplo,
+                                       const StedcParams<typename base_type<T>::type>& stedc_params) {
+    const std::size_t part = syev_two_stage_part_buffer_size<B, T>(ctx, a.batch_range(0, items), jobz, uplo, stedc_params);
+    return items < a.batch_size() ? part + BumpAllocator::allocation_size<T*>(ctx, items) : part;
+}
+
+// Items per part. There is no L2 rule (none was measured), so below the scratch budget only
+// BATCHLAS_TUNE_L2_CHUNK_ITEMS splits the batch; above it the part is capped so its workspace fits.
+// The query and the call must agree, so both use it.
+template <Backend B, typename T>
+int syev_two_stage_chunk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a, JobType jobz, Uplo uplo,
+                         const StedcParams<typename base_type<T>::type>& stedc_params) {
+    const int batch = static_cast<int>(a.batch_size());
+    const int chunk = static_cast<int>(tuning::blocked_chunk_items(batch, 0, 0, 0, 0));
+    return ops::syev::detail::budget_capped_chunk(chunk, batch, ops::syev::detail::chunk_budget(ctx), [&](int items) {
+        return syev_two_stage_chunk_bytes<B, T>(ctx, a, items, jobz, uplo, stedc_params);
+    });
+}
+
+} // namespace
+
+template <Backend B, typename T>
+Event syev_two_stage(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& a_in,
+                     Span<typename base_type<T>::type> eigenvalues,
+                     JobType jobz,
+                     Uplo uplo,
+                     const Span<std::byte>& ws,
+                     StedcParams<typename base_type<T>::type> stedc_params,
+                     Span<int32_t> info) {
+    validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
+    const int n = static_cast<int>(a_in.rows());
+    const int batch = static_cast<int>(a_in.batch_size());
+    const int chunk = syev_two_stage_chunk<B, T>(ctx, a_in, jobz, uplo, stedc_params);
+    if (batch < 2 * chunk) return syev_two_stage_part<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params, info);
+    // Each part is a complete solve of its items; they share the one part-sized workspace and pointer
+    // array on the in-order queue syev_two_stage_part requires.
+    const int largest = ops::syev::detail::largest_part(chunk, batch);
+    const std::size_t part_bytes =
+        syev_two_stage_part_buffer_size<B, T>(ctx, a_in.batch_range(0, largest), jobz, uplo, stedc_params);
+    if (ws.size() < part_bytes) throw batchlas::workspace_error("syev_two_stage: workspace smaller than one part");
+    BumpAllocator tail(ws.subspan(part_bytes));
+    T** ptrs = tail.allocate<T*>(ctx, static_cast<std::size_t>(largest)).data();
+    const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
+        const auto sub = a_in.batch_range(b0, cb);
+        MatrixView<T, MatrixFormat::Dense> part(sub.data_ptr(), n, n, sub.ld(), sub.stride(), cb, ptrs);
+        if (!sub.active_rows().empty() || !sub.active_cols().empty())
+            part = part.with_active_dims(sub.active_rows(), sub.active_cols());
+        (void)syev_two_stage_part<B, T>(
+            ctx, part, eigenvalues.subspan(static_cast<std::size_t>(b0) * n, static_cast<std::size_t>(cb) * n), jobz,
+            uplo, ws.subspan(0, part_bytes), stedc_params,
+            info_requested ? info.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb)) : Span<int32_t>());
+    }
+    return ctx.get_event();
+}
+
+template <Backend B, typename T>
+size_t syev_two_stage_buffer_size(Queue& ctx,
+                                  const MatrixView<T, MatrixFormat::Dense>& a,
+                                  JobType jobz,
+                                  Uplo uplo,
+                                  StedcParams<typename base_type<T>::type> stedc_params) {
+    const int batch = static_cast<int>(a.batch_size());
+    if (a.rows() < 1 || batch < 1 || a.rows() != a.cols())
+        return syev_two_stage_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
+    const int chunk = syev_two_stage_chunk<B, T>(ctx, a, jobz, uplo, stedc_params);
+    if (batch < 2 * chunk) return syev_two_stage_part_buffer_size<B, T>(ctx, a, jobz, uplo, stedc_params);
+    return syev_two_stage_chunk_bytes<B, T>(ctx, a, ops::syev::detail::largest_part(chunk, batch), jobz, uplo,
+                                            stedc_params);
 }
 
 #define SYEV_TWO_STAGE_INSTANTIATE(back, fp) \
