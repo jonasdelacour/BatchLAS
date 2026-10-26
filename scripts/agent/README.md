@@ -17,6 +17,7 @@ Each script replaces a procedure that agent sessions hand-wrote, often several t
 | `wf_dump.py` | ad-hoc JSON unwrapping of Workflow output and reading 50k-character results whole |
 | `tune_procs.sh` | finding the tuner that holds a GPU lock, orphaned workers, killing a run tree |
 | `vendor_gaps.py` | re-written `losses.py` scripts: where the vendor still beats native, from the tuned tables |
+| `dispatch.sh` | hand-typed `ssh host 'cd ...; claude -p ...'` launches: a worktree and headless session on jrhnbr, tr02 (CPU/build only, GPUs hidden) or the Mac, with per-host rules, `hosts`/`list`/`logs`/`report`/`stop` |
 | `prune_worktrees.sh` | 60+ stale worktrees; removes only clean, merged ones (`--apply`) |
 | `claude-settings.json` | template for `.claude/settings.json`: registers `session_start.sh`, the build guard `scripts/agent_build_guard.py`, the tier guard `scripts/agent_tier_guard.py`, and read-only allow rules |
 | `../agent_tier_guard.py` | subagents and workflow stages launched on the session's model and effort whatever the task: blocks an Agent call or Workflow `agent()` that picks no tier from `.claude/agents/` (scout, mechanic, engineer, verifier, architect) |
