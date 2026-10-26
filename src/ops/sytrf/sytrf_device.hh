@@ -96,9 +96,16 @@ struct Group {
     int* si;
     int lid;
     int nl;
+    bool sg_only = false;  // nl == 32 run by sub-group 0 of a wider work-group: sub-group collectives
 
-    void bar() const { sycl::group_barrier(it.get_group()); }
-    int bcast(int v) const { return batchlas::portable::group_broadcast(it.get_group(), v, 0); }
+    void bar() const {
+        if (sg_only) sycl::group_barrier(it.get_sub_group());
+        else sycl::group_barrier(it.get_group());
+    }
+    int bcast(int v) const {
+        if (sg_only) return batchlas::portable::group_broadcast(it.get_sub_group(), v, 0);
+        return batchlas::portable::group_broadcast(it.get_group(), v, 0);
+    }
 
     static bool better(R ov, int oi, R bv, int bi, bool prefer_low) {
         return ov > bv || (ov == bv && (prefer_low ? oi < bi : oi > bi));

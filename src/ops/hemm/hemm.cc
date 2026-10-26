@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // hemm (flat-kernel-selection.md §4.3, §12): select::run takes the first entry of the nearest
-// tuned/hemm.<device>.txt row that can_run() admits. Expand writes the Hermitian matrix that A's
+// tuned/hemm.<device>.txt row that can_run() admits. Mirror is symm's (src/ops/symm/kernels/symm_mirror.cc)
+// with the mirrored element conjugated and the diagonal real. Expand writes the Hermitian matrix that A's
 // referenced triangle stands for into scratch and hands it to the public gemm (one strided-batched
 // call per chunk); Vendor is the per-item cublas?hemm / cblas_?hemm loop.
 
@@ -12,6 +13,7 @@
 #include <src/backends/level3_shape.hh>
 #include <src/expansion_budget.hh>
 #include <src/ops/hemm/choice.hh>
+#include <src/ops/symm/kernels/symm_mirror.hh>
 #include <src/ops/level3/batched.hh>
 #include <src/select/select.hh>
 #include <src/util/template-instantiations.hh>
@@ -37,13 +39,19 @@ select::Key key_of(const MV<T>& C) {
 // rejects a heterogeneous B or C against the homogeneous scratch; every vendor loop runs each item
 // at the top-level extents. So no family takes a heterogeneous operand. Expand is chunked over the
 // batch (grid z, scratch budget), so it refuses only an item whose own scratch does not fit.
-// rocBLAS has no ?hemm wrapper, so on ROCm only Expand (over rocBLAS gemm) runs.
+// rocBLAS has no ?hemm wrapper, so on ROCm only Mirror and Expand (over rocBLAS gemm) run. Mirror's
+// terms are symm's: its launch, chunked over the batch.
 template <Backend B, typename T>
 bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
+        [&](Mirror) {
+            return kWired && d.is_gpu && homogeneous && d.max_wg >= mirror::kWg && C.rows() >= 1 && C.cols() >= 1 &&
+                   A.batch_size() >= 1 && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<T>() &&
+                   (C.rows() + mirror::tile<T>() - 1) / mirror::tile<T>() <= d.max_groups_yz;
+        },
         [&](Expand) {
             return kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 && C.cols() >= 1 &&
                    A.batch_size() >= 1 &&
@@ -57,6 +65,13 @@ template <Backend B, typename T>
 Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
+        [&](Mirror) -> Event {
+            if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
+                return sycl_symm::symm_mirror<T, /*Herm=*/true>(q, A, Bm, C, alpha, beta, side, uplo,
+                                                                level3::grid_chunk<B>(q));
+            else
+                throw batchlas::internal_error("hemm: mirror is wired for GPU backends only");  // can_run refuses it
+        },
         [&](Expand) -> Event {
             if constexpr (select::native_gpu_backend<B> || B == Backend::ROCM)
                 return level3::expand_gemm<B, T, /*Conjugate=*/true>(q, A, Bm, C, alpha, beta, side, uplo);

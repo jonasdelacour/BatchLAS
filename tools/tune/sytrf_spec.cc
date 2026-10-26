@@ -16,6 +16,7 @@
 #include <src/ops/sytrf/choice.hh>
 #include <tools/tune/cell_runner.hh>
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -67,7 +68,8 @@ struct SytrfProblem {
         int bad = 0;
         for (int b = 0; b < batch; ++b) bad += info[std::size_t(b)] != 0;
         (void)MV::copy(q, Xv, B0v);
-        (void)sytrs<kBackend, T>(q, Av, Xv, Uplo::Lower, piv.to_span(), Span<std::byte>{});
+        UnifiedVector<std::byte> sws(std::max<std::size_t>(1, sytrs_buffer_size<kBackend, T>(q, Av, Xv, Uplo::Lower)));
+        (void)sytrs<kBackend, T>(q, Av, Xv, Uplo::Lower, piv.to_span(), sws.to_span());
         q.wait();
         return {MV::solve_residual(q, A0v, Xv, B0v), bad};
     }

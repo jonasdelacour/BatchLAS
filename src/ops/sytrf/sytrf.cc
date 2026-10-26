@@ -1,6 +1,5 @@
 // sytrf (flat-kernel-selection.md §4.3): select::run takes the first entry of the nearest
-// tuned/sytrf.<device>.txt row that can_run() admits. sytrs is not routed: the native kernel serves every
-// GPU call and LAPACKE the NETLIB backend (cuSOLVER's Xsytrs wants int64 pivots and has no batched form).
+// tuned/sytrf.<device>.txt row that can_run() admits. sytrs is routed on its own (src/ops/sytrs/).
 // evidence: docs/perf/sytrf.md
 
 #include <batchlas/backend_config.h>
@@ -111,31 +110,8 @@ size_t sytrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     return ops::sytrf::workspace<B, T>(ctx, c, A, uplo);
 }
 
-template <Backend B, typename T>
-Event sytrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
-            Uplo uplo, Span<int64_t> pivots, Span<std::byte> work_space) {
-    sytrs_validate_params<T>(A, Bm, uplo);
-    if (A.batch_size() == 0 || A.rows() == 0 || Bm.cols() == 0) return ctx.create_event_after_external_work();
-    (void)work_space;
-    if constexpr (B == Backend::NETLIB) {
-        if constexpr (ops::sytrf::vendor_linked<B>) return backend::sytrs_vendor<B, T>(ctx, A, Bm, uplo, pivots, nullptr);
-        else select::throw_no_vendor_route<T>(Op::sytrf, B, select::library_name<B>(select::Lib::solver));
-    } else {
-        return sycl_sytrf::sytrs_native_dispatch<T>(ctx, A, Bm, uplo, pivots);
-    }
-}
-
-template <Backend B, typename T>
-size_t sytrs_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo) {
-    (void)ctx;
-    sytrs_validate_params<T>(A, Bm, uplo);
-    return 0;
-}
-
-#define SYTRF_INSTANTIATE(B_, fp)                                                                      \
-    BATCHLAS_INSTANTIATE_OP(B_, fp, sytrf) BATCHLAS_INSTANTIATE_OP(B_, fp, sytrf_buffer_size)          \
-    BATCHLAS_INSTANTIATE_OP(B_, fp, sytrs) BATCHLAS_INSTANTIATE_OP(B_, fp, sytrs_buffer_size)
+#define SYTRF_INSTANTIATE(B_, fp) \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, sytrf) BATCHLAS_INSTANTIATE_OP(B_, fp, sytrf_buffer_size)
 BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRF_INSTANTIATE)
 #undef SYTRF_INSTANTIATE
 

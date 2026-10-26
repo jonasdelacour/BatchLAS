@@ -135,15 +135,20 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # laswp -- so it shares no device symbol with getrs_native.cc either.
     getrs/kernels/getrs_fused.cc
     getri/kernels/getri_blocked.cc
-    # potri: two element-wise kernels (info scan, triangle store); no device symbol shared with any other TU.
+    # potri: the CTA trtri/lauum kernel and its element-wise kernels; no device symbol shared with any other TU.
     potri/kernels/potri_native.cc
+    potri/kernels/potri_cta.cc
     lascl/lascl.cc
-    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol.
+    # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol
+    # outside this pair.
     sytrf/kernels/sytrf_kernels.cc
+    sytrf/kernels/sytrs_kernels.cc
     # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
     sygvd/kernels/sygvd_native.cc
     # Masked batches (syev_masked, sygvd_masked): one gather/scatter kernel, CPU image kept for NETLIB.
     ../kernels/common/batch_mask.cc
+    # sygst blocked's diagonal-block kernel; self-contained, its BLAS-3 children are public ops.
+    sygst/kernels/sygst_diag.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:

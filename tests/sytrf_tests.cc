@@ -9,6 +9,8 @@
 #include <batchlas/blas/functions/sytrf.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/no_route.hh>
+#include <batchlas/tuning_params.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -19,6 +21,8 @@
 #include <src/ops/sysv/choice.hh>
 #include <src/ops/sytrf/choice.hh>
 #include <src/ops/sytrf/sytrf_native.hh>
+#include <src/ops/sytrs/choice.hh>
+#include <src/select/coverage.hh>
 #include <src/select/select.hh>
 #include <src/select/vendor.hh>
 
@@ -26,11 +30,18 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <random>
+#include <sstream>
 #include <string>
+#include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -198,6 +209,36 @@ void expect_same_pivots(const Sys<T>& x, const Sys<T>& y, const std::string& wha
     for (int e = 0; e < x.n * x.batch; ++e) ASSERT_EQ(a[e], b[e]) << what << " at " << e;
 }
 
+// The logical partner row the 2 x 2 block at logical k of item `item` interchanged with logical
+// k + 1 (k + 1 itself when none), or -1 when no block starts at k.
+template <typename T>
+int block_partner(const Sys<T>& p, int item, int k) {
+    if (!block_at(p, item, k)) return -1;
+    const int* ip = reinterpret_cast<const int*>(p.piv.data()) + size_t(item) * p.n;
+    auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
+    return phys(-ip[phys(k)] - 1);
+}
+
+// A 2 x 2 block forced at logical step k of item s of a dominant system: diagonals k and r (default
+// k + 1) zero and a coupling (r, k) that dominates both columns, so ?sytf2 takes kstep 2 at k and
+// interchanges rows k + 1 and r (none when r = k + 1).
+template <typename T>
+void force_block(Sys<T>& p, int s, int k, int r = -1) {
+    if (r < 0) r = k + 1;
+    auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
+    auto put = [&](int li, int lj, T v) {
+        const int i = phys(li), j = phys(lj);
+        p.full[size_t(s) * p.n * p.n + size_t(j) * p.n + i] = v;
+        p.full[size_t(s) * p.n * p.n + size_t(i) * p.n + j] = v;
+        const bool ij = referenced<T>(p.uplo, i, j);
+        p.a[size_t(s) * p.stra + size_t(ij ? j : i) * p.lda + (ij ? i : j)] = v;
+    };
+    put(k, k, T{});
+    put(r, r, T{});
+    put(r, k, MV<T>::make(2.0 * (p.n + 2), 0.25));
+    p.a_in.assign(p.a.begin(), p.a.end());
+}
+
 // Sets the stored (referenced) entries of physical row and column j of item s to v.
 template <typename T>
 void set_index(Sys<T>& p, int s, int j, T v) {
@@ -248,8 +289,15 @@ protected:
     void solve(Sys<T>& p) {
         auto A = a_view(p);
         auto Bv = b_view(p);
-        (void)sytrs<Bk, T>(*this->ctx, A, Bv, p.uplo, p.piv.to_span(), Span<std::byte>{});
+        const size_t need = sytrs_buffer_size<Bk, T>(*this->ctx, A, Bv, p.uplo);
+        UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
+        (void)sytrs<Bk, T>(*this->ctx, A, Bv, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need));
         this->ctx->wait();
+    }
+
+    void solve(Sys<T>& p, const ops::sytrs::SytrsChoice& c) {
+        const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", c);
+        solve(p);
     }
 
     void sysv_run(Sys<T>& p, const ops::sysv::SysvChoice* c) {
@@ -269,6 +317,25 @@ protected:
         if (Bk == Backend::NETLIB && !select::kHasNetlib) return r;  // compose's sytrf has no route
         if (Bk != Backend::NETLIB && n <= 32) r.push_back(ops::sysv::Cta{});
         r.push_back(ops::sysv::Compose{});
+        return r;
+    }
+
+    // Whether sytrs `cta` can take order n here: the register tile and this device's local memory.
+    bool cta_fits(int n) const {
+        const auto& d = select::describe(this->ctx->device(), Bk, false);
+        return Bk != Backend::NETLIB && n <= sycl_sytrf::kSytrsCtaMaxN &&
+               static_cast<int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(n)) <= d.slm_budget;
+    }
+
+    std::vector<ops::sytrs::SytrsChoice> solve_routes(int n) const {
+        std::vector<ops::sytrs::SytrsChoice> r;
+        if (Bk != Backend::NETLIB) {
+            if (cta_fits(n)) r.push_back(ops::sytrs::Cta{});
+            r.push_back(ops::sytrs::Blocked{});
+            r.push_back(ops::sytrs::Wg{});
+        } else if (select::kHasNetlib) {
+            r.push_back(ops::sytrs::Vendor{});
+        }
         return r;
     }
 };
@@ -341,9 +408,10 @@ TYPED_TEST(SytrfTest, SysvEveryRoute) {
     }
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (Gen gen : {Gen::random, Gen::kkt})
-            for (int n : {4, 9, 32, 33, 96}) {
+            for (int n : {4, 9, 32, 33, 96})
+                for (int nrhs : {1, 4, 9}) {  // 8 | 9 straddles cta's sub-groups per work-group
                 for (const auto& c : this->sysv_routes(n)) {
-                    auto p = make_sys<T>(n, 4, 6, uplo, gen, 300u + unsigned(n));
+                    auto p = make_sys<T>(n, nrhs, 6, uplo, gen, 300u + unsigned(n));
                     this->sysv_run(p, &c);
                     const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
                     for (int bi = 0; bi < p.batch; ++bi) {
@@ -407,7 +475,7 @@ TYPED_TEST(SytrfTest, CtaAndWgAgreeBitForBit) {
             this->factor(p, ops::sytrf::Cta{});
             this->factor(q, ops::sytrf::Wg{});
             this->factor(k, ops::sytrf::Blocked{});  // below one panel the blocked tier is the wg kernel
-            this->solve(p);
+            this->solve(p, ops::sytrs::Cta{});
             const ops::sysv::SysvChoice cta = ops::sysv::Cta{};
             this->sysv_run(f, &cta);
             const bool one_panel = n <= sycl_sytrf::kSytrfBlockedNb;
@@ -654,26 +722,289 @@ TYPED_TEST(SytrfTest, NonFiniteAndAliasedItemsTerminate) {
 
 // sytrs reads ipiv as given: a list sytrf cannot have written (an entry 0 or beyond n, the poison
 // 0x0BADBEEF, an unpaired 2 x 2 entry) gives that item an all-NaN X instead of an out-of-bounds
-// access, and the other items are still solved.
+// access, and the other items are still solved. Every native sytrs family.
 TYPED_TEST(SytrfTest, SytrsMalformedPivotsGiveNaN) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "LAPACKE ?sytrs does not check ipiv";
     const int n = 40;
-    for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
-        auto p = make_sys<T>(n, 2, 5, uplo, Gen::kkt, 81u);
-        this->factor(p, ops::sytrf::Wg{});
-        int* ip = reinterpret_cast<int*>(p.piv.data());
-        ip[1 * n + 3] = 0;
-        ip[2 * n + 5] = n + 1;
-        for (int k = 0; k < n; ++k) ip[3 * n + k] = 0x0BADBEEF;
-        for (int k = 0; k < n; ++k) ip[4 * n + k] = k + 1;
-        ip[4 * n + (uplo == Uplo::Lower ? n - 1 : 0)] = -1;  // the last logical entry, alone
-        this->solve(p);
-        for (int bi = 1; bi < 5; ++bi)
-            for (int c = 0; c < p.nrhs; ++c)
-                for (int i = 0; i < n; ++i)
-                    ASSERT_TRUE(std::isnan(std::real(p.b[size_t(bi) * p.strb + size_t(c) * p.ldb + i])))
-                        << tag(uplo) << " item " << bi << " row " << i;
-        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0})) << tag(uplo);
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (const auto& c : this->solve_routes(n)) {
+            auto p = make_sys<T>(n, 2, 5, uplo, Gen::kkt, 81u);
+            this->factor(p, ops::sytrf::Wg{});
+            int* ip = reinterpret_cast<int*>(p.piv.data());
+            ip[1 * n + 3] = 0;
+            ip[2 * n + 5] = n + 1;
+            for (int k = 0; k < n; ++k) ip[3 * n + k] = 0x0BADBEEF;
+            for (int k = 0; k < n; ++k) ip[4 * n + k] = k + 1;
+            ip[4 * n + (uplo == Uplo::Lower ? n - 1 : 0)] = -1;  // the last logical entry, alone
+            this->solve(p, c);
+            const std::string what = select::to_string(c) + " " + tag(uplo);
+            for (int bi = 1; bi < 5; ++bi)
+                for (int col = 0; col < p.nrhs; ++col)
+                    for (int i = 0; i < n; ++i)
+                        ASSERT_TRUE(std::isnan(std::real(p.b[size_t(bi) * p.strb + size_t(col) * p.ldb + i])))
+                            << what << " item " << bi << " row " << i;
+            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0})) << what;
+            EXPECT_EQ(first_touched(p), -1) << what;
+        }
+}
+
+// Every sytrs family on factors with interchanges (random) and 2 x 2 blocks in every item (kkt):
+// residual, the pads and the unreferenced triangle untouched. n straddles cta's register-tile steps
+// (32 | 33, 64 | 65) and its ceiling (128 | 129); nrhs straddles cta's sub-group count (8 | 9).
+TYPED_TEST(SytrfTest, SytrsEveryFamily) {
+    using T = typename TestFixture::T;
+    if (this->solve_routes(4).empty()) GTEST_SKIP() << "no sytrs route in this build";
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (Gen gen : {Gen::random, Gen::kkt})
+            for (int n : {1, 3, 17, 32, 33, 64, 65, 128, 129, 300})
+                for (int nrhs : {1, 8, 9}) {
+                    if (gen == Gen::kkt && n < 3) continue;
+                    if (TestFixture::Bk == Backend::NETLIB && (n > 65 || nrhs == 8)) continue;  // one family: LAPACKE
+                    for (const auto& c : this->solve_routes(n)) {
+                        auto p = make_sys<T>(n, nrhs, 4, uplo, gen, 2000u + unsigned(n) + 7u * unsigned(nrhs));
+                        this->factor_auto(p);
+                        this->solve(p, c);
+                        const std::string what = select::to_string(c) + " " + tag(uplo) + " gen=" +
+                                                 std::to_string(int(gen)) + " n=" + std::to_string(n) +
+                                                 " nrhs=" + std::to_string(nrhs);
+                        for (int bi = 0; bi < p.batch; ++bi) {
+                            ASSERT_EQ(p.info[bi], 0) << what;
+                            if (gen == Gen::kkt) ASSERT_GT(pivot_kinds(p, bi).second, 0) << what << " item " << bi;
+                        }
+                        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+                        EXPECT_EQ(first_touched(p), -1) << what;
+                    }
+                }
+}
+
+// A 2 x 2 step whose second row is interchanged with a row r != k + 1: the gather must move row
+// k + 1, not row k. Forced on a dominant system at (1, n - 1 - s) and, from n = 12, (n / 2, n / 2 + 3),
+// checked in ipiv first (else vacuous), then solved on every family.
+TYPED_TEST(SytrfTest, SytrsTwoByTwoWithInterchangeEveryFamily) {
+    using T = typename TestFixture::T;
+    if (this->solve_routes(8).empty()) GTEST_SKIP() << "no sytrs route in this build";
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (int n : {8, 33, 65, 129})
+            for (const auto& c : this->solve_routes(n)) {
+                auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 3100u + unsigned(n));
+                std::vector<std::pair<int, int>> forced[3];
+                for (int s = 0; s < p.batch; ++s) {
+                    forced[s].push_back({1, n - 1 - s});
+                    if (n >= 12) forced[s].push_back({n / 2, n / 2 + 3});
+                    for (const auto& [k, r] : forced[s]) force_block(p, s, k, r);
+                }
+                this->factor_auto(p);
+                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                for (int s = 0; s < p.batch; ++s) {
+                    ASSERT_EQ(p.info[s], 0) << what;
+                    for (const auto& [k, r] : forced[s])
+                        ASSERT_EQ(block_partner(p, s, k), r) << what << " item " << s << " k=" << k;
+                }
+                this->solve(p, c);
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+                EXPECT_EQ(first_touched(p), -1) << what;
+            }
+}
+
+// Wide right-hand sides: cta's sub-groups each take many columns, blocked's trsm a wide B.
+TYPED_TEST(SytrfTest, SytrsWideRightHandSides) {
+    using T = typename TestFixture::T;
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (int n : {40, 70})
+            for (const auto& c : this->solve_routes(n)) {
+                if (std::holds_alternative<ops::sytrs::Wg>(c)) continue;  // one work-group per column: slow, covered above
+                auto p = make_sys<T>(n, 300, 3, uplo, Gen::kkt, 2500u + unsigned(n));
+                this->factor_auto(p);
+                this->solve(p, c);
+                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+                EXPECT_EQ(first_touched(p), -1) << what;
+            }
+}
+
+// A 2 x 2 block whose rows sit in different register slots of cta (logical 31 | 32, 63 | 64,
+// 95 | 96): D^-1 reads the partner across the lane-31 / lane-0 seam. Every family; the forced
+// block is checked first, or the case is vacuous.
+TYPED_TEST(SytrfTest, SytrsTwoByTwoAcrossTheLaneBoundary) {
+    using T = typename TestFixture::T;
+    if (this->solve_routes(4).empty()) GTEST_SKIP() << "no sytrs route in this build";
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (int n : {64, 128})
+            for (const auto& c : this->solve_routes(n)) {
+                auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 2600u + unsigned(n));
+                for (int s = 0; s < p.batch; ++s)
+                    for (int k = 31; k + 1 < n; k += 32) force_block(p, s, k);
+                this->factor_auto(p);
+                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                for (int s = 0; s < p.batch; ++s)
+                    for (int k = 31; k + 1 < n; k += 32) ASSERT_TRUE(block_at(p, s, k)) << what << " k=" << k;
+                this->solve(p, c);
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+            }
+}
+
+// A saturating batch of identical KKT items: every item's X equals item 0's bit for bit, on cta's
+// local-memory kernel (n = 32 one register slot, n = 100 four; nrhs = 9, so sub-groups take two
+// columns), blocked (its trsm and chunked passes) and wg.
+TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    const int batch = 1024;
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (const auto& [c, n] : {std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Cta{}}, 32},
+                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Cta{}}, 100},
+                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Blocked{}}, 150},
+                                   std::pair{ops::sytrs::SytrsChoice{ops::sytrs::Wg{}}, 40}}) {
+            if (std::holds_alternative<ops::sytrs::Cta>(c) && !this->cta_fits(n)) continue;
+            auto p = make_sys<T>(n, 9, batch, uplo, Gen::kkt, 4343u, /*identical=*/true);
+            this->factor(p, ops::sytrf::Wg{});
+            this->solve(p, c);
+            const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+            EXPECT_GT(pivot_kinds(p, 0).second, 0) << what;
+            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, batch - 1})) << what;
+            for (int bi = 1; bi < batch; ++bi)
+                for (int e = 0; e < p.strb; ++e)
+                    ASSERT_TRUE(same(p.b[size_t(bi) * p.strb + e], p.b[size_t(e)])) << what << " item " << bi;
+        }
+}
+
+// cta's ceiling straddled both ways: a pin runs at 128 and throws at 129 (when local memory fits
+// 128 at all), and Auto solves on both sides.
+TYPED_TEST(SytrfTest, SytrsCtaCeilingStraddled) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    for (int n : {sycl_sytrf::kSytrsCtaMaxN, sycl_sytrf::kSytrsCtaMaxN + 1}) {
+        auto p = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
+        this->factor_auto(p);
+        if (this->cta_fits(n)) {
+            this->solve(p, ops::sytrs::Cta{});
+            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 127})) << "cta n=" << n;
+        } else {
+            EXPECT_ANY_THROW(this->solve(p, ops::sytrs::Cta{})) << "n=" << n;
+        }
+        auto a = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
+        this->factor_auto(a);
+        this->solve(a);
+        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, a, all_items(a))) << "auto n=" << n;
+    }
+}
+
+// sysv's compose hands its sytrf status to sytrs as the skip list: on every sytrs family the
+// singular item keeps its B bit for bit and every other item is solved.
+TYPED_TEST(SytrfTest, SytrsSkipListEveryFamily) {
+    using T = typename TestFixture::T;
+    if (this->sysv_routes(4).empty()) GTEST_SKIP() << "no sysv route in this build";
+    const ops::sysv::SysvChoice compose = ops::sysv::Compose{};
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+        for (int n : {20, 90})
+            for (const auto& c : this->solve_routes(n)) {
+                const int s = 2;
+                auto p = make_sys<T>(n, 3, 5, uplo, Gen::kkt, 2700u + unsigned(n));
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i)
+                        if (referenced<T>(uplo, i, j)) p.a[size_t(s) * p.stra + size_t(j) * p.lda + i] = T{};
+                p.a_in.assign(p.a.begin(), p.a.end());
+                {
+                    const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", c);
+                    this->sysv_run(p, &compose);
+                }
+                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                ASSERT_GT(p.info[s], 0) << what;
+                for (int e = 0; e < p.strb; ++e)
+                    ASSERT_TRUE(same(p.b[size_t(s) * p.strb + e], p.b_in[size_t(s) * p.strb + e])) << what;
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 1, 3, 4})) << what;
+            }
+}
+
+// blocked's batch chunks (forced to 7 over 23 items: 7 + 7 + 9), in order and out of order: every
+// item is solved from its own factor and pivots, a malformed list in the last part gives that item
+// NaN, and sysv's skip list reaches the item in the second part.
+TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    else {
+        const int n = 45, batch = 23;
+        const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "7");
+        ASSERT_EQ(tuning::blocked_chunk_items(batch, 1, 1, 1), 7) << "the override did not reach the accessor";
+        const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", ops::sytrs::Blocked{});
+        Queue ooo(*this->ctx, /*in_order=*/false);
+        for (Queue* q : {this->ctx.get(), &ooo}) {
+            const std::string what = q == &ooo ? "out of order" : "in order";
+            for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+                auto p = make_sys<T>(n, 3, batch, uplo, Gen::kkt, 2800u);
+                this->factor_auto(p);
+                int* ip = reinterpret_cast<int*>(p.piv.data());
+                ip[21 * n + 4] = 0;
+                auto A = a_view(p);
+                auto Bv = b_view(p);
+                UnifiedVector<std::byte> ws(std::max<size_t>(1, sytrs_buffer_size<TestFixture::Bk, T>(*q, A, Bv, uplo)));
+                (void)sytrs<TestFixture::Bk, T>(*q, A, Bv, uplo, p.piv.to_span(), ws.to_span());
+                q->wait();
+                std::vector<int> good;
+                for (int b = 0; b < batch; ++b)
+                    if (b != 21) good.push_back(b);
+                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, good)) << what << " " << tag(uplo);
+                for (int i = 0; i < n; ++i) ASSERT_TRUE(std::isnan(std::real(p.b[size_t(21) * p.strb + i]))) << what;
+                EXPECT_EQ(first_touched(p), -1) << what;
+            }
+        }
+        const ops::sysv::SysvChoice compose = ops::sysv::Compose{};
+        auto s = make_sys<T>(n, 2, batch, Uplo::Lower, Gen::kkt, 2900u);
+        for (int j = 0; j < n; ++j)
+            for (int i = j; i < n; ++i) s.a[size_t(9) * s.stra + size_t(j) * s.lda + i] = T{};
+        s.a_in.assign(s.a.begin(), s.a.end());
+        this->sysv_run(s, &compose);
+        ASSERT_GT(s.info[9], 0);
+        for (int e = 0; e < s.strb; ++e) ASSERT_TRUE(same(s.b[size_t(9) * s.strb + e], s.b_in[size_t(9) * s.strb + e]));
+        std::vector<int> good;
+        for (int b = 0; b < batch; ++b)
+            if (b != 9) good.push_back(b);
+        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, s, good)) << "sysv compose, chunked";
+    }
+}
+
+// Linked is not reached: each pinned native family leaves a `reached,sytrs` coverage row with its
+// own spelling and the call's key (m = k = n, n = nrhs). threadsafe: the child re-executes the binary.
+TYPED_TEST(SytrfTest, SytrsPinnedFamiliesAreReached) {
+    using T = typename TestFixture::T;
+    if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
+    else {
+        ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+        const std::string dir = ::testing::TempDir() + "sytrs_cov." + std::string(select::dtype_name<T>());
+        std::filesystem::remove_all(dir);
+        std::filesystem::create_directories(dir);
+        const std::string out = dir + "/cov";
+        const std::vector<std::tuple<ops::sytrs::SytrsChoice, int, int, std::string>> runs{
+            {ops::sytrs::Cta{}, 16, 4, "cta"}, {ops::sytrs::Blocked{}, 48, 3, "blocked"}, {ops::sytrs::Wg{}, 40, 2, "wg"}};
+        auto child = [&] {
+            const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+            batchlas::coverage::g_dynamic_enabled = true;
+            for (const auto& [c, n, nrhs, name] : runs) {
+                auto p = make_sys<T>(n, nrhs, 2, Uplo::Lower, Gen::random, 77u);
+                this->factor(p, ops::sytrf::Wg{});
+                this->solve(p, c);
+            }
+            std::exit(0);
+        };
+        EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+        std::map<std::string, std::string> algo;  // "m n k" -> spelling
+        for (const auto& ent : std::filesystem::directory_iterator(dir)) {
+            std::ifstream in(ent.path());
+            for (std::string line; std::getline(in, line);) {
+                if (line.rfind("reached,sytrs,", 0) != 0) continue;
+                std::vector<std::string> f;
+                std::stringstream ss(line);
+                for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
+                ASSERT_GE(f.size(), 11u) << line;
+                algo[f[5] + " " + f[6] + " " + f[7]] = f[10];
+            }
+        }
+        std::filesystem::remove_all(dir);
+        for (const auto& [c, n, nrhs, name] : runs) {
+            const std::string key = std::to_string(n) + " " + std::to_string(nrhs) + " " + std::to_string(n);
+            ASSERT_TRUE(algo.count(key)) << "no reached row for " << name << " (" << key << ")";
+            EXPECT_EQ(algo[key], name) << key;
+        }
     }
 }

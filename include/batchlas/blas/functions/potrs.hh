@@ -4,9 +4,9 @@
 /// @brief Batched solve with a Cholesky factor (potrs).
 /// @ingroup api_factorizations
 
-// No Op and no BATCHLAS_POTRS_ROUTE: the two families are the fused one-launch solve and two
-// routed trsm calls, and the tie between them is a capacity predicate (src/ops/potrs/potrs.hh),
-// the same one posv's `cta` and `blocked` choices pin. evidence: docs/perf/potri.md#potrs-and-potri
+// Routed (Op::potrs, BATCHLAS_POTRS_ROUTE): `fused`, the one-launch solve, and `trsm`, two routed trsm
+// calls, chosen by tuned/potrs.<device>.txt; posv's `cta` and `blocked` pin the same two solves.
+// evidence: docs/perf/potrs.md#potrs-selection
 
 #include <batchlas/export.hh>
 #include <cstdint>
@@ -71,10 +71,11 @@ inline void potrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @p A holds the factor written by potrf() or posv() in the @p uplo triangle
 /// (\f$ A = L L^H \f$ for Lower, \f$ U^H U \f$ for Upper); the other triangle is not read. On
 /// return B holds X and A is unchanged. A factor is reusable across calls, so a caller with many
-/// right-hand-side sets factors once and calls this per set. The result is bit-identical to the
-/// solve half of posv() on its `cta` choice where the fused solve fits and on its `blocked`
-/// choice elsewhere. No workspace and no per-item status: an item whose factor came from a
-/// failed potrf() has a meaningless X, and the other items are unaffected.
+/// right-hand-side sets factors once and calls this per set. The `fused` choice is bit-identical to
+/// the solve half of posv() on its `cta` choice, `trsm` to posv's `blocked`; the tuned table picks
+/// between them (pin with `BATCHLAS_POTRS_ROUTE=fused|trsm`). No workspace and no per-item status:
+/// an item whose factor came from a failed potrf() has a meaningless X, and the other items are
+/// unaffected.
 ///
 /// Asynchronous: B is readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
