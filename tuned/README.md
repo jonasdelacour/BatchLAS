@@ -29,8 +29,8 @@ Counts: 47 files, 23 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
-| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri all `transcribed` (from sm_89's measured rows) | "The sm_120 deep tables" below; potri: @ref perf_potri |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); potri float and cfloat `deep` (2026-10-26), double and cdouble `transcribed` from them | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not
@@ -41,7 +41,10 @@ syr2k, trmm `ff340fc6`. Later rule changes are their own transcribed runs: gesvd
 (complex general above 32 gains `blocked`, Hermitian Upper copies Lower) and `167a4eaf` (sm_89
 cfloat 33..64 puts `blocked` first, docs/perf/gesvd.md); the complex rows of symm, syrk and syr2k
 and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, docs/perf/level3.md).
-potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above).
+potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above), superseded by
+`c6aa0c2b` (cta and blocked:nb, provisional) and `f517330f` / `f517330f-gap` (2026-10-26: sm_89 double
+from the measured float ranking, cdouble from cfloat's, the over-cap float/cfloat cells from the nearest
+measured cell, every sm_120 row from sm_89's; @ref perf_potri).
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
 ([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
