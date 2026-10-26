@@ -1,6 +1,6 @@
 # LDL^T: sytrf, sytrs, sysv {#perf_sytrf}
 
-> **Status:** current · routes and `can_run` windows only, nothing timed · threadripper02 (RTX PRO 6000, sm_120) and the RTX 4090 box (sm_89), CUDA 13.2 · 2026-10-25
+> **Status:** current · sytrf routes untimed; sytrs and sysv timed on the RTX 4090 box (sm_89, float and cfloat), sm_120 transcribed · CUDA 13.2 · 2026-10-26
 
 Batched symmetric indefinite factorization by Bunch-Kaufman pivoting with LAPACK `?sytrf` semantics,
 its solve `?sytrs`, and the composed `?sysv`. Consumers: KKT systems \f$[[H, A^T], [A, 0]]\f$ (optimize)
