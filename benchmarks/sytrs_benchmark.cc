@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 using namespace batchlas;
@@ -34,8 +35,12 @@ void announce(const char* op) {
     const int i = std::string(op) == "sysv";
     if (done[i]) return;
     done[i] = true;
-    const char* raw = settings().routing.route(op).get();
-    std::fprintf(stderr, "%s route: %s\n", op, raw && *raw ? raw : "unset (the tuned table's choice)");
+    try {
+        const char* raw = settings().routing.route(op).get();
+        std::fprintf(stderr, "%s route: %s\n", op, raw && *raw ? raw : "unset (the tuned table's choice)");
+    } catch (const std::invalid_argument&) {  // a build where the op reads no route variable
+        std::fprintf(stderr, "%s route: not routed in this build\n", op);
+    }
 }
 
 }  // namespace

@@ -23,7 +23,8 @@ and `dsysv` (gfn2). Complex is symmetric, not Hermitian (`csytrf`).
 ## sysv and sytrs: contract
 
 * `sytrs` reads A, `uplo` and `ipiv` exactly as `sytrf` left them and overwrites B with X. No
-  singularity check: a singular item gives infinities or NaNs.
+  singularity check: a singular item gives infinities or NaNs. It takes a workspace of
+  `sytrs_buffer_size()` bytes (nonzero for the `blocked` route only).
 * `sysv` is `sytrf` then `sytrs`. An item with `info > 0` keeps its B (LAPACK `?sysv`); the other
   items are solved. Every route honours this, the fused `cta` kernel included.
 
@@ -35,16 +36,23 @@ and `dsysv` (gfn2). Complex is symmetric, not Hermitian (`csytrf`).
 | `sytrf` | `wg` | `sytrf_kernels.cc` `sytrf_wg_dispatch`: one work-group (32..256) per matrix, unblocked `?sytf2` in place in global memory | native term |
 | `sytrf` | `blocked` | `sytrf_kernels.cc` `sytrf_blocked_dispatch`: `?lasyf` panels of 31 columns (one work-group per matrix) and the trailing update through the public `gemm`; `?sytf2` on the last panel | native term (the gemm selects for itself) |
 | `sytrf` | `vendor` | `cusolverDn<t>sytrf` per item (`cusolver_sytrf.cc`), LAPACKE `?sytrf` (`netlib_lapack.cc`) | CUDA with cuSOLVER or NETLIB with LAPACKE, `d.has_vendor`, homogeneous batch. rocSOLVER is not wired |
-| `sysv` | `cta` | `sysv_cta_dispatch`: the `cta` factor and both solves in one launch | GPU, sub-group 32, homogeneous, `1 <= n <= 32` |
-| `sysv` | `compose` | public `sytrf` (routed), then `sytrs` with the per-item status as a skip list | homogeneous batch |
+| `sytrs` | `cta` | `sytrs_kernels.cc` `sytrs_cta_dispatch`: [the converted solve](#sytrs-the-converted-solve), factor in local memory, one sub-group per right-hand side | native term, `n <= 128`, `sytrs_cta_slm_bytes<T>(n) <= slm_budget` (`sytrs.hh`, `can_run`) |
+| `sytrs` | `blocked` | `sytrs_blocked_dispatch`: converted factor and gathered B in workspace per chunk, two public `trsm` around a D^-1 kernel | native term (the trsm selects for itself) |
+| `sytrs` | `wg` | `sytrf_kernels.cc` `sytrs_native_dispatch`: one work-group per right-hand side, `?sytrs` step by step (the first sytrs) | native term |
+| `sytrs` | `vendor` | LAPACKE `?sytrs` per item (`netlib_lapack.cc`) | NETLIB with LAPACKE, homogeneous batch |
+| `sysv` | `cta` | `sysv_cta_dispatch`: the `cta` factor, then sytrs `cta`'s solve with one sub-group per right-hand side, one launch | GPU, sub-group 32, homogeneous, `1 <= n <= 32` |
+| `sysv` | `compose` | public `sytrf` (routed), then the routed `sytrs` with the per-item status as a skip list | homogeneous batch |
 
 * **Native term:** `B != NETLIB && d.is_gpu && d.has_sg32 && max_wg >= 32`, homogeneous batch,
-  `n, batch >= 1`.
-* **sytrs is not routed** (no `Op`, no route variable): the native kernel (one work-group per
-  right-hand side, `sytrs_native_dispatch`) on every GPU backend, LAPACKE on NETLIB.
-* **Last resort** (no table): sytrf `wg`, then `vendor`; sysv `compose`.
+  `n, batch >= 1` (sytrs: `nrhs >= 1`, A and B homogeneous).
+* **sytrs** is `Op::sytrs`, `src/ops/sytrs/` (`choice.hh`, `sytrs.hh` shared with sysv's compose,
+  `sytrs.cc`); key `n:log:2 nrhs:log batch:log`. cuSOLVER's `Xsytrs` is not wired (int64 pivots,
+  per item), so CUDA has no sytrs vendor family.
+* **Last resort** (no table): sytrf `wg`, then `vendor`; sytrs `blocked`, then `vendor`; sysv `compose`.
 * **Pins:** `BATCHLAS_SYTRF_ROUTE` (`cta`, `wg`, `blocked`, `vendor`, `native`, `auto`),
-  `BATCHLAS_SYSV_ROUTE` (`cta`, `compose`). A `cta` pin above n = 32 throws.
+  `BATCHLAS_SYTRS_ROUTE` (`cta`, `blocked`, `wg`, `vendor`, `native`, `auto`),
+  `BATCHLAS_SYSV_ROUTE` (`cta`, `compose`). A sytrf `cta` pin above n = 32 and a sytrs `cta` pin
+  above n = 128 (or past local memory) throw.
 
 ### sytrf: the transcribed tables
 
@@ -151,6 +159,42 @@ check. No input was found that hangs the kernels as they were: the hang
 recorded in PR #193 was seen with a deliberately broken kernel and its trigger was not kept, so the
 broadcast removes the mechanism rather than a known trigger. The `ctest` entries carry
 `TIMEOUT 1800`, and the suite is in the heavy tier (`SaturatingBatchIsBitIdenticalToItemZero`).
+
+## sytrs: the converted solve {#sytrs-the-converted-solve}
+
+The first `sytrs` (now the `wg` family) was LAPACK `?sytrs`: one work-group per right-hand side,
+the interchanges applied one pivot at a time between the eliminations, 2-3 barriers per step and a
+work-group sum per column of the backward pass, L re-read once per right-hand side. `cta` and
+`blocked` are LAPACK `?sytrs2` instead (`sytrs_device.hh`): the factor is first **converted**
+(`?syconv`): each step's interchange is applied to the rows of the *earlier* columns of L, in step
+order (a 2 x 2 step at k swaps row k + 1 and touches columns < k), and the 2 x 2 off-diagonals move
+out of L. Then \f$A = P L D L^T P^T\f$ with L unit lower and one permutation P, so the solve is a
+gather \f$y = P^T b\f$, \f$L w = y\f$, \f$w := D^{-1} w\f$, \f$L^T z = w\f$ and a scatter
+\f$x = P z\f$. Both run in the logical lower form; Upper through [the reversal map](#sytrf-the-reversal-map).
+The pivot list is validated once per item first, as before: a list `sytrf` cannot have written gives
+that item an all-NaN X.
+
+* **`cta`** (`sytrs_kernels.cc`, `cta_launch`): one work-group per item. The logical lower triangle
+  is staged once in local memory (ld = n | 1) and converted there (one lane per column walks the
+  pivot list; no barrier inside the walk); lane 0 composes P and the block kinds. Then each
+  sub-group owns right-hand sides sgid, sgid + nsg, ... (nsg = min(nrhs, 8)): lane i holds logical
+  rows i, i + 32, ... in registers (R = ceil(n / 32) <= 4, so n <= 128), the gather and the scatter
+  use the same physical row per lane, both sweeps are broadcast form (`group_broadcast` of row k,
+  then an axpy over the lane's rows: no reduction, no barrier), and D^-1 reads a 2 x 2 partner by a
+  shift, across the lane-31 / lane-0 seam between register slots. `can_run`: n <= 128 and the
+  staged factor fits local memory (complex<double> stops near n = 76 on sm_89).
+* **`blocked`** (`sytrs_blocked_dispatch`): per chunk of items, a prep kernel (one work-group per
+  item) writes the converted factor into workspace (n x n per item, the uplo triangle only, diagonal
+  unused) and the gathered B (n x nrhs); then the public `trsm` (`Left`, uplo, `NoTrans`, `Unit`), a
+  D^-1 kernel over (row, rhs, item), the public `trsm` with `Trans` (complex is not conjugated), and
+  the scatter back to B. The chunk is getrf's L2 rule on the per-item workspace, capped by half the
+  scratch lease and by the grid (`blocked_chunk`), so the workspace is per chunk, never
+  n^2 x batch. Any n, any nrhs; the vendor-free build serves it with the native trsm.
+* **sysv `cta`**: the fused factor is sub-group 0's (sub-group barriers and broadcasts only, so the
+  factor is bit-identical to sytrf `cta`); the work-group then has one sub-group per right-hand
+  side (at most 8) and solves with exactly `cta`'s converted solve, in parallel.
+* **skip list**: every family keeps the B of an item whose entry is nonzero (sysv after a singular
+  factor); sysv `compose` now calls the routed sytrs with its status as that list.
 
 ## sytrf: vendor
 

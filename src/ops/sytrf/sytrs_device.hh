@@ -172,6 +172,77 @@ inline void ldl_solve_regs(const SG& sg, int lane, const Staged<D>& S, D (&x)[R]
     }
 }
 
+// A sub-group sum every lane receives, in a fixed butterfly order. Collective.
+template <typename D, typename SG>
+inline D sg_sum_all(const SG& sg, D v) {
+    for (unsigned off = 16; off > 0; off >>= 1) v = add(v, batchlas::portable::permute_group_by_xor(sg, v, off));
+    return v;
+}
+
+// Exchange logical rows a and b of a register-resident vector. Collective.
+template <int R, typename D, typename SG>
+inline void swap_rows(const SG& sg, int lane, D (&x)[R], int a, int b) {
+    const D va = row_bcast<R>(sg, x, a), vb = row_bcast<R>(sg, x, b);
+    BATCHLAS_UNROLL_FULL
+    for (int r = 0; r < R; ++r) {
+        const int t = lane + 32 * r;
+        if (t == a) x[r] = vb;
+        else if (t == b) x[r] = va;
+    }
+}
+
+// LAPACK ?sytrs on one sub-group with the factor as sytrf stored it (no conversion), read from
+// global memory: the interchanges between the eliminations, D applied in the forward pass, the
+// backward pass in dot form. `lp(k)` is the logical ipiv entry (logical_piv) of a validated list.
+template <int R, typename D, typename SG, typename Acc, typename Piv>
+inline void ldl_solve_sg(const SG& sg, int lane, const Acc& G, int n, Piv&& lp, D (&x)[R]) {
+    using namespace sycl_device;
+    for (int k = 0; k < n;) {
+        const int v = lp(k);
+        const int two = v < 0 ? 1 : 0;
+        swap_rows<R>(sg, lane, x, k + two, (v > 0 ? v : -v) - 1);
+        const D xk = row_bcast<R>(sg, x, k);
+        const D xk1 = two ? row_bcast<R>(sg, x, k + 1) : zero<D>();
+        BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < R; ++r) {
+            const int t = lane + 32 * r;
+            if (t > k + two && t < n) {
+                D a = dev_sub(x[r], dev_mul(G(t, k), xk));
+                if (two) a = dev_sub(a, dev_mul(G(t, k + 1), xk1));
+                x[r] = a;
+            } else if (t == k || (two && t == k + 1)) {
+                const int kd = two ? (t == k ? 1 : 2) : 0;
+                x[r] = d_solve_row(kd, x[r], t == k ? xk1 : xk, G(t, t), two ? G(t == k ? k + 1 : k, t == k ? k + 1 : k) : G(t, t),
+                                   two ? G(k + 1, k) : dev_one<D>());
+            }
+        }
+        k += 1 + two;
+    }
+    for (int k = n - 1; k >= 0;) {
+        const int v = lp(k);
+        const int two = v < 0 ? 1 : 0;
+        D p0 = zero<D>(), p1 = zero<D>();
+        BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < R; ++r) {
+            const int t = lane + 32 * r;
+            if (t > k && t < n) {
+                p0 = add(p0, dev_mul(G(t, k), x[r]));
+                if (two) p1 = add(p1, dev_mul(G(t, k - 1), x[r]));
+            }
+        }
+        const D s0 = sg_sum_all(sg, p0);
+        const D s1 = two ? sg_sum_all(sg, p1) : zero<D>();
+        BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < R; ++r) {
+            const int t = lane + 32 * r;
+            if (t == k) x[r] = dev_sub(x[r], s0);
+            else if (two && t == k - 1) x[r] = dev_sub(x[r], s1);
+        }
+        swap_rows<R>(sg, lane, x, k, (v > 0 ? v : -v) - 1);
+        k -= 1 + two;
+    }
+}
+
 // Every right-hand side of one item, sub-group `sgid` of `nsg` taking columns sgid, sgid + nsg, ...
 // Row t is gathered from and scattered back to the same physical row of B, map(perm[t]), so no
 // lane reads what another writes. An invalid list (ok false) gives an all-NaN X.

@@ -31,6 +31,7 @@ namespace batchlas {
 namespace sycl_sytrf {
 
 template <typename T, int R> class SytrsCtaKernel;
+template <typename T, int R> class SytrsSgKernel;
 template <typename T> class SytrsPrepKernel;
 template <typename T> class SytrsDiagKernel;
 template <typename T> class SytrsScatterKernel;
@@ -103,6 +104,64 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
                 bar();
                 const bool ok = sytrf_device::ldl_convert<D>(S, n, S.ps, S.perm, S.kind, S.e, lid, wg, &im[3 * n], bar);
                 sytrf_device::solve_columns<R>(sg, lane, sgid, nsg, S, ok, rev, bp + b * strb, ldb, nrhs);
+            });
+    });
+    return ctx.get_event();
+}
+
+// sytrs `sg`: one sub-group per (item, right-hand-side slot), eight to a work-group and no
+// work-group barrier; the factor is read from A as stored (ldl_solve_sg), so no local memory.
+template <typename T, int R>
+Event sg_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+                bool rev, const int* piv, const int32_t* skip, int nsg) {
+    using D = Dev<T>;
+    const int n = static_cast<int>(A.rows());
+    const int nrhs = static_cast<int>(B.cols());
+    const std::size_t groups = static_cast<std::size_t>(A.batch_size()) * nsg;
+    constexpr std::size_t kWg = 256;
+    const std::size_t global = (groups * 32 + kWg - 1) / kWg * kWg;
+    const D* const ap = reinterpret_cast<const D*>(A.data_ptr());
+    D* const bp = reinterpret_cast<D*>(B.data_ptr());
+    const std::ptrdiff_t lda = A.ld(), stra = A.stride(), ldb = B.ld(), strb = B.stride();
+    ctx->submit([&](sycl::handler& h) {
+        batchlas::impl::parallel_for<SytrsSgKernel<T, R>>(h, sycl::nd_range<1>(sycl::range<1>(global), sycl::range<1>(kWg)),
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
+                const std::size_t g = it.get_global_id(0) / 32;
+                if (g >= groups) return;
+                const auto sg = it.get_sub_group();
+                const int lane = static_cast<int>(sg.get_local_linear_id());
+                const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(g / nsg);
+                const int j = static_cast<int>(g % nsg);
+                if (skip != nullptr && skip[b] != 0) return;
+                const int* const gp = piv + b * n;
+                auto lp = [&](int k) { return sytrf_device::logical_piv(gp[rev ? n - 1 - k : k], n, rev); };
+                bool ok = true;
+                for (int k = 0; k < n && ok;) {
+                    const int v = lp(k);
+                    ok = v != 0 && (v > 0 || (k + 1 < n && lp(k + 1) == v));
+                    k += v > 0 ? 1 : 2;
+                }
+                ok = batchlas::portable::group_broadcast(sg, ok ? 1 : 0, 0) != 0;
+                const Tile<D> G{const_cast<D*>(ap) + b * stra, lda, n, rev};
+                for (int c = j; c < nrhs; c += nsg) {
+                    D* const col = bp + b * strb + static_cast<std::ptrdiff_t>(c) * ldb;
+                    if (!ok) {
+                        for (int t = lane; t < n; t += 32) col[t] = sytrf_device::nan_of<D>();
+                        continue;
+                    }
+                    D x[R];
+                    BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < R; ++r) {
+                        const int t = lane + 32 * r;
+                        x[r] = t < n ? col[rev ? n - 1 - t : t] : sytrf_device::zero<D>();
+                    }
+                    sytrf_device::ldl_solve_sg<R>(sg, lane, G, n, lp, x);
+                    BATCHLAS_UNROLL_FULL
+                    for (int r = 0; r < R; ++r) {
+                        const int t = lane + 32 * r;
+                        if (t < n) col[rev ? n - 1 - t : t] = x[r];
+                    }
+                }
             });
     });
     return ctx.get_event();
@@ -261,6 +320,25 @@ void scatter_launch(Queue& ctx, T* b, int ldb, int strb, int n, int nrhs, int cb
 
 }  // namespace
 
+// sytrs.hh's can_run(Sg) mirrors these checks; keep the two in step.
+template <typename T>
+Event sytrs_sg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo, Span<int64_t> pivots,
+                        const int32_t* skip_info) {
+    check_solve_args(A, B, uplo, pivots, "sytrs_sg");
+    check_device(ctx, "sytrs_sg");
+    const int n = static_cast<int>(A.rows());
+    if (n > kSytrsSgMaxN)
+        throw batchlas::unsupported("sytrs_sg: order " + std::to_string(n) + " is above the register tile's 256");
+    const int nsg = std::min<int>(kSytrsCtaMaxSg, static_cast<int>(B.cols()));
+    const bool rev = uplo == Uplo::Upper;
+    const int* const piv = pivots.as_span<int>().data();
+    if (n <= 32) return sg_launch<T, 1>(ctx, A, B, rev, piv, skip_info, nsg);
+    if (n <= 64) return sg_launch<T, 2>(ctx, A, B, rev, piv, skip_info, nsg);
+    if (n <= 128) return sg_launch<T, 4>(ctx, A, B, rev, piv, skip_info, nsg);
+    return sg_launch<T, 8>(ctx, A, B, rev, piv, skip_info, nsg);
+}
+
 // sytrs.hh's can_run(Cta) mirrors these checks; keep the two in step.
 template <typename T>
 Event sytrs_cta_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
@@ -341,6 +419,9 @@ Event sytrs_blocked_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
     template Event sytrs_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                       \
                                          const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<int64_t>,          \
                                          const int32_t*);                                                         \
+    template Event sytrs_sg_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                        \
+                                        const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<int64_t>,           \
+                                        const int32_t*);                                                          \
     template std::size_t sytrs_blocked_buffer_size<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,          \
                                                       const MatrixView<T, MatrixFormat::Dense>&);                 \
     template Event sytrs_blocked_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                   \

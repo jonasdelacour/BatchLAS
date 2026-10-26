@@ -53,9 +53,8 @@ BATCHLAS_INTERNAL_API Event sytrf_blocked_dispatch(Queue& ctx, const MatrixView<
                                                    Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info,
                                                    SytrfTrailingGemm<T> trailing_gemm);
 
-// `skip_info` (one entry per item, or null), every sytrs driver: an item whose entry is nonzero
-// keeps its B, as LAPACK ?sysv leaves B alone after a singular ?sytrf.
-// sytrs `wg`: one work-group per right-hand side (the first sytrs).
+// sytrs `wg`, one work-group per right-hand side. `skip_info` (per item, or null), every sytrs
+// driver: a nonzero entry keeps that item's B, as LAPACK ?sysv after a singular ?sytrf.
 template <typename T>
 BATCHLAS_INTERNAL_API Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                                                   const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
@@ -79,13 +78,20 @@ BATCHLAS_INTERNAL_API Event sytrs_cta_dispatch(Queue& ctx, const MatrixView<T, M
                                                const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
                                                Span<int64_t> pivots, const int32_t* skip_info = nullptr);
 
+// sytrs `sg`: one sub-group per (item, rhs slot), the factor read from A as stored (no local memory).
+inline constexpr int kSytrsSgMaxN = 256;
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event sytrs_sg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                                              const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
+                                              Span<int64_t> pivots, const int32_t* skip_info = nullptr);
+
 // Positional form of the routed batchlas::trsm (alpha third), injected by the facade.
 template <typename T>
 using SytrsSolveTrsm = std::function<Event(Queue&, const MatrixView<T, MatrixFormat::Dense>&,
                                            const MatrixView<T, MatrixFormat::Dense>&, T, Side, Uplo, Transpose, Diag)>;
 
-// sytrs `blocked` (?sytrs2): the converted factor and the gathered B in workspace, per chunk of
-// items; then trsm, D^-1, trsm with the transposed factor, and the scatter.
+// sytrs `blocked` (?sytrs2): converted factor and gathered B in workspace per chunk, two trsm.
 template <typename T>
 BATCHLAS_INTERNAL_API std::size_t sytrs_blocked_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                                                             const MatrixView<T, MatrixFormat::Dense>& B);
