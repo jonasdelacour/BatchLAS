@@ -23,11 +23,13 @@ existing kernels and need no vendor library, so the vendor-free build serves the
   the workspace (two full `trsm`, about 3x LAPACK's work, `n^2 * batch` workspace, 137 GB at the cdouble
   grid corner); [the A/B](#potri-measured-against-the-identity-solve) retired it.
 - **`info`** is the `?potri` one: the 1-based index of the first factor diagonal entry that is exactly
-  zero. A failed `potrf` is reported by `potrf`'s own `info` (and by `posv`); a non-positive-definite
-  item does not disturb the others in any of the three calls. A non-empty `info` shorter than the batch
-  throws `invalid_argument`, as the per-item status contract in `docs/cpp-api.md` says (it was silently
-  skipped before 2026-10-25). The info kernel's own wrapper (`potri_diag_info`) refuses a short span too,
-  with `internal_error`, so its unguarded `out[0, batch)` write never depends on the entry check alone.
+  zero. Such an item is left unchanged, as `?trtri` returns before writing, on both families and with
+  or without `info` (blocked wrote inf/NaN into it before 2026-10-26). A failed `potrf` is reported by
+  `potrf`'s own `info` (and by `posv`); a non-positive-definite item does not disturb the others in any
+  of the three calls. A non-empty `info` shorter than the batch throws `invalid_argument`, as the
+  per-item status contract in `docs/cpp-api.md` says (it was silently skipped before 2026-10-25). The
+  kernels that write it (`potri_cta`, and the blocked driver for its `Trtri` launch) refuse a short span
+  too, with `internal_error`, so their unguarded `[0, batch)` writes never depend on the entry check alone.
 - **Diagonal:** potri writes the diagonal's imaginary part as zero, `full` or not: the inverse of a
   Hermitian matrix has a real diagonal (cta stores lauu2's real sum; blocked zeroes it in `potri_finish`).
 - **Any queue:** both potri families and `potrs`'s trsm pair run on a CPU queue (NETLIB): the potri
@@ -130,10 +132,21 @@ nb x nb diagonal block of the item (one work-group per block) and `Lauum` forms 
   (`tuning::blocked_chunk_items` on the triangle plus W, potrf's rule: 75 % of L2, a multiple of the CU
   count), so W and the pointer arrays (three, one per view of a call) are one part's: at the cdouble grid
   corner (n = 512, batch 32768) the part is 128 items and W 64 MiB, where the identity solve asked for
-  137 GB. At `n <= nb` it is the CTA kernel twice and no workspace. `potri_finish` zeroes the diagonal's
-  imaginary part (herk's is the child's business) and mirrors for `full`.
-- `info` comes from `potri_diag_info` (one 32-wide work-group per item; the earlier one-thread-per-item
-  scan cost 27 us at batch 1024 for n = 64, more than the trmm it preceded).
+  137 GB. At `n <= nb` it is the cta family's one `Potri` launch and no workspace. `potri_finish`
+  zeroes the diagonal's imaginary part (herk's is the child's business) and mirrors for `full`.
+- A failed item (an exactly zero diagonal entry) stays unchanged without a host round trip
+  (`sycl_potri::Stash`): every work-group of the `Trtri` launch scans its item's whole diagonal, writes
+  `info` (or a batch of flags in the workspace when no `info` is passed) and, for a failed item, copies
+  its block column's triangle to the item's slot and returns; the trmm, gemm and herk/syrk children then
+  write garbage into that item, and the part's last launch, `Lauum` on the last diagonal block, copies
+  the slot back instead. `potri_finish` skips flagged items. The slots are one packed `uplo` triangle per
+  item of a part (256 MiB at the cdouble corner above), the price of leaving the item alone, plus one
+  int per item of the batch. No launch is added, and a healthy batch's cost is unchanged: an A/B of the
+  pinned blocked arm against the previous build (sm_89, 2026-10-26, 14 alternated passes, the first
+  dropped) gave new/base 0.992-1.002 at nine float and complex<float> cells, n = 128-512, batch 128 and
+  2048. At `n <= nb` the one `Potri` launch that replaced `Trtri`, `Lauum` and the scan takes 0.78x the time (float
+  n = 96, nb = 128) and 0.82x (complex<float> n = 48, nb = 64) at batch 2048. Before 2026-10-26 `info` came from a separate scan launch, `potri_diag_info` (one 32-wide work-group per item; the earlier
+  one-thread-per-item scan cost 27 us at batch 1024 for n = 64, more than the trmm it preceded).
 
 ## potri measured against the identity solve {#potri-measured-against-the-identity-solve}
 
@@ -207,8 +220,9 @@ compiled candidate pinned, both triangles, an order ladder through the tile widt
 their ragged neighbours up to n = 300 (lauum's gemm leg needs three blocks); graded spectra (condition
 1e3 float/cfloat, 1e6 double/cdouble, random unitary eigenvectors); padded `ld` and stride with a poisoned
 unreferenced triangle that must come back unchanged; complex data with nonzero imaginary parts; the
-bit-for-bit `full` mirror; `info` with the other items bit-identical on every family; the workspace per
-family (none for cta and for blocked at n <= nb, below `n^2` per item above it); a forced three-item
+bit-for-bit `full` mirror; `info` with the failed item unchanged and the other items bit-identical on
+every family, both triangles, `full` or not, with and without `info`; the workspace per family (none for
+cta and for blocked at n <= nb, below `n (nb + n)` per item above it); a forced three-item
 chunk whose ten items are each verified; the cta pin launched at its advertised ceiling (graded input)
 and refused one past it; 1024 identical items bit-identical to item 0 per family at orders whose CTA
 work-groups span several sub-groups (n = 37, 100); a 70001-item batch; a short `info` span refused; and
@@ -240,7 +254,9 @@ the cta-only cases green.
 | `potri_blocked.hh` lauum: the copy of W back into A dropped | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB; Saturating: all types CUDA | 76 of 112 |
 | `potri_blocked.hh` lauum Lower: herk/syrk on the diagonal block dropped | Coverage: all types CUDA+NETLIB; Full: dz CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: dcz CUDA+NETLIB; Parts: dcz CUDA+NETLIB; Saturating: dcz CUDA | 77 of 112 |
 | `potri_blocked.hh`: every batch part starts at item 0 | Parts: all types CUDA+NETLIB; Saturating: z CUDA | 103 of 112 |
-| `potri_native.cc` `potri_diag_info`: 0-based | Info: all types CUDA+NETLIB | 104 of 112 |
+| `potri_native.cc` `potri_diag_info` (removed since: the `Trtri` launch writes `info`): 0-based | Info: all types CUDA+NETLIB | 104 of 112 |
+| `potri_blocked.hh` lauum: the last `Lauum` launch never restores the stash (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB | 80 of 88 |
+| `potri_native.cc` `potri_finish`: flagged items not skipped (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB (the `full` cases) | 80 of 88 |
 | `potri_native.cc` `potri_finish`: the mirror without `conj` | Full: cz CUDA+NETLIB; Parts: cz CUDA+NETLIB | 104 of 112 |
 
 Two blind spots found on the way: the diagonally dominant inputs (condition below 8, off-diagonals

@@ -46,7 +46,7 @@ struct Walk {
 
 template <typename T>
 Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, CtaMode mode, int nb,
-                bool full, Span<int32_t> info) {
+                bool full, Span<int32_t> info, Stash<T> stash) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     using R = typename DM::real;
@@ -82,6 +82,15 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     const bool lower = uplo == Uplo::Lower;
     const int md = static_cast<int>(mode);
     const std::size_t groups = static_cast<std::size_t>(batch) * static_cast<std::size_t>(nblk);
+    const bool stash_on = stash.slots != nullptr;
+    if (stash_on && (mode == CtaMode::Potri || !stash.flags ||
+                     (mode == CtaMode::Trtri ? stash.origin != 0 || stash.n != n
+                                             : stash.origin < 0 || stash.origin + n != stash.n)))
+        throw batchlas::internal_error("potri_cta: a stash needs flags, Trtri over whole items or Lauum on the last block");
+    D* const slots = reinterpret_cast<D*>(stash.slots);
+    int32_t* const flags = stash.flags;
+    const int sn = stash.n, origin = stash.origin;
+    const std::ptrdiff_t tri = static_cast<std::ptrdiff_t>(sn) * (sn + 1) / 2;
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> St(sycl::range<1>(tile), h);
@@ -97,6 +106,32 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
             const int mpw = (m + TS - 1) / TS * TS;
             const int ntile = cta_tiles(m, TS);
             D* const Ag = a + item * stride + static_cast<std::ptrdiff_t>(j0) * (lda + 1);
+
+            if (stash_on) {
+                D* const Ai = a + item * stride - static_cast<std::ptrdiff_t>(origin) * (lda + 1);
+                int z = INT_MAX;
+                if (md == 1) {
+                    for (int i = tid; i < sn; i += wg)
+                        if (dev_is_zero(Ai[static_cast<std::ptrdiff_t>(i) * (lda + 1)])) z = sycl::min(z, i);
+                    z = sycl::reduce_over_group(grp, z, sycl::minimum<int>());
+                    if (j0 == 0 && tid == 0) flags[item] = z == INT_MAX ? 0 : z + 1;
+                } else if (flags[item] != 0) {
+                    z = 0;
+                }
+                if (z != INT_MAX) {  // work-group uniform; no other group of this launch writes these columns
+                    D* const slot = slots + item * tri;
+                    for (int c = md == 1 ? j0 : 0; c < (md == 1 ? j0 + m : sn); ++c) {
+                        const std::ptrdiff_t cc = c;
+                        const std::ptrdiff_t off = lower ? cc * sn - cc * (cc - 1) / 2 - cc : cc * (cc + 1) / 2;
+                        for (int r = (lower ? c : 0) + tid; r < (lower ? sn : c + 1); r += wg) {
+                            D& g = Ai[r + cc * lda];
+                            if (md == 1) slot[off + r] = g;
+                            else g = slot[off + r];
+                        }
+                    }
+                    return;
+                }
+            }
             D* const S = &St[0];
             R* const rd = &rdt[0];
             auto s = [&](int r, int c) -> D& { return S[r + static_cast<std::ptrdiff_t>(c) * lds]; };
@@ -291,7 +326,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
 
 #define BATCHLAS_POTRI_CTA_INSTANTIATE(T)                                                                    \
     template Event potri_cta<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, CtaMode, int, bool, \
-                                Span<int32_t>);
+                                Span<int32_t>, Stash<T>);
 
 BATCHLAS_POTRI_CTA_INSTANTIATE(float)
 BATCHLAS_POTRI_CTA_INSTANTIATE(double)

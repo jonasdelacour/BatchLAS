@@ -51,7 +51,7 @@ bool can_run(const PotriChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-// Exactly the chosen family's need: cta none, blocked one part's W.
+// Exactly the chosen family's need: cta none, blocked one part's W and slots plus the batch's flags.
 template <class T>
 std::size_t workspace(Queue& q, const PotriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
