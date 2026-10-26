@@ -1418,6 +1418,14 @@ TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
     }) << "the panel at the ADVERTISED cap m=" << cap << " (work-group " << cap
        << ") does not launch, so getrf_panel_reg_max_m advertises capacity the device "
           "refuses";
+    // A runtime may DROP an over-ceiling launch without an error (acpp multipass did), so
+    // no-throw alone cannot see it: the kernel must also have written every pivot.
+    // evidence: docs/design/known-defects.md#getrf-register-panel-unlaunched-on-acpp-multipass
+    for (int k = 0; k < 32; ++k) {
+        EXPECT_TRUE(tall_piv[std::size_t(k)] >= k + 1 && tall_piv[std::size_t(k)] <= cap)
+            << "ipiv[" << k << "] = " << tall_piv[std::size_t(k)] << " at the advertised cap m="
+            << cap << ": the launch was silently dropped";
+    }
 }
 
 // P4f. THE BLOCKED DRIVER TAKES THE REGISTER LEAF UNDER THE KNOB AND PRODUCES THE

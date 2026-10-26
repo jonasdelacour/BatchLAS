@@ -646,8 +646,9 @@ set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
 # what an icpx build without -ffp-model=precise produces, 6-15x slower and green
 # in every functional test. Skips (77) when there is no NVPTX image or no cuobjdump.
 # evidence: docs/perf/blackwell.md#device-call-guard
+# Not for acpp multipass CUDA: its fat binaries carry cubin only, no PTX to scan.
 find_package(Python3 QUIET COMPONENTS Interpreter)
-if(Python3_Interpreter_FOUND)
+if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
     set(_device_calls_args "${PROJECT_BINARY_DIR}")
     if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
         list(APPEND _device_calls_args --cuobjdump "${CUDAToolkit_BIN_DIR}/cuobjdump")
@@ -677,6 +678,10 @@ foreach(_bin IN LISTS _acpp_jit_bins)
         set(_acpp_jit_ok OFF)
     endif()
 endforeach()
+# Multipass CUDA (cuda:sm_XX) compiles ahead of time: nothing reaches the JIT cache it scans.
+if(BATCHLAS_ACPP_CUDA_AOT_ARCH)
+    set(_acpp_jit_ok OFF)
+endif()
 if(Python3_Interpreter_FOUND AND BATCHLAS_HAS_CUDA_BACKEND AND _acpp_jit_ok)
     set(_cuda "BATCHLAS_TEST_BACKEND=CUDA")
     add_test(NAME acpp_jit_tests

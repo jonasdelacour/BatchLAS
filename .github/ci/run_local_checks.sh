@@ -113,6 +113,11 @@ if [ "$#" -gt 1 ]; then
         if [ -n "$_impl" ]; then
             _require="$_require --sycl-impl $_impl"
         fi
+        # A multipass CUDA tree (cuda:sm_XX) has its own ledger, tests/known-failures-acpp-cuda.txt.
+        _targets=$(sed -n 's/^BATCHLAS_ACPP_TARGETS:STRING=//p' "$BATCHLAS_BUILD_DIR/CMakeCache.txt" 2>/dev/null)
+        if [ -n "$_targets" ]; then
+            _require="$_require --acpp-targets $_targets"
+        fi
     fi
     if [ "$#" -gt 2 ] && [ -n "$3" ]; then
         # shellcheck disable=SC2086  # _require is a deliberate word split

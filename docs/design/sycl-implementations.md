@@ -112,6 +112,73 @@ Sites outside them that test `BATCHLAS_SYCL_IMPL_ACPP` directly:
 - The `register_128x128` L2-prefetch load is reached through `on_ptx()` plus
   `__acpp_if_target_sscp`. Launch bounds stay an implementation difference (A10).
 
+### Multipass CUDA: --acpp-targets=cuda:sm_XX {#sycl-impl-cuda-aot}
+
+acpp's ahead-of-time CUDA flow (the fullerenes toolchain): a host pass plus a real NVPTX device
+pass compiled by acpp's clang (LLVM 20) in CUDA mode, kernels in the fat binary, no JIT.
+
+- **Toolkit.** Clang 20 rejects CUDA 13 headers, so the flow needs CUDA 12.x
+  (`BATCHLAS_ACPP_CUDA_PATH`, passed as `--acpp-cuda-path`; configure fails on a 13.x toolkit).
+  The same toolkit's cuBLAS/cuSOLVER/cuSPARSE are linked (`CUDAToolkit_ROOT`). Clang's CUDA wrapper
+  includes curand headers, which an HPC SDK keeps in `math_libs/<v>/.../include`: added as
+  `-isystem` when found. CUDA above 12.8 also gets `-Wno-unknown-cuda-version`. The flags go into
+  `BatchLAS_SYCL_COMPILE_OPTIONS`, so a consumer compiles with the same toolkit.
+- **No GPU at configure.** An explicit `cuda:sm_XX` names the device, so the CUDA backend is built
+  when the acpp install has `librt-backend-cuda` even if `acpp-info` sees no GPU (hosted CI).
+- **No `SYCL_EXTERNAL`.** The secular-equation root solvers are in `stedc_secular_roots.hh`,
+  `inline` where `SYCL_EXTERNAL` is undefined, so every caller compiles its own copy.
+- **Implicit host-device.** Device code that names a `__host__`-only function (a non-`constexpr`
+  member called from a `constexpr` one) is an error; `UnifiedVector::operator==` and `push_back`
+  lost a `constexpr` that never applied.
+- **Target dispatch.** `on_ptx()` is `true` and `target_arch()` is `__CUDA_ARCH__ / 10` in the
+  CUDA device pass (`__acpp_if_target_cuda`). `SscpBackend`'s asm-label `__nvvm_*` declarations are
+  skipped there (clang's own builtins exist), and `redux` uses `NvptxBackend::redux_full`, which
+  keys on `BATCHLAS_NVPTX_ARCH` (`__SYCL_CUDA_ARCH__` or `__CUDA_ARCH__`).
+- **Work-group reduce.** `portable::reduce_over_group` takes `detail::wg_reduce_floating` in the
+  CUDA and HIP device passes too (`kExactWgReducePass`); its scratch is a `__shared__` array in a
+  `__device__` helper. acpp's own multipass reduce is a typed tree, so it does not have the SSCP
+  rounding defect. By reading, it returns its static scratch after the last barrier
+  (`generic/hiplike/group_functions.hpp:36-71`), so a following reduce of the same type could
+  overwrite it before every item has read it. The replacement is kept for that reason only: the
+  race was never observed. The 44-bit loss is SSCP-only.
+- **What `DeviceBlasTest.PortableWorkGroupDoubleSumIsExact` discriminates** (standalone probes of
+  its kernel against a patched copy of `group-collectives.hh`, RTX 4090, acpp `develop` 94ab0d58,
+  LLVM 20, CUDA 12.8; wg 64, 96, 256 and 1024, 1024 groups, 4 reps):
+
+  | Break | generic (SSCP) | multipass `cuda:sm_89` |
+  | --- | --- | --- |
+  | none | exact | exact |
+  | `kExactWgReducePass = false` (acpp's own reduce) | 99.3% of items wrong | exact |
+  | replacement drops sub-group partial 1 | all wrong | all wrong |
+  | replacement drops its trailing barrier | exact | exact |
+
+  acpp's own reduce, called directly, was also exact on multipass in ~118 M items x 16 chained
+  reduces (wg 64-1024, 4096 groups, 20 reps). So on multipass the test guards the replacement, not
+  an acpp defect. Its second (mirrored, negated) sum checks only that a second reduce in one kernel
+  returns its own sum: no break of the trailing barrier turned it red on either flow, so that
+  barrier is kept from reading acpp's source, with no test behind it.
+- **Contraction.** The driver default is `fast`; BatchLAS passes `BATCHLAS_FP_CONTRACT`
+  (default `on`), as for generic ([build guide](../guide/build.md#guide_build_fp_contract)).
+- **One toolkit.** FindCUDAToolkit takes `$CUDACXX` before `CUDAToolkit_ROOT`, so a CUDA 13 nvcc in
+  the environment gave 13.2 include dirs beside 12.8 libraries. Configure ignores a `CUDACXX`
+  outside the chosen toolkit, seeds `CUDAToolkit_ROOT` from acpp's `default-cuda-path` when
+  `BATCHLAS_ACPP_CUDA_PATH` is empty, and fails if CUDA 13 still wins (a stale
+  `CUDAToolkit_BIN_DIR` in an old tree) or if FindCUDAToolkit's cached toolkit is not the one
+  acpp compiles against (a changed `BATCHLAS_ACPP_CUDA_PATH` in an old tree).
+- **Tests on sm_89** (the 4090 box, acpp `develop` 94ab0d58, CUDA 12.8, vendor on, serial full
+  `ctest`): 25 of 147 entries failed, ledgered in `tests/known-failures-acpp-cuda.txt` by cause.
+  The largest was getrf's register-panel leaf: acpp's cubins need more registers than the
+  DPC++-probed cap assumed, the 512-thread double and complex<float> launches were dropped without
+  an error, getrs faulted on the unwritten pivots and the lost context failed the rest of the
+  process. On acpp the leaf is now capped at 256 rows
+  ([Defect 22](known-defects.md#getrf-register-panel-unlaunched-on-acpp-multipass)). Next: the 48 KiB local-memory cap in tests that assume the
+  opt-in, saturating-batch bit-identity in syev, gesvd and syev_align (cause open), and the error
+  model (an oversized launch is not reported). No CPU target exists in this flow, so the NETLIB
+  instantiations do not run. `device_calls_tests` and `acpp_jit_tests` need PTX or a JIT cache
+  and are not registered. The vendor-free `cuda:sm_89` install links no LAPACKE, CBLAS or CUDA
+  math library, and `examples/consumer` built as C++23 against it ran on the GPU (`backend = 1`,
+  max err 0).
+
 ### Local memory: the launch budget {#sycl-impl-slm-budget}
 
 | | DPC++ (CUDA) | acpp 25.10 (CUDA) | acpp + `BATCHLAS_ACPP_SLM_OPTIN` |

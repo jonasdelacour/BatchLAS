@@ -249,6 +249,24 @@ batchlas_write_env_script()
 
 if(BATCHLAS_HAS_CUDA_BACKEND)
     find_package(CUDAToolkit REQUIRED)
+    if(BATCHLAS_ACPP_CUDA_AOT_ARCH AND CUDAToolkit_VERSION_MAJOR GREATER_EQUAL 13)
+        message(FATAL_ERROR "--acpp-targets=${BATCHLAS_ACPP_TARGETS}: FindCUDAToolkit picked CUDA "
+            "${CUDAToolkit_VERSION} (${CUDAToolkit_BIN_DIR}), not the 12.x toolkit '${CUDAToolkit_ROOT}'. "
+            "Unset CUDACXX and CUDAToolkit_BIN_DIR (a fresh build tree) and configure again.")
+    endif()
+    # Device code and the CUDA libraries must come from ONE toolkit; FindCUDAToolkit's results are
+    # cached, so a changed BATCHLAS_ACPP_CUDA_PATH alone would mix them.
+    if(BATCHLAS_ACPP_AOT_CUDA_ROOT)
+        get_filename_component(_found_cuda "${CUDAToolkit_BIN_DIR}/.." REALPATH)
+        get_filename_component(_acpp_cuda "${BATCHLAS_ACPP_AOT_CUDA_ROOT}" REALPATH)
+        if(NOT _found_cuda STREQUAL _acpp_cuda)
+            message(FATAL_ERROR "--acpp-targets=${BATCHLAS_ACPP_TARGETS} compiles against the CUDA "
+                "toolkit ${_acpp_cuda}, but FindCUDAToolkit found ${_found_cuda} (cached "
+                "CUDAToolkit_ROOT='${CUDAToolkit_ROOT}'). Use a fresh build tree, or pass "
+                "-DCUDAToolkit_ROOT=${BATCHLAS_ACPP_AOT_CUDA_ROOT} and remove the cached "
+                "CUDAToolkit_* and CUDA_*_LIBRARY entries.")
+        endif()
+    endif()
     set(BATCHLAS_CUDA_LINK_LIBRARIES
         CUDA::cudart
         CUDA::cublas

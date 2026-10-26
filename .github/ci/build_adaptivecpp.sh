@@ -7,6 +7,8 @@
 # the distro LLVM. Only the generic (SSCP) compiler and the OpenMP host runtime are built:
 # --acpp-targets=generic compiles device code to target-independent IR, so a BatchLAS compile
 # needs no CUDA toolkit and no GPU. Design: docs/design/sycl-implementations.md#sycl-impl-phases (P6).
+# With ACPP_CUDA_PATH (the acpp-cuda-consumer job) the CUDA backend is built too; the toolkit's
+# lib64/stubs/libcuda.so stands in for the driver, so that build is GPU-less as well.
 #
 # Environment (all optional):
 #   ACPP_REPO   clone URL (default https://github.com/AdaptiveCpp/AdaptiveCpp.git; a local
@@ -15,6 +17,8 @@
 #   ACPP_SHA    commit the tag must resolve to; a moved tag is an error
 #   LLVM_ROOT   LLVM install (default /usr/lib/llvm-20; 20 is AdaptiveCpp 25.10's ceiling)
 #   JOBS        build parallelism (default: nproc)
+#   ACPP_CUDA_PATH  a CUDA 12.x toolkit: also build the CUDA runtime backend and the multipass
+#               CUDA flow (--acpp-targets=cuda:sm_XX) against it; empty (default): no CUDA
 set -eu
 
 prefix=${1:?usage: build_adaptivecpp.sh <install-prefix> [<work-dir>]}
@@ -24,6 +28,13 @@ tag=${ACPP_TAG:-v25.10.0}
 sha=${ACPP_SHA:-9f842c701a599107cc6d117d3539f971036363a1}
 llvm=${LLVM_ROOT:-/usr/lib/llvm-20}
 jobs=${JOBS:-$(nproc)}
+cuda=${ACPP_CUDA_PATH:-}
+if [ -n "$cuda" ]; then
+    [ -x "$cuda/bin/nvcc" ] || { echo "build_adaptivecpp: ACPP_CUDA_PATH=$cuda has no bin/nvcc" >&2; exit 1; }
+    cuda_args="-DWITH_CUDA_BACKEND=ON -DCUDAToolkit_ROOT=$cuda"
+else
+    cuda_args="-DWITH_CUDA_BACKEND=OFF"
+fi
 
 for f in "$llvm/bin/clang++" "$llvm/lib/cmake/llvm/LLVMConfig.cmake" \
          "$llvm/include/clang/AST/ASTContext.h" "$llvm/lib/libomp.so" "$llvm/bin/ld.lld"; do
@@ -48,7 +59,7 @@ cmake -S "$work/src" -B "$work/build" \
     -DCLANG_EXECUTABLE_PATH="$llvm/bin/clang++" \
     -DACPP_LLD_PATH="$llvm/bin/ld.lld" \
     -DACPP_COMPILER_FEATURE_PROFILE=full \
-    -DWITH_CUDA_BACKEND=OFF -DWITH_ROCM_BACKEND=OFF \
+    $cuda_args -DWITH_ROCM_BACKEND=OFF \
     -DWITH_OPENCL_BACKEND=OFF -DWITH_LEVEL_ZERO_BACKEND=OFF
 cmake --build "$work/build" -j "$jobs"
 cmake --install "$work/build"
@@ -58,3 +69,10 @@ grep -q '"plugin-with-sscp-compiler" : "true"' "$prefix/etc/AdaptiveCpp/acpp-cor
     echo "build_adaptivecpp: the install has no SSCP compiler; --acpp-targets=generic would fail" >&2
     exit 1
 }
+if [ -n "$cuda" ]; then
+    [ -e "$prefix/lib/hipSYCL/librt-backend-cuda.so" ] && grep -q "\"default-cuda-path\" *: *\"$cuda\"" \
+        "$prefix/etc/AdaptiveCpp/acpp-cuda.json" || {
+        echo "build_adaptivecpp: no CUDA backend, or acpp-cuda.json does not name $cuda" >&2
+        exit 1
+    }
+fi

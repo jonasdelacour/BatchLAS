@@ -19,7 +19,11 @@
 cmake_minimum_required(VERSION 3.21)
 project(batchlas_consumer CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+# C++20 is the floor of the public headers; -DCMAKE_CXX_STANDARD=23 builds the consumer as C++23
+# (the ci.yml acpp-cuda-consumer job does).
+if(NOT DEFINED CMAKE_CXX_STANDARD)
+    set(CMAKE_CXX_STANDARD 20)
+endif()
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(BatchLAS CONFIG REQUIRED)

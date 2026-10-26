@@ -74,6 +74,16 @@ constexpr int panel_reg_wg_ceiling(int regs) {
     return warps_per_partition * kPartitionsPerBlock * kPanelRegWgQuantum;
 }
 
+// The probe above is DPC++'s ptxas. acpp multipass allocates 110/150/144/222 (float, double,
+// cfloat, cdouble), a launch above the ceiling is dropped WITHOUT an error, and the panel's
+// pivots stay unwritten. 256 rows launch at any count <= 255, as kernel_max_wg_size answers.
+// evidence: docs/design/known-defects.md#getrf-register-panel-unlaunched-on-acpp-multipass
+#if BATCHLAS_SYCL_IMPL_ACPP
+constexpr int kPanelRegImplMaxRows = 256;
+#else
+constexpr int kPanelRegImplMaxRows = kPanelRegMaxRows;
+#endif
+
 // 0 spells "this type has no register panel", exactly as getrf_cta_max_n_for_slm's 0 does.
 template <typename T>
 constexpr int panel_reg_max_m() {
@@ -83,7 +93,8 @@ constexpr int panel_reg_max_m() {
     } else {
         constexpr int by_regs =
             panel_reg_wg_ceiling(regs) / kPanelRegWgQuantum * kPanelRegWgQuantum;
-        return (by_regs < kPanelRegMaxRows) ? by_regs : kPanelRegMaxRows;
+        constexpr int cap = std::min(kPanelRegMaxRows, kPanelRegImplMaxRows);
+        return (by_regs < cap) ? by_regs : cap;
     }
 }
 
