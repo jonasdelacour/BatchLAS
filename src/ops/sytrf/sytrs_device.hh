@@ -106,6 +106,37 @@ inline bool ldl_convert(const Acc& L, int n, const int* ps, int* perm, int* kind
     return ok;
 }
 
+// ?syconv as a gather, for a factor in global memory: column j of W is column j of G with its rows
+// permuted by sigma_j, the interchanges after step j composed (W(t, j) = G(sigma_j(t), j), t > j).
+// Walking j down, sigma gains one interchange per block start, applied by lane 0 in O(1) through
+// its inverse; every read and write of a column is then one pass instead of one swap per step.
+// kind must be build_perm's for a valid list.
+template <typename D, typename Dst, typename Src, typename Bar>
+inline void convert_gather(const Dst& W, const Src& G, int n, const int* ps, const int* kind, int* sig, int* inv,
+                           int lid, int nl, Bar&& bar) {
+    for (int t = lid; t < n; t += nl) {
+        sig[t] = t;
+        inv[t] = t;
+    }
+    bar();
+    for (int j = n - 1; j >= 0; --j) {
+        const bool two = kind[j] == 1;
+        for (int t = j + 1 + lid; t < n; t += nl) W(t, j) = two && t == j + 1 ? zero<D>() : G(sig[t], j);
+        bar();
+        if (lid == 0 && kind[j] != 2) {
+            const int a = two ? j + 1 : j, b = (ps[j] > 0 ? ps[j] : -ps[j]) - 1;
+            if (a != b) {
+                const int ia = inv[a], ib = inv[b];
+                sig[ia] = b;
+                sig[ib] = a;
+                inv[a] = ib;
+                inv[b] = ia;
+            }
+        }
+        bar();
+    }
+}
+
 // Row t of D^-1 x for a block of kind kd: x is row t's value, xp its 2 x 2 partner's, dtt and dpp
 // their diagonals, off the block's off-diagonal. ?sytrs's arithmetic, so both rows of a block agree.
 template <typename D>

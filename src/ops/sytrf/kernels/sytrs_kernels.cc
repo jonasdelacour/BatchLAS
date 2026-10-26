@@ -172,7 +172,7 @@ Event sg_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const M
 template <typename T>
 struct BlockedWs {
     Span<T> lw, bw;
-    Span<int> ps, perm, kind;
+    Span<int> ps, perm, kind, sig, inv;
     Span<T*> pl, pb;
 };
 
@@ -186,6 +186,8 @@ BlockedWs<T> blocked_layout(Queue& ctx, BumpAllocator& pool, int n, int nrhs, in
     ws.ps = pool.allocate<int>(ctx, p * un);
     ws.perm = pool.allocate<int>(ctx, p * un);
     ws.kind = pool.allocate<int>(ctx, p * un);
+    ws.sig = pool.allocate<int>(ctx, p * un);
+    ws.inv = pool.allocate<int>(ctx, p * un);
     ws.pl = pool.allocate<T*>(ctx, p);
     ws.pb = pool.allocate<T*>(ctx, p);
     return ws;
@@ -197,7 +199,7 @@ template <typename T>
 int blocked_chunk(Queue& ctx, int n, int nrhs, int batch) {
     const auto dev = ctx.device();
     const int64_t item = (static_cast<int64_t>(n) * n + static_cast<int64_t>(n) * nrhs) * static_cast<int64_t>(sizeof(T)) +
-                         3 * static_cast<int64_t>(n) * static_cast<int64_t>(sizeof(int));
+                         5 * static_cast<int64_t>(n) * static_cast<int64_t>(sizeof(int));
     int64_t chunk = tuning::blocked_chunk_items(
         batch, item, static_cast<int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
         static_cast<int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)));
@@ -220,6 +222,8 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
     int* const psw = ws.ps.data();
     int* const pw = ws.perm.data();
     int* const kw = ws.kind.data();
+    int* const sw = ws.sig.data();
+    int* const iw = ws.inv.data();
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<int, 1> flag(sycl::range<1>(1), h);
         batchlas::impl::parallel_for<SytrsPrepKernel<T>>(h,
@@ -234,15 +238,29 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
                 int* const ps = psw + i0 * n;
                 int* const perm = pw + i0 * n;
                 int* const kind = kw + i0 * n;
-                for (std::ptrdiff_t idx = lid; idx < nn; idx += wg) {
-                    const int i = static_cast<int>(idx % n), j = static_cast<int>(idx / n);
-                    if (i > j) W(i, j) = G(i, j);
-                }
                 for (int k = lid; k < n; k += wg) ps[k] = sytrf_device::logical_piv(piv[i0 * n + (rev ? n - 1 - k : k)], n, rev);
                 auto bar = [&] { sycl::group_barrier(it.get_group()); };
                 bar();
-                const bool ok = sytrf_device::ldl_convert<D>(W, n, ps, perm, kind, static_cast<D*>(nullptr), lid, wg,
-                                                            &flag[0], bar);
+                if (lid == 0) {
+                    const bool valid = sytrf_device::piv_list_valid(ps, n);
+                    flag[0] = valid ? 1 : 0;
+                    if (valid) sytrf_device::build_perm(ps, n, perm, kind);
+                }
+                bar();
+                const bool ok = flag[0] != 0;
+                if (ok) {
+                    sytrf_device::convert_gather<D>(W, G, n, ps, kind, sw + i0 * n, iw + i0 * n, lid, wg, bar);
+                } else {
+                    for (std::ptrdiff_t idx = lid; idx < nn; idx += wg) {
+                        const int i = static_cast<int>(idx % n), j = static_cast<int>(idx / n);
+                        if (i > j) W(i, j) = G(i, j);
+                    }
+                    for (int t = lid; t < n; t += wg) {
+                        perm[t] = t;
+                        kind[t] = 0;
+                    }
+                    bar();
+                }
                 D* const y = bw + i0 * nb;
                 const D* const src = bp + i0 * strb;
                 for (std::ptrdiff_t idx = lid; idx < nb; idx += wg) {
