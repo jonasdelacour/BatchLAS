@@ -270,7 +270,7 @@ set(BATCHLAS_HEAVY_TESTS
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
-    syev_tests)
+    syev_tests sygvd_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)

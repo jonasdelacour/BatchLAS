@@ -1,24 +1,33 @@
 // sygst: the two-sided triangular reduction of sygvd. select::run takes the first entry of the nearest
-// tuned/sygst.<device>.txt row that can_run() admits. TwoSided mirrors A's uplo triangle and applies the
-// factor from both sides with the public trsm (itype 1) or trmm (itypes 2 and 3), so its children select
-// their own kernels; Vendor is LAPACKE ?sygst/?hegst on the host (cuSOLVER has none).
-// evidence: docs/perf/sygvd.md#sygvd-routes
+// tuned/sygst.<device>.txt row that can_run() admits. Blocked is LAPACK's dsygst/zhegst schedule on the
+// uplo triangles only: the SLM diagonal kernel (kernels/sygst_diag.cc) and the public trsm, hemm/symm,
+// her2k/syr2k and trmm, each selecting its own kernel. TwoSided mirrors A and applies the factor from
+// both sides with two full trsm or trmm; Vendor is LAPACKE ?sygst/?hegst on the host (cuSOLVER has none).
+// evidence: docs/perf/sygvd.md#sygvd-routes, docs/perf/sygvd.md#sygst-the-blocked-family
 
 #include <batchlas/backend_config.h>
 
+#include <batchlas/blas/functions/hemm.hh>
+#include <batchlas/blas/functions/her2k.hh>
 #include <batchlas/blas/functions/sygst.hh>
+#include <batchlas/blas/functions/symm.hh>
+#include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/functions/trsm.hh>
 
+#include <batchlas/tuning_params.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/sygst/choice.hh>
+#include <src/ops/sygst/sygst_native.hh>
 #include <src/select/select.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
+#include <algorithm>
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <variant>
 
@@ -38,11 +47,19 @@ select::Key key_of(const MV<T>& A) {
     return {{"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
+inline bool blocked_nb_compiled(int nb) { return nb == 16 || nb == 32 || nb == 64; }
+
 // Correctness only. The children refuse what they cannot run; a heterogeneous batch has no family.
+// Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
 template <Backend B, class T>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
     const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
     return std::visit(overloaded{
+        [&](const Blocked& b) {
+            const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());
+            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagMaxOrder &&
+                   static_cast<std::int64_t>(sycl_sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
+        },
         [&](TwoSided) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
     }, c);
@@ -50,6 +67,176 @@ bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, cons
 
 template <class T>
 constexpr Transpose kH = is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+
+// ---- blocked --------------------------------------------------------------------------------------
+
+// Whether the call is one diagonal-kernel launch: no child, no workspace, no chunking.
+inline bool single_block(int n, int nb) { return n <= std::min(nb, sycl_sygst::kDiagMaxOrder); }
+
+// Items per pass: the panel and trailing parts hand A between children through L2, as potrf's do.
+// One diagonal block has no hand-off and never splits. Query and call both use it.
+template <class T>
+int blocked_chunk(Queue& q, int n, int nb, int batch) {
+    if (single_block(n, nb)) return batch;
+    const auto dev = q.device();
+    return static_cast<int>(tuning::blocked_chunk_items(
+        batch, static_cast<std::int64_t>(n) * (n + 1) * static_cast<std::int64_t>(sizeof(T)),
+        static_cast<std::int64_t>(dev.get_property(DeviceProperty::GLOBAL_MEM_CACHE_SIZE)),
+        static_cast<std::int64_t>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS))));
+}
+
+inline int blocked_part(int chunk, int batch) { return batch < 2 * chunk ? batch : chunk + batch % chunk; }
+
+// One pointer array per trsm role (the vendor trsm reads them) and, for itypes 2 and 3, the n x nb
+// panel product per item that the out-of-place trmm needs. Nothing for a single diagonal block.
+template <class T>
+struct BlockedLayout {
+    Span<T*> pf, pa;
+    Span<T> w;
+};
+
+template <class T>
+BlockedLayout<T> blocked_layout(Queue& q, BumpAllocator& pool, int n, int nb, int itype, int part) {
+    BlockedLayout<T> l;
+    if (single_block(n, nb)) return l;
+    const auto p = static_cast<std::size_t>(part);
+    l.pf = pool.allocate<T*>(q, p);
+    l.pa = pool.allocate<T*>(q, p);
+    if (itype != 1) l.w = pool.allocate<T>(q, static_cast<std::size_t>(n) * static_cast<std::size_t>(nb) * p);
+    return l;
+}
+
+template <class T>
+std::size_t blocked_workspace(Queue& q, const MV<T>& A, int nb, int itype) {
+    const int n = A.rows(), batch = A.batch_size();
+    const int part = blocked_part(blocked_chunk<T>(q, n, nb, batch), batch);
+    return workspace_bytes([&](BumpAllocator& p) { return blocked_layout<T>(q, p, n, nb, itype, part); });
+}
+
+// One pass over cb items: views at absolute block offsets into A, B and the panel product W.
+template <class T>
+struct Pass {
+    T* a;
+    const T* b;
+    int lda, ldb, sa, sb, cb, n, nb;
+    BlockedLayout<T> l;
+    MV<T> A(int r0, int nr, int c0, int nc, T** p = nullptr) const {
+        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * lda + r0, nr, nc, lda, sa, cb, p);
+    }
+    MV<T> Bm(int r0, int nr, int c0, int nc, T** p = nullptr) const {
+        return MV<T>(const_cast<T*>(b) + static_cast<std::ptrdiff_t>(c0) * ldb + r0, nr, nc, ldb, sb, cb, p);
+    }
+    MV<T> W(int nr, int nc, int ld) const { return MV<T>(l.w.data(), nr, nc, ld, n * nb, cb); }
+};
+
+// C := alpha op(Asym) Bm + C (Left) or alpha Bm op(Asym) + C (Right), Asym Hermitian in its uplo triangle.
+template <Backend B, class T>
+void sym_mm(Queue& q, const MV<T>& Asym, const MV<T>& Bm, const MV<T>& C, T alpha, Side side, Uplo uplo) {
+    if constexpr (is_std_complex_v<T>) (void)::batchlas::hemm<B, T>(q, Asym, Bm, C, alpha, T(1), side, uplo);
+    else (void)::batchlas::symm<B, T>(q, Asym, Bm, C, alpha, T(1), side, uplo);
+}
+
+// C := C + alpha X Y^H + conj(alpha) Y X^H (NoTrans) or alpha X^H Y + conj(alpha) Y^H X, on C's uplo triangle.
+template <Backend B, class T>
+void sym_r2k(Queue& q, const MV<T>& X, const MV<T>& Y, const MV<T>& C, T alpha, Uplo uplo, bool trans) {
+    if constexpr (is_std_complex_v<T>)
+        (void)::batchlas::her2k<B, T>(q, X, Y, C, alpha, float_t<T>(1), uplo, trans ? Transpose::ConjTrans : Transpose::NoTrans);
+    else (void)::batchlas::syr2k<B, T>(q, X, Y, C, alpha, T(1), uplo, trans ? Transpose::Trans : Transpose::NoTrans);
+}
+
+template <class T>
+void diag_block(Queue& q, const Pass<T>& p, int o, int kb, int itype, Uplo uplo) {
+    (void)sycl_sygst::sygst_diag<T>(q, p.a + static_cast<std::ptrdiff_t>(o) * p.lda + o, p.lda, p.sa,
+                                    p.b + static_cast<std::ptrdiff_t>(o) * p.ldb + o, p.ldb, p.sb, kb, p.cb, itype,
+                                    uplo);
+}
+
+// The order-n block at offset o, nb at a time (dsygst / zhegst). A diagonal block wider than the kernel
+// recurses at the kernel's order: it is the same reduction with that block's own factor.
+template <Backend B, class T>
+void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, Uplo uplo) {
+    const bool lower = uplo == Uplo::Lower;
+    const T one(1), half(0.5), mhalf(-0.5), mone(-1);
+    auto diag = [&](int at, int kb) {
+        if (kb <= sycl_sygst::kDiagMaxOrder) diag_block<T>(q, p, at, kb, itype, uplo);
+        else blocked_range<B, T>(q, p, at, kb, sycl_sygst::kDiagMaxOrder, itype, uplo);
+    };
+    T** const pf = p.l.pf.data();
+    T** const pa = p.l.pa.data();
+    for (int k = 0; k < n; k += nb) {
+        const int kb = std::min(nb, n - k), at = o + k, m = n - k - kb, r = at + kb;
+        if (itype == 1) {
+            diag(at, kb);
+            if (m == 0) break;
+            const auto C11 = p.A(at, kb, at, kb);
+            const auto F11 = p.Bm(at, kb, at, kb, pf);
+            const auto F22 = p.Bm(r, m, r, m, pf);
+            const auto A22 = p.A(r, m, r, m);
+            if (lower) {  // A21 := L22^-1 (A21 L11^-H - L21 C11), A22 -= P L21^H + L21 P^H
+                const auto P = p.A(r, m, at, kb, pa);
+                const auto L21 = p.Bm(r, m, at, kb);
+                (void)::batchlas::trsm<B, T>(q, F11, P, one, Side::Right, uplo, kH<T>, Diag::NonUnit);
+                sym_mm<B, T>(q, C11, L21, P, mhalf, Side::Right, uplo);
+                sym_r2k<B, T>(q, P, L21, A22, mone, uplo, false);
+                sym_mm<B, T>(q, C11, L21, P, mhalf, Side::Right, uplo);
+                (void)::batchlas::trsm<B, T>(q, F22, P, one, Side::Left, uplo, Transpose::NoTrans, Diag::NonUnit);
+            } else {  // A12 := (U11^-H A12 - C11 U12) U22^-1, A22 -= P^H U12 + U12^H P
+                const auto P = p.A(at, kb, r, m, pa);
+                const auto U12 = p.Bm(at, kb, r, m);
+                (void)::batchlas::trsm<B, T>(q, F11, P, one, Side::Left, uplo, kH<T>, Diag::NonUnit);
+                sym_mm<B, T>(q, C11, U12, P, mhalf, Side::Left, uplo);
+                sym_r2k<B, T>(q, P, U12, A22, mone, uplo, true);
+                sym_mm<B, T>(q, C11, U12, P, mhalf, Side::Left, uplo);
+                (void)::batchlas::trsm<B, T>(q, F22, P, one, Side::Right, uplo, Transpose::NoTrans, Diag::NonUnit);
+            }
+            continue;
+        }
+        if (k > 0) {  // itypes 2, 3: extend the reduced leading k x k block by this block row/column
+            const auto A11 = p.A(o, k, o, k);
+            const auto F11 = p.Bm(o, k, o, k);
+            const auto F22 = p.Bm(at, kb, at, kb);
+            const auto A22 = p.A(at, kb, at, kb);
+            if (lower) {  // W = A21 L11 + A22 L21 / 2, A11 += W^H L21 + L21^H W, A21 = L22^H (W + A22 L21 / 2)
+                const auto P = p.A(at, kb, o, k);
+                const auto L21 = p.Bm(at, kb, o, k);
+                const auto W = p.W(kb, k, p.nb);
+                (void)::batchlas::trmm<B, T>(q, F11, P, W, one, Side::Right, uplo, Transpose::NoTrans, Diag::NonUnit);
+                sym_mm<B, T>(q, A22, L21, W, half, Side::Left, uplo);
+                sym_r2k<B, T>(q, W, L21, A11, one, uplo, true);
+                sym_mm<B, T>(q, A22, L21, W, half, Side::Left, uplo);
+                (void)::batchlas::trmm<B, T>(q, F22, W, P, one, Side::Left, uplo, kH<T>, Diag::NonUnit);
+            } else {  // W = U11 A12 + U12 A22 / 2, A11 += W U12^H + U12 W^H, A12 = (W + U12 A22 / 2) U22^H
+                const auto P = p.A(o, k, at, kb);
+                const auto U12 = p.Bm(o, k, at, kb);
+                const auto W = p.W(k, kb, p.n);
+                (void)::batchlas::trmm<B, T>(q, F11, P, W, one, Side::Left, uplo, Transpose::NoTrans, Diag::NonUnit);
+                sym_mm<B, T>(q, A22, U12, W, half, Side::Right, uplo);
+                sym_r2k<B, T>(q, W, U12, A11, one, uplo, false);
+                sym_mm<B, T>(q, A22, U12, W, half, Side::Right, uplo);
+                (void)::batchlas::trmm<B, T>(q, F22, W, P, one, Side::Right, uplo, kH<T>, Diag::NonUnit);
+            }
+        }
+        diag(at, kb);
+    }
+}
+
+template <Backend B, class T>
+Event blocked(Queue& q, const MV<T>& A, const MV<T>& Bf, int nb, int itype, Uplo uplo, Span<std::byte> ws) {
+    const int n = A.rows(), batch = A.batch_size();
+    const int chunk = blocked_chunk<T>(q, n, nb, batch);
+    BumpAllocator pool(ws);
+    const auto l = blocked_layout<T>(q, pool, n, nb, itype, blocked_part(chunk, batch));
+    for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
+        cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;  // the last part takes the remainder
+        const Pass<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(),
+                        Bf.data_ptr() + static_cast<std::ptrdiff_t>(b0) * Bf.stride(),
+                        A.ld(), Bf.ld(), A.stride(), Bf.stride(), cb, n, nb, l};
+        blocked_range<B, T>(q, p, 0, n, nb, itype, uplo);
+    }
+    return q.get_event();
+}
+
+// ---- twosided -------------------------------------------------------------------------------------
 
 // itypes 2 and 3 form one product out of place: an n x n buffer and its pointer array per item.
 template <class T>
@@ -59,14 +246,6 @@ std::size_t twosided_workspace(Queue& q, const MV<T>& A, int itype) {
     (void)pool.allocate<T>(q, static_cast<std::size_t>(A.rows()) * A.rows() * A.batch_size());
     (void)pool.allocate<T*>(q, static_cast<std::size_t>(A.batch_size()));
     return pool.required_bytes();
-}
-
-template <Backend B, class T>
-std::size_t workspace(Queue& q, const SygstChoice& c, const MV<T>& A, int itype) {
-    return std::visit(overloaded{
-        [&](TwoSided) { return twosided_workspace<T>(q, A, itype); },
-        [&](Vendor) -> std::size_t { return 0; },
-    }, c);
 }
 
 template <Backend B, class T>
@@ -88,10 +267,22 @@ Event twosided(Queue& q, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo, 
     return ::batchlas::trmm<B, T>(q, Bf, W, A, one, Side::Right, uplo, lower ? Transpose::NoTrans : kH<T>, Diag::NonUnit);
 }
 
+// ---- dispatch -------------------------------------------------------------------------------------
+
+template <Backend B, class T>
+std::size_t workspace(Queue& q, const SygstChoice& c, const MV<T>& A, int itype) {
+    return std::visit(overloaded{
+        [&](const Blocked& b) { return blocked_workspace<T>(q, A, b.nb, itype); },
+        [&](TwoSided) { return twosided_workspace<T>(q, A, itype); },
+        [&](Vendor) -> std::size_t { return 0; },
+    }, c);
+}
+
 template <Backend B, class T>
 Event launch(Queue& q, const SygstChoice& c, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo,
              Span<std::byte> ws) {
     return std::visit(overloaded{
+        [&](const Blocked& b) { return blocked<B, T>(q, A, Bf, b.nb, itype, uplo, ws); },
         [&](TwoSided) { return twosided<B, T>(q, A, Bf, itype, uplo, ws); },
         [&](Vendor) -> Event {
             if constexpr (vendor_linked<B>) return backend::sygst_vendor<B, T>(q, A, Bf, itype, uplo, ws);
@@ -121,7 +312,7 @@ Event sygst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
         [&](const auto& c) {
             if (work_space.size() < ops::sygst::workspace<Back, T>(ctx, c, A, itype))
                 throw batchlas::workspace_error("sygst: workspace is shorter than sygst_buffer_size()");
-            // The mirror and both triangular products chain, so they need an in-order queue.
+            // Every child reads the previous one's output, so they need an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
                 return ops::sygst::launch<Back, T>(q, c, A, B, itype, uplo, work_space);
             });

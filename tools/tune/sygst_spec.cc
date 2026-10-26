@@ -3,7 +3,7 @@
 // A := L^-1 A0 L^-H. It is checked on the default items by ||A0 - L C L^H|| / ||A0||
 // (MatrixView::similarity_residual, Check::factorization) with C the result mirrored and L the factor
 // with its upper triangle zeroed. A is restored from A0 before every run. Only itype 1, Lower is tuned:
-// the table has no itype or uplo key.
+// the table has no itype or uplo key. evidence: docs/perf/sygvd.md#sygst-measured
 
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/sygst.hh>
@@ -94,12 +94,17 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/ops/sygst/choice.hh",  // vendor (LAPACKE, host only) has no GPU source of its own
+            // family: blocked
+            "src/ops/sygst/sygst_native.hh",
+            "src/ops/sygst/kernels/sygst_diag.cc",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/sygst/sygst.cc"
         // twosided calls the public trsm (itype 1) and trmm (2, 3): their native kernels count too.
         // family: twosided "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
+        // blocked also calls the public hemm/symm, her2k/syr2k and trmm (and, through them, gemm).
+        // family: blocked "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh" "src/ops/hemm/hemm.cc" "src/ops/hemm/choice.hh" "src/ops/symm/symm.cc" "src/ops/symm/choice.hh" "src/ops/her2k/her2k.cc" "src/ops/her2k/choice.hh" "src/ops/syr2k/syr2k.cc" "src/ops/syr2k/choice.hh" "src/ops/syr2k/kernels/syr2k_triangular_tiles.hh" "src/ops/trmm/trmm.cc" "src/ops/trmm/choice.hh" "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/kernels/common/triangular_expand.hh" "src/kernels/common/triangular_tiles.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/sygst_spec.cc"; }
