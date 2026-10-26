@@ -196,6 +196,50 @@ that item an all-NaN X.
 * **skip list**: every family keeps the B of an item whose entry is nonzero (sysv after a singular
   factor); sysv `compose` now calls the routed sytrs with its status as that list.
 
+## sytrs: measured {#sytrs-measured}
+
+`benchmarks/sytrs_benchmark` (`BM_SYTRS`, `BM_SYSV`; Args n, nrhs, batch; the family is the route
+pin), RTX 4090 (GPU 1, idle, `CUDA_VISIBLE_DEVICES=1`), 2026-10-26, `--warmup=3 --min_iters=8`, two
+passes in reversed family order, median. Time per call in ms; `wg` is the first sytrs, unchanged.
+
+| dtype | n | nrhs | batch | `wg` (old) | `cta` | `blocked` | best / old |
+|---|---|---|---|---|---|---|---|
+| float | 8 | 16 | 8192 | 0.297 | 0.065 | 0.067 | 4.6x |
+| float | 32 | 4 | 8192 | 0.303 | 0.083 | 0.397 | 3.6x |
+| float | 32 | 64 | 8192 | 4.35 | 0.486 | 1.01 | 9.0x |
+| float | 64 | 16 | 8192 | 3.35 | 0.657 | 1.10 | 5.1x |
+| float | 64 | 1 | 8192 | 0.243 | 0.602 | 0.726 | 0.40x (old kept) |
+| float | 128 | 1 | 8192 | 0.869 | 10.2 | 3.20 | 0.27x (old kept) |
+| float | 128 | 16 | 8192 | 11.2 | 5.87 | 3.87 | 2.9x |
+| float | 128 | 64 | 8192 | 44.2 | 19.8 | 7.09 | 6.2x |
+| float | 512 | 64 | 1024 | 56.5 | - | 12.4 | 4.6x |
+| cfloat | 32 | 64 | 1024 | 1.29 | 0.135 | 0.377 | 9.6x |
+| cfloat | 64 | 64 | 8192 | 19.8 | 3.16 | 6.91 | 6.3x |
+| cfloat | 128 | 64 | 8192 | 76.1 | - | 17.3 | 4.4x |
+| cfloat | 512 | 16 | 1024 | 25.0 | - | 12.7 | 2.0x |
+
+* **`cta`** is the best family for n <= 64 at nrhs >= 4 (2-10x over `wg`) and at nrhs = 1 up to
+  n = 32 (1.1-1.7x). Its local memory is the staged factor, so at n = 128 one work-group fills an SM
+  (66 KB float): it loses there except at batch 128 or nrhs >= 16.
+* **`blocked`** wins from n = 128 at nrhs >= 4 and at every n for nrhs >= 16 with batch >= 1024 at
+  small n (8 x 64 x 8192: 0.127 vs 0.168 ms). Its first version converted by one swap per pivot
+  step in global memory (n^2 / 2 strided swaps per item); converting by a gather through the
+  composed permutation (`convert_gather`) made it 1.0-2.3x faster from n = 64 (median 1.55x) and
+  left it unchanged below (`blocked-swap-vs-gather.txt` in the evidence below).
+* **`wg` stays** where it wins: nrhs = 1 from n = 64 (batch >= 1024) and nrhs <= 4 from n = 256. A
+  work-group per right-hand side has the memory parallelism a single-rhs solve needs there.
+* **Measured dead end, `sg`**: one sub-group per (item, rhs) on the factor as stored (no conversion,
+  no local memory, next column prefetched). Best in 12 of 162 cells, by at most 1.35x over `wg`
+  (32 x 1 x 8192, 64 x 1 x 1024) plus cells nothing else ran; not kept.
+* **sysv `cta`** (fused factor plus the converted solve, one sub-group per rhs) against the old
+  fused kernel (one sub-group, rhs one after another, `?sytrs` step by step): 1.0-1.1x at nrhs = 1,
+  1.6-2.0x at nrhs = 4, 1.3-4.3x at 16 and 3.5-11.8x at 64 (float and cfloat, n = 8..32, batch 128..8192).
+* **Vendor**: cuSOLVER has no batched sytrs and `Xsytrs` is not wired (int64 pivots, per item), so
+  there is no vendor arm to measure on CUDA.
+
+Evidence: `/home/jonaslacour/.claude/jobs/ad7932ae/tmp/perf-sytrs/` (`families-2pass.txt`,
+`sysv-cta-old-vs-new.txt`, `blocked-swap-vs-gather.txt`, the raw CSVs) on the 4090 box.
+
 ## sytrf: vendor
 
 cuSOLVER 13.2 (`cusolverDn.h`) offers `cusolverDn<t>sytrf` (+ `_bufferSize`; legacy API, int32
