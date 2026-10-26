@@ -26,9 +26,7 @@ struct Blocked {
 
 using PotriChoice = std::variant<Cta, Blocked>;
 
-/// Tie-break order (§6.3): the one-launch kernel first. No vendor family exists. nb = 128 only for float:
-/// a 128-order CTA block exceeds the local memory of every other type; nb = 32 won no measured cell.
-/// evidence: docs/perf/potri.md#potri-measured-against-the-identity-solve
+/// Tie-break order (§6.3): cta first; nb = 128 for float only. evidence: docs/perf/potri.md#potri-selection
 template <class T>
 constexpr auto candidates() {
     if constexpr (std::is_same_v<T, float>)

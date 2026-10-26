@@ -1,7 +1,6 @@
 #pragma once
 
-// potri: the local-memory-resident trtri/lauum kernel, the info scan and the triangle finish.
-// evidence: docs/perf/potri.md#potri-the-algorithm
+// potri's kernels: the CTA trtri/lauum, the info scan, the finish. evidence: docs/perf/potri.md#potri-the-algorithm
 
 #include <src/util/internal-api.hh>
 #include <src/ops/potrf/potrf_slm_hole.hh>
@@ -15,13 +14,11 @@
 
 namespace batchlas::sycl_potri {
 
-// Potri: the uplo triangle of A := that of A^-1 from the factor (trtri then lauum, one launch).
-// Trtri: every nb x nb diagonal block of A (the last one ragged) := its triangular inverse.
+// Potri: A's uplo triangle := A^-1's from the factor. Trtri: each nb x nb diagonal block := its inverse.
 // Lauum: A := X^H X (Lower) or X X^H (Upper) from the triangular X in A's uplo triangle.
 enum class CtaMode : int { Potri = 0, Trtri = 1, Lauum = 2 };
 
-// Register tiles: TS x TS per tile, at most kCtaTiles tiles per work-item, at most kCtaMaxWg
-// work-items; one tile per lower-triangle tile of the order-m block padded to a multiple of TS.
+// TS x TS register tiles, one per lower-triangle tile, at most kCtaTiles per work-item of kCtaMaxWg.
 template <typename T>
 inline constexpr int kCtaTs = sizeof(T) > 8 ? 2 : 4;
 inline constexpr int kCtaTiles = 2;
@@ -39,8 +36,7 @@ constexpr int cta_wg(int m, int ts, int max_wg) {
     return want < cap ? want : cap;
 }
 
-// The padded tile (odd ld) and the padded reals. Shared by can_run (through cta_max_n) and the
-// launcher, so the advertised ceiling is the allocated one.
+// The padded tile (odd ld) and reals: can_run (cta_max_n) and the launcher share it.
 constexpr std::size_t cta_slm_bytes(int m, int ts, std::size_t sz_d, std::size_t sz_r) {
     const std::size_t mp = static_cast<std::size_t>((m + ts - 1) / ts * ts);
     return potrf_native::potrf_hole_padded((mp + 1) * mp * sz_d + mp * sz_r + 64);
@@ -51,7 +47,6 @@ constexpr bool cta_fits(int m, int ts, std::size_t sz_d, std::size_t sz_r, std::
            cta_tiles(m, ts) <= kCtaTiles * cta_wg(m, ts, max_wg);
 }
 
-// The largest order that fits (and every smaller one does); 0 if none.
 template <typename T>
 constexpr int cta_max_n(std::size_t slm_budget, int max_wg) {
     using R = typename base_type<T>::type;
@@ -60,9 +55,8 @@ constexpr int cta_max_n(std::size_t slm_budget, int max_wg) {
     return best;
 }
 
-// mode Trtri inverts the ceil(n / nb) diagonal blocks of every item; Potri and Lauum ignore nb.
-// info (Potri only, may be empty): 1-based first exactly-zero factor diagonal, else 0; such an
-// item is left unchanged. full (Potri only) also writes the other triangle (conjugate transpose).
+// nb: Trtri's block order. info and full: Potri only; an item with an exactly zero diagonal entry
+// gets its 1-based index and is left unchanged; full writes the conjugate into the other triangle.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
                                       CtaMode mode, int nb, bool full, Span<int32_t> info);
