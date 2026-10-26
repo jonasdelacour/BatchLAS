@@ -13,7 +13,6 @@
 #include <src/ops/potri/choice.hh>
 #include <src/ops/potri/potri_blocked.hh>
 #include <src/ops/potri/potri_native.hh>
-#include <src/ops/potrs/potrs.hh>
 #include <src/select/select.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -49,18 +48,7 @@ bool can_run(const PotriChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Cta) { return homogeneous && n <= cta_ceiling<T>(d); },
         [&](Blocked b) { return homogeneous && b.nb >= 1 && std::min(b.nb, n) <= cta_ceiling<T>(d); },
-        [&](Fused) { return homogeneous && potrs::fused_fits<T>(d, n, n); },
-        [&](Identity) { return homogeneous; },
     }, c);
-}
-
-// The A/B baseline's n x n identity per item.
-template <class T>
-std::size_t identity_workspace(Queue& q, const MV<T>& A) {
-    auto pool = BumpAllocator::measuring();
-    (void)pool.allocate<T>(q, static_cast<std::size_t>(A.rows()) * A.rows() * A.batch_size());
-    (void)pool.allocate<T*>(q, static_cast<std::size_t>(A.batch_size()));
-    return pool.required_bytes();
 }
 
 // Exactly the chosen family's need: cta none, blocked one part's W.
@@ -69,23 +57,7 @@ std::size_t workspace(Queue& q, const PotriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Cta) -> std::size_t { return 0; },
         [&](Blocked b) { return blocked::workspace<T>(q, A, b.nb); },
-        [&](auto) { return identity_workspace<T>(q, A); },
     }, c);
-}
-
-template <Backend B, class T>
-Event identity_launch(Queue& q, const MV<T>& A, Uplo uplo, bool full, Span<std::byte> ws, Span<int32_t> info,
-                      bool fused) {
-    const int n = static_cast<int>(A.rows());
-    const int batch = static_cast<int>(A.batch_size());
-    BumpAllocator pool(ws);
-    const Span<T> buf = pool.allocate<T>(q, static_cast<std::size_t>(n) * n * batch);
-    const Span<T*> xptr = pool.allocate<T*>(q, static_cast<std::size_t>(batch));
-    const MV<T> X(buf.data(), n, n, n, n * n, batch, xptr.data());
-    if (!info.empty()) (void)sycl_potri::potri_diag_info<T>(q, A, info);
-    (void)X.fill_identity(q);
-    (void)potrs::solve<B, T>(q, A, X, uplo, fused);
-    return sycl_potri::potri_store<T>(q, X, A, uplo, full);
 }
 
 template <Backend B, class T>
@@ -96,8 +68,6 @@ Event launch(Queue& q, const PotriChoice& c, const MV<T>& A, Uplo uplo, bool ful
     return std::visit(overloaded{
         [&](Cta) { return sycl_potri::potri_cta<T>(q, A, uplo, sycl_potri::CtaMode::Potri, A.rows(), full, info); },
         [&](Blocked b) { return blocked::run<B, T>(q, A, uplo, b.nb, full, ws, info); },
-        [&](Fused) { return identity_launch<B, T>(q, A, uplo, full, ws, info, true); },
-        [&](Identity) { return identity_launch<B, T>(q, A, uplo, full, ws, info, false); },
     }, c);
 }
 

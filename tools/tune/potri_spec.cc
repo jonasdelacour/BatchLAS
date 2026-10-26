@@ -99,10 +99,6 @@ public:
         return {
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
-            "include/batchlas/util/group-collectives.hh",
-            // family: fused
-            "src/ops/getrs/kernels/getrs_fused.cc",
-            "src/ops/getrs/getrs_native.hh",
             // family: blocked
             "src/ops/potri/potri_blocked.hh",
             // common
@@ -110,7 +106,6 @@ public:
             "src/ops/potri/kernels/potri_native.cc",
             "src/ops/potri/potri_native.hh",
             "src/ops/potrf/potrf_slm_hole.hh",
-            "src/ops/potrs/potrs.hh",
             "src/ops/potri/choice.hh",
         };
         // kernel-sources-end
@@ -118,7 +113,6 @@ public:
         // common "src/ops/potri/potri.cc"
         // blocked calls the public trmm, gemm, herk and syrk; its batch chunk comes from tuning_params.hh.
         // family: blocked "src/ops/trmm/kernels/trmm_triangular_tiles.hh" "src/ops/trmm/choice.hh" "src/ops/herk/choice.hh" "src/ops/syrk/choice.hh" "include/batchlas/tuning_params.hh"
-        // family: identity "src/ops/trsm/kernels/trsm_native.cc" "src/ops/trsm/trsm_native.hh" "src/ops/trsm/kernels/trsm_sg_left.cc" "src/ops/trsm/trsm_canonical.hh" "src/ops/trsm/choice.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potri_spec.cc"; }

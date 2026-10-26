@@ -77,9 +77,4 @@ template <typename T>
 BATCHLAS_INTERNAL_API Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
                                          bool full);
 
-// The A/B baseline only (the identity + solve families): A's uplo triangle := X's, full mirrors.
-template <typename T>
-BATCHLAS_INTERNAL_API Event potri_store(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& X,
-                                        const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, bool full);
-
 }  // namespace batchlas::sycl_potri

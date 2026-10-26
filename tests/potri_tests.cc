@@ -360,10 +360,11 @@ namespace {
 
 using ops::potri::PotriChoice;
 
-// cta, then blocked at the two block orders every type compiles (nb = 32 crosses 33 and 65).
-const std::vector<PotriChoice>& potri_pins() {
-    static const std::vector<PotriChoice> v{ops::potri::Cta{}, ops::potri::Blocked{32}, ops::potri::Blocked{64}};
-    return v;
+// Every compiled candidate: cta, blocked:nb=64 and, for float only, blocked:nb=128.
+template <typename T>
+std::vector<PotriChoice> potri_pins() {
+    const auto c = ops::potri::candidates<T>();
+    return {c.begin(), c.end()};
 }
 
 std::string pin_name(const PotriChoice& c) { return select::to_string(c); }
@@ -428,14 +429,15 @@ Sys<T> make_graded_sys(int n, int batch, Uplo uplo, unsigned seed, double cond) 
 }  // namespace
 
 // A * A^-1 = I through verify, both triangles, Auto and each pin, an order ladder through the tile
-// width (4), the block orders (32, 64) and their ragged neighbours, padded ld and stride, the
+// width (4), the block orders (64, 128) and their ragged neighbours, three and more diagonal blocks
+// (lauum's gemm leg needs n > 2 nb), padded ld and stride, the
 // unreferenced triangle poisoned and written by nobody, info all zero.
 TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
     using T = typename TestFixture::T;
     const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-        for (int n : {1, 2, 3, 4, 5, 8, 9, 16, 31, 32, 33, 64, 65, 100})
-            for (int route = -1; route < static_cast<int>(potri_pins().size()); ++route) {
+        for (int n : {1, 2, 3, 4, 5, 8, 9, 16, 31, 32, 33, 64, 65, 100, 129, 200, 300})
+            for (int route = -1; route < static_cast<int>(potri_pins<T>().size()); ++route) {
                 if (route == 0 && n > ceiling) continue;
                 auto p = make_sys<T>(n, 1, 4, uplo, 900u + n);
                 UnifiedVector<int32_t> info;
@@ -444,10 +446,10 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
                 UnifiedVector<int32_t> pinfo(p.batch, int32_t(-7));
                 {
                     std::optional<select::ScopedPin<PotriChoice>> pin;
-                    if (route >= 0) pin.emplace("potri", potri_pins()[route]);
+                    if (route >= 0) pin.emplace("potri", potri_pins<T>()[route]);
                     (void)this->run_potri(p, false, &pinfo);
                 }
-                const std::string what = "n=" + std::to_string(n) + " route=" + (route < 0 ? "auto" : pin_name(potri_pins()[route])) +
+                const std::string what = "n=" + std::to_string(n) + " route=" + (route < 0 ? "auto" : pin_name(potri_pins<T>()[route])) +
                                          " uplo=" + (uplo == Uplo::Lower ? "L" : "U");
                 for (int it = 0; it < p.batch; ++it) ASSERT_EQ(pinfo[it], 0) << what;
                 std::vector<std::vector<T>> inv;
@@ -464,8 +466,8 @@ TYPED_TEST(PotriTest, PotriInvertsGradedIllConditionedInputs) {
     const double cond = std::is_same_v<RealOf<T>, float> ? 1e3 : 1e6;
     const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-        for (int n : {7, 33, 100})
-            for (const PotriChoice& c : potri_pins()) {
+        for (int n : {7, 33, 100, 200, 300})
+            for (const PotriChoice& c : potri_pins<T>()) {
                 if (c.index() == 0 && n > ceiling) continue;
                 auto p = make_graded_sys<T>(n, 3, uplo, 61u + n, cond);
                 UnifiedVector<int32_t> info;
@@ -487,9 +489,9 @@ TYPED_TEST(PotriTest, PotriInvertsGradedIllConditionedInputs) {
 // real, and the whole matrix is the inverse with no mirroring on the caller's side. Every family.
 TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
     using T = typename TestFixture::T;
-    for (const PotriChoice& c : potri_pins())
+    for (const PotriChoice& c : potri_pins<T>())
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-            for (int n : {3, 8, 17, 40, 70}) {
+            for (int n : {3, 8, 17, 40, 70, 150}) {
                 auto p = make_sys<T>(n, 1, 3, uplo, 31u + n);
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
@@ -522,8 +524,8 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
 // inverses are bit-identical to a clean batch's, on every family.
 TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
     using T = typename TestFixture::T;
-    for (const PotriChoice& c : potri_pins())
-        for (int n : {5, 8, 20, 70})
+    for (const PotriChoice& c : potri_pins<T>())
+        for (int n : {5, 8, 20, 70, 150})
             for (int zero_at : {0, n / 2, n - 1}) {
                 if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
                 const int bad = 1, batch = 4;
@@ -563,11 +565,11 @@ TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
         if (100 <= cta_ceiling<BK, T>(this->q())) EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo)), 0u);
     }
-    const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{32}});
+    const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
     const size_t need = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
-    EXPECT_GE(need, sizeof(T) * 100 * 32 * 3);
+    EXPECT_GE(need, sizeof(T) * 100 * 64 * 3);
     EXPECT_LT(need, sizeof(T) * 100 * 100 * 3);
-    MV<T> small_n(p.a.data(), 32, 32, p.lda, p.stra, 3, nullptr);
+    MV<T> small_n(p.a.data(), 64, 64, p.lda, p.stra, 3, nullptr);
     EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), small_n, p.uplo)), 0u);
     UnifiedVector<std::byte> small(need / 2);
     EXPECT_THROW(([&] { (void)potri<BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}); }()), batchlas::workspace_error);
@@ -590,7 +592,7 @@ TYPED_TEST(PotriTest, PotriBlockedPartsCoverEveryItem) {
         auto p = make_sys<T>(70, 1, 10, uplo, 404u);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
-        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{32}});
+        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
         const size_t whole = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "3");
         const size_t part = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
@@ -609,15 +611,16 @@ TYPED_TEST(PotriTest, PotriBlockedPartsCoverEveryItem) {
     }
 }
 
-// The cta pin at its advertised ceiling launches and inverts; one past it is refused (a bad pin
-// throws, never falls back) while Auto still serves it, and a foreign spelling throws.
+// The cta pin at its advertised ceiling launches and inverts (a graded input: at n = 176 the
+// diagonally dominant one hid a broken substitution); one past it is refused (a bad pin throws,
+// never falls back) while Auto still serves it, and a foreign spelling throws.
 TYPED_TEST(PotriTest, PotriCtaPinStraddlesItsCeiling) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
     const int ceiling = cta_ceiling<BK, T>(this->q());
     ASSERT_GE(ceiling, 32);
     for (int n : {ceiling, ceiling + 1}) {
-        auto p = make_sys<T>(n, 1, 2, Uplo::Lower, 77u + n);
+        auto p = make_graded_sys<T>(n, 2, Uplo::Lower, 77u + n, 1e2);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) continue;
         const auto factor = p.a;
@@ -656,7 +659,7 @@ TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     using T = typename TestFixture::T;
     const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (int n : {8, 37, 100})
-        for (const PotriChoice& c : potri_pins()) {
+        for (const PotriChoice& c : potri_pins<T>()) {
             if ((c.index() == 0 && n > ceiling) || (TestFixture::BK == Backend::NETLIB && n > 37)) continue;
             auto p = make_sys<T>(n, 1, 1024, Uplo::Lower, 13u + n, /*identical=*/true);
             UnifiedVector<int32_t> info;
@@ -682,7 +685,7 @@ TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
 TYPED_TEST(PotriTest, BatchBeyondTheGridYLimitIsCovered) {
     using T = typename TestFixture::T;
     const int n = 2, batch = 70001;
-    for (const PotriChoice& c : {PotriChoice{ops::potri::Cta{}}, PotriChoice{ops::potri::Blocked{32}}}) {
+    for (const PotriChoice& c : {PotriChoice{ops::potri::Cta{}}, PotriChoice{ops::potri::Blocked{64}}}) {
         auto p = make_sys<T>(n, 1, batch, Uplo::Upper, 4242u, /*identical=*/true);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
@@ -726,7 +729,7 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
     std::filesystem::create_directories(dir);
     const std::string out = dir + "/cov";
     // Factored before coverage is switched on, so potrf's own children leave no rows.
-    auto lo = make_sys<T>(16, 1, 3, Uplo::Lower, 5u), hi = make_sys<T>(100, 1, 3, Uplo::Lower, 6u);
+    auto lo = make_sys<T>(16, 1, 3, Uplo::Lower, 5u), hi = make_sys<T>(200, 1, 3, Uplo::Lower, 6u);
     UnifiedVector<int32_t> info;
     if (!this->factor(lo, info) || !this->factor(hi, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
     auto child = [&] {
@@ -737,7 +740,7 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
             const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
             (void)this->run_potri(lo, false);
         }
-        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{32}});
+        const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
         (void)this->run_potri(hi, false);
         std::exit(0);
     };
@@ -757,8 +760,8 @@ TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
         }
     }
     std::filesystem::remove_all(dir);
-    EXPECT_EQ(algos["potri"], (std::set<std::string>{"cta", "blocked:nb=32"}));
+    EXPECT_EQ(algos["potri"], (std::set<std::string>{"cta", "blocked:nb=64"}));
     constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
-    // cta at n = 16 calls no child; blocked at n = 100 calls these, and nothing else.
+    // cta at n = 16 calls no child; blocked at n = 200 (four blocks) calls these, and nothing else.
     EXPECT_EQ(blocked_children, (std::set<std::string>{"trmm", "gemm", kCx ? "herk" : "syrk"}));
 }
