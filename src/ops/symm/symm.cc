@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // symm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
-// tuned/symm.<device>.txt row that can_run() admits. Expand mirrors A's referenced triangle into a
+// tuned/symm.<device>.txt row that can_run() admits. Mirror is gemm's wide v2 tile staging A from its
+// referenced triangle (src/ops/symm/kernels/symm_mirror.cc); Expand mirrors that triangle into a
 // dense scratch copy and hands it to the public gemm, which picks its own kernel; Vendor is the per-item
 // cublas?symm / cblas_?symm loop.
 
@@ -13,6 +14,7 @@
 
 #include <src/ops/level3/batched.hh>
 #include <src/ops/symm/choice.hh>
+#include <src/ops/symm/kernels/symm_mirror.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/expansion_budget.hh>
@@ -52,7 +54,8 @@ select::Key key_of(const MV<T>& C) {
 // (cuBLAS, netlib) runs each item at the top-level (m, n). So no family takes a heterogeneous
 // operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget) and grid z holds its batch, so the launch
-// chunks the batch and only an item whose own scratch does not fit is refused.
+// chunks the batch and only an item whose own scratch does not fit is refused. Mirror chunks the
+// batch too; its terms are the launch (256 lanes, two slabs of local memory, the row tiles in grid y).
 template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
@@ -61,6 +64,10 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
                         C.cols() >= 1 && A.batch_size() >= 1;
     return std::visit(overloaded{
+        [&](Mirror) {
+            return native && d.slm_budget_for(mirror::kWg) >= mirror::slm_bytes<T>() &&
+                   (C.rows() + mirror::tile<T>() - 1) / mirror::tile<T>() <= d.max_groups_yz;
+        },
         [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
         [&](Vendor) { return kVendorWired<B, T> && d.has_vendor && homogeneous; },
     }, c);
@@ -88,6 +95,13 @@ template <Backend B, typename T>
 Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta,
              Side side, Uplo uplo) {
     return std::visit(overloaded{
+        [&](Mirror) -> Event {
+            if constexpr (kExpandWired<B>)
+                return sycl_symm::symm_mirror<T, /*Herm=*/false>(q, A, Bm, C, alpha, beta, side, uplo,
+                                                                 level3::grid_chunk<B>(q));
+            else
+                throw batchlas::internal_error("symm: mirror is wired for GPU backends only");  // can_run refuses it
+        },
         [&](Expand) -> Event {
             if constexpr (kExpandWired<B>)
                 return level3::expand_gemm<B, T, /*Conjugate=*/false>(q, A, Bm, C, alpha, beta, side, uplo);

@@ -648,7 +648,7 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
 }
 
 // ---------------------------------------------------------------------------
-// Defect 14 (the entry mirrors the named triangle) and repeatability under a pinned route.
+// Defect 14 (every driver reads only the named triangle) and repeatability under a pinned route.
 // evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
 // ---------------------------------------------------------------------------
 
@@ -759,9 +759,9 @@ void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase
 
 }  // namespace
 
-// Without the entry mirror this catches only the complex types (Auto sends them to cta, which reads
-// the lower triangle for Upper). Real types reach no reading route at n <= 40; their guards are the
-// heavy AutoReadsOnlyTheNamedTriangleAtLargeN and SyevCandidates.OtherTriangleIsNeverRead.
+// With the sytrd_cta load reverted this catches only the complex types (Auto sends them to cta).
+// Real types reach no reading route at n <= 40; their guards are the heavy
+// AutoReadsOnlyTheNamedTriangleAtLargeN (sy2sb) and SyevCandidates.OtherTriangleIsNeverRead.
 TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
     if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE)
         GTEST_SKIP() << "no LAPACKE: NETLIB syev has no route in this build";
