@@ -80,6 +80,24 @@ python3 scripts/sweep_to_table.py --op sytrf --device sm_89
 python3 scripts/sweep_to_table.py --op sysv --device sm_89
 ```
 
+### sytrs: the tuned tables {#sytrs-selection}
+
+`tuned/sytrs.sm_89.txt` float and cfloat are a measured `preview` sweep (`tools/tune/sytrs_spec.cc`:
+random symmetric A factored once by the routed sytrf, untimed; Lower only, as sytrf; every family
+verified by `solve_residual` against A), run `20261026T143047-JRHNBR-1000130`, GPU 1 of the 4090 box,
+`--batch-ladder off` (batch 128 .. 32768), 1256 cells with refinement. double and cdouble
+(sm_89) and all four dtypes on sm_120 are run `transcribed-sytrs-d67ad754`: the measured float /
+cfloat order copied row for row (FP64 is not tuned on 1:64 parts; no sm_120 box measured it), and
+`can_run` drops `cta` where cdouble's factor does not fit local memory. Measured first entries
+(float / cfloat, of 614 / 642 rows): `cta` 341 / 325, `blocked` 196 / 211, `wg` 77 / 106. The same
+regions as the benchmark below: `cta` at small n, `blocked` at large n x nrhs, `wg` for one or a few
+right-hand sides at n >= 64.
+
+```sh
+build/tools/tune/batchlas_tune sytrs --tier preview --dtype float,cfloat --devices 1 --batch-ladder off
+python3 scripts/sweep_to_table.py --op sytrs --device sm_89
+```
+
 ## sytrf: the reversal map
 
 The kernels implement `?sytf2` and `?sytrs` once, in lower form (`sytrf_device.hh`). Upper runs the
@@ -296,3 +314,22 @@ Run on the RTX 4090 box, 2026-10-25, float and cfloat CUDA instantiations, every
 | `sysv` `compose` passes no skip list | `SingularItemReportsInfo...`, `compose` only |
 | `ldl_solve` pivot validation off | `SytrsMalformedPivotsGiveNaN`: an illegal-address abort |
 | decisions not broadcast | nothing: the termination test provokes no divergence on this box |
+
+sytrs `cta` / `blocked` and sysv `cta` (2026-10-26, float and cfloat CUDA, the shipped tables, every
+break reverted; "pinned rows" are the `Sytrs*` rows naming a family, "Auto" the sytrf and sysv tests
+whose solve the table sends to that family):
+
+| break | red set |
+|---|---|
+| `cta` D^-1 drops the lane-31 partner from the next register slot | pinned `cta` rows of `SytrsEveryFamily`, `SytrsTwoByTwoAcrossTheLaneBoundary`, `SytrsWideRightHandSides`, `SytrsSaturating...` (float), `SytrsCtaCeilingStraddled`; Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute`, `BlockedMatchesWgAndVendor` |
+| `?syconv` column walk skips its swaps (`cta`, sysv `cta`) | every pinned `cta` row with interchanges (`SytrsEveryFamily`, `SytrsMalformed...`, `SytrsSkipList...`, `SytrsWide...`, `SytrsSaturating...`, `SytrsCtaCeiling...`), the sysv `cta` rows of `SysvEveryRoute` and `SaturatingBatch...`; Auto as above plus `VendorFactorSolvesWithNativeSytrs`. `CtaAndWgAgreeBitForBit` stays green: sysv `cta` and sytrs `cta` share the walk, so both are wrong alike |
+| `cta` gathers B by t instead of perm[t] | the same set as the column-walk break |
+| `cta` ignores the skip list | `SytrsSkipListEveryFamily` (`cta`), `SingularItemReportsInfo...` (`compose`) only |
+| sysv `cta` solves a singular item | `SingularItemReportsInfo...` only |
+| `convert_gather` never composes sigma (`blocked`) | pinned `blocked` rows of `SytrsEveryFamily`, `SytrsMalformedPivotsGiveNaN`, `SytrsSkipList...`, `SytrsWide...`, `SytrsSaturating...`, `SytrsBlockedChunks...`; Auto: cfloat `SaturatingBatchIsBitIdentical...` (n = 170) |
+| `blocked` D^-1 does not write the second row of a 2 x 2 block | the same plus `SytrsTwoByTwoAcrossTheLaneBoundary` (`blocked`) |
+| `blocked` scatter ignores P | the same set as the sigma break |
+| `blocked` chunk loop drops the pivot offset of parts after the first | `SytrsBlockedChunksKeepEachItemsPivots` only |
+| `blocked` scatter ignores the skip list | `SytrsSkipListEveryFamily` (`blocked`), `SytrsBlockedChunks...` only |
+
+Logs: `break-<name>.log` in the evidence directory under [sytrs: measured](#sytrs-measured).
