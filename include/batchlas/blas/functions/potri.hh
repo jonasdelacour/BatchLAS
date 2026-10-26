@@ -61,9 +61,9 @@ inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, U
 /// potrf() or posv(); on return it holds the @p uplo triangle of \f$ A^{-1} \f$. With
 /// @p full = false the other triangle is neither read nor written; with @p full = true it
 /// receives the conjugate transpose, so the result is exactly Hermitian. Either way the stored
-/// diagonal is real: its imaginary part is written as zero. The inverse is formed by solving the factored
-/// system against an identity held in the workspace, so the cost is that of a posv with
-/// nrhs = n minus the factorization.
+/// diagonal is real: its imaginary part is written as zero. The inverse is formed in place as LAPACK
+/// does, ?trtri on the factor then ?lauum (about n^3 / 3 + n^3 / 3 multiply-adds per item), either in
+/// one local-memory-resident launch or blocked over public trmm, gemm and herk/syrk.
 ///
 /// Asynchronous: A and @p info are readable after the returned event is waited on.
 /// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
@@ -74,7 +74,7 @@ inline void potri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A, U
 /// @param full        also fill the other triangle with the conjugate transpose
 /// @param work_space  device-accessible scratch of at least potri_buffer_size() bytes
 /// @param info        per-item status as for LAPACK `?potri`: 0 on success, i > 0 if the factor's
-///                    diagonal entry i is exactly zero (that item's inverse is meaningless, the
+///                    diagonal entry i is exactly zero (that item is left unchanged, the
 ///                    others are unaffected). Empty span = not requested; otherwise at least
 ///                    one entry per item.
 /// @return event of the last enqueued kernel
@@ -91,7 +91,9 @@ BATCHLAS_API Event potri(Queue& ctx,
                          Span<std::byte> work_space,
                          Span<int32_t> info);
 
-/// @brief Workspace, in bytes, that potri() needs for these operands: one n x n identity per item.
+/// @brief Workspace, in bytes, that potri() needs for these operands under the family it picks:
+///        none for the one-launch kernel; for the blocked one, an n x nb panel and a packed triangle per
+///        item of one batch part (the triangle keeps a failed item unchanged) and an int per item.
 ///
 /// @throws batchlas::invalid_argument if potri_validate_params() rejects the operands
 /// @ingroup api_factorizations_lowlevel
