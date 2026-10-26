@@ -263,7 +263,7 @@ set(BATCHLAS_HEAVY_TESTS
     gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
     getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
     orgqr_candidates_tests ormqr_candidates_tests posv_candidates_tests
-    potrf_candidates_tests potrf_tests potrs_tests spmm_candidates_tests spmm_tests syev_blocked_tests
+    potrf_candidates_tests potrf_tests potri_tests potrs_tests spmm_candidates_tests spmm_tests syev_blocked_tests
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
