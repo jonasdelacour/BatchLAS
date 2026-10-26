@@ -30,7 +30,7 @@ Counts: 51 files, 25 per GPU device plus `spmm.cpu.txt`.
 | device | ledger tiers | where from |
 |---|---|---|
 | sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; sygst and sygvd: @ref perf_sygvd |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); sygst float and cfloat `deep` (2026-10-27, every itype and uplo), its double and cdouble `transcribed` from them | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not
@@ -42,7 +42,12 @@ syr2k, trmm `ff340fc6`. Later rule changes are their own transcribed runs: gesvd
 cfloat 33..64 puts `blocked` first, docs/perf/gesvd.md); the complex rows of symm, syrk and syr2k
 and every hemm, herk and her2k row `26168c21` (the deleted `cublas.cc` rules, docs/perf/level3.md).
 potri `628b77d5` (both devices, no timing: `fused` for n <= 8, `blocked` above);
-sygst, sygvd `ab235065` (both devices, no timing: `twosided` and `compose` first everywhere, @ref perf_sygvd).
+sygvd `ab235065` (both devices, no timing: `compose` first everywhere, @ref perf_sygvd); sygst
+`fd79f23c` (keys n, batch) and `7d0b0f84` (keys itype, uplo, n, batch), both written by
+`scripts/transcribe/sygst_transcribe.py` as of the commit the run id names (committed in `39a8ec07`; no
+timing: sm_89 double and cdouble, every sm_120 dtype and the sm_89 cells past the memory cap copy the
+nearest sm_89 `deep` float or cfloat row with the same itype and uplo, @ref perf_sygvd, "sygst:
+measured"). `scripts/transcribe/ledger_add_key.py` (`7cb2217c`) gave the earlier cells `itype=1,uplo=L`.
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
 ([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The transcribers' sources are in git history, for example
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. The migration script that wrote the
