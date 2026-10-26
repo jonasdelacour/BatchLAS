@@ -222,43 +222,77 @@ inline void swap_rows(const SG& sg, int lane, D (&x)[R], int a, int b) {
     }
 }
 
+// Column j of the logical factor, every row (rows above j are read but never used).
+template <int R, typename D, typename Acc>
+inline void load_col(const Acc& G, int n, int lane, int j, D (&c)[R]) {
+    BATCHLAS_UNROLL_FULL
+    for (int r = 0; r < R; ++r) {
+        const int t = lane + 32 * r;
+        c[r] = t < n ? G(t, j) : zero<D>();
+    }
+}
+
 // LAPACK ?sytrs on one sub-group with the factor as sytrf stored it (no conversion), read from
 // global memory: the interchanges between the eliminations, D applied in the forward pass, the
-// backward pass in dot form. `lp(k)` is the logical ipiv entry (logical_piv) of a validated list.
+// backward pass in dot form. The next step's columns are loaded before this step's arithmetic,
+// which hides their latency behind it. `lp(k)` is the logical ipiv entry of a validated list.
 template <int R, typename D, typename SG, typename Acc, typename Piv>
 inline void ldl_solve_sg(const SG& sg, int lane, const Acc& G, int n, Piv&& lp, D (&x)[R]) {
     using namespace sycl_device;
-    for (int k = 0; k < n;) {
-        const int v = lp(k);
+    D c0[R] = {}, c1[R] = {}, n0[R] = {}, n1[R] = {};
+    int k = 0, v = lp(0);
+    load_col<R>(G, n, lane, 0, c0);
+    if (v < 0) load_col<R>(G, n, lane, 1, c1);
+    while (k < n) {
         const int two = v < 0 ? 1 : 0;
+        const int kn = k + 1 + two;
+        const int vn = kn < n ? lp(kn) : 1;
+        if (kn < n) load_col<R>(G, n, lane, kn, n0);
+        if (vn < 0) load_col<R>(G, n, lane, kn + 1, n1);
         swap_rows<R>(sg, lane, x, k + two, (v > 0 ? v : -v) - 1);
         const D xk = row_bcast<R>(sg, x, k);
         const D xk1 = two ? row_bcast<R>(sg, x, k + 1) : zero<D>();
+        const D dkk = two ? row_bcast<R>(sg, c0, k) : zero<D>();
+        const D off = two ? row_bcast<R>(sg, c0, k + 1) : zero<D>();
+        const D dk1 = two ? row_bcast<R>(sg, c1, k + 1) : zero<D>();
         BATCHLAS_UNROLL_FULL
         for (int r = 0; r < R; ++r) {
             const int t = lane + 32 * r;
             if (t > k + two && t < n) {
-                D a = dev_sub(x[r], dev_mul(G(t, k), xk));
-                if (two) a = dev_sub(a, dev_mul(G(t, k + 1), xk1));
+                D a = dev_sub(x[r], dev_mul(c0[r], xk));
+                if (two) a = dev_sub(a, dev_mul(c1[r], xk1));
                 x[r] = a;
-            } else if (t == k || (two && t == k + 1)) {
-                const int kd = two ? (t == k ? 1 : 2) : 0;
-                x[r] = d_solve_row(kd, x[r], t == k ? xk1 : xk, G(t, t), two ? G(t == k ? k + 1 : k, t == k ? k + 1 : k) : G(t, t),
-                                   two ? G(k + 1, k) : dev_one<D>());
+            } else if (t == k && !two) {
+                x[r] = d_solve_row(0, x[r], x[r], c0[r], c0[r], dev_one<D>());
+            } else if (two && (t == k || t == k + 1)) {
+                x[r] = t == k ? d_solve_row(1, x[r], xk1, dkk, dk1, off) : d_solve_row(2, x[r], xk, dk1, dkk, off);
             }
         }
-        k += 1 + two;
+        BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < R; ++r) {
+            c0[r] = n0[r];
+            c1[r] = n1[r];
+        }
+        k = kn;
+        v = vn;
     }
-    for (int k = n - 1; k >= 0;) {
-        const int v = lp(k);
+    k = n - 1;
+    v = lp(k);
+    load_col<R>(G, n, lane, k, c0);
+    if (v < 0) load_col<R>(G, n, lane, k - 1, c1);
+    while (k >= 0) {
         const int two = v < 0 ? 1 : 0;
+        const int kn = k - 1 - two;
+        const int vn = kn >= 0 ? lp(kn) : 1;
+        if (kn >= 0) load_col<R>(G, n, lane, kn, n0);
+        if (vn < 0) load_col<R>(G, n, lane, kn - 1, n1);
         D p0 = zero<D>(), p1 = zero<D>();
         BATCHLAS_UNROLL_FULL
         for (int r = 0; r < R; ++r) {
             const int t = lane + 32 * r;
             if (t > k && t < n) {
-                p0 = add(p0, dev_mul(G(t, k), x[r]));
-                if (two) p1 = add(p1, dev_mul(G(t, k - 1), x[r]));
+                p0 = add(p0, dev_mul(c0[r], x[r]));
+                if (two) p1 = add(p1, dev_mul(c1[r], x[r]));
             }
         }
         const D s0 = sg_sum_all(sg, p0);
@@ -270,7 +304,13 @@ inline void ldl_solve_sg(const SG& sg, int lane, const Acc& G, int n, Piv&& lp, 
             else if (two && t == k - 1) x[r] = dev_sub(x[r], s1);
         }
         swap_rows<R>(sg, lane, x, k, (v > 0 ? v : -v) - 1);
-        k -= 1 + two;
+        BATCHLAS_UNROLL_FULL
+        for (int r = 0; r < R; ++r) {
+            c0[r] = n0[r];
+            c1[r] = n1[r];
+        }
+        k = kn;
+        v = vn;
     }
 }
 

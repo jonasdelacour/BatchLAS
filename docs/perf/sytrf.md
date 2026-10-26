@@ -223,6 +223,18 @@ unreferenced triangle poisoned with large finite values, complex with nonzero im
 * `CtaAndWgAgreeBitForBit`, `SaturatingBatchIsBitIdenticalToItemZero` (batch 1024, identical KKT
   items), `VendorFactorSolvesWithNativeSytrs`, `CtaCeilingStraddled`, `ArgumentChecks`.
 * The blocked and termination tests: see the two sections above.
+* **sytrs**, every family pinned (`solve_routes`: cta where it fits, sg to n = 256, blocked, wg;
+  LAPACKE on NETLIB): `SytrsEveryFamily` (random and KKT factors, both uplo, n straddling 32 | 33,
+  64 | 65, 128 | 129, 256 | 257, nrhs 1, 8, 9: the per-item sub-group count 8 | 9),
+  `SytrsWideRightHandSides` (nrhs = 300), `SytrsTwoByTwoAcrossTheLaneBoundary` (a 2 x 2 block forced
+  at logical 31 | 32, 63 | 64, ... on dominant data, asserted present first),
+  `SytrsSaturatingBatchIsBitIdenticalToItemZero` (batch 1024, heavy tier: cta n = 32 and 100, sg
+  n = 200, blocked n = 150, wg n = 40), `SytrsCeilingsStraddled` (pins at 128 | 129 and 256 | 257,
+  Auto on both sides), `SytrsSkipListEveryFamily` (sysv compose with each sytrs family pinned: the
+  singular item keeps B bit for bit), `SytrsBlockedChunksKeepEachItemsPivots` (chunk forced to 7 of 23
+  items, in and out of order, a malformed list in the last part, sysv's skip in the second),
+  `SytrsMalformedPivotsGiveNaN` (every family) and `SytrsPinnedFamiliesAreReached` (each pin leaves its
+  own `reached,sytrs` coverage row with the call's key).
 
 ### sytrf: deliberate breaks
 
