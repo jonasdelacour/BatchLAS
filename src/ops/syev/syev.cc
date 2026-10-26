@@ -141,10 +141,6 @@ Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typenam
                 throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
             // Blocked and TwoStage require an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                // Defect 14: several native drivers read the other triangle. Mirroring the named one
-                // (conjugated, real diagonal) first hands every family the same Hermitian matrix.
-                // The vendor reads only `uplo`. evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
-                if (!std::holds_alternative<ops::syev::Vendor>(c)) (void)A.hermitize(q, uplo);
                 return ops::syev::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
             });
         });
