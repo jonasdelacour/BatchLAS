@@ -179,6 +179,8 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |
 | `gesv(ctx, A, B, pivots, ws)` | solves `A·X = B` by LU with partial pivoting | `A` (L and U), `B` (X), `pivots` |
 | `posv(ctx, A, B, uplo, ws)` | solves `A·X = B` for Hermitian positive-definite `A` | `A` (Cholesky factor, `uplo` triangle), `B` (X) |
+| `sytrf(ctx, A, uplo, pivots, ws)` | Bunch-Kaufman `A = L·D·Lᵀ` or `U·D·Uᵀ`, `A` symmetric (complex: not Hermitian) | `uplo` triangle of `A`, `pivots` (LAPACK `ipiv`, @ref perf_sytrf) |
+| `sytrs(ctx, A, B, uplo, pivots, ws)` / `sysv(ctx, A, B, uplo, pivots, ws)` | solves `A·X = B` from `sytrf`'s factors / `sytrf` then `sytrs` | `B` (and `A`, `pivots` for `sysv`) |
 | `geqrf(ctx, A, tau)` / `orgqr(ctx, A, tau)` | QR with Householder reflectors / expand to explicit `Q` | `A`, `tau` |
 | `ormqr(ctx, A, C, tau, opts)` | `C := op(Q)·C` (`Left`) or `C·op(Q)` (`Right`) with `geqrf`'s `Q` | `C` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
@@ -614,12 +616,12 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Twelve routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
-LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv` and `posv`
-report factorisation status, `potri` a zero factor diagonal; `syev`, `syevx`, `gesvd`, `steqr`,
-`stedc` report convergence status; `sygvd` reports both (`n + i` for a factorisation failure of
-`B`). It is a field on `PotrfOptions` and a trailing parameter elsewhere (the option-struct `syev`
-and `gesvd` spellings take none):
+Fourteen routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv`, `posv`,
+`sytrf` and `sysv` report factorisation status, `potri` a zero factor diagonal; `syev`, `syevx`,
+`gesvd`, `steqr`, `stedc` report convergence status; `sygvd` reports both (`n + i` for a
+factorisation failure of `B`). It is a field on `PotrfOptions` and a trailing parameter elsewhere
+(the option-struct `syev` and `gesvd` spellings take none):
 
 ```cpp
 UnifiedVector<int32_t> info(batch);

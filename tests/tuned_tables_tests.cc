@@ -30,6 +30,8 @@
 #include <src/ops/hemm/choice.hh>
 #include <src/ops/herk/choice.hh>
 #include <src/ops/her2k/choice.hh>
+#include <src/ops/sytrf/choice.hh>
+#include <src/ops/sysv/choice.hh>
 #include <src/ops/sygst/choice.hh>
 #include <src/ops/sygvd/choice.hh>
 #include <src/select/select.hh>
@@ -202,6 +204,9 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
+    // sytrf and sysv compile one candidate list for every dtype.
+    if (op == "sytrf") return spellings(batchlas::ops::sytrf::candidates<float>());
+    if (op == "sysv") return spellings(batchlas::ops::sysv::candidates<float>());
     // sygst and sygvd: fieldless families, one list for every dtype.
     if (op == "sygst") return spellings(batchlas::ops::sygst::candidates<float>());
     if (op == "sygvd") return spellings(batchlas::ops::sygvd::candidates<float>());
@@ -312,6 +317,8 @@ std::string key_spec(const std::string& op) {
     if (op == "syrk") join(batchlas::ops::syrk::key_names);
     if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    if (op == "sytrf") join(batchlas::ops::sytrf::key_names);
+    if (op == "sysv") join(batchlas::ops::sysv::key_names);
     if (op == "sygst") join(batchlas::ops::sygst::key_names);
     if (op == "sygvd") join(batchlas::ops::sygvd::key_names);
     if (op == "hemm") join(batchlas::ops::hemm::key_names);
@@ -466,7 +473,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "potri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
-                           "herk", "her2k", "sygst", "sygvd"})
+                           "herk", "her2k", "sytrf", "sysv", "sygst", "sygvd"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
@@ -797,6 +804,33 @@ TEST(TunedTables, SygstSygvdTranscribedTablesHoldTheChoiceGridNativeFirst) {
             EXPECT_EQ(got_vd, want_vd) << dt << " " << dev;
         }
 }
+
+// sytrf's table is transcribed on both devices (no timing, docs/perf/sytrf.md#sytrf-the-blocked-route): one
+// row per grid cell, cta first through n = 32, wg first through 128, blocked first from 256, and every
+// row ranks blocked. A retune replaces rows with timed ones and this test goes with them.
+TEST(TunedTables, SytrfTranscribedTablesHoldExactlyTheChoiceGridAndPlaceBlocked) {
+    namespace sytrf = batchlas::ops::sytrf;
+    std::set<std::string> want;
+    for (int n : sytrf::grid_n)
+        for (int b : sytrf::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded("sytrf", dt, dev);
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                got.insert(row.keys[0] + " " + row.keys[1]);
+                const int n = std::stoi(row.keys[0]);
+                const std::string first = n <= 32 ? "cta" : n <= 128 ? "wg" : "blocked";
+                EXPECT_EQ(row.ranked.front().spelling, first) << dt << " " << dev << " " << row.keys[0];
+                EXPECT_TRUE(std::any_of(row.ranked.begin(), row.ranked.end(),
+                                        [](const auto& e) { return e.spelling == "blocked"; }))
+                    << dt << " " << dev << " " << row.keys[0];
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+}
+
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
 TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gesv = batchlas::ops::gesv;

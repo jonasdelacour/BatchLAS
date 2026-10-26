@@ -1,0 +1,1283 @@
+# op=sysv device=sm_120 batchlas=30cc8e06 kernels=b81daf23 family_kernels=cta:9c917170,compose:b81daf23 date=2026-10-22
+# source=ledger:benchmarks/results/tuning/ledger/sysv.sm_120.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:1280
+# keys: dtype:exact n:log:3 nrhs:log batch:log
+dtype=float n=1 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=1 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=2 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=4 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=8 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=12 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=16 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=24 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=float n=32 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=float n=33 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=33 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=33 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=33 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=33 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=33 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=33 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=33 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=33 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=33 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=33 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=33 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=33 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=33 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=33 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=33 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=33 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=33 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=33 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=33 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=48 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=48 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=48 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=48 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=48 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=48 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=48 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=48 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=48 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=48 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=48 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=48 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=48 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=48 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=48 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=48 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=48 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=48 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=48 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=48 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=64 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=64 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=64 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=64 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=64 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=64 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=64 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=64 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=64 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=64 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=64 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=64 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=64 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=64 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=64 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=64 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=64 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=64 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=64 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=64 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=128 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=128 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=128 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=128 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=128 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=128 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=128 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=128 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=128 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=128 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=128 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=128 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=128 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=128 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=128 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=128 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=128 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=128 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=128 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=128 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=256 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=256 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=256 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=256 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=256 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=256 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=256 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=256 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=256 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=256 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=256 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=256 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=256 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=256 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=256 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=256 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=256 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=256 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=256 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=256 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=512 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=512 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=512 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=512 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=512 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=512 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=512 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=512 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=512 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=512 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=512 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=512 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=512 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=512 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=512 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=512 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=512 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=512 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=512 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=512 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=1024 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=1024 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=1024 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=1024 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=1024 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=1024 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=1024 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=1024 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=1024 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=1024 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=1024 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=1024 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=1024 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=1024 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=1024 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=1024 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=1024 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=1024 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=1024 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=1024 nrhs=64 batch=32768 | compose - # transcribed
+dtype=float n=2048 nrhs=1 batch=128 | compose - # transcribed
+dtype=float n=2048 nrhs=1 batch=512 | compose - # transcribed
+dtype=float n=2048 nrhs=1 batch=2048 | compose - # transcribed
+dtype=float n=2048 nrhs=1 batch=8192 | compose - # transcribed
+dtype=float n=2048 nrhs=1 batch=32768 | compose - # transcribed
+dtype=float n=2048 nrhs=4 batch=128 | compose - # transcribed
+dtype=float n=2048 nrhs=4 batch=512 | compose - # transcribed
+dtype=float n=2048 nrhs=4 batch=2048 | compose - # transcribed
+dtype=float n=2048 nrhs=4 batch=8192 | compose - # transcribed
+dtype=float n=2048 nrhs=4 batch=32768 | compose - # transcribed
+dtype=float n=2048 nrhs=16 batch=128 | compose - # transcribed
+dtype=float n=2048 nrhs=16 batch=512 | compose - # transcribed
+dtype=float n=2048 nrhs=16 batch=2048 | compose - # transcribed
+dtype=float n=2048 nrhs=16 batch=8192 | compose - # transcribed
+dtype=float n=2048 nrhs=16 batch=32768 | compose - # transcribed
+dtype=float n=2048 nrhs=64 batch=128 | compose - # transcribed
+dtype=float n=2048 nrhs=64 batch=512 | compose - # transcribed
+dtype=float n=2048 nrhs=64 batch=2048 | compose - # transcribed
+dtype=float n=2048 nrhs=64 batch=8192 | compose - # transcribed
+dtype=float n=2048 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=1 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=1 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=2 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=4 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=8 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=12 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=16 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=24 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=double n=32 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=double n=33 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=33 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=33 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=33 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=33 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=33 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=33 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=33 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=33 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=33 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=33 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=33 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=33 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=33 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=33 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=33 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=33 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=33 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=33 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=33 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=48 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=48 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=48 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=48 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=48 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=48 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=48 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=48 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=48 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=48 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=48 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=48 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=48 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=48 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=48 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=48 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=48 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=48 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=48 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=48 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=64 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=64 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=64 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=64 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=64 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=64 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=64 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=64 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=64 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=64 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=64 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=64 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=64 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=64 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=64 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=64 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=64 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=64 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=64 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=64 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=128 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=128 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=128 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=128 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=128 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=128 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=128 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=128 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=128 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=128 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=128 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=128 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=128 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=128 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=128 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=128 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=128 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=128 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=128 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=128 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=256 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=256 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=256 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=256 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=256 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=256 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=256 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=256 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=256 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=256 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=256 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=256 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=256 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=256 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=256 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=256 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=256 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=256 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=256 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=256 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=512 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=512 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=512 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=512 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=512 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=512 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=512 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=512 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=512 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=512 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=512 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=512 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=512 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=512 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=512 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=512 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=512 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=512 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=512 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=512 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=1024 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=1024 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=1024 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=1024 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=1024 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=1024 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=1024 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=1024 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=1024 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=1024 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=1024 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=1024 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=1024 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=1024 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=1024 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=1024 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=1024 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=1024 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=1024 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=1024 nrhs=64 batch=32768 | compose - # transcribed
+dtype=double n=2048 nrhs=1 batch=128 | compose - # transcribed
+dtype=double n=2048 nrhs=1 batch=512 | compose - # transcribed
+dtype=double n=2048 nrhs=1 batch=2048 | compose - # transcribed
+dtype=double n=2048 nrhs=1 batch=8192 | compose - # transcribed
+dtype=double n=2048 nrhs=1 batch=32768 | compose - # transcribed
+dtype=double n=2048 nrhs=4 batch=128 | compose - # transcribed
+dtype=double n=2048 nrhs=4 batch=512 | compose - # transcribed
+dtype=double n=2048 nrhs=4 batch=2048 | compose - # transcribed
+dtype=double n=2048 nrhs=4 batch=8192 | compose - # transcribed
+dtype=double n=2048 nrhs=4 batch=32768 | compose - # transcribed
+dtype=double n=2048 nrhs=16 batch=128 | compose - # transcribed
+dtype=double n=2048 nrhs=16 batch=512 | compose - # transcribed
+dtype=double n=2048 nrhs=16 batch=2048 | compose - # transcribed
+dtype=double n=2048 nrhs=16 batch=8192 | compose - # transcribed
+dtype=double n=2048 nrhs=16 batch=32768 | compose - # transcribed
+dtype=double n=2048 nrhs=64 batch=128 | compose - # transcribed
+dtype=double n=2048 nrhs=64 batch=512 | compose - # transcribed
+dtype=double n=2048 nrhs=64 batch=2048 | compose - # transcribed
+dtype=double n=2048 nrhs=64 batch=8192 | compose - # transcribed
+dtype=double n=2048 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=12 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=1 batch=128 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=1 batch=512 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=4 batch=128 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=4 batch=512 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=16 batch=128 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=16 batch=512 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=64 batch=128 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=64 batch=512 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cfloat n=2048 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=12 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=128 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=512 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=2048 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=8192 | cta - | compose - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=32768 | cta - | compose - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=32768 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=1 batch=128 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=1 batch=512 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=1 batch=2048 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=1 batch=8192 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=1 batch=32768 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=4 batch=128 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=4 batch=512 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=4 batch=2048 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=4 batch=8192 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=4 batch=32768 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=16 batch=128 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=16 batch=512 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=16 batch=2048 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=16 batch=8192 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=16 batch=32768 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=64 batch=128 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=64 batch=512 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=64 batch=2048 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=64 batch=8192 | compose - # transcribed
+dtype=cdouble n=2048 nrhs=64 batch=32768 | compose - # transcribed

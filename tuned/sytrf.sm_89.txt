@@ -1,0 +1,323 @@
+# op=sytrf device=sm_89 batchlas=ab235065 kernels=788d2cfe family_kernels=cta:d27de35d,wg:d27de35d,blocked:caf2f790,vendor:be515348 date=2026-10-25
+# source=ledger:benchmarks/results/tuning/ledger/sytrf.sm_89.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:320
+# keys: dtype:exact n:log:3 batch:log
+dtype=float n=1 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=1 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=1 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=1 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=1 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=2 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=2 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=2 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=2 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=2 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=4 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=4 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=4 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=4 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=4 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=8 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=8 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=8 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=8 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=8 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=12 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=12 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=12 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=12 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=12 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=16 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=16 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=16 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=16 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=16 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=24 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=24 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=24 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=24 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=24 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=32 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=32 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=32 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=32 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=32 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=float n=33 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=float n=33 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=float n=33 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=float n=33 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=float n=33 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=float n=48 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=float n=48 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=float n=48 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=float n=48 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=float n=48 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=float n=64 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=float n=64 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=float n=64 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=float n=64 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=float n=64 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=float n=128 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=float n=128 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=float n=128 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=float n=128 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=float n=128 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=float n=256 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=float n=256 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=float n=256 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=float n=256 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=float n=256 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=float n=512 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=float n=512 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=float n=512 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=float n=512 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=float n=512 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=float n=1024 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=float n=1024 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=float n=1024 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=float n=1024 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=float n=1024 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=float n=2048 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=float n=2048 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=float n=2048 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=float n=2048 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=float n=2048 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=1 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=1 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=1 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=1 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=2 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=2 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=2 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=2 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=2 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=4 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=4 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=4 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=4 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=4 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=8 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=8 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=8 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=8 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=8 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=12 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=12 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=12 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=12 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=12 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=16 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=16 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=16 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=16 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=16 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=24 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=24 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=24 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=24 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=24 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=32 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=32 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=32 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=32 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=32 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=double n=33 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=double n=33 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=double n=33 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=double n=33 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=double n=33 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=double n=48 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=double n=48 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=double n=48 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=double n=48 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=double n=48 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=double n=64 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=double n=64 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=double n=64 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=double n=64 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=double n=64 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=double n=128 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=double n=128 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=double n=128 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=double n=128 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=double n=128 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=double n=256 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=double n=256 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=double n=256 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=double n=256 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=double n=256 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=double n=512 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=double n=512 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=double n=512 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=double n=512 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=double n=512 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1024 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1024 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1024 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1024 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=double n=1024 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=double n=2048 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=double n=2048 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=double n=2048 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=double n=2048 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=double n=2048 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=1 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=1 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=1 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=1 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=2 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=2 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=2 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=2 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=2 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=4 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=4 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=4 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=4 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=4 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=8 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=8 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=8 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=8 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=8 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=12 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=12 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=12 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=12 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=12 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=16 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=16 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=16 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=16 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=16 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=24 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=24 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=24 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=24 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=24 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=32 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=32 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=32 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=32 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=32 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=33 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=33 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=33 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=33 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=33 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=48 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=48 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=48 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=48 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=48 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=64 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=64 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=64 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=64 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=64 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=128 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=128 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=128 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=128 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=128 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cfloat n=256 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=256 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=256 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=256 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=256 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=512 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=512 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=512 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=512 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=512 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1024 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1024 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1024 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1024 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=1024 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=2048 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=2048 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=2048 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=2048 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cfloat n=2048 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=1 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=1 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=1 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=1 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=2 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=2 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=2 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=2 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=2 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=4 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=4 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=4 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=4 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=4 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=8 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=8 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=8 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=8 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=8 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=12 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=12 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=12 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=12 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=12 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=16 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=16 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=16 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=16 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=16 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=24 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=24 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=24 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=24 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=24 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=32 batch=128 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=32 batch=512 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=32 batch=2048 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=32 batch=8192 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=32 batch=32768 | cta - | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=33 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=33 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=33 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=33 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=33 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=48 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=48 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=48 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=48 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=48 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=64 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=64 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=64 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=64 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=64 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=128 batch=128 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=128 batch=512 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=128 batch=2048 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=128 batch=8192 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=128 batch=32768 | wg - | blocked - | vendor - # transcribed
+dtype=cdouble n=256 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=256 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=256 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=256 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=256 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=512 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=512 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=512 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=512 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=512 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1024 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1024 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1024 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1024 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=1024 batch=32768 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=2048 batch=128 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=2048 batch=512 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=2048 batch=2048 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=2048 batch=8192 | blocked - | wg - | vendor - # transcribed
+dtype=cdouble n=2048 batch=32768 | blocked - | wg - | vendor - # transcribed
