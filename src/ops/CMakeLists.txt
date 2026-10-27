@@ -105,6 +105,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     ritz_values/ritz_values.cc
     syev_align/syev_align.cc
     syfn/syfn.cc
+    syfn/kernels/syfn_kernels.cc
 )
 
 set(EXTENSIONS_FACTORIZATION_SOURCES
@@ -142,7 +143,7 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol
     # outside this pair.
     sytrf/kernels/sytrf_kernels.cc
-    sytrf/kernels/sytrs_kernels.cc
+    sytrs/kernels/sytrs_kernels.cc
     # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
     sygvd/kernels/sygvd_native.cc
     # Masked batches (syev_masked, sygvd_masked): one gather/scatter kernel, CPU image kept for NETLIB.

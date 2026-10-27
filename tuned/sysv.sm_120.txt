@@ -1,4 +1,4 @@
-# op=sysv device=sm_120 batchlas=30cc8e06 kernels=b81daf23 family_kernels=cta:9c917170,compose:b81daf23 date=2026-10-22
+# op=sysv device=sm_120 batchlas=30cc8e06 kernels=d8016aed family_kernels=cta:8494ccc6,compose:3ab217b8 date=2026-10-22
 # source=ledger:benchmarks/results/tuning/ledger/sysv.sm_120.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:1280
 # keys: dtype:exact n:log:3 nrhs:log batch:log
 dtype=float n=1 nrhs=1 batch=128 | cta - | compose - # transcribed
