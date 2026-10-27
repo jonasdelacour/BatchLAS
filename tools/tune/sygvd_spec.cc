@@ -109,7 +109,7 @@ public:
         // kernel-deps-begin
         // common "src/ops/sygvd/sygvd.cc"
         // compose calls the public potrf, sygst, syev, trsm and trmm, each selecting its own kernel.
-        // family: compose "src/ops/sygst/sygst.cc" "src/ops/syev/syev.cc"
+        // family: compose "src/ops/sygvd/kernels/sygvd_compose.cc" "src/ops/sygst/sygst.cc" "src/ops/sygst/kernels/sygst_blocked.cc" "src/ops/sygst/kernels/sygst_twosided.cc" "src/ops/syev/syev.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/sygvd_spec.cc"; }
