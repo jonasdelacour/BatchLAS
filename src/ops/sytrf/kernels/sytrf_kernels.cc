@@ -9,7 +9,7 @@
 
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/ops/sytrf/sytrf_device.hh>
-#include <src/ops/sytrf/sytrs_device.hh>
+#include <src/ops/sytrs/sytrs_device.hh>
 
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>

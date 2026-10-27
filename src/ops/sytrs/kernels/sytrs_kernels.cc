@@ -7,7 +7,7 @@
 // any other cluster.
 
 #include <src/ops/sytrf/sytrf_native.hh>
-#include <src/ops/sytrf/sytrs_device.hh>
+#include <src/ops/sytrs/sytrs_device.hh>
 
 #include <src/queue.hh>
 #include <src/select/grid_chunk.hh>

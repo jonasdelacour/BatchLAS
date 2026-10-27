@@ -142,7 +142,7 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # Bunch-Kaufman LDL^T (sytrf, sytrs, sysv's fused tier): its own device code, no shared symbol
     # outside this pair.
     sytrf/kernels/sytrf_kernels.cc
-    sytrf/kernels/sytrs_kernels.cc
+    sytrs/kernels/sytrs_kernels.cc
     # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
     sygvd/kernels/sygvd_native.cc
     # sygst blocked's diagonal-block kernel; self-contained, its BLAS-3 children are public ops.

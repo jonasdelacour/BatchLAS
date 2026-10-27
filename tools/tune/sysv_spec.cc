@@ -95,7 +95,7 @@ public:
             // common
             "src/ops/sytrf/kernels/sytrf_kernels.cc",
             "src/ops/sytrf/sytrf_device.hh",
-            "src/ops/sytrf/sytrs_device.hh",
+            "src/ops/sytrs/sytrs_device.hh",
             "src/ops/sytrf/sytrf_native.hh",
             "src/ops/sysv/choice.hh",
         };
@@ -105,7 +105,7 @@ public:
         // compose calls the public sytrf and the routed sytrs, which select for themselves: their routing,
         // kernels and vendor arm count too.
         // family: compose "src/ops/sytrf/sytrf.cc" "src/ops/sytrf/choice.hh" "src/backends/cusolver_sytrf.cc" "include/batchlas/tuning_params.hh"
-        // family: compose "src/ops/sytrs/sytrs.hh" "src/ops/sytrs/choice.hh" "src/ops/sytrf/kernels/sytrs_kernels.cc"
+        // family: compose "src/ops/sytrs/sytrs.hh" "src/ops/sytrs/choice.hh" "src/ops/sytrs/kernels/sytrs_kernels.cc"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/sysv_spec.cc"; }
