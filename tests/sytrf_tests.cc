@@ -168,6 +168,10 @@ template <typename T>
             if (x.ipiv(b)[k] != y.ipiv(y_item < 0 ? b : y_item)[k])
                 return ::testing::AssertionFailure() << "ipiv differs: item " << b << " entry " << k << " ("
                                                      << x.ipiv(b)[k] << " vs " << y.ipiv(y_item < 0 ? b : y_item)[k] << ")";
+    // Whole-batch comparisons also cover the buffer past n * batch entries, which no route may write.
+    if (items.empty() && y_item < 0)
+        for (size_t e = 0; e < x.piv.size() && e < y.piv.size(); ++e)
+            if (x.piv[e] != y.piv[e]) return ::testing::AssertionFailure() << "piv buffer differs at word " << e;
     return ::testing::AssertionSuccess();
 }
 
