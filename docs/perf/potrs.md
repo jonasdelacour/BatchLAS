@@ -245,10 +245,10 @@ n = 8, nrhs = 8, batch 8192: 0.1537 against 2.374 (15x, line 7015); float n = 64
 `tests/potrs_tests.cc` (the potrs cases moved out of `potri_tests.cc`), every backend and type, heavy
 cases in `potrs_tests_heavy`:
 
-- each family pinned, and Auto, on graded SPD factors (D C D, condition about 8e6 double, 8e3 single), both
-  triangles, n through the block edge (16/17, 33, 130) and nrhs through the accumulator buckets and past
-  the width ceiling, padded `ld` and stride with a poisoned unreferenced triangle; the factor read-only and
-  B's pads untouched; a second right-hand side on the same factor;
+- each family pinned, and Auto, on graded SPD factors (`fill_graded_hermitian`, condition 1e6 double,
+  1e3 single), both triangles, n through the block edge (16/17, 33, 130) and nrhs through the accumulator
+  buckets and past the width ceiling, padded `ld` and stride with a poisoned unreferenced triangle; the
+  factor read-only and B's pads untouched; a second right-hand side on the same factor;
 - `fused` bit for bit equal to posv `cta`, `trsm` to posv `blocked`; a non-SPD item flagged by posv with
   the other items undisturbed;
 - the fused pin straddling both ceilings, launched at the SLM ceiling (`n = cap / 8`, nrhs 8) and refused
