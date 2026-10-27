@@ -11,7 +11,7 @@ existing kernels and need no vendor library, so the vendor-free build serves the
   `uplo` triangle of `A`, no workspace, no `info`. Since 2026-10-26 it is a routed op (`Op::potrs`,
   `BATCHLAS_POTRS_ROUTE`, measured tables): the one-launch fused solve (`getrs_fused.cc`, both
   substitutions, B in SLM) or two public `trsm` calls, chosen per cell
-  ([potrs selection](potrs.md#potrs-selection)). `src/ops/potrs/potrs.hh` holds the one implementation:
+  ([potrs selection](potrs.md#potrs-selection)). `src/ops/potrs/kernels/potrs_trsm.cc` holds the one implementation:
   posv's `cta` choice is `potrf` + `solve(fused = true)`, its `blocked` choice `potrf` + `solve(fused = false)`.
   `FusedMatchesPosvCtaAndTrsmMatchesPosvBlockedBitForBit` (`tests/potrs_tests.cc`) compares them bit for bit.
 - **`potri(A, uplo, full, ws, info)`** follows LAPACK `?potri`: the factor in, the `uplo` triangle of the
@@ -44,7 +44,7 @@ existing kernels and need no vendor library, so the vendor-free build serves the
 | family | driver | `can_run` (`src/ops/potri/potri.cc`) |
 |---|---|---|
 | `cta` | `sycl_potri::potri_cta`, mode `Potri`: trtri + lauum in one launch | homogeneous batch, `n <= cta_max_n<T>(d.slm_budget, d.max_wg)` |
-| `blocked:nb=64`, `blocked:nb=128` (float only) | `ops::potri::blocked::run` (`potri_blocked.hh`) | homogeneous batch, `min(nb, n) <= cta_max_n` (one diagonal block must fit the CTA kernel) |
+| `blocked:nb=64`, `blocked:nb=128` (float only) | `ops::potri::blocked::run` (`kernels/potri_blocked.cc`) | homogeneous batch, `min(nb, n) <= cta_max_n` (one diagonal block must fit the CTA kernel) |
 
 `cta_max_n` (`potri_native.hh`) is the largest order whose padded tile (`(mp + 1) * mp` scalars plus `mp`
 reals, `mp` = n rounded up to the tile width TS, the 48 KB launch hole padded) fits the local memory and
@@ -121,7 +121,7 @@ whose factor has an exactly zero diagonal entry gets its `info` and is left unch
 uniform early return). The same kernel has two other modes for the blocked driver: `Trtri` inverts every
 nb x nb diagonal block of the item (one work-group per block) and `Lauum` forms `X^H X` of one block.
 
-**blocked:nb** (`potri_blocked.hh`), LAPACK's blocked loops on public ops, so each child takes its own table:
+**blocked:nb** (`kernels/potri_blocked.cc`), LAPACK's blocked loops on public ops, so each child takes its own table:
 
 - trtri: all diagonal blocks inverted by one `Trtri` launch; then per block column (Lower: last first)
   `W = X22 L21` (trmm, Left) and `X21 = -W X11` (trmm, Right, out of place back into A); Upper mirrors it.
@@ -248,14 +248,14 @@ the cta-only cases green.
 | `potri_cta.cc` store: the mirrored half without `conj` | Beyond: cz CUDA+NETLIB; Full: cz CUDA+NETLIB; Graded: cz CUDA+NETLIB; Inverts: cz CUDA+NETLIB; Parts: cz CUDA+NETLIB | 92 of 112 |
 | `potri_cta.cc` trti2: the per-tile-row barrier removed | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Info: all types CUDA; Inverts: all types CUDA+NETLIB; Parts: cN dC dN fN zC zN; Saturating: all types CUDA+NETLIB; Straddle: cC cN dC dN fN zC zN | 63 of 112 |
 | `potri_cta.cc`: info 0-based | Info: all types CUDA+NETLIB | 104 of 112 |
-| `potri_blocked.hh` trtri Lower: `X21 = -W X11` (trmm, Right) replaced by a plain copy of W | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB; Saturating: all types CUDA | 76 of 112 |
-| `potri_blocked.hh` trtri Upper: the same for `X12 = -W X22` | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB | 80 of 112 |
-| `potri_blocked.hh` lauum Lower: the gemm leg dropped | Coverage: all types NETLIB; Full: dz CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: dz CUDA+NETLIB | 92 of 112 |
-| `potri_blocked.hh` lauum: the copy of W back into A dropped | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB; Saturating: all types CUDA | 76 of 112 |
-| `potri_blocked.hh` lauum Lower: herk/syrk on the diagonal block dropped | Coverage: all types CUDA+NETLIB; Full: dz CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: dcz CUDA+NETLIB; Parts: dcz CUDA+NETLIB; Saturating: dcz CUDA | 77 of 112 |
-| `potri_blocked.hh`: every batch part starts at item 0 | Parts: all types CUDA+NETLIB; Saturating: z CUDA | 103 of 112 |
+| `kernels/potri_blocked.cc` trtri Lower: `X21 = -W X11` (trmm, Right) replaced by a plain copy of W | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB; Saturating: all types CUDA | 76 of 112 |
+| `kernels/potri_blocked.cc` trtri Upper: the same for `X12 = -W X22` | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB | 80 of 112 |
+| `kernels/potri_blocked.cc` lauum Lower: the gemm leg dropped | Coverage: all types NETLIB; Full: dz CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: dz CUDA+NETLIB | 92 of 112 |
+| `kernels/potri_blocked.cc` lauum: the copy of W back into A dropped | Full: all types CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: all types CUDA+NETLIB; Parts: all types CUDA+NETLIB; Saturating: all types CUDA | 76 of 112 |
+| `kernels/potri_blocked.cc` lauum Lower: herk/syrk on the diagonal block dropped | Coverage: all types CUDA+NETLIB; Full: dz CUDA+NETLIB; Graded: all types CUDA+NETLIB; Inverts: dcz CUDA+NETLIB; Parts: dcz CUDA+NETLIB; Saturating: dcz CUDA | 77 of 112 |
+| `kernels/potri_blocked.cc`: every batch part starts at item 0 | Parts: all types CUDA+NETLIB; Saturating: z CUDA | 103 of 112 |
 | `potri_native.cc` `potri_diag_info` (removed since: the `Trtri` launch writes `info`): 0-based | Info: all types CUDA+NETLIB | 104 of 112 |
-| `potri_blocked.hh` lauum: the last `Lauum` launch never restores the stash (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB | 80 of 88 |
+| `kernels/potri_blocked.cc` lauum: the last `Lauum` launch never restores the stash (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB | 80 of 88 |
 | `potri_native.cc` `potri_finish`: flagged items not skipped (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB (the `full` cases) | 80 of 88 |
 | `potri_native.cc` `potri_finish`: the mirror without `conj` | Full: cz CUDA+NETLIB; Parts: cz CUDA+NETLIB | 104 of 112 |
 
