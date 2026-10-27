@@ -490,42 +490,18 @@ MatrixView<float> A(dA, n, n, /*ld=*/n, /*stride=*/n * n, batch, /*data_ptrs=*/p
 
 ### Row-major data: the operand swap
 
-**The view rule.** A row-major `r x c` buffer `p` with row stride `lda >= c` (element `(i, j)` at
-`p[i * lda + j]`) is, over the same bytes, the column-major `c x r` matrix with `ld = lda`: its
-transpose. The view is `MatrixView<T>(p, c, r, lda, stride, batch)`, rows and columns swapped and
-`ld` unchanged; `stride` is the item stride in elements. Every view below follows this rule; the
-packed case has `lda = c`. `examples/row_major_interop.cc` spells it `transposed_view`.
-
-Since `Cᵀ = Bᵀ Aᵀ`, passing the transposed views to `gemm` in the opposite order computes the
-row-major product with no copy:
+A column-major view of a row-major `m x k` buffer with row length `k` is its transpose. Since
+`Cᵀ = Bᵀ Aᵀ`, passing the transposed views to `gemm` in the opposite order computes the row-major
+product with no copy:
 
 ```cpp
 // Row-major A (m x k), B (k x n), C (m x n), packed, in USM at pa/pb/pc.
-// Each view is (cols, rows, ld = row length): At = Aᵀ (k x m), Bt = Bᵀ (n x k), Ct = Cᵀ (n x m).
 MatrixView<float> At(pa, k, m, k), Bt(pb, n, k, n), Ct(pc, n, m, n);
-gemm(ctx, Bt, At, Ct, GemmOptions<float>{});  // Cᵀ = Bᵀ Aᵀ, i.e. C = A B row-major
+gemm(ctx, Bt, At, Ct, GemmOptions<float>{});  // C = A B, row-major
 ```
 
 The swap is `gemm`'s. For the symmetric routines, flip `uplo`. For everything else, including
-`potrf` and `getrf`, convert first ([Row-major source data](#row-major-source-data)).
-
-**Symmetric `syev` needs no copy.** A row-major symmetric `n x n` `A` is its own transpose, so the
-column-major view `MatrixView(p, n, n, lda, stride, batch)` over the same bytes solves the same
-matrix. The row-major upper triangle is the column-major lower triangle, so `Uplo::Lower`
-(the `SyevOptions` default) reads the triangle a row-major caller filled, and a row-major lower
-triangle needs `Uplo::Upper`. After `syev`, the column-major `V` has eigenvectors as
-columns, and read row-major from the same bytes they are the rows.
-
-**Transposed operands use the flags on the transposed views.** For `C = A Bᵀ` with row-major `A`
-(m x k), `B` (n x k) and `C` (m x n), the rule gives `At(pa, k, m, k)` = `Aᵀ` (k x m),
-`Bt(pb, k, n, k)` = `Bᵀ` (k x n; `B` has row length k) and `Ct(pc, n, m, n)` = `Cᵀ` (n x m). Then
-`Cᵀ = B Aᵀ = op(Bt) At` with `op = Trans`: `gemm(ctx, Bt, At, Ct, {.transA = Transpose::Trans})`.
-For `D = Aᵀ A` (k x k), `Dᵀ = D = At Atᵀ`: `gemm(ctx, At, At, Dt, {.transB = Transpose::Trans})`
-with `Dt(pd, k, k, k)`. In general each row-major operand enters as its transposed view in swapped
-order, and a row-major `op(X) = Xᵀ` sets the flag on that operand's view.
-`examples/row_major_interop.cc` runs the swap, both flag forms and `syev` on padded row-major
-batches (`lda > c`, item stride with a gap, large finite poison outside the matrix) and checks them
-with `batchlas::verify` and a row-major host oracle.
+`potrf`, `getrf` and `syev`, convert first ([Row-major source data](#row-major-source-data)).
 
 ### The CSR non-zero count has its own type {#the-csr-non-zero-count-has-its-own-type}
 
