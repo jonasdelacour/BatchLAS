@@ -44,7 +44,7 @@ using ts::Live;
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-// B's condition number (the graded spectrum of ts::hpd): 1e2 in single precision, 1e4 in double.
+// B's condition scale 10^(2 decades) (see scaled): 1e2 in single precision, 1e4 in double.
 template <typename T>
 constexpr double b_cond() { return std::is_same_v<batchlas::float_t<T>, float> ? 1e2 : 1e4; }
 
@@ -52,12 +52,26 @@ constexpr double b_cond() { return std::is_same_v<batchlas::float_t<T>, float> ?
 template <typename T>
 verify::Slack cond_slack() { return {4.0 * b_cond<T>(), "generalized problem: error ~ cond(B)"}; }
 
-// sygst's residual on an ill-conditioned B does not follow cond(B): under 1x the bound at cond 1e6 (double),
-// 1e3 (float) on ts::hpd's graded spectrum (2026-10-27; 9x on the earlier D S D input), so a defect shows.
-inline verify::Slack graded_slack() { return {32.0, "graded B: the reduction's error does not follow cond(B)"}; }
+// sygst's residual on a badly scaled B = D S D follows S, not cond(B): at most 17x the bound at cond(B) 1e6
+// (double), under 1x at 1e3 (float) (2026-10-27); far tighter than cond_slack, so a subtle defect shows.
+inline verify::Slack graded_slack() { return {32.0, "graded B: the reduction's error follows the scaled S"}; }
 
-// A0 (random Hermitian) and B0 (HPD of condition `cond`), whole and packed, one item when identical; a and
-// b in padded, poisoned storage (A ld n + 3, stride + 5; B ld n + 2, stride + 7) holding their uplo triangles.
+// S := D S D in place, D_i = 10^(decades (i / (n - 1) - 1/2)): entries spread over 10^(2 decades) on a
+// well-conditioned S. Local: no shared generator or MatrixView facility scales rows and columns.
+template <typename T>
+void scaled(Matrix<T>& S, double decades) {
+    const int n = S.rows();
+    std::vector<double> D(n);
+    for (int i = 0; i < n; ++i) D[i] = std::pow(10.0, decades * (n > 1 ? double(i) / (n - 1) - 0.5 : 0.0));
+    for (int b = 0; b < S.batch_size(); ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) S(i, j, b) *= batchlas::float_t<T>(D[i] * D[j]);
+}
+
+// A0 (random Hermitian) and B0 = D S D, D taking cond(B) to ~`cond`: S is fill_random_spd's with its diagonal
+// raised to 2.5 n, so its off-diagonal stays ~1/(4n) of it (a larger one makes sygst's error follow cond(B)).
+// Whole and packed, one item when identical; a and b in padded, poisoned storage (A ld n + 3, stride + 5;
+// B ld n + 2, stride + 7) holding their uplo triangles.
 template <typename T>
 struct Gen {
     Uplo uplo;
@@ -82,10 +96,13 @@ protected:
 
     Gen<T> gen(int n, int batch, Uplo uplo, unsigned seed, bool identical = false, double cond = b_cond<T>()) {
         const int drawn = identical ? 1 : batch;
-        Gen<T> g{uplo, Matrix<T>(n, n, drawn), ts::hpd<T>(q(), n, drawn, cond, seed + 1), ts::padded<T>(n, n, batch),
+        Gen<T> g{uplo, Matrix<T>(n, n, drawn), Matrix<T>(n, n, drawn), ts::padded<T>(n, n, batch),
                  ts::padded<T>(n, n, batch, 2, 7)};
         (void)g.A0.view().fill_random(q(), true, seed);
+        (void)g.B0.view().fill_random_spd(q(), seed + 1);
+        (void)g.B0.view().fill_diagonal(q(), MV<T>::make(2.5 * n, 0.0));
         q().wait();
+        scaled(g.B0, std::log10(cond) / 2);
         ts::store<T>(g.a, g.A0, Live::triangle(uplo));
         ts::store<T>(g.b, g.B0, Live::triangle(uplo));
         return g;
@@ -147,6 +164,9 @@ protected:
         const Uplo other = g.uplo == Uplo::Lower ? Uplo::Upper : Uplo::Lower;
         Matrix<T> Q = Matrix<T>::Zeros(n, n, nb);
         ts::store<T>(Q, H, Live::triangle(qh ? other : g.uplo));
+        if (qh)
+            for (int b = 0; b < nb; ++b)
+                for (int i = 0; i < n; ++i) Q(i, i, b) = MV<T>::conj(T(H(i, i, b)));
         const std::vector<int> all = g.a.all_items();
         return itype == 1 ? MV<T>::similarity_residual(q(), g.A0, Q, C, all) : MV<T>::similarity_residual(q(), C, Q, g.A0, all);
     }
@@ -186,8 +206,8 @@ TYPED_TEST_SUITE(SygvdTest, SygvdTestTypes);
 // family it can pin, both triangles, an order ladder through the CTA width, B read-only (pads too).
 // ARMED BREAK: in src/ops/sygst/sygst.cc twosided(), give the itype-1 Right trsm `Transpose::NoTrans` for
 // Lower. SEEN (2026-10-25; re-run 2026-10-27 on test_support): RED here for twosided itype 1 Lower only, all
-// 8 configs; on CUDA also compose itype 1 Lower in SygvdSolves (every type) and FactoredEntry (float, double;
-// complex compose takes blocked there). NETLIB's compose takes LAPACKE's sygst, its last resort.
+// 8 configs; on CUDA also compose itype 1 Lower in SygvdSolves (double, cdouble) and FactoredEntry (double),
+// the same set as before the migration. NETLIB's compose takes LAPACKE's sygst, its last resort.
 TYPED_TEST(SygvdTest, SygstMatchesTheTwoSidedDefinition) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;

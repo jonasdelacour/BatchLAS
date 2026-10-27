@@ -248,9 +248,10 @@ uplo, `BATCHLAS_SYGST_ROUTE` pins) times one family. Still to time, on a quiet G
   the rest via `similarity_residual`.
 - `blocked` at every `nb`, itype and triangle, at orders straddling each edge (the kernel's compile-time
   orders 8, 16, 32; nb 32 to 256; a two-level recursion at n = 260), on B with cond ~1e3 (float) or ~1e6
-  (double), against a slack of 32 (the reduction's error does not follow cond(B): under 1x the bound on
-  the graded spectrum of `fill_graded_hermitian`, 9x on the earlier diagonally scaled B). A's storage
-  outside its triangle and all of B keep their bits.
+  (double), a badly scaled B = D S D, against a slack of 32 (the reduction's error on it follows the scaled
+  S, not cond(B): at most 9x the bound on the original S, 17x on the test_support one, `fill_random_spd`
+  with its diagonal raised to 2.5 n, 2026-10-27). A's storage outside its triangle and all of B keep
+  their bits.
 - 1024 identical items on `blocked`, bit-identical to item 0 (n = 5 packs 25 items per work-group, 16, 20,
   40), forced 100-item passes (`BATCHLAS_TUNE_L2_CHUNK_ITEMS`, which bypasses the 4 x CU floor), and an
   exact workspace query.
