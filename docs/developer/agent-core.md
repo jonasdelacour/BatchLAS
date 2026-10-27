@@ -31,9 +31,9 @@ python3 scripts/agent/doc_section.py --find 'splitk'          # which sections m
   `-- Using SYCL targets: spir64_x86_64` at configure means a silent CPU-only build (TL;DR, §2b).
 - New worktree: `scripts/seed_build_tree.sh ~/BatchLAS/build build` before editing (9 s) rather
   than a fresh configure (§6, §7).
-- Build through `scripts/b <target>` only: named targets, `-j8` cap, box-wide lock, exit 70 when
-  a requested binary is missing. Its full output goes to `build/logs/`; read the log's tail or
-  grep it, never the whole log. One build at a time; heavy TUs exceed 14 GB (§7).
+- Build through `scripts/b <target>` only: named targets, `-j8` cap, memory admission (builds run
+  side by side while RAM allows), exit 70 when a requested binary is missing. Its full output goes
+  to `build/logs/`; read the log's tail or grep it, never the whole log. Heavy TUs exceed 14 GB (§7).
 - The build is device-link-bound: the `.so` is the link unit. Time a rebuild by appending a line,
   not `touch` (ccache hit). Ninja, lld, PCH, unity builds and `-fno-sycl-rdc` are measured dead (§7).
 - `cmake --build --target A B C` can exit 0 and skip links: check `test -x build/tests/<name>` (§7).

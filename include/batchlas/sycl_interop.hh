@@ -35,6 +35,21 @@ namespace batchlas {
 /// @ingroup api_core
 BATCHLAS_API sycl::queue& sycl_queue(const Queue& ctx);
 
+/// @brief A Queue inside the caller's SYCL context, so the caller's `malloc_shared` (or any other)
+/// USM from that context is reachable zero-copy.
+///
+/// The returned Queue is a root Queue like `Queue(Device)`: it has its own SYCL queue, arena and
+/// event chain, and constructing it closes batchlas::configure(). The Queue does not own `ctx`;
+/// SYCL keeps it alive as long as the Queue exists.
+/// @param ctx      the caller's context; must contain `dev`
+/// @param dev      one of the root devices BatchLAS enumerates (`Device::get_devices(type)`)
+/// @param in_order true (default) for an in-order queue
+/// @return a Queue whose `sycl_queue(q).get_context() == ctx`
+/// @throws batchlas::device_error if `dev` is not one of Device::get_devices(type) (for example a
+///         sub-device from `create_sub_devices`) or is not part of `ctx`
+/// @ingroup api_core
+BATCHLAS_API Queue queue_from_sycl(const sycl::context& ctx, const sycl::device& dev, bool in_order = true);
+
 /// @brief The `sycl::event` underlying a BatchLAS Event.
 ///
 /// For handing BatchLAS's work to SYCL code: `depends_on()`, `wait_and_throw()`, a barrier on

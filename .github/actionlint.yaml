@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # The workstation GPU runner (gpu-build-test, nightly); docs/ci.md.
+  labels:
+    - cuda

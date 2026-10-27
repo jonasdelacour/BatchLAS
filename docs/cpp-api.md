@@ -583,7 +583,7 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 ### Per-item status
 
 Ten routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
-LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv`, `posv`
+LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv` and `posv`
 report factorisation status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status.
 It is a field on `PotrfOptions` and a trailing parameter elsewhere (the option-struct `syev` and
 `gesvd` spellings take none):
@@ -858,6 +858,7 @@ For SYCL-typed interop include `<batchlas/sycl_interop.hh>`, the one BatchLAS he
 batchlas::sycl_queue(const Queue&)   -> sycl::queue&
 batchlas::sycl_event(const Event&)   -> sycl::event
 batchlas::event_from_sycl(sycl::event) -> Event
+batchlas::queue_from_sycl(const sycl::context&, const sycl::device&, bool in_order = true) -> Queue
 ```
 
 ```cpp
@@ -870,9 +871,34 @@ batchlas::potrf(ctx, A, {.uplo = Uplo::Lower}); // waits for `mine`
 my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
 ```
 
-Both queues must share a SYCL context. Pointers from `cudaMalloc`, `cudaMallocManaged`,
+Both queues must share a SYCL context ([`queue_from_sycl`](#queue-from-sycl-inside-your-own-context)
+builds a Queue in yours). Pointers from `cudaMalloc`, `cudaMallocManaged`,
 `sycl::malloc_device` and `sycl::malloc_host` wrap into `Span`/`MatrixView` zero-copy when reachable
 from that context.
+
+### A Queue inside your own SYCL context {#queue-from-sycl-inside-your-own-context}
+
+`queue_from_sycl(ctx, dev, in_order)` builds a root `Queue`, like `Queue(Device)`, whose SYCL
+queue lives in *your* context: `sycl_queue(q).get_context() == ctx`. Use it when your USM comes from
+a context of your own (for example `sycl::malloc_shared` on a context several queues share): that
+memory is then reachable from the Queue, zero-copy, with no copy into BatchLAS's default context.
+
+```cpp
+sycl::context my_ctx(dev);
+float* a = sycl::malloc_shared<float>(size_t(n) * n * batch, dev, my_ctx);
+Queue q = batchlas::queue_from_sycl(my_ctx, dev);   // in order by default
+MatrixView<float> A(a, n, n, n, n * n, batch);
+batchlas::potrf(q, A, PotrfOptions{}).wait();   // Event is [[nodiscard]]
+sycl::free(a, my_ctx);                              // only after the wait
+```
+
+- `in_order` defaults to `true`; pass `false` for an out-of-order Queue.
+- The Queue has its own SYCL queue, workspace arena and event chain, and constructing it closes
+  `batchlas::configure()` as any root Queue does. It does not own `ctx`; SYCL keeps the context
+  alive while the Queue exists.
+- **Throws `batchlas::device_error`** when `dev` is not one of the root devices BatchLAS enumerates
+  (`Device::get_devices(type)`): a sub-device from `create_sub_devices`, or a device of a backend
+  the runtime does not list. It throws the same type when `dev` is not part of `ctx`.
 
 ## The `linalg` convenience layer
 

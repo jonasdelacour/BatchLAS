@@ -24,7 +24,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | 11 | `src/ops/gemm/kernels/epilogue_linear.hh:14-15`, `src/ops/gemm/kernels/gemm_kernels.cc` | fixed 2026-10-11, workarounds deleted |
 | 12 | every `can_run` in `src/ops/`, `src/ops/{hemm,herk,her2k}/` | fixed (WP3): a heterogeneous batch has no route |
 | 13 | `src/backends/cublas.cc`, cuBLASLt | fixed (16-byte aligned scalars); the gemv/spmm refusals deleted (WP3) |
-| 14 | Hermitian drivers in gesvd and syev | open, wrong answer under Auto |
+| 14 | Hermitian drivers in gesvd and syev | fixed in the drivers (`sytrd_cta` load, `sytrd_sy2sb` update) |
 | 15 | cuSOLVER `gesvdjBatched` | open, pinned vendor only |
 | 16 | blocked geqrf/orgqr/ormqr part loops | fixed: parts capped at half the grid (reproduced on sm_89) |
 | 17 | cuSPARSE spmm | open, plus an alignment waiver |
@@ -32,6 +32,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | 19 | `src/ops/potrf/potrf.cc` `can_run` | fixed: `blocked` serves Upper |
 | 20 | `src/sycl/kernel_attrs.hh:18-19` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
 | 21 | plain `range<3>` launches with the batch in dimension 0 (`ormbr.cc:170` and others) | open; worked around in the QR, gesvd and syev part loops |
+| 22 | `src/ops/getrf/kernels/getrf_panel_reg.cc` register cap; acpp multipass launches | worked around (256-row cap on acpp); the silent launch drop is open |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -270,20 +271,57 @@ With large finite poison in the triangle the caller did not name:
 - `syev_cta` with Upper (n = 5, 17, 32) reads the lower triangle. `syev_blocked` with Lower at
   n <= 32 reads the upper. `syev_two_stage` with Lower at n = 40 reads the upper.
 
-Auto reaches some of these. gesvd sends Hermitian Upper n <= 32 to `cta`. syev sends cfloat
-n = 9..32 and cdouble n <= 32 to `syev_cta`. syev `two_stage` with Lower is the Auto choice for
-jobz=N above n = 320, and for float V with n = 449..1024. A caller that stores only the upper
-triangle gets a wrong answer today. `linalg::eigh`, `eigvalsh` and the Hermitian `linalg::svd`
-mirror the named triangle on their copy first (`MatrixView::hermitize`), so they are unaffected.
+Auto reached some of these. gesvd sent Hermitian Upper n <= 32 to `cta`. Before the fix,
+Auto sent cfloat n = 9..32 and cdouble n <= 32 to `syev_cta`, and `two_stage` with Lower was its
+choice for jobz=N above n = 320 and for float V with n = 449..1024. `linalg::eigh`, `eigvalsh` and
+the Hermitian `linalg::svd` mirror the named triangle on their copy first
+(`MatrixView::hermitize`), so they were never affected.
 
-- **Tests:** `GesvdCandidates.DISABLED_HermitianFamiliesIgnoreTheUnreferencedTriangle`
-  (`tests/gesvd_candidates_tests.cc`) and `SyevCandidates.OtherTriangleIsNeverRead`
-  (`tests/syev_candidates_tests.cc`). Both are skipped for exactly these drivers.
-- **Fix needs:** mirror or read only the named triangle in each driver, then remove the skip list.
+- **Fix (2026-10-26), in the drivers:** the public `syev` mirrors nothing; each driver reads only
+  the named triangle.
+  - `sytrd_cta` (`src/ops/syev/sytrd/sytrd_cta.cc`, the tile load): each lane loads its row of the
+    named triangle, coalesced, and writes the conjugate into the other half of the SLM tile; the
+    diagonal's imaginary part is dropped, as `{c,z}hetrd` does. This serves `syev_cta` Upper,
+    `syev_blocked` Lower at n <= 32 (`sytrd_blocked` hands n <= 32 to `sytrd_cta` Lower) and
+    `gesvd_cta` Hermitian Upper. The reduction loops are unchanged.
+  - `sytrd_sy2sb` (`src/ops/syev/sytrd/sytrd_sy2sb.cc`): the two full-block `ormqr` calls on the
+    trailing block are replaced by LAPACK `dsytrd_sy2sb`'s two-sided update, which reads only the
+    lower triangle: Y = A22 V T (`symm`/`hemm`, Lower), W = Y - V (T^H V^H Y) / 2, then
+    A22 -= V W^H + W V^H (`syr2k`/`her2k`, or the gemm pair whose lower result depends only on
+    lower entries). `syevx`'s direct subset path shares it.
+  - Cost (2026-10-26, sm_89, `syev_two_stage_benchmark` jobz=V Lower kd = 32, base 024d64c1, alternating
+    rounds): with symm/hemm's `mirror` family ([level-3](../perf/level3.md#level-3-the-mirror-family)) the
+    lower-only update is faster than the old full-block one for float (n = 256..2048: 0.88-0.91x) and
+    cfloat (n = 256..1024: 0.93-0.94x). double at n = 480, batch 512 is 1.34x slower (809 -> 1084 ms):
+    the transcribed double symm rows rank the per-item cuBLAS loop first, and FP64 rows are not tuned on
+    this part. Accepted by the owner; a later FP64 pass that measures those rows removes it.
+  - Upper on `blocked` and `two_stage`, and Lower on `syev_cta`, still go through an in-place
+    O(n^2) pass that reads the named triangle and writes the other (`uplo_mirror.hh`,
+    `syev_cta.cc`): the Lower-only (resp. Upper-only) pipelines are served that way, which reads
+    nothing unnamed. The documented contract stands: the other triangle may be overwritten.
+- **Tests:** `SyevTest.AutoIgnoresUnreferencedTriangle` (n = 5, 32, 40) and its heavy-tier half
+  `SyevTest.AutoReadsOnlyTheNamedTriangleAtLargeN` (n = 400, 1024, GPU backends only)
+  (`tests/syev_tests.cc`: Auto, both `uplo`, both jobz, poison 9e3 against
+  \f$\lVert A\rVert_2 = 1\f$, strided batch), `SyevCandidates.OtherTriangleIsNeverRead` (every
+  pinned family, no skip list) and `GesvdCandidates.HermitianFamiliesIgnoreTheUnreferencedTriangle`
+  (re-enabled; `PinnedCandidatesStraddleTheirLimits` poisons `cta` Upper too). NETLIB
+  instantiations run only the small half: their route is reference LAPACK, which reads only
+  `uplo`. In a build without LAPACKE (vendor-free) NETLIB syev has no route and runs neither.
+- **Red set of the unfixed drivers** (2026-10-25, sm_89, full-target tree, `tuned/` tables of
+  ab235065, no entry mirror): under Auto, float and double fail at n = 400 and 1024 Lower N
+  (`two_stage`) and float also at n = 1024 Lower V; cfloat fails at n = 32 Upper V and N (`cta`)
+  and at n = 400 and 1024 Lower N; cdouble at n = 5 Upper V and N, n = 32 Upper N (`cta`; its
+  n = 32 V row is the vendor) and n = 400 and 1024 Lower N. Every other Auto shape (`jacobi`,
+  `cta_fused`, `blocked` above n = 32, the vendor) stays green: those routes do not read the
+  poison. `OtherTriangleIsNeverRead` fails for exactly `cta` Upper (n = 5, 17, 32), `blocked`
+  Lower (n = 5, 17, 32) and `two_stage` Lower (n = 40), both jobz, all four dtypes; the gesvd test
+  for `cta herm=U` at 8x8 and 32x32.
+- **Known test gap:** `OtherTriangleIsNeverRead` stops at n = 40, a single short sy2sb panel; a
+  full or second panel is reached only by the heavy Auto test (jobz=N, and float V at n = 1024).
 - **gesvd blocked fixed 2026-10-22:** the Hermitian arm mirrors Lower into Upper before
   `syev_blocked` (Upper is mirrored the other way inside it), and `can_run` admits Upper.
   `PinnedCandidatesStraddleTheirLimits` now poisons blocked at every n, both triangles.
-- **Status:** open for `gesvd_cta` Upper and the syev drivers.
+- **Status:** fixed in the drivers for syev and gesvd.
 
 ## Defect 15: cuSOLVER `gesvdjBatched` faults on values-only non-square input
 
@@ -434,6 +472,27 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
   the sites above. syev two_stage (band_reduction, sy2sb) and `transpose` have no part loop and are not
   covered.
 - **Status:** open outside the capped part loops.
+
+## Defect 22: acpp multipass drops an over-ceiling launch silently {#getrf-register-panel-unlaunched-on-acpp-multipass}
+
+- **Symptom:** on an AdaptiveCpp multipass `cuda:sm_89` tree (acpp `develop` 94ab0d58, CUDA 12.8)
+  `LuTest/1.RegPanelAgreesWithTheLocalMemoryLeaf` (double) read the `-12345` pivot poison back at
+  m = 512, and complex<float> failed the same way at the heavy Auto shapes. No error was raised at
+  the launch or the next wait. getrs then used the garbage pivots, faulted (CUDA:700), and the lost
+  context failed every later case of the process: about 300 ledger lines of cascade.
+- **Cause:** the register-panel leaf's row cap is computed at compile time from register counts
+  probed on DPC++'s ptxas (64/104/96/176 for float, double, cfloat, cdouble). acpp's multipass
+  cubins allocate 110/150/144/222 (`cuobjdump --dump-resource-usage` of
+  `libbatchlas_extensions_cta.so`), so a 512-thread double or cfloat panel is over the
+  per-sub-partition register ceiling. The acpp CUDA queue drops that launch without reporting it,
+  the same error-model gap as `QueueAsyncErrors.*` in `tests/known-failures-acpp-cuda.txt`.
+- **Workaround:** on acpp the cap is at most 256 rows (`kPanelRegImplMaxRows`): 8 warps launch at
+  any count up to 255 registers, the bound `kernel_max_wg_size` already uses
+  (`src/sycl/impl.hh`). Taller panels take the local-memory leaf. `RegPanelCapacityIsOneSpelling`
+  now checks the pivots written by its launch at the advertised cap, so a dropped launch is red.
+- **Fix needs:** a launch error from the acpp CUDA backend for an out-of-resources launch, or a
+  per-kernel register query; any other compile-time register gate is exposed the same way on acpp.
+- **Status:** worked around for the register panel; the silent drop is open.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 

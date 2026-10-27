@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <cstdint>
+#include <cstring>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/env.hh>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cstring>
 #include <complex>
+#include <initializer_list>
 #include <string>
 #include <iostream>
 #include <vector>
@@ -625,5 +627,159 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
                     << where;
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Defect 14 (every driver reads only the named triangle) and repeatability under a pinned route.
+// evidence: docs/design/known-defects.md#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A graded Hermitian batch from the library fill (lambda_i = 10^(-6 i / (n - 1)), a different Q per
+// item, deterministic in the seed) in A's strided storage, copied whole into `full`. Then a large
+// finite poison (9e3 against ||A||_2 = 1) overwrites the triangle `uplo` does not name.
+template <typename T>
+std::vector<std::vector<double>> fill_poisoned(Queue& ctx, MatrixView<T, MatrixFormat::Dense> A, Uplo uplo,
+                                               const MatrixView<T, MatrixFormat::Dense>& full) {
+    const int n = A.rows();
+    A.fill_graded_hermitian(ctx, 6.0, 91u + unsigned(n)).wait();
+    MatrixView<T, MatrixFormat::Dense>::copy(ctx, full, A).wait();
+    const T poison = vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
+    for (int b = 0; b < A.batch_size(); ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                if (uplo == Uplo::Lower ? i < j : i > j) A(i, j, b) = poison;
+    std::vector<double> lam(n);
+    for (int i = 0; i < n; ++i) lam[i] = std::pow(10.0, n == 1 ? 0.0 : -6.0 * i / (n - 1));
+    std::sort(lam.begin(), lam.end());
+    return std::vector<std::vector<double>>(A.batch_size(), lam);
+}
+
+}  // namespace
+
+namespace {
+
+// Poison in the triangle the caller did not name, under Auto, on a strided batch (ld = n + 3,
+// stride = ld n + 5), for every n in `ns`, both uplo and both jobz.
+template <typename T, Backend B>
+void expect_auto_ignores_other_triangle(Queue& ctx, std::initializer_list<int> ns) {
+    using Real = typename base_type<T>::type;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const int batch = 2;
+    for (const int n : ns)
+        for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                const std::string where = "n=" + std::to_string(n) + (uplo == Uplo::Lower ? " L" : " U") +
+                                          (jobz == JobType::EigenVectors ? " V" : " N");
+                const int ld = n + 3, stride = ld * n + 5;
+                UnifiedVector<T> buf(size_t(stride) * batch, T(0));
+                UnifiedVector<T*> ptrs(batch, nullptr);
+                MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                const auto lambda = fill_poisoned<T>(ctx, A, uplo, A0);
+                UnifiedVector<Real> W(size_t(n) * batch, Real(0));
+                UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
+                (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                ctx.wait();
+
+                const VectorView<Real> w(W.data(), n, batch);
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, lambda, 1.0, A0.all_items())) << where;
+                if (jobz != JobType::EigenVectors) continue;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n, MV::eigen_residual(ctx, A0, A, w, A0.all_items()))
+                    << where;
+                EXPECT_VERIFY(T, verify::Check::orthogonality_rotations, n, MV::orthogonality(ctx, A, A0.all_items()))
+                    << where;
+            }
+}
+
+struct RepeatCase {
+    const char* route;
+    int n, batch;
+};
+
+// Same device, same route, same build: two solves of identical copies of one batch agree bit for bit
+// (W and the whole buffer: eigenvectors, the other triangle and the padding).
+template <typename T, Backend B>
+void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase> cases) {
+    using Real = typename base_type<T>::type;
+    for (const RepeatCase& c : cases) {
+        if (B == Backend::ROCM && std::string(c.route) == "cta") continue;
+        const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", c.route);
+        for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                const std::string where = std::string(c.route) + " n=" + std::to_string(c.n) +
+                                          " batch=" + std::to_string(c.batch) + (uplo == Uplo::Lower ? " L" : " U") +
+                                          (jobz == JobType::EigenVectors ? " V" : " N");
+                const int ld = c.n + 3, stride = ld * c.n + 5;
+                Matrix<T, MatrixFormat::Dense> A0(c.n, c.n, c.batch);
+                UnifiedVector<T> buf[2] = {UnifiedVector<T>(size_t(stride) * c.batch, T(0)),
+                                           UnifiedVector<T>(size_t(stride) * c.batch, T(0))};
+                UnifiedVector<Real> W[2] = {UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-1)),
+                                            UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-2))};
+                UnifiedVector<T*> ptrs[2] = {UnifiedVector<T*>(c.batch, nullptr), UnifiedVector<T*>(c.batch, nullptr)};
+                for (int r = 0; r < 2; ++r) {
+                    MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
+                    (void)fill_poisoned<T>(ctx, A, uplo, A0);
+                    if (r == 1)
+                        ASSERT_EQ(0, std::memcmp(buf[0].data(), buf[1].data(), buf[0].size() * sizeof(T)))
+                            << where << ": the inputs differ";
+                }
+                for (int r = 0; r < 2; ++r) {
+                    MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
+                    UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W[r].to_span(), jobz, uplo));
+                    (void)syev<B, T>(ctx, A, W[r].to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
+                    ctx.wait();
+                }
+                EXPECT_EQ(0, std::memcmp(W[0].data(), W[1].data(), W[0].size() * sizeof(Real)))
+                    << where << ": eigenvalues differ between two runs";
+                EXPECT_EQ(0, std::memcmp(buf[0].data(), buf[1].data(), buf[0].size() * sizeof(T)))
+                    << where << ": eigenvectors or A differ between two runs";
+            }
+    }
+}
+
+}  // namespace
+
+// With the sytrd_cta load reverted this catches only the complex types (Auto sends them to cta).
+// Real types reach no reading route at n <= 40; their guards are the heavy
+// AutoReadsOnlyTheNamedTriangleAtLargeN (sy2sb) and SyevCandidates.OtherTriangleIsNeverRead.
+TYPED_TEST(SyevTest, AutoIgnoresUnreferencedTriangle) {
+    if (TestFixture::BackendType == Backend::NETLIB && !BATCHLAS_HAS_LAPACKE)
+        GTEST_SKIP() << "no LAPACKE: NETLIB syev has no route in this build";
+    expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
+                                                                                                   {5, 32, 40});
+}
+
+// Heavy tier (*AutoReads*): two_stage is Auto's choice for jobz=N here and for float V at n = 1024.
+// NETLIB is skipped: its route is reference LAPACK, which reads only `uplo` and is never mirrored,
+// and its n = 1024 solves cost ~100 s per dtype.
+TYPED_TEST(SyevTest, AutoReadsOnlyTheNamedTriangleAtLargeN) {
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "reference LAPACK reads only uplo; covered at small n by AutoIgnoresUnreferencedTriangle";
+    } else {
+        expect_auto_ignores_other_triangle<typename TestFixture::ScalarType, TestFixture::BackendType>(*this->ctx,
+                                                                                                       {400, 1024});
+    }
+}
+
+TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "the pinned native families are GPU kernels";
+    } else {
+        expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
+            *this->ctx, {{"cta", 17, 64}, {"blocked", 32, 64}, {"two_stage", 40, 64}});
+    }
+}
+
+// Heavy tier (*Saturating*): cta's batch of 1024 fills the device with sub-group partitions, and
+// the n = 400 solves are the slow half of the cases.
+TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatableAtSaturatingBatch) {
+    if constexpr (TestFixture::BackendType == Backend::NETLIB) {
+        GTEST_SKIP() << "the pinned native families are GPU kernels";
+    } else {
+        expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
+            *this->ctx, {{"cta", 32, 1024}, {"blocked", 400, 64}, {"two_stage", 400, 64}});
     }
 }

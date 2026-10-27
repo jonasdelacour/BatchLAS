@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <algorithm>
 #include <src/queue.hh>
 #include <src/sycl/local_mem.hh>
 #include <cstdio>
@@ -90,6 +91,45 @@ Queue::Queue(const Queue& base, bool in_order)
     : device_(base.device_), in_order_(in_order), backend_(base.backend_), resolved_backend_(base.resolved_backend_) {
     batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(base.impl_->get_context(), base.impl_->get_device(), device_, in_order_);
+}
+
+namespace detail {
+struct SyclQueueSource {
+    const sycl::context& ctx;
+    const sycl::device& dev;
+};
+}  // namespace detail
+
+Queue::Queue(Device logical, bool in_order, const detail::SyclQueueSource& src)
+    : device_(logical), in_order_(in_order) {
+    batchlas::detail::note_queue_constructed();
+    require_metal_adaptivity(device_);
+    impl_ = std::make_unique<QueueImpl>(src.ctx, src.dev, device_, in_order_);
+}
+
+namespace detail {
+struct SyclInteropAccess {
+    static Queue make(const sycl::context& ctx, const sycl::device& dev, bool in_order) {
+        const auto& all = QueueImpl::device_arrays;
+        for (size_t t = 0; t < all.size(); ++t) {
+            for (size_t i = 0; i < all[t].size(); ++i) {
+                if (all[t][i] != dev) continue;
+                const auto in_ctx = ctx.get_devices();
+                if (std::find(in_ctx.begin(), in_ctx.end(), dev) == in_ctx.end()) {
+                    throw batchlas::device_error("queue_from_sycl: the device is not part of the given context");
+                }
+                return Queue(Device(i, static_cast<DeviceType>(t)), in_order, SyclQueueSource{ctx, dev});
+            }
+        }
+        throw batchlas::device_error(
+            "queue_from_sycl: the device is not one of Device::get_devices(type) (a sub-device or a "
+            "device outside the runtime's root device list cannot back a BatchLAS Queue)");
+    }
+};
+}  // namespace detail
+
+Queue queue_from_sycl(const sycl::context& ctx, const sycl::device& dev, bool in_order) {
+    return detail::SyclInteropAccess::make(ctx, dev, in_order);
 }
 
 bool Queue::backend_available(batchlas::Backend backend) {

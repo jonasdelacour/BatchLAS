@@ -188,7 +188,7 @@ target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
-target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc ops/symm/kernels/symm_mirror.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 
@@ -438,7 +438,10 @@ else()
 endif()
 
 
-if(BATCHLAS_HAS_HOST_BACKEND)
+# Linked only when the library may call LAPACKE/CBLAS (BATCHLAS_HAS_LAPACKE/CBLAS: found AND
+# vendor math allowed). A vendor-free build keeps the host device family but calls no netlib, so
+# no libbatchlas*.so records DT_NEEDED on it; batchlas_verify (static, test-only) links it itself.
+if(BATCHLAS_HAS_HOST_BACKEND AND BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS)
     # PRIVATE: these are absolute -dev symlink paths
     # (/usr/lib/x86_64-linux-gnu/liblapacke.so). PUBLIC put them verbatim into
     # the exported BatchLAS::batchlas_backends interface, so a consumer on a

@@ -110,14 +110,20 @@ public:
             "src/kernels/common/triangular_expand.hh",
             "src/ops/level3/batched.hh",
             "src/expansion_budget.hh",
+            // family: mirror
+            "src/ops/symm/kernels/symm_mirror.cc",
+            "src/ops/symm/kernels/symm_mirror.hh",
             // common
             "src/ops/hemm/choice.hh",
+            "src/ops/symm/mirror_tile.hh",
         };
         // kernel-sources-end
         // kernel-deps-begin
         // common "src/ops/hemm/hemm.cc"
         // hemm expand calls the public gemm: its native kernels and can_run count too.
         // family: expand "src/ops/gemm/kernels/gemm_kernels.cc" "src/ops/gemm/kernels/gemm_launch.hh" "src/ops/gemm/kernels/gemm_rows.hh" "src/ops/gemm/kernels/gemm_shard.cc.in" "src/ops/gemm/gemm_kernels.hh" "src/ops/gemm/choice.hh" "src/ops/gemm/gemm.cc"
+        // mirror stages wide v2's gemm tile with its own A loader: the body it reuses counts.
+        // family: mirror "src/ops/gemm/kernels/register_64x64_k16_wide.hh" "src/ops/gemm/kernels/register_tiled_common.hh" "src/ops/gemm/kernels/vec4.hh" "src/ops/gemm/kernels/copy_async.hh" "src/ops/gemm/kernels/accessors.hh" "src/ops/gemm/kernels/epilogue_linear.hh" "src/ops/gemm/kernels/load_policies.hh" "src/ops/gemm/gemm_kernels.hh"
         // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/hemm_spec.cc"; }

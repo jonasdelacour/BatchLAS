@@ -20,8 +20,8 @@ Past fan-outs lost 94-147 minutes per agent to a base that did not link. The usu
 ```
 Context: BatchLAS, rules in docs/developer/agent-guide.md (read sections 7-9 only if you build/test/route).
 Base: <sha>, verified to build and pass <smoke test> on this box at <time>.
-Build only named targets with scripts/b -B <your tree> <targets>; it holds the box-wide lock and
-the -j8 cap. Set TMPDIR to a disk path ($CLAUDE_JOB_DIR/tmp), never tmpfs /tmp.
+Build only named targets with scripts/b -B <your tree> <targets>; it admits builds by free memory
+(several run side by side) and caps -j8. Set TMPDIR to a disk path ($CLAUDE_JOB_DIR/tmp), never tmpfs /tmp.
 Never hand-edit tuned/*.txt (regenerate with scripts/sweep_to_table.py from the ledger) or the
 TuneHash pins (scripts/agent/repin_tune_hashes.py; <owner> owns them).
 Wait on background work with scripts/agent/wait_for.sh run in the background, never sleep loops.

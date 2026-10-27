@@ -39,6 +39,7 @@ vendor-free build.
 | Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 26.04 | Library, tests and benchmarks built and run here daily |
 | Second GPU box | same toolchain (threadripper02) | 13.2 | NVIDIA RTX PRO 6000, `sm_120` | Linux | Built and tested; `sm_120` tuning tables measured here |
 | AdaptiveCpp + CUDA | AdaptiveCpp 25.10.0, LLVM 20, generic (SSCP) flow (`/opt/adaptivecpp-25.10.0-cuda13.2`) | 13.2 | NVIDIA RTX PRO 6000, `sm_120` | Linux | Library and tests built and run (`acpp-tests`); failure ledger `tests/known-failures-acpp.txt` |
+| AdaptiveCpp multipass CUDA | AdaptiveCpp `develop` 94ab0d58 (25.10.0+), LLVM 20, `BATCHLAS_ACPP_TARGETS=cuda:sm_89` (`/opt/adaptivecpp-llvm20-cuda12.8`) | 12.8 | NVIDIA RTX 4090, `sm_89` | Ubuntu 26.04 | Library and tests built, full `ctest` run serially; failure ledger `tests/known-failures-acpp-cuda.txt` ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
 | CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export, public headers, comment density, evidence anchors, tuned tables, docs site |
 | CI — `acpp-compile` | AdaptiveCpp 25.10.0 built from source, LLVM 20 | off | none | `ubuntu-24.04` | Configures and compiles every target with `--acpp-targets=generic`; runs nothing |
 | CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 26.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
@@ -137,11 +138,33 @@ cmake --build build -j8
 | `CMAKE_BUILD_RPATH_USE_ORIGIN` | build-tree RUNPATHs relative to `$ORIGIN` (BatchLAS defaults it to `ON`), so a copied tree (`scripts/seed_build_tree.sh`) loads its own libraries |
 | `BATCHLAS_SYCL_IMPL` | `AUTO` (default; `ACPP` when `CMAKE_CXX_COMPILER` is the `acpp` driver), `DPCPP` or `ACPP`. Only the matching compiler is accepted; `ACPP` without an `acpp` compiler takes `acpp` from `PATH`, else `/opt/adaptivecpp/bin`, also replacing a cached compiler (`ccmake`); CMake then resets the cache and the value reads `AUTO` |
 | `BATCHLAS_ACPP_TARGETS` | `--acpp-targets` of an AdaptiveCpp build (default `generic`) |
+| `BATCHLAS_ACPP_CUDA_PATH` | AdaptiveCpp with `BATCHLAS_ACPP_TARGETS=cuda:sm_XX` (multipass CUDA): the CUDA 12.x toolkit for `--acpp-cuda-path`, also the toolkit the library links (empty: acpp's `default-cuda-path`). A CUDA 13 toolkit there is a configure error ([multipass CUDA](../design/sycl-implementations.md#sycl-impl-cuda-aot)) |
+| `BATCHLAS_FP_CONTRACT` | `on` (default) or `off`: the `-ffp-contract` of every BatchLAS TU, host and device, under both implementations ([below](#guide_build_fp_contract)) |
 | `BATCHLAS_ENABLE_METAL` | AdaptiveCpp only: `AUTO` (default; dispatch an Apple GPU as `Backend::SYCL` when `acpp-info` lists a Metal device), `ON` (require it; configure fails without one) or `OFF` (needs the GPU hidden with `ACPP_VISIBILITY_MASK=omp`; configure fails while `acpp-info` lists it) |
 | `BATCHLAS_DEVICE_FP64` | `AUTO` (default), `ON` or `OFF`: instantiate double and complex<double> for `Backend::SYCL`. `AUTO` resolves to `OFF` when Metal is enabled, and `ON` with Metal is a configure error. CUDA, ROCm and the host always keep all four types |
 | `BATCHLAS_OPENBLAS_ROOT` | OpenBLAS prefix whose `libopenblas` provides LAPACKE and CBLAS. On macOS it is probed at `/opt/homebrew/opt/openblas` and `/usr/local/opt/openblas`; set it, the headers go on the library's include path. Empty on Linux by default, which keeps the system LAPACKE |
 | `BATCHLAS_HIDDEN_VISIBILITY` | `-fvisibility=hidden` on the monolithic library (only with `BATCHLAS_MONOLITHIC_LIBRARY`; default `ON`, `OFF` when `BATCHLAS_BUILD_TESTS` is on). `OFF` lets the in-tree tests link against it, since they reach about 1,000 unexported internal symbols |
 | `BATCHLAS_ACPP_SLM_OPTIN` | AdaptiveCpp + CUDA: a launch interposer that opts kernels into more than 48 KiB of local memory (default `OFF`; [SYCL implementations](../design/sycl-implementations.md#sycl-impl-slm-budget)) |
+
+### Floating-point contraction {#guide_build_fp_contract}
+
+The installed library is built with `-ffp-contract=on`: `a*b + c` written as **one expression** may
+become one fused multiply-add (one rounding); a product stored in a variable and added in a later
+statement is never fused. Both implementations build it that way:
+
+| implementation | compiler default | what BatchLAS passes | checked |
+| --- | --- | --- | --- |
+| DPC++ (`clang++`, `icpx`) | `on` (the driver passes `-ffp-contract=on` to every job; `icpx` also gets `-ffp-model=precise`, which keeps `on`) | nothing for `on`; `-ffp-contract=off` for `off`, after `-ffp-model` | device IR of a test kernel: one `llvm.fmuladd` under `on`, none under `off` |
+| AdaptiveCpp | `fast` at `-O2` and above (fuses across statements) | `-ffp-contract=<BATCHLAS_FP_CONTRACT>` on every TU | sm_120 PTX of the same kernel, multipass CUDA: 2 `fma.rn.f64` with no flag, 1 under `on`, 0 under `off` (the product is emitted as `mul.rn`, which ptxas cannot fuse) |
+
+`-DBATCHLAS_FP_CONTRACT=off` builds every BatchLAS TU without contraction (for bitwise agreement
+with code built `-ffp-contract=off`). The default and the tuned tables are `on`; `off` is
+neither measured nor tested by CI. The option covers BatchLAS's own TUs only: templates
+instantiated from the installed headers (device BLAS, `group-collectives.hh`) take the
+consumer's flags, and vendor libraries (cuBLAS, cuSOLVER) contract as they were built. The other
+floating-point settings of DPC++ and acpp `generic` match (no FTZ, `div.rn`, approximate
+`sqrt.f32`; [A11](../design/sycl-implementations.md#sycl-impl-runtime-differences)); multipass
+CUDA was not compared.
 
 ### Device and toolkit detection {#guide_build_detection}
 

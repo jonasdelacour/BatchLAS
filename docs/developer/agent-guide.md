@@ -145,9 +145,9 @@ cmake -B build .                                     # no seed: full build 5 min
 # GPU-only iteration tree (nvptx64 only; never the gate, §7):
 #   cmake -B build-gpu . -DBATCHLAS_CPU_TARGET=none
 
-# Iterate through scripts/b: named targets only (no target = exit 64), -j8 cap, a
-# box-wide build lock, a free-memory wait, exit 70 when a requested binary is
-# missing after a "successful" build. One target = the library plus one test binary.
+# Iterate through scripts/b: named targets only (no target = exit 64), -j8 cap,
+# memory admission (builds run side by side while RAM allows; the newer ones pause
+# when it runs low), exit 70 when a requested binary is missing after a "successful" build. One target = the library plus one test binary.
 scripts/b stedc_tests
 ctest --test-dir build -R '^stedc_tests(_heavy)?$' --output-on-failure
 
@@ -345,7 +345,12 @@ A TU that a CPU queue can run (gemm, gemv, spmm, NETLIB paths) must keep its CPU
 
 - **Cap build parallelism at `-j8`** unless you have measured headroom. Heavy SYCL TUs exceed 14 GB
   each, and wide builds (`-j20`, `-j28`, or two `-j` builds side by side) have been OOM-killed
-  several times. Run one build at a time; add a second only after checking `free -g`.
+  several times. RAM is the only limit on concurrent builds: `scripts/b` admits a build only while
+  `MemAvailable` >= `BATCHLAS_ADMIT_MEM_GB` (36), staggers starts by `BATCHLAS_ADMIT_RAMP_S`
+  (120 s), and below `BATCHLAS_PAUSE_MEM_GB` (10) SIGSTOPs every build but the oldest until
+  `BATCHLAS_RESUME_MEM_GB` (24). `BATCHLAS_BUILD_LOCK_MODE=exclusive` restores one build per box.
+  `scripts/gate.sh` still takes the exclusive lock for its whole run. Eight -j8 builds ran side by
+  side on the 4090 box (2026-10-26) without dropping below 12 GB available.
 - **ccache is on by default** (`BATCHLAS_USE_CCACHE`, `cmake/BatchLASCcache.cmake`) when `ccache`
   is on `PATH` or in `~/.local/bin`; configure prints `ccache enabled (...)`. No ccache: drop the
   static binary from https://github.com/ccache/ccache/releases into `~/.local/bin` (no root).
@@ -444,7 +449,7 @@ A TU that a CPU queue can run (gemm, gemv, spmm, NETLIB paths) must keep its CPU
   ledger (`docs/ci.md`). Compare failing test **names** against a baseline, never pass/fail counts.
   Failures that reproduce on main only on one machine are in `tests/known-failures-host-<host>.txt`
   (short hostname). `compare_failures.py` reads that file on top of the main ledger when `--known`
-  is not given, and marks its entries `[host]`. To attribute anything else, run
+  is not given and the tree is DPC++, and marks its entries `[host]`. To attribute anything else, run
   `python3 scripts/agent/attribute_failures.py --tree build-gate <ctest names>`. It builds only
   those binaries in a cached base worktree seeded from your tree, runs both trees N times, and
   prints PRE-EXISTING / NEW / FLAKY / FIXED per gtest case. Never rebuild main by hand for this.
@@ -531,7 +536,7 @@ heterogeneous batch on every backend (the loops run each item at the top-level e
 heterogeneous call has no route. `cublasdx` and the old level-3 pin-word list are gone: every
 `cublasdx` pin throws as an unknown family.
 
-**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 22 ops) takes `auto`,
+**Env override** `BATCHLAS_<OP>_ROUTE` (`settings().routing.route("<op>")`, 27 ops) takes `auto`,
 `native`, `vendor` or a spelling (`lpanel:panel=8`, `lpanel:8`), case-folded and trimmed.
 
 - **A bad pin THROWS** (unparsable, not a compiled candidate, or cannot run the shape). Only the class

@@ -88,6 +88,15 @@ BATCHLAS_UNROLL_FULL
 template <typename Op, typename T>
 inline constexpr bool is_op_v = std::is_same_v<Op, T>;
 
+// The NVPTX device pass's sm_XY0: DPC++, or AdaptiveCpp multipass CUDA (cuda:sm_XY); 0 elsewhere.
+#if defined(__SYCL_CUDA_ARCH__)
+#define BATCHLAS_NVPTX_ARCH __SYCL_CUDA_ARCH__
+#elif BATCHLAS_SYCL_IMPL_ACPP && defined(__CUDA_ARCH__)
+#define BATCHLAS_NVPTX_ARCH __CUDA_ARCH__
+#else
+#define BATCHLAS_NVPTX_ARCH 0
+#endif
+
 // redux.sync (sm_80+) only with the full mask: a per-chunk mask makes ptxas
 // serialise the warp into WARPSYNC.EXCLUSIVE groups, slower than a butterfly.
 template <typename T, typename Op>
@@ -100,7 +109,7 @@ inline constexpr bool redux_ok_v =
 
 template <typename T, typename Op>
 inline T redux_full(T v, Op) {
-#if defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
+#if BATCHLAS_NVPTX_ARCH >= 800
     constexpr uint32_t kAll = ~0u;
     constexpr bool kSigned = std::is_same_v<T, int32_t>;
     if constexpr (is_op_v<Op, sycl::plus<T>> || is_op_v<Op, sycl::plus<>>) {
@@ -123,7 +132,7 @@ inline T redux_full(T v, Op) {
 #endif
 }
 
-#if defined(__SYCL_CUDA_ARCH__) && __SYCL_CUDA_ARCH__ >= 800
+#if BATCHLAS_NVPTX_ARCH >= 800
 inline constexpr bool kHasRedux = true;
 #else
 inline constexpr bool kHasRedux = false;
