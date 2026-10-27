@@ -1,7 +1,7 @@
 // sytrf / sytrs / sysv: Bunch-Kaufman LDL^T with LAPACK ?sytrf semantics. Every route is pinned and
 // checked against the full symmetric matrix through batchlas::verify; the operand layout is never
-// natural (padded ld, padded batch stride, both pads and the unreferenced triangle poisoned with large
-// finite values), complex data has nonzero imaginary parts and is symmetric, not Hermitian.
+// natural (padded ld, padded batch stride, both pads and the unreferenced triangle poisoned with a large
+// finite value), complex data has nonzero imaginary parts and is symmetric, not Hermitian.
 // evidence: docs/perf/sytrf.md
 #include <gtest/gtest.h>
 
@@ -16,13 +16,14 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/verify/tolerance.hh>
 
+#include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 
 #include <src/ops/sysv/choice.hh>
 #include <src/ops/sytrf/choice.hh>
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/ops/sytrs/choice.hh>
-#include <src/select/coverage.hh>
 #include <src/select/select.hh>
 #include <src/select/vendor.hh>
 
@@ -30,15 +31,10 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <cstdlib>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
 #include <random>
-#include <sstream>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -49,25 +45,32 @@ using namespace batchlas;
 
 namespace {
 
+namespace ts = test_support;
+using ts::Live;
+using verify::Check;
+
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-using verify::Check;
-
 // random: uniform [-1, 1], every pivot kind occurs; dominant: |diagonal| = n + 2 with alternating
 // signs, so every pivot is 1 x 1 with no interchange; kkt: [[H, A^T], [A, 0]] with a small H, which
-// forces 2 x 2 pivots; zero: the zero matrix (info > 0 at the first step).
-enum class Gen { random, dominant, kkt, zero };
+// forces 2 x 2 pivots.
+enum class Gen { random, dominant, kkt };
 
+// full: the whole symmetric matrix per item, packed; a: its uplo triangle in padded storage (ld n + 3,
+// stride + 7), b: B padded (ld n + 2, stride + 5), b0 a snapshot of b; piv and info hold sentinels.
 template <typename T>
 struct Sys {
-    int n = 0, nrhs = 0, batch = 0, lda = 0, stra = 0, ldb = 0, strb = 0;
+    int n = 0, nrhs = 0;
     Uplo uplo = Uplo::Lower;
-    UnifiedVector<T> a, b;
-    std::vector<T> a_in, b_in;
-    std::vector<T> full;  // the symmetric matrix the triangle stands for, n x n per item, ld n
+    Matrix<T> full, a, b, b0;
     UnifiedVector<int64_t> piv;
     UnifiedVector<int32_t> info;
+
+    int batch() const { return a.batch_size(); }
+    const int* ipiv(int item) const { return reinterpret_cast<const int*>(piv.data()) + size_t(item) * n; }
+    int* ipiv(int item) { return reinterpret_cast<int*>(piv.data()) + size_t(item) * n; }
+    bool stored(int i, int j) const { return Live::triangle(uplo).contains(i, j, n, n); }
 };
 
 template <typename T>
@@ -77,105 +80,60 @@ T draw(std::mt19937& g, double scale) {
     return MV<T>::make(scale * re, scale * im);
 }
 
+// Complex symmetric (not Hermitian) item `item` of m: no library generator draws one, nor a KKT matrix.
 template <typename T>
-std::vector<T> symmetric(int n, Gen gen, std::mt19937& g) {
-    std::vector<T> m(size_t(n) * n, T{});
-    if (gen == Gen::zero) return m;
-    const int nc = gen == Gen::kkt ? n / 3 : 0;  // constraint rows, the zero block
-    const int nh = n - nc;
+void symmetric(Matrix<T>& m, int item, Gen gen, std::mt19937& g) {
+    const int n = m.rows();
+    const int nh = n - (gen == Gen::kkt ? n / 3 : 0);  // n - nh constraint rows: the zero block
     for (int j = 0; j < n; ++j)
         for (int i = j; i < n; ++i) {
             T v = draw<T>(g, 1.0);
             if (gen == Gen::kkt) {
-                if (i < nh) v = draw<T>(g, 1e-2);          // H
-                else if (j >= nh) v = T{};                 // the zero block
+                if (i < nh) v = draw<T>(g, 1e-2);  // H
+                else if (j >= nh) v = T{};         // the zero block
             }
             if (gen == Gen::dominant && i == j) v = MV<T>::make((j % 2 ? -1.0 : 1.0) * (n + 2), 0.5);
-            m[size_t(j) * n + i] = v;
-            m[size_t(i) * n + j] = v;
+            m(i, j, item) = m(j, i, item) = v;
         }
-    return m;
-}
-
-template <typename T>
-bool referenced(Uplo uplo, int i, int j) {
-    return uplo == Uplo::Lower ? i >= j : i <= j;
 }
 
 template <typename T>
 Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, Gen gen, unsigned seed, bool identical = false) {
-    Sys<T> p;
-    p.n = n; p.nrhs = nrhs; p.batch = batch; p.uplo = uplo;
-    p.lda = n + 3; p.stra = p.lda * n + 7;
-    p.ldb = n + 2; p.strb = p.ldb * nrhs + 5;
-    const T pad = MV<T>::make(-9.75e3, 4.5e3);
-    const T tri = MV<T>::make(7.25e5, -3.5e5);  // in range, large, finite: a kernel that reads it is wrong
-    p.a = UnifiedVector<T>(size_t(p.stra) * batch, pad);
-    p.b = UnifiedVector<T>(size_t(p.strb) * batch, pad);
-    p.full.assign(size_t(n) * n * batch, T{});
-    p.piv = UnifiedVector<int64_t>(size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL));
-    p.info = UnifiedVector<int32_t>(size_t(batch), int32_t(-12345));
+    Matrix<T> full(n, n, batch), b(n, nrhs, batch);
     std::mt19937 g(seed);
     for (int bi = 0; bi < batch; ++bi) {
         if (identical && bi > 0) g.seed(seed);
-        const auto m = symmetric<T>(n, gen, g);
-        std::copy(m.begin(), m.end(), p.full.begin() + size_t(bi) * n * n);
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                p.a[size_t(bi) * p.stra + size_t(j) * p.lda + i] = referenced<T>(uplo, i, j) ? m[size_t(j) * n + i] : tri;
+        symmetric(full, bi, gen, g);
         for (int c = 0; c < nrhs; ++c)
-            for (int i = 0; i < n; ++i) p.b[size_t(bi) * p.strb + size_t(c) * p.ldb + i] = draw<T>(g, 1.0);
+            for (int i = 0; i < n; ++i) b(i, c, bi) = draw<T>(g, 1.0);
     }
-    p.a_in.assign(p.a.begin(), p.a.end());
-    p.b_in.assign(p.b.begin(), p.b.end());
+    Sys<T> p{n, nrhs, uplo, std::move(full), ts::padded<T>(n, n, batch, 3, 7), ts::padded<T>(n, nrhs, batch, 2, 5),
+             Matrix<T>(n, nrhs, batch), UnifiedVector<int64_t>(size_t(n) * batch, int64_t(0x0BADBEEF0BADBEEFLL)),
+             UnifiedVector<int32_t>(size_t(batch), int32_t(-12345))};
+    ts::store<T>(p.a, p.full, Live::triangle(uplo));
+    ts::store<T>(p.b, b);
+    p.b0 = p.b.clone();
     return p;
 }
 
+// The unreferenced triangle and both pads still hold the poison.
 template <typename T>
-MV<T> a_view(Sys<T>& p) { return MV<T>(p.a.data(), p.n, p.n, p.lda, p.stra, p.batch); }
-template <typename T>
-MV<T> b_view(Sys<T>& p) { return MV<T>(p.b.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch); }
-
-template <typename T>
-std::vector<int> all_items(const Sys<T>& p) {
-    std::vector<int> v(size_t(p.batch));
-    for (int i = 0; i < p.batch; ++i) v[size_t(i)] = i;
-    return v;
+::testing::AssertionResult untouched(const Sys<T>& p) {
+    if (auto r = ts::unwritten_outside<T>(p.a, Live::triangle(p.uplo)); !r) return r << " in A";
+    return ts::unwritten_outside<T>(p.b, Live::block()) << " in B";
 }
 
+// Zeroes item s's stored triangle (a singular item; full keeps the regular matrix).
 template <typename T>
-double residual(Queue& q, Sys<T>& p, const std::vector<int>& items) {
-    return MV<T>::solve_residual(q, MV<T>(p.full.data(), p.n, p.n, p.n, p.n * p.n, p.batch), b_view(p),
-                                 MV<T>(p.b_in.data(), p.n, p.nrhs, p.ldb, p.strb, p.batch), items);
-}
-
-template <typename T>
-bool same(const T& x, const T& y) { return std::memcmp(&x, &y, sizeof(T)) == 0; }
-
-// The unreferenced triangle and both pads must come back bit-unchanged: the first offender, or -1.
-template <typename T>
-long long first_touched(const Sys<T>& p) {
-    for (int bi = 0; bi < p.batch; ++bi)
-        for (int idx = 0; idx < p.stra; ++idx) {
-            const int j = idx / p.lda, i = idx % p.lda;
-            const bool live = j < p.n && i < p.n && referenced<T>(p.uplo, i, j);
-            const size_t at = size_t(bi) * p.stra + idx;
-            if (!live && !same(p.a[at], p.a_in[at])) return (long long)at;
-        }
-    for (int bi = 0; bi < p.batch; ++bi)
-        for (int idx = 0; idx < p.strb; ++idx) {
-            const int j = idx / p.ldb, i = idx % p.ldb;
-            const size_t at = size_t(bi) * p.strb + idx;
-            if (!(j < p.nrhs && i < p.n) && !same(p.b[at], p.b_in[at])) return -2 - (long long)at;
-        }
-    return -1;
+void zero_item(Sys<T>& p, int s) {
+    ts::store<T>(p.a.batch_item(s), Matrix<T>::Zeros(p.n, p.n, 1), Live::triangle(p.uplo));
 }
 
 // LAPACK's encoding, checked: |ipiv| in [1, n], a 2 x 2 block is two equal negative entries.
 // Returns {1 x 1 interchanges, 2 x 2 blocks}, or {-1, -1} for a malformed list.
 template <typename T>
 std::pair<int, int> pivot_kinds(const Sys<T>& p, int item) {
-    const int* ip = reinterpret_cast<const int*>(p.piv.data()) + size_t(item) * p.n;
+    const int* ip = p.ipiv(item);
     int swaps = 0, blocks = 0;
     for (int k = 0; k < p.n;) {
         const int v = ip[k];
@@ -192,7 +150,7 @@ std::pair<int, int> pivot_kinds(const Sys<T>& p, int item) {
 // n-1-i for Upper): k = nb - 1 is a block across the first blocked-panel boundary.
 template <typename T>
 bool block_at(const Sys<T>& p, int item, int k) {
-    const int* ip = reinterpret_cast<const int*>(p.piv.data()) + size_t(item) * p.n;
+    const int* ip = p.ipiv(item);
     auto lp = [&](int i) { return ip[p.uplo == Uplo::Upper ? p.n - 1 - i : i]; };
     for (int j = 0; j < p.n;) {
         if (lp(j) > 0) { ++j; continue; }
@@ -202,11 +160,15 @@ bool block_at(const Sys<T>& p, int item, int k) {
     return false;
 }
 
+// Item b's ipiv in x equals item b's in y (item y_item's when >= 0), for each of `items` (empty: all).
 template <typename T>
-void expect_same_pivots(const Sys<T>& x, const Sys<T>& y, const std::string& what) {
-    const int* a = reinterpret_cast<const int*>(x.piv.data());
-    const int* b = reinterpret_cast<const int*>(y.piv.data());
-    for (int e = 0; e < x.n * x.batch; ++e) ASSERT_EQ(a[e], b[e]) << what << " at " << e;
+::testing::AssertionResult same_pivots(const Sys<T>& x, const Sys<T>& y, const std::vector<int>& items = {}, int y_item = -1) {
+    for (int b : items.empty() ? x.a.all_items() : items)
+        for (int k = 0; k < x.n; ++k)
+            if (x.ipiv(b)[k] != y.ipiv(y_item < 0 ? b : y_item)[k])
+                return ::testing::AssertionFailure() << "ipiv differs: item " << b << " entry " << k << " ("
+                                                     << x.ipiv(b)[k] << " vs " << y.ipiv(y_item < 0 ? b : y_item)[k] << ")";
+    return ::testing::AssertionSuccess();
 }
 
 // The logical partner row the 2 x 2 block at logical k of item `item` interchanged with logical
@@ -214,9 +176,8 @@ void expect_same_pivots(const Sys<T>& x, const Sys<T>& y, const std::string& wha
 template <typename T>
 int block_partner(const Sys<T>& p, int item, int k) {
     if (!block_at(p, item, k)) return -1;
-    const int* ip = reinterpret_cast<const int*>(p.piv.data()) + size_t(item) * p.n;
     auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
-    return phys(-ip[phys(k)] - 1);
+    return phys(-p.ipiv(item)[phys(k)] - 1);
 }
 
 // A 2 x 2 block forced at logical step k of item s of a dominant system: diagonals k and r (default
@@ -228,32 +189,22 @@ void force_block(Sys<T>& p, int s, int k, int r = -1) {
     auto phys = [&](int i) { return p.uplo == Uplo::Upper ? p.n - 1 - i : i; };
     auto put = [&](int li, int lj, T v) {
         const int i = phys(li), j = phys(lj);
-        p.full[size_t(s) * p.n * p.n + size_t(j) * p.n + i] = v;
-        p.full[size_t(s) * p.n * p.n + size_t(i) * p.n + j] = v;
-        const bool ij = referenced<T>(p.uplo, i, j);
-        p.a[size_t(s) * p.stra + size_t(ij ? j : i) * p.lda + (ij ? i : j)] = v;
+        p.full(i, j, s) = p.full(j, i, s) = v;
+        (p.stored(i, j) ? p.a(i, j, s) : p.a(j, i, s)) = v;
     };
     put(k, k, T{});
     put(r, r, T{});
     put(r, k, MV<T>::make(2.0 * (p.n + 2), 0.25));
-    p.a_in.assign(p.a.begin(), p.a.end());
 }
 
 // Sets the stored (referenced) entries of physical row and column j of item s to v.
 template <typename T>
 void set_index(Sys<T>& p, int s, int j, T v) {
     for (int i = 0; i < p.n; ++i) {
-        if (referenced<T>(p.uplo, i, j)) p.a[size_t(s) * p.stra + size_t(j) * p.lda + i] = v;
-        if (referenced<T>(p.uplo, j, i)) p.a[size_t(s) * p.stra + size_t(i) * p.lda + j] = v;
+        if (p.stored(i, j)) p.a(i, j, s) = v;
+        if (p.stored(j, i)) p.a(j, i, s) = v;
     }
-    p.a_in.assign(p.a.begin(), p.a.end());
 }
-
-template <typename T, Backend B>
-struct SytrfConfig {
-    using ScalarType = T;
-    static constexpr Backend BackendVal = B;
-};
 
 template <typename Config>
 class SytrfTest : public test_utils::BatchLASTest<Config> {
@@ -279,19 +230,16 @@ protected:
     }
 
     void factor_auto(Sys<T>& p) {
-        auto A = a_view(p);
-        const size_t need = sytrf_buffer_size<Bk, T>(*this->ctx, A, p.uplo);
+        const size_t need = sytrf_buffer_size<Bk, T>(*this->ctx, p.a, p.uplo);
         UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-        (void)sytrf<Bk, T>(*this->ctx, A, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need), p.info.to_span());
+        (void)sytrf<Bk, T>(*this->ctx, p.a, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need), p.info.to_span());
         this->ctx->wait();
     }
 
     void solve(Sys<T>& p) {
-        auto A = a_view(p);
-        auto Bv = b_view(p);
-        const size_t need = sytrs_buffer_size<Bk, T>(*this->ctx, A, Bv, p.uplo);
+        const size_t need = sytrs_buffer_size<Bk, T>(*this->ctx, p.a, p.b, p.uplo);
         UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-        (void)sytrs<Bk, T>(*this->ctx, A, Bv, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need));
+        (void)sytrs<Bk, T>(*this->ctx, p.a, p.b, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need));
         this->ctx->wait();
     }
 
@@ -303,13 +251,16 @@ protected:
     void sysv_run(Sys<T>& p, const ops::sysv::SysvChoice* c) {
         std::optional<select::ScopedPin<ops::sysv::SysvChoice>> pin;
         if (c) pin.emplace("sysv", *c);
-        auto A = a_view(p);
-        auto Bv = b_view(p);
-        const size_t need = sysv_buffer_size<Bk, T>(*this->ctx, A, Bv, p.uplo);
+        const size_t need = sysv_buffer_size<Bk, T>(*this->ctx, p.a, p.b, p.uplo);
         UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-        (void)sysv<Bk, T>(*this->ctx, A, Bv, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need),
+        (void)sysv<Bk, T>(*this->ctx, p.a, p.b, p.uplo, p.piv.to_span(), Span<std::byte>(ws.data(), need),
                           p.info.to_span());
         this->ctx->wait();
+    }
+
+    // ||full X - B0|| over `items` (empty: every item), X read in place from the padded b.
+    double residual(const Sys<T>& p, const std::vector<int>& items = {}) {
+        return MV<T>::solve_residual(*this->ctx, p.full, p.b, p.b0, items.empty() ? p.b.all_items() : items);
     }
 
     std::vector<ops::sysv::SysvChoice> sysv_routes(int n) const {
@@ -340,9 +291,15 @@ protected:
     }
 };
 
-using SytrfTestTypes = typename test_utils::backend_types<SytrfConfig>::type;
+using SytrfTestTypes = typename test_utils::backend_types<ts::Config>::type;
 
-std::string tag(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
+// Every item but `s`.
+std::vector<int> all_but(int batch, int s) {
+    std::vector<int> v;
+    for (int b = 0; b < batch; ++b)
+        if (b != s) v.push_back(b);
+    return v;
+}
 
 }  // namespace
 
@@ -358,20 +315,20 @@ TYPED_TEST(SytrfTest, GeneratorsForceTheirPivotKinds) {
             auto r = make_sys<T>(24, 1, 8, uplo, Gen::random, 11u);
             this->factor(r, c);
             int swaps = 0, blocks = 0;
-            for (int bi = 0; bi < r.batch; ++bi) {
+            for (int bi = 0; bi < r.batch(); ++bi) {
                 const auto [s, b] = pivot_kinds(r, bi);
-                ASSERT_GE(s, 0) << "malformed ipiv, item " << bi << " " << select::to_string(c) << tag(uplo);
+                ASSERT_GE(s, 0) << "malformed ipiv, item " << bi << " " << select::to_string(c) << ts::uplo_name(uplo);
                 swaps += s;
                 blocks += b;
             }
-            EXPECT_GT(swaps, 0) << select::to_string(c) << tag(uplo);
-            EXPECT_GT(blocks, 0) << select::to_string(c) << tag(uplo);
+            EXPECT_GT(swaps, 0) << select::to_string(c) << ts::uplo_name(uplo);
+            EXPECT_GT(blocks, 0) << select::to_string(c) << ts::uplo_name(uplo);
             auto d = make_sys<T>(24, 1, 4, uplo, Gen::dominant, 12u);
             this->factor(d, c);
-            for (int bi = 0; bi < d.batch; ++bi) EXPECT_EQ(pivot_kinds(d, bi), std::make_pair(0, 0));
+            for (int bi = 0; bi < d.batch(); ++bi) EXPECT_EQ(pivot_kinds(d, bi), std::make_pair(0, 0));
             auto k = make_sys<T>(24, 1, 4, uplo, Gen::kkt, 13u);
             this->factor(k, c);
-            for (int bi = 0; bi < k.batch; ++bi) EXPECT_GT(pivot_kinds(k, bi).second, 0) << select::to_string(c);
+            for (int bi = 0; bi < k.batch(); ++bi) EXPECT_GT(pivot_kinds(k, bi).second, 0) << select::to_string(c);
         }
 }
 
@@ -388,11 +345,11 @@ TYPED_TEST(SytrfTest, FactorThenSolveEveryRoute) {
                     auto p = make_sys<T>(n, 3, 5, uplo, gen, 100u + unsigned(n));
                     this->factor(p, c);
                     this->solve(p);
-                    const std::string what = select::to_string(c) + " " + tag(uplo) + " gen=" +
+                    const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " gen=" +
                                              std::to_string(int(gen)) + " n=" + std::to_string(n);
-                    for (int bi = 0; bi < p.batch; ++bi) EXPECT_EQ(p.info[bi], 0) << what;
-                    EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
-                    EXPECT_EQ(first_touched(p), -1) << what;
+                    for (int bi = 0; bi < p.batch(); ++bi) EXPECT_EQ(p.info[bi], 0) << what;
+                    EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
+                    EXPECT_TRUE(untouched(p)) << what;
                 }
             }
 }
@@ -413,14 +370,14 @@ TYPED_TEST(SytrfTest, SysvEveryRoute) {
                 for (const auto& c : this->sysv_routes(n)) {
                     auto p = make_sys<T>(n, nrhs, 6, uplo, gen, 300u + unsigned(n));
                     this->sysv_run(p, &c);
-                    const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
-                    for (int bi = 0; bi < p.batch; ++bi) {
+                    const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
+                    for (int bi = 0; bi < p.batch(); ++bi) {
                         EXPECT_EQ(p.info[bi], 0) << what;
                         EXPECT_GE(pivot_kinds(p, bi).first, 0) << what;
                         if (gen == Gen::kkt) EXPECT_GT(pivot_kinds(p, bi).second, 0) << what;
                     }
-                    EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
-                    EXPECT_EQ(first_touched(p), -1) << what;
+                    EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
+                    EXPECT_TRUE(untouched(p)) << what;
                 }
             }
 }
@@ -436,27 +393,17 @@ TYPED_TEST(SytrfTest, SingularItemReportsInfoWithoutDisturbingTheOthers) {
         for (const auto& c : this->sysv_routes(n)) {
             auto good = make_sys<T>(n, 2, 6, uplo, Gen::kkt, 77u);
             auto bad = make_sys<T>(n, 2, 6, uplo, Gen::kkt, 77u);
-            for (int j = 0; j < n; ++j)
-                for (int i = 0; i < n; ++i)
-                    if (referenced<T>(uplo, i, j)) bad.a[size_t(s) * bad.stra + size_t(j) * bad.lda + i] = T{};
-            bad.a_in.assign(bad.a.begin(), bad.a.end());
+            zero_item(bad, s);
             this->sysv_run(good, &c);
             this->sysv_run(bad, &c);
-            const std::string what = select::to_string(c) + " " + tag(uplo);
+            const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo);
             EXPECT_EQ(bad.info[s], uplo == Uplo::Lower ? 1 : n) << what;
-            for (int bi = 0; bi < bad.batch; ++bi) {
-                if (bi == s) continue;
-                EXPECT_EQ(bad.info[bi], 0) << what;
-                for (int e = 0; e < bad.stra; ++e)
-                    ASSERT_TRUE(same(bad.a[size_t(bi) * bad.stra + e], good.a[size_t(bi) * good.stra + e])) << what;
-                for (int e = 0; e < bad.strb; ++e)
-                    ASSERT_TRUE(same(bad.b[size_t(bi) * bad.strb + e], good.b[size_t(bi) * good.strb + e])) << what;
-                const int* gp = reinterpret_cast<const int*>(good.piv.data()) + size_t(bi) * n;
-                const int* bp = reinterpret_cast<const int*>(bad.piv.data()) + size_t(bi) * n;
-                for (int k = 0; k < n; ++k) ASSERT_EQ(gp[k], bp[k]) << what;
-            }
-            for (int e = 0; e < bad.strb; ++e)
-                ASSERT_TRUE(same(bad.b[size_t(s) * bad.strb + e], bad.b_in[size_t(s) * bad.strb + e])) << what;
+            const auto others = all_but(bad.batch(), s);
+            for (int bi : others) EXPECT_EQ(bad.info[bi], 0) << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(bad.a, good.a, others)) << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(bad.b, good.b, others)) << what;
+            ASSERT_TRUE(same_pivots(bad, good, others)) << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(bad.b, bad.b0, std::vector{s})) << what;
         }
 }
 
@@ -479,16 +426,15 @@ TYPED_TEST(SytrfTest, CtaAndWgAgreeBitForBit) {
             const ops::sysv::SysvChoice cta = ops::sysv::Cta{};
             this->sysv_run(f, &cta);
             const bool one_panel = n <= sycl_sytrf::kSytrfBlockedNb;
-            for (size_t e = 0; e < p.a.size(); ++e) {
-                ASSERT_TRUE(same(p.a[e], q.a[e])) << "factor, n=" << n << " " << tag(uplo) << " at " << e;
-                if (one_panel) ASSERT_TRUE(same(k.a[e], q.a[e])) << "blocked, n=" << n << " " << tag(uplo) << " at " << e;
-                ASSERT_TRUE(same(p.a[e], f.a[e])) << "sysv factor, n=" << n << " " << tag(uplo) << " at " << e;
-            }
-            for (size_t e = 0; e < p.b.size(); ++e) ASSERT_TRUE(same(p.b[e], f.b[e])) << "X, n=" << n << " at " << e;
-            for (size_t e = 0; e < p.piv.size(); ++e) {
-                ASSERT_EQ(p.piv[e], q.piv[e]);
-                ASSERT_EQ(p.piv[e], f.piv[e]);
-                if (one_panel) ASSERT_EQ(k.piv[e], q.piv[e]);
+            const std::string what = std::string(" n=") + std::to_string(n) + " " + ts::uplo_name(uplo);
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(p.a, q.a)) << "factor" << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(p.a, f.a)) << "sysv factor" << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(p.b, f.b)) << "X" << what;
+            ASSERT_TRUE(same_pivots(p, q)) << what;
+            ASSERT_TRUE(same_pivots(p, f)) << what;
+            if (one_panel) {
+                ASSERT_TRUE(ts::items_bit_identical_to<T>(k.a, q.a)) << "blocked" << what;
+                ASSERT_TRUE(same_pivots(k, q)) << "blocked" << what;
             }
         }
 }
@@ -505,9 +451,9 @@ TYPED_TEST(SytrfTest, VendorFactorSolvesWithNativeSytrs) {
                 auto p = make_sys<T>(n, 2, 4, uplo, Gen::kkt, 900u + unsigned(n));
                 this->factor(p, ops::sytrf::Vendor{});
                 this->solve(p);
-                for (int bi = 0; bi < p.batch; ++bi) EXPECT_GT(pivot_kinds(p, bi).second, 0);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << "n=" << n << tag(uplo);
-                EXPECT_EQ(first_touched(p), -1) << "vendor wrote outside the triangle, n=" << n << tag(uplo);
+                for (int bi = 0; bi < p.batch(); ++bi) EXPECT_GT(pivot_kinds(p, bi).second, 0);
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << "n=" << n << ts::uplo_name(uplo);
+                EXPECT_TRUE(untouched(p)) << "vendor wrote outside the triangle, n=" << n << ts::uplo_name(uplo);
             }
     }
 }
@@ -526,9 +472,7 @@ TYPED_TEST(SytrfTest, WgPivotsMatchVendor) {
                 auto v = make_sys<T>(n, 1, 3, uplo, Gen::random, 700u + unsigned(n));
                 this->factor(w, ops::sytrf::Wg{});
                 this->factor(v, ops::sytrf::Vendor{});
-                const int* wp = reinterpret_cast<const int*>(w.piv.data());
-                const int* vp = reinterpret_cast<const int*>(v.piv.data());
-                for (int e = 0; e < n * w.batch; ++e) ASSERT_EQ(wp[e], vp[e]) << "n=" << n << tag(uplo) << " at " << e;
+                ASSERT_TRUE(same_pivots(w, v)) << "n=" << n << ts::uplo_name(uplo);
             }
     }
 }
@@ -555,16 +499,11 @@ TYPED_TEST(SytrfTest, SaturatingBatchIsBitIdenticalToItemZero) {
                 this->solve(p);
             }
             EXPECT_GT(pivot_kinds(p, 0).second, 0);
-            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, batch - 1})) << route;
-            const int* ip = reinterpret_cast<const int*>(p.piv.data());
-            for (int bi = 1; bi < batch; ++bi) {
-                ASSERT_EQ(p.info[bi], p.info[0]) << "route " << route << " item " << bi;
-                for (int e = 0; e < p.stra; ++e)
-                    ASSERT_TRUE(same(p.a[size_t(bi) * p.stra + e], p.a[size_t(e)])) << "route " << route << " item " << bi;
-                for (int e = 0; e < p.strb; ++e)
-                    ASSERT_TRUE(same(p.b[size_t(bi) * p.strb + e], p.b[size_t(e)])) << "route " << route << " item " << bi;
-                for (int k = 0; k < n; ++k) ASSERT_EQ(ip[size_t(bi) * n + k], ip[k]) << "route " << route;
-            }
+            EXPECT_VERIFY(T, Check::solve, n, this->residual(p, {0, batch - 1})) << route;
+            for (int bi = 1; bi < batch; ++bi) ASSERT_EQ(p.info[bi], p.info[0]) << "route " << route << " item " << bi;
+            ASSERT_TRUE(ts::items_bit_identical<T>(p.a)) << "route " << route;
+            ASSERT_TRUE(ts::items_bit_identical<T>(p.b)) << "route " << route;
+            ASSERT_TRUE(same_pivots(p, p, {}, 0)) << "route " << route;
         }
 }
 
@@ -583,7 +522,7 @@ TYPED_TEST(SytrfTest, CtaCeilingStraddled) {
         this->factor(pinned, n <= 32 ? ops::sytrf::SytrfChoice{ops::sytrf::Cta{}}
                                      : ops::sytrf::SytrfChoice{ops::sytrf::Wg{}});
         this->factor_auto(autop);
-        for (size_t e = 0; e < pinned.a.size(); ++e) ASSERT_TRUE(same(pinned.a[e], autop.a[e])) << "n=" << n;
+        ASSERT_TRUE(ts::items_bit_identical_to<T>(pinned.a, autop.a)) << "n=" << n;
     }
 }
 
@@ -624,24 +563,24 @@ TYPED_TEST(SytrfTest, BlockedMatchesWgAndVendor) {
                 auto wg = make_sys<T>(n, 2, 16, uplo, gen, seed);
                 this->factor(bl, ops::sytrf::Blocked{});
                 this->factor(wg, ops::sytrf::Wg{});
-                const std::string what = tag(uplo) + " gen=" + std::to_string(int(gen)) + " n=" + std::to_string(n);
-                for (int bi = 0; bi < bl.batch; ++bi) {
+                const std::string what = std::string(ts::uplo_name(uplo)) + " gen=" + std::to_string(int(gen)) + " n=" + std::to_string(n);
+                for (int bi = 0; bi < bl.batch(); ++bi) {
                     EXPECT_EQ(bl.info[bi], 0) << what;
                     straddles += block_at(bl, bi, nb - 1) ? 1 : 0;
                 }
                 if (gen == Gen::random) {
-                    expect_same_pivots(bl, wg, what + " vs wg");
+                    ASSERT_TRUE(same_pivots(bl, wg)) << what << " vs wg";
                     if (vendor) {
                         auto v = make_sys<T>(n, 2, 16, uplo, gen, seed);
                         this->factor(v, ops::sytrf::Vendor{});
-                        expect_same_pivots(bl, v, what + " vs vendor");
+                        ASSERT_TRUE(same_pivots(bl, v)) << what << " vs vendor";
                     }
                 }
-                EXPECT_EQ(first_touched(bl), -1) << what;
+                EXPECT_TRUE(untouched(bl)) << what;
                 this->solve(bl);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, bl, all_items(bl))) << what;
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(bl)) << what;
             }
-        EXPECT_GT(straddles, 0) << tag(uplo) << ": no 2 x 2 block across the first panel boundary";
+        EXPECT_GT(straddles, 0) << ts::uplo_name(uplo) << ": no 2 x 2 block across the first panel boundary";
     }
 }
 
@@ -665,18 +604,13 @@ TYPED_TEST(SytrfTest, SingularColumnsReportTheFirstInLoopOrder) {
             this->factor(good, c);
             this->factor(bad, c);
             const auto [lo, hi] = std::minmax_element(zs.begin(), zs.end());
-            const std::string what = select::to_string(c) + " " + tag(uplo) + " zero " + std::to_string(*lo) +
+            const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " zero " + std::to_string(*lo) +
                                      (zs.size() > 1 ? "," + std::to_string(*hi) : "");
             EXPECT_EQ(bad.info[s], (uplo == Uplo::Lower ? *lo : *hi) + 1) << what;
-            for (int bi = 0; bi < bad.batch; ++bi) {
-                if (bi == s) continue;
-                EXPECT_EQ(bad.info[bi], 0) << what;
-                for (int e = 0; e < bad.stra; ++e)
-                    ASSERT_TRUE(same(bad.a[size_t(bi) * bad.stra + e], good.a[size_t(bi) * good.stra + e])) << what;
-                const int* gp = reinterpret_cast<const int*>(good.piv.data()) + size_t(bi) * n;
-                const int* bp = reinterpret_cast<const int*>(bad.piv.data()) + size_t(bi) * n;
-                for (int k = 0; k < n; ++k) ASSERT_EQ(gp[k], bp[k]) << what;
-            }
+            const auto others = all_but(bad.batch(), s);
+            for (int bi : others) EXPECT_EQ(bad.info[bi], 0) << what;
+            ASSERT_TRUE(ts::items_bit_identical_to<T>(bad.a, good.a, others)) << what;
+            ASSERT_TRUE(same_pivots(bad, good, others)) << what;
         }
 }
 
@@ -698,19 +632,16 @@ TYPED_TEST(SytrfTest, NonFiniteAndAliasedItemsTerminate) {
                 auto clean = make_sys<T>(n, 1, 6, uplo, Gen::random, 61u);
                 auto dirty = make_sys<T>(n, 1, 6, uplo, Gen::random, 61u);
                 const int first = uplo == Uplo::Lower ? 0 : n - 1;  // the first logical diagonal
-                dirty.a[size_t(1) * dirty.stra + size_t(first) * dirty.lda + first] = nan;
-                dirty.a[size_t(3) * dirty.stra + (uplo == Uplo::Lower ? size_t(n - 1) : size_t(n - 1) * dirty.lda)] = inf;
+                dirty.a(first, first, 1) = nan;
+                dirty.a(uplo == Uplo::Lower ? n - 1 : 0, uplo == Uplo::Lower ? 0 : n - 1, 3) = inf;
                 for (int j = 0; j < n; ++j) set_index(dirty, 4, j, nan);
                 this->factor(clean, c);
                 this->factor(dirty, c);
-                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
                 EXPECT_GT(dirty.info[1], 0) << what;
-                for (int bi : {0, 2, 5})
-                    for (int e = 0; e < dirty.stra; ++e)
-                        ASSERT_TRUE(same(dirty.a[size_t(bi) * dirty.stra + e], clean.a[size_t(bi) * clean.stra + e]))
-                            << what << " item " << bi;
+                ASSERT_TRUE(ts::items_bit_identical_to<T>(dirty.a, clean.a, std::vector{0, 2, 5})) << what;
                 auto al = make_sys<T>(n, 1, 8, uplo, Gen::random, 62u);
-                const MV<T> A(al.a.data(), n, n, al.lda, al.lda, al.batch);  // item b+1 = item b shifted one column
+                const MV<T> A(al.a.data_ptr(), n, n, al.a.ld(), al.a.ld(), al.batch());  // item b+1 = item b shifted one column
                 const select::ScopedPin<ops::sytrf::SytrfChoice> pin("sytrf", c);
                 const size_t need = sytrf_buffer_size<TestFixture::Bk, T>(*this->ctx, A, uplo);
                 UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
@@ -731,21 +662,20 @@ TYPED_TEST(SytrfTest, SytrsMalformedPivotsGiveNaN) {
         for (const auto& c : this->solve_routes(n)) {
             auto p = make_sys<T>(n, 2, 5, uplo, Gen::kkt, 81u);
             this->factor(p, ops::sytrf::Wg{});
-            int* ip = reinterpret_cast<int*>(p.piv.data());
-            ip[1 * n + 3] = 0;
-            ip[2 * n + 5] = n + 1;
-            for (int k = 0; k < n; ++k) ip[3 * n + k] = 0x0BADBEEF;
-            for (int k = 0; k < n; ++k) ip[4 * n + k] = k + 1;
-            ip[4 * n + (uplo == Uplo::Lower ? n - 1 : 0)] = -1;  // the last logical entry, alone
+            p.ipiv(1)[3] = 0;
+            p.ipiv(2)[5] = n + 1;
+            for (int k = 0; k < n; ++k) p.ipiv(3)[k] = 0x0BADBEEF;
+            for (int k = 0; k < n; ++k) p.ipiv(4)[k] = k + 1;
+            p.ipiv(4)[uplo == Uplo::Lower ? n - 1 : 0] = -1;  // the last logical entry, alone
             this->solve(p, c);
-            const std::string what = select::to_string(c) + " " + tag(uplo);
+            const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo);
             for (int bi = 1; bi < 5; ++bi)
                 for (int col = 0; col < p.nrhs; ++col)
                     for (int i = 0; i < n; ++i)
-                        ASSERT_TRUE(std::isnan(std::real(p.b[size_t(bi) * p.strb + size_t(col) * p.ldb + i])))
+                        ASSERT_TRUE(std::isnan(std::real(p.b(i, col, bi))))
                             << what << " item " << bi << " row " << i;
-            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0})) << what;
-            EXPECT_EQ(first_touched(p), -1) << what;
+            EXPECT_VERIFY(T, Check::solve, n, this->residual(p, {0})) << what;
+            EXPECT_TRUE(untouched(p)) << what;
         }
 }
 
@@ -765,15 +695,15 @@ TYPED_TEST(SytrfTest, SytrsEveryFamily) {
                         auto p = make_sys<T>(n, nrhs, 4, uplo, gen, 2000u + unsigned(n) + 7u * unsigned(nrhs));
                         this->factor_auto(p);
                         this->solve(p, c);
-                        const std::string what = select::to_string(c) + " " + tag(uplo) + " gen=" +
+                        const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " gen=" +
                                                  std::to_string(int(gen)) + " n=" + std::to_string(n) +
                                                  " nrhs=" + std::to_string(nrhs);
-                        for (int bi = 0; bi < p.batch; ++bi) {
+                        for (int bi = 0; bi < p.batch(); ++bi) {
                             ASSERT_EQ(p.info[bi], 0) << what;
                             if (gen == Gen::kkt) ASSERT_GT(pivot_kinds(p, bi).second, 0) << what << " item " << bi;
                         }
-                        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
-                        EXPECT_EQ(first_touched(p), -1) << what;
+                        EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
+                        EXPECT_TRUE(untouched(p)) << what;
                     }
                 }
 }
@@ -789,21 +719,21 @@ TYPED_TEST(SytrfTest, SytrsTwoByTwoWithInterchangeEveryFamily) {
             for (const auto& c : this->solve_routes(n)) {
                 auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 3100u + unsigned(n));
                 std::vector<std::pair<int, int>> forced[3];
-                for (int s = 0; s < p.batch; ++s) {
+                for (int s = 0; s < p.batch(); ++s) {
                     forced[s].push_back({1, n - 1 - s});
                     if (n >= 12) forced[s].push_back({n / 2, n / 2 + 3});
                     for (const auto& [k, r] : forced[s]) force_block(p, s, k, r);
                 }
                 this->factor_auto(p);
-                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
-                for (int s = 0; s < p.batch; ++s) {
+                const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
+                for (int s = 0; s < p.batch(); ++s) {
                     ASSERT_EQ(p.info[s], 0) << what;
                     for (const auto& [k, r] : forced[s])
                         ASSERT_EQ(block_partner(p, s, k), r) << what << " item " << s << " k=" << k;
                 }
                 this->solve(p, c);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
-                EXPECT_EQ(first_touched(p), -1) << what;
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
+                EXPECT_TRUE(untouched(p)) << what;
             }
 }
 
@@ -817,9 +747,9 @@ TYPED_TEST(SytrfTest, SytrsWideRightHandSides) {
                 auto p = make_sys<T>(n, 300, 3, uplo, Gen::kkt, 2500u + unsigned(n));
                 this->factor_auto(p);
                 this->solve(p, c);
-                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
-                EXPECT_EQ(first_touched(p), -1) << what;
+                const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
+                EXPECT_TRUE(untouched(p)) << what;
             }
 }
 
@@ -833,14 +763,14 @@ TYPED_TEST(SytrfTest, SytrsTwoByTwoAcrossTheLaneBoundary) {
         for (int n : {64, 128})
             for (const auto& c : this->solve_routes(n)) {
                 auto p = make_sys<T>(n, 3, 3, uplo, Gen::dominant, 2600u + unsigned(n));
-                for (int s = 0; s < p.batch; ++s)
+                for (int s = 0; s < p.batch(); ++s)
                     for (int k = 31; k + 1 < n; k += 32) force_block(p, s, k);
                 this->factor_auto(p);
-                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
-                for (int s = 0; s < p.batch; ++s)
+                const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
+                for (int s = 0; s < p.batch(); ++s)
                     for (int k = 31; k + 1 < n; k += 32) ASSERT_TRUE(block_at(p, s, k)) << what << " k=" << k;
                 this->solve(p, c);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, all_items(p))) << what;
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p)) << what;
             }
 }
 
@@ -860,12 +790,10 @@ TYPED_TEST(SytrfTest, SytrsSaturatingBatchIsBitIdenticalToItemZero) {
             auto p = make_sys<T>(n, 9, batch, uplo, Gen::kkt, 4343u, /*identical=*/true);
             this->factor(p, ops::sytrf::Wg{});
             this->solve(p, c);
-            const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+            const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
             EXPECT_GT(pivot_kinds(p, 0).second, 0) << what;
-            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, batch - 1})) << what;
-            for (int bi = 1; bi < batch; ++bi)
-                for (int e = 0; e < p.strb; ++e)
-                    ASSERT_TRUE(same(p.b[size_t(bi) * p.strb + e], p.b[size_t(e)])) << what << " item " << bi;
+            EXPECT_VERIFY(T, Check::solve, n, this->residual(p, {0, batch - 1})) << what;
+            ASSERT_TRUE(ts::items_bit_identical<T>(p.b)) << what;
         }
 }
 
@@ -879,14 +807,14 @@ TYPED_TEST(SytrfTest, SytrsCtaCeilingStraddled) {
         this->factor_auto(p);
         if (this->cta_fits(n)) {
             this->solve(p, ops::sytrs::Cta{});
-            EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 127})) << "cta n=" << n;
+            EXPECT_VERIFY(T, Check::solve, n, this->residual(p, {0, 127})) << "cta n=" << n;
         } else {
             EXPECT_ANY_THROW(this->solve(p, ops::sytrs::Cta{})) << "n=" << n;
         }
         auto a = make_sys<T>(n, 2, 128, Uplo::Lower, Gen::random, 37u);
         this->factor_auto(a);
         this->solve(a);
-        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, a, all_items(a))) << "auto n=" << n;
+        EXPECT_VERIFY(T, Check::solve, n, this->residual(a)) << "auto n=" << n;
     }
 }
 
@@ -901,19 +829,15 @@ TYPED_TEST(SytrfTest, SytrsSkipListEveryFamily) {
             for (const auto& c : this->solve_routes(n)) {
                 const int s = 2;
                 auto p = make_sys<T>(n, 3, 5, uplo, Gen::kkt, 2700u + unsigned(n));
-                for (int j = 0; j < n; ++j)
-                    for (int i = 0; i < n; ++i)
-                        if (referenced<T>(uplo, i, j)) p.a[size_t(s) * p.stra + size_t(j) * p.lda + i] = T{};
-                p.a_in.assign(p.a.begin(), p.a.end());
+                zero_item(p, s);
                 {
                     const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", c);
                     this->sysv_run(p, &compose);
                 }
-                const std::string what = select::to_string(c) + " " + tag(uplo) + " n=" + std::to_string(n);
+                const std::string what = select::to_string(c) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n);
                 ASSERT_GT(p.info[s], 0) << what;
-                for (int e = 0; e < p.strb; ++e)
-                    ASSERT_TRUE(same(p.b[size_t(s) * p.strb + e], p.b_in[size_t(s) * p.strb + e])) << what;
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, {0, 1, 3, 4})) << what;
+                ASSERT_TRUE(ts::items_bit_identical_to<T>(p.b, p.b0, std::vector{s})) << what;
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p, all_but(p.batch(), s))) << what;
             }
 }
 
@@ -934,33 +858,22 @@ TYPED_TEST(SytrfTest, SytrsBlockedChunksKeepEachItemsPivots) {
             for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
                 auto p = make_sys<T>(n, 3, batch, uplo, Gen::kkt, 2800u);
                 this->factor_auto(p);
-                int* ip = reinterpret_cast<int*>(p.piv.data());
-                ip[21 * n + 4] = 0;
-                auto A = a_view(p);
-                auto Bv = b_view(p);
-                UnifiedVector<std::byte> ws(std::max<size_t>(1, sytrs_buffer_size<TestFixture::Bk, T>(*q, A, Bv, uplo)));
-                (void)sytrs<TestFixture::Bk, T>(*q, A, Bv, uplo, p.piv.to_span(), ws.to_span());
+                p.ipiv(21)[4] = 0;
+                UnifiedVector<std::byte> ws(std::max<size_t>(1, sytrs_buffer_size<TestFixture::Bk, T>(*q, p.a, p.b, uplo)));
+                (void)sytrs<TestFixture::Bk, T>(*q, p.a, p.b, uplo, p.piv.to_span(), ws.to_span());
                 q->wait();
-                std::vector<int> good;
-                for (int b = 0; b < batch; ++b)
-                    if (b != 21) good.push_back(b);
-                EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, p, good)) << what << " " << tag(uplo);
-                for (int i = 0; i < n; ++i) ASSERT_TRUE(std::isnan(std::real(p.b[size_t(21) * p.strb + i]))) << what;
-                EXPECT_EQ(first_touched(p), -1) << what;
+                EXPECT_VERIFY(T, Check::solve, n, this->residual(p, all_but(batch, 21))) << what << " " << ts::uplo_name(uplo);
+                for (int i = 0; i < n; ++i) ASSERT_TRUE(std::isnan(std::real(p.b(i, 0, 21)))) << what;
+                EXPECT_TRUE(untouched(p)) << what;
             }
         }
         const ops::sysv::SysvChoice compose = ops::sysv::Compose{};
         auto s = make_sys<T>(n, 2, batch, Uplo::Lower, Gen::kkt, 2900u);
-        for (int j = 0; j < n; ++j)
-            for (int i = j; i < n; ++i) s.a[size_t(9) * s.stra + size_t(j) * s.lda + i] = T{};
-        s.a_in.assign(s.a.begin(), s.a.end());
+        zero_item(s, 9);
         this->sysv_run(s, &compose);
         ASSERT_GT(s.info[9], 0);
-        for (int e = 0; e < s.strb; ++e) ASSERT_TRUE(same(s.b[size_t(9) * s.strb + e], s.b_in[size_t(9) * s.strb + e]));
-        std::vector<int> good;
-        for (int b = 0; b < batch; ++b)
-            if (b != 9) good.push_back(b);
-        EXPECT_VERIFY(T, Check::solve, n, residual(*this->ctx, s, good)) << "sysv compose, chunked";
+        ASSERT_TRUE(ts::items_bit_identical_to<T>(s.b, s.b0, std::vector{9}));
+        EXPECT_VERIFY(T, Check::solve, n, this->residual(s, all_but(batch, 9))) << "sysv compose, chunked";
     }
 }
 
@@ -970,41 +883,22 @@ TYPED_TEST(SytrfTest, SytrsPinnedFamiliesAreReached) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::Bk == Backend::NETLIB) GTEST_SKIP() << "no native route on NETLIB";
     else {
-        ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-        const std::string dir = ::testing::TempDir() + "sytrs_cov." + std::string(select::dtype_name<T>());
-        std::filesystem::remove_all(dir);
-        std::filesystem::create_directories(dir);
-        const std::string out = dir + "/cov";
         const std::vector<std::tuple<ops::sytrs::SytrsChoice, int, int, std::string>> runs{
             {ops::sytrs::Cta{}, 16, 4, "cta"}, {ops::sytrs::Blocked{}, 48, 3, "blocked"}, {ops::sytrs::Wg{}, 40, 2, "wg"}};
-        auto child = [&] {
-            const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
-            batchlas::coverage::g_dynamic_enabled = true;
+        const auto rows = ts::reached_rows([&] {
             for (const auto& [c, n, nrhs, name] : runs) {
                 auto p = make_sys<T>(n, nrhs, 2, Uplo::Lower, Gen::random, 77u);
                 this->factor(p, ops::sytrf::Wg{});
                 this->solve(p, c);
             }
-            std::exit(0);
-        };
-        EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
-        std::map<std::string, std::string> algo;  // "m n k" -> spelling
-        for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-            std::ifstream in(ent.path());
-            for (std::string line; std::getline(in, line);) {
-                if (line.rfind("reached,sytrs,", 0) != 0) continue;
-                std::vector<std::string> f;
-                std::stringstream ss(line);
-                for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-                ASSERT_GE(f.size(), 11u) << line;
-                algo[f[5] + " " + f[6] + " " + f[7]] = f[10];
-            }
-        }
-        std::filesystem::remove_all(dir);
+        });
+        std::map<std::tuple<long long, long long, long long>, std::string> algo;  // (m, n, k) -> spelling
+        for (const auto& r : rows)
+            if (r.op == "sytrs") algo[{r.m, r.n, r.k}] = r.spelling;
         for (const auto& [c, n, nrhs, name] : runs) {
-            const std::string key = std::to_string(n) + " " + std::to_string(nrhs) + " " + std::to_string(n);
-            ASSERT_TRUE(algo.count(key)) << "no reached row for " << name << " (" << key << ")";
-            EXPECT_EQ(algo[key], name) << key;
+            const auto it = algo.find({n, nrhs, n});
+            ASSERT_NE(it, algo.end()) << "no reached row for " << name << " (" << n << " " << nrhs << ")";
+            EXPECT_EQ(it->second, name) << n << " " << nrhs;
         }
     }
 }
