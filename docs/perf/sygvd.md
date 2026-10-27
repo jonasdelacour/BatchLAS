@@ -213,7 +213,7 @@ skip `blocked` (it is a GPU family) and stayed green under every break. "Definit
 | the wide diagonal block recurses at order kb - 1 | definition only, every itype and triangle at n >= 33, nb 64, 128, 256 only (nb 32 never recurses) |
 | a pass offsets B by A's batch stride (`blocked`) | aborts (CUDA illegal address) in saturating's forced 100-item passes, the first case with more than one pass; every earlier case green |
 | the diagonal kernel stores the whole block, not the triangle | definition and saturating only, from the poison check (`A written at ...`), every itype, triangle, n and nb |
-| packed work-groups overlap by one item (`first = group * (ipw - 1)`) | saturating only, both its bit-identity loop and sygvd's `SaturatingBatchIsBitIdenticalToItemZeroAndWorkspaceIsExact`: batch 3 fits one group, so no definition case can see it |
+| packed work-groups overlap by one item (`first = group * (ipw - 1)`) | saturating, both its bit-identity loop and sygvd's `SaturatingBatchIsBitIdenticalToItemZeroAndWorkspaceIsExact`, every CUDA type. Re-run 2026-10-27 (same set before and after the test_support migration): also definition (every nb, itype and triangle) for double, cfloat and cdouble, whose groups hold too few items for batch 3 to fit one (at `ipw = 1` every group takes item 0), and, through compose, sygvd's Auto cases for the complex types |
 
 Per-break logs: `breaks/B*.txt` in the session's evidence directory.
 
@@ -248,8 +248,10 @@ uplo, `BATCHLAS_SYGST_ROUTE` pins) times one family. Still to time, on a quiet G
   the rest via `similarity_residual`.
 - `blocked` at every `nb`, itype and triangle, at orders straddling each edge (the kernel's compile-time
   orders 8, 16, 32; nb 32 to 256; a two-level recursion at n = 260), on B with cond ~1e3 (float) or ~1e6
-  (double), against a slack of 32 (the reduction's error on a graded B follows the scaled S, measured at
-  most 9x the bound). A's storage outside its triangle and all of B keep their bits.
+  (double), a badly scaled B = D S D, against a slack of 32 (the reduction's error on it follows the scaled
+  S, not cond(B): at most 9x the bound on the original S, 17x on the test_support one, `fill_random_spd`
+  with its diagonal raised to 2.5 n, 2026-10-27). A's storage outside its triangle and all of B keep
+  their bits.
 - 1024 identical items on `blocked`, bit-identical to item 0 (n = 5 packs 25 items per work-group, 16, 20,
   40), forced 100-item passes (`BATCHLAS_TUNE_L2_CHUNK_ITEMS`, which bypasses the 4 x CU floor), and an
   exact workspace query.
