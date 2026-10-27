@@ -188,6 +188,7 @@ TYPED_TEST_SUITE(MaskedTest, MaskedTestTypes);
 // syev_masked on every pinned family, every pattern, both triangles, batch 9 and a saturating 1024 half masked.
 // ARMED BREAK: in src/kernels/common/batch_mask.cc move_items, index the full batch by `g` instead of `ix[g]`.
 // SEEN: RED for the alternating and single patterns (and the 1024 batch) on every family; none and all GREEN.
+// Re-run 2026-10-27 (test_support): the same, all 8 configs; the sygvd test also RED at compose n=6 L alternating.
 // ARMED BREAK (2026-10-26): in both *_masked.cc buffer sizes, largest_over_counts(0, ...). SEEN: RED in both
 // masked tests at the first partial pattern (workspace_error), all 8 configs; ShortMaskIsRefused GREEN.
 // ARMED BREAK (2026-10-26): in syev.cc syev(), A.hermitize(q, Lower) after the launch at batch 4 or 512.
@@ -250,6 +251,7 @@ TYPED_TEST(MaskedTest, SyevMaskedTouchesOnlyActiveItemsAndMatchesTheUnmaskedRun)
 // inactive items untouched; active items bit-identical to the unmasked sygvd / sygvd_factored.
 // ARMED BREAK: in src/ops/sygvd/sygvd_masked.cc run_masked, drop the scatter of B (`if (!a.factored) ...`).
 // SEEN: RED at the first partial-pattern sygvd_masked case (active B), all 8 configs; syev_masked GREEN.
+// Re-run 2026-10-27 (test_support): the same (compose n=6 L batch=9 alternating: B), all 8 configs.
 TYPED_TEST(MaskedTest, SygvdMaskedTouchesOnlyActiveItemsAndMatchesTheUnmaskedRun) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
