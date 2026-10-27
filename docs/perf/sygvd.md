@@ -40,7 +40,7 @@ and its workspace query stay distinct. Neither `itype` nor `uplo` is a table key
 
 | op | family | what runs | `can_run` |
 |---|---|---|---|
-| sygst | `blocked:nb` (32, 64, 128, 256) | LAPACK's blocked `?sygst`/`?hegst` on the `uplo` triangles: per block the SLM diagonal kernel, then `trsm` (itype 1) or `trmm` (2, 3), `gemm` and `her2k`/`syr2k` ([the blocked family](#sygst-the-blocked-family)) | homogeneous, `n >= 1`, GPU, compiled `nb`, `max_wg >= 128`, the diagonal kernel's SLM fits (`sygst.cc:57-60`) |
+| sygst | `blocked:nb` (32, 64, 128, 256) | LAPACK's blocked `?sygst`/`?hegst` on the `uplo` triangles: per block the SLM diagonal kernel, then `trsm` (itype 1) or `trmm` (2, 3), `gemm` and `her2k`/`syr2k` ([the blocked family](#sygst-the-blocked-family)) | homogeneous, `n >= 1`, GPU, compiled `nb`, `max_wg >= 128`, the diagonal kernel's SLM fits (`sygst.cc:46-50`) |
 | sygst | `twosided` | `A.hermitize(uplo)`, then two public `trsm` (itype 1) or two public `trmm` through an `n x n` workspace product (itypes 2, 3) | homogeneous batch, `n >= 1` (`sygst.cc:62`) |
 | sygst | `vendor` | LAPACKE `?sygst` / `?hegst` per item | NETLIB with LAPACKE; homogeneous. cuSOLVER 13.2 has no public `?sygst` |
 | sygvd | `compose` | `potrf(B)` (skipped by `sygvd_factored`), the failed-item identity (`sygvd_native.cc`), `sygst`, `syev`, then a `trsm` back-transform (itypes 1, 2) or `trmm` plus a copy (itype 3), then the info merge | homogeneous batch, `n >= 1` |
@@ -64,7 +64,7 @@ row, `transcribed` from `benchmarks/results/tuning/ledger/sygvd.<device>.jsonl` 
 
 ## sygst: the blocked family {#sygst-the-blocked-family}
 
-`blocked:nb=<32|64|128|256>` is LAPACK's `dsygst` / `zhegst` (`src/ops/sygst/sygst.cc`, `blocked_range`).
+`blocked:nb=<32|64|128|256>` is LAPACK's `dsygst` / `zhegst` (`src/ops/sygst/kernels/sygst_blocked.cc`, `blocked_range`).
 It works in place on the `uplo` triangle of `A` and never hermitizes it. Every read of `A` and `B` goes
 through the named triangles, so the other triangle of `A`, its `ld` pads and the gaps between items
 keep their bits (the tests poison them; defect-14 rule). For each block of `nb` columns, with `kb` the
@@ -106,7 +106,7 @@ but never fewer than 4 x CU items per pass (`kBlockedMinChunkCus`, [measured](#s
 two pointer arrays for the vendor `trsm`, `H` (nb x nb per item) and, for itypes 2 and 3, `W` (n x nb per
 item). There is no n x n buffer. A single diagonal block (n <= min(nb, 32)) needs none.
 
-**can_run** (`src/ops/sygst/sygst.cc:57-60`): homogeneous batch, `n >= 1`, a GPU, a compiled `nb`,
+**can_run** (`src/ops/sygst/sygst.cc:46-50`): homogeneous batch, `n >= 1`, a GPU, a compiled `nb`,
 `max_wg >= 128`, and the diagonal kernel's shared memory at order min(n, 32) within `slm_budget`. All
 of these are correctness conditions. `twosided` (`:62`) stays as the second native family. The measured
 tables rank it first in 33 of 165 float itype-1 rows (n = 33..76 at most batches, n <= 351 at batch
