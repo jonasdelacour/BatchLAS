@@ -3,6 +3,7 @@
 // The fixture base sygvd_tests.cc and masked_batch_tests.cc share: potrf pinned native on GPU backends,
 // whether sygvd's vendor family is linked, and the sygvd families a pin must reach.
 #include <batchlas/backend_config.h>
+#include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <tests/test_utils.hh>
@@ -49,5 +50,11 @@ protected:
 private:
     std::optional<batchlas::select::ScopedPin<batchlas::ops::potrf::PotrfChoice>> potrf_pin_;
 };
+
+// w (n eigenvalues per item, packed) as an n x 1 matrix per item, for the bit-identity checks.
+template <typename R>
+batchlas::MatrixView<R, batchlas::MatrixFormat::Dense> items_of(const batchlas::UnifiedVector<R>& w, int n) {
+    return {const_cast<R*>(w.data()), n, 1, n, n, static_cast<int>(w.size()) / n};
+}
 
 }  // namespace sygvd_test

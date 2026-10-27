@@ -78,11 +78,7 @@ struct Gen {
     Matrix<T> A0, B0, a, b;
 };
 
-// w as an n x 1 matrix per item, for the bit-identity checks.
-template <typename R>
-MV<R> items_of(UnifiedVector<R>& w, int n) {
-    return MV<R>(w.data(), n, 1, n, n, static_cast<int>(w.size()) / n);
-}
+using sygvd_test::items_of;
 
 template <typename Config>
 class SygvdTest : public sygvd_test::SygvdFixture<Config> {
