@@ -47,7 +47,7 @@ Two entries (`include/batchlas/blas/functions/syfn.hh`):
 
 ## syfn tests and deliberate breaks {#syfn-tests-and-breaks}
 
-`tests/syfn_tests.cc` builds each item as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
+`tests/syfn_tests.cc` builds each item (except the Loewdin and out-of-order-queue inputs, drawn from `fill_graded_hermitian`) as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
 Householder reflectors (complex vectors for complex types) held in double, so every reference is a
 closed form in double, formed and compared by `MatrixView`'s checks (`product`,
 `similarity_residual`, `qr_reconstruction`), on padded poisoned storage from `tests/test_support/`:
@@ -69,7 +69,7 @@ the move onto `tests/test_support/`: the `InvSqrt` scale (32), `V` at ld = n (8)
 |---|---|
 | `InvSqrt` scale \f$ w^{-1/2} \f$ instead of \f$ w^{-1/4} \f$ | `InvSqrtOfGradedSpdIsLoewdin`, `FromEigenMatchesHostReference`, `OutOfDomainEigenvaluesSetInfo`, `SaturatingBatchIsBitIdentical`; all 8 configs (32) |
 | column scale reads `V` at ld = n | `FromEigenMatchesHostReference` only (8): the only padded `V` |
-| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`; complex only (8) |
+| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`, `WeightsPairWithAscendingEigenvalues`; complex only, NETLIB and CUDA (12; re-run 2026-10-27 on the migrated suite, which adds the third test) |
 | `hermitize(Upper)` | every test with a herk-form product (6 tests x 8 = 48); `NoEigenpairs`, `OutOfOrder`, `Rejects` green |
 | `info` a flag, not a count | `OutOfDomainEigenvaluesSetInfo` only (8) |
 | `Sqrt` domain `w <= 0` | `OutOfDomainEigenvaluesSetInfo` only (8): the exact-zero straddle |
