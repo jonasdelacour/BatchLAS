@@ -6,7 +6,7 @@
 /// @ingroup api_factorizations
 
 // No vendor arm: the composed arm is potrf then potrs (potrs.hh: the fused solve or two routed trsm
-// calls, src/ops/potrs/potrs.hh), and the documented contract below is exactly that composition.
+// calls, src/ops/potrs/kernels/potrs_trsm.cc), and the documented contract below is exactly that composition.
 // evidence: docs/perf/potrf.md#the-fused-posv-tier
 
 #include <batchlas/export.hh>

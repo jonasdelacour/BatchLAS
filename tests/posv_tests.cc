@@ -409,7 +409,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
 // P8. The public op on the COMPOSED arm, both triangles: the only test that exercises
 // the Upper composition's transpose arguments. THE ROUTE IS PINNED because Auto now
 // sends n <= 32 to the fused tier, which would leave this guard covering n = 33 alone.
-// ARMED BREAK (R9): swap the two Upper trsm calls in src/ops/potrs/potrs.hh solve().
+// ARMED BREAK (R9): swap the two Upper trsm calls in src/ops/potrs/kernels/potrs_trsm.cc solve().
 // EXPECTED: RED for Uplo::Upper only, GREEN for Lower.
 TYPED_TEST(PosvTest, PublicPosvSolvesOnBothTriangles) {
     using T = typename TestFixture::T;
