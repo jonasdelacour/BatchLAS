@@ -83,7 +83,7 @@ private:
 /// @ingroup api_config
 struct RoutingSettings {
     /// @brief The ops that read a route variable, by their `<op>` spelling.
-    static constexpr std::array<std::string_view, 28> ops{
+    static constexpr std::array<std::string_view, 29> ops{
         "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
         "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm",
         "hemm", "herk", "her2k", "sygvd", "sygst", "sytrf", "sysv", "potri", "potrs", "sytrs"};
