@@ -347,9 +347,9 @@ factors also interchange their 2 x 2 rows:
 
 | break | red set |
 |---|---|
-| `build_perm` swaps row k instead of k + 1 at a 2 x 2 step | `SytrsTwoByTwoWithInterchangeEveryFamily` (`cta`, `blocked`), `SytrsTwoByTwoAcrossTheLaneBoundary`, `SytrsEveryFamily`, `SytrsWide...`, `SytrsSaturating...`, `SytrsSkipList...`, `SytrsBlockedChunks...`, `SytrsMalformed...`, `SytrsCtaCeilingStraddled` (2 of 8); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute`, `BlockedMatchesWgAndVendor`, `SaturatingBatch...`, `VendorFactorSolvesWithNativeSytrs`; `SytrsPinnedFamiliesAreReached` green |
+| `build_perm` swaps row k instead of k + 1 at a 2 x 2 step | `SytrsTwoByTwoWithInterchangeEveryFamily` (`cta`, `blocked`), `SytrsTwoByTwoAcrossTheLaneBoundary`, `SytrsEveryFamily`, `SytrsWide...`, `SytrsSaturating...`, `SytrsSkipList...`, `SytrsBlockedChunks...`, `SytrsMalformed...`, `SytrsCtaCeilingStraddled` (1 of 8: float CUDA); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute`, `BlockedMatchesWgAndVendor`, `SaturatingBatch...`, `VendorFactorSolvesWithNativeSytrs`; `SytrsPinnedFamiliesAreReached` green |
 | `build_perm` drops the 2 x 2 interchange (p := k + 1) | the same set less `SytrsTwoByTwoAcrossTheLaneBoundary`, whose forced blocks have p = k + 1 |
-| `ldl_solve` (`wg`) swaps row k instead of k + 1 | `SytrsTwoByTwoWithInterchangeEveryFamily`, `SytrsEveryFamily`, `SytrsMalformed...`, `SytrsSaturating...`, `SytrsSkipList...` (`wg` rows), `SytrsCtaCeilingStraddled` (Auto at 129); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute` (`compose`), `BlockedMatchesWgAndVendor`, `SaturatingBatch...` (6 of 8); `SytrsTwoByTwoAcrossTheLaneBoundary` green |
+| `ldl_solve` (`wg`) swaps row k instead of k + 1 | `SytrsTwoByTwoWithInterchangeEveryFamily`, `SytrsEveryFamily`, `SytrsMalformed...`, `SytrsSaturating...`, `SytrsSkipList...` (`wg` rows), `SytrsCtaCeilingStraddled` (Auto at 129); Auto: `FactorThenSolveEveryRoute`, `SysvEveryRoute` (`compose`), `BlockedMatchesWgAndVendor`, `SaturatingBatchIsBitIdenticalToItemZero` (3 of 8); `SytrsTwoByTwoAcrossTheLaneBoundary` green |
 
 Logs: `break-<name>.log` in the evidence directory under [sytrs: measured](#sytrs-measured); the
 2 x 2 interchange breaks in `/home/jonaslacour/.claude/jobs/ad7932ae/tmp/leftovers/sytrs-2/`
