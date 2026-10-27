@@ -97,8 +97,8 @@ public:
             // family: vendor
             "src/backends/netlib_lapack.cc",
             // common
-            "src/ops/sytrf/kernels/sytrs_kernels.cc",
-            "src/ops/sytrf/sytrs_device.hh",
+            "src/ops/sytrs/kernels/sytrs_kernels.cc",
+            "src/ops/sytrs/sytrs_device.hh",
             "src/ops/sytrf/sytrf_device.hh",
             "src/ops/sytrf/sytrf_native.hh",
             "src/ops/sytrs/choice.hh",
