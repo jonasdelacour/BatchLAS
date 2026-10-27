@@ -317,7 +317,7 @@ Run on the RTX 4090 box, 2026-10-25, float and cfloat CUDA instantiations, every
 | the step kernel skips `ldl_undo` | the same `blocked` rows, residuals only (ipiv still matches `wg` and cuSOLVER) |
 | alpha = (1 + sqrt 17) / 7 (pivot choice; every factor stays valid) | `WgPivotsMatchVendor`, the "vs vendor" half of `BlockedMatchesWgAndVendor`; every residual green |
 | `ldl_factor` reports the last zero column | `SingularItemReportsInfo...` (cta, compose), the `wg` rows of `SingularColumnsReportTheFirstInLoopOrder` with two zero columns (re-run 2026-10-26; blocked green: each set puts at most one zero column in its tail) |
-| blocked tail info drops the Lower offset (`st = t`, 2026-10-26) | `SingularColumnsReportTheFirstInLoopOrder`, the `blocked` Lower {95} case only (info 3 for 96), all four CUDA types |
+| blocked tail info drops the Lower offset (`st = t`, 2026-10-26) | `SingularColumnsReportTheFirstInLoopOrder`, the `blocked` Lower {95} case only (info 3 for 96), all four CUDA types (re-run 2026-10-27 on the test_support suite: the same) |
 | `sytrs` drops the reversal of x for Upper | every Upper row through `sytrs`; all Lower and the fused `sysv` `cta` green |
 | `sytrs` ignores the right-hand side's column offset | every `sytrs` row with nrhs >= 2; the fused `sysv` `cta` green |
 | `sysv` `compose` passes no skip list | `SingularItemReportsInfo...`, `compose` only |
@@ -334,11 +334,11 @@ whose solve the table sends to that family):
 | `?syconv` column walk skips its swaps (`cta`, sysv `cta`) | every pinned `cta` row with interchanges (`SytrsEveryFamily`, `SytrsMalformed...`, `SytrsSkipList...`, `SytrsWide...`, `SytrsSaturating...`, `SytrsCtaCeiling...`), the sysv `cta` rows of `SysvEveryRoute` and `SaturatingBatch...`; Auto as above plus `VendorFactorSolvesWithNativeSytrs`. `CtaAndWgAgreeBitForBit` stays green: sysv `cta` and sytrs `cta` share the walk, so both are wrong alike |
 | `cta` gathers B by t instead of perm[t] | the same set as the column-walk break |
 | `cta` ignores the skip list | `SytrsSkipListEveryFamily` (`cta`), `SingularItemReportsInfo...` (`compose`) only |
-| sysv `cta` solves a singular item | `SingularItemReportsInfo...` only |
+| sysv `cta` solves a singular item | `SingularItemReportsInfo...` only (re-run 2026-10-27 on the test_support suite: the same, all four CUDA types, the kept-B check) |
 | `convert_gather` never composes sigma (`blocked`) | pinned `blocked` rows of `SytrsEveryFamily`, `SytrsMalformedPivotsGiveNaN`, `SytrsSkipList...`, `SytrsWide...`, `SytrsSaturating...`, `SytrsBlockedChunks...`; Auto: cfloat `SaturatingBatchIsBitIdentical...` (n = 170) |
 | `blocked` D^-1 does not write the second row of a 2 x 2 block | the same plus `SytrsTwoByTwoAcrossTheLaneBoundary` (`blocked`) |
 | `blocked` scatter ignores P | the same set as the sigma break |
-| `blocked` chunk loop drops the pivot offset of parts after the first | `SytrsBlockedChunksKeepEachItemsPivots` only |
+| `blocked` chunk loop drops the pivot offset of parts after the first | `SytrsBlockedChunksKeepEachItemsPivots` only (re-run 2026-10-27 on the test_support suite: the same, all four CUDA types) |
 | `blocked` scatter ignores the skip list | `SytrsSkipListEveryFamily` (`blocked`), `SytrsBlockedChunks...` only |
 
 The 2 x 2 interchange (2026-10-26, all eight typed instantiations, every break reverted). `cta` and
