@@ -200,7 +200,7 @@ TYPED_TEST_SUITE(SygvdTest, SygvdTestTypes);
 // sygst against its definition, from potrf's factor: itype 1 A0 = L C L^H (Lower) or U^H C U (Upper);
 // itypes 2, 3 C = L^H A0 L or U A0 U^H (similarity_residual with the factor built on the host). Every
 // family it can pin, both triangles, an order ladder through the CTA width, B read-only (pads too).
-// ARMED BREAK: in src/ops/sygst/sygst.cc twosided(), give the itype-1 Right trsm `Transpose::NoTrans` for
+// ARMED BREAK: in src/ops/sygst/kernels/sygst_twosided.cc twosided(), give the itype-1 Right trsm `Transpose::NoTrans` for
 // Lower. SEEN (2026-10-25; re-run 2026-10-27 on test_support): RED here for twosided itype 1 Lower only, all
 // 8 configs; on CUDA also compose itype 1 Lower in SygvdSolves (double, cdouble) and FactoredEntry (double),
 // the same set as before the migration. NETLIB's compose takes LAPACKE's sygst, its last resort.
@@ -329,7 +329,7 @@ TYPED_TEST(SygvdTest, CoverageRowNamesEachPinnedSygstFamily) {
 
 // sygvd on Auto: every itype, both jobz, both triangles, n through the syev CTA width; jobz=N's values
 // must equal jobz=V's (whose residual is checked) within the values bound.
-// ARMED BREAK: in src/ops/sygvd/sygvd.cc compose(), give the itype-3 trmm `Transpose::NoTrans` for Upper.
+// ARMED BREAK: in src/ops/sygvd/kernels/sygvd_compose.cc compose(), give the itype-3 trmm `Transpose::NoTrans` for Upper.
 // SEEN (re-run 2026-10-27): RED for compose itype 3 Upper only, here and in FactoredEntry, all 8 configs;
 // vendor GREEN.
 TYPED_TEST(SygvdTest, SygvdSolvesEveryItypeOnEveryFamily) {
