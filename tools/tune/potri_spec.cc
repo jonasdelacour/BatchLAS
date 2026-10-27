@@ -100,7 +100,7 @@ public:
             "src/sycl/kernel_attrs.hh",
             "src/sycl/sscp_target.hh",
             // family: blocked
-            "src/ops/potri/potri_blocked.hh",
+            "src/ops/potri/kernels/potri_blocked.cc",
             // common
             "src/ops/potri/kernels/potri_cta.cc",
             "src/ops/potri/kernels/potri_native.cc",
