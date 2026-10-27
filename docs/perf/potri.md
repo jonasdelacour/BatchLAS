@@ -259,6 +259,16 @@ the cta-only cases green.
 | `potri_native.cc` `potri_finish`: flagged items not skipped (run 2026-10-26, 88-case suite) | Info: all types CUDA+NETLIB (the `full` cases) | 80 of 88 |
 | `potri_native.cc` `potri_finish`: the mirror without `conj` | Full: cz CUDA+NETLIB; Parts: cz CUDA+NETLIB | 104 of 112 |
 
+Re-run 2026-10-27 after the suite moved onto `tests/test_support/` (inputs from `fill_random_spd` and
+`fill_graded_hermitian`, one poison value, the saturating and grid-limit cases verified on the whole
+`full` matrix): `potri_finish` ignoring the flags turns exactly Info red, the `full` cases, all eight
+configs, as above. The cta store's mirror without `conj` turns the listed five red for cz plus Saturating
+(cz CUDA+NETLIB), which now reads the mirrored half. (An attempt written `if (lower && false)` did not drop
+the call: it sends Lower down the Upper branch, which still calls `rank_k`, so it is no break.) `rank_k` returning without a launch turns Coverage red in all eight configs with either suite
+(missing `syrk`/`herk`), Graded red everywhere, and Inverts, Full, Parts and Saturating on type sets that
+moved with the ungraded inputs (new: Inverts fdz both backends, Full and Parts all eight, Saturating fdz
+CUDA; old: Inverts and Parts dcz, Full dz, Saturating dcz CUDA).
+
 Two blind spots found on the way: the diagonally dominant inputs (condition below 8, off-diagonals
 `1/n`) passed a broken intra-block substitution at the float cta ceiling on the host queue (n = 176) and
 a dropped lauum gemm for float and cfloat; the graded inputs caught both, so the ceiling launch now runs
