@@ -101,6 +101,7 @@ public:
             "src/ops/getrs/getrs_native.hh",
             // common
             "src/ops/potrs/potrs.hh",
+            "src/ops/potrs/kernels/potrs_trsm.cc",
             "src/ops/potrs/choice.hh",
         };
         // kernel-sources-end

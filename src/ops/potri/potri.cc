@@ -11,7 +11,6 @@
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/potri/choice.hh>
-#include <src/ops/potri/potri_blocked.hh>
 #include <src/ops/potri/potri_native.hh>
 #include <src/select/select.hh>
 #include <src/util/template-instantiations.hh>
