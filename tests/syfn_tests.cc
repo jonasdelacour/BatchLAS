@@ -1,8 +1,9 @@
-// syfn (fullerenes plan P2.2): F = V f(Lambda) V^H. Matrices are built on the host as
-// A = Q diag(d) Q^H with Q a product of two Householder reflectors (complex v for complex T), so
-// every reference is a closed form in double that shares no code with the library. Operands have
-// a padded ld and a stride gap holding a large finite poison; syfn's unreferenced triangle is
-// poisoned too.
+// syfn (fullerenes plan P2.2): F = V f(Lambda) V^H. Items are A = Q diag(d) Q^H with Q a product of
+// two Householder reflectors (complex v for complex T) held in double, so each reference is f(d) on
+// that Q, formed and compared by MatrixView's double-precision checks; the Loewdin case draws its
+// graded A with fill_graded_hermitian. Operands sit in padded, poisoned storage (test_support), and
+// syfn's unreferenced triangle is poisoned too.
+// evidence: docs/perf/syfn.md#syfn-tests-and-breaks
 #include <gtest/gtest.h>
 
 #include <batchlas/backend_config.h>
@@ -13,6 +14,8 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <tests/test_support/inputs.hh>
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 
 #include <batchlas/verify/tolerance.hh>
@@ -20,7 +23,6 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <cstring>
 #include <limits>
 #include <random>
 #include <vector>
@@ -29,22 +31,18 @@ using namespace batchlas;
 
 namespace {
 
+namespace ts = test_support;
+using ts::Live;
 using verify::Check;
-using cd = std::complex<double>;
-using HostMat = std::vector<cd>;  // n x n column-major
+using batchlas::float_t;  // not math.h's
 
 template <typename T>
-using Real = batchlas::float_t<T>;
-
-template <typename T, Backend B>
-struct SyfnConfig {
-    using ScalarType = T;
-    static constexpr Backend BackendVal = B;
-};
-
-using SyfnTestTypes = typename test_utils::backend_types<SyfnConfig>::type;
-
-constexpr bool kHostVendor = bool(BATCHLAS_HAS_LAPACKE) && bool(BATCHLAS_HAS_CBLAS);
+using MV = MatrixView<T, MatrixFormat::Dense>;
+template <typename T>
+using P = typename MV<T>::promoted_type;
+template <typename T>
+using Fn = SyfnFunction<float_t<T>>;
+using Spectra = std::vector<std::vector<double>>;  // one spectrum per item
 
 // A vendor-free build has no host syev or syrk, so its NETLIB items are covered only by
 // SyfnVendorFree.HostWithoutLapackeThrowsNoRoute.
@@ -54,137 +52,103 @@ protected:
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->IsSkipped()) return;
-        if (test_utils::BatchLASTest<Config>::BackendType == Backend::NETLIB && !kHostVendor)
-            GTEST_SKIP() << "no host LAPACKE/CBLAS: syfn has no route on NETLIB";
+        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(Config::BackendVal);
     }
 };
 
+using SyfnTestTypes = typename test_utils::backend_types<ts::Config>::type;
 TYPED_TEST_SUITE(SyfnTest, SyfnTestTypes);
 
-constexpr double kPoison = 9.0e3;
-
 template <typename T>
-T to_t(cd z) {
-    if constexpr (is_std_complex_v<T>) return T(Real<T>(z.real()), Real<T>(z.imag()));
-    else return T(z.real());
+Matrix<P<T>> up(const MV<T>& v) {
+    return v.template astype<P<T>>();
 }
 
-template <typename T>
-cd to_cd(T x) {
-    if constexpr (is_std_complex_v<T>) return cd(double(x.real()), double(x.imag()));
-    else return cd(double(x), 0.0);
+Spectra map(Spectra d, auto&& f) {
+    for (auto& v : d)
+        for (double& x : v) x = f(x);
+    return d;
 }
 
-template <typename T>
-double kappa_for() { return std::is_same_v<Real<T>, float> ? 1.0e3 : 1.0e6; }
-
-// Two Householder reflectors; v has a nonzero imaginary part for complex T.
-template <typename T>
-HostMat householder_q(int n, std::mt19937& gen) {
-    std::normal_distribution<double> nd;
-    HostMat Q(size_t(n) * n, cd(0));
-    for (int i = 0; i < n; ++i) Q[i * n + i] = 1;
-    for (int r = 0; r < 2; ++r) {
-        std::vector<cd> v(n);
-        double nv = 0;
-        for (auto& x : v) {
-            x = cd(nd(gen), is_std_complex_v<T> ? nd(gen) : 0.0);
-            nv += std::norm(x);
-        }
-        HostMat Qn(Q);  // Q := Q (I - 2 v v^H / nv)
-        for (int i = 0; i < n; ++i) {
-            cd qv = 0;
-            for (int k = 0; k < n; ++k) qv += Q[k * n + i] * v[k];
-            for (int j = 0; j < n; ++j) Qn[j * n + i] -= 2.0 * qv * std::conj(v[j]) / nv;
-        }
-        Q = Qn;
-    }
-    return Q;
-}
-
-// Q diag(g) Q^H.
-HostMat q_diag_qh(const HostMat& Q, const std::vector<double>& g, int n) {
-    HostMat R(size_t(n) * n, cd(0));
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i) {
-            cd s = 0;
-            for (int k = 0; k < n; ++k) s += Q[k * n + i] * g[k] * std::conj(Q[k * n + j]);
-            R[j * n + i] = s;
-        }
+// Q diag(g_b) Q^H per item, through the checks' reference product.
+template <typename U>
+Matrix<U> qdq(Queue& q, const Matrix<U>& Q, const Spectra& g) {
+    const int n = Q.rows(), batch = Q.batch_size();
+    Matrix<U> D = Matrix<U>::Zeros(n, n, batch), QD(n, n, batch), R(n, n, batch);
+    for (int b = 0; b < batch; ++b)
+        for (int k = 0; k < n; ++k) D(k, k, b) = U(g[b][k]);
+    (void)MV<U>::product(q, Q, Transpose::NoTrans, D, Transpose::NoTrans, QD);
+    (void)MV<U>::product(q, QD, Transpose::NoTrans, Q, Transpose::ConjTrans, R);
+    q.wait();
     return R;
 }
 
-HostMat mul(const HostMat& X, const HostMat& Y, int n) {
-    HostMat R(size_t(n) * n, cd(0));
-    for (int j = 0; j < n; ++j)
-        for (int k = 0; k < n; ++k)
-            for (int i = 0; i < n; ++i) R[j * n + i] += X[k * n + i] * Y[j * n + k];
-    return R;
+// ||X - Y||_F / ||Y||_F, the worst item: qr_reconstruction with R = I.
+template <typename U>
+double rel_diff(Queue& q, const Matrix<U>& X, const Matrix<U>& Y) {
+    return MV<U>::qr_reconstruction(q, Y, X, Matrix<U>::Identity(Y.cols(), Y.batch_size()), Y.all_items());
 }
 
-double frob_diff(const HostMat& X, const HostMat& Y) {
-    double d = 0, y = 0;
-    for (size_t k = 0; k < X.size(); ++k) d += std::norm(X[k] - Y[k]), y += std::norm(Y[k]);
-    return std::sqrt(d / y);
-}
-
-// Padded storage: ld = rows + pad, stride ld * cols + 7, everything poisoned.
+// Item b: Q_b (double), d_b = spectrum(b), A = Q diag(d) Q^H in double and rounded to T (At).
 template <typename T>
-struct Padded {
-    Matrix<T> store;
-    MatrixView<T> view;
-    Padded(int rows, int cols, int pad, int batch)
-        : store((rows + pad) * cols + 7, batch),
-          view(store.data_ptr(), rows, cols, rows + pad, (rows + pad) * cols + 7, batch) {
-        std::fill(store.data_ptr(), store.data_ptr() + int64_t((rows + pad) * cols + 7) * batch,
-                  T(Real<T>(kPoison)));
-    }
-    bool pad_intact() const {
-        const T* p = view.data_ptr();
-        for (int b = 0; b < view.batch_size(); ++b)
-            for (int k = 0; k < view.stride(); ++k) {
-                const int j = k / view.ld(), i = k % view.ld();
-                if (j < view.cols() && i < view.rows()) continue;
-                if (p[int64_t(b) * view.stride() + k] != T(Real<T>(kPoison))) return false;
-            }
-        return true;
-    }
-    size_t elems() const { return size_t(view.stride()) * size_t(view.batch_size()); }
-    std::vector<T> raw() const { return std::vector<T>(view.data_ptr(), view.data_ptr() + elems()); }
-    HostMat item(int b) const {
-        HostMat R(size_t(view.rows()) * view.cols());
-        for (int j = 0; j < view.cols(); ++j)
-            for (int i = 0; i < view.rows(); ++i) R[j * view.rows() + i] = to_cd(view(i, j, b));
-        return R;
-    }
+struct Problem {
+    Matrix<P<T>> Q, A;
+    Matrix<T> At;
+    Spectra d;
 };
 
-// Writes the uplo triangle of H into item b of A; the other triangle keeps its poison.
 template <typename T>
-void store_triangle(MatrixView<T> A, int b, const HostMat& H, Uplo uplo) {
-    const int n = A.rows();
-    for (int j = 0; j < n; ++j)
-        for (int i = 0; i < n; ++i)
-            if (uplo == Uplo::Lower ? i >= j : i <= j) A(i, j, b) = to_t<T>(H[j * n + i]);
-}
-
-template <typename T>
-bool exactly_hermitian(const MatrixView<T>& F, int b) {
-    for (int j = 0; j < F.cols(); ++j)
-        for (int i = 0; i < F.rows(); ++i) {
-            const T x = F(i, j, b), y = F(j, i, b);
-            if constexpr (is_std_complex_v<T>) {
-                if (x.real() != y.real() || x.imag() != -y.imag()) return false;
-            } else if (x != y) {
-                return false;
+Problem<T> make_problem(Queue& q, int n, int batch, unsigned seed, auto&& spectrum) {
+    using U = P<T>;
+    std::mt19937 gen(seed);
+    std::normal_distribution<double> nd;
+    Matrix<U> Q = Matrix<U>::Identity(n, batch);
+    Spectra d;
+    for (int b = 0; b < batch; ++b) {
+        for (int r = 0; r < 2; ++r) {  // Q := Q (I - 2 v v^H / v^H v), row by row
+            std::vector<U> v(n);
+            double nv = 0;
+            for (U& x : v) x = MV<U>::make(nd(gen), is_std_complex_v<T> ? nd(gen) : 0.0), nv += std::norm(x);
+            for (int i = 0; i < n; ++i) {
+                U qv = 0;
+                for (int k = 0; k < n; ++k) qv += U(Q(i, k, b)) * v[k];
+                for (int j = 0; j < n; ++j) Q(i, j, b) -= 2.0 * qv * MV<U>::conj(v[j]) / nv;
             }
         }
+        d.push_back(spectrum(b));
+    }
+    Matrix<U> A = qdq(q, Q, d);
+    Matrix<T> At = A.template astype<T>();
+    return {std::move(Q), std::move(A), std::move(At), std::move(d)};
+}
+
+// d_k = kappa^{-k/(n-1)}: cond kappa.
+std::vector<double> graded(int n, double kappa) {
+    std::vector<double> d(n);
+    for (int k = 0; k < n; ++k) d[k] = std::pow(kappa, -double(k) / double(n - 1));
+    return d;
+}
+
+// A's uplo triangle in poisoned storage at ld n + pad; a one-item A repeats into every item.
+template <typename T>
+Matrix<T> stored(const MV<T>& A, Uplo uplo, int pad, int batch) {
+    Matrix<T> a = ts::padded<T>(A.rows(), A.cols(), batch, pad);
+    ts::store<T>(a, A, Live::triangle(uplo));
+    return a;
+}
+
+// F == F^H element for element (real T: symmetric), every item.
+template <typename T>
+bool exactly_hermitian(const MV<T>& F) {
+    for (int b = 0; b < F.batch_size(); ++b)
+        for (int j = 0; j < F.cols(); ++j)
+            for (int i = 0; i < F.rows(); ++i)
+                if (!(T(F(i, j, b)) == MV<T>::conj(T(F(j, i, b))))) return false;
     return true;
 }
 
 template <typename T, Backend B>
-std::vector<int32_t> run_syfn(Queue& q, const MatrixView<T>& A, const MatrixView<T>& F, SyfnFunction<Real<T>> fn,
-                              Uplo uplo) {
+std::vector<int32_t> run_syfn(Queue& q, const MV<T>& A, const MV<T>& F, Fn<T> fn, Uplo uplo) {
     UnifiedVector<std::byte> ws(syfn_buffer_size<B, T>(q, A, F, fn, uplo));
     UnifiedVector<int32_t> info(size_t(A.batch_size()), int32_t(-7));
     syfn<B, T>(q, A, F, fn, uplo, ws.to_span(), info.to_span()).wait();
@@ -192,36 +156,11 @@ std::vector<int32_t> run_syfn(Queue& q, const MatrixView<T>& A, const MatrixView
 }
 
 template <typename T, Backend B>
-std::vector<int32_t> run_from_eigen(Queue& q, const MatrixView<T>& V, UnifiedVector<Real<T>>& W,
-                                    const MatrixView<T>& F, SyfnFunction<Real<T>> fn) {
+std::vector<int32_t> run_from_eigen(Queue& q, const MV<T>& V, UnifiedVector<float_t<T>>& W, const MV<T>& F, Fn<T> fn) {
     UnifiedVector<std::byte> ws(syfn_from_eigen_buffer_size<B, T>(q, V, W.to_span(), F, fn));
     UnifiedVector<int32_t> info(size_t(V.batch_size()), int32_t(-7));
     syfn_from_eigen<B, T>(q, V, W.to_span(), F, fn, ws.to_span(), info.to_span()).wait();
     return std::vector<int32_t>(info.begin(), info.end());
-}
-
-// Graded spectra d_k = kappa^{-k/(n-1)} (cond kappa), A_b = Q_b diag(d) Q_b^H.
-struct Problem {
-    std::vector<HostMat> Q, A;
-    std::vector<std::vector<double>> d;
-};
-
-template <typename T>
-Problem make_problem(int n, int batch, unsigned seed, auto&& spectrum) {
-    std::mt19937 gen(seed);
-    Problem p;
-    for (int b = 0; b < batch; ++b) {
-        p.Q.push_back(householder_q<T>(n, gen));
-        p.d.push_back(spectrum(b));
-        p.A.push_back(q_diag_qh(p.Q.back(), p.d.back(), n));
-    }
-    return p;
-}
-
-std::vector<double> graded(int n, double kappa) {
-    std::vector<double> d(n);
-    for (int k = 0; k < n; ++k) d[k] = std::pow(kappa, -double(k) / double(n - 1));
-    return d;
 }
 
 // Loewdin acceptance: F = A^{-1/2} with ||F A F - I||_F / sqrt(n) at kappa * eps, F exactly
@@ -229,28 +168,21 @@ std::vector<double> graded(int n, double kappa) {
 TYPED_TEST(SyfnTest, InvSqrtOfGradedSpdIsLoewdin) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    const double kappa = kappa_for<T>();
+    Queue& q = *this->ctx;
+    const double kappa = ts::cond_for<T>();
     for (int n : {12, 40})
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
-            SCOPED_TRACE(::testing::Message() << "n=" << n << " uplo=" << int(uplo));
+            SCOPED_TRACE(::testing::Message() << "n=" << n << " uplo=" << ts::uplo_name(uplo));
             constexpr int batch = 3;
-            Problem p = make_problem<T>(n, batch, 11u + n, [&](int) { return graded(n, kappa); });
-            Padded<T> A(n, n, 3, batch), F(n, n, 5, batch);
-            for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b], uplo);
-            const std::vector<T> A0 = A.raw();
-            const std::vector<int32_t> info = run_syfn<T, B>(*this->ctx, A.view, F.view, SyfnFunction<Real<T>>::inv_sqrt(), uplo);
-            for (int b = 0; b < batch; ++b) {
-                EXPECT_EQ(info[b], 0);
-                EXPECT_TRUE(exactly_hermitian(F.view, b));
-                const HostMat Fh = F.item(b), FAF = mul(mul(Fh, p.A[b], n), Fh, n);
-                HostMat I(size_t(n) * n, cd(0));
-                for (int i = 0; i < n; ++i) I[i * n + i] = 1;
-                double r = 0;
-                for (size_t k = 0; k < I.size(); ++k) r += std::norm(FAF[k] - I[k]);
-                EXPECT_VERIFY(T, Check::factorization, n, std::sqrt(r / n) / kappa);
-            }
-            EXPECT_TRUE(F.pad_intact());
-            EXPECT_TRUE(A0 == A.raw());
+            const Matrix<T> A0 = ts::hpd<T>(q, n, batch, kappa, 11u + n);
+            Matrix<T> a = stored<T>(A0, uplo, 3, batch), F = ts::padded<T>(n, n, batch, 5);
+            const Matrix<T> before = a.clone();
+            EXPECT_EQ((run_syfn<T, B>(q, a, F, Fn<T>::inv_sqrt(), uplo)), std::vector<int32_t>(batch, 0));
+            EXPECT_TRUE(exactly_hermitian<T>(F));
+            const double faf = MV<T>::similarity_residual(q, Matrix<T>::Identity(n, batch), F, A0, F.all_items());
+            EXPECT_VERIFY(T, Check::factorization, n, faf / kappa);
+            EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
+            EXPECT_TRUE(ts::items_bit_identical_to<T>(a, before));
         }
 }
 
@@ -258,33 +190,31 @@ TYPED_TEST(SyfnTest, InvSqrtOfGradedSpdIsLoewdin) {
 TYPED_TEST(SyfnTest, ExpMatchesClosedFormInPlace) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 24, batch = 4;
-    Problem p = make_problem<T>(n, batch, 5, [&](int b) {
+    Problem<T> p = make_problem<T>(q, n, batch, 5, [&](int b) {
         std::vector<double> d(n);
         for (int k = 0; k < n; ++k) d[k] = -2.0 + 4.0 * double((k * 7 + b) % n) / double(n - 1);
         return d;
     });
-    Padded<T> A(n, n, 2, batch);
-    for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b], Uplo::Upper);
-    const std::vector<int32_t> info = run_syfn<T, B>(*this->ctx, A.view, A.view, SyfnFunction<Real<T>>::exp(), Uplo::Upper);
-    for (int b = 0; b < batch; ++b) {
-        std::vector<double> e(n);
-        for (int k = 0; k < n; ++k) e[k] = std::exp(p.d[b][k]);
-        EXPECT_EQ(info[b], 0);
-        EXPECT_TRUE(exactly_hermitian(A.view, b));
-        EXPECT_VERIFY(T, Check::factorization, n, frob_diff(A.item(b), q_diag_qh(p.Q[b], e, n)));
-    }
-    EXPECT_TRUE(A.pad_intact());
+    Matrix<T> a = stored<T>(p.At, Uplo::Upper, 2, batch);
+    EXPECT_EQ((run_syfn<T, B>(q, a, a, Fn<T>::exp(), Uplo::Upper)), std::vector<int32_t>(batch, 0));
+    EXPECT_TRUE(exactly_hermitian<T>(a));
+    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return std::exp(x); }));
+    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(q, up<T>(a), ref));
+    EXPECT_TRUE(ts::unwritten_outside<T>(a, Live::block()));
 }
 
 // sqrt: F F = A; inverse of an indefinite A (the signed gemm form): F A = I.
 TYPED_TEST(SyfnTest, SqrtAndInverseOfIndefinite) {
     using T = typename TestFixture::ScalarType;
+    using U = P<T>;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 20, batch = 3;
     for (SyfnKind kind : {SyfnKind::Sqrt, SyfnKind::Inverse}) {
         SCOPED_TRACE(int(kind));
-        Problem p = make_problem<T>(n, batch, 9, [&](int b) {
+        Problem<T> p = make_problem<T>(q, n, batch, 9, [&](int b) {
             std::vector<double> d(n);
             for (int k = 0; k < n; ++k) {
                 d[k] = 1.0 + 3.0 * double((k * 3 + b) % n) / double(n - 1);
@@ -292,57 +222,52 @@ TYPED_TEST(SyfnTest, SqrtAndInverseOfIndefinite) {
             }
             return d;
         });
-        Padded<T> A(n, n, 1, batch), F(n, n, 4, batch);
-        for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b], Uplo::Lower);
-        const std::vector<int32_t> info = run_syfn<T, B>(*this->ctx, A.view, F.view, SyfnFunction<Real<T>>{kind, {}}, Uplo::Lower);
-        for (int b = 0; b < batch; ++b) {
-            EXPECT_EQ(info[b], 0);
-            EXPECT_TRUE(exactly_hermitian(F.view, b));
-            const HostMat Fh = F.item(b);
-            if (kind == SyfnKind::Sqrt) {
-                EXPECT_VERIFY(T, Check::factorization, n, frob_diff(mul(Fh, Fh, n), p.A[b]));
-            } else {
-                HostMat I(size_t(n) * n, cd(0));
-                for (int i = 0; i < n; ++i) I[i * n + i] = 1;
-                EXPECT_VERIFY(T, Check::solve, n, frob_diff(mul(Fh, p.A[b], n), I));
-            }
+        Matrix<T> a = stored<T>(p.At, Uplo::Lower, 1, batch), F = ts::padded<T>(n, n, batch, 4);
+        EXPECT_EQ((run_syfn<T, B>(q, a, F, Fn<T>{kind, {}}, Uplo::Lower)), std::vector<int32_t>(batch, 0));
+        EXPECT_TRUE(exactly_hermitian<T>(F));
+        const Matrix<U> f = up<T>(F), I = Matrix<U>::Identity(n, batch);
+        if (kind == SyfnKind::Sqrt) {  // ||A - F F^H|| / ||A||, F exactly Hermitian
+            EXPECT_VERIFY(T, Check::factorization, n, MV<U>::similarity_residual(q, p.A, f, I, p.A.all_items()));
+        } else {
+            Matrix<U> FA(n, n, batch);
+            MV<U>::product(q, f, Transpose::NoTrans, p.A, Transpose::NoTrans, FA).wait();
+            EXPECT_VERIFY(T, Check::solve, n, rel_diff(q, FA, I));
         }
-        EXPECT_TRUE(F.pad_intact());
+        EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
     }
 }
 
 // The per-iteration entry on a non-orthonormal n x m V (m < n): signed weights (gemm form) and
-// inv_sqrt (herk form) against a host sum over j of f_j v_j v_j^H.
+// inv_sqrt (herk form) against (V diag(f)) V^H in double.
 TYPED_TEST(SyfnTest, FromEigenMatchesHostReference) {
     using T = typename TestFixture::ScalarType;
+    using U = P<T>;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 33, m = 17, batch = 3;
+    Matrix<T> V = ts::padded<T>(n, m, batch, 3);
+    ts::store<T>(V, Matrix<T>::Random(n, m, false, batch, 3));
     std::mt19937 gen(3);
     std::normal_distribution<double> nd;
-    Padded<T> V(n, m, 3, batch);
-    for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < m; ++j)
-            for (int i = 0; i < n; ++i) V.view(i, j, b) = to_t<T>(cd(nd(gen), is_std_complex_v<T> ? nd(gen) : 0.0));
-    UnifiedVector<Real<T>> W(size_t(m) * batch), wts(size_t(m) * batch);
-    for (size_t k = 0; k < W.size(); ++k) W[k] = Real<T>(0.5 + std::fabs(nd(gen))), wts[k] = Real<T>(nd(gen));
+    UnifiedVector<float_t<T>> W(size_t(m) * batch), wts(size_t(m) * batch);
+    for (size_t k = 0; k < W.size(); ++k) W[k] = float_t<T>(0.5 + std::fabs(nd(gen))), wts[k] = float_t<T>(nd(gen));
     for (bool weights : {true, false}) {
         SCOPED_TRACE(weights ? "weights" : "inv_sqrt");
-        Padded<T> F(n, n, 2, batch);
-        const auto fn = weights ? SyfnFunction<Real<T>>::with_weights(wts.to_span()) : SyfnFunction<Real<T>>::inv_sqrt();
-        const std::vector<int32_t> info = run_from_eigen<T, B>(*this->ctx, V.view, W, F.view, fn);
-        for (int b = 0; b < batch; ++b) {
-            HostMat R(size_t(n) * n, cd(0));
+        Matrix<T> F = ts::padded<T>(n, n, batch, 2);
+        const auto fn = weights ? Fn<T>::with_weights(wts.to_span()) : Fn<T>::inv_sqrt();
+        EXPECT_EQ((run_from_eigen<T, B>(q, V, W, F, fn)), std::vector<int32_t>(batch, 0));
+        EXPECT_TRUE(exactly_hermitian<T>(F));
+        const Matrix<U> v = up<T>(V);
+        Matrix<U> vf = up<T>(V), R(n, n, batch);
+        for (int b = 0; b < batch; ++b)
             for (int j = 0; j < m; ++j) {
                 const double f = weights ? double(wts[b * m + j]) : 1.0 / std::sqrt(double(W[b * m + j]));
-                for (int c = 0; c < n; ++c)
-                    for (int r = 0; r < n; ++r) R[c * n + r] += f * to_cd(V.view(r, j, b)) * std::conj(to_cd(V.view(c, j, b)));
+                for (int i = 0; i < n; ++i) vf(i, j, b) *= f;
             }
-            EXPECT_EQ(info[b], 0);
-            EXPECT_TRUE(exactly_hermitian(F.view, b));
-            EXPECT_VERIFY(T, Check::blas, m, frob_diff(F.item(b), R));
-        }
-        EXPECT_TRUE(F.pad_intact());
-        EXPECT_TRUE(V.pad_intact());
+        MV<U>::product(q, vf, Transpose::NoTrans, v, Transpose::ConjTrans, R).wait();
+        EXPECT_VERIFY(T, Check::blas, m, rel_diff(q, up<T>(F), R));
+        EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
+        EXPECT_TRUE(ts::unwritten_outside<T>(V, Live::block()));
     }
 }
 
@@ -352,33 +277,33 @@ TYPED_TEST(SyfnTest, FromEigenMatchesHostReference) {
 TYPED_TEST(SyfnTest, WeightsPairWithAscendingEigenvalues) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 14, batch = 2;
-    Problem p = make_problem<T>(n, batch, 17, [&](int b) {
+    Problem<T> p = make_problem<T>(q, n, batch, 17, [&](int b) {
         std::vector<double> d(n);
         for (int k = 0; k < n; ++k) d[k] = -3.0 + 0.5 * double((k * 5 + b) % n);
         return d;
     });
-    UnifiedVector<Real<T>> wts(size_t(n) * batch);
+    UnifiedVector<float_t<T>> wts(size_t(n) * batch);
     for (int b = 0; b < batch; ++b)
-        for (int j = 0; j < n; ++j) wts[b * n + j] = Real<T>((j % 2 ? -1.0 : 1.0) * (1.0 + j + 0.25 * b));
-    Padded<T> A(n, n, 2, batch), F(n, n, 3, batch), F2(n, n, 3, batch);
-    for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b], Uplo::Upper);
-    const auto fn = SyfnFunction<Real<T>>::with_weights(wts.to_span());
-    const std::vector<int32_t> info = run_syfn<T, B>(*this->ctx, A.view, F.view, fn, Uplo::Upper);
+        for (int j = 0; j < n; ++j) wts[b * n + j] = float_t<T>((j % 2 ? -1.0 : 1.0) * (1.0 + j + 0.25 * b));
+    Matrix<T> a = stored<T>(p.At, Uplo::Upper, 2, batch), F = ts::padded<T>(n, n, batch, 3),
+              F2 = ts::padded<T>(n, n, batch, 3);
+    const auto fn = Fn<T>::with_weights(wts.to_span());
+    EXPECT_EQ((run_syfn<T, B>(q, a, F, fn, Uplo::Upper)), std::vector<int32_t>(batch, 0));
+    Spectra g(batch, std::vector<double>(n));
     for (int b = 0; b < batch; ++b) {
         std::vector<int> order(n);
         for (int k = 0; k < n; ++k) order[k] = k;
         std::sort(order.begin(), order.end(), [&](int x, int y) { return p.d[b][x] < p.d[b][y]; });
-        std::vector<double> g(n);
-        for (int j = 0; j < n; ++j) g[order[j]] = double(wts[b * n + j]);
-        EXPECT_EQ(info[b], 0);
-        EXPECT_TRUE(exactly_hermitian(F.view, b));
-        EXPECT_VERIFY(T, Check::factorization, n, frob_diff(F.item(b), q_diag_qh(p.Q[b], g, n)));
+        for (int j = 0; j < n; ++j) g[b][order[j]] = double(wts[b * n + j]);
     }
-    EXPECT_TRUE(F.pad_intact());
-    UnifiedVector<std::byte> ws(syfn_buffer_size(*this->ctx, A.view, F2.view, fn, Uplo::Upper));
-    syfn(*this->ctx, A.view, F2.view, fn, Uplo::Upper, ws.to_span(), Span<int32_t>{}).wait();
-    EXPECT_EQ(std::memcmp(F.view.data_ptr(), F2.view.data_ptr(), sizeof(T) * F.elems()), 0) << "deducing spelling";
+    EXPECT_TRUE(exactly_hermitian<T>(F));
+    EXPECT_VERIFY(T, Check::factorization, n, rel_diff(q, up<T>(F), qdq(q, p.Q, g)));
+    EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
+    UnifiedVector<std::byte> ws(syfn_buffer_size(q, a.view(), F2.view(), fn, Uplo::Upper));
+    syfn(q, a.view(), F2.view(), fn, Uplo::Upper, ws.to_span(), Span<int32_t>{}).wait();
+    EXPECT_TRUE(ts::items_bit_identical_to<T>(F2, F)) << "deducing spelling";
 }
 
 // Item 1 has two negative eigenvalues: info = {0, 2, 0}; items 0 and 2 are A^{-1/2}, item 1 is
@@ -386,63 +311,51 @@ TYPED_TEST(SyfnTest, WeightsPairWithAscendingEigenvalues) {
 // takes them, InvSqrt counts them.
 TYPED_TEST(SyfnTest, OutOfDomainEigenvaluesSetInfo) {
     using T = typename TestFixture::ScalarType;
+    using R = float_t<T>;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 16, batch = 3;
-    Problem p = make_problem<T>(n, batch, 21, [&](int b) {
+    Problem<T> p = make_problem<T>(q, n, batch, 21, [&](int b) {
         std::vector<double> d = graded(n, 100.0);
         if (b == 1) d[3] = -0.5, d[9] = -2.0;
         return d;
     });
-    Padded<T> A(n, n, 2, batch), F(n, n, 1, batch);
-    for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b], Uplo::Lower);
-    const std::vector<int32_t> info = run_syfn<T, B>(*this->ctx, A.view, F.view, SyfnFunction<Real<T>>::inv_sqrt(), Uplo::Lower);
-    EXPECT_EQ(info, (std::vector<int32_t>{0, 2, 0}));
-    for (int b = 0; b < batch; ++b) {
-        std::vector<double> g(n);
-        for (int k = 0; k < n; ++k) g[k] = p.d[b][k] > 0 ? 1.0 / std::sqrt(p.d[b][k]) : 0.0;
-        EXPECT_VERIFY_SLACK(T, Check::factorization, n, frob_diff(F.item(b), q_diag_qh(p.Q[b], g, n)),
-                            verify::Slack{100.0, "forward error of A^{-1/2} scales with cond(A) = 100"});
-    }
+    Matrix<T> a = stored<T>(p.At, Uplo::Lower, 2, batch), F = ts::padded<T>(n, n, batch, 1);
+    EXPECT_EQ((run_syfn<T, B>(q, a, F, Fn<T>::inv_sqrt(), Uplo::Lower)), (std::vector<int32_t>{0, 2, 0}));
+    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return x > 0 ? 1.0 / std::sqrt(x) : 0.0; }));
+    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(q, up<T>(F), ref),
+                        verify::Slack{100.0, "forward error of A^{-1/2} scales with cond(A) = 100"});
     constexpr int m = 4;
-    Padded<T> V(n, m, 0, 1), G(n, n, 0, 1);
-    for (int j = 0; j < m; ++j)
-        for (int i = 0; i < n; ++i) V.view(i, j, 0) = to_t<T>(cd(i == j ? 1.0 : 0.0, 0.0));
-    UnifiedVector<Real<T>> W(m);
-    W[0] = Real<T>(0), W[1] = Real<T>(-1), W[2] = Real<T>(0), W[3] = Real<T>(16);
-    const double tol = 8.0 * std::numeric_limits<Real<T>>::epsilon();
-    auto diag = [&](int k) { return to_cd(G.view(k, k, 0)); };
-    EXPECT_EQ((run_from_eigen<T, B>(*this->ctx, V.view, W, G.view, SyfnFunction<Real<T>>::inverse())), std::vector<int32_t>{2});
+    Matrix<T> V = ts::padded<T>(n, m, 1, 0), G = ts::padded<T>(n, n, 1, 0);
+    ts::store<T>(V, Matrix<T>::Identity(n, 1));
+    UnifiedVector<R> W(m);
+    W[0] = R(0), W[1] = R(-1), W[2] = R(0), W[3] = R(16);
+    const double tol = 8.0 * std::numeric_limits<R>::epsilon();
+    auto diag = [&](int k) { return std::complex<double>(MV<T>::up(T(G(k, k, 0)))); };
+    EXPECT_EQ((run_from_eigen<T, B>(q, V, W, G, Fn<T>::inverse())), std::vector<int32_t>{2});
     EXPECT_NEAR(diag(1).real(), -1.0, tol) << "inverse of -1";
     EXPECT_NEAR(diag(3).real(), 1.0 / 16.0, tol / 16.0);
-    EXPECT_EQ(diag(0), cd(0.0)) << "an out-of-domain value contributes 0";
-    EXPECT_EQ((run_from_eigen<T, B>(*this->ctx, V.view, W, G.view, SyfnFunction<Real<T>>::sqrt())), std::vector<int32_t>{1});
+    EXPECT_EQ(diag(0), 0.0) << "an out-of-domain value contributes 0";
+    EXPECT_EQ((run_from_eigen<T, B>(q, V, W, G, Fn<T>::sqrt())), std::vector<int32_t>{1});
     EXPECT_NEAR(diag(3).real(), 4.0, 4.0 * tol);
-    EXPECT_EQ(diag(1), cd(0.0));
-    EXPECT_EQ((run_from_eigen<T, B>(*this->ctx, V.view, W, G.view, SyfnFunction<Real<T>>::inv_sqrt())), std::vector<int32_t>{3});
+    EXPECT_EQ(diag(1), 0.0);
+    EXPECT_EQ((run_from_eigen<T, B>(q, V, W, G, Fn<T>::inv_sqrt())), std::vector<int32_t>{3});
     EXPECT_NEAR(diag(3).real(), 0.25, 0.25 * tol);
-    EXPECT_EQ(diag(2), cd(0.0));
+    EXPECT_EQ(diag(2), 0.0);
 }
 
 // 1024 identical items: every F bit-identical to item 0, item 0 correct.
 TYPED_TEST(SyfnTest, SaturatingBatchIsBitIdentical) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
     constexpr int n = 16, batch = 1024;
-    std::mt19937 gen(8);
-    const HostMat Q = householder_q<T>(n, gen);
-    const std::vector<double> d = graded(n, 1.0e2);
-    const HostMat Ah = q_diag_qh(Q, d, n);
-    Padded<T> A(n, n, 1, batch), F(n, n, 3, batch);
-    for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, Ah, Uplo::Lower);
-    run_syfn<T, B>(*this->ctx, A.view, F.view, SyfnFunction<Real<T>>::inv_sqrt(), Uplo::Lower);
-    int differing = 0;
-    for (int b = 1; b < batch; ++b)
-        for (int j = 0; j < n; ++j)
-            if (std::memcmp(&F.view(0, j, b), &F.view(0, j, 0), sizeof(T) * n) != 0) ++differing;
-    EXPECT_EQ(differing, 0);
-    std::vector<double> g(n);
-    for (int k = 0; k < n; ++k) g[k] = 1.0 / std::sqrt(d[k]);
-    EXPECT_VERIFY_SLACK(T, Check::factorization, n, frob_diff(F.item(0), q_diag_qh(Q, g, n)),
+    Problem<T> p = make_problem<T>(q, n, 1, 8, [&](int) { return graded(n, 1.0e2); });
+    Matrix<T> a = stored<T>(p.At, Uplo::Lower, 1, batch), F = ts::padded<T>(n, n, batch, 3);
+    run_syfn<T, B>(q, a, F, Fn<T>::inv_sqrt(), Uplo::Lower);
+    EXPECT_TRUE(ts::items_bit_identical<T>(F));
+    const Matrix<P<T>> ref = qdq(q, p.Q, map(p.d, [](double x) { return 1.0 / std::sqrt(x); }));
+    EXPECT_VERIFY_SLACK(T, Check::factorization, n, rel_diff(q, up<T>(F.batch_item(0)), ref),
                         verify::Slack{100.0, "forward error of A^{-1/2} scales with cond(A) = 100"});
 }
 
@@ -452,70 +365,73 @@ TYPED_TEST(SyfnTest, SaturatingBatchIsBitIdentical) {
 TYPED_TEST(SyfnTest, OutOfOrderQueueMatchesInOrder) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    constexpr int n = 48, distinct = 8, batch = 256;
-    Problem p = make_problem<T>(n, distinct, 4, [&](int) { return graded(n, 1.0e2); });
-    Padded<T> A(n, n, 1, batch), A2(n, n, 1, batch), F1(n, n, 1, batch), F2(n, n, 1, batch);
-    for (int b = 0; b < batch; ++b) store_triangle<T>(A.view, b, p.A[b % distinct], Uplo::Lower);
-    run_syfn<T, B>(*this->ctx, A.view, F1.view, SyfnFunction<Real<T>>::inv_sqrt(), Uplo::Lower);
-    Queue ooo(this->ctx->device(), B, false);
-    (void)MatrixView<T>::copy(ooo, A2.view, A.view);
-    run_syfn<T, B>(ooo, A2.view, F2.view, SyfnFunction<Real<T>>::inv_sqrt(), Uplo::Lower);
-    EXPECT_EQ(std::memcmp(F1.view.data_ptr(), F2.view.data_ptr(), sizeof(T) * F1.elems()), 0);
+    Queue& q = *this->ctx;
+    constexpr int n = 48, batch = 256;
+    Matrix<T> a = stored<T>(ts::hpd<T>(q, n, batch, 1.0e2, 4), Uplo::Lower, 1, batch);
+    Matrix<T> a2 = ts::padded<T>(n, n, batch, 1), F1 = ts::padded<T>(n, n, batch, 1), F2 = ts::padded<T>(n, n, batch, 1);
+    run_syfn<T, B>(q, a, F1, Fn<T>::inv_sqrt(), Uplo::Lower);
+    Queue ooo(q.device(), B, false);
+    (void)MV<T>::copy(ooo, a2, a);
+    run_syfn<T, B>(ooo, a2, F2, Fn<T>::inv_sqrt(), Uplo::Lower);
+    EXPECT_TRUE(ts::items_bit_identical_to<T>(F2, F1));
 }
 
 // m = 0 eigenpairs: F is exactly zero.
 TYPED_TEST(SyfnTest, NoEigenpairsGivesZero) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
-    Padded<T> V(6, 0, 0, 2), F(6, 6, 2, 2);
-    UnifiedVector<Real<T>> W(1);
-    const std::vector<int32_t> info = run_from_eigen<T, B>(*this->ctx, V.view, W, F.view, SyfnFunction<Real<T>>::exp());
-    EXPECT_EQ(info, (std::vector<int32_t>{0, 0}));
+    Matrix<T> V = ts::padded<T>(6, 0, 2, 0), F = ts::padded<T>(6, 6, 2, 2);
+    UnifiedVector<float_t<T>> W(1);
+    EXPECT_EQ((run_from_eigen<T, B>(*this->ctx, V, W, F, Fn<T>::exp())), (std::vector<int32_t>{0, 0}));
+    int nonzero = 0;
     for (int b = 0; b < 2; ++b)
         for (int j = 0; j < 6; ++j)
-            for (int i = 0; i < 6; ++i) EXPECT_EQ(to_cd(F.view(i, j, b)), cd(0.0));
-    EXPECT_TRUE(F.pad_intact());
+            for (int i = 0; i < 6; ++i) nonzero += !(T(F(i, j, b)) == T(0));
+    EXPECT_EQ(nonzero, 0);
+    EXPECT_TRUE(ts::unwritten_outside<T>(F, Live::block()));
 }
 
 TYPED_TEST(SyfnTest, RejectsBadArguments) {
     using T = typename TestFixture::ScalarType;
+    using R = float_t<T>;
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
-    Matrix<T> A(6, 6, 2), R(6, 5, 2), F(6, 6, 2), F3(6, 6, 3), V(6, 4, 2), Vw(4, 6, 2);
-    UnifiedVector<Real<T>> W(8), Wshort(7);
+    Matrix<T> A(6, 6, 2), Rect(6, 5, 2), F(6, 6, 2), F3(6, 6, 3), V(6, 4, 2), Vw(4, 6, 2);
+    UnifiedVector<R> W(8), Wshort(7);
     UnifiedVector<int32_t> info(2), infoshort(1);
     UnifiedVector<std::byte> ws(1 << 20);
-    const auto inv = SyfnFunction<Real<T>>::inv_sqrt();
-    auto f = [&](const MatrixView<T>& a, const MatrixView<T>& o, SyfnFunction<Real<T>> fn, Uplo u, size_t bytes,
-                 Span<int32_t> in) { syfn<B, T>(q, a, o, fn, u, ws.to_span().subspan(0, bytes), in).wait(); };
-    auto e = [&](const MatrixView<T>& v, UnifiedVector<Real<T>>& w, const MatrixView<T>& o, SyfnFunction<Real<T>> fn,
-                 size_t bytes) { syfn_from_eigen<B, T>(q, v, w.to_span(), o, fn, ws.to_span().subspan(0, bytes), Span<int32_t>{}).wait(); };
-    EXPECT_THROW(f(R, F, inv, Uplo::Lower, ws.size(), info.to_span()), batchlas::invalid_argument);
+    const auto inv = Fn<T>::inv_sqrt();
+    auto f = [&](const MV<T>& a, const MV<T>& o, Fn<T> fn, Uplo u, size_t bytes, Span<int32_t> in) {
+        syfn<B, T>(q, a, o, fn, u, ws.to_span().subspan(0, bytes), in).wait();
+    };
+    auto e = [&](const MV<T>& v, UnifiedVector<R>& w, const MV<T>& o, Fn<T> fn, size_t bytes) {
+        syfn_from_eigen<B, T>(q, v, w.to_span(), o, fn, ws.to_span().subspan(0, bytes), Span<int32_t>{}).wait();
+    };
+    EXPECT_THROW(f(Rect, F, inv, Uplo::Lower, ws.size(), info.to_span()), batchlas::invalid_argument);
     EXPECT_THROW(f(A, F3, inv, Uplo::Lower, ws.size(), info.to_span()), batchlas::invalid_argument);
     EXPECT_THROW(f(A, F, inv, static_cast<Uplo>(77), ws.size(), info.to_span()), batchlas::invalid_argument);
     EXPECT_THROW(f(A, F, inv, Uplo::Lower, ws.size(), infoshort.to_span()), batchlas::invalid_argument);
-    EXPECT_THROW(f(A, F, SyfnFunction<Real<T>>::with_weights(Wshort.to_span()), Uplo::Lower, ws.size(), info.to_span()),
+    EXPECT_THROW(f(A, F, Fn<T>::with_weights(Wshort.to_span()), Uplo::Lower, ws.size(), info.to_span()),
                  batchlas::invalid_argument);
-    EXPECT_THROW(f(A, F, SyfnFunction<Real<T>>{static_cast<SyfnKind>(9), {}}, Uplo::Lower, ws.size(), info.to_span()),
+    EXPECT_THROW(f(A, F, Fn<T>{static_cast<SyfnKind>(9), {}}, Uplo::Lower, ws.size(), info.to_span()),
                  batchlas::invalid_argument);
     EXPECT_THROW(f(A, F, inv, Uplo::Lower, 64, info.to_span()), batchlas::workspace_error);
     EXPECT_THROW(e(V, Wshort, F, inv, ws.size()), batchlas::invalid_argument);
     EXPECT_THROW(e(Vw, W, F, inv, ws.size()), batchlas::invalid_argument);
-    EXPECT_THROW(e(V, W, R, inv, ws.size()), batchlas::invalid_argument);
+    EXPECT_THROW(e(V, W, Rect, inv, ws.size()), batchlas::invalid_argument);
     Matrix<T> Fv(6, 6, 2);
-    EXPECT_THROW(e(MatrixView<T>(Fv, 6, 4), W, Fv, inv, ws.size()), batchlas::invalid_argument) << "F aliases V";
-    const MatrixView<T> Fvl(Fv.data_ptr() + 2 * 6, 6, 4, 6, 36, 2);
+    EXPECT_THROW(e(MV<T>(Fv, 6, 4), W, Fv, inv, ws.size()), batchlas::invalid_argument) << "F aliases V";
+    const MV<T> Fvl(Fv.data_ptr() + 2 * 6, 6, 4, 6, 36, 2);
     EXPECT_THROW(e(Fvl, W, Fv, inv, ws.size()), batchlas::invalid_argument) << "V is later columns of F";
     if (q.device().type == DeviceType::GPU) {
-        std::vector<Real<T>> host_w(8, Real<T>(1));
-        const auto hw = SyfnFunction<Real<T>>::with_weights(Span<Real<T>>(host_w.data(), host_w.size()));
+        std::vector<R> host_w(8, R(1));
+        const auto hw = Fn<T>::with_weights(Span<R>(host_w.data(), host_w.size()));
         EXPECT_THROW(e(V, W, F, hw, ws.size()), batchlas::invalid_argument) << "host weights, explicit";
-        EXPECT_THROW((void)syfn_from_eigen(q, MatrixView<T>(V), W.to_span(), MatrixView<T>(F), hw, ws.to_span(),
-                                           Span<int32_t>{}),
+        EXPECT_THROW((void)syfn_from_eigen(q, MV<T>(V), W.to_span(), MV<T>(F), hw, ws.to_span(), Span<int32_t>{}),
                      batchlas::invalid_argument)
             << "host weights, deducing";
     }
-    EXPECT_THROW(e(V, W, F, SyfnFunction<Real<T>>::with_weights(Wshort.to_span()), ws.size()), batchlas::invalid_argument);
+    EXPECT_THROW(e(V, W, F, Fn<T>::with_weights(Wshort.to_span()), ws.size()), batchlas::invalid_argument);
     EXPECT_THROW(e(V, W, F, inv, 16), batchlas::workspace_error);
 }
 
@@ -524,7 +440,7 @@ TYPED_TEST(SyfnTest, RejectsBadArguments) {
 // workspace, before any kernel; syfn_from_eigen throws it from syrk after its own kernels, which it
 // drains first. The queue stays usable.
 TEST(SyfnVendorFree, HostWithoutLapackeThrowsNoRoute) {
-    if (kHostVendor) GTEST_SKIP() << "host LAPACKE/CBLAS is built in";
+    if (BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS) GTEST_SKIP() << "host LAPACKE/CBLAS is built in";
     Queue q(Device("cpu"), Backend::NETLIB, true);
     Matrix<float> A = Matrix<float>::Identity(8, 3), F(8, 8, 3), V = Matrix<float>::Identity(8, 3);
     UnifiedVector<float> W(24, 1.0f);

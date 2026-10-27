@@ -47,25 +47,29 @@ Two entries (`include/batchlas/blas/functions/syfn.hh`):
 
 ## syfn tests and deliberate breaks {#syfn-tests-and-breaks}
 
-`tests/syfn_tests.cc` builds each item as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
-Householder reflectors (complex vectors for complex types), so every reference is a closed form in
-double: Loewdin \f$ \|F A F - I\| / \kappa \f$ on a graded spectrum (\f$ \kappa = 10^6 \f$ double,
-\f$ 10^3 \f$ float, whose 7 digits a \f$ 10^6 \f$ condition would exhaust), \f$ e^A \f$ in place against
-\f$ Q e^D Q^H \f$, \f$ F F = A \f$ and \f$ F A = I \f$ on an indefinite \f$ A \f$, the weights and
-herk forms against a host sum on a non-orthonormal padded `V`, `syfn(A)` with signed weights on an
+`tests/syfn_tests.cc` builds each item (except the Loewdin and out-of-order-queue inputs, drawn from `fill_graded_hermitian`) as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
+Householder reflectors (complex vectors for complex types) held in double, so every reference is a
+closed form in double, formed and compared by `MatrixView`'s checks (`product`,
+`similarity_residual`, `qr_reconstruction`), on padded poisoned storage from `tests/test_support/`:
+Loewdin \f$ \|F A F - I\| / \kappa \f$ on a graded `fill_graded_hermitian` input (\f$ \kappa = 10^6 \f$
+double, \f$ 10^3 \f$ float, whose 7 digits a \f$ 10^6 \f$ condition would exhaust), \f$ e^A \f$ in place
+against \f$ Q e^D Q^H \f$, \f$ F F = A \f$ and \f$ F A = I \f$ on an indefinite \f$ A \f$, the weights
+and herk forms against \f$ (V \operatorname{diag}(f)) V^H \f$ on a non-orthonormal padded `V`, `syfn(A)` with signed weights on an
 unsorted spectrum against the ascending pairing (and the deducing spelling bit-identical to the
 explicit one), per-item `info` with the other items correct, 1024 identical items bit-identical, an
 out-of-order queue bit-identical, and argument checks (partial `F`/`V` overlap, host weights).
 
 Deliberate breaks of `src/ops/syfn/syfn.cc`, each reverted (md5 checked), on the full-target
 tree (configs 0-3 NETLIB, 4-7 CUDA; float, double, cfloat, cdouble). Green before: 80/80 (72 before
-the review fixes of 2026-10-26; the last four rows are from that round).
+the review fixes of 2026-10-26; the last four rows are from that round). Re-run on 2026-10-27 after
+the move onto `tests/test_support/`: the `InvSqrt` scale (32), `V` at ld = n (8) and `hermitize(Upper)`
+(48) breaks gave the same red sets.
 
 | Break | Red set |
 |---|---|
 | `InvSqrt` scale \f$ w^{-1/2} \f$ instead of \f$ w^{-1/4} \f$ | `InvSqrtOfGradedSpdIsLoewdin`, `FromEigenMatchesHostReference`, `OutOfDomainEigenvaluesSetInfo`, `SaturatingBatchIsBitIdentical`; all 8 configs (32) |
 | column scale reads `V` at ld = n | `FromEigenMatchesHostReference` only (8): the only padded `V` |
-| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`; complex only (8) |
+| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`, `WeightsPairWithAscendingEigenvalues`; complex only, NETLIB and CUDA (12; re-run 2026-10-27 on the migrated suite, which adds the third test) |
 | `hermitize(Upper)` | every test with a herk-form product (6 tests x 8 = 48); `NoEigenpairs`, `OutOfOrder`, `Rejects` green |
 | `info` a flag, not a count | `OutOfDomainEigenvaluesSetInfo` only (8) |
 | `Sqrt` domain `w <= 0` | `OutOfDomainEigenvaluesSetInfo` only (8): the exact-zero straddle |

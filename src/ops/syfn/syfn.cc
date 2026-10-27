@@ -1,6 +1,6 @@
 // syfn: matrix functions of Hermitian matrices (fullerenes plan P2.2). A pure composition with no
 // kernel choice of its own, so no Op and no route: syev, herk/syrk and gemm select for themselves,
-// and the three kernels here (weights, info, column scale) are element-wise.
+// and its element-wise kernels (weights, info, column scale) live in kernels/syfn_kernels.cc.
 // evidence: docs/perf/syfn.md#syfn-composition
 
 #include <batchlas/backend_config.h>
@@ -12,6 +12,7 @@
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/util/mempool.hh>
 
+#include <src/ops/syfn/syfn_native.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -24,50 +25,9 @@
 namespace batchlas {
 namespace ops::syfn {
 
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-
-template <Backend B, class T>
-struct WeightsKernel {};
-template <Backend B, class T>
-struct InfoKernel {};
-template <Backend B, class T>
-struct ScaleKernel {};
-template <Backend B, class T>
-struct ZeroKernel {};
-
 // InvSqrt, Sqrt and Exp are >= 0 everywhere, so Y = V sqrt(f) and F = Y Y^H (herk) halves the
 // flops. Inverse and Weights may be negative: Y = V f and F = Y V^H (gemm).
 inline bool rank_k_form(SyfnKind k) { return k == SyfnKind::InvSqrt || k == SyfnKind::Sqrt || k == SyfnKind::Exp; }
-
-template <class R>
-inline bool out_of_domain(SyfnKind k, R w) {
-    switch (k) {
-        case SyfnKind::InvSqrt: return w <= R(0);
-        case SyfnKind::Sqrt: return w < R(0);
-        case SyfnKind::Inverse: return w == R(0);
-        default: return false;
-    }
-}
-
-// The column scale: sqrt(f(w)) for the rank-k form, f(w) otherwise; 0 out of the domain.
-template <class R>
-inline R column_scale(SyfnKind k, R w, R weight) {
-    if (out_of_domain(k, w)) return R(0);
-    switch (k) {
-        case SyfnKind::InvSqrt: return R(1) / sycl::sqrt(sycl::sqrt(w));
-        case SyfnKind::Sqrt: return sycl::sqrt(sycl::sqrt(w));
-        case SyfnKind::Exp: return sycl::exp(w * R(0.5));
-        case SyfnKind::Inverse: return R(1) / w;
-        default: return weight;
-    }
-}
-
-template <class T>
-struct Core {
-    Span<T> y;           // n x m per item, ld n: the scaled columns
-    Span<float_t<T>> g;  // m per item: the column scales
-};
 
 template <class T>
 Core<T> carve_core(const Device& dev, BumpAllocator& pool, int64_t n, int64_t m, int64_t batch) {
@@ -104,43 +64,10 @@ Event from_eigen(Queue& q, const MV<T>& V, Span<float_t<T>> W, const MV<T>& F, S
     using R = float_t<T>;
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
     const SyfnKind kind = fn.kind;
-    const R* wp = W.data();
-    if (!info.empty()) {
-        int32_t* ip = info.data();
-        const int32_t* sp = syev_info.empty() ? nullptr : syev_info.data();
-        q->parallel_for<InfoKernel<B, T>>(sycl::range<1>(size_t(batch)), [=](sycl::id<1> id) {
-            const int64_t b = int64_t(id[0]);
-            if (sp && sp[b] != 0) {
-                ip[b] = int32_t(n) + sp[b];
-                return;
-            }
-            int32_t bad = 0;
-            for (int64_t j = 0; j < m; ++j) bad += out_of_domain(kind, wp[b * m + j]) ? 1 : 0;
-            ip[b] = bad;
-        });
-    }
-    T* fp = F.data_ptr();
-    const int64_t ldf = F.ld(), sf = F.stride();
-    if (m == 0) {
-        q->parallel_for<ZeroKernel<B, T>>(sycl::range<1>(size_t(n * n * batch)), [=](sycl::id<1> id) {
-            const int64_t l = int64_t(id[0]), b = l / (n * n), e = l % (n * n);
-            fp[b * sf + (e / n) * ldf + e % n] = T(0);
-        });
-        return q.get_event();
-    }
-    const R* up = fn.weights.data();
-    R* gp = ws.g.data();
-    q->parallel_for<WeightsKernel<B, T>>(sycl::range<1>(size_t(m * batch)), [=](sycl::id<1> id) {
-        const size_t k = id[0];
-        gp[k] = column_scale(kind, wp[k], kind == SyfnKind::Weights ? up[k] : R(0));
-    });
-    const T* vp = V.data_ptr();
-    const int64_t ldv = V.ld(), sv = V.stride();
+    if (!info.empty()) launch_info<B, T>(q, V, W, kind, info, syev_info);
+    if (m == 0) return launch_zero<B, T>(q, V, F);
+    launch_scale<B, T>(q, V, W, fn, ws);
     T* yp = ws.y.data();
-    q->parallel_for<ScaleKernel<B, T>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
-        const int64_t l = int64_t(id[0]), b = l / (n * m), e = l % (n * m), i = e % n, j = e / n;
-        yp[l] = vp[b * sv + j * ldv + i] * gp[b * m + j];
-    });
     const MV<T> Y(yp, int(n), int(m), int(n), int(n * m), int(batch));
     if (rank_k_form(kind)) {
         if constexpr (is_std_complex_v<T>) herk<B, T>(q, Y, F, R(1), R(0), Uplo::Lower, Transpose::NoTrans);
