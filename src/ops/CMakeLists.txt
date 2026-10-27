@@ -104,6 +104,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     lanczos/lanczos.cc
     ritz_values/ritz_values.cc
     syfn/syfn.cc
+    syfn/kernels/syfn_kernels.cc
 )
 
 set(EXTENSIONS_FACTORIZATION_SOURCES
