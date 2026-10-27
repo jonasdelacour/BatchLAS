@@ -1,4 +1,4 @@
-# op=sytrs device=sm_120 batchlas=d67ad754 kernels=42603051 family_kernels=cta:9848abb4,blocked:8fc4fbab,wg:3dc9a598,vendor:d588b990 date=2026-10-26
+# op=sytrs device=sm_120 batchlas=d67ad754 kernels=470956d8 family_kernels=cta:0c9c4767,blocked:8c8925dd,wg:13e0411c,vendor:c1e7dd67 date=2026-10-26
 # source=ledger:benchmarks/results/tuning/ledger/sytrs.sm_120.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2512
 # keys: dtype:exact n:log:2 nrhs:log batch:log
 dtype=float n=1 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
