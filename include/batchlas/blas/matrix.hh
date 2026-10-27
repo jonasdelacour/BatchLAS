@@ -801,6 +801,15 @@ namespace batchlas {
         static double eigen_residual(Queue& ctx, const MatrixView& A, const MatrixView& V, const VectorView<float_t<T>>& w,
                                      std::span<const int> items = {});
 
+        /// @brief The generalized eigen residual of @p itype with W = diag(w) over X's columns: 1 (A X = B X W)
+        ///        ||A0 X - B0 X W||_F / (||A0||_F ||X||_F), 2 (A B X = X W) ||A0 (B0 X) - X W||_F / (||A0||_F ||B0 X||_F),
+        ///        3 (B A X = X W) ||B0 (A0 X) - X W||_F / (||B0||_F ||A0 X||_F). A0 and B0 are read whole; an empty
+        ///        @p B0 (rows() == 0) is the identity, every itype then the standard problem.
+        /// @throws batchlas::invalid_argument for an itype outside 1..3 or a dimension mismatch
+        static double generalized_eigen_residual(Queue& ctx, const MatrixView& A0, const MatrixView& B0, const MatrixView& X,
+                                                 const VectorView<float_t<T>>& w, int itype = 1,
+                                                 std::span<const int> items = {});
+
         /// @brief max |w - ref| / scale per item; ref[item] holds w.size() values in the caller's order.
         static double values_error(const VectorView<float_t<T>>& w, const std::vector<std::vector<double>>& ref,
                                    double scale, std::span<const int> items = {});

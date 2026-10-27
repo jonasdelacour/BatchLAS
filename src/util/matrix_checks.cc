@@ -817,6 +817,49 @@ double MatrixView<T, MType>::eigen_residual(Queue& ctx_in, const MatrixView& A, 
 }
 
 template <typename T, MatrixFormat MType>
+double MatrixView<T, MType>::generalized_eigen_residual(Queue& ctx_in, const MatrixView& A0, const MatrixView& B0, const MatrixView& X,
+                                                        const VectorView<float_t<T>>& w, int itype, std::span<const int> items) {
+    Queue& ctx = check_queue(ctx_in);
+    if (!ctx.in_order())
+        return select::on_in_order_queue(ctx, [&](Queue& q) { return generalized_eigen_residual(q, A0, B0, X, w, itype, items); });
+    using P = promoted_type;
+    const int n = X.rows(), nv = X.cols();
+    const bool ident = B0.rows() == 0;
+    if (itype < 1 || itype > 3) bad("generalized_eigen_residual", "itype must be 1, 2 or 3");
+    if (A0.rows() != n || A0.cols() != n || (!ident && (B0.rows() != n || B0.cols() != n)) || w.size() < nv)
+        bad("generalized_eigen_residual", "dimension mismatch");
+    if (ident) itype = 1;
+    const auto all = pick(X, items);
+    double worst = 0;
+    for (auto grp : chunks(all, std::size_t(n) * std::max(n, nv))) {
+        const int g = int(grp.size());
+        auto a = A0.template astype<P>(grp), x = X.template astype<P>(grp);
+        std::optional<Matrix<P>> b;
+        if (!ident) b.emplace(B0.template astype<P>(grp));
+        Matrix<P> W(nv, nv, g);
+        std::fill(W.data().data(), W.data().data() + std::size_t(nv) * nv * g, P(0));
+        for (int it = 0; it < g; ++it)
+            for (int j = 0; j < nv; ++j) W(j, j, it) = P(double(w(j, grp[std::size_t(it)])));
+        // M Y - Z W: itype 1 M = A, Y = X, Z = B X; 2 M = A, Y = B X, Z = X; 3 M = B, Y = A X, Z = X.
+        Matrix<P> Y(n, nv, g), L(n, nv, g), Tm(n, nv, g);
+        MV<P> m = a.view(), y = x.view(), z = x.view();
+        if (itype == 1 && !ident) z = Y.view();
+        if (itype == 2) y = Y.view();
+        if (itype == 3) y = Y.view(), m = b->view();
+        if (!ident) (void)MV<P>::product(ctx, itype == 3 ? a.view() : b->view(), Transpose::NoTrans, x, Transpose::NoTrans, Y);
+        (void)MV<P>::product(ctx, m, Transpose::NoTrans, y, Transpose::NoTrans, L);
+        (void)MV<P>::product(ctx, z, Transpose::NoTrans, W, Transpose::NoTrans, Tm);
+        UnifiedVector<double> nm(4 * std::size_t(g));
+        difference(ctx, L, Tm, P(1), std::nullopt, nm.data(), nm.data() + g);
+        frobenius(ctx, m, nm.data() + 2 * g);
+        frobenius(ctx, y, nm.data() + 3 * g);
+        ctx.wait();
+        for (int it = 0; it < g; ++it) worst = nanmax(worst, quot(nm[it], nm[2 * g + it] * nm[3 * g + it]));
+    }
+    return worst;
+}
+
+template <typename T, MatrixFormat MType>
 double MatrixView<T, MType>::values_error(const VectorView<float_t<T>>& w, const std::vector<std::vector<double>>& ref, double scale,
                                           std::span<const int> items) {
     double worst = 0;
@@ -906,6 +949,9 @@ bool MatrixView<T, MType>::pivots_valid(const VectorView<std::int32_t>& piv, int
     template double MatrixView<T, MatrixFormat::Dense>::orthogonality(Queue&, const MatrixView&, std::span<const int>);        \
     template double MatrixView<T, MatrixFormat::Dense>::eigen_residual(Queue&, const MatrixView&, const MatrixView&,           \
                                                                        const VectorView<float_t<T>>&, std::span<const int>);   \
+    template double MatrixView<T, MatrixFormat::Dense>::generalized_eigen_residual(                                            \
+        Queue&, const MatrixView&, const MatrixView&, const MatrixView&, const VectorView<float_t<T>>&, int,                   \
+        std::span<const int>);                                                                                                 \
     template double MatrixView<T, MatrixFormat::Dense>::values_error(const VectorView<float_t<T>>&,                            \
                                                                      const std::vector<std::vector<double>>&, double,          \
                                                                      std::span<const int>);                                    \
