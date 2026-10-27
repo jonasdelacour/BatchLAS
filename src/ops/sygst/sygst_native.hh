@@ -2,7 +2,9 @@
 
 #include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/sycl-span.hh>
 
 #include <algorithm>
 #include <cstddef>
@@ -53,3 +55,25 @@ BATCHLAS_INTERNAL_API Event sygst_mirror(Queue& ctx, const T* a, int lda, std::p
                                          Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f);
 
 }  // namespace batchlas::sycl_sygst
+
+namespace batchlas::ops::sygst {
+
+template <class T>
+using MV = MatrixView<T, MatrixFormat::Dense>;
+
+template <class T>
+constexpr Transpose kH = is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
+
+// Blocked (kernels/sygst_blocked.cc): workspace bytes, and the reduction on an in-order queue.
+template <class T>
+std::size_t blocked_workspace(Queue& q, const MV<T>& A, int nb, int itype);
+template <Backend B, class T>
+Event blocked(Queue& q, const MV<T>& A, const MV<T>& Bf, int nb, int itype, Uplo uplo, Span<std::byte> ws);
+
+// TwoSided (kernels/sygst_twosided.cc).
+template <class T>
+std::size_t twosided_workspace(Queue& q, const MV<T>& A, int itype);
+template <Backend B, class T>
+Event twosided(Queue& q, const MV<T>& A, const MV<T>& Bf, int itype, Uplo uplo, Span<std::byte> ws);
+
+}  // namespace batchlas::ops::sygst

@@ -1,5 +1,3 @@
-#pragma once
-
 // potri's blocked family, LAPACK's ?potri: ?trtri (every diagonal block inverted by the CTA kernel
 // in one launch, then two trmm per block column) and ?lauum (trmm, gemm, a copy back, the CTA
 // kernel on the diagonal block and herk/syrk per block row). Only the uplo triangle is read or
@@ -7,6 +5,8 @@
 // zero diagonal entry is left unchanged, as ?potri leaves it: the first CTA launch copies it to its
 // slot, the last one copies it back (sycl_potri::Stash). The batch runs in L2-sized parts, so W and
 // the slots are one part's. evidence: docs/perf/potri.md#potri-the-algorithm
+
+#include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/herk.hh>
@@ -18,9 +18,11 @@
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/potri/potri_native.hh>
+#include <src/util/template-instantiations.hh>
 
 #include <algorithm>
 #include <array>
+#include <complex>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -187,5 +189,16 @@ Event run(Queue& q, const MV<T>& A, Uplo uplo, int nb, bool full, Span<std::byte
     if (kCx || full) return sycl_potri::potri_finish<T>(q, A, uplo, full, flags);
     return q.get_event();
 }
+
+template std::size_t workspace<float>(Queue&, const MV<float>&, int);
+template std::size_t workspace<double>(Queue&, const MV<double>&, int);
+template std::size_t workspace<std::complex<float>>(Queue&, const MV<std::complex<float>>&, int);
+template std::size_t workspace<std::complex<double>>(Queue&, const MV<std::complex<double>>&, int);
+
+#define POTRI_BLOCKED_INSTANTIATE(back, fp)                                                                      \
+    template Event run<back, BATCHLAS_UNPAREN fp>(Queue&, const MV<BATCHLAS_UNPAREN fp>&, Uplo, int, bool, \
+                                                  Span<std::byte>, Span<int32_t>);
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(POTRI_BLOCKED_INSTANTIATE)
+#undef POTRI_BLOCKED_INSTANTIATE
 
 }  // namespace batchlas::ops::potri::blocked

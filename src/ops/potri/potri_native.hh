@@ -77,3 +77,15 @@ BATCHLAS_INTERNAL_API Event potri_finish(Queue& ctx, const MatrixView<T, MatrixF
                                          bool full, const int32_t* skip = nullptr);
 
 }  // namespace batchlas::sycl_potri
+
+// The blocked family (kernels/potri_blocked.cc): trtri then lauum on nb x nb blocks.
+namespace batchlas::ops::potri::blocked {
+
+template <class T>
+std::size_t workspace(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, int nb);
+
+template <Backend B, class T>
+Event run(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int nb, bool full,
+          Span<std::byte> ws_span, Span<int32_t> info);
+
+}  // namespace batchlas::ops::potri::blocked

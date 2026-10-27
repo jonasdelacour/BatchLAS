@@ -105,6 +105,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     ritz_values/ritz_values.cc
     syev_align/syev_align.cc
     syfn/syfn.cc
+    syfn/kernels/syfn_kernels.cc
 )
 
 set(EXTENSIONS_FACTORIZATION_SOURCES
