@@ -55,8 +55,6 @@ using ts::Live;
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-const char* uplo_s(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
-
 // A0 (the whole Hermitian A) and B0 packed, one item when the batch is identical; a and b in padded,
 // poisoned storage (A ld n + 3, stride + 5; B ld n + 2, stride + 7), a holding A0's uplo triangle.
 template <typename T>
@@ -100,9 +98,7 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // NETLIB serves potrf and trsm through LAPACKE/CBLAS only, so a vendor-free build has nothing to test there.
-        if (BK == Backend::NETLIB && !(BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS))
-            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS has no potrf or trsm route";
+        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK);
     }
 
     Queue& q() { return *this->ctx; }
@@ -126,14 +122,7 @@ protected:
     // The Cholesky factor in A's triangle, through the public potrf. False when the build has no potrf route.
     bool factor(Sys<T>& p) {
         UnifiedVector<int32_t> info(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
-        try {
-            const size_t need = potrf_buffer_size<BK, T>(q(), p.a, p.uplo);
-            UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-            (void)potrf<BK, T>(q(), p.a, p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
-        } catch (const NoRouteError&) {
-            return false;
-        }
-        q().wait();
+        if (!ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span())) return false;
         for (int it = 0; it < p.a.batch_size(); ++it) EXPECT_EQ(info[it], 0) << "potrf failed on item " << it;
         return true;
     }
@@ -178,7 +167,7 @@ TYPED_TEST(PotrsTest, EachFamilySolvesGradedSystemsOnBothTriangles) {
                         const Pin pin("potrs", std::string_view(family));
                         this->solve(p);
                     }
-                    const std::string what = std::string(family) + " " + uplo_s(uplo) + " n=" + std::to_string(n) +
+                    const std::string what = std::string(family) + " " + ts::uplo_name(uplo) + " n=" + std::to_string(n) +
                                              " nrhs=" + std::to_string(nrhs);
                     EXPECT_VERIFY(T, verify::Check::solve, n, this->solve_res(p)) << what;
                     ASSERT_TRUE(ts::unwritten_outside<T>(p.a, Live::nothing(), factor_bits)) << what << ": A";
@@ -378,13 +367,13 @@ TYPED_TEST(PotrsTest, AutoReadsTheShippedTable) {
                           {Uplo::Upper, 256, 8, 128}};
     for (Cell k : cells) {
         if (TestFixture::BK == Backend::NETLIB) k.batch = std::min(k.batch, 16);  // no CPU table: the batch keys nothing
-        const std::string label = std::string(uplo_s(k.uplo)) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs) +
+        const std::string label = std::string(ts::uplo_name(k.uplo)) + " n=" + std::to_string(k.n) + " nrhs=" + std::to_string(k.nrhs) +
                                   " batch=" + std::to_string(k.batch);
         auto p = this->sys(k.n, k.nrhs, k.batch, k.uplo, 41u + k.n);
         if (!this->factor(p)) continue;
         const std::string want = test_utils::shipped_table_pick<C>(
             "potrs", select::dtype_name<T>(), this->dev(),
-            select::Key{{"uplo", uplo_s(k.uplo)}, {"n", k.n}, {"nrhs", k.nrhs}, {"batch", k.batch}},
+            select::Key{{"uplo", ts::uplo_name(k.uplo)}, {"n", k.n}, {"nrhs", k.nrhs}, {"batch", k.batch}},
             [&] {
                 auto s = this->sys(k.n, k.nrhs, 1, k.uplo, 3u);
                 (void)this->factor(s);
@@ -416,7 +405,7 @@ TYPED_TEST(PotrsTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
                     const Pin pin("potrs", std::string_view(family));
                     this->solve(p);
                 }
-                ASSERT_TRUE(ts::items_bit_identical<T>(p.b)) << family << " " << uplo_s(uplo) << " n=" << n;
+                ASSERT_TRUE(ts::items_bit_identical<T>(p.b)) << family << " " << ts::uplo_name(uplo) << " n=" << n;
                 EXPECT_VERIFY(T, verify::Check::solve, n, this->solve_res(p, {0})) << family << " n=" << n;
             }
 }

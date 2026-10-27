@@ -14,6 +14,8 @@
 #include <cstddef>
 #include <cstring>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace test_support {
@@ -27,6 +29,8 @@ struct Config {
     using ScalarType = T;
     static constexpr batchlas::Backend BackendVal = B;
 };
+
+inline const char* uplo_name(batchlas::Uplo u) { return u == batchlas::Uplo::Lower ? "L" : "U"; }
 
 template <typename T>
 bool same_bits(const T& a, const T& b) {
@@ -91,21 +95,27 @@ void poison_outside(const MV<T>& dst, Live live) {
                 p[static_cast<std::size_t>(b) * dst.stride() + o] = poison<T>();
 }
 
-/// The whole Hermitian (real: symmetric) matrix of v's uplo triangle per item, packed. The
-/// diagonal is taken as stored, so a non-real one still reaches a residual.
+/// The whole Hermitian (real: symmetric) matrix of v's uplo triangle per item, packed. The diagonal
+/// is taken as stored, so a non-real one still reaches a residual; `real_diagonal` drops its
+/// imaginary part instead (an op's output whose diagonal carries rounding-level imaginary parts).
 template <typename T>
-batchlas::Matrix<T> hermitian(const MV<T>& v, batchlas::Uplo uplo) {
+batchlas::Matrix<T> hermitian(const MV<T>& v, batchlas::Uplo uplo, bool real_diagonal = false) {
     batchlas::Matrix<T> h(v.rows(), v.cols(), v.batch_size());
     const Live own = Live::triangle(uplo);
     for (int b = 0; b < v.batch_size(); ++b)
         for (int j = 0; j < v.cols(); ++j)
             for (int i = 0; i < v.rows(); ++i)
                 h(i, j, b) = own.contains(i, j, v.rows(), v.cols()) ? T(v(i, j, b)) : MV<T>::conj(T(v(j, i, b)));
+    if (real_diagonal)
+        for (int b = 0; b < v.batch_size(); ++b)
+            for (int i = 0; i < std::min(v.rows(), v.cols()); ++i) h(i, i, b) = MV<T>::make(std::real(T(h(i, i, b))), 0.0);
     return h;
 }
 
 namespace detail {
 inline std::vector<int> items_or_all(std::span<const int> items, int batch) {
+    for (int b : items)
+        if (b < 0 || b >= batch) throw std::out_of_range("test_support: item " + std::to_string(b) + " outside the batch");
     std::vector<int> all(items.begin(), items.end());
     if (items.empty())
         for (int b = 0; b < batch; ++b) all.push_back(b);
@@ -162,6 +172,7 @@ template <typename T>
 /// identical inputs: a race shows as a differing item).
 template <typename T>
 ::testing::AssertionResult items_bit_identical(const MV<T>& v, int ref = 0) {
+    if (ref < 0 || ref >= v.batch_size()) return ::testing::AssertionFailure() << "reference item " << ref << " outside the batch";
     const std::size_t s = static_cast<std::size_t>(v.stride());
     for (int b = 0; b < v.batch_size(); ++b)
         if (auto d = test_utils::usm_bulk::first_diff(v.data_ptr() + b * s, v.data_ptr() + ref * s, s))

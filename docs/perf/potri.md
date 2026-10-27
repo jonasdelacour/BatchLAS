@@ -263,9 +263,8 @@ Re-run 2026-10-27 after the suite moved onto `tests/test_support/` (inputs from 
 `fill_graded_hermitian`, one poison value, the saturating and grid-limit cases verified on the whole
 `full` matrix): `potri_finish` ignoring the flags turns exactly Info red, the `full` cases, all eight
 configs, as above. The cta store's mirror without `conj` turns the listed five red for cz plus Saturating
-(cz CUDA+NETLIB), which now reads the mirrored half. Dropping lauum's diagonal herk/syrk call (line form `if
-(lower && false)`) left Coverage green with both the old and the new suite, so herk/syrk are still reached
-there; `rank_k` returning without a launch turns Coverage red in all eight configs with either suite
+(cz CUDA+NETLIB), which now reads the mirrored half. (An attempt written `if (lower && false)` did not drop
+the call: it sends Lower down the Upper branch, which still calls `rank_k`, so it is no break.) `rank_k` returning without a launch turns Coverage red in all eight configs with either suite
 (missing `syrk`/`herk`), Graded red everywhere, and Inverts, Full, Parts and Saturating on type sets that
 moved with the ungraded inputs (new: Inverts fdz both backends, Full and Parts all eight, Saturating fdz
 CUDA; old: Inverts and Parts dcz, Full dz, Saturating dcz CUDA).

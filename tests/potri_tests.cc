@@ -64,10 +64,7 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // NETLIB serves potrf and trsm through LAPACKE/CBLAS only (no CPU-native kernel), so a
-        // vendor-free build has nothing to test on the host queue.
-        if (BK == Backend::NETLIB && !(BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS))
-            GTEST_SKIP() << "NETLIB without LAPACKE/CBLAS has no potrf or trsm route";
+        TEST_SUPPORT_SKIP_NETLIB_WITHOUT_LAPACK(BK);
     }
 
     Queue& q() { return *this->ctx; }
@@ -83,15 +80,7 @@ protected:
     // False when the build has no potrf route for the shape (vendor-free: the native potrf does not cover it).
     bool factor(Sys<T>& p, UnifiedVector<int32_t>& info) {
         info = UnifiedVector<int32_t>(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
-        try {
-            const size_t need = potrf_buffer_size<BK, T>(q(), p.a, p.uplo);
-            UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-            (void)potrf<BK, T>(q(), p.a, p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
-        } catch (const NoRouteError&) {
-            return false;
-        }
-        q().wait();
-        return true;
+        return ts::potrf_in_place<BK, T>(q(), p.a, p.uplo, info.to_span());
     }
 
     Event run_potri(Sys<T>& p, bool full, UnifiedVector<int32_t>* info = nullptr) {
@@ -169,7 +158,7 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
                     (void)this->run_potri(p, false, &pinfo);
                 }
                 const std::string what = "n=" + std::to_string(n) + " route=" + (route < 0 ? "auto" : pin_name(potri_pins<T>()[route])) +
-                                         " uplo=" + (uplo == Uplo::Lower ? "L" : "U");
+                                         " uplo=" + ts::uplo_name(uplo);
                 for (int it = 0; it < 4; ++it) ASSERT_EQ(pinfo[it], 0) << what;
                 EXPECT_VERIFY(T, verify::Check::solve, n, this->triangle_residual(p)) << what;
                 EXPECT_TRUE(ts::unwritten_outside<T>(p.a, Live::triangle(uplo), before)) << what;
@@ -194,7 +183,7 @@ TYPED_TEST(PotriTest, PotriInvertsGradedIllConditionedInputs) {
                     (void)this->run_potri(p, false);
                 }
                 EXPECT_VERIFY(T, verify::Check::solve, n, this->triangle_residual(p))
-                    << "n=" << n << " " << pin_name(c) << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
+                    << "n=" << n << " " << pin_name(c) << " uplo=" << ts::uplo_name(uplo);
             }
 }
 
