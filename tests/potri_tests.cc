@@ -7,136 +7,52 @@
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/potri.hh>
-#include <batchlas/no_route.hh>
-#include <batchlas/blas/functions/potrs.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/no_route.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <tests/test_support/coverage_rows.hh>
+#include <tests/test_support/inputs.hh>
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 
-#include <src/ops/posv/choice.hh>
 #include <src/ops/potri/choice.hh>
 #include <src/ops/potri/potri_native.hh>
-#include <src/select/coverage.hh>
 #include <src/select/select.hh>
-#include <batchlas/util/env.hh>
 
 #include <algorithm>
-#include <complex>
 #include <cstdint>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <map>
 #include <optional>
-#include <random>
 #include <set>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <tuple>
-#include <type_traits>
 #include <vector>
 
 using namespace batchlas;
 
 namespace {
 
+namespace ts = test_support;
+using ts::Live;
+
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
-template <typename T>
-using RealOf = typename batchlas::base_type<T>::type;
 
-template <typename T, Backend B>
-struct PotriConfig {
-    using ScalarType = T;
-    static constexpr Backend BackendVal = B;
-};
-
-template <typename T>
-bool same_bits(const T& a, const T& b) {
-    return std::memcmp(&a, &b, sizeof(T)) == 0;
-}
-
-// One Hermitian positive-definite item, strictly diagonally dominant (condition below 8), every
-// off-diagonal entry with a nonzero imaginary part. Column-major n x n.
-template <typename T>
-std::vector<T> make_hpd(int n, std::mt19937& gen) {
-    using R = RealOf<T>;
-    std::uniform_real_distribution<R> d(R(0.1), R(1));
-    std::vector<T> A(static_cast<size_t>(n) * n);
-    for (int j = 0; j < n; ++j) {
-        A[j + static_cast<size_t>(j) * n] = MV<T>::make(R(2.5) + R(0.5) * d(gen), R(0));
-        for (int i = j + 1; i < n; ++i) {
-            const R x = (gen() & 1) ? d(gen) : -d(gen);
-            const R y = d(gen);
-            A[i + static_cast<size_t>(j) * n] = MV<T>::make(x / R(n), y / R(n));
-            A[j + static_cast<size_t>(i) * n] = MV<T>::make(x / R(n), -y / R(n));
-        }
-    }
-    return A;
-}
-
-// A and B at padded ld and a stride that is not ld*cols. Everything the op may not touch (the
-// other triangle of A, the ld pads, the inter-item gaps) holds a large finite value a kernel
-// would happily consume: reading it wrecks a residual, writing it is caught by memcmp.
+// A0 the whole Hermitian A packed (one item when the batch is identical); a padded and poisoned
+// (ld n + 3, stride + 5) holding A0's uplo triangle, the factor after factor(), the inverse after potri.
 template <typename T>
 struct Sys {
-    int n = 0, nrhs = 0, batch = 0, lda = 0, stra = 0, ldb = 0, strb = 0;
-    Uplo uplo = Uplo::Lower;
-    UnifiedVector<T> a, b;
-    UnifiedVector<T*> aptr, bptr;
-    std::vector<std::vector<T>> full, rhs;  // the whole Hermitian A and the n x nrhs B per item
-
-    MV<T> A() { return {a.data(), n, n, lda, stra, batch, aptr.data()}; }
-    MV<T> B() { return {b.data(), n, nrhs, ldb, strb, batch, bptr.data()}; }
-    bool owned(int i, int j) const { return uplo == Uplo::Lower ? i >= j : i <= j; }
+    Uplo uplo;
+    Matrix<T> A0, a;
 };
-
-// identical: every item is item 0's data (the saturating-batch shape).
-template <typename T>
-Sys<T> make_sys(int n, int nrhs, int batch, Uplo uplo, unsigned seed, bool identical = false) {
-    using R = RealOf<T>;
-    Sys<T> p;
-    p.n = n, p.nrhs = std::max(nrhs, 1), p.batch = batch, p.uplo = uplo;
-    p.lda = n + 3, p.stra = p.lda * n + 5, p.ldb = n + 2, p.strb = p.ldb * p.nrhs + 7;
-    const T poison = MV<T>::make(R(-999), R(777));
-    p.a = UnifiedVector<T>(static_cast<size_t>(p.stra) * batch, poison);
-    p.b = UnifiedVector<T>(static_cast<size_t>(p.strb) * batch, poison);
-    p.aptr = UnifiedVector<T*>(batch, nullptr);
-    p.bptr = UnifiedVector<T*>(batch, nullptr);
-    p.full.resize(batch);
-    p.rhs.resize(batch);
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<R> d(R(-1), R(1));
-    for (int it = 0; it < batch; ++it) {
-        if (identical && it > 0) {
-            p.full[it] = p.full[0];
-            p.rhs[it] = p.rhs[0];
-        } else {
-            p.full[it] = make_hpd<T>(n, gen);
-            p.rhs[it].resize(static_cast<size_t>(n) * p.nrhs);
-            for (auto& v : p.rhs[it]) v = MV<T>::make(d(gen), d(gen));
-        }
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                if (p.owned(i, j))
-                    p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(j) * p.lda + i] =
-                        p.full[it][i + static_cast<size_t>(j) * n];
-        for (int k = 0; k < p.nrhs; ++k)
-            for (int i = 0; i < n; ++i)
-                p.b[static_cast<size_t>(it) * p.strb + static_cast<size_t>(k) * p.ldb + i] =
-                    p.rhs[it][i + static_cast<size_t>(k) * n];
-    }
-    return p;
-}
 
 template <typename Config>
 class PotriTest : public test_utils::BatchLASTest<Config> {
@@ -155,17 +71,22 @@ protected:
     }
 
     Queue& q() { return *this->ctx; }
-    // The fused solve (potri `fused`, posv `cta`) needs a GPU with sub-group size 32; `blocked` runs anywhere.
-    bool fused_ok() { return q().device().type == DeviceType::GPU && q().device().supports_sub_group_size(32); }
+
+    // cond > 1: a graded spectrum of that condition, else diagonally dominant; identical: one drawn item everywhere.
+    Sys<T> sys(int n, int batch, Uplo uplo, unsigned seed, double cond = 1.0, bool identical = false) {
+        Sys<T> p{uplo, ts::hpd<T>(q(), n, identical ? 1 : batch, cond, seed), ts::padded<T>(n, n, batch)};
+        ts::store<T>(p.a, p.A0, Live::triangle(uplo));
+        return p;
+    }
 
     // The Cholesky factor in A's triangle, through the public potrf; returns its info.
     // False when the build has no potrf route for the shape (vendor-free: the native potrf does not cover it).
     bool factor(Sys<T>& p, UnifiedVector<int32_t>& info) {
-        info = UnifiedVector<int32_t>(static_cast<size_t>(p.batch), int32_t(-12345));
+        info = UnifiedVector<int32_t>(static_cast<size_t>(p.a.batch_size()), int32_t(-12345));
         try {
-            const size_t need = potrf_buffer_size<BK, T>(q(), p.A(), p.uplo);
+            const size_t need = potrf_buffer_size<BK, T>(q(), p.a, p.uplo);
             UnifiedVector<std::byte> ws(std::max<size_t>(need, 1));
-            (void)potrf<BK, T>(q(), p.A(), p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
+            (void)potrf<BK, T>(q(), p.a, p.uplo, Span<std::byte>(ws.data(), need), info.to_span());
         } catch (const NoRouteError&) {
             return false;
         }
@@ -174,70 +95,26 @@ protected:
     }
 
     Event run_potri(Sys<T>& p, bool full, UnifiedVector<int32_t>* info = nullptr) {
-        const size_t need = potri_buffer_size<BK, T>(q(), p.A(), p.uplo);
+        const size_t need = potri_buffer_size<BK, T>(q(), p.a, p.uplo);
         ws_ = UnifiedVector<std::byte>(std::max<size_t>(need, 1));
         Span<int32_t> s = info ? info->to_span() : Span<int32_t>{};
-        auto ev = potri<BK, T>(q(), p.A(), p.uplo, full, Span<std::byte>(ws_.data(), need), s);
+        auto ev = potri<BK, T>(q(), p.a, p.uplo, full, Span<std::byte>(ws_.data(), need), s);
         ev.wait();
         q().wait();
         return ev;
     }
 
-    // max over items of ||A0 X - I|| / (||A0|| ||X||), X read from item @p x_of(item) of a packed
-    // n x n batch, A0 the original full Hermitian matrices.
-    double inverse_residual(const Sys<T>& p, const std::vector<std::vector<T>>& inv) {
-        Matrix<T> A0(p.n, p.n, p.batch), X(p.n, p.n, p.batch);
-        for (int it = 0; it < p.batch; ++it)
-            for (int j = 0; j < p.n; ++j)
-                for (int i = 0; i < p.n; ++i) {
-                    A0(i, j, it) = p.full[it][i + static_cast<size_t>(j) * p.n];
-                    X(i, j, it) = inv[it][i + static_cast<size_t>(j) * p.n];
-                }
-        return MV<T>::solve_residual(q(), A0, X, MV<T>{});
+    // max over `items` (empty: the default sample) of ||A0 X - I|| / (||A0|| ||X||).
+    double inverse_residual(const Sys<T>& p, const MV<T>& X, const std::vector<int>& items = {}) {
+        return MV<T>::solve_residual(q(), p.A0, X, MV<T>{}, items);
     }
-
-    // Item @p it of A as a packed n x n matrix, the triangle mirrored (Hermitian) onto the rest.
-    std::vector<T> mirrored(const Sys<T>& p, int it) const {
-        std::vector<T> out(static_cast<size_t>(p.n) * p.n);
-        for (int j = 0; j < p.n; ++j)
-            for (int i = 0; i < p.n; ++i) {
-                const T v = p.owned(i, j) ? p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(j) * p.lda + i]
-                                          : p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(i) * p.lda + j];
-                out[i + static_cast<size_t>(j) * p.n] = p.owned(i, j) ? v : MV<T>::make(double(std::real(v)), -double(std::imag(v)));
-            }
-        return out;
-    }
-
-    double solve_res(const Sys<T>& p) {
-        Matrix<T> A0(p.n, p.n, p.batch), X(p.n, p.nrhs, p.batch), B0(p.n, p.nrhs, p.batch);
-        for (int it = 0; it < p.batch; ++it) {
-            for (int j = 0; j < p.n; ++j)
-                for (int i = 0; i < p.n; ++i) A0(i, j, it) = p.full[it][i + static_cast<size_t>(j) * p.n];
-            for (int k = 0; k < p.nrhs; ++k)
-                for (int i = 0; i < p.n; ++i) {
-                    X(i, k, it) = p.b[static_cast<size_t>(it) * p.strb + static_cast<size_t>(k) * p.ldb + i];
-                    B0(i, k, it) = p.rhs[it][i + static_cast<size_t>(k) * p.n];
-                }
-        }
-        return MV<T>::solve_residual(q(), A0, X, B0);
-    }
-
-    bool outside_a_untouched(const Sys<T>& p, const UnifiedVector<T>& before, bool full) const {
-        for (int it = 0; it < p.batch; ++it)
-            for (size_t o = 0; o < static_cast<size_t>(p.stra); ++o) {
-                const int col = static_cast<int>(o) / p.lda, row = static_cast<int>(o) % p.lda;
-                const bool in = col < p.n && row < p.n && static_cast<int>(o) < p.lda * p.n;
-                if (in && (p.owned(row, col) || full)) continue;
-                const size_t idx = static_cast<size_t>(it) * p.stra + o;
-                if (!same_bits(p.a[idx], before[idx])) return false;
-            }
-        return true;
-    }
+    // The stored triangle of the inverse, mirrored.
+    double triangle_residual(const Sys<T>& p) { return inverse_residual(p, ts::hermitian<T>(p.a, p.uplo)); }
 
     UnifiedVector<std::byte> ws_;
 };
 
-using PotriTestTypes = typename test_utils::backend_types<PotriConfig>::type;
+using PotriTestTypes = typename test_utils::backend_types<ts::Config>::type;
 
 }  // namespace
 
@@ -268,56 +145,6 @@ int cta_ceiling(Queue& q) {
     return sycl_potri::cta_max_n<T>(static_cast<std::size_t>(d.slm_budget), d.max_wg);
 }
 
-// A Hermitian positive-definite matrix Q diag(lam) Q^H with eigenvalues graded geometrically from 1 to
-// 1 / cond and a random unitary Q (Gram-Schmidt twice, in double), column-major n x n.
-template <typename T>
-std::vector<T> make_graded_hpd(int n, double cond, std::mt19937& gen) {
-    using C = std::complex<double>;
-    constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
-    std::normal_distribution<double> d(0.0, 1.0);
-    std::vector<C> Q(static_cast<size_t>(n) * n);
-    for (auto& v : Q) v = C(d(gen), kCx ? d(gen) : 0.0);
-    auto col = [&](int j) { return Q.begin() + static_cast<std::ptrdiff_t>(j) * n; };
-    for (int j = 0; j < n; ++j)
-        for (int pass = 0; pass < 2; ++pass) {
-            for (int k = 0; k < j; ++k) {
-                C dot = 0;
-                for (int i = 0; i < n; ++i) dot += std::conj(col(k)[i]) * col(j)[i];
-                for (int i = 0; i < n; ++i) col(j)[i] -= dot * col(k)[i];
-            }
-            double nrm = 0;
-            for (int i = 0; i < n; ++i) nrm += std::norm(col(j)[i]);
-            for (int i = 0; i < n; ++i) col(j)[i] /= std::sqrt(nrm);
-        }
-    std::vector<T> A(static_cast<size_t>(n) * n);
-    for (int j = 0; j < n; ++j)
-        for (int i = j; i < n; ++i) {
-            C s = 0;
-            for (int k = 0; k < n; ++k)
-                s += col(k)[i] * std::pow(cond, -double(k) / std::max(1, n - 1)) * std::conj(col(k)[j]);
-            const double im = i == j ? 0.0 : s.imag();
-            A[i + static_cast<size_t>(j) * n] = MV<T>::make(s.real(), im);
-            A[j + static_cast<size_t>(i) * n] = MV<T>::make(s.real(), -im);
-        }
-    return A;
-}
-
-// make_sys's layout and poison, every item replaced by a graded matrix of condition @p cond.
-template <typename T>
-Sys<T> make_graded_sys(int n, int batch, Uplo uplo, unsigned seed, double cond) {
-    Sys<T> p = make_sys<T>(n, 1, batch, uplo, seed);
-    std::mt19937 gen(seed * 7u + 1u);
-    for (int it = 0; it < batch; ++it) {
-        p.full[it] = make_graded_hpd<T>(n, cond, gen);
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                if (p.owned(i, j))
-                    p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(j) * p.lda + i] =
-                        p.full[it][i + static_cast<size_t>(j) * n];
-    }
-    return p;
-}
-
 }  // namespace
 
 // A * A^-1 = I through verify, both triangles, Auto and each pin, an order ladder through the tile
@@ -331,11 +158,11 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
         for (int n : {1, 2, 3, 4, 5, 8, 9, 16, 31, 32, 33, 64, 65, 100, 129, 200, 300})
             for (int route = -1; route < static_cast<int>(potri_pins<T>().size()); ++route) {
                 if (route == 0 && n > ceiling) continue;
-                auto p = make_sys<T>(n, 1, 4, uplo, 900u + n);
+                auto p = this->sys(n, 4, uplo, 900u + n);
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
-                const UnifiedVector<T> before = p.a;
-                UnifiedVector<int32_t> pinfo(p.batch, int32_t(-7));
+                const Matrix<T> before = p.a;
+                UnifiedVector<int32_t> pinfo(4, int32_t(-7));
                 {
                     std::optional<select::ScopedPin<PotriChoice>> pin;
                     if (route >= 0) pin.emplace("potri", potri_pins<T>()[route]);
@@ -343,11 +170,9 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
                 }
                 const std::string what = "n=" + std::to_string(n) + " route=" + (route < 0 ? "auto" : pin_name(potri_pins<T>()[route])) +
                                          " uplo=" + (uplo == Uplo::Lower ? "L" : "U");
-                for (int it = 0; it < p.batch; ++it) ASSERT_EQ(pinfo[it], 0) << what;
-                std::vector<std::vector<T>> inv;
-                for (int it = 0; it < p.batch; ++it) inv.push_back(this->mirrored(p, it));
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, inv)) << what;
-                EXPECT_TRUE(this->outside_a_untouched(p, before, false)) << what;
+                for (int it = 0; it < 4; ++it) ASSERT_EQ(pinfo[it], 0) << what;
+                EXPECT_VERIFY(T, verify::Check::solve, n, this->triangle_residual(p)) << what;
+                EXPECT_TRUE(ts::unwritten_outside<T>(p.a, Live::triangle(uplo), before)) << what;
             }
 }
 
@@ -355,23 +180,20 @@ TYPED_TEST(PotriTest, PotriInvertsAndWritesOnlyItsTriangle) {
 // both triangles: the diagonally dominant inputs above cannot see an unstable update order.
 TYPED_TEST(PotriTest, PotriInvertsGradedIllConditionedInputs) {
     using T = typename TestFixture::T;
-    const double cond = std::is_same_v<RealOf<T>, float> ? 1e3 : 1e6;
     const int ceiling = cta_ceiling<TestFixture::BK, T>(this->q());
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
         for (int n : {7, 33, 100, 200, 300})
             for (const PotriChoice& c : potri_pins<T>()) {
                 if (c.index() == 0 && n > ceiling) continue;
-                auto p = make_graded_sys<T>(n, 3, uplo, 61u + n, cond);
+                auto p = this->sys(n, 3, uplo, 61u + n, ts::cond_for<T>());
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
-                for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "potrf refused a graded input";
+                for (int it = 0; it < 3; ++it) ASSERT_EQ(info[it], 0) << "potrf refused a graded input";
                 {
                     const select::ScopedPin<PotriChoice> pin("potri", c);
                     (void)this->run_potri(p, false);
                 }
-                std::vector<std::vector<T>> inv;
-                for (int it = 0; it < p.batch; ++it) inv.push_back(this->mirrored(p, it));
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, inv))
+                EXPECT_VERIFY(T, verify::Check::solve, n, this->triangle_residual(p))
                     << "n=" << n << " " << pin_name(c) << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
             }
 }
@@ -384,31 +206,25 @@ TYPED_TEST(PotriTest, PotriFullFillsTheOtherTriangleWithTheConjugateTranspose) {
     for (const PotriChoice& c : potri_pins<T>())
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (int n : {3, 8, 17, 40, 70, 150}) {
-                auto p = make_sys<T>(n, 1, 3, uplo, 31u + n);
+                auto p = this->sys(n, 3, uplo, 31u + n);
                 UnifiedVector<int32_t> info;
                 if (!this->factor(p, info)) continue;
                 if (c.index() == 0 && n > cta_ceiling<TestFixture::BK, T>(this->q())) continue;
-                const UnifiedVector<T> before = p.a;
+                const Matrix<T> before = p.a;
                 {
                     const select::ScopedPin<PotriChoice> pin("potri", c);
                     (void)this->run_potri(p, true);
                 }
-                std::vector<std::vector<T>> inv;
-                for (int it = 0; it < p.batch; ++it) {
-                    std::vector<T> whole(static_cast<size_t>(n) * n);
-                    for (int j = 0; j < n; ++j)
-                        for (int i = 0; i < n; ++i) whole[i + static_cast<size_t>(j) * n] = p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(j) * p.lda + i];
+                for (int it = 0; it < 3; ++it)
                     for (int j = 0; j < n; ++j)
                         for (int i = 0; i < n; ++i) {
-                            const T a = whole[i + static_cast<size_t>(j) * n], b = whole[j + static_cast<size_t>(i) * n];
+                            const T a = p.a(i, j, it), b = p.a(j, i, it);
                             // Diagonals: a real value (a bitwise +0 against -0 is not a defect).
                             if (i == j) ASSERT_EQ(std::imag(a), 0) << "(" << i << "," << j << ") " << pin_name(c);
-                            else ASSERT_TRUE(same_bits(a, MV<T>::make(double(std::real(b)), -double(std::imag(b))))) << "(" << i << "," << j << ") " << pin_name(c);
+                            else ASSERT_TRUE(ts::same_bits(a, MV<T>::conj(b))) << "(" << i << "," << j << ") " << pin_name(c);
                         }
-                    inv.push_back(whole);
-                }
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, inv)) << "n=" << n << " " << pin_name(c);
-                EXPECT_TRUE(this->outside_a_untouched(p, before, true)) << pin_name(c);
+                EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, p.a)) << "n=" << n << " " << pin_name(c);
+                EXPECT_TRUE(ts::unwritten_outside<T>(p.a, Live::block(), before)) << pin_name(c);
             }
 }
 
@@ -429,15 +245,13 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
                         const int bad = 1, batch = 4;
                         const std::string what = pin_name(c) + " n=" + std::to_string(n) + " zero_at=" + std::to_string(zero_at) +
                                                  (uplo == Uplo::Lower ? " L" : " U") + (full ? " full" : "");
-                        auto clean = make_sys<T>(n, 1, batch, uplo, 5u + n);
+                        auto clean = this->sys(n, batch, uplo, 5u + n);
                         UnifiedVector<int32_t> info;
                         if (!this->factor(clean, info)) continue;
-                        auto dirty = make_sys<T>(n, 1, batch, uplo, 5u + n);
-                        dirty.a = clean.a;
-                        dirty.a[static_cast<size_t>(bad) * dirty.stra + static_cast<size_t>(zero_at) * dirty.lda + zero_at] = MV<T>::make(0.0, 0.0);
-                        auto quiet = make_sys<T>(n, 1, batch, uplo, 5u + n);
-                        quiet.a = dirty.a;
-                        const UnifiedVector<T> before = dirty.a;
+                        Sys<T> dirty = clean;
+                        dirty.a(zero_at, zero_at, bad) = MV<T>::make(0.0, 0.0);
+                        Sys<T> quiet = dirty;
+                        const Matrix<T> before = dirty.a;
                         UnifiedVector<int32_t> ic(batch, -1), id(batch, -1);
                         {
                             const select::ScopedPin<PotriChoice> pin("potri", c);
@@ -448,12 +262,11 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
                         for (int it = 0; it < batch; ++it) {
                             EXPECT_EQ(ic[it], 0) << what;
                             EXPECT_EQ(id[it], it == bad ? zero_at + 1 : 0) << "item " << it << " " << what;
-                            const auto& want = it == bad ? before : clean.a;
-                            for (const Sys<T>* s : {&dirty, &quiet})
-                                for (size_t o = 0; o < static_cast<size_t>(s->stra); ++o)
-                                    ASSERT_TRUE(same_bits(s->a[static_cast<size_t>(it) * s->stra + o], want[static_cast<size_t>(it) * clean.stra + o]))
-                                        << "item " << it << (it == bad ? " (the failed one)" : "") << " changed at " << o << " "
-                                        << what << (s == &quiet ? " without info" : "");
+                        }
+                        for (const Sys<T>* s : {&dirty, &quiet}) {
+                            const char* how = s == &quiet ? " without info" : "";
+                            ASSERT_TRUE(ts::items_bit_identical_to<T>(s->a, before, std::vector<int>{bad})) << "the failed item, " << what << how;
+                            ASSERT_TRUE(ts::items_bit_identical_to<T>(s->a, clean.a, std::vector<int>{0, 2, 3})) << what << how;
                         }
                     }
 }
@@ -465,28 +278,28 @@ TYPED_TEST(PotriTest, PotriInfoNamesTheZeroDiagonalAndLeavesOtherItemsAlone) {
 TYPED_TEST(PotriTest, PotriWorkspaceAndDegenerateCalls) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
-    auto p = make_sys<T>(100, 1, 3, Uplo::Lower, 3u);
+    auto p = this->sys(100, 3, Uplo::Lower, 3u);
     UnifiedVector<int32_t> info;
     if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
     {
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
-        if (100 <= cta_ceiling<BK, T>(this->q())) EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo)), 0u);
+        if (100 <= cta_ceiling<BK, T>(this->q())) EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), p.a, p.uplo)), 0u);
     }
     const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
-    const size_t need = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
+    const size_t need = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
     EXPECT_GE(need, sizeof(T) * (100 * 64 + 100 * 101 / 2) * 3);
     EXPECT_LT(need, sizeof(T) * 100 * (64 + 100) * 3);
-    MV<T> small_n(p.a.data(), 64, 64, p.lda, p.stra, 3, nullptr);
+    MV<T> small_n(p.a.data_ptr(), 64, 64, p.a.ld(), p.a.stride(), 3, nullptr);
     EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), small_n, p.uplo)), 0u);
     UnifiedVector<std::byte> small(need / 2);
-    EXPECT_THROW(([&] { (void)potri<BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}); }()), batchlas::workspace_error);
+    EXPECT_THROW(([&] { (void)potri<BK, T>(this->q(), p.a, p.uplo, false, Span<std::byte>(small.data(), small.size()), Span<int32_t>{}); }()), batchlas::workspace_error);
     UnifiedVector<std::byte> ws(need);
-    MV<T> empty_batch(p.a.data(), 12, 12, p.lda, p.stra, 0, nullptr);
+    MV<T> empty_batch(p.a.data_ptr(), 12, 12, p.a.ld(), p.a.stride(), 0, nullptr);
     EXPECT_NO_THROW(([&] { (void)potri<BK, T>(this->q(), empty_batch, p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait(); }()));
     EXPECT_EQ((potri_buffer_size<BK, T>(this->q(), empty_batch, p.uplo)), 0u);
-    MV<T> nonsquare(p.a.data(), 12, 11, p.lda, p.stra, 3, nullptr);
+    MV<T> nonsquare(p.a.data_ptr(), 12, 11, p.a.ld(), p.a.stride(), 3, nullptr);
     EXPECT_THROW(([&] { (void)potri_buffer_size<BK, T>(this->q(), nonsquare, p.uplo); }()), batchlas::invalid_argument);
-    MV<T> zero_n(p.a.data(), 0, 0, 1, 1, 3, nullptr);
+    MV<T> zero_n(p.a.data_ptr(), 0, 0, 1, 1, 3, nullptr);
     EXPECT_THROW(([&] { (void)potri_buffer_size<BK, T>(this->q(), zero_n, p.uplo); }()), batchlas::internal_error);
 }
 
@@ -496,25 +309,16 @@ TYPED_TEST(PotriTest, PotriBlockedPartsCoverEveryItem) {
     using T = typename TestFixture::T;
     constexpr Backend BK = TestFixture::BK;
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
-        auto p = make_sys<T>(70, 1, 10, uplo, 404u);
+        auto p = this->sys(70, 10, uplo, 404u);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
-        const size_t whole = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
+        const size_t whole = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
         const ScopedEnvVar chunk("BATCHLAS_TUNE_L2_CHUNK_ITEMS", "3");
-        const size_t part = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
+        const size_t part = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
         EXPECT_LT(part, whole);
         (void)this->run_potri(p, true);
-        std::vector<int> all(p.batch);
-        for (int it = 0; it < p.batch; ++it) all[it] = it;
-        Matrix<T> A0(p.n, p.n, p.batch), X(p.n, p.n, p.batch);
-        for (int it = 0; it < p.batch; ++it)
-            for (int j = 0; j < p.n; ++j)
-                for (int i = 0; i < p.n; ++i) {
-                    A0(i, j, it) = p.full[it][i + static_cast<size_t>(j) * p.n];
-                    X(i, j, it) = p.a[static_cast<size_t>(it) * p.stra + static_cast<size_t>(j) * p.lda + i];
-                }
-        EXPECT_VERIFY(T, verify::Check::solve, p.n, MV<T>::solve_residual(this->q(), A0, X, MV<T>{}, all));
+        EXPECT_VERIFY(T, verify::Check::solve, 70, this->inverse_residual(p, p.a, p.a.all_items()));
     }
 }
 
@@ -527,19 +331,17 @@ TYPED_TEST(PotriTest, PotriCtaPinStraddlesItsCeiling) {
     const int ceiling = cta_ceiling<BK, T>(this->q());
     ASSERT_GE(ceiling, 32);
     for (int n : {ceiling, ceiling + 1}) {
-        auto p = make_graded_sys<T>(n, 2, Uplo::Lower, 77u + n, 1e2);
+        auto p = this->sys(n, 2, Uplo::Lower, 77u + n, 1e2);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) continue;
-        const auto factor = p.a;
+        const Matrix<T> factor = p.a;
         UnifiedVector<std::byte> ws(1);
-        auto call = [&] { (void)potri<BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(ws.data(), std::size_t{0}), Span<int32_t>{}).wait(); };
+        auto call = [&] { (void)potri<BK, T>(this->q(), p.a, p.uplo, false, Span<std::byte>(ws.data(), std::size_t{0}), Span<int32_t>{}).wait(); };
         {
             const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
             if (n == ceiling) {
                 EXPECT_NO_THROW(call());
-                std::vector<std::vector<T>> inv;
-                for (int it = 0; it < p.batch; ++it) inv.push_back(this->mirrored(p, it));
-                EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, inv)) << "at the ceiling " << n;
+                EXPECT_VERIFY(T, verify::Check::solve, n, this->triangle_residual(p)) << "at the ceiling " << n;
             } else {
                 EXPECT_THROW(call(), std::invalid_argument);
             }
@@ -550,9 +352,9 @@ TYPED_TEST(PotriTest, PotriCtaPinStraddlesItsCeiling) {
         }
         if (n == ceiling + 1) {
             p.a = factor;
-            const size_t need = potri_buffer_size<BK, T>(this->q(), p.A(), p.uplo);
+            const size_t need = potri_buffer_size<BK, T>(this->q(), p.a, p.uplo);
             ws = UnifiedVector<std::byte>(std::max<size_t>(need, 1));
-            EXPECT_NO_THROW(([&] { (void)potri<BK, T>(this->q(), p.A(), p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait(); }()));
+            EXPECT_NO_THROW(([&] { (void)potri<BK, T>(this->q(), p.a, p.uplo, false, Span<std::byte>(ws.data(), need), Span<int32_t>{}).wait(); }()));
         }
     }
 }
@@ -568,21 +370,15 @@ TYPED_TEST(PotriTest, SaturatingBatchOfIdenticalItemsIsBitIdentical) {
     for (int n : {8, 37, 100})
         for (const PotriChoice& c : potri_pins<T>()) {
             if ((c.index() == 0 && n > ceiling) || (TestFixture::BK == Backend::NETLIB && n > 37)) continue;
-            auto p = make_sys<T>(n, 1, 1024, Uplo::Lower, 13u + n, /*identical=*/true);
+            auto p = this->sys(n, 1024, Uplo::Lower, 13u + n, 1.0, /*identical=*/true);
             UnifiedVector<int32_t> info;
             if (!this->factor(p, info)) continue;
             {
                 const select::ScopedPin<PotriChoice> pin("potri", c);
                 (void)this->run_potri(p, true);
             }
-            for (int it = 1; it < p.batch; ++it)
-                for (size_t o = 0; o < static_cast<size_t>(p.stra); ++o)
-                    ASSERT_TRUE(same_bits(p.a[static_cast<size_t>(it) * p.stra + o], p.a[o]))
-                        << "potri item " << it << " offset " << o << " " << pin_name(c) << " n=" << n;
-            auto one = make_sys<T>(n, 1, 1, Uplo::Lower, 13u + n, true);
-            one.full.assign(1, p.full[0]);
-            EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(one, {this->mirrored(p, 0)}))
-                << "n=" << n << " " << pin_name(c);
+            ASSERT_TRUE(ts::items_bit_identical<T>(p.a)) << "potri " << pin_name(c) << " n=" << n;
+            EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, p.a, {0})) << "n=" << n << " " << pin_name(c);
         }
 }
 
@@ -593,7 +389,7 @@ TYPED_TEST(PotriTest, BatchBeyondTheGridYLimitIsCovered) {
     using T = typename TestFixture::T;
     const int n = 2, batch = 70001;
     for (const PotriChoice& c : {PotriChoice{ops::potri::Cta{}}, PotriChoice{ops::potri::Blocked{64}}}) {
-        auto p = make_sys<T>(n, 1, batch, Uplo::Upper, 4242u, /*identical=*/true);
+        auto p = this->sys(n, batch, Uplo::Upper, 4242u, 1.0, /*identical=*/true);
         UnifiedVector<int32_t> info;
         if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
         UnifiedVector<int32_t> pinfo(batch, int32_t(-7));
@@ -601,23 +397,16 @@ TYPED_TEST(PotriTest, BatchBeyondTheGridYLimitIsCovered) {
             const select::ScopedPin<PotriChoice> pin("potri", c);
             (void)this->run_potri(p, true, &pinfo);
         }
-        for (int it = 0; it < batch; ++it) {
-            ASSERT_EQ(pinfo[it], 0) << "item " << it;
-            for (size_t o = 0; o < static_cast<size_t>(p.stra); ++o)
-                ASSERT_TRUE(same_bits(p.a[static_cast<size_t>(it) * p.stra + o], p.a[o]))
-                    << "item " << it << " offset " << o << " " << pin_name(c);
-        }
-        auto one = make_sys<T>(n, 1, 1, Uplo::Upper, 4242u, true);
-        one.full.assign(1, p.full[0]);
-        EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(one, {this->mirrored(p, 0)})) << pin_name(c);
+        for (int it = 0; it < batch; ++it) ASSERT_EQ(pinfo[it], 0) << "item " << it;
+        ASSERT_TRUE(ts::items_bit_identical<T>(p.a)) << pin_name(c);
+        EXPECT_VERIFY(T, verify::Check::solve, n, this->inverse_residual(p, p.a, {0})) << pin_name(c);
     }
 }
 
 // A non-empty info span shorter than the batch is refused, not silently ignored.
 // BREAK (run 2026-10-25): drop the info-size check in potri.cc. RED: this test only.
 TYPED_TEST(PotriTest, ShortInfoSpanIsRefused) {
-    using T = typename TestFixture::T;
-    auto p = make_sys<T>(4, 1, 3, Uplo::Lower, 8u);
+    auto p = this->sys(4, 3, Uplo::Lower, 8u);
     UnifiedVector<int32_t> info;
     if (!this->factor(p, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
     UnifiedVector<int32_t> short_info(2, int32_t(-7));
@@ -626,49 +415,28 @@ TYPED_TEST(PotriTest, ShortInfoSpanIsRefused) {
 
 // Linked is not reached: the coverage rows of a child process show each pinned family ran, and that
 // blocked above nb reached its children (trmm, gemm, and herk or syrk) while cta reached none of them.
-// threadsafe: the child re-executes the binary, so the device runtime starts fresh.
 TYPED_TEST(PotriTest, PotriCoverageShowsEachFamilyAndTheBlockedChildren) {
     using T = typename TestFixture::T;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "potri_cov." + std::string(select::dtype_name<T>()) +
-                            (TestFixture::BK == Backend::NETLIB ? ".netlib" : ".gpu");
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     // Factored before coverage is switched on, so potrf's own children leave no rows.
-    auto lo = make_sys<T>(16, 1, 3, Uplo::Lower, 5u), hi = make_sys<T>(200, 1, 3, Uplo::Lower, 6u);
+    auto lo = this->sys(16, 3, Uplo::Lower, 5u), hi = this->sys(200, 3, Uplo::Lower, 6u);
     UnifiedVector<int32_t> info;
     if (!this->factor(lo, info) || !this->factor(hi, info)) GTEST_SKIP() << "no potrf route for this shape in this build";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto rows = ts::reached_rows([&] {
         const ScopedEnvVar clear("BATCHLAS_POTRI_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         {
             const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Cta{}});
             (void)this->run_potri(lo, false);
         }
         const select::ScopedPin<PotriChoice> pin("potri", PotriChoice{ops::potri::Blocked{64}});
         (void)this->run_potri(hi, false);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::set<std::string>> algos;  // op -> chosen spellings
     std::set<std::string> blocked_children;
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 11u) << line;
-            algos[f[1]].insert(f[10]);
-            if (f[1] != "potri") blocked_children.insert(f[1]);
-        }
+    for (const auto& r : rows) {
+        algos[r.op].insert(r.spelling);
+        if (r.op != "potri") blocked_children.insert(r.op);
     }
-    std::filesystem::remove_all(dir);
     EXPECT_EQ(algos["potri"], (std::set<std::string>{"cta", "blocked:nb=64"}));
-    constexpr bool kCx = !std::is_same_v<T, RealOf<T>>;
     // cta at n = 16 calls no child; blocked at n = 200 (four blocks) calls these, and nothing else.
-    EXPECT_EQ(blocked_children, (std::set<std::string>{"trmm", "gemm", kCx ? "herk" : "syrk"}));
+    EXPECT_EQ(blocked_children, (std::set<std::string>{"trmm", "gemm", is_std_complex_v<T> ? "herk" : "syrk"}));
 }
