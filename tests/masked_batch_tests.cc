@@ -85,11 +85,7 @@ Matrix<T> poisoned(const Matrix<T>& full, const Mask& m) {
     return got;
 }
 
-// w as an n x 1 matrix per item, for the bit-identity checks.
-template <typename R>
-MV<R> items_of(const UnifiedVector<R>& w, int n) {
-    return MV<R>(const_cast<R*>(w.data()), n, 1, n, n, static_cast<int>(w.size()) / n);
-}
+using sygvd_test::items_of;
 
 // Families whose per-item result does not depend on the batch around it; the others (blocked, two_stage,
 // compose) select children and size launches by batch size, so their reference is the active items alone.
