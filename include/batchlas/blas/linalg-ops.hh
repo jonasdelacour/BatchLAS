@@ -4,9 +4,11 @@
 #include <batchlas/export.hh>
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <batchlas/blas/enums.hh>
+#include <batchlas/error.hh>
 // Needed here: the qualified ids in the forwards below bind at definition context.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
@@ -183,6 +185,14 @@ inline Event divide_into(Queue& ctx,
 /// @}
 
 namespace detail {
+// First in every value-returning wrapper: its work copies and results carry no batch mask, so a
+// masked operand would run every item.
+template <typename... V>
+inline void refuse_batch_mask(const char* who, const V&... v) {
+    if ((v.has_batch_mask() || ...))
+        throw ::batchlas::unsupported(std::string("linalg::") + who + ": batch mask not supported yet");
+}
+
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Dense>& A) {
     return Matrix<T, MatrixFormat::Dense>(A.rows(), A.cols(), A.batch_size());
@@ -197,6 +207,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& A,
                                           const MatrixView<T, MatrixFormat::Dense>& B) {
+    detail::refuse_batch_mask("add", A, B);
     auto C = detail::like(A);
     // (void) on an Event is deliberate: the in-order Queue already orders the next call.
     (void)add_into<T>(ctx, A, B, C);
@@ -208,6 +219,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
+    detail::refuse_batch_mask("subtract", A, B);
     auto C = detail::like(A);
     (void)subtract_into<T>(ctx, A, B, C);
     return C;
@@ -218,6 +230,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
+    detail::refuse_batch_mask("multiply", A, B);
     auto C = detail::like(A);
     (void)multiply_into<T>(ctx, A, B, C);
     return C;
@@ -228,6 +241,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              const MatrixView<T, MatrixFormat::Dense>& B) {
+    detail::refuse_batch_mask("divide", A, B);
     auto C = detail::like(A);
     (void)divide_into<T>(ctx, A, B, C);
     return C;
@@ -238,6 +252,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              T alpha) {
+    detail::refuse_batch_mask("scaled", A);
     auto C = detail::like(A);
     (void)axpby_into<T>(ctx, alpha, A, T(0), A, C);
     return C;
@@ -273,6 +288,7 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              const MatrixView<T, MatrixFormat::Dense>& B,
                                              const MatmulOptions<T>& opts = {}) {
+    detail::refuse_batch_mask("matmul", A, B);
     const bool ta = opts.transA != Transpose::NoTrans;
     const bool tb = opts.transB != Transpose::NoTrans;
     const auto m = ta ? A.cols() : A.rows();
@@ -298,6 +314,7 @@ inline Vector<T> matvec(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const VectorView<T>& x,
                         Transpose trans = Transpose::NoTrans) {
+    detail::refuse_batch_mask("matvec", A, x);
     Vector<T> y(trans == Transpose::NoTrans ? A.rows() : A.cols(), A.batch_size());
     (void)gemv(ctx, A, x, y, GemvOptions<T>{.transA = trans});
     return y;
@@ -315,6 +332,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> gram(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            Transpose trans = Transpose::ConjTrans) {
+    detail::refuse_batch_mask("gram", A);
     const bool inner = trans != Transpose::NoTrans;
     const int n = inner ? A.cols() : A.rows();
     Matrix<T, MatrixFormat::Dense> C(n, n, A.batch_size());
@@ -348,6 +366,7 @@ inline Matrix<T, MatrixFormat::Dense> solve_triangular(Queue& ctx,
                                                        const MatrixView<T, MatrixFormat::Dense>& A,
                                                        const MatrixView<T, MatrixFormat::Dense>& B,
                                                        const TrsmOptions<T>& opts = {}) {
+    detail::refuse_batch_mask("solve_triangular", A, B);
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
     (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
         (void)MatrixView<T, MatrixFormat::Dense>::copy(q, X, B);
@@ -375,6 +394,7 @@ template <typename T>
 inline Cholesky<T> cholesky(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& A,
                             Uplo uplo = kDefaultUplo) {
+    detail::refuse_batch_mask("cholesky", A);
     ::batchlas::detail::require_square("cholesky", "A", A);
     auto F = detail::like(A);
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
@@ -398,6 +418,7 @@ template <typename T>
 inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
                                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                                            Uplo uplo = kDefaultUplo) {
+    detail::refuse_batch_mask("eigvalsh", A);
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
     auto work = detail::like(A);
@@ -431,6 +452,7 @@ template <typename T>
 inline Eigh<T> eigh(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
                     Uplo uplo = kDefaultUplo) {
+    detail::refuse_batch_mask("eigh", A);
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
@@ -470,6 +492,7 @@ inline EighSubset<T> eigh_subset(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const SyevxParams<T>& subset,
                                  JobType jobz) {
+    refuse_batch_mask("eigh", A);
     ::batchlas::detail::require_square("eigh", "A", A);
     const int64_t n = A.rows();
     int64_t k = n;
@@ -550,6 +573,7 @@ inline Solve<T> solve(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B,
                       Transpose trans = Transpose::NoTrans) {
+    detail::refuse_batch_mask("solve", A, B);
     auto LU = detail::like(A);
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
@@ -594,6 +618,7 @@ inline Solve<T> solve_spd(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
                           const MatrixView<T, MatrixFormat::Dense>& B,
                           Uplo uplo = kDefaultUplo) {
+    detail::refuse_batch_mask("solve_spd", A, B);
     auto F = detail::like(A);
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
@@ -613,6 +638,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
+    detail::refuse_batch_mask("triu", A);
     auto C = detail::like(A);
     (void)triangular_mask_into<T>(ctx, A, C, Uplo::Upper, k);
     return C;
@@ -623,6 +649,7 @@ template <typename T>
 inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
+    detail::refuse_batch_mask("tril", A);
     auto C = detail::like(A);
     (void)triangular_mask_into<T>(ctx, A, C, Uplo::Lower, k);
     return C;
@@ -642,6 +669,7 @@ struct Inv {
 /// @throws batchlas::invalid_argument if `A` is not square
 template <typename T>
 inline Inv<T> inv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    detail::refuse_batch_mask("inv", A);
     ::batchlas::detail::require_square("inv", "A", A);
     auto LU = detail::like(A);
     auto Ainv = detail::like(A);
@@ -724,6 +752,7 @@ template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   const GesvdOptions& opts) {
+    detail::refuse_batch_mask("svd", A);
     if (opts.jobu == SvdVectors::None && opts.jobvh == SvdVectors::None) {
         throw batchlas::invalid_argument(
             "linalg::svd: SvdVectors::None for both U and Vh leaves them empty; use "
@@ -791,6 +820,7 @@ struct Lu {
 // Pivots are a UnifiedVector, not an arena lease as in solve(): they outlive the call.
 template <typename T>
 inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    detail::refuse_batch_mask("lu", A);
     ::batchlas::detail::require_square("lu", "A", A);
     auto LU = detail::like(A);
     UnifiedVector<int64_t> pivots(static_cast<size_t>(A.rows()) *

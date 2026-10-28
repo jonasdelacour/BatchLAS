@@ -218,12 +218,13 @@ namespace detail {
 void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src) {
     if (dst.size() != src.size()) throw batchlas::invalid_argument("astype: batch mask length mismatch");
     if (src.empty()) return;
-    // astype takes no Queue and copies the data on the host, so it copies the mask on the host too:
-    // `dst` is the result's own shared store. A device-only mask cannot be read there, and a Queue
-    // made here would be a per-call Queue (on the wrong device, for another device's mask).
-    if (QueueImpl::usm_kind(src.data()) == sycl::usm::alloc::device)
-        throw batchlas::unsupported("astype: the batch mask is device-only memory, which astype (a host copy, no Queue) "
-                                    "cannot read; attach a shared or host USM mask to convert the view");
+    // astype takes no Queue, so the mask is copied on the host: only shared or host USM of a
+    // library context is known to be readable there. Device memory, or memory of a foreign context
+    // (sycl_interop: unknown), is refused; a Queue made here would be a per-call Queue.
+    const sycl::usm::alloc kind = QueueImpl::usm_kind(src.data());
+    if (kind != sycl::usm::alloc::shared && kind != sycl::usm::alloc::host)
+        throw batchlas::unsupported("astype: the batch mask is not host-readable USM of a BatchLAS context, and "
+                                    "astype (a host copy, no Queue) cannot read it; attach a shared or host USM mask");
     std::memcpy(dst.data(), src.data(), src.size());
 }
 }  // namespace detail

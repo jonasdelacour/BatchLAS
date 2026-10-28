@@ -2213,12 +2213,12 @@ namespace batchlas {
     Matrix<U, MType> Matrix<T, MType>::astype() const {
         static_assert(MType == MatrixFormat::Dense, "Matrix::astype only supports dense matrices");
         Matrix<U, MType> result(rows_, cols_, batch_size_, ld_, stride_);
+        if (this->has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), this->batch_mask_);
         auto src = this->data();
         auto dst = result.data();
         for (std::size_t i = 0; i < dst.size(); ++i) {
             dst[i] = static_cast<U>(src[i]);
         }
-        if (this->has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), this->batch_mask_);
         return result;
     }
 
@@ -2227,6 +2227,7 @@ namespace batchlas {
     Matrix<U, MType> MatrixView<T, MType>::astype() const {
         static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
         Matrix<U, MType> result(rows_, cols_, batch_size_);
+        if (has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), batch_mask_);
         // Deliberately a host loop, not a kernel: astype takes no Queue, and building one
         // (then waiting on it) would cost more than the copy.
         const T* src_ptr = data_.data();
@@ -2248,7 +2249,6 @@ namespace batchlas {
                 }
             }
         }
-        if (has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), batch_mask_);
         return result;
     }
 
@@ -2257,6 +2257,7 @@ namespace batchlas {
     Matrix<U, MType> MatrixView<T, MType>::astype(std::span<const int> items) const {
         static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
         if (is_heterogeneous()) throw batchlas::invalid_argument("MatrixView::astype: heterogeneous views are not supported");
+        if (has_batch_mask()) throw batchlas::unsupported("MatrixView::astype(items): batch mask not supported yet");
         Matrix<U, MType> result(rows_, cols_, static_cast<int>(items.size()));
         const std::size_t packed = static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_);
         U* dst = result.data().data();
@@ -2289,6 +2290,7 @@ namespace batchlas {
     template <typename T>
     template <typename U>
     Vector<U> VectorView<T>::astype() const {
+        if (has_batch_mask()) throw batchlas::unsupported("VectorView::astype: batch mask not supported yet");
         Vector<U> result(size_, batch_size_, Stride{stride_}, Inc{inc_});
         for (int b = 0; b < batch_size_; ++b) {
             for (int i = 0; i < size_; ++i) {

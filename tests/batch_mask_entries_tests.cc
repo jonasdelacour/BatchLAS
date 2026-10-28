@@ -10,6 +10,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
+#include <batchlas/blas/linalg-ops.hh>
 #include <batchlas/error.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -18,6 +19,7 @@
 #include <tests/masked_contract.hh>
 #include <tests/test_utils.hh>
 
+#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -42,26 +44,30 @@ constexpr int kVecStride = kN + 2;
 const std::vector<std::uint8_t> kAlternating{0, 1, 0, 1};
 
 // Every operand of every entry, primed with well-posed data: Hermitian, diagonally dominant items,
-// a diagonal CSR pattern, a positive tridiagonal (d, e). Views carry `mask` when it is set.
+// a diagonal CSR pattern, a positive tridiagonal (d, e). With `only` < 0 every view carries `mask`;
+// otherwise only the views of buffer `only` (an index into buffers()) do. `used` records them.
 template <typename T>
 struct Pool {
     Queue& q;
     Span<const std::uint8_t> mask;
     Span<std::byte> ws;
+    int only = -1;
+    std::vector<int>* used = nullptr;
     UnifiedVector<T> a, b, c, z, v, tq, tp, tau, vals;
     UnifiedVector<Real<T>> d, e, w, s;
     UnifiedVector<T*> pa, pb, pc;
     UnifiedVector<std::int64_t> piv;
     UnifiedVector<std::int32_t> piv32, info, m, counts;
-    UnifiedVector<int> ro, ci;
+    UnifiedVector<int> ro, ci, full, first_empty, second_k0;
 
     static std::size_t mat_len() { return std::size_t(kStride) * kBatch; }
     static std::size_t vec_len() { return std::size_t(kVecStride) * kBatch; }
-    Pool(Queue& queue, Span<const std::uint8_t> m_, Span<std::byte> work)
-        : q(queue), mask(m_), ws(work), a(mat_len()), b(mat_len()), c(mat_len()), z(mat_len()), v(mat_len()),
-          tq(vec_len()), tp(vec_len()), tau(vec_len()), vals(vec_len()), d(vec_len()), e(vec_len()), w(vec_len()),
-          s(vec_len()), pa(kBatch), pb(kBatch), pc(kBatch), piv(vec_len()), piv32(vec_len()), info(kBatch),
-          m(kBatch), counts(kBatch), ro(std::size_t(kN + 1) * kBatch), ci(vec_len()) {
+    Pool(Queue& queue, Span<const std::uint8_t> m_, Span<std::byte> work, int only_ = -1)
+        : q(queue), mask(m_), ws(work), only(only_), a(mat_len()), b(mat_len()), c(mat_len()), z(mat_len()),
+          v(mat_len()), tq(vec_len()), tp(vec_len()), tau(vec_len()), vals(vec_len()), d(vec_len()), e(vec_len()),
+          w(vec_len()), s(vec_len()), pa(kBatch), pb(kBatch), pc(kBatch), piv(vec_len()), piv32(vec_len()),
+          info(kBatch), m(kBatch), counts(kBatch), ro(std::size_t(kN + 1) * kBatch), ci(vec_len()), full(kBatch, kN),
+          first_empty(kBatch, kN), second_k0(kBatch, kN) {
         for (auto* buf : {&a, &b, &c, &z, &v})
             for (std::size_t k = 0; k < buf->size(); ++k) {
                 const std::size_t it = k / kStride, j = (k % kStride) / kLd, i = (k % kStride) % kLd;
@@ -82,40 +88,55 @@ struct Pool {
         for (int i = 0; i < kBatch; ++i) info[i] = m[i] = counts[i] = -7;
         for (std::size_t k = 0; k < ro.size(); ++k) ro[k] = int(k % (kN + 1));
         for (std::size_t k = 0; k < vec_len(); ++k) ci[k] = int(k % kVecStride % kN);  // per-item copies
+        first_empty[0] = 0;  // item 0 (inactive) has m == 0, item 1 (active) k == 0
+        second_k0[1] = 0;
     }
     bool masked() const { return !mask.empty(); }
+    // Every byte an entry could write, named; the workspace is scratch and excluded.
+    std::vector<std::tuple<const char*, const std::byte*, std::size_t>> buffers() const {
+        std::vector<std::tuple<const char*, const std::byte*, std::size_t>> out;
+        const auto add = [&](const char* name, const auto& buf) {
+            out.emplace_back(name, reinterpret_cast<const std::byte*>(buf.data()), buf.size() * sizeof(*buf.data()));
+        };
+        add("A", a), add("B", b), add("C", c), add("Z", z), add("V", v), add("tauq", tq), add("taup", tp);
+        add("tau", tau), add("csr", vals), add("d", d), add("e", e), add("w", w), add("s", s), add("piv", piv);
+        add("piv32", piv32), add("info", info), add("m", m), add("counts", counts);
+        return out;
+    }
+    bool masks(const void* data) {
+        const auto all = buffers();
+        int idx = -1;
+        for (std::size_t i = 0; i < all.size(); ++i)
+            if (std::get<1>(all[i]) == data) idx = int(i);
+        if (used && idx >= 0 && std::find(used->begin(), used->end(), idx) == used->end()) used->push_back(idx);
+        return masked() && (only < 0 || only == idx);
+    }
     MV<T> mat(UnifiedVector<T>& buf, int rows = kN, int cols = kN) {
         T** ptrs = &buf == &a ? pa.data() : &buf == &b ? pb.data() : &buf == &c ? pc.data() : nullptr;
         const MV<T> view(buf.data(), rows, cols, kLd, kStride, kBatch, ptrs);
-        return masked() ? view.with_batch_mask(mask) : view;
+        return masks(buf.data()) ? view.with_batch_mask(mask) : view;
     }
     template <typename U>
     VectorView<U> vec(UnifiedVector<U>& buf, int size = kN) {
         const VectorView<U> view(buf.data(), size, kBatch, 1, kVecStride);
-        return masked() ? view.with_batch_mask(mask) : view;
+        return masks(buf.data()) ? view.with_batch_mask(mask) : view;
     }
     MatrixView<T, MatrixFormat::CSR> csr() {
-        const MatrixView<T, MatrixFormat::CSR> view(vals.data(), ro.data(), ci.data(), kN, kN, NonZeros{kN}, kVecStride, kN + 1,
-                                                    kBatch);
-        return masked() ? view.with_batch_mask(mask) : view;
+        const MatrixView<T, MatrixFormat::CSR> view(vals.data(), ro.data(), ci.data(), kN, kN, NonZeros{kN}, kVecStride,
+                                                    kN + 1, kBatch);
+        return masks(vals.data()) ? view.with_batch_mask(mask) : view;
     }
     template <typename U>
     static Span<U> flat(UnifiedVector<U>& buf) { return {buf.data(), buf.size()}; }
+    static Span<int> ints(UnifiedVector<int>& buf) { return {buf.data(), buf.size()}; }
     Span<Real<T>> wspan() { return flat(w); }
     Span<T> tspan() { return flat(tau); }
     Span<std::int64_t> pspan() { return flat(piv); }
     Span<std::int32_t> ispan() { return flat(info); }
 
-    // Every byte an entry could write, named; the workspace is scratch and excluded.
-    std::vector<std::pair<std::string, std::vector<std::byte>>> snapshot() const {
-        std::vector<std::pair<std::string, std::vector<std::byte>>> out;
-        const auto add = [&](const char* name, const auto& buf) {
-            const auto* p = reinterpret_cast<const std::byte*>(buf.data());
-            out.emplace_back(name, std::vector<std::byte>(p, p + buf.size() * sizeof(*buf.data())));
-        };
-        add("A", a), add("B", b), add("C", c), add("Z", z), add("V", v), add("tauq", tq), add("taup", tp);
-        add("tau", tau), add("csr", vals), add("d", d), add("e", e), add("w", w), add("s", s), add("piv", piv);
-        add("piv32", piv32), add("info", info), add("m", m), add("counts", counts);
+    std::vector<std::vector<std::byte>> snapshot() const {
+        std::vector<std::vector<std::byte>> out;
+        for (const auto& [name, data, bytes] : buffers()) out.emplace_back(data, data + bytes);
         return out;
     }
 };
@@ -125,10 +146,43 @@ struct Entry {
     std::string name;
     bool routed = false;  ///< refuses through can_run (NoRouteError text varies): an unmasked twin must run
     std::function<void(Pool<T>&)> call;
+    bool pinned = false;  ///< runs under a strict pin, so "cannot run this shape" is can_run's refusal
 };
 
-// False when a routed op has no route in this build at all (`unroutable` allows only that), so
-// there is nothing a mask could be ignored by and nothing to check.
+// One masked run (`only` as for Pool): a refusal, and every operand byte unchanged.
+template <typename T>
+void expect_refused(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws, int only,
+                    std::vector<int>* used) {
+    Pool<T> p(q, mask, ws, only);
+    p.used = used;
+    SCOPED_TRACE(only < 0 ? std::string("every operand masked")
+                          : std::string("only ") + std::get<0>(p.buffers()[std::size_t(only)]) + " masked");
+    const auto before = p.snapshot();
+    std::string what;
+    bool refused = false;
+    try {
+        entry.call(p);
+        q.wait();
+        what = "ran a masked call";
+    } catch (const batchlas::unsupported& e) {
+        refused = true;
+        what = e.what();
+    } catch (const batchlas::invalid_argument& e) {
+        refused = entry.pinned && std::string(e.what()).find("cannot run this shape") != std::string::npos;
+        what = std::string(refused ? "" : "threw something other than a refusal: ") + e.what();
+    } catch (const std::exception& e) {
+        what = std::string("threw something other than a refusal: ") + e.what();
+    }
+    EXPECT_TRUE(refused) << what;
+    if (refused && !entry.routed) EXPECT_NE(what.find("batch mask"), std::string::npos) << what;
+    const auto after = p.snapshot();
+    for (std::size_t i = 0; i < before.size(); ++i)
+        EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << std::get<0>(p.buffers()[i]);
+}
+
+// Every operand masked, then each operand view alone: an entry that refuses on some operands
+// only ignores the mask on the others. False when a routed op has no route in this build at all
+// (`unroutable` allows only that): nothing a mask could be ignored by, nothing to check.
 template <typename T>
 bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws,
                    bool unroutable = false) {
@@ -147,25 +201,10 @@ bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mas
             return false;
         }
     }
-    Pool<T> p(q, mask, ws);
-    const auto before = p.snapshot();
-    std::string what;
-    bool refused = false;
-    try {
-        entry.call(p);
-        q.wait();
-        what = "ran a masked call";
-    } catch (const batchlas::unsupported& e) {
-        refused = true;
-        what = e.what();
-    } catch (const std::exception& e) {
-        what = std::string("threw something other than a refusal: ") + e.what();
-    }
-    EXPECT_TRUE(refused) << what;
-    if (refused && !entry.routed) EXPECT_NE(what.find("batch mask"), std::string::npos) << what;
-    const auto after = p.snapshot();
-    for (std::size_t i = 0; i < before.size(); ++i)
-        EXPECT_TRUE(after[i].second == before[i].second) << "wrote operand " << before[i].first;
+    std::vector<int> used;  // the operands the call views, recorded by the every-operand run
+    expect_refused(q, entry, mask, ws, -1, &used);
+    EXPECT_FALSE(used.empty()) << "the entry views no operand";
+    for (int idx : used) expect_refused(q, entry, mask, ws, idx, nullptr);
     return true;
 }
 
@@ -247,7 +286,25 @@ std::vector<Entry<T>> routed_entries() {
              sytrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws);
          }},
         {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
+        {"gemm(heterogeneous, a k == 0 item)", true,
+         [=](P& p) {
+             // Item 0 (inactive) is empty and item 1 (active) has k == 0: the loop writes C there itself.
+             const auto A = p.mat(p.a).with_active_dims(p.first_empty.to_span(), p.second_k0.to_span());
+             const auto Bm = p.mat(p.b).with_active_dims(p.second_k0.to_span(), p.full.to_span());
+             const auto Cm = p.mat(p.c).with_active_dims(p.first_empty.to_span(), p.full.to_span());
+             gemm<B, T>(p.q, A, Bm, Cm, one, half, N, N);
+         }},
     };
+    if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
+        out.push_back({"getri(pinned blocked)", true,
+                       [=](P& p) {
+                           // blocked writes P into C before its trsm: only getri's own C check stops a masked C.
+                           const select::ScopedPin<std::monostate> pin("getri", "blocked", select::StrictPin{});
+                           if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
+                           getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
+                       },
+                       true});
+    }
     if constexpr (is_std_complex_v<T>) {
         out.push_back({"hemm", true,
                        [=](P& p) { hemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
@@ -407,25 +464,6 @@ std::vector<Entry<T>> direct_entries() {
     add("latrd_lower_panel(panel)", [=](P& p) {
         latrd_lower_panel<B, T>(p.q, p.mat(p.a), p.vec(p.tp, kN - 1), p.vec(p.tau), p.mat(p.z, kN, 2));
     });
-    add("steqr", [=](P& p) {
-        steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
-    });
-    add("steqr_cta", [=](P& p) {
-        steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
-                        p.ispan());
-    });
-    add("stedc", [=](P& p) {
-        stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
-    });
-    add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); });
-    add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); });
-    add("stein(counts)", [=](P& p) {
-        stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
-                    p.mat(p.z), p.ws);
-    });
-    add("tridiagonal_solver", [=](P& p) {
-        tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
-    });
     add("gebrd_unblocked", [=](P& p) {
         gebrd_unblocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp));
     });
@@ -433,14 +471,6 @@ std::vector<Entry<T>> direct_entries() {
         [=](P& p) { gebrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp)); });
     add("gebrd_blocked", [=](P& p) {
         gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
-    });
-    add("bdsqr", [=](P& p) { bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-    add("bdsqr(vectors)", [=](P& p) {
-        bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
-    });
-    add("bdsdc", [=](P& p) { bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-    add("bdsdc(vectors)", [=](P& p) {
-        bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
     });
     add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
     add("syevx", [=](P& p) { syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z)); });
@@ -461,7 +491,6 @@ std::vector<Entry<T>> direct_entries() {
     add("syevx_filtered", [=](P& p) {
         syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
     });
-    add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
     add("ritz_values", [=](P& p) {
         ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
     });
@@ -469,11 +498,8 @@ std::vector<Entry<T>> direct_entries() {
     add("ortho(M)", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); });
     add("inv", [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); });
     add("inv(owning)", [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); });
-    add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
     add("norm", [=](P& p) { norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.w)); });
     add("norm(owning)", [=](P& p) { (void)norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a)); });
-    add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
-    add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
     add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
     add("syfn_from_eigen", [=](P& p) {
         syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
@@ -491,6 +517,39 @@ std::vector<Entry<T>> direct_entries() {
         p.q.wait();
         iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
     });
+    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
+        add("steqr", [=](P& p) {
+            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
+        });
+        add("steqr_cta", [=](P& p) {
+            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
+                            p.ispan());
+        });
+        add("stedc", [=](P& p) {
+            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
+        });
+        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); });
+        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); });
+        add("stein(counts)", [=](P& p) {
+            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
+                        p.mat(p.z), p.ws);
+        });
+        add("bdsqr", [=](P& p) { bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
+        add("bdsqr(vectors)", [=](P& p) {
+            bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
+        });
+        add("bdsdc", [=](P& p) { bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
+        add("bdsdc(vectors)", [=](P& p) {
+            bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
+        });
+        add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
+        add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
+        add("tridiagonal_solver", [=](P& p) {
+            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
+        });
+        add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
+        add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
+    }
     return out;
 }
 
@@ -549,7 +608,48 @@ std::vector<Entry<T>> check_entries() {
         Matrix<T> dst(kN, kN, kBatch);
         dst.copy_from(p.mat(p.a));
     });
-    add("astype(device-only mask)", [=](P& p) { (void)p.mat(p.a).template astype<double>(); });
+    add("MatrixView::astype(device-only mask)", [=](P& p) { (void)p.mat(p.a).template astype<T>(); });
+    add("MatrixView::astype(items)", [=](P& p) { (void)p.mat(p.a).template astype<T>(std::span<const int>{}); });
+    add("VectorView::astype", [=](P& p) { (void)p.vec(p.tq).template astype<T>(); });
+    return out;
+}
+
+// The header-only value-returning wrappers of blas/linalg-ops.hh: their work copies are unmasked.
+template <typename T>
+std::vector<Entry<T>> linalg_entries() {
+    using P = Pool<T>;
+    std::vector<Entry<T>> out;
+    const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
+    SyevxParams<T> subset;
+    subset.select = SyevxSelect::Index;
+    subset.il = 0;
+    subset.iu = 1;
+    add("linalg::add", [=](P& p) { (void)linalg::add<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::subtract", [=](P& p) { (void)linalg::subtract<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::multiply", [=](P& p) { (void)linalg::multiply<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::divide", [=](P& p) { (void)linalg::divide<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::scaled", [=](P& p) { (void)linalg::scaled<T>(p.q, p.mat(p.a), T(2)); });
+    add("linalg::matmul", [=](P& p) { (void)linalg::matmul<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::matvec", [=](P& p) { (void)linalg::matvec<T>(p.q, p.mat(p.a), p.vec(p.tq)); });
+    add("linalg::gram", [=](P& p) { (void)linalg::gram<T>(p.q, p.mat(p.a)); });
+    add("linalg::solve_triangular", [=](P& p) { (void)linalg::solve_triangular<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::cholesky", [=](P& p) { (void)linalg::cholesky<T>(p.q, p.mat(p.a)); });
+    add("linalg::eigvalsh", [=](P& p) { (void)linalg::eigvalsh<T>(p.q, p.mat(p.a)); });
+    add("linalg::eigh", [=](P& p) { (void)linalg::eigh<T>(p.q, p.mat(p.a)); });
+    add("linalg::eigh(subset)", [=](P& p) { (void)linalg::eigh<T>(p.q, p.mat(p.a), subset); });
+    add("linalg::eigvalsh(subset)", [=](P& p) { (void)linalg::eigvalsh<T>(p.q, p.mat(p.a), subset); });
+    add("linalg::solve", [=](P& p) { (void)linalg::solve<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::solve_spd", [=](P& p) { (void)linalg::solve_spd<T>(p.q, p.mat(p.a), p.mat(p.b)); });
+    add("linalg::triu", [=](P& p) { (void)linalg::triu<T>(p.q, p.mat(p.a)); });
+    add("linalg::tril", [=](P& p) { (void)linalg::tril<T>(p.q, p.mat(p.a)); });
+    add("linalg::inv", [=](P& p) { (void)linalg::inv<T>(p.q, p.mat(p.a)); });
+    add("linalg::svd", [=](P& p) { (void)linalg::svd<T>(p.q, p.mat(p.a)); });
+    add("linalg::svd(options)", [=](P& p) {
+        (void)linalg::svd<T>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
+    });
+    add("linalg::lu", [=](P& p) { (void)linalg::lu<T>(p.q, p.mat(p.a)); });
+    add("linalg::norm", [=](P& p) { (void)linalg::norm<T>(p.q, p.mat(p.a)); });
+    if constexpr (!is_std_complex_v<T>) add("linalg::cond", [=](P& p) { (void)linalg::cond<T>(p.q, p.mat(p.a)); });
     return out;
 }
 
@@ -558,85 +658,105 @@ struct EntryConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
 };
+using C = std::complex<float>;
 using EntryTuple = decltype(std::tuple_cat(
 #if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CPU_TARGET
-    std::tuple<EntryConfig<float, Backend::NETLIB>>{},
+    std::tuple<EntryConfig<float, Backend::NETLIB>, EntryConfig<C, Backend::NETLIB>>{},
 #endif
 #if BATCHLAS_HAS_CUDA_BACKEND
-    std::tuple<EntryConfig<float, Backend::CUDA>>{},
+    std::tuple<EntryConfig<float, Backend::CUDA>, EntryConfig<C, Backend::CUDA>>{},
 #endif
 #if BATCHLAS_HAS_ROCM_BACKEND
-    std::tuple<EntryConfig<float, Backend::ROCM>>{},
+    std::tuple<EntryConfig<float, Backend::ROCM>, EntryConfig<C, Backend::ROCM>>{},
 #endif
     std::tuple<>{}));
 using EntryTypes = test_utils::tuple_to_types<EntryTuple>::type;
 
 template <typename Config>
-class BatchMaskEntries : public test_utils::BatchLASTest<Config> {};
+class BatchMaskEntries : public test_utils::BatchLASTest<Config> {
+protected:
+    UnifiedVector<std::byte> work{std::size_t(1) << 26};
+    Span<std::byte> ws() { return {work.data(), work.size()}; }
+};
 TYPED_TEST_SUITE(BatchMaskEntries, EntryTypes);
 
-using C = std::complex<float>;
-
 TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
+    using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
-    UnifiedVector<std::byte> work(std::size_t(1) << 26);
-    const Span<std::byte> ws(work.data(), work.size());
     const masked_contract::DeviceMask mask(q, kAlternating);
-    // The host backend of a tree without CBLAS/LAPACKE routes only the ops with a native host family.
-    const bool unroutable = B == Backend::NETLIB && !select::kHasNetlib;
+    // Only a build without the backend's library may lack a route (herk has no native kernel).
+    const bool unroutable =
+        (B == Backend::NETLIB && !select::kHasNetlib) || (B == Backend::CUDA && !select::kHasCudaVendor);
     int checked = 0;
-    for (const auto& e : routed_entries<float, B>()) checked += check_refuses<float>(q, e, mask.span(), ws, unroutable);
-    for (const auto& e : routed_entries<C, B>())
-        if (e.name == "hemm" || e.name == "herk" || e.name == "her2k")
-            checked += check_refuses<C>(q, e, mask.span(), ws, unroutable);
+    for (const auto& e : routed_entries<T, B>()) checked += check_refuses<T>(q, e, mask.span(), this->ws(), unroutable);
     EXPECT_GT(checked, 0) << "no routed op ran unmasked, so no refusal was checked";
 }
 
 TYPED_TEST(BatchMaskEntries, VendorEntriesRefuseADeviceOnlyMask) {
+    using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
-    UnifiedVector<std::byte> work(std::size_t(1) << 22);
-    const Span<std::byte> ws(work.data(), work.size());
     const masked_contract::DeviceMask mask(q, kAlternating);
-    for (const auto& e : vendor_entries<float, B>()) check_refuses<float>(q, e, mask.span(), ws);
-    for (const auto& e : vendor_entries<C, B>())
-        if (e.name.rfind("he", 0) == 0) check_refuses<C>(q, e, mask.span(), ws);
+    for (const auto& e : vendor_entries<T, B>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
 TYPED_TEST(BatchMaskEntries, FamilyStageAndUtilEntriesRefuseADeviceOnlyMask) {
+    using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     Queue& q = *this->ctx;
-    UnifiedVector<std::byte> work(std::size_t(1) << 22);
-    const Span<std::byte> ws(work.data(), work.size());
     const masked_contract::DeviceMask mask(q, kAlternating);
-    for (const auto& e : direct_entries<float, B>()) check_refuses<float>(q, e, mask.span(), ws);
+    for (const auto& e : direct_entries<T, B>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
 TYPED_TEST(BatchMaskEntries, VerificationEntriesRefuseADeviceOnlyMask) {
+    using T = typename TestFixture::ScalarType;
     Queue& q = *this->ctx;
-    UnifiedVector<std::byte> work(std::size_t(1) << 16);
-    const Span<std::byte> ws(work.data(), work.size());
     const masked_contract::DeviceMask mask(q, kAlternating);
-    for (const auto& e : check_entries<float>()) check_refuses<float>(q, e, mask.span(), ws);
+    for (const auto& e : check_entries<T>()) check_refuses<T>(q, e, mask.span(), this->ws());
+}
+
+TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
+    using T = typename TestFixture::ScalarType;
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& e : linalg_entries<T>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
 // The syev capability queries answer from can_run, so a masked view is one no family supports.
 TYPED_TEST(BatchMaskEntries, SyevSupportQueriesAnswerNoForAMaskedView) {
+    using T = typename TestFixture::ScalarType;
+    namespace sd = ops::syev::detail;
     constexpr Backend B = TestFixture::BackendType;
-    Queue& q = *this->ctx;
-    UnifiedVector<std::byte> work(std::size_t(1) << 16);
-    const masked_contract::DeviceMask mask(q, kAlternating);
-    Pool<float> plain(q, {}, Span<std::byte>(work.data(), work.size()));
-    const auto A = plain.mat(plain.a);
     if (B == Backend::NETLIB) GTEST_SKIP() << "no syev family serves the host backend";
-    ASSERT_TRUE(ops::syev::detail::syev_supports_cta<float>(q, A) || ops::syev::detail::syev_supports_blocked<float>(q, A, Uplo::Lower) ||
-                ops::syev::detail::syev_supports_two_stage<float>(q, A, Uplo::Lower))
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    Pool<T> plain(q, {}, this->ws());
+    const auto A = plain.mat(plain.a);
+    ASSERT_TRUE(sd::syev_supports_cta<T>(q, A) || sd::syev_supports_blocked<T>(q, A, Uplo::Lower) ||
+                sd::syev_supports_two_stage<T>(q, A, Uplo::Lower))
         << "no family supports the unmasked view, so the masked answers prove nothing";
-    Pool<float> p(q, mask.span(), Span<std::byte>(work.data(), work.size()));
-    EXPECT_FALSE(ops::syev::detail::syev_supports_cta<float>(q, p.mat(p.a)));
-    EXPECT_FALSE(ops::syev::detail::syev_supports_blocked<float>(q, p.mat(p.a), Uplo::Lower));
-    EXPECT_FALSE(ops::syev::detail::syev_supports_two_stage<float>(q, p.mat(p.a), Uplo::Lower));
+    Pool<T> p(q, mask.span(), this->ws());
+    EXPECT_FALSE(sd::syev_supports_cta<T>(q, p.mat(p.a)));
+    EXPECT_FALSE(sd::syev_supports_blocked<T>(q, p.mat(p.a), Uplo::Lower));
+    EXPECT_FALSE(sd::syev_supports_two_stage<T>(q, p.mat(p.a), Uplo::Lower));
+}
+
+// astype copies the mask on the host with no Queue: shared USM copies, a device-only or a foreign
+// (non-USM) mask is refused before any data is converted.
+TYPED_TEST(BatchMaskEntries, AstypeCopiesOnlyAHostReadableUsmMask) {
+    using T = typename TestFixture::ScalarType;
+    Queue& q = *this->ctx;
+    Pool<T> p(q, {}, this->ws());
+    UnifiedVector<std::uint8_t> shared(kBatch);
+    for (int b = 0; b < kBatch; ++b) shared[b] = kAlternating[std::size_t(b)];
+    const auto copied = p.mat(p.a).with_batch_mask(shared.to_span()).template astype<T>();
+    ASSERT_TRUE(copied.has_batch_mask());
+    for (int b = 0; b < kBatch; ++b) EXPECT_EQ(copied.batch_mask()[b], kAlternating[std::size_t(b)]);
+    const masked_contract::DeviceMask device(q, kAlternating);
+    std::vector<std::uint8_t> foreign(kAlternating);
+    for (const auto m : {device.span(), Span<const std::uint8_t>(foreign.data(), foreign.size())})
+        EXPECT_THROW((void)p.mat(p.a).with_batch_mask(m).template astype<T>(), batchlas::unsupported);
 }
 
 }  // namespace

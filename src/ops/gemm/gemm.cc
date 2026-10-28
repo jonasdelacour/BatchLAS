@@ -236,6 +236,8 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
            ComputePrecision precision) {
     (void)batchlas::detail::call_mask("gemm", A, B, C);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
+        // The loop writes k == 0 items itself, before any per-item can_run sees the mask.
+        batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm", Back, A, B, C);
         // Items are homogeneous by construction, so the recursion is one level deep.
         return backend::detail::gemm_heterogeneous_loop<T>(
             ctx, A, B, C, beta, transA, transB,
