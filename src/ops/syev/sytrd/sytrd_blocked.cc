@@ -3,6 +3,7 @@
 #include <batchlas/util/group-collectives.hh>
 #include <src/select/vendor.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/mempool.hh>
@@ -848,6 +849,7 @@ Event sytrd_blocked(Queue& ctx,
                     Uplo uplo,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_blocked", B, a_in, d_out, e_out, tau_out);
     validate_sytrd_dims(a_in, d_out, e_out, tau_out);
 
     if (!ctx.in_order()) {

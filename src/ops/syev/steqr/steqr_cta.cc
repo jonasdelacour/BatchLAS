@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/group-invoke.hh>
@@ -157,6 +158,7 @@ namespace batchlas {
                     const MatrixView<T, MatrixFormat::Dense>& eigvects,
                     Span<int32_t> info) {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_cta");
+        batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr_cta", B, d_in, e_in, eigenvalues, eigvects);
         if (eigvects.rows() != eigvects.cols()) {
             throw batchlas::invalid_argument("Matrix must be square for eigenvalue computation.");
         }

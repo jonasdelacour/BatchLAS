@@ -12,6 +12,7 @@
 #include <src/ops/sygvd/choice.hh>
 #include <src/ops/sygvd/sygvd_native.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -38,7 +39,8 @@ select::Key key_of(const Args<T>& a) {
 // factored B; compose's children refuse what they cannot run themselves.
 template <Backend B, class T>
 bool can_run(const SygvdChoice& c, const select::Device& d, const Args<T>& a) {
-    const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1;
+    const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1 &&
+                             !batchlas::detail::any_batch_mask(a.A, a.B);  // no family reads the mask yet
     return std::visit(overloaded{
         [&](Compose) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored; },
@@ -72,6 +74,7 @@ Event launch(Queue& q, const SygvdChoice& c, const Args<T>& a, Span<std::byte> w
 template <class T>
 void validate(const char* who, const Args<T>& a) {
     sygst_validate_params<T>(who, a.A, a.B, a.itype, a.uplo);
+    (void)batchlas::detail::call_mask(who, a.A, a.B);
     const auto need = static_cast<std::size_t>(a.A.rows()) * static_cast<std::size_t>(a.A.batch_size());
     if (a.w.size() < need)
         throw batchlas::invalid_argument(std::string(who) + ": eigenvalues holds " + std::to_string(a.w.size()) +

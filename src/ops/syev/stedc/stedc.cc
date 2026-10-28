@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -950,6 +951,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
     // leaf and merge under this point only ever RAISES a status, which is what lets
     // the recursive driver's two half-solves and the level driver's L merges all
     // write the same slots. See src/kernels/common/info_span.hh.
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "stedc", B, d, e, eigenvalues, eigvects);
     detail::info_clear(ctx, info, d.batch_size());
     return stedc_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, info);
 }
