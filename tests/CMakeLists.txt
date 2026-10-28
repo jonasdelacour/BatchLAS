@@ -113,6 +113,7 @@ set(TEST_TARGETS
     syev_two_stage_tests
     syev_candidates_tests
     syrk_candidates_tests
+    sytrf_tests
     syev_align_tests
     syfn_tests
     sygvd_tests
@@ -195,7 +196,8 @@ set(BATCHLAS_TEST_LABELS_blas
     geqrf_candidates_tests
     gesv_tests posv_tests potri_tests potrs_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests)
+    transpose_tests norm_tests cond_tests inverse_tests
+    sytrf_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
@@ -273,6 +275,7 @@ set(BATCHLAS_HEAVY_TESTS
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
     syev_tests sygvd_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -499,6 +502,10 @@ function(batchlas_add_test_target test_name)
             # A backend that breaks a divergent collective deadlocks rather than
             # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
             set_tests_properties(${_entry} PROPERTIES TIMEOUT 300)
+        endif()
+        if(test_name STREQUAL "sytrf_tests")
+            # NonFiniteAndAliasedItemsTerminate: a lane-divergent pivot decision deadlocks, not fails.
+            set_tests_properties(${_entry} PROPERTIES TIMEOUT 1800)
         endif()
     endforeach()
     set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")

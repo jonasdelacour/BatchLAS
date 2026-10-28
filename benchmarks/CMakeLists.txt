@@ -66,6 +66,7 @@ set(BENCHMARK_TARGETS
     sb2st_hh_benchmark
     syev_two_stage_benchmark
     htev_compare_benchmark
+    sytrs_benchmark
 )
 
 # Benchmarks ARE part of the default ALL target. BATCHLAS_BUILD_BENCHMARKS

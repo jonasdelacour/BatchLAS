@@ -1,0 +1,2515 @@
+# op=sytrs device=sm_120 batchlas=d67ad754 kernels=470956d8 family_kernels=cta:0c9c4767,blocked:8c8925dd,wg:13e0411c,vendor:c1e7dd67 date=2026-10-26
+# source=ledger:benchmarks/results/tuning/ledger/sytrs.sm_120.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:2512
+# keys: dtype:exact n:log:2 nrhs:log batch:log
+dtype=float n=1 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=3 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=13 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=14 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=15 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=16 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=19 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=1 nrhs=19 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=19 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=20 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=20 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=20 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=21 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=21 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=21 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=23 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=23 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=32 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=32 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=38 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=41 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=128 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=181 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=215 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=1 nrhs=235 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=256 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=1 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=1 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=2 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=17 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=19 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=25 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=27 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=2 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=108 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=118 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=2 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=2 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=3 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=3 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=3 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=3 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=21 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=23 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=4 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=108 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=118 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=4 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=4 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=5 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=5 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=5 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=5 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=5 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=5 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=5 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=5 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=6 nrhs=20 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=22 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=26 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=35 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=128 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=139 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=6 nrhs=152 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=6 nrhs=181 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=6 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=6 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=7 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=7 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=7 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=7 nrhs=22 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=7 nrhs=26 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=7 nrhs=35 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=7 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=7 nrhs=128 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=7 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=17 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=19 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=23 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=8 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=91 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=91 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=99 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=99 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=108 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=108 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=128 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=128 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=181 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=215 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=235 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=8 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=8 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=9 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=9 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=9 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=9 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=9 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=11 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=11 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=11 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=11 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=11 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=11 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=13 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=14 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=16 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=16 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=16 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=16 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=16 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=16 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=24 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=24 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=32 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=32 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=33 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=33 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=36 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=36 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=38 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=38 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=40 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=40 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=48 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=48 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=48 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=48 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=48 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=51 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=55 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=55 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=59 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=64 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=64 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=64 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=64 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=64 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=64 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=2 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=2 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=float n=65 nrhs=3 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=9 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=11 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=12 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=13 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=65 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=65 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=70 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=76 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=91 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=128 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=65 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=72 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=72 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=72 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=79 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=79 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=79 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=79 nrhs=10 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=79 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=79 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=79 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=87 nrhs=3 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=float n=87 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=float n=87 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=float n=87 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=87 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=87 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=float n=87 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=91 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=float n=91 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=91 nrhs=3 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=float n=91 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=91 nrhs=4 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=91 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=91 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=96 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=96 nrhs=2 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=2 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=float n=96 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=3 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=float n=96 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=96 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=4 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=96 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=96 nrhs=11 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=96 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=96 nrhs=59 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=96 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=103 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=103 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=float n=103 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=111 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=float n=111 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=111 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=111 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=111 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=29 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=40 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=46 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=50 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=111 nrhs=54 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=119 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=128 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=128 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=float n=128 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=128 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=float n=128 nrhs=2 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=float n=128 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=128 nrhs=3 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=128 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=float n=128 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=float n=128 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=128 nrhs=4 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=float n=128 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=float n=128 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=128 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=9 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=float n=128 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=128 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=128 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=float n=128 nrhs=49 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=54 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=float n=128 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=float n=129 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=3 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=float n=129 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=10 batch=128 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=129 nrhs=256 batch=8192 | blocked - | wg - # transcribed
+dtype=float n=182 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=182 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=float n=198 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=float n=216 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=216 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=float n=235 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=float n=256 nrhs=6 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=256 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=float n=304 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=332 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=362 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=362 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=395 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=431 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=float n=512 nrhs=10 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=11 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=float n=512 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=float n=1024 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=float n=1024 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=float n=1024 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=float n=1024 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=float n=1024 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=float n=1024 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=float n=1024 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=float n=1024 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=float n=1024 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=3 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=13 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=14 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=15 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=16 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=19 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=1 nrhs=19 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=19 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=20 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=20 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=20 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=21 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=21 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=21 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=23 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=23 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=32 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=32 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=38 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=41 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=128 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=181 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=215 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=1 nrhs=235 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=256 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=1 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=1 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=2 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=17 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=19 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=25 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=27 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=2 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=108 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=118 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=2 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=2 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=3 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=3 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=3 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=3 nrhs=23 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=21 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=23 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=4 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=108 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=118 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=4 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=4 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=5 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=5 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=5 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=5 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=5 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=5 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=5 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=5 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=6 nrhs=20 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=22 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=26 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=35 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=128 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=139 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=6 nrhs=152 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=6 nrhs=181 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=6 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=6 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=7 nrhs=19 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=7 nrhs=20 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=7 nrhs=21 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=7 nrhs=22 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=7 nrhs=26 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=7 nrhs=35 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=7 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=7 nrhs=128 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=7 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=17 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=19 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=23 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=8 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=91 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=91 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=91 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=99 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=99 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=108 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=108 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=108 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=128 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=128 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=181 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=215 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=235 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=8 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=8 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=9 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=9 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=9 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=9 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=9 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=11 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=11 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=11 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=11 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=11 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=11 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=13 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=14 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=16 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=16 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=16 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=16 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=16 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=16 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=24 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=24 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=32 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=32 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=33 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=33 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=36 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=36 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=38 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=38 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=40 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=40 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=48 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=48 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=48 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=48 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=48 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=51 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=55 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=55 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=59 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=64 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=64 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=64 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=64 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=64 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=64 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=2 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=2 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=double n=65 nrhs=3 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=9 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=11 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=12 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=12 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=13 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=65 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=65 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=70 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=76 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=91 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=128 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=65 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=72 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=72 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=72 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=79 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=79 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=79 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=79 nrhs=10 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=79 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=79 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=79 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=87 nrhs=3 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=double n=87 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=double n=87 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=double n=87 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=87 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=87 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=double n=87 nrhs=9 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=91 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=double n=91 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=91 nrhs=3 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=double n=91 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=91 nrhs=4 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=91 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=91 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=96 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=96 nrhs=2 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=2 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=double n=96 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=3 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=double n=96 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=96 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=4 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=96 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=9 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=96 nrhs=11 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=11 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=96 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=96 nrhs=59 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=96 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=103 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=103 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=double n=103 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=111 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=double n=111 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=111 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=111 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=111 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=29 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=40 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=46 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=50 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=111 nrhs=54 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=119 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=128 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=128 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=double n=128 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=128 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=double n=128 nrhs=2 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=double n=128 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=128 nrhs=3 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=128 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=double n=128 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=double n=128 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=128 nrhs=4 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=double n=128 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=double n=128 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=128 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=9 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=11 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=double n=128 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=128 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=128 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=double n=128 nrhs=49 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=54 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=double n=128 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=double n=129 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=3 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=double n=129 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=10 batch=128 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=129 nrhs=256 batch=8192 | blocked - | wg - # transcribed
+dtype=double n=182 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=182 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=double n=198 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=double n=216 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=216 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=double n=235 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=double n=256 nrhs=6 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=256 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=double n=304 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=332 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=362 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=362 nrhs=9 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=395 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=431 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=8 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=9 batch=1024 | wg - | blocked - # transcribed
+dtype=double n=512 nrhs=10 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=11 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=double n=512 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=double n=1024 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=double n=1024 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=double n=1024 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=double n=1024 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=double n=1024 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=double n=1024 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=double n=1024 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=double n=1024 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=double n=1024 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=5 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=12 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=13 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=17 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=19 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=23 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=32 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=32 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=49 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=1 nrhs=51 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=54 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=128 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=181 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=197 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=215 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=235 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=1 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=1 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=9 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=10 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=28 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=32 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=35 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=37 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=38 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=41 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=45 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=45 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=49 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=52 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=56 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=76 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=91 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=128 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=2 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=181 batch=128 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=2 nrhs=197 batch=128 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=2 nrhs=215 batch=128 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=2 nrhs=256 batch=128 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=2 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=2 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=3 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=3 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=32 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=3 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=38 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=3 nrhs=41 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=3 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=45 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=128 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=152 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=3 nrhs=166 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=3 nrhs=181 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=6 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=32 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=45 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=49 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=54 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=54 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=59 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=70 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=76 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=91 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=128 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=4 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=128 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=139 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=4 nrhs=152 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=181 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=4 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=5 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=5 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=6 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=6 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=128 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=152 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=166 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=181 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=6 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=6 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=6 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=32 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=70 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=76 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=91 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=91 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=108 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=118 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=128 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=7 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=7 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=2 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=6 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=6 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=7 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=27 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=29 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=32 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=8 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=54 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=8 nrhs=59 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=8 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=12 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=9 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=9 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=10 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=11 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=11 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=11 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=11 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=11 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=11 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=2 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=16 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=24 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=24 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=28 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=28 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=30 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=30 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=6 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=32 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=33 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=33 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=36 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=36 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=36 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=38 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=38 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=38 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=40 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=40 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=40 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=48 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=51 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=55 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=55 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=55 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=59 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=59 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=64 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=64 nrhs=2 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=2 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=3 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=64 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=65 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=65 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=65 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=2 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=65 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=65 nrhs=2 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=65 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=5 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=6 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=6 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=7 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=65 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=65 nrhs=59 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=65 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=72 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=72 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=72 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=72 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=79 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=79 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=79 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=79 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=79 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=79 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=83 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=87 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=87 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=87 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=87 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=87 nrhs=27 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=87 nrhs=35 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=87 nrhs=40 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=87 nrhs=42 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=87 nrhs=45 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=91 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=96 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=96 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=2 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=96 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=96 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=96 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cfloat n=96 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=cfloat n=96 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=96 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=96 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=96 nrhs=38 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=96 nrhs=41 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=45 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=96 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cfloat n=103 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=103 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=103 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=103 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cfloat n=103 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cfloat n=111 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=2 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=111 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=111 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=10 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=111 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=111 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=119 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=119 nrhs=3 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=3 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=3 batch=8192 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=10 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=128 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=128 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=3 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=129 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=9 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=129 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=153 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=167 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=182 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=182 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=182 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=182 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=182 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=198 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=216 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=216 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=216 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=235 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=235 nrhs=5 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=5 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=5 batch=1024 | wg - | blocked - # transcribed
+dtype=cfloat n=256 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=6 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cfloat n=256 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=512 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=512 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=512 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=512 nrhs=5 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=512 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=512 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=512 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=512 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=724 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=861 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=939 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=1024 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=1024 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=1024 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=1024 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cfloat n=1024 nrhs=9 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=1024 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=1024 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=1024 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cfloat n=1024 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=2 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=4 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=5 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=11 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=12 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=13 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=17 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=19 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=23 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=32 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=32 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=49 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=1 nrhs=51 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=54 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=128 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=181 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=197 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=215 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=235 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=1 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=1 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=9 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=10 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=28 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=32 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=35 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=37 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=38 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=41 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=45 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=45 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=49 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=52 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=56 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=76 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=91 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=128 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=2 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=181 batch=128 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=2 nrhs=197 batch=128 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=2 nrhs=215 batch=128 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=2 nrhs=256 batch=128 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=2 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=2 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=3 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=3 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=16 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=32 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=3 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=38 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=3 nrhs=41 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=3 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=45 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=64 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=128 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=152 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=3 nrhs=166 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=3 nrhs=181 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=6 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=8 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=32 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=45 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=49 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=54 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=54 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=59 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=70 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=76 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=91 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=128 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=4 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=128 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=139 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=4 nrhs=152 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=181 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=4 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=5 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=5 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=6 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=6 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=32 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=70 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=128 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=152 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=166 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=181 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=6 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=6 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=6 nrhs=256 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=9 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=11 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=32 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=70 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=76 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=91 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=91 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=108 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=118 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=128 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=128 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=7 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=7 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=2 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=5 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=6 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=6 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=7 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=7 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=23 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=27 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=29 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=32 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=32 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=8 nrhs=45 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=45 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=54 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=8 nrhs=59 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=8 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=11 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=12 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=13 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=9 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=9 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=10 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=11 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=11 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=11 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=11 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=11 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=11 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=2 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=2 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=16 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=45 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=24 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=24 nrhs=256 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=28 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=28 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=30 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=30 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=6 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=35 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=38 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=32 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=33 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=33 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=36 nrhs=1 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=36 nrhs=1 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=36 nrhs=1 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=38 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=38 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=38 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=40 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=40 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=40 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=1 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=2 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=48 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=51 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=55 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=55 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=55 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=59 nrhs=2 batch=1024 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=59 nrhs=2 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=64 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=64 nrhs=2 batch=1024 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=2 batch=8192 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=2 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=3 batch=32768 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=8 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=8 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=8 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=16 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=64 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=256 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=256 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=64 nrhs=256 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=65 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=65 nrhs=1 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=65 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=2 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=65 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=65 nrhs=2 batch=32768 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=65 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=3 batch=32768 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=4 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=5 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=6 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=6 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=6 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=7 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=7 batch=32768 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=65 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=8 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=16 batch=32768 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=54 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=65 nrhs=59 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=65 nrhs=256 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=72 nrhs=3 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=72 nrhs=3 batch=8192 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=72 nrhs=4 batch=1024 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=72 nrhs=4 batch=8192 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=79 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=79 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=79 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=79 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=79 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=79 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=83 nrhs=45 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=87 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=87 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=87 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=87 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=87 nrhs=27 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=87 nrhs=35 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=87 nrhs=40 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=87 nrhs=42 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=87 nrhs=45 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=91 nrhs=1 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=1 batch=128 | wg - | cta - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=1 batch=1024 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=96 nrhs=1 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=96 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=2 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=96 nrhs=2 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=96 nrhs=3 batch=1024 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=96 nrhs=3 batch=8192 | wg - | blocked - | cta - # transcribed
+dtype=cdouble n=96 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=4 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=4 batch=8192 | blocked - | wg - | cta - # transcribed
+dtype=cdouble n=96 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=96 nrhs=8 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=8 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=96 nrhs=16 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=16 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=32 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=96 nrhs=38 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=96 nrhs=41 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=45 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=64 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=64 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=64 batch=8192 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=256 batch=128 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=96 nrhs=256 batch=1024 | blocked - | cta - | wg - # transcribed
+dtype=cdouble n=103 nrhs=2 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=103 nrhs=4 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=103 nrhs=6 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=103 nrhs=8 batch=128 | cta - | wg - | blocked - # transcribed
+dtype=cdouble n=103 nrhs=16 batch=128 | cta - | blocked - | wg - # transcribed
+dtype=cdouble n=111 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=2 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=111 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=111 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=10 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=111 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=111 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=119 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=119 nrhs=3 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=3 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=3 batch=8192 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=9 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=10 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=128 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=128 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=1 batch=8192 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=2 batch=8192 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=3 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=3 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=4 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=129 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=8 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=9 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=16 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=64 batch=8192 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=129 nrhs=256 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=153 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=167 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=182 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=182 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=182 nrhs=6 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=182 nrhs=7 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=182 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=198 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=216 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=216 nrhs=5 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=216 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=235 nrhs=4 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=235 nrhs=5 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=1 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=2 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=4 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=5 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=5 batch=1024 | wg - | blocked - # transcribed
+dtype=cdouble n=256 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=6 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=8 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=16 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=64 batch=1024 | blocked - | wg - # transcribed
+dtype=cdouble n=256 nrhs=256 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=512 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=512 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=512 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=512 nrhs=5 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=512 nrhs=6 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=512 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=512 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=512 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=724 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=861 nrhs=8 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=939 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=1024 nrhs=1 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=1024 nrhs=2 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=1024 nrhs=4 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=1024 nrhs=8 batch=128 | wg - | blocked - # transcribed
+dtype=cdouble n=1024 nrhs=9 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=1024 nrhs=11 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=1024 nrhs=16 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=1024 nrhs=64 batch=128 | blocked - | wg - # transcribed
+dtype=cdouble n=1024 nrhs=256 batch=128 | blocked - | wg - # transcribed

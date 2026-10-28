@@ -387,7 +387,7 @@ TEST(TuneHash, SharedKernelHeadersAreCommonInEverySpec) {
             EXPECT_EQ(std::count(b.all.begin(), b.all.end(), h), 1) << name << " " << h;
         }
     }
-    EXPECT_EQ(specs, 26);
+    EXPECT_EQ(specs, 29);
 }
 
 TEST(TuneHash, SpecsDeclareTheirFamilies) {

@@ -25,12 +25,12 @@ and her2k are complex only) on sm_89 and sm_120. spmm also ships a CPU table. An
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
 checks this inventory.
 
-Counts: 53 files, 26 per GPU device plus `spmm.cpu.txt`.
+Counts: 59 files, 29 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
-| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri and potrs all `transcribed` (from sm_89's measured rows); sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; potrs: @ref perf_potrs; sygst and sygvd: @ref perf_sygvd |
-| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); potri and potrs float and cfloat `deep` (2026-10-26), double and cdouble `transcribed` from them; sygst float and cfloat `deep` (2026-10-27, every itype and uplo), its double and cdouble `transcribed` from them | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri and potrs all `transcribed` (from sm_89's measured rows); sytrf, sysv, sytrs, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; potrs: @ref perf_potrs; sytrf, sysv and sytrs: @ref perf_sytrf; sygst and sygvd: @ref perf_sygvd |
+| sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); potri and potrs float and cfloat `deep` (2026-10-26), double and cdouble `transcribed` from them; sygst float and cfloat `deep` (2026-10-27, every itype and uplo), its double and cdouble `transcribed` from them; sytrs float and cfloat `preview` (double, cdouble `transcribed` from them) and sysv float and cfloat `preview` (2026-10-26, @ref perf_sytrf) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows at their grid points; they are not
@@ -58,6 +58,13 @@ sygvd `ab235065` (both devices, no timing: `compose` first everywhere, @ref perf
 timing: sm_89 double and cdouble, every sm_120 dtype and the sm_89 cells past the memory cap copy the
 nearest sm_89 `deep` float or cfloat row with the same itype and uplo, @ref perf_sygvd, "sygst:
 measured"). `scripts/transcribe/ledger_add_key.py` (`7cb2217c`) gave the earlier cells `itype=1,uplo=L`.
+sytrf, sysv
+`30cc8e06` (both devices, @ref perf_sytrf); sytrf's `blocked` family is run
+`transcribed-sytrf-blocked` (both devices, no timing: `blocked` first from n = 256, second for 33..128, third for n <= 32);
+sytrs `transcribed-sytrs-d67ad754` (sm_89 double and cdouble, all of sm_120: the measured sm_89
+float / cfloat order, @ref perf_sytrf; transcriber `scripts/transcribe/sytrs_transcribe.py`, commit
+`5b4d432a`, whose docstring gives both invocations; re-running them regenerates the rows
+byte-identically).
 The potrf sm_89 Upper rows are run `custom-5dc7f884`, `factor_bench` medians
 ([the blocked Upper driver](../docs/perf/potrf.md#the-blocked-upper-driver)). The potri (`c6aa0c2b`, `f517330f`) and potrs transcribers are
 in `scripts/transcribe/` (committed in `a01aa47d`); the older ones' sources are in git history, for example
