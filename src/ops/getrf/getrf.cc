@@ -15,6 +15,7 @@
 
 #include <src/ops/getrf/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -42,6 +43,7 @@ select::Key key_of(const MV<T>& A) {
 // top-level order (known-defects #12).
 template <Backend B, typename T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 &&
                         n >= 1 && A.batch_size() >= 1;
@@ -115,6 +117,7 @@ template <Backend B, typename T>
 Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_t> pivots,
             Span<std::byte> workspace, Span<int32_t> info) {
     getrf_validate_params<T>(A);
+    (void)detail::call_mask("getrf", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n are A's extents, k = m.
@@ -129,6 +132,7 @@ Event getrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<int64_
 template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     getrf_validate_params<T>(A);
+    (void)detail::call_mask("getrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::getrf::spec, ctx, ops::getrf::key_of<T>(A), ops::getrf::candidates<T>(),

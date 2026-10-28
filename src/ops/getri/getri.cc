@@ -14,6 +14,7 @@
 
 #include <src/ops/getri/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/getri/getri_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -45,6 +46,7 @@ select::Key key_of(const MV<T>& A) {
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, typename T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     return std::visit(overloaded{
         [&](Blocked) {
             return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
@@ -91,6 +93,8 @@ template <Backend Back, typename T>
 Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
     getri_validate_params<T>(A, C);
+    (void)detail::call_mask("getri", A, C);
+    if (C.has_batch_mask()) throw batchlas::unsupported("getri: the output C carries a batch mask, which no getri family honours yet");
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).
@@ -105,6 +109,7 @@ Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
 template <Backend Back, typename T>
 size_t getri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     getri_validate_params<T>(A);
+    (void)detail::call_mask("getri_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::getri::spec, ctx, ops::getri::key_of<T>(A), ops::getri::candidates<T>(),

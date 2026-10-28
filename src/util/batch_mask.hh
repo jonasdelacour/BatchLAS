@@ -59,4 +59,8 @@ Span<const std::uint8_t> call_mask(const char* op, const Views&... v) {
     return out;
 }
 
+// True when any operand carries a batch mask: a can_run term for families that ignore it.
+template <class... V>
+bool any_batch_mask(const V&... v) { return (v.has_batch_mask() || ...); }
+
 }  // namespace batchlas::detail
