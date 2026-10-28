@@ -32,7 +32,7 @@
 namespace batchlas {
 
 // At namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NC, int NR, int MinBlocks>
+template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
 class PosvTinyKernel;
 
 namespace sycl_posv {
@@ -75,7 +75,9 @@ constexpr int tiny_rhs_bucket(int nrhs) {
 // into local memory: the Cholesky column (every lane stores one element) and the
 // backward solve's transposed row (lane i stores its row, each lane loads ONE element).
 // evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
-template <typename T, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm>
+// Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
+// it was (the runtime fold cost 4.3% on complex<float> n = 16, nrhs = 4 at batch 32768).
+template <typename T, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
 struct PosvTinyBody {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
@@ -108,7 +110,8 @@ struct PosvTinyBody {
         // NO EARLY RETURN: tiny_device.hh's third invariant.
         // The batch mask folds into `live` (I2): an inactive item is a dead slot like a tail one.
         const bool in_range = (prob_id < batch);
-        const bool live = in_range && (mask == nullptr || mask[prob_id] != 0);
+        bool live = in_range;
+        if constexpr (Masked) live = live && mask[prob_id] != 0;
         const bool row_live = live && (lane < n);
         const int b = in_range ? prob_id : 0;
 
@@ -328,7 +331,7 @@ constexpr bool posv_tiny_slm() {
     return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
 }
 
-template <typename T, int N, int NC, int NR, int MinBlocks>
+template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
 Event posv_tiny_launch_b(Queue& ctx,
                          T* a_ptr, int lda, int stride_a,
                          T* b_ptr, int ldb, int stride_b,
@@ -346,7 +349,7 @@ Event posv_tiny_launch_b(Queue& ctx,
         kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
     static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
     constexpr bool kSlm = posv_tiny_slm<T, N>();
-    using Body = PosvTinyBody<T, N, NC, NR, kMpw, MinBlocks, kSlm>;
+    using Body = PosvTinyBody<T, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
     const std::size_t slm_elems = kSlm ? std::size_t(4 * kMpw * Body::kNV) : 1;
@@ -357,7 +360,7 @@ Event posv_tiny_launch_b(Queue& ctx,
             static_cast<std::ptrdiff_t>(ldb), static_cast<std::ptrdiff_t>(stride_b),
             upper, n, nrhs, batch, info_ptr, mask,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks>>(h,
+        batchlas::impl::parallel_for<PosvTinyKernel<T, N, NC, NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
@@ -396,15 +399,15 @@ constexpr int posv_tiny_min_blocks() {
     }
 }
 
-template <typename T, int N, int NC, int NR>
+template <typename T, int N, int NC, int NR, bool Masked>
 Event posv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
                           int stride_b, bool upper, int n, int nrhs, int batch,
                           int32_t* info_ptr, const std::uint8_t* mask) {
-    return posv_tiny_launch_b<T, N, NC, NR, posv_tiny_min_blocks<T, N, NC, NR>()>(
+    return posv_tiny_launch_b<T, N, NC, NR, posv_tiny_min_blocks<T, N, NC, NR>(), Masked>(
         ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, upper, n, nrhs, batch, info_ptr, mask);
 }
 
-template <typename T, int N, int NR>
+template <typename T, int N, int NR, bool Masked>
 Event posv_tiny_launch(Queue& ctx,
                        T* a_ptr, int lda, int stride_a,
                        T* b_ptr, int ldb, int stride_b,
@@ -414,7 +417,7 @@ Event posv_tiny_launch(Queue& ctx,
 #define BATCHLAS_POSV_TINY_NC(NCC)                                                           \
         case NCC:                                                                            \
             if constexpr (NCC <= N && posv_nc_legal<T, N>(NCC)) {                            \
-                return posv_tiny_launch_nc<T, N, NCC, NR>(ctx, a_ptr, lda, stride_a, b_ptr,  \
+                return posv_tiny_launch_nc<T, N, NCC, NR, Masked>(ctx, a_ptr, lda, stride_a, b_ptr,  \
                                                           ldb, stride_b, upper, n, nrhs,     \
                                                           batch, info_ptr, mask);            \
             }                                                                                \
@@ -426,7 +429,7 @@ Event posv_tiny_launch(Queue& ctx,
         default:
             break;
     }
-    return posv_tiny_launch_nc<T, N, N, NR>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b,
+    return posv_tiny_launch_nc<T, N, N, NR, Masked>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b,
                                             upper, n, nrhs, batch, info_ptr, mask);
 }
 
@@ -519,9 +522,12 @@ Event posv_tiny_dispatch(Queue& ctx,
 
 #define BATCHLAS_POSV_TINY_ARM(NN, RR)                                                 \
     if constexpr (tiny_cap<T>() >= (NN)) {                                             \
-        return posv_tiny_launch<T, NN, RR>(ctx, A.data_ptr(), A.ld(), A.stride(),       \
-                                           B.data_ptr(), B.ld(), B.stride(), upper, n,  \
-                                           nrhs, batch, info.data(), mask);             \
+        return mask ? posv_tiny_launch<T, NN, RR, true>(ctx, A.data_ptr(), A.ld(),        \
+                          A.stride(), B.data_ptr(), B.ld(), B.stride(), upper, n, nrhs, \
+                          batch, info.data(), mask)                                     \
+                    : posv_tiny_launch<T, NN, RR, false>(ctx, A.data_ptr(), A.ld(),     \
+                          A.stride(), B.data_ptr(), B.ld(), B.stride(), upper, n, nrhs, \
+                          batch, info.data(), nullptr);                                 \
     }
 
     if (rbucket == 1) {
