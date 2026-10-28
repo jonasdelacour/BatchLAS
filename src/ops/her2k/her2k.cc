@@ -14,6 +14,7 @@
 #include <src/ops/level3/batched.hh>
 #include <src/ops/syr2k/kernels/syr2k_triangular_tiles.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -58,6 +59,7 @@ Event launch(Queue& q, const Her2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, ComplexScalar T>
 Event her2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, float_t<T> beta, Uplo uplo, Transpose transA) {
+    (void)batchlas::detail::call_mask("her2k", A, B, C);
     backend::shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::her2k::inner<T>(A, transA),
