@@ -37,6 +37,7 @@ namespace batchlas
 
                         const auto mask = detail::call_mask("cond", A);
                         const std::uint8_t* mk = detail::mask_ptr(mask);
+                        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
                         auto pool = BumpAllocator(workspace);
                         auto A_buf = pool.allocate<T>(ctx, A.data().size());
                         auto A_ptrs = pool.allocate<T*>(ctx, A.batch_size());
@@ -63,7 +64,7 @@ namespace batchlas
 
                         ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
                             const size_t b = idx[0];
-                            if (mk && !mk[b]) return;
+                            if (masked && !mk[b]) return;
                             const Real* ev = eig_span.data() + b * n;
                             Real max_v = sycl::fabs(ev[0]);
                             Real min_v = max_v;
@@ -90,6 +91,7 @@ namespace batchlas
                         }
                         const auto mask = detail::call_mask("cond", A);
                         const std::uint8_t* mk = detail::mask_ptr(mask);
+                        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
                         auto pool = BumpAllocator(workspace);
                         auto Ainv = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, A.data().size()).data(),
                                                                      A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
@@ -107,7 +109,7 @@ namespace batchlas
                         (void)norm(ctx, Ainv, norm_type, A_inv_norms);
                         (void)norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
-                            if (mk && !mk[i]) return;
+                            if (masked && !mk[i]) return;
                             conds[i] = A_inv_norms[i] * A_norms[i];
                         });
                         return ctx.get_event();

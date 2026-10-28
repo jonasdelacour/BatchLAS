@@ -30,6 +30,7 @@ namespace batchlas
 
         const auto mask = detail::call_mask("norm", A);
         const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         Matrix<T, MatrixFormat::Dense> A_copy_store(A.rows(), A.cols(), A.batch_size(), A.ld(), A.stride());
         // The scratch copy carries the mask, so the copy, the mirror and syev skip the same items.
         const auto A_copy = A_copy_store.view().with_batch_mask(mask);
@@ -52,7 +53,7 @@ namespace batchlas
 
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
             const size_t b = idx[0];
-            if (mk && !mk[b]) return;
+            if (masked && !mk[b]) return;
             const Real* eig = eigen_span.data() + b * n;
             Real max_val = Real(0);
             for (int i = 0; i < n; ++i) {
@@ -109,6 +110,7 @@ namespace batchlas
                    const NormType norm_type,
                    const Span<float_t<T>> norms){
         const std::uint8_t* mk = detail::mask_ptr(detail::call_mask("norm", A));
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         //Zero extra memory allocation kernels
         ctx -> submit([&](sycl::handler &cgh) {
             // Get the data pointers and sizes
@@ -122,7 +124,7 @@ namespace batchlas
             // All kernels assume that matrices are stored in column-major order
             batchlas::impl::parallel_for<NormKernel<T, MF>>(cgh, sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
                 auto batch_idx = item.get_group_linear_id();
-                if (mk && !mk[batch_idx]) return;  // I1: uniform per work-group, before any barrier
+                if (masked && !mk[batch_idx]) return;  // I1: uniform per work-group, before any barrier
                 auto local_idx = item.get_local_linear_id();
                 auto local_size = item.get_local_range()[0];
                 auto cta = item.get_group();

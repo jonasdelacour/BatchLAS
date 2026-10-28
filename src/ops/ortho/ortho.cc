@@ -46,10 +46,11 @@ namespace batchlas {
         const T* s = src.data_ptr();
         T* d = dst.data_ptr();
         const size_t total = size_t(r * c * src.batch_size());
+        const bool masked = mask != nullptr;  // captured as a bool: see ortho()
         ctx->parallel_for<OrthoTransposeCopyKernel<B, T>>(sycl::range<1>(total), [=](sycl::id<1> id) {
             const int64_t lin = int64_t(id[0]);
             const int64_t b = lin / (r * c), e = lin % (r * c);
-            if (mask && !mask[b]) return;
+            if (masked && !mask[b]) return;
             const int64_t i = e % c, j = e / c;
             d[b * sd + j * ldd + i] = s[b * ss + i * lds + j];
         });
@@ -154,6 +155,7 @@ namespace batchlas {
                 OrthoAlgorithm algo) {
         const auto mask = detail::call_mask("ortho", A);
         const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         //If transA == NoTrans we find the orthonormal basis of the column space
         //Else we find the orthonormal basis of the row space
         using float_t = typename base_type<T>::type;
@@ -226,7 +228,7 @@ namespace batchlas {
             if constexpr (detail::is_complex<T>::value) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
-                    if (mk && !mk[id[0]]) return;
+                    if (masked && !mk[id[0]]) return;
                     auto& e = x(int(id[1]), int(id[0]));
                     e = std::conj(e);
                 });
@@ -277,7 +279,7 @@ namespace batchlas {
                             auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
                             auto cta = item.get_group();
-                            if (mk && !mk[bid]) return;  // uniform per work-group, before the barrier
+                            if (masked && !mk[bid]) return;  // uniform per work-group, before the barrier
                             T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
                             auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
 
@@ -306,7 +308,7 @@ namespace batchlas {
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
-                    if (mk && !mk[bid]) return;
+                    if (masked && !mk[bid]) return;
                     auto ATA_acc = ATA_ptr + bid * ATA_stride;
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
@@ -337,8 +339,9 @@ namespace batchlas {
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                // The SVQB scalings write only scratch (C, diags), so they take no item guard: on
-                // AdaptiveCpp's Metal target one broke complex<float> SVQB (cause not found).
+                // The SVQB scalings write only scratch (C, diags), so they take no item guard. A guard
+                // on the raw pointer skipped every item on AdaptiveCpp Metal (a captured null read
+                // as non-null), leaving stale diags.
                 auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
                 auto diags_acc = diags.subspan(bid * k, k);
 
@@ -406,7 +409,7 @@ namespace batchlas {
             auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
             ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
                 auto batch_idx = item.get_group().get_group_id()[0];
-                if (mk && !mk[batch_idx]) return;
+                if (masked && !mk[batch_idx]) return;
                 for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
                     auto i = linear_ix % m;
                     auto j = linear_ix / m;

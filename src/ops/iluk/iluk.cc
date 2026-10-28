@@ -786,6 +786,7 @@ PackedInts pack_ints(std::initializer_list<const std::vector<int>*> arrays, std:
 // batch-proportional host work this path exists to avoid.
 template <Backend B, typename T>
 void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat::CSR>& A, const uint8_t* mask) {
+    const bool masked = mask != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     const int batch = A.batch_size();
     if (batch <= 1) return;
     const int rows = A.rows();
@@ -799,7 +800,7 @@ void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat
         const int linear = static_cast<int>(id[0]);
         const int b = linear / per_element + 1;
         const int k = linear % per_element;
-        if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item's pattern is not read
+        if (masked && mask[b] == 0) return;  // I3: an inactive item's pattern is not read
         if (k <= rows) {
             if (kv.row_offsets_[b * kv.offset_stride_ + k] != kv.row_offsets_[k]) *flag = 1;
         } else {
@@ -841,6 +842,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
                                       const ILUKSymbolic& sym,
                                       const ILUKParams<T>& params,
                                       const uint8_t* mask) {
+    const bool masked = mask != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     const int n = sym.n;
     const int batch = A.batch_size();
     const int sym_nnz = sym.sym_nnz;
@@ -881,7 +883,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
     const int a_nnz = sym.a_nnz;
     ctx->parallel_for<ILUKZeroKernel<B, T>>(
         sycl::range<1>(static_cast<size_t>(sym_nnz) * batch), [=](sycl::id<1> id) {
-        if (mask != nullptr && mask[id[0] % batch] == 0) return;
+        if (masked && mask[id[0] % batch] == 0) return;
         work[id[0]] = T(0);
     });
     ctx.wait_and_throw();  // the zero fill must land before A is scattered over it
@@ -890,7 +892,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         const int linear = static_cast<int>(id[0]);
         const int p = linear / batch;
         const int b = linear % batch;
-        if (mask != nullptr && mask[b] == 0) return;
+        if (masked && mask[b] == 0) return;
         const int slot = a_to_sym[p];
         if (slot >= 0) work[static_cast<size_t>(slot) * batch + b] = akv.data_[b * akv.matrix_stride_ + p];
     });
@@ -933,7 +935,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             const int t = linear / batch;
             const int b = linear % batch;
             // An inactive item never raises the pivot status, so it cannot fail the call.
-            if (mask != nullptr && mask[b] == 0) return;
+            if (masked && mask[b] == 0) return;
             const int i = level_rows[begin + t];
 
             auto at = [&](int slot) -> T& { return work[static_cast<size_t>(slot) * batch + b]; };
@@ -1025,7 +1027,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             // Dropped entries were zeroed, and any entry at or below the drop
             // threshold was dropped, so a non-zero value is exactly a kept one.
             // An inactive item keeps nothing: the union is over the active items.
-            if (mask != nullptr && mask[b] == 0) continue;
+            if (masked && mask[b] == 0) continue;
             if (abs_value(work[slot * batch + b]) != RealT<T>(0)) keep = 1;
         }
         ku[slot] = keep;
@@ -1077,7 +1079,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         const int linear = static_cast<int>(id[0]);
         const int i = linear / batch;
         const int b = linear % batch;
-        if (mask != nullptr && mask[b] == 0) return;  // neutral: an inactive item counts as usable
+        if (masked && mask[b] == 0) return;  // neutral: an inactive item counts as usable
         const int slot = c2s[diag_off[i]];
         int32_t local = 0;
         (void)stabilize_pivot_no_throw(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0),
@@ -1108,6 +1110,7 @@ void write_factor_to_storage(Queue& ctx,
                              int matrix_stride,
                              int offset_stride,
                              const uint8_t* mask) {
+    const bool masked = mask != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
     const int nnz = dev.nnz;
     auto* vals = values.data();
     auto* ci = col_indices.data();
@@ -1127,7 +1130,7 @@ void write_factor_to_storage(Queue& ctx,
         // The pattern is shared, so every item gets it (an unmasked apply stays in bounds);
         // an inactive item's values keep their bytes.
         ci[static_cast<size_t>(b) * matrix_stride + q] = host_ci[q];
-        if (mask != nullptr && mask[b] == 0) return;
+        if (masked && mask[b] == 0) return;
         vals[static_cast<size_t>(b) * matrix_stride + q] = src[static_cast<size_t>(c2s[q]) * batch + b];
     });
     ctx->parallel_for<ILUKRowOffsetKernel<B, T>>(
@@ -1394,6 +1397,7 @@ Event iluk_apply(Queue& ctx,
     // rhs and out (and M.lu, if its caller attached one) share one mask; an inactive item's out
     // keeps every byte. The factor of an item that was inactive at factorization is scratch.
     const uint8_t* mask = detail::mask_ptr(detail::call_mask("iluk_apply", M.lu, rhs, out));
+    const bool masked = mask != nullptr;  // captured as a bool, as above
     if (rhs.rows() != M.n || out.rows() != M.n) {
         throw batchlas::invalid_argument("iluk_apply: rhs/out row dimension must match factor rows");
     }
@@ -1452,7 +1456,7 @@ Event iluk_apply(Queue& ctx,
         const int b = linear / nrhs;
         const int col = linear % nrhs;
         const int lid = static_cast<int>(item.get_local_id(0));
-        if (mask != nullptr && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
+        if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
 
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;

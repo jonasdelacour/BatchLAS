@@ -29,6 +29,7 @@ namespace batchlas {
                       Span<std::byte> workspace) {
         const auto mask = detail::call_mask("ritz_values", A, V, ritz_vals);
         const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -97,7 +98,7 @@ namespace batchlas {
                     int b = group_id / k;
                     int j = group_id % k;
                     // Uniform per work-group (one (b, j) pair each), so the barriers below stay matched.
-                    if (mk && !mk[b]) continue;
+                    if (masked && !mk[b]) continue;
 
                     // Compute v_j^T * (A*v_j) using work-group reduction
                     // Each thread computes partial sum for its assigned elements

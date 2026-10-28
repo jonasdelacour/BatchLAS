@@ -50,6 +50,7 @@ namespace batchlas {
         detail::refuse_batch_mask("lanczos", A, V);
         const auto mask = detail::call_mask("lanczos", A, V);
         const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -89,7 +90,7 @@ namespace batchlas {
                 auto reduce_mem = sycl::local_accessor<T>(n, h);
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
-                    if (mk && !mk[bid]) return;  // I1, before the group reduction
+                    if (masked && !mk[bid]) return;  // I1, before the group reduction
                     auto tid = item.get_local_linear_id();
                     auto bdim = item.get_local_range()[0];
                     auto cta = item.get_group();
@@ -135,7 +136,7 @@ namespace batchlas {
                     auto dot_mem = sycl::local_accessor<T>(n, h);
                     batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
-                        if (mk && !mk[bid]) return;
+                        if (masked && !mk[bid]) return;
                         auto tid = item.get_local_linear_id();
                         auto wg = item.get_local_range()[0];
                         auto cta = item.get_group();
