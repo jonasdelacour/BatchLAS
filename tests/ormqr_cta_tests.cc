@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <array>
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/matrix.hh>
@@ -23,8 +24,11 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
 
 } // namespace
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/ormqr_verify.hh>
+
+namespace ts = test_support;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 
@@ -133,6 +137,61 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
                     1),
          this->ctx->wait()),
         std::exception);
+}
+
+// A batch tail: batch 1025 at n = 13 (P = 16) leaves dead partitions in the last work-group,
+// beside the live one in its sub-group (multiplier 1) and as whole dead warps (multiplier 4).
+// Both kernels (Left: C in registers; Right: C in local memory) run a dead partition to the
+// end and store nothing (known-defects.md, defect 23). Every item of C is held BITWISE to
+// batch 1024 at multiplier 1 (no dead partition); no slot outside the items may change.
+TYPED_TEST(OrmqrCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
+    using T = typename TestFixture::ScalarType;
+    constexpr int n = 13, ld = n + 3, stride = ld * n + 5, pad = 3;
+    const T poison = ts::poison<T>();
+
+    Queue ctx_cpu("cpu");
+    Matrix<T, MatrixFormat::Dense> F = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, 1, /*seed=*/2026);
+    UnifiedVector<T> tau1(n);
+    UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(ctx_cpu, F, tau1.to_span()), std::byte{0});
+    geqrf(ctx_cpu, F, tau1.to_span(), ws_geqrf.to_span()).wait();
+    const Matrix<T, MatrixFormat::Dense> C1 = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, 1, /*seed=*/7);
+
+    UnifiedVector<std::byte> ws(1, std::byte{0});
+    const auto run = [&](int batch, Side side, size_t mul) {
+        UnifiedVector<T> a(static_cast<size_t>(batch) * stride, poison), c(static_cast<size_t>(batch + pad) * stride, poison);
+        UnifiedVector<T> tau(static_cast<size_t>(batch) * (n + 1), poison);
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < n; ++j) {
+                tau[static_cast<size_t>(b) * (n + 1) + j] = tau1[j];
+                for (int i = 0; i < n; ++i) {
+                    a[static_cast<size_t>(b) * stride + i + j * ld] = F.view()(i, j, 0);
+                    c[static_cast<size_t>(b) * stride + i + j * ld] = C1.view()(i, j, 0);
+                }
+            }
+        }
+        MatrixView<T, MatrixFormat::Dense> A(a.data(), n, n, ld, stride, batch), C(c.data(), n, n, ld, stride, batch);
+        VectorView<T> tv(tau.data(), n, batch, 1, n + 1);
+        (void)ormqx_cta(*this->ctx, A, tv, C, Uplo::Upper, side, Transpose::Trans, n, ws.to_span(), mul);
+        this->ctx->wait();
+        return c;
+    };
+    for (const Side side : {Side::Left, Side::Right}) {
+        const auto ref = run(1024, side, 1);
+        for (const size_t mul : {size_t(1), size_t(4)}) {
+            SCOPED_TRACE(::testing::Message() << "side " << int(side) << ", cta_wg_size_multiplier " << mul);
+            const auto got = run(1025, side, mul);
+            const auto view = [&](const UnifiedVector<T>& v, int off, int batch) {
+                return ts::MV<T>(const_cast<T*>(v.data()) + static_cast<size_t>(off) * stride, n, n, ld, stride, batch);
+            };
+            // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+            EXPECT_TRUE(ts::items_bit_identical_to(view(got, 0, 1024), view(ref, 0, 1024)));
+            EXPECT_TRUE(ts::items_bit_identical_to(view(got, 1024, 1), view(ref, 0, 1)));
+            // the gaps of the live items and every slot of the items past the batch stay poison
+            EXPECT_TRUE(ts::unwritten_outside(view(got, 0, 1025), ts::Live::block()));
+            const std::array<int, 3> tail{1025, 1026, 1027};
+            EXPECT_TRUE(ts::unwritten_outside(view(got, 0, 1025 + pad), ts::Live::nothing(), tail));
+        }
+    }
 }
 
 // Batch 0: no launch, no throw, nothing written (acpp 25.10 launches an empty nd_range).

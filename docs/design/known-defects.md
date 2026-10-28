@@ -1,6 +1,6 @@
 # Known defects {#design_known_defects}
 
-> **Status:** current · checked 2026-10-23
+> **Status:** current · checked 2026-10-28
 
 Each entry is a defect located to a line, with its symptom, cause, workaround and status. Open
 entries are left in the tree; fixed and closed entries keep their numbered heading, because code,
@@ -33,6 +33,7 @@ tests and the failure ledgers cite the slug. Performance debt is listed per op u
 | 20 | `src/sycl/kernel_attrs.hh:18-19` `BATCHLAS_LAUNCH_BOUNDS` | open, perf only: the bound is ignored on the tiny solvers; the 128x128 gemm worked around (WP-U) |
 | 21 | plain `range<3>` launches with the batch in dimension 0 (`ormbr.cc:170` and others) | open; worked around in the QR, gesvd and syev part loops |
 | 22 | `src/ops/getrf/kernels/getrf_panel_reg.cc` register cap; acpp multipass launches | worked around (256-row cap on acpp); the silent launch drop is open |
+| 23 | `src/ops/gesvd/gebrd/gebrd_cta.cc:153`; `ormqr_cta.cc:243,397`, `syev_jacobi_cta.cc:239` | fixed 2026-10-28: no early return in these packed kernels |
 | — | CTA SYTRD Lower path | worked around, not reproduced |
 | — | `linalg::qr` | wrapper withheld, cause not located |
 | — | `lanczos` spectrum ~3x too wide | open, wrong answer, cause not located |
@@ -493,6 +494,49 @@ Measured by calling `backend::spmm_vendor` directly, so these are vendor behavio
 - **Fix needs:** a launch error from the acpp CUDA backend for an out-of-resources launch, or a
   per-kernel register query; any other compile-time register gate is exposed the same way on acpp.
 - **Status:** worked around for the register panel; the silent drop is open.
+
+## Defect 23: a dead partition returned before work-group barriers {#defect-23-packed-cta-early-return}
+
+- **Symptom:** none observed on sm_89. `gebrd_cta` packs `probs_per_wg` problems per work-group,
+  one per sub-group partition, and returned `if (prob_id >= batch_size)` per partition
+  (`src/ops/gesvd/gebrd/gebrd_cta.cc:153` before the fix). Every live partition then ran five
+  work-group `it.barrier` per column. Whenever `batch % probs_per_wg != 0` the last work-group's
+  barriers were reached by only part of the group, which SYCL leaves undefined. Live results were
+  right here because NVIDIA hardware counts an exited thread as arrived at `bar.sync`. That is
+  observed behaviour, not a contract.
+- **Cause:** the per-problem early return that `tiny_device.hh` (third invariant) forbids.
+- **Same idiom, partition scope:** `ormqx_cta` (`ormqr_cta.cc:243` Left, `:397` Right) and
+  `syev_jacobi_cta` (`syev_jacobi_cta.cc:239`, after its work-group barrier) returned before
+  `group_barrier(part)` and partition shuffles only. Every device backend builds Masked partitions
+  (`kMaskedByDefault`, `sg_partition.hh`), which let the chunks of a sub-group diverge, so this is
+  defined there. Only the lockstep generic backend (`backend_generic.hh:48`, a sub-group barrier)
+  makes it undefined, and no device here runs that backend. There these kernels diverge per
+  partition on data anyway: `apply_reflector_small` returns on `tau == 0` (`ormqr_cta.cc:112`), and
+  Jacobi skips rounds and leaves the sweep loop per partition. Removing the return alone does not
+  make them lockstep-safe.
+- **Fix:** `live = prob_id < batch`, the batch item clamped to 0, loads guarded to a zero tile, every
+  output and info store guarded by `live`. A zero tile is neutral: `larfg` gives tau = 0 (gebrd), the
+  reflectors are tau = 0 (ormqr), and no pair rotates, so Jacobi converges after one sweep. Live
+  items are bit-identical to the old code (FNV hashes of the tests below match before and after).
+- **Not changed (partition scope, defined on Masked backends):** `sytrd_cta.cc:111`,
+  `gesvdj_cta.cc:280`, and `sytrd_sb2st_cta.cc:119`, whose global-storage path has no workspace
+  for a dead partition.
+- **Tests:** `GesvdTest.GebrdCtaBatchTailStoresNothingAndKeepsItemsBitwise`,
+  `OrmqrCtaTest.BatchTailStoresNothingAndKeepsItemsBitwise` (Left and Right),
+  `SyevJacobiCtaTest.BatchTailStoresNothingAndKeepsItemsBitwise`. Each runs batch 1025 at n = 13
+  (P = 16) with work-group multipliers 1 and 4 (a dead partition beside a live one in a sub-group,
+  and whole dead warps). Each item is compared bitwise with batch 1024 at multiplier 1, which has no
+  dead partition. The ld, inc and stride gaps and three items past the batch are poisoned. The old
+  code passes them too, because sm_89 tolerates the barrier. What they guard is the store guards,
+  each break planted and red: without `live`, gebrd's A writeback and ormqr's Right writeback
+  overwrite item 0, and Jacobi's info store writes past the batch. gebrd's `taup(n-1) = 0` guard
+  is not observable, since every item stores that same 0.
+- **Cost:** registers per thread (ncu, sm_89, n = 13): gebrd unchanged (48 float, 56 double),
+  ormqr Left 52 to 53 and 86 to 87, Jacobi 37 to 40, 46 to 50 and 78 to 80 (complex<double>;
+  complex<float> unchanged at 56), ormqr Right unchanged at 40. Only double Jacobi crosses an
+  allocation granule (48 to 56), and double is not tuned on this 1:64 part. The hot loops are
+  unchanged.
+- **Status:** fixed.
 
 ## LOBPCG picked a spurious zero Ritz value from a null P column
 
