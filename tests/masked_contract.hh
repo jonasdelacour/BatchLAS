@@ -127,6 +127,10 @@ struct Case {
     std::function<void(const std::string& pattern, std::span<const int> active)> verify_active;
     /// Every item holds the same input (the saturating-batch case): active items bit-identical.
     bool identical_items = false;
+    /// Composites and Auto on a vendor backend: an unmasked child may take the vendor, which a
+    /// masked one refuses, so a masked pattern's active items are compared with the all-active
+    /// masked call (routing keys on capacity, never on the mask's contents).
+    bool masked_reference = false;
     int wg_items = 0, chunk_items = 0;  ///< see patterns()
 };
 
@@ -180,6 +184,7 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
     }
     std::optional<std::size_t> size;
     std::map<int, detail::Bytes> refs;  // the unmasked call per chunk setting
+    std::map<int, detail::Bytes> masked_refs;  // masked_reference: the all-active call per chunk setting
     for (const Pattern& p : pats) {
         SCOPED_TRACE(std::string(op ? op : "op") + " " + spelling + " pattern " + p.name);
         std::size_t need = 0;
@@ -195,7 +200,12 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
             const Pattern none{"none", {}, p.chunk_items};
             refs[p.chunk_items] = detail::run(q, c, none, c.buffer_size ? c.buffer_size({}) : 0, nullptr);
         }
-        const detail::Bytes& ref = refs[p.chunk_items];
+        if (c.masked_reference && !p.bytes.empty() && !masked_refs.count(p.chunk_items)) {
+            const Pattern all = by_rule("all-active", c.batch, [](int) { return true; }, p.chunk_items);
+            DeviceMask m(q, all.bytes);
+            masked_refs[p.chunk_items] = detail::run(q, c, all, c.buffer_size ? c.buffer_size(m.span()) : 0, nullptr);
+        }
+        const detail::Bytes& ref = c.masked_reference && !p.bytes.empty() ? masked_refs[p.chunk_items] : refs[p.chunk_items];
         detail::Bytes before;
         const detail::Bytes got = detail::run(q, c, p, need, &before);
         const auto outs = c.outputs();
