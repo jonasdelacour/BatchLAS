@@ -932,6 +932,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info)
 {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "stedc", B, d, e, eigenvalues, eigvects);
     if (d.size() != e.size() + 1) {
         throw batchlas::invalid_argument("The size of e must be one less than the size of d.");
     }
@@ -951,7 +952,6 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
     // leaf and merge under this point only ever RAISES a status, which is what lets
     // the recursive driver's two half-solves and the level driver's L merges all
     // write the same slots. See src/kernels/common/info_span.hh.
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "stedc", B, d, e, eigenvalues, eigvects);
     detail::info_clear(ctx, info, d.batch_size());
     return stedc_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, info);
 }

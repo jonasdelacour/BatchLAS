@@ -22,6 +22,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -67,6 +68,7 @@ Event stebz(Queue& ctx,
             Span<int32_t> m,
             const Span<std::byte>& ws,
             StebzParams<T> params) {
+    ::batchlas::detail::refuse_batch_mask("stebz", d, e, w);
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
 

@@ -8,6 +8,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/info_span.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -370,6 +371,7 @@ Event bdsqr(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask("bdsqr", d, e, u, vh);
     static_cast<void>(B);
 
     const int32_t n = static_cast<int32_t>(d.size());

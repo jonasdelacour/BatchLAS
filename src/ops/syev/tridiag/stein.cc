@@ -20,6 +20,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -106,6 +107,7 @@ Event stein(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& Z,
             const Span<std::byte>& ws,
             SteinParams<T> params) {
+    ::batchlas::detail::refuse_batch_mask("stein", d, e, w, Z);
     const int64_t n = d.size();
     const int64_t k = static_cast<int64_t>(k_in);
     const int64_t batch_size = d.batch_size();

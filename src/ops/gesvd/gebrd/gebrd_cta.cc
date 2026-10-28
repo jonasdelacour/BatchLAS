@@ -8,6 +8,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 
 #include <array>
 #include <numeric>
@@ -265,6 +266,7 @@ Event gebrd_cta(Queue& ctx,
                 const VectorView<T>& tauq_out,
                 const VectorView<T>& taup_out,
                 size_t cta_wg_size_multiplier) {
+    ::batchlas::detail::refuse_batch_mask("gebrd_cta", a_in, d_out, e_out, tauq_out, taup_out);
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }

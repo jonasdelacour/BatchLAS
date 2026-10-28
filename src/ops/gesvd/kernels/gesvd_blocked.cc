@@ -14,6 +14,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/ops/syev/stedc/stedc_internal.hh>
 #include <src/select/grid_chunk.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <chrono>
@@ -1453,6 +1454,7 @@ Event gesvd_blocked(Queue& ctx,
                     SvdVectors jobvh,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_blocked");
     const int batch = static_cast<int>(a_in.batch_size());
     const int chunk = gesvd_blocked_chunk<T>(ctx, a_in, jobu, jobvh);
@@ -1491,6 +1493,7 @@ Event gesvd_blocked(Queue& ctx,
                     Uplo hermitian_uplo,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
     return gesvd_native_hermitian_impl<B, T>(ctx,
                                              a_in,
                                              singular_values,
@@ -1563,6 +1566,7 @@ Event gesvd_cta(Queue& ctx,
                 SvdVectors jobvh,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     // Its normal-equations branch is real-only; complex general is the blocked family's.
     if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
@@ -1606,6 +1610,7 @@ Event gesvd_cta(Queue& ctx,
                 Uplo hermitian_uplo,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");

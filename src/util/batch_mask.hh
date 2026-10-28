@@ -65,21 +65,21 @@ Span<const std::uint8_t> call_mask(const char* op, const Views&... v) {
     return out;
 }
 
-// For an op without a selection: refuse a masked call at the public entry until its kernels honour the mask.
-template <class T, class... V>
-void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
-    if (any_batch_mask(v...))
-        throw NoRouteError(op, backend, scalar_kind_of<T>, std::string(who) + ": batch mask not supported yet");
-}
+inline std::string batch_mask_refusal(const char* who) { return std::string(who) + ": batch mask not supported yet"; }
 
-// The entry of an op no family of which honours the mask yet: validates the masks, then refuses a masked call.
+// The entry refusal, first in a public entry whose kernels ignore the mask: call_mask, then a throw
+// naming "batch mask" before any launch or write; NoRouteError for a family of a routed op.
 // @throws batchlas::invalid_argument for mismatched masks; batchlas::unsupported for any masked operand
 template <typename... Views>
-void refuse_batch_mask(const char* op, const Views&... v) {
-    (void)call_mask(op, v...);
-    if (any_batch_mask(v...)) {
-        throw batchlas::unsupported(std::string(op) + ": a batch mask is not supported by this op yet");
-    }
+void refuse_batch_mask(const char* who, const Views&... v) {
+    (void)call_mask(who, v...);
+    if (any_batch_mask(v...)) throw batchlas::unsupported(batch_mask_refusal(who));
+}
+
+template <class T, class... V>
+void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
+    (void)call_mask(who, v...);
+    if (any_batch_mask(v...)) throw NoRouteError(op, backend, scalar_kind_of<T>, batch_mask_refusal(who));
 }
 
 }  // namespace batchlas::detail

@@ -6,6 +6,7 @@
 #include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <stdexcept>
 
@@ -202,6 +203,7 @@ Event gebrd_unblocked(Queue& ctx,
                       const VectorView<typename base_type<T>::type>& e,
                       const VectorView<T>& tauq,
                       const VectorView<T>& taup) {
+    ::batchlas::detail::refuse_batch_mask("gebrd_unblocked", a, d, e, tauq, taup);
     static_cast<void>(B);
 
     if (a.rows() < a.cols()) {

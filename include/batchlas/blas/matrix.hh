@@ -349,7 +349,7 @@ namespace batchlas {
             }
         }
 
-        // Device-side copy of mask bytes (a device-only source works); waits. Defined in src/matrix.cc.
+        // Host copy of mask bytes for astype (no Queue); throws for a device-only source. Defined in src/matrix.cc.
         BATCHLAS_API void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src);
 
         inline int dense_active_rows(int rows_capacity, Span<int> active_rows, int batch_index) {
@@ -684,7 +684,8 @@ namespace batchlas {
         /// @}
 
         /// @brief Packed dense copy with every element converted by `static_cast<U>`; host loop, no Queue.
-        ///        A batch mask is copied into the result's own (enable_batch_mask()) on the device.
+        ///        A batch mask is copied into the result's own (enable_batch_mask()) on the host.
+        /// @throws batchlas::unsupported for a device-only (device USM) batch mask
         template <typename U>
         Matrix<U, MType> astype() const;
 

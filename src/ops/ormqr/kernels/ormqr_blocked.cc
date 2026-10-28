@@ -13,6 +13,7 @@
 #include <src/kernels/common/larft_wy.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <complex>
@@ -322,6 +323,7 @@ Event ormqr_blocked(Queue& ctx,
                     Span<T> tau,
                     Span<std::byte> workspace,
                     int32_t block_size) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_blocked", B, a, c);
     validate_ormqr_dims(a, c, side, tau);
 
     if (!ctx.in_order()) {

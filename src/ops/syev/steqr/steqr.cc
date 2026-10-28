@@ -52,11 +52,11 @@ Event steqr(Queue& ctx,
             SteqrParams<T> params,
             const MatrixView<T, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr", B, d_in, e_in, eigenvalues, eigvects);
     // The one clear, here rather than in the tiers: neither steqr_cta nor steqr_wg
     // touches an item that converged, so without this the caller would read
     // whatever was in its span for the healthy items. Everything below only ever
     // raises a status -- see the accumulator rule in src/kernels/common/info_span.hh.
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr", B, d_in, e_in, eigenvalues, eigvects);
     detail::info_clear(ctx, info, d_in.batch_size());
     return steqr_dispatch<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
 }

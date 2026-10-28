@@ -14,6 +14,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 #include <complex>
 #include <limits>
 #include <numeric>
@@ -516,6 +517,7 @@ Event syev_jacobi_cta(Queue& ctx,
                       const Span<std::byte>& ws,
                       JacobiParams<T> params,
                       Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_jacobi_cta", B, a_in);
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {

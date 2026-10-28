@@ -17,6 +17,7 @@
 #include <src/queue.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 
 #include <complex>
 #include <numeric>
@@ -510,6 +511,7 @@ Event ormqx_cta(Queue& ctx,
                int32_t k,
                const Span<std::byte>& ws,
                size_t cta_wg_size_multiplier) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqx_cta", B, a_in, tau_in, c_in);
     (void)ws;
 
     const bool left = (side == Side::Left);

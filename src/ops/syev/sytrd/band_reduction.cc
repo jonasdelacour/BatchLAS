@@ -13,6 +13,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/ops/geqrf/geqrf.hh>  // geqrf_buffer_size_bound: sized once, run on sub-views
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <cstdint>
@@ -1391,6 +1392,7 @@ Event sytrd_band_reduction(Queue& ctx,
                            int32_t kd,
                            const Span<std::byte>& ws,
                            SytrdBandReductionParams params) {
+    ::batchlas::detail::refuse_batch_mask("sytrd_band_reduction", ab_in, d_out, e_out, tau_out);
     validate_band_reduction_dims(ab_in, d_out, e_out, tau_out, kd);
 
     const int n = ab_in.cols();
@@ -1412,6 +1414,7 @@ Event sytrd_band_reduction_single_step(Queue& ctx,
                                        int32_t kd,
                                        const Span<std::byte>& ws,
                                        SytrdBandReductionParams params) {
+    ::batchlas::detail::refuse_batch_mask("sytrd_band_reduction_single_step", ab_in, abw_out);
     return sytrd_band_reduction_single_step_core<B, T>(ctx, ab_in, abw_out, uplo, kd, ws, params);
 }
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <batchlas/blas/linalg.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/functions/ormqr.hh>
@@ -41,6 +42,7 @@ namespace batchlas {
                 Uplo uplo,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, A);
         static LinalgHandle<B> handle;
         BumpAllocator pool(workspace);
         // rocSOLVER's info is a per-item device array with LAPACK semantics; it
@@ -70,6 +72,7 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
         impl::run_native<impl::Native::Hip>(*ctx, [=](auto stream) mutable {
@@ -119,6 +122,7 @@ namespace batchlas {
                       Transpose trans,
                       Span<T> tau,
                       Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
         auto m = C.rows();
@@ -177,6 +181,7 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
         static_cast<void>(workspace);
         static LinalgHandle<B> handle;
         auto m = A.rows();
@@ -223,6 +228,7 @@ namespace batchlas {
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
         static LinalgHandle<B> handle;
         BumpAllocator pool(workspace);
         // See potrf above (issue #73).
@@ -271,6 +277,7 @@ namespace batchlas {
                 Transpose transA,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
         static_cast<void>(workspace);
         static LinalgHandle<Back> handle;
         auto ipiv = pivots.as_span<int>();
@@ -328,6 +335,7 @@ namespace batchlas {
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
         static LinalgHandle<B> handle;
         BumpAllocator pool(workspace);
         // See potrf above (issue #73).
@@ -378,6 +386,7 @@ namespace batchlas {
                       Uplo uplo,
                       Span<std::byte> workspace,
                       Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, A);
         static LinalgHandle<B> handle;
         BumpAllocator pool(workspace);
         // rocSOLVER's info is documented per-item LAPACK semantics (see the note

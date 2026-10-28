@@ -15,6 +15,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <complex>
@@ -635,6 +636,7 @@ Event syev_blocked(Queue& ctx,
                    const Span<std::byte>& ws,
                    StedcParams<typename base_type<T>::type> stedc_params,
                    Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_blocked", B, a_in);
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());

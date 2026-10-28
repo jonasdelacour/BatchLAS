@@ -8,6 +8,7 @@
 #include <src/util/template-instantiations.hh>
 #include <complex>
 #include <src/backends/backend_handle_impl.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -23,6 +24,7 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", Back, A, B, C);
         static LinalgHandle<Back> handle;
         BumpAllocator pool(workspace);
         auto buffer_size = backend::spmm_vendor_buffer_size<Back>(ctx, A, B, C, alpha, beta, transA, transB);

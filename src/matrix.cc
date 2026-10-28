@@ -9,6 +9,7 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <random>
 #include <algorithm>
 #include <numeric>
@@ -217,10 +218,13 @@ namespace detail {
 void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src) {
     if (dst.size() != src.size()) throw batchlas::invalid_argument("astype: batch mask length mismatch");
     if (src.empty()) return;
-    // A device memcpy, not a host loop: the source may be sycl::malloc_device memory.
-    Queue q;
-    q->memcpy(dst.data(), src.data(), src.size());
-    q.wait();
+    // astype takes no Queue and copies the data on the host, so it copies the mask on the host too:
+    // `dst` is the result's own shared store. A device-only mask cannot be read there, and a Queue
+    // made here would be a per-call Queue (on the wrong device, for another device's mask).
+    if (QueueImpl::usm_kind(src.data()) == sycl::usm::alloc::device)
+        throw batchlas::unsupported("astype: the batch mask is device-only memory, which astype (a host copy, no Queue) "
+                                    "cannot read; attach a shared or host USM mask to convert the view");
+    std::memcpy(dst.data(), src.data(), src.size());
 }
 }  // namespace detail
 
@@ -685,6 +689,7 @@ MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrienta
 // Copy from another matrix view
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
+    ::batchlas::detail::refuse_batch_mask("Matrix::copy_from", *this, src);
     if (rows_ != src.rows_ || cols_ != src.cols_ || batch_size_ != src.batch_size_) {
         throw batchlas::invalid_argument("Matrix dimensions or batch size mismatch in copy_from");
     }
