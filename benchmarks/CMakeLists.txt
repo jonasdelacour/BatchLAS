@@ -32,6 +32,7 @@ set(BENCHMARK_TARGETS
     gemv_benchmark
     spmm_benchmark
     trsm_benchmark
+    potrs_benchmark
     ormqr_benchmark
     ormqr_blocked_benchmark
     ormqr_cta_benchmark

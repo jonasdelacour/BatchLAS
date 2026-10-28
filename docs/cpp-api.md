@@ -172,6 +172,8 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `trmm(ctx, A, B, C, opts)` | `C := α·op(A)·B` or `α·B·op(A)` | **`C`**; `B` untouched |
 | `trsm(ctx, A, B, opts)` | solves `op(A)·X = α·B` or `X·op(A) = α·B` | **`B`**, overwritten with `X` |
 | `potrf(ctx, A, opts)` | Cholesky, `A = L·Lᴴ` or `Uᴴ·U` | `A` in place, `uplo` triangle |
+| `potrs(ctx, A, B, uplo)` | solves `A·X = B` from `potrf`'s factor | `B`; `A` read-only |
+| `potri(ctx, A, uplo, full, ws, info)` | `A⁻¹` from `potrf`'s factor (LAPACK `?potri`) | `A` in place, `uplo` triangle (both with `full`) |
 | `getrf(ctx, A, pivots)` | LU with partial pivoting | `A` and `pivots` |
 | `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors | `B` |
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |
@@ -206,8 +208,8 @@ C.symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
 - `symm`, `syrk` and `syr2k` are constrained to **real** `T`; `hemm`, `herk` and `her2k` to
   **complex** `T`; `gemm`, `gemv`, `trmm` and `trsm` take both. `herk`'s `α` and `β` and `her2k`'s
   `β` are real.
-- `potrf`, `getrf`, `getri`, `gesv`, `posv` and the eigen/SVD routines optionally report per-item
-  status ([Per-item status](#per-item-status)).
+- `potrf`, `getrf`, `getri`, `gesv`, `posv`, `potri`, `sytrf`, `sysv` and the eigen/SVD routines
+  optionally report per-item status ([Per-item status](#per-item-status)).
 
 ### trsm: alpha follows the matrices {#trsm-alpha-moved-next-to-the-matrices}
 
@@ -582,11 +584,11 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Ten routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+Eleven routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
 LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv` and `posv`
-report factorisation status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status.
-It is a field on `PotrfOptions` and a trailing parameter elsewhere (the option-struct `syev` and
-`gesvd` spellings take none):
+report factorisation status, `potri` a zero factor diagonal; `syev`, `syevx`, `gesvd`, `steqr`,
+`stedc` report convergence status. It is a field on `PotrfOptions` and a trailing parameter
+elsewhere (the option-struct `syev` and `gesvd` spellings take none):
 
 ```cpp
 UnifiedVector<int32_t> info(batch);

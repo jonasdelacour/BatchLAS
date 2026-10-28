@@ -17,6 +17,8 @@ lives on as table rows.
 | [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | symm, syrk, syr2k, trmm: flat selection tables; hemm, herk, her2k: hand-written in `cublas.cc` |
 | [trsm.md](trsm.md) | `trsm` | **yes**, broadly; read its open debts before trusting a ratio |
 | [potrf.md](potrf.md) | `potrf` | **yes**, per cell; measured tables; five native kernels |
+| [potri.md](potri.md) | `potrs` `potri` | n/a; native compositions over `trsm` and the fused solve, no vendor arm; transcribed (untimed) tables |
+| [potrs.md](potrs.md) | `potrs` | n/a (no vendor arm); `fused` or `trsm` per cell from measured sm_89 float and complex<float> tables; FP64 and sm_120 transcribed |
 | [qr.md](qr.md) | `geqrf` `orgqr` `ormqr` | **yes**: `ormqr` native-first; `geqrf` above a per-type order floor plus a tall-panel clause; `orgqr` to n = 512 |
 | [lu.md](lu.md) | `getrf` `getrs` `getri` | **yes**: four windows, all `float`/`cfloat`-leaning |
 | [gemv.md](gemv.md) | `gemv` | **yes**: sm_89 one `complex<double>` transposed window; sm_120 native first in most rows |

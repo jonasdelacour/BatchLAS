@@ -26,6 +26,8 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
+#include <batchlas/blas/functions/potri.hh>
+#include <batchlas/blas/functions/potrs.hh>
 #include <batchlas/blas/functions/spmm.hh>
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/syrk.hh>

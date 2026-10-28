@@ -133,6 +133,9 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # laswp -- so it shares no device symbol with getrs_native.cc either.
     getrs/kernels/getrs_fused.cc
     getri/kernels/getri_blocked.cc
+    # potri: the CTA trtri/lauum kernel and its element-wise kernels; no device symbol shared with any other TU.
+    potri/kernels/potri_native.cc
+    potri/kernels/potri_cta.cc
     lascl/lascl.cc
 )
 

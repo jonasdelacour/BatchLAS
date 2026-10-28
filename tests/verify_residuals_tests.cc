@@ -662,6 +662,62 @@ template <typename T> struct EigenCase {
     double value() { return MV<T>::eigen_residual(ctx(), A.mview(), V.mview(), w.vview()); }
 };
 
+// B0 = L L^H, L unit lower bidiagonal with a unit-phase sub-diagonal (zero: B0 = I), V unitary,
+// G = V diag(w) V^H. itype 1: X = L^-H V, A0 = L G L^H; 2: X = L^-H V, A0 = L^-H G L^-1; 3: X = L V,
+// A0 as for 2. Every entry is a small dyadic, so the exact case scores 0 in every dtype.
+template <typename T, int Itype> struct GenEigCase {
+    using type = T;
+    using R = real_t<T>;
+    static constexpr Check kind = Check::eigen_residual;
+    static constexpr int n = 16;
+    int bound_n = n, hot_r = n - 1, hot_c = 0;
+    Batched<T> A0 = Batched<T>::matrix(n, n), B0 = Batched<T>::matrix(n, n), X = Batched<T>::matrix(n, n);
+    Batched<R> w = Batched<R>::vec(n);
+
+    explicit GenEigCase(bool identity_b = false) {
+        using D = promoted_t<T>;
+        const D c = identity_b ? D(0) : MV<T>::up(phase<T>(1));
+        auto cj = [](D x) { return MV<T>::conj(x); };
+        auto L = [&](int i, int j) { return i == j ? D(1) : i == j + 1 ? c : D(0); };
+        auto Linv = [&](int i, int j) {
+            D r = i >= j ? D(1) : D(0);
+            for (int k = j; k < i; ++k) r *= -c;
+            return r;
+        };
+        auto left = [&](int i, int j) { return Itype == 1 ? L(i, j) : cj(Linv(j, i)); };
+        auto right = [&](int i, int j) { return Itype == 3 ? L(i, j) : cj(Linv(j, i)); };
+        for (int b = 0; b < kB; ++b) {
+            std::vector<D> G(n * n, D(0));
+            for (int j = 0; j < n; ++j) w.ex(b, j, 0) = R(j - 7 + b);
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i)
+                    for (int l = 0; l < n; ++l)
+                        G[j * n + i] += MV<T>::up(hadamard<T>(i, l, b)) * double(w.ex(b, l, 0)) * cj(MV<T>::up(hadamard<T>(j, l, b)));
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    D a = D(0), x = D(0), bb = D(0);
+                    for (int k = 0; k < n; ++k) {
+                        for (int l = 0; l < n; ++l) a += left(i, k) * G[l * n + k] * cj(left(j, l));
+                        x += right(i, k) * MV<T>::up(hadamard<T>(k, j, b));
+                        bb += L(i, k) * cj(L(j, k));
+                    }
+                    A0.ex(b, i, j) = down<T>(a), X.ex(b, i, j) = down<T>(x), B0.ex(b, i, j) = down<T>(bb);
+                }
+        }
+        A0.store();
+        B0.store();
+        X.store();
+        w.store();
+    }
+    Batched<T>& out() { return X; }
+    double value(int itype = Itype) {
+        return MV<T>::generalized_eigen_residual(ctx(), A0.mview(), B0.mview(), X.mview(), w.vview(), itype);
+    }
+};
+template <typename T> using GenEig1Case = GenEigCase<T, 1>;
+template <typename T> using GenEig2Case = GenEigCase<T, 2>;
+template <typename T> using GenEig3Case = GenEigCase<T, 3>;
+
 template <typename T> struct ValuesCase {
     using type = T;
     using R = real_t<T>;
@@ -698,6 +754,9 @@ VERIFY_RESIDUAL_SUITE(SpmmBackwardError, SpmmCase)
 VERIFY_RESIDUAL_SUITE(SpmmTransBackwardError, SpmmTransCase)
 VERIFY_RESIDUAL_SUITE(Orthogonality, OrthoCase)
 VERIFY_RESIDUAL_SUITE(EigenResidual, EigenCase)
+VERIFY_RESIDUAL_SUITE(GeneralizedEigenResidual1, GenEig1Case)
+VERIFY_RESIDUAL_SUITE(GeneralizedEigenResidual2, GenEig2Case)
+VERIFY_RESIDUAL_SUITE(GeneralizedEigenResidual3, GenEig3Case)
 VERIFY_RESIDUAL_SUITE(ValuesError, ValuesCase)
 
 // ------------------------------------------------------------------ further axes
@@ -1018,6 +1077,20 @@ TYPED_TEST(EigenResidual, KnownValue) {
         for (int s = 0; s < n; ++s) a2 += std::norm(full(r, s));
     }
     expect_value(c, mod(d) * std::sqrt(hit) / std::sqrt(a2));
+}
+
+// An itype-1 solution solves neither other problem (the itype reaches the formula), and B0 = I
+// stored or empty is the standard problem under every itype.
+TYPED_TEST(GeneralizedEigenResidual1, OtherItypesFailAndAnEmptyBIsTheIdentity) {
+    GenEigCase<TypeParam, 1> c;
+    const double bound = bound_of(c);
+    for (int itype : {2, 3}) EXPECT_GT(c.value(itype), bound * 100) << "itype " << itype;
+    GenEigCase<TypeParam, 1> s(true);
+    for (int itype : {1, 2, 3}) {
+        EXPECT_LT(s.value(itype), bound / 100) << "stored identity, itype " << itype;
+        const double empty = MV<TypeParam>::generalized_eigen_residual(ctx(), s.A0.mview(), MV<TypeParam>(), s.X.mview(), s.w.vview(), itype);
+        EXPECT_LT(empty, bound / 100) << "empty B0, itype " << itype;
+    }
 }
 
 TYPED_TEST(ValuesError, KnownValue) {
