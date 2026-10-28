@@ -16,6 +16,7 @@
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -29,7 +30,7 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int N>
+template <typename T, int N, bool Masked>
 class PotrfTinyKernel;
 
 namespace sycl_potrf {
@@ -65,12 +66,15 @@ inline int potrf_tiny_matrices_per_wg(int N, int max_wg) {
                                           /*max_pack=*/kTinyWgSize / N);
 }
 
-template <typename T, int N>
+// Masked: the batch mask folds into `live` (I2: an inactive item is a dead slot, never a return).
+// A template so the unmasked instance is the kernel as it was: the fold cost 2-4.5% on float.
+// evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
+template <typename T, int N, bool Masked>
 Event potrf_tiny_launch(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         bool upper,
                         Span<int32_t> info,
-                        int n, int batch, int per_wg) {
+                        int n, int batch, int per_wg, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
@@ -94,7 +98,7 @@ Event potrf_tiny_launch(Queue& ctx,
     constexpr bool real_diag = DM::is_complex;
 
     ctx->submit([&](sycl::handler& h) {
-        batchlas::impl::parallel_for<PotrfTinyKernel<T, N>>(h,
+        batchlas::impl::parallel_for<PotrfTinyKernel<T, N, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(kTinySubGroupSize) {
@@ -106,11 +110,13 @@ Event potrf_tiny_launch(Queue& ctx,
 
                 // NO EARLY RETURN -- the in-tree `if (prob_id >= nb) return;` idiom is
                 // not copied here; see tiny_device.hh's third invariant.
-                const bool live = (prob_id < batch);
+                const bool in_range = (prob_id < batch);
+                bool live = in_range;
+                if constexpr (Masked) live = live && mask[prob_id] != 0;
                 const bool row_live = live && (lane < n);
 
                 const D* __restrict Ag =
-                    a_ptr + static_cast<std::ptrdiff_t>(live ? prob_id : 0) * stride_a;
+                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
 
                 D rA[N];
                 if (upper) {
@@ -175,7 +181,7 @@ BATCHLAS_UNROLL_FULL
                 }
 
                 D* __restrict Aout =
-                    a_ptr + static_cast<std::ptrdiff_t>(live ? prob_id : 0) * stride_a;
+                    a_ptr + static_cast<std::ptrdiff_t>(in_range ? prob_id : 0) * stride_a;
                 if (upper) {
                     tiny_native::tiny_store_upper<D, N>(rA, Aout, ld, lane, row_live);
                 } else {
@@ -187,6 +193,13 @@ BATCHLAS_UNROLL_FULL
     });
 
     return ctx.get_event();
+}
+
+template <typename T, int N>
+Event potrf_tiny_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, bool upper, Span<int32_t> info,
+                     int n, int batch, int per_wg, const std::uint8_t* mask) {
+    if (mask) return potrf_tiny_launch<T, N, true>(ctx, A, upper, info, n, batch, per_wg, mask);
+    return potrf_tiny_launch<T, N, false>(ctx, A, upper, info, n, batch, per_wg, nullptr);
 }
 
 template <typename T>
@@ -275,20 +288,21 @@ Event potrf_tiny_dispatch(Queue& ctx,
 
     const bool upper = (uplo == Uplo::Upper);
     const int N = tiny_native::tiny_bucket_ge(n);
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
 
     // Only the per-type OUTER entry points are explicitly instantiated; this switch
     // pulls the three N in (trsm_native.cc's discipline).
     switch (N) {
         case 8:
-            return potrf_tiny_launch<T, 8>(ctx, A, upper, info, n, batch,
-                                           potrf_tiny_matrices_per_wg(8, max_wg));
+            return potrf_tiny_leg<T, 8>(ctx, A, upper, info, n, batch,
+                                           potrf_tiny_matrices_per_wg(8, max_wg), mask);
         case 16:
-            return potrf_tiny_launch<T, 16>(ctx, A, upper, info, n, batch,
-                                            potrf_tiny_matrices_per_wg(16, max_wg));
+            return potrf_tiny_leg<T, 16>(ctx, A, upper, info, n, batch,
+                                            potrf_tiny_matrices_per_wg(16, max_wg), mask);
         case 32:
             if constexpr (PotrfTinyCap<T>::kMaxN >= 32) {
-                return potrf_tiny_launch<T, 32>(ctx, A, upper, info, n, batch,
-                                                potrf_tiny_matrices_per_wg(32, max_wg));
+                return potrf_tiny_leg<T, 32>(ctx, A, upper, info, n, batch,
+                                                potrf_tiny_matrices_per_wg(32, max_wg), mask);
             }
             break;
         default:

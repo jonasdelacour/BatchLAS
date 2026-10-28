@@ -250,6 +250,16 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   inactive item keep every byte, a singular item included. `blocked` slices the mask per part, on
   its kernels and its gemm views (the chunk patterns at n = 45 and 170). sytrs `blocked` refuses
   until trsm honours the mask; cuSOLVER's sytrf refuses permanently.
+- **W2a, Cholesky** (`tests/potrf_mask_tests.cc`; sm_89, every scalar, 2026-10-28): potrf `tiny`,
+  `cta` and `lpanel`, posv `tiny`, potri `cta` (either backend) and lascl run a masked batch, with
+  failing items in `info` and both triangles; the vendor and the composites over W1b or W2b children
+  (potrf and posv `blocked`, posv `cta`, potrs, potri `blocked`) refuse and write nothing. Dropping
+  one guard at a time turned red only its own cases: potrf `tiny`'s, posv `tiny`'s and potri `cta`'s
+  (their shapes, hole patterns only); `cta`'s two returns (its shapes in both scopes, and Auto, which
+  picks `cta` at n = 24); `lpanel`'s fold (its shapes). Dropping the vendor's `can_run` term left
+  `potrf_vendor`'s own entry refusal (NoRouteError): red on the strict vendor pin and Auto double,
+  nothing written. posv `tiny` and `lpanel` take `Masked` too: their runtime fold cost 4.3% and 4.2%
+  on complex float at batch 32768.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

@@ -7,6 +7,7 @@
 #include <src/queue.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -34,12 +35,13 @@ Event potri_finish(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     const std::size_t elems = full ? static_cast<std::size_t>(n) * static_cast<std::size_t>(n) : static_cast<std::size_t>(n);
     const std::size_t total = static_cast<std::size_t>(A.batch_size()) * elems;
     const auto [global_size, local_size] = compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potri", A));
 
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for<PotriFinishKernel<T>>(sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> it) {
             for (std::size_t f = it.get_global_id(0); f < total; f += it.get_global_range(0)) {
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(f / elems);
-                if (skip && skip[b] != 0) continue;
+                if ((skip && skip[b] != 0) || (mask && mask[b] == 0)) continue;
                 const std::size_t e = f % elems;
                 const int r = full ? static_cast<int>(e % static_cast<std::size_t>(n)) : static_cast<int>(e);
                 const int c = full ? static_cast<int>(e / static_cast<std::size_t>(n)) : r;

@@ -12,6 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -196,7 +197,7 @@ Event potrf_cta_launch(Queue& ctx,
                        bool upper,
                        Span<int32_t> info,
                        const PotrfCtaLaunch& p,
-                       int n, int batch) {
+                       int n, int batch, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
@@ -246,13 +247,15 @@ Event potrf_cta_launch(Queue& ctx,
                     slot = sg_id;
                     tid = static_cast<int>(sg.get_local_linear_id());
                     p1_active = true;
-                    // Sub-group-uniform, and this scope uses only sub-group barriers.
-                    if (matrix_id >= batch) return;
+                    // Sub-group-uniform, and this scope uses only sub-group barriers; one matrix per
+                    // sub-group, so the mask return (I1) is uniform too.
+                    if (matrix_id >= batch || (mask != nullptr && mask[matrix_id] == 0)) return;
                 } else {
                     matrix_id = wg_id;   // G == 1 => num_wg == batch, cannot exceed
                     slot = 0;
                     tid = static_cast<int>(it.get_local_linear_id());
                     p1_active = (sg.get_group_linear_id() == 0);
+                    if (mask != nullptr && mask[matrix_id] == 0) return;  // I1: before the first barrier
                 }
 
                 D* S = &tile[0] + static_cast<std::ptrdiff_t>(slot) * lda * n;
@@ -342,13 +345,14 @@ Event potrf_cta_dispatch(Queue& ctx,
                              : potrf_cta_layout<T>(ctx, pool, batch);
 
     const bool upper = (uplo == Uplo::Upper);
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
 
     if (p.scope == PotrfScope::SubGroup) {
         return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::SubGroup>(
-            ctx, A, upper, info, p, n, batch);
+            ctx, A, upper, info, p, n, batch, mask);
     }
     return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::WorkGroup>(
-        ctx, A, upper, info, p, n, batch);
+        ctx, A, upper, info, p, n, batch, mask);
 }
 
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.
