@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <array>
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/enums.hh>
@@ -9,6 +10,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
 
@@ -23,6 +25,7 @@
 #include <vector>
 
 using namespace batchlas;
+namespace ts = test_support;
 
 namespace {
 
@@ -388,6 +391,68 @@ TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
             const std::vector<int> clean{1, 2, 3};
             test_utils::expect_eigenvalues_match_lapacke<Scalar>(A0, W, n, /*sorted_copy=*/true, clean);
         }
+    }
+}
+
+// A batch tail: batch 1025 at n = 13 (P = 16) leaves dead partitions in the last work-group,
+// beside the live one in its sub-group (multiplier 1) and as whole dead warps (multiplier 4).
+// A dead partition sweeps a zero tile and stores nothing (known-defects.md, defect 23). A, W
+// and info are held BITWISE to batch 1024 at multiplier 1 (no dead partition); no slot
+// outside the items (ld/stride gaps, items past the batch) may change.
+TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    constexpr int n = 13, ld = n + 3, stride = ld * n + 5, pad = 3;
+    const Scalar poison = ts::poison<Scalar>();
+    const Real wpoison = ts::poison<Real>();
+    const int32_t info_poison = 12345;  // ts::poison needs a MatrixView scalar; info has no view
+    const auto A1 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, 1, /*seed=*/2026);
+
+    struct Out {
+        UnifiedVector<Scalar> a;
+        UnifiedVector<Real> w;
+        UnifiedVector<int32_t> info;
+    };
+    const auto run = [&](int batch, size_t mul) {
+        Out o{UnifiedVector<Scalar>(static_cast<size_t>(batch + pad) * stride, poison),
+              UnifiedVector<Real>(static_cast<size_t>(batch + pad) * n, wpoison),
+              UnifiedVector<int32_t>(static_cast<size_t>(batch + pad), info_poison)};
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) o.a[static_cast<size_t>(b) * stride + i + j * ld] = A1.view()(i, j, 0);
+        MatrixView<Scalar, MatrixFormat::Dense> A(o.a.data(), n, n, ld, stride, batch);
+        JacobiParams<Scalar> params{};
+        params.cta_wg_size_multiplier = mul;
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A, Span<Real>(o.w.data(), static_cast<size_t>(batch) * n),
+                                   JobType::EigenVectors, Uplo::Lower, Span<std::byte>(), params,
+                                   Span<int32_t>(o.info.data(), static_cast<size_t>(batch)))
+            .wait();
+        return o;
+    };
+    const auto ref = run(1024, 1);
+    ASSERT_EQ(ref.info[0], 0) << "the reference item did not converge";
+    for (const size_t mul : {size_t(1), size_t(4)}) {
+        SCOPED_TRACE(::testing::Message() << "cta_wg_size_multiplier " << mul);
+        const auto got = run(1025, mul);
+        const std::array<int, 3> tail{1025, 1026, 1027};
+        const auto check = [&](auto& g, auto& r, int rows, int cols, int ldv, int s, const char* what) {
+            using E = std::remove_pointer_t<decltype(g.data())>;
+            const auto view = [&](auto& v, int off, int batch) {
+                return ts::MV<E>(v.data() + static_cast<size_t>(off) * s, rows, cols, ldv, s, batch);
+            };
+            SCOPED_TRACE(what);
+            // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+            EXPECT_TRUE(ts::items_bit_identical_to(view(g, 0, 1024), view(r, 0, 1024)));
+            EXPECT_TRUE(ts::items_bit_identical_to(view(g, 1024, 1), view(r, 0, 1)));
+            // the gaps of the live items and every slot of the items past the batch stay poison
+            EXPECT_TRUE(ts::unwritten_outside(view(g, 0, 1025), ts::Live::block()));
+            EXPECT_TRUE(ts::unwritten_outside(view(g, 0, 1025 + pad), ts::Live::nothing(), tail));
+        };
+        check(got.a, ref.a, n, n, ld, stride, "A");
+        check(got.w, ref.w, 1, n, 1, n, "W");
+        for (int b = 0; b < 1025 + pad; ++b)  // info: local loop, an int32 vector is no MatrixView
+            EXPECT_EQ(got.info[b], b < 1025 ? ref.info[b < 1024 ? b : 0] : info_poison) << "info item " << b;
     }
 }
 
