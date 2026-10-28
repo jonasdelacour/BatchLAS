@@ -230,6 +230,36 @@ std::vector<Entry<T>> gemm_entries() {
     };
 }
 
+// The level-3 ops and spmm, whose native families honour the mask (W1b). trsm writes B, the rest C.
+template <typename T, Backend B>
+std::vector<Entry<T>> level3_entries() {
+    using P = Pool<T>;
+    const T one(1), half(0.5);
+    const auto L = Uplo::Lower;
+    const auto N = Transpose::NoTrans;
+    std::vector<Entry<T>> out = {
+        {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
+        {"trmm", true,
+         [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
+        {"spmm", true,
+         [=](P& p) { spmm<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws); }},
+    };
+    if constexpr (is_std_complex_v<T>) {
+        out.push_back({"hemm", true,
+                       [=](P& p) { hemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
+        out.push_back({"herk", true, [=](P& p) { herk<B, T>(p.q, p.mat(p.a), p.mat(p.c), Real<T>(1), Real<T>(0.5), L, N); }});
+        out.push_back({"her2k", true,
+                       [=](P& p) { her2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<T>(0.5), L, N); }});
+    } else {
+        out.push_back({"symm", true,
+                       [=](P& p) { symm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
+        out.push_back({"syrk", true, [=](P& p) { syrk<B, T>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); }});
+        out.push_back({"syr2k", true,
+                       [=](P& p) { syr2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N); }});
+    }
+    return out;
+}
+
 // The routed ops: the public op entries, each refused by every family's can_run term.
 // gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 template <typename T, Backend B>
@@ -240,9 +270,6 @@ std::vector<Entry<T>> routed_entries() {
     const auto N = Transpose::NoTrans;
     const auto all = SvdVectors::All;
     std::vector<Entry<T>> out = {
-        {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
-        {"trmm", true,
-         [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
         {"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }},
         {"getrf", true, [=](P& p) { getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); }},
         {"getrs", true,
@@ -283,8 +310,6 @@ std::vector<Entry<T>> routed_entries() {
              if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
              potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L);
          }},
-        {"spmm", true,
-         [=](P& p) { spmm<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws); }},
         {"sygst", true,
          [=](P& p) {
              if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
@@ -308,9 +333,13 @@ std::vector<Entry<T>> routed_entries() {
          }},
         {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
     };
-    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
-    if constexpr (B == Backend::NETLIB)
+    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
+    // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
+    if constexpr (B == Backend::NETLIB) {
         for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
+        for (auto& e : level3_entries<T, B>())
+            if (e.name != "spmm") out.push_back(std::move(e));
+    }
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
@@ -320,19 +349,6 @@ std::vector<Entry<T>> routed_entries() {
                            getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
                        },
                        true});
-    }
-    if constexpr (is_std_complex_v<T>) {
-        out.push_back({"hemm", true,
-                       [=](P& p) { hemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
-        out.push_back({"herk", true, [=](P& p) { herk<B, T>(p.q, p.mat(p.a), p.mat(p.c), Real<T>(1), Real<T>(0.5), L, N); }});
-        out.push_back({"her2k", true,
-                       [=](P& p) { her2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Real<T>(0.5), L, N); }});
-    } else {
-        out.push_back({"symm", true,
-                       [=](P& p) { symm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
-        out.push_back({"syrk", true, [=](P& p) { syrk<B, T>(p.q, p.mat(p.a), p.mat(p.c), one, half, L, N); }});
-        out.push_back({"syr2k", true,
-                       [=](P& p) { syr2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N); }});
     }
     return out;
 }
@@ -758,6 +774,52 @@ TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
                     const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
                     EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
                         << "C item " << b << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
+                }
+            }
+        }
+    }
+}
+
+// The level-3 ops and spmm run a masked batch natively (spmm's direct on the host backend too),
+// pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
+// ones the unmasked call's, every other operand unwritten.
+TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& e : level3_entries<T, B>()) {
+        if (B == Backend::NETLIB && e.name != "spmm") continue;
+        SCOPED_TRACE(e.name);
+        // Native pins (gemm's for the families over it): Auto may give the unmasked call the vendor.
+        const select::ScopedPin<std::monostate> pin(e.name, "native", select::StrictPin{});
+        const select::ScopedPin<std::monostate> gemm_pin("gemm", "native", select::StrictPin{});
+        const std::string written = e.name == "trsm" ? "B" : "C";
+        Pool<T> plain(q, {}, this->ws());
+        e.call(plain);
+        q.wait();
+        const auto want = plain.snapshot();
+        for (int only = -1; only < plain.views; ++only) {  // trsm, syrk and herk take two views
+            SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+            Pool<T> p(q, mask.span(), this->ws(), only);
+            const auto before = p.snapshot();
+            ASSERT_NO_THROW({
+                e.call(p);
+                q.wait();
+            });
+            const auto after = p.snapshot();
+            for (std::size_t i = 0; i < before.size(); ++i) {
+                const std::string name = std::get<0>(p.buffers()[i]);
+                if (name != written) {
+                    EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << name;
+                    continue;
+                }
+                for (int b = 0; b < kBatch; ++b) {
+                    const std::size_t off = std::size_t(b) * kStride * sizeof(T), len = kStride * sizeof(T);
+                    const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
+                    EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
+                        << name << " item " << b
+                        << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
                 }
             }
         }
