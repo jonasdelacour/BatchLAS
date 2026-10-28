@@ -72,7 +72,8 @@ Event syevx_direct(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& V,
                    const SyevxParams<T>& params,
                    Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("syevx_direct", A, V);
+    // Honours the mask: the copy, the public syev and the select kernel all skip an inactive item.
+    const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct", A, V);
     using float_type = typename base_type<T>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {
@@ -113,7 +114,8 @@ Event syevx_direct(Queue& ctx,
         auto a_copy_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch_size));
         auto lambdas = pool.allocate<float_type>(ctx, static_cast<size_t>(n * batch_size));
 
-        auto A_copy = packed_copy_view<T>(a_copy_data.data(), n, batch_size, a_copy_ptrs.data());
+        auto A_copy = packed_copy_view<T>(a_copy_data.data(), n, batch_size, a_copy_ptrs.data())
+                          .with_batch_mask(mask);
 
         // syev overwrites its input; syevx must leave A intact.
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
@@ -150,6 +152,8 @@ Event syevx_direct(Queue& ctx,
                                      ? std::min<int64_t>(static_cast<int64_t>(neigs), V.cols())
                                      : 0;
         int32_t* m_ptr = m.empty() ? nullptr : m.data();
+        const std::uint8_t* mk = ::batchlas::detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;
 
         ctx->submit([&](sycl::handler& h) {
             // first index of the block, and its true (untruncated) size.
@@ -162,6 +166,7 @@ Event syevx_direct(Queue& ctx,
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
                     auto cta = item.get_group();
+                    if (masked && !mk[bid]) return;  // I1: uniform per work-group, before the barrier
 
                     const auto* lam = lam_ptr + bid * n;
 
@@ -239,7 +244,7 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         return 0;
     } else {
         // Range-independent by construction: sized on n and batch alone.
-        (void)W; (void)V; (void)params; (void)neigs;
+        (void)W; (void)params; (void)neigs;
         const int64_t n = A.rows();
         const int64_t batch_size = A.batch_size();
 
@@ -248,7 +253,9 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         work_size += BumpAllocator::allocation_size<T*>(ctx, static_cast<size_t>(batch_size));
         work_size += BumpAllocator::allocation_size<float_type>(ctx, static_cast<size_t>(n * batch_size));
 
-        auto A_copy = packed_copy_view<T>(nullptr, n, batch_size, nullptr);
+        // The masked view picks the masked syev family; only the mask's presence matters.
+        const auto mask = ::batchlas::detail::call_mask("syevx_direct_buffer_size", A, V);
+        auto A_copy = packed_copy_view<T>(nullptr, n, batch_size, nullptr).with_batch_mask(mask);
         work_size += BumpAllocator::allocation_size<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, Span<float_type>(), jobz, Uplo::Lower));
 
