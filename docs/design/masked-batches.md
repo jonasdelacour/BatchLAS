@@ -199,6 +199,19 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W3a, the tridiagonal stages** (`tests/steqr_mask_tests.cc`, `tridiag_mask_tests.cc`,
+  `stedc_mask_tests.cc`; Mac, acpp Metal float, the acpp CPU queue and NETLIB float and double,
+  2026-10-28): steqr (cta, wg, legacy), stebz, stein, tridiagonal_solver and stedc run a masked
+  batch natively. stedc's deflation maximum at n = 512 decided bit-identical: with only odd items
+  active the back-transform takes the narrow GEMM (16 columns) where the unmasked call takes the
+  full one (512), and Z kept its bits. The mask tests poison the workspace: zeroed, an inactive
+  item's working copy is an empty problem and a dropped steqr guard stores its Z back unchanged.
+  Defeating one guard per build turned red only its own paths: stebz, stein and
+  tridiagonal_solver (their `*EveryPattern` and saturating cases, plus their row in
+  `batch_mask_entries_tests`); steqr cta's `live` fold (the CTA cases and stedc's recursive leaves,
+  Metal only); steqr wg's sweep (every NETLIB steqr case, Metal n = 40, stedc on the CPU queue);
+  steqr_legacy's (NETLIB stedc only); stedc's in-place diagonal edit (the recursive cases); the
+  per-level expanded mask (the level cases, through `info`).
 
 ## Rejected alternatives {#masked-batches-rejected}
 

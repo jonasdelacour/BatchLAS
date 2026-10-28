@@ -102,7 +102,9 @@ struct Problem {
             std::fill_n(Z.data_ptr(), std::size_t(Z.stride()) * s.batch, test_support::poison<T>());
             std::fill_n(info.data(), info.size(), std::int32_t(-7));
         };
+        // Poisoned workspace (a live problem in an inactive item's working copy), as steqr_mask_tests.
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
+            std::memset(ws.data(), 0x3F, ws.size());
             (void)stedc<B, T>(q, dv().with_batch_mask(mask), ev().with_batch_mask(mask), wv().with_batch_mask(mask), ws, s.jobz,
                         params(), Z.view().with_batch_mask(mask), Span<std::int32_t>(info.data(), info.size()));
         };

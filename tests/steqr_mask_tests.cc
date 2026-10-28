@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <string>
 #include <vector>
@@ -109,7 +110,12 @@ struct Problem {
         c.wg_items = s.wg_items;
         c.identical_items = s.identical;
         c.prepare = [this] { prepare(); };
-        c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) { run(m, ws); };
+        // Poisoned workspace: an inactive item's working copy is then a live problem, so a solve
+        // that ignores the mask rotates (and stores) its Z instead of storing it back unchanged.
+        c.call = [this](Span<const std::uint8_t> m, Span<std::byte> ws) {
+            std::memset(ws.data(), 0x3F, ws.size());
+            run(m, ws);
+        };
         c.buffer_size = [this](Span<const std::uint8_t> m) { return buffer(m); };
         c.outputs = [this] {
             std::vector<mc::Output> o{w.output("w"), mc::Output::span<int32_t>("info", {info.data(), info.size()}, 1),
