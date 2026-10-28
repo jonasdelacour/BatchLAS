@@ -21,6 +21,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | --- | --- |
 | @subpage design_matrix_model "Matrix model" | Column-major storage, `ld`/stride/batch, owning matrices vs views, the device-side view. |
 | @subpage design_api_conventions "API conventions" | Option structs vs positional overloads, owning arguments, argument checks, per-item info. |
+| @subpage design_masked_batches "Masked batches" | The per-item batch mask on a view: the kernel contract, the refusal policy, the migration waves and the tests. |
 | @subpage design_workspace "Workspace" | The per-Queue arena, leases, `BumpAllocator` sizing. |
 | @subpage design_error_model "Error model" | Exception hierarchy, convergence reporting. |
 | @subpage design_environment "Environment" | Every `BATCHLAS_*` variable the library reads. |

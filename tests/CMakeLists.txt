@@ -47,6 +47,7 @@ set(TEST_TARGETS
     matrix_tests
     matrix_view_tests
     batch_mask_view_tests
+    masked_contract_tests
     trsm_tests
     potrf_tests
     potrf_candidates_tests
@@ -186,7 +187,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(BATCHLAS_TEST_LABELS_util
     sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests philox_tests
-    mempool_tests matrix_tests matrix_view_tests batch_mask_view_tests minibench_cli_tests
+    mempool_tests matrix_tests matrix_view_tests batch_mask_view_tests masked_contract_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
