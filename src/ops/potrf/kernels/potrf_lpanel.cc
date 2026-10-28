@@ -165,7 +165,8 @@ unsigned potrf_lpanel_debug_launch(Queue& ctx, int n, int batch, int min_blocks_
 namespace {
 
 // Masked: the batch mask folds into `live` (I2), a template so the unmasked instance is the kernel
-// as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768).
+// as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768). The body is
+// instantiated per Masked: shared by both kernels it stayed out of line (float NB = 16, 11% slower).
 template <typename T, int NB, bool Masked>
 Event potrf_lpanel_launch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,

@@ -27,9 +27,7 @@ namespace batchlas::potrf_native {
 // `L >= n` lanes: lane `r` owns row `r` for the whole call, because rp/rS/rA must survive the
 // k loop. `store` is false for a packed group's dead slots, which still run the WHOLE body --
 // the barrier count is work-group uniform -- with only the global stores suppressed.
-// Tag: one instance per kernel (the masked and unmasked launches), so each keeps a single caller
-// and is inlined as before; a shared one stayed out of line for float NB = 16 (90 -> 115 registers).
-template <typename D, typename R, int NB, bool Tag = false>
+template <typename D, typename R, int NB, bool Tag = false>  // Tag: one inlined instance per kernel
 inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               int tid, int L, bool store,
                               D* __restrict sA, int slda,
