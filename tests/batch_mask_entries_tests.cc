@@ -244,17 +244,6 @@ std::vector<Entry<T>> routed_entries() {
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
         {"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }},
-        {"getrf", true, [=](P& p) { getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); }},
-        {"getrs", true,
-         [=](P& p) {
-             if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-             getrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws);
-         }},
-        {"getri", true,
-         [=](P& p) {
-             if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-             getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-         }},
         {"geqrf", true, [=](P& p) { geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); }},
         {"orgqr", true,
          [=](P& p) {
@@ -271,7 +260,6 @@ std::vector<Entry<T>> routed_entries() {
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
         {"gesvd(hermitian)", true,
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan()); }},
-        {"gesv", true, [=](P& p) { gesv<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.pspan(), p.ws, p.ispan()); }},
         {"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }},
         {"potri", true,
          [=](P& p) {
@@ -311,10 +299,20 @@ std::vector<Entry<T>> routed_entries() {
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
     if constexpr (B == Backend::NETLIB)
         for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
+    // getrf, getrs and gesv honour the mask (W2b): tests/getrf_mask_tests.cc and
+    // tests/getrs_mask_tests.cc hold their contract. getri and inv honour it on NETLIB only: on a
+    // device, getri's blocked family waits for trsm and the vendor's strided call refuses.
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
+        out.push_back({"getri", true,
+                       [=](P& p) {
+                           if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
+                           getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
+                       }});
+        out.push_back({"inv", true, [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); }});
+        out.push_back({"inv(owning)", true, [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); }});
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
-                           // blocked writes P into C before its trsm: only getri's own C check stops a masked C.
+                           // blocked writes P into C before its trsm: its can_run refuses a masked A or C.
                            const select::ScopedPin<std::monostate> pin("getri", "blocked", select::StrictPin{});
                            if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
                            getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
@@ -384,11 +382,15 @@ std::vector<Entry<T>> vendor_entries() {
         add("ormqr_vendor", [=](P& p) {
             backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
         });
-        add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
-        add("getrs_vendor", [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
-        add("getri_vendor", [=](P& p) {
-            backend::getri_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-        });
+        // NETLIB's LU host loops honour the mask (W2b, idiom I4); a strided vendor call cannot.
+        if constexpr (B != Backend::NETLIB) {
+            add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
+            add("getrs_vendor",
+                [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
+            add("getri_vendor", [=](P& p) {
+                backend::getri_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
+            });
+        }
     }
     if constexpr (sv::solver_vendor_available<B>) {
         add("potrf_vendor", [=](P& p) { backend::potrf_vendor<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); });
@@ -512,8 +514,6 @@ std::vector<Entry<T>> direct_entries() {
     });
     add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
     add("ortho(M)", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); });
-    add("inv", [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); });
-    add("inv(owning)", [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); });
     add("norm", [=](P& p) { norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.w)); });
     add("norm(owning)", [=](P& p) { (void)norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a)); });
     add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });

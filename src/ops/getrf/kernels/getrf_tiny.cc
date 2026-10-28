@@ -14,6 +14,7 @@
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -85,6 +86,7 @@ struct GetrfTinyBody {
     std::ptrdiff_t strp;
     int* piv_ptr;
     int32_t* info_ptr;
+    const std::uint8_t* mask;          // the batch mask, null when unmasked
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
     BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
@@ -98,8 +100,9 @@ struct GetrfTinyBody {
         const int prob_id = wg_id * kMpw + pidx;
 
         // CLAMP, DO NOT RETURN (as steqr_cta.cc does too): tiny_device.hh's
-        // third invariant -- an early-exited lane still sits in the shuffle mask.
-        const bool live = (prob_id < batch);
+        // third invariant -- an early-exited lane still sits in the shuffle mask. A masked-off
+        // item is dead the same way (I2): it factors an identity pad and stores nothing.
+        const bool live = (prob_id < batch) && (mask == nullptr || mask[prob_id] != 0);
         const int b = live ? prob_id : 0;
         const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
 
@@ -236,7 +239,7 @@ constexpr bool getrf_tiny_slm() {
 
 template <typename T, int N, int NC, int MinBlocks>
 Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
-                        int* piv_ptr, int32_t* info_ptr) {
+                        int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* costs an isnan branch and a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
@@ -256,7 +259,7 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
 
     ctx->submit([&](sycl::handler& h) {
         const Body body{reinterpret_cast<D*>(a_ptr), n, batch, static_cast<std::ptrdiff_t>(ld),
-                        static_cast<std::ptrdiff_t>(stride), piv_ptr, info_ptr,
+                        static_cast<std::ptrdiff_t>(stride), piv_ptr, info_ptr, mask,
                         sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
         batchlas::impl::parallel_for<GetrfTinyKernel<T, N, NC, MinBlocks>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
@@ -289,23 +292,23 @@ constexpr int getrf_tiny_min_blocks() {
 
 template <typename T, int N, int NC>
 Event getrf_tiny_launch_nc(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
-                           int* piv_ptr, int32_t* info_ptr) {
+                           int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     return getrf_tiny_launch<T, N, NC, getrf_tiny_min_blocks<T, N, NC>()>(
-        ctx, a_ptr, ld, stride, n, batch, piv_ptr, info_ptr);
+        ctx, a_ptr, ld, stride, n, batch, piv_ptr, info_ptr, mask);
 }
 
 // Order -> column bucket inside lane bucket N: every even order for the 32-bit types (one
 // instantiation per bucket; the step is the measured cost), the lane count for fp64.
 template <typename T, int N>
 Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
-                           int* piv_ptr, int32_t* info_ptr) {
+                           int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     if constexpr (getrf_tiny_slm<T>() && N >= 16) {
         switch (tn::tiny_col_bucket(n, 2)) {
 #define BATCHLAS_GETRF_TINY_NC(NCC)                                                            \
             case NCC:                                                                          \
                 if constexpr (NCC <= N && NCC > N / 2) {                                       \
                     return getrf_tiny_launch_nc<T, N, NCC>(ctx, a_ptr, ld, stride, n, batch,   \
-                                                           piv_ptr, info_ptr);                 \
+                                                           piv_ptr, info_ptr, mask);           \
                 }                                                                              \
                 break;
             BATCHLAS_GETRF_TINY_NC(10) BATCHLAS_GETRF_TINY_NC(12) BATCHLAS_GETRF_TINY_NC(14)
@@ -317,7 +320,7 @@ Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int 
                 break;
         }
     }
-    return getrf_tiny_launch_nc<T, N, N>(ctx, a_ptr, ld, stride, n, batch, piv_ptr, info_ptr);
+    return getrf_tiny_launch_nc<T, N, N>(ctx, a_ptr, ld, stride, n, batch, piv_ptr, info_ptr, mask);
 }
 
 // An empty OR SHORT `info` span means "not requested". A may carry a null data_ptr().
@@ -400,21 +403,22 @@ Event getrf_tiny_dispatch(Queue& ctx,
     // No zero pre-fill, so this body cannot serve as a blocked-driver panel leaf.
 
     auto piv_i32 = pivots.as_span<int>();
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("getrf_tiny", A));
 
     switch (bucket) {
         case 4:
             return getrf_tiny_launch_mb<T, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
-                                           piv_i32.data(), info.data());
+                                           piv_i32.data(), info.data(), mask);
         case 8:
             return getrf_tiny_launch_mb<T, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
-                                           piv_i32.data(), info.data());
+                                           piv_i32.data(), info.data(), mask);
         case 16:
             return getrf_tiny_launch_mb<T, 16>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
-                                            piv_i32.data(), info.data());
+                                            piv_i32.data(), info.data(), mask);
         case 32:
             if constexpr (tiny_cap<T>() >= 32) {
                 return getrf_tiny_launch_mb<T, 32>(ctx, A.data_ptr(), A.ld(), A.stride(), n,
-                                                batch, piv_i32.data(), info.data());
+                                                batch, piv_i32.data(), info.data(), mask);
             }
             break;
         default:

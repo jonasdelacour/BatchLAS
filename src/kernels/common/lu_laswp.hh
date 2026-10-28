@@ -27,11 +27,12 @@ template <typename Tag, typename T> class LuLaswpKernel;
 // `base`: forward gives P B (?LASWP incx = +1), !forward gives P^T B (incx = -1).
 // Values are GLOBAL 1-BASED rows (getrf_native.hh's pivot contract), so `base`
 // must point at row 0, offset only in COLUMN; `piv_stride` is the order of A.
+// `mask` (null: unmasked) is the batch mask from item 0 of `base`; an inactive item is skipped.
 template <typename Tag, typename T>
 Event lu_laswp_launch(Queue& ctx,
                       T* base, int ld, int stride, int ncols, int batch,
                       const int* piv, int piv_stride,
-                      int k0, int k1, bool forward) {
+                      int k0, int k1, bool forward, const std::uint8_t* mask = nullptr) {
     if (ncols <= 0 || batch <= 0 || k1 <= k0) return ctx.get_event();
 
     // Re-type std::complex at the pointer boundary only; device_scalar.hh's rule.
@@ -47,6 +48,7 @@ Event lu_laswp_launch(Queue& ctx,
                            static_cast<std::size_t>(ncols)),
             [=](sycl::item<2> it) {
                 const int b = static_cast<int>(it.get_id(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int c = static_cast<int>(it.get_id(1));
 
                 D* const col = bp + static_cast<std::ptrdiff_t>(b) * stride +
@@ -107,7 +109,8 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                                    T* base, int ld, int stride, int batch,
                                    const int* piv, int piv_stride,
                                    int n, int nb,
-                                   std::size_t slm_budget, int max_wg) {
+                                   std::size_t slm_budget, int max_wg,
+                                   const std::uint8_t* mask = nullptr) {
     if (batch <= 0 || n <= 0 || nb <= 0) return true;
 
     const int P = (n + nb - 1) / nb;
@@ -176,6 +179,7 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                 const int k0 = c0 + ib;                   // = j0_{r+1}
                 const int R = n - k0;                     // rows AND transpositions
                 if (R <= 0 || ib <= 0) return;
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
 
                 int* const idxs = &ints[0];
                 int* const ips = &ints[static_cast<std::size_t>(rmax)];
@@ -247,7 +251,8 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                                   T* base, int ld, int stride, int batch,
                                   const int* piv, int piv_stride,
                                   int k0, int L, int R, int c_begin, int ncols,
-                                  std::size_t slm_budget, int max_wg) {
+                                  std::size_t slm_budget, int max_wg,
+                                  const std::uint8_t* mask = nullptr) {
     if (batch <= 0 || ncols <= 0 || L <= 0 || R <= 0) return true;
 
     using DM = sycl_device::DevMap<T>;
@@ -287,6 +292,7 @@ bool lu_laswp_right_gather_launch(Queue& ctx,
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const int t = gid / batch;
                 const int b = gid - t * batch;
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const int cb = c_begin + t * Cs;
                 const int cw = ((c_begin + ncols - cb) < Cs) ? (c_begin + ncols - cb) : Cs;
 

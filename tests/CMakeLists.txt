@@ -41,6 +41,8 @@ set(TEST_TARGETS
     linalg_layer_tests
     gemm_tests
     gemm_mask_tests
+    getrf_mask_tests
+    getrs_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -194,7 +196,7 @@ set(BATCHLAS_TEST_LABELS_util
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemm_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
+    device_blas_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests

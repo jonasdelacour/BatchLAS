@@ -6,6 +6,8 @@
 
 #include <src/ops/getrf/getrf_native.hh>
 #include <src/kernels/common/lu_laswp.hh>
+#include <src/kernels/common/info_span.hh>
+#include <src/util/batch_mask.hh>
 
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -279,25 +281,32 @@ Event getrf_blocked_dispatch(Queue& ctx,
 
     const int ld = A.ld();
     const int stride = A.stride();
+    const auto mask = batchlas::detail::call_mask("getrf_blocked", A);
 
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int* const piv_ptr = piv_i32.data() + static_cast<std::ptrdiff_t>(b0) * mn;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
+        // This part's slice of the batch mask: every launch below and every sub-view skips its
+        // inactive items, whose matrix, pivots and info stay untouched.
+        const Span<const std::uint8_t> pmask =
+            mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
+        const std::uint8_t* const pm = batchlas::detail::mask_ptr(pmask);
 
         // The fill belongs HERE, not after the first panel: getf2_panel_device READS
         // info[b], so this is a real read-after-write. Unguarded, the first panel reads
         // the caller's garbage back and reports a false singularity.
-        ctx->fill(info_ptr, int32_t(0), static_cast<std::size_t>(cb));
+        batchlas::detail::info_clear(ctx, Span<int32_t>(info_ptr, static_cast<std::size_t>(cb)), cb, pmask);
         if (!ctx.in_order()) ctx.wait();
 
         // The explicit 6-arg constructor, never operator()(Slice, Slice), which would
         // propagate the parent's pointer array; each role passes its own, never nullptr.
+        // A raw-pointer view starts unmasked, so the part's mask slice is re-attached.
         auto sub = [&](int r0, int nr, int c0, int nc, Span<T*> ptrs) {
             return MatrixView<T, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-                nr, nc, ld, stride, cb, ptrs.data());
+                nr, nc, ld, stride, cb, ptrs.data()).with_batch_mask(pmask);
         };
 
         for (int j0 = 0; j0 < mn; j0 += nb) {
@@ -313,10 +322,10 @@ Event getrf_blocked_dispatch(Queue& ctx,
             T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
             if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
                 (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
-                                                   piv_ptr, mn, j0, info_ptr);
+                                                   piv_ptr, mn, j0, info_ptr, pm);
             } else {
                 (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, cb,
-                                               piv_ptr, mn, j0, info_ptr, nullptr);
+                                               piv_ptr, mn, j0, info_ptr, nullptr, pm);
             }
 
             // A caller may build an out-of-order queue, so every dependent edge guards itself.
@@ -327,7 +336,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
             if (mode == LeftLaswp::InLoop && j0 > 0) {
                 (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                     ctx, a_ptr, ld, stride, /*ncols=*/j0, cb,
-                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true, pm);
                 if (!ctx.in_order()) ctx.wait();
             }
 
@@ -338,12 +347,12 @@ Event getrf_blocked_dispatch(Queue& ctx,
                 lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
                     ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
                     /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
-                    slm_budget, max_wg);
+                    slm_budget, max_wg, pm);
             if (!gathered) {
                 (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                     ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
                     /*ncols=*/n2, cb,
-                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+                    piv_ptr, /*piv_stride=*/mn, /*k0=*/j0, /*k1=*/j2, /*forward=*/true, pm);
             }
             if (!ctx.in_order()) ctx.wait();
 
@@ -375,7 +384,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
             if (mode == LeftLaswp::DeferGather) {
                 done = lu_native::lu_laswp_deferred_left_launch<GetrfBlockedLaswpTag, T>(
                     ctx, a_ptr, ld, stride, cb, piv_ptr, /*piv_stride=*/mn,
-                    mn, nb, slm_budget, max_wg);
+                    mn, nb, slm_budget, max_wg, pm);
                 if (done && !ctx.in_order()) ctx.wait();
             }
             if (!done) {
@@ -387,7 +396,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
                     (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                         ctx, a_ptr + static_cast<std::ptrdiff_t>(c0) * ld, ld, stride,
                         /*ncols=*/ib, cb,
-                        piv_ptr, /*piv_stride=*/mn, /*k0=*/k0, /*k1=*/mn, /*forward=*/true);
+                        piv_ptr, /*piv_stride=*/mn, /*k0=*/k0, /*k1=*/mn, /*forward=*/true, pm);
                     if (!ctx.in_order()) ctx.wait();
                 }
             }

@@ -1150,7 +1150,8 @@ namespace batchlas{
                 Transpose transA,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
+        // I4: the host loop reads the (possibly device-only, host-addressable here) mask itself.
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("getrs_vendor", A, B));
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto B_view = B;
@@ -1171,6 +1172,7 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrs", [=] {
             int nrhs = B_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrs, LAPACKE_dgetrs, LAPACKE_cgetrs, LAPACKE_zgetrs,
                     Layout::ColMajor,
@@ -1212,7 +1214,8 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
+        // I4: the host loop and the pivot copy skip an inactive item (matrix, pivots, info untouched).
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("getrf_vendor", A));
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto piv = pivots;
@@ -1227,6 +1230,7 @@ namespace batchlas{
 
         Event getrf_event = ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
             for (int i = 0; i < batch; ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
                     Layout::ColMajor,
@@ -1245,6 +1249,7 @@ namespace batchlas{
             auto piv_in = piv_i32;
             h.depends_on(static_cast<sycl::event>(*ctx.get_event()));
             h.parallel_for(sycl::range<1>(static_cast<size_t>(mn * batch)), [=](sycl::id<1> idx) {
+                if (mask != nullptr && mask[static_cast<int>(idx[0]) / mn] == 0) return;
                 piv_out[static_cast<int>(idx[0])] = static_cast<int64_t>(piv_in[static_cast<int>(idx[0])]);
             });
         });
@@ -1276,10 +1281,12 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
+        // I4: the copy and the host loop skip an inactive item, whose C and info stay untouched.
+        const auto mask_span = ::batchlas::detail::call_mask("getri_vendor", A, C);
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
         BumpAllocator pool(workspace);
-        auto A_view = A;
-        auto C_view = C;
+        auto A_view = A.with_batch_mask(mask_span);
+        auto C_view = C.with_batch_mask(mask_span);
         auto piv = pivots;
         const int n = A_view.rows();
         const int batch = A_view.batch_size();
@@ -1293,6 +1300,7 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
             auto piv_in = piv.as_span<int64_t>();
             for (int b = 0; b < batch; ++b) {
+                if (mask != nullptr && mask[b] == 0) continue;
                 auto Cb = C_view[b];
                 for (int i = 0; i < n; ++i) {
                     piv_i32[b * n + i] = static_cast<int>(piv_in[b * n + i]);

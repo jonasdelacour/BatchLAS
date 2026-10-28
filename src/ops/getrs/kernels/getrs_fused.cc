@@ -12,6 +12,7 @@
 
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/kernel_attrs.hh>
 
@@ -219,7 +220,7 @@ Event fused_launch_notrans(Queue& ctx,
                            const T* A, int lda, int strideA,
                            T* B, int ldb, int strideB,
                            const int* piv, int pstride,
-                           int n, int nrhs, int batch, int wg, int nb) {
+                           int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
     using DM = DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -241,6 +242,7 @@ Event fused_launch_notrans(Queue& ctx,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
@@ -413,7 +415,8 @@ Event fused_launch_trans(Queue& ctx,
                          const T* A, int lda, int strideA,
                          T* B, int ldb, int strideB,
                          const int* piv, int pstride,
-                         int n, int nrhs, int batch, int wg, int nb, bool conj) {
+                         int n, int nrhs, int batch, int wg, int nb, bool conj,
+                         const std::uint8_t* mask) {
     using DM = DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -436,6 +439,7 @@ Event fused_launch_trans(Queue& ctx,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
@@ -838,13 +842,14 @@ template <typename T>
 Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
                         const int* piv, int pstride,
-                        int n, int nrhs, int batch, int wg, int nb) {
+                        int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
     #define BATCHLAS_GETRS_FUSED_ARM(NRV)                                            \
         if (trans) return fused_launch_trans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,    \
                                                      piv, pstride, n, nrhs, batch,   \
-                                                     wg, nb, conj);                  \
+                                                     wg, nb, conj, mask);            \
         return fused_launch_notrans<T, NRV>(ctx, A, lda, sA, B, ldb, sB,             \
-                                            piv, pstride, n, nrhs, batch, wg, nb);
+                                            piv, pstride, n, nrhs, batch, wg, nb,    \
+                                            mask);
     if (nrhs <= 1) { BATCHLAS_GETRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_GETRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_GETRS_FUSED_ARM(4) }
@@ -979,7 +984,8 @@ Event getrs_fused_dispatch(Queue& ctx,
         A.data_ptr(), A.ld(), A.stride(),
         B.data_ptr(), B.ld(), B.stride(),
         piv_i32.data(), /*pstride=*/n,
-        n, nrhs, batch, wg, nb);
+        n, nrhs, batch, wg, nb,
+        batchlas::detail::mask_ptr(batchlas::detail::call_mask("getrs_fused", A, B)));
 }
 
 // src/ops/posv/posv.cc's can_run(Cta) mirrors these checks; keep the two in step.

@@ -120,7 +120,9 @@ BATCHLAS_INTERNAL_API bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_
 // THE TWO PANEL LEAVES, one contract: `piv_stride` is the matrix ORDER, `piv_base` the
 // panel's first global row, `info_ptr` READ as well as written (zero it before panel 0).
 // The register leaf adds a WIDTH ceiling `nb` (a short final panel arrives with n < nb)
-// and a REGISTER height ceiling `max_m`; 0 = absent. evidence: docs/perf/lu.md#the-register-panel-leaf
+// and a REGISTER height ceiling `max_m`; 0 = absent. `mask` is the batch mask from the first
+// item (null: unmasked); an inactive item's panel, pivots and info are left untouched.
+// evidence: docs/perf/lu.md#the-register-panel-leaf
 template <typename T>
 BATCHLAS_INTERNAL_API int getrf_panel_reg_nb();
 
@@ -138,7 +140,8 @@ BATCHLAS_INTERNAL_API Event getrf_panel_reg_factorize(Queue& ctx,
                                                       T* a_ptr, int ld, int stride,
                                                       int m, int n, int batch,
                                                       int* piv_ptr, int piv_stride,
-                                                      int piv_base, int32_t* info_ptr);
+                                                      int piv_base, int32_t* info_ptr,
+                                                      const std::uint8_t* mask = nullptr);
 
 template <typename T>
 BATCHLAS_INTERNAL_API Event getrf_panel_factorize(Queue& ctx,
@@ -146,6 +149,7 @@ BATCHLAS_INTERNAL_API Event getrf_panel_factorize(Queue& ctx,
                                                   int m, int n, int batch,
                                                   int* piv_ptr, int piv_stride, int piv_base,
                                                   int32_t* info_ptr,
-                                                  bool* used_resident_out);
+                                                  bool* used_resident_out,
+                                                  const std::uint8_t* mask = nullptr);
 
 }  // namespace batchlas::sycl_getrf

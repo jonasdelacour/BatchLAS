@@ -37,9 +37,10 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // re-check exactly this at their entry. A non-conforming pair (A not square, rows or batch
 // disagreeing) is left to the vendor, as before. NETLIB writes true int64 pivots where the
 // natives read packed 1-based int32, a silent wrong answer, so no native runs under it.
+// Masked: cta and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
 template <Backend B, typename T>
 bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
-    if (detail::any_batch_mask(A, Bm)) return false;  // no family honours a batch mask yet
+    const bool masked = detail::any_batch_mask(A, Bm);
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
     const bool conforming = A.cols() == n && Bm.rows() == n && Bm.batch_size() == A.batch_size();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && conforming && !A.is_heterogeneous() &&
@@ -52,8 +53,11 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
                    nrhs <= sycl_getrs::kGetrsFusedMaxRhs &&
                    static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
         },
-        [&](Blocked) { return native && sycl_getrs::getrs_blocked_available<T>(); },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !Bm.is_heterogeneous(); },
+        // mask: lift after trsm (the interchange kernels already honour it)
+        [&](Blocked) { return native && !masked && sycl_getrs::getrs_blocked_available<T>(); },
+        [&](Vendor) {
+            return d.has_vendor && !A.is_heterogeneous() && !Bm.is_heterogeneous() && (!masked || B == Backend::NETLIB);
+        },
     }, c);
 }
 
@@ -97,7 +101,11 @@ template <Backend Back, typename T>
 Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             Transpose transA, Span<int64_t> pivots, Span<std::byte> workspace) {
     getrs_validate_params<T>(A, B);
-    (void)detail::call_mask("getrs", A, B);
+    // Both operands carry the call's mask whichever brought it, so the solves' children see it.
+    const auto mask = detail::call_mask("getrs", A, B);
+    const bool adopt = !mask.empty() && A.batch_size() == B.batch_size();
+    const auto Am = adopt ? A.with_batch_mask(mask) : A;
+    const auto Bmk = adopt ? B.with_batch_mask(mask) : B;
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = nrhs, and transA (the field separating rows).
@@ -107,7 +115,7 @@ Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     return select::run<Back, T>(
         ops::getrs::spec, ctx, key, ops::getrs::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::getrs::can_run<Back, T>(c, d, A, B); }, shape, key,
-        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, A, B, transA, pivots, workspace); });
+        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, Am, Bmk, transA, pivots, workspace); });
 }
 
 template <Backend Back, typename T>

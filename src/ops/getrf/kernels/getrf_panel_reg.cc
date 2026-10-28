@@ -120,7 +120,7 @@ template <typename T, int NB>
 Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
                              int m, int ncols, int batch,
                              int* piv_ptr, int piv_stride, int piv_base,
-                             int32_t* info_ptr, int wg) {
+                             int32_t* info_ptr, int wg, const std::uint8_t* mask) {
     // std::complex is re-typed HERE, at the pointer boundary: its Annex-G operator* costs
     // an isnan branch and a libcall in device code.
     using DM = sycl_device::DevMap<T>;
@@ -146,6 +146,7 @@ Event getrf_panel_reg_launch(Queue& ctx, T* a_ptr, int ld, int stride,
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
                 gn::getf2_panel_reg_device<D, NB>(
                     it, ap + static_cast<std::ptrdiff_t>(b) * strp, ld,
                     m, ncols, kmax,
@@ -201,7 +202,7 @@ Event getrf_panel_reg_factorize(Queue& ctx,
                                 T* a_ptr, int ld, int stride,
                                 int m, int n, int batch,
                                 int* piv_ptr, int piv_stride, int piv_base,
-                                int32_t* info_ptr) {
+                                int32_t* info_ptr, const std::uint8_t* mask) {
     const auto dev = ctx.device();
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_panel_reg: degenerate extents");
@@ -233,7 +234,7 @@ Event getrf_panel_reg_factorize(Queue& ctx,
         constexpr int NB = 32;
         return getrf_panel_reg_launch<T, NB>(ctx, a_ptr, ld, stride, m, n, batch,
                                              piv_ptr, piv_stride, piv_base, info_ptr,
-                                             panel_reg_wg(m));
+                                             panel_reg_wg(m), mask);
     } else {
         throw batchlas::unsupported(
             "getrf_panel_reg: this scalar type has no register-resident panel leaf");
@@ -247,7 +248,7 @@ Event getrf_panel_reg_factorize(Queue& ctx,
     template bool getrf_panel_reg_fits<T>(int, int, int);                                   \
     template unsigned getrf_panel_reg_debug_launch<T>(Queue&, int, int);                    \
     template Event getrf_panel_reg_factorize<T>(Queue&, T*, int, int, int, int, int, int*,  \
-                                                int, int, int32_t*);
+                                                int, int, int32_t*, const std::uint8_t*);
 
 BATCHLAS_GETRF_PANEL_REG_INSTANTIATE(float)
 BATCHLAS_GETRF_PANEL_REG_INSTANTIATE(double)
