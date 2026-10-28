@@ -231,6 +231,7 @@ std::vector<Entry<T>> gemm_entries() {
 }
 
 // The routed ops: the public op entries, each refused by every family's can_run term.
+// gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 template <typename T, Backend B>
 std::vector<Entry<T>> routed_entries() {
     using P = Pool<T>;
@@ -239,7 +240,6 @@ std::vector<Entry<T>> routed_entries() {
     const auto N = Transpose::NoTrans;
     const auto all = SvdVectors::All;
     std::vector<Entry<T>> out = {
-        {"gemv", true, [=](P& p) { gemv<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp), one, half, N); }},
         {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},

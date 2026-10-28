@@ -3,7 +3,7 @@
 
 // Native batched GEMV. No is_gpu gate: Direct must build for native_cpu, so keep
 // this TU out of NO_CPU_TARGETS. evidence: docs/perf/gemv.md#the-five-kernel-bodies
-// m == 0, n == 0 or (alpha == 0 && beta == 1) leaves Y untouched; A unread at alpha == 0.
+// m == 0, n == 0, (alpha == 0 && beta == 1) or a masked-off item leaves y untouched; A unread at alpha == 0.
 
 #include <src/util/internal-api.hh>
 #include <batchlas/blas/enums.hh>
