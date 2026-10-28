@@ -22,6 +22,7 @@
 
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/sygvd.hh>
 
 #include <src/backends/gemm_heterogeneous.hh>
 #include <src/backends/host_blas_health.hh>
@@ -781,6 +782,58 @@ namespace batchlas{
     } // namespace backend
 
     namespace backend {
+
+    // LAPACKE ?sygst/?hegst and ?sygvd/?hegvd per item: sygst's and sygvd's vendor families on the host.
+    // evidence: docs/perf/sygvd.md#sygvd-routes
+    template <Backend B, typename T>
+    Event sygst_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, int itype, Uplo uplo,
+                       Span<std::byte> /*workspace*/) {
+        auto a = A;
+        auto b = Bm;
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygst", [=] {
+            for (int i = 0; i < a.batch_size(); ++i)
+                (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssygst, LAPACKE_dsygst, LAPACKE_chegst, LAPACKE_zhegst, Layout::ColMajor, itype, uplo,
+                    a.rows(), a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld());
+        });
+    }
+
+    template <Backend B, typename T>
+    Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, Span<typename base_type<T>::type> w, int itype,
+                       JobType jobz, Uplo uplo, Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
+        auto a = A;
+        auto b = Bm;
+        auto eig = w;
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygvd", [=] {
+            const int n = a.rows();
+            for (int i = 0; i < a.batch_size(); ++i) {
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssygvd, LAPACKE_dsygvd, LAPACKE_chegvd, LAPACKE_zhegvd, Layout::ColMajor, itype, jobz,
+                    uplo, n, a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld(),
+                    base_float_ptr_convert(eig.subspan(static_cast<size_t>(i) * n).data()));
+                if (want_info) info[i] = static_cast<int32_t>(st);
+            }
+        });
+    }
+
+    template <Backend B, typename T>
+    size_t sygvd_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*Bm*/,
+                                    Span<typename base_type<T>::type> /*w*/, int /*itype*/, JobType /*jobz*/,
+                                    Uplo /*uplo*/) {
+        return 0;
+    }
+
+    #define NETLIB_SYGVD_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygst_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygvd_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygvd_vendor_buffer_size)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYGVD_OPS, Backend::NETLIB)
+    #undef NETLIB_SYGVD_OPS
 
     template <Backend B, typename T>
     Event potrf_vendor(Queue& ctx,

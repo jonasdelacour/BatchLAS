@@ -191,6 +191,11 @@ target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc ops/symm/kernels/symm_mirror.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sygst/sygst.cc ops/sygvd/sygvd.cc)
+# The sygst Blocked/TwoSided and sygvd Compose drivers: host code over public routed ops, so they sit
+# with the op .cc they came from (no device symbol; the diagonal kernel lives in src/ops/CMakeLists.txt).
+target_sources(batchlas_selection_obj PRIVATE ops/sygst/kernels/sygst_blocked.cc ops/sygst/kernels/sygst_twosided.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sygvd/kernels/sygvd_compose.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 

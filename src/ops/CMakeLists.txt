@@ -140,6 +140,10 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     potri/kernels/potri_native.cc
     potri/kernels/potri_cta.cc
     lascl/lascl.cc
+    # sygvd: two element-wise kernels (failed-item identity, info merge); no shared device symbol.
+    sygvd/kernels/sygvd_native.cc
+    # sygst blocked's diagonal-block kernel; self-contained, its BLAS-3 children are public ops.
+    sygst/kernels/sygst_diag.cc
 )
 
 # The unit of SYCL *device* linking is the shared library, not the object file:

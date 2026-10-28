@@ -32,6 +32,8 @@
 #include <src/ops/hemm/choice.hh>
 #include <src/ops/herk/choice.hh>
 #include <src/ops/her2k/choice.hh>
+#include <src/ops/sygst/choice.hh>
+#include <src/ops/sygvd/choice.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -209,6 +211,9 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
+    // sygst and sygvd: fieldless families, one list for every dtype.
+    if (op == "sygst") return spellings(batchlas::ops::sygst::candidates<float>());
+    if (op == "sygvd") return spellings(batchlas::ops::sygvd::candidates<float>());
     // complex-only: their real spellings are symm, syrk and syr2k.
     if (op == "hemm" && dtype[0] == 'c') return spellings(batchlas::ops::hemm::candidates<std::complex<float>>());
     if (op == "herk" && dtype[0] == 'c') return spellings(batchlas::ops::herk::candidates<std::complex<float>>());
@@ -317,6 +322,8 @@ std::string key_spec(const std::string& op) {
     if (op == "syrk") join(batchlas::ops::syrk::key_names);
     if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    if (op == "sygst") join(batchlas::ops::sygst::key_names);
+    if (op == "sygvd") join(batchlas::ops::sygvd::key_names);
     if (op == "hemm") join(batchlas::ops::hemm::key_names);
     if (op == "herk") join(batchlas::ops::herk::key_names);
     if (op == "her2k") join(batchlas::ops::her2k::key_names);
@@ -469,7 +476,7 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
                            "getri", "potri", "potrs", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
-                           "herk", "her2k"})
+                           "herk", "her2k", "sygst", "sygvd"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
@@ -787,6 +794,74 @@ TEST(TunedTables, PotriTablesCoverTheChoiceGridAndRankCtaOnlyWhereItFits) {
         }
 }
 
+// sygvd is transcribed on both devices (no timing): one row per grid cell and jobz, compose first
+// everywhere. A retune replaces rows with timed ones and this test goes with them.
+TEST(TunedTables, SygvdTranscribedTablesHoldTheChoiceGridComposeFirst) {
+    namespace sygvd = batchlas::ops::sygvd;
+    std::set<std::string> want_vd;
+    for (const char* j : {"N", "V"})
+        for (int n : sygvd::grid_n)
+            for (int b : sygvd::grid_batch) want_vd.insert(std::string(j) + " " + std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            std::set<std::string> got_vd;
+            for (const auto& row : embedded("sygvd", dt, dev).rows) {
+                got_vd.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
+                EXPECT_EQ(row.ranked.front().spelling, "compose") << dt << " " << dev << " " << row.keys[1];
+            }
+            EXPECT_EQ(got_vd, want_vd) << dt << " " << dev;
+        }
+}
+
+// sygst (docs/perf/sygvd.md#sygst-measured): sm_89 float and cfloat are timed at every itype x uplo x
+// grid cell of at most 2 GiB of operands; every other dtype and device is transcribed from those rows (double from float,
+// cdouble from cfloat, sm_120 from sm_89's), so a transcribed row at a measured key ranks exactly as the
+// measured one. Every grid cell has a transcribed row; on the timed tables the nearest timed row decides.
+TEST(TunedTables, SygstTablesAreMeasuredOnSm89AndTranscribedFromIt) {
+    namespace sygst = batchlas::ops::sygst;
+    using Ranking = std::vector<std::string>;
+    auto ranking = [](const sel::TableRow& r) {
+        Ranking s;
+        for (const auto& e : r.ranked) s.push_back(e.spelling);
+        return s;
+    };
+    auto join = [](const sel::TableRow& r) { return r.keys[0] + " " + r.keys[1] + " " + r.keys[2] + " " + r.keys[3]; };
+    std::vector<std::pair<std::string, double>> cells;  // "itype uplo n batch", n^2 batch
+    for (const char* it : {"1", "2", "3"})
+        for (const char* ul : {"L", "U"})
+            for (int n : sygst::grid_n)
+                for (int b : sygst::grid_batch)
+                    cells.emplace_back(std::string(it) + " " + ul + " " + std::to_string(n) + " " + std::to_string(b),
+                                       double(n) * n * b);
+    std::map<std::string, std::map<std::string, Ranking>> measured;  // dtype -> key -> ranking
+    for (const char* dt : {"float", "cfloat"}) {
+        const double elem = dt[0] == 'c' ? 8.0 : 4.0;
+        std::set<std::string> timed;
+        for (const auto& row : embedded("sygst", dt, "sm_89").rows)
+            if (row.timed) {
+                timed.insert(join(row));
+                measured[dt][join(row)] = ranking(row);
+            }
+        for (const auto& [key, n2b] : cells)
+            if (4.0 * n2b * elem <= 2.0 * (1u << 30)) EXPECT_TRUE(timed.count(key)) << dt << " " << key;
+    }
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const std::string from = dt[0] == 'c' ? "cfloat" : "float";
+            std::set<std::string> got;
+            for (const auto& row : embedded("sygst", dt, dev).rows) {
+                const std::string key = join(row);
+                got.insert(key);
+                if (row.timed) {
+                    EXPECT_TRUE(std::string(dev) == "sm_89" && from == dt) << dt << " " << dev << " " << key;
+                    continue;
+                }
+                if (measured[from].count(key)) EXPECT_EQ(ranking(row), measured[from][key]) << dt << " " << dev << " " << key;
+            }
+            if (std::string(dev) == "sm_89" && from == dt) continue;  // past the cap the nearest timed row decides
+            for (const auto& c : cells) EXPECT_TRUE(got.count(c.first)) << dt << " " << dev << " " << c.first;
+        }
+}
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
 TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gesv = batchlas::ops::gesv;

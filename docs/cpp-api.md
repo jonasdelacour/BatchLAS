@@ -186,6 +186,9 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `syev_align(ctx, V_old, W, V, tol, ws)` | per cluster of `W` (gap ≤ `tol`·max\|W\|): `V_c := V_c·R`, the Procrustes rotation onto `V_old`; then every `(V_oldᴴV)ᵢᵢ ≥ 0` | `V` |
 | `syfn(ctx, A, F, fn, uplo, ws, info)` | `F := V·f(Λ)·Vᴴ` from `syev` of the `uplo` triangle; `fn` = `SyfnFunction<R>::inv_sqrt()`, `sqrt()`, `inverse()`, `exp()` or `with_weights(w)`; out-of-domain eigenvalues weigh 0 and are counted in `info` (@ref perf_syfn) | **`F`**, in full and exactly Hermitian; `A` read-only, `F` may be `A` |
 | `syfn_from_eigen(ctx, V, W, F, fn, ws, info)` | `F := V·diag(f(W))·Vᴴ` from given pairs, `V` n×m (e.g. occupied orbitals); the density-matrix step | **`F`**, in full; its storage span must not overlap `V`'s |
+| `sygst(ctx, A, B, itype, uplo, ws)` | `A := L⁻¹·A·L⁻ᴴ` / `U⁻ᴴ·A·U⁻¹` (itype 1) or `Lᴴ·A·L` / `U·A·Uᴴ` (2, 3) from `potrf`'s factor in `B` (LAPACK `?sygst`, @ref perf_sygvd) | `uplo` triangle of `A`; `B` read-only |
+| `sygvd(ctx, A, B, W, itype, jobz, uplo, ws, info)` | `A·x = λ·B·x` (itype 1), `A·B·x = λ·x` (2), `B·A·x = λ·x` (3), B positive definite (LAPACK `?sygvd`; `hegvd` is the same call) | `W` ascending; `A` gets eigenvectors (`Xᴴ·B·X = I`; itype 3 `Xᴴ·B⁻¹·X = I`); `B` gets its Cholesky factor; `info` `n + i` for a non-positive-definite `B` |
+| `sygvd_factored(ctx, A, F, W, itype, jobz, uplo, ws, info)` | `sygvd` with `B` already factored by `potrf` (factor once, solve many times) | as `sygvd`; `F` read-only |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` and `S` are the **real**
 counterpart of `T` (n·batch and min(m,n)·batch).
@@ -587,11 +590,12 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Eleven routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+Twelve routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
 LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv` and `posv`
 report factorisation status, `potri` a zero factor diagonal; `syev`, `syevx`, `gesvd`, `steqr`,
-`stedc` report convergence status. It is a field on `PotrfOptions` and a trailing parameter
-elsewhere (the option-struct `syev` and `gesvd` spellings take none):
+`stedc` report convergence status; `sygvd` reports both (`n + i` for a factorisation failure of
+`B`). It is a field on `PotrfOptions` and a trailing parameter elsewhere (the option-struct `syev`
+and `gesvd` spellings take none):
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
