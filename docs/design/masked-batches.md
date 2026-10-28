@@ -260,6 +260,15 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   `potrf_vendor`'s own entry refusal (NoRouteError): red on the strict vendor pin and Auto double,
   nothing written. posv `tiny` and `lpanel` take `Masked` too: their runtime fold cost 4.3% and 4.2%
   on complex float at batch 32768.
+- **Cholesky lift pass** (`tests/potrf_mask_tests.cc`; sm_89, every scalar, 2026-10-28): potrf
+  `blocked`, posv `cta` and `blocked`, potrs `fused` (I1 in `potrs_fused_launch`) and `trsm`, and
+  potri `blocked` run a masked batch, the chunked drivers at forced part sizes (part edges, a wholly
+  inactive part). The composites' children are pinned `native` in both runs, because the unmasked
+  reference may otherwise route a child to the vendor. posv re-attaches the call mask to A and B, so
+  a mask on B alone still covers A and `info`. Each break was red only on its own cases: the potrs
+  fused guard (potrs `fused`, posv `cta`), potrf blocked's fixup guard (potrf `blocked`, plus the posv
+  shapes whose potrf child is `blocked`), potri blocked's sub-view masks (potri `blocked`), potrs'
+  trsm views (potrs `trsm`, posv `blocked`), and posv's re-attach (the B-only posv cases).
 
 ## Rejected alternatives {#masked-batches-rejected}
 
