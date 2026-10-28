@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
-// The Cholesky group honours a batch mask (W2a), each family pinned and reached, on
-// tests/masked_contract.hh: potrf's tiny, cta and lpanel, posv's tiny, potri's cta (either backend)
-// and lascl. Every pattern (packed work-group holes for the packed kernels), a device-only mask,
-// complex data, padded ld and stride, failing items (info, potri's untouched zero-diagonal item),
-// both triangles; the heavy tier adds the saturating identical-item batch. The composites whose
-// children are another wave's (potrf and posv blocked, posv cta, potrs, potri blocked) and the
-// vendor refuse a masked call and write nothing. evidence: docs/design/masked-batches.md#masked-batches-tests
+// The Cholesky group honours a batch mask (W2a, and the lift pass), each family pinned and reached,
+// on tests/masked_contract.hh: potrf's tiny, cta, lpanel and blocked, posv's tiny, cta and blocked,
+// potrs' fused and trsm, potri's cta (either backend) and blocked, and lascl. Every pattern (packed
+// work-group holes for the packed kernels, part edges and a wholly inactive part for the chunked
+// drivers), a device-only mask, complex data, padded ld and stride, failing items (info, potri's
+// untouched zero-diagonal item), both triangles; the heavy tier adds the saturating identical-item
+// batch. The vendor refuses a masked call and writes nothing. evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/posv.hh>
@@ -35,6 +35,7 @@
 #include <cstring>
 #include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 using namespace batchlas;
@@ -53,6 +54,7 @@ struct Shape {
     Uplo uplo = Uplo::Lower;
     int wg_items = 0;        ///< items per packed work-group
     bool identical = false;  ///< every item the same input (the saturating case)
+    int chunk = 0;           ///< forced part size (BATCHLAS_TUNE_L2_CHUNK_ITEMS) for the chunked drivers
 };
 
 const char* op_name(Op o) {
@@ -111,6 +113,7 @@ struct Problem {
         c.batch = s.batch;
         c.wg_items = s.wg_items;
         c.identical_items = s.identical;
+        c.chunk_items = s.chunk;
         c.prepare = [this] {
             std::copy(a_image.begin(), a_image.end(), A.data_ptr());
             std::copy(b_image.begin(), b_image.end(), Bm.data_ptr());
@@ -165,6 +168,11 @@ protected:
         SCOPED_TRACE(label(s));
         Queue& q = *this->ctx;
         Problem<T, B> p(q, s);
+        // A masked call never reaches the vendor, so the composites' children take a native family
+        // in the unmasked reference too: the same route, bit for bit.
+        using Pin = select::ScopedPin<std::monostate>;
+        const Pin c0("potrf", "native"), c1("trsm", "native"), c2("gemm", "native"), c3("trmm", "native"),
+            c4("syrk", "native"), c5("herk", "native");
         if (reach) {
             mc::check<Choice>(q, op_name(s.op), pin_of(s), p.make_case());
         } else {
@@ -270,19 +278,41 @@ TYPED_TEST(PotrfMask, LasclLeavesInactiveItemsUntouched) {
     }
 }
 
-// The families whose children another wave migrates, and the vendor: a strict pin refuses the
-// masked call before it writes (Auto walks on to a native family instead).
-TYPED_TEST(PotrfMask, CompositesAndVendorRefuse) {
+// potrf blocked and potri blocked chunk the batch: every part edge, a wholly inactive part, both
+// triangles, a trailing update past one fold block (n > nb + W).
+TYPED_TEST(PotrfMask, BlockedFamiliesLeaveInactiveItemsUntouched) {
+    if (!this->gpu()) GTEST_SKIP() << "the blocked families are GPU drivers";
+    this->template check<ops::potrf::PotrfChoice>({Op::potrf, "blocked", 100, 0, 24, Uplo::Lower, 0, false, 8});
+    this->template check<ops::potrf::PotrfChoice>({Op::potrf, "blocked", 72, 0, 21, Uplo::Upper, 0, false, 5});
+    this->template check<ops::potri::PotriChoice>({Op::potri, "blocked:nb=64", 150, 0, 24, Uplo::Lower, 0, false, 8});
+    this->template check<ops::potri::PotriChoice>({Op::potri, "blocked:nb=64", 100, 0, 21, Uplo::Upper, 0, false, 5});
+}
+
+// The solves: posv's cta (potrf, then the fused solve) and blocked (potrf, then two trsm), and
+// potrs' fused kernel and trsm pair, both triangles and every fused nrhs bucket.
+TYPED_TEST(PotrfMask, SolveFamiliesLeaveInactiveItemsUntouched) {
+    if (!this->gpu()) GTEST_SKIP() << "posv's and potrs' natives are GPU families";
+    this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 12, 2, 16, Uplo::Lower});
+    this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 37, 5, 16, Uplo::Upper});
+    this->template check<ops::posv::PosvChoice>({Op::posv, "blocked", 70, 3, 16, Uplo::Upper});
+    this->template check<ops::posv::PosvChoice>({Op::posv, "blocked", 9, 1, 16, Uplo::Lower});
+    for (const auto& [n, r, u] : {std::tuple{6, 1, Uplo::Lower}, {19, 2, Uplo::Upper}, {33, 4, Uplo::Lower},
+                                  {40, 7, Uplo::Upper}})
+        this->template check<ops::potrs::PotrsChoice>({Op::potrs, "fused", n, r, 16, u});
+    this->template check<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 6, 2, 16, Uplo::Upper});
+    this->template check<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 50, 3, 16, Uplo::Lower});
+}
+
+// The vendor's batched call cannot skip an item: a strict pin refuses the masked call before it
+// writes (Auto walks on to a native family instead).
+TYPED_TEST(PotrfMask, VendorRefuses) {
     constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "the composites' natives are GPU families";
-    this->template refuses<ops::potrf::PotrfChoice>({Op::potrf, "blocked", 40, 0, 8, Uplo::Lower});
-    this->template refuses<ops::posv::PosvChoice>({Op::posv, "cta", 12, 2, 8, Uplo::Lower});
-    this->template refuses<ops::posv::PosvChoice>({Op::posv, "blocked", 12, 2, 8, Uplo::Upper});
-    this->template refuses<ops::potrs::PotrsChoice>({Op::potrs, "fused", 6, 2, 8, Uplo::Lower});
-    this->template refuses<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 6, 2, 8, Uplo::Upper});
-    this->template refuses<ops::potri::PotriChoice>({Op::potri, "blocked:nb=64", 80, 0, 8, Uplo::Lower});
-    if constexpr (select::has_library<B>(ops::potrf::spec.vendor))
+    if constexpr (select::has_library<B>(ops::potrf::spec.vendor)) {
+        if (!this->gpu()) GTEST_SKIP() << "the vendor's potrf is a GPU library";
         this->template refuses<ops::potrf::PotrfChoice>({Op::potrf, "vendor", 12, 0, 8, Uplo::Lower});
+    } else {
+        GTEST_SKIP() << "no vendor potrf on this backend";
+    }
 }
 
 // Auto with a mask never picks the vendor: inactive items untouched, active ones a Cholesky factor.
@@ -313,6 +343,8 @@ TYPED_TEST(PotrfMask, SaturatingIdenticalItems) {
     if (!this->gpu()) GTEST_SKIP() << "potrf's and posv's natives are GPU kernels";
     for (const Shape& s : this->potrf_shapes(1024, true)) this->template check<ops::potrf::PotrfChoice>(s, false);
     for (const Shape& s : this->posv_shapes(1024, true)) this->template check<ops::posv::PosvChoice>(s, false);
+    this->template check<ops::posv::PosvChoice>({Op::posv, "cta", 20, 3, 1024, Uplo::Lower, 0, true}, false);
+    this->template check<ops::potrs::PotrsChoice>({Op::potrs, "fused", 24, 4, 1024, Uplo::Upper, 0, true}, false);
 }
 
 }  // namespace

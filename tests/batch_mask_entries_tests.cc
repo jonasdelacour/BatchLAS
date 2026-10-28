@@ -276,12 +276,6 @@ std::vector<Entry<T>> routed_entries() {
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
         {"gesvd(hermitian)", true,
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan()); }},
-        {"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }},
-        {"potrs", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
-             potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L);
-         }},
         {"sygvd_factored", true,
          [=](P& p) {
              if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
@@ -291,11 +285,14 @@ std::vector<Entry<T>> routed_entries() {
     };
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
     // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
-    // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses; potri's cta runs
-    // on either backend (potrf_mask_tests holds both contracts).
+    // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses, and with it posv and
+    // potrs, whose children (potrf, trsm) refuse there. On a device all three honour the mask, and
+    // potri's cta runs on either backend (potrf_mask_tests holds the contracts).
     if constexpr (B == Backend::NETLIB) {
         for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
         out.push_back({"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
+        out.push_back({"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
+        out.push_back({"potrs", true, [=](P& p) { potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L); }});
         for (auto& e : level3_entries<T, B>())
             if (e.name != "spmm") out.push_back(std::move(e));
     }

@@ -43,8 +43,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView
 template <typename T>
 bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& B) {
-    // tiny honours a batch mask; cta and blocked run their children on the masked views.
-    const bool masked = detail::any_batch_mask(A, B);
+    // tiny honours a batch mask; cta and blocked run their children (potrf, the solve) on the masked views.
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
@@ -53,10 +52,8 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
             return native && n <= sycl_posv::posv_tiny_max_n<T>() && nrhs <= sycl_posv::kPosvTinyMaxRhs &&
                    d.max_wg >= sycl_posv::kPosvTinyWgSize;
         },
-        // mask: lift after potrs_fused_dispatch (src/ops/getrs/kernels/getrs_fused.cc, W2b).
-        [&](Cta) { return native && !masked && ops::potrs::fused_fits<T>(d, n, nrhs); },
-        // mask: lift after trsm.
-        [&](Blocked) { return homogeneous && !masked; },
+        [&](Cta) { return native && ops::potrs::fused_fits<T>(d, n, nrhs); },
+        [&](Blocked) { return homogeneous; },
     }, c);
 }
 
