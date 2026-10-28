@@ -232,6 +232,7 @@ std::vector<Entry<T>> gemm_entries() {
 
 // The routed ops: the public op entries, each refused by every family's can_run term.
 // gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
+// sytrf, sytrs and sysv honour it (W4b): sytrf_mask_tests holds their contract.
 template <typename T, Backend B>
 std::vector<Entry<T>> routed_entries() {
     using P = Pool<T>;
@@ -300,13 +301,6 @@ std::vector<Entry<T>> routed_entries() {
              sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
                                   p.ispan());
          }},
-        {"sytrf", true, [=](P& p) { sytrf<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); }},
-        {"sytrs", true,
-         [=](P& p) {
-             if (!p.masked()) sytrf<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan());
-             sytrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws);
-         }},
-        {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
     };
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
     if constexpr (B == Backend::NETLIB)
@@ -410,12 +404,11 @@ std::vector<Entry<T>> vendor_entries() {
             backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
                                         p.ispan());
         });
-        add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
+        // LAPACKE's sytrf and sytrs read the mask in their host loop (W4b); cuSOLVER's cannot skip.
+        if constexpr (B == Backend::CUDA)
+            add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
     }
     if constexpr (B == Backend::NETLIB && sv::kHasNetlib) {
-        add("sytrs_vendor", [=](P& p) {
-            backend::sytrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), nullptr);
-        });
         add("sygst_vendor", [=](P& p) { backend::sygst_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws); });
     }
     return out;

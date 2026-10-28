@@ -11,9 +11,11 @@
 #include <src/ops/sytrf/sytrf_device.hh>
 #include <src/ops/sytrs/sytrs_device.hh>
 
+#include <src/kernels/common/info_span.hh>
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/tuning_params.hh>
@@ -85,7 +87,7 @@ Span<int32_t> info_layout(Queue& ctx, BumpAllocator& pool, Span<int32_t> info_ou
 // parallel with sytrs `cta`'s converted solve (sytrs_device.hh).
 template <typename T>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, int* piv, int32_t* info,
-                 const MatrixView<T, MatrixFormat::Dense>* B) {
+                 const MatrixView<T, MatrixFormat::Dense>* B, const std::uint8_t* mask) {
     using D = Dev<T>;
     using R = Real<T>;
     constexpr int kLdt = kSytrfCtaMaxN + 1;
@@ -112,6 +114,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
@@ -173,7 +176,8 @@ Event sytrf_cta_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     check_device(ctx, "sytrf_cta");
     BumpAllocator pool(workspace);
     auto info = info_layout<T>(ctx, pool, info_out, static_cast<int>(A.batch_size()));
-    return cta_launch<T>(ctx, A, uplo, pivots.as_span<int>().data(), info.data(), nullptr);
+    return cta_launch<T>(ctx, A, uplo, pivots.as_span<int>().data(), info.data(), nullptr,
+                         detail::mask_ptr(detail::call_mask("sytrf_cta", A)));
 }
 
 template <typename T>
@@ -188,7 +192,8 @@ Event sysv_cta_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     check_device(ctx, "sysv_cta");
     BumpAllocator pool(workspace);
     auto info = info_layout<T>(ctx, pool, info_out, static_cast<int>(A.batch_size()));
-    return cta_launch<T>(ctx, A, uplo, pivots.as_span<int>().data(), info.data(), &B);
+    return cta_launch<T>(ctx, A, uplo, pivots.as_span<int>().data(), info.data(), &B,
+                         detail::mask_ptr(detail::call_mask("sysv_cta", A, B)));
 }
 
 template <typename T>
@@ -207,6 +212,7 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     const bool upper = uplo == Uplo::Upper;
     D* const ap = reinterpret_cast<D*>(A.data_ptr());
     const std::ptrdiff_t lda = A.ld(), stra = A.stride();
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("sytrf_wg", A));
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<R, 1> red(sycl::range<1>(2 * (wg / 32)), h);
         sycl::local_accessor<int, 1> redi(sycl::range<1>(wg / 32), h);
@@ -215,6 +221,7 @@ Event sytrf_wg_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (mask != nullptr && mask[b] == 0) return;
                 const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
                 const Tile<D> G{ap + b * stra, lda, n, upper};
                 int* const gp = piv + b * n;
@@ -245,6 +252,7 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     D* const ap = reinterpret_cast<D*>(A.data_ptr());
     D* const bp = reinterpret_cast<D*>(B.data_ptr());
     const std::ptrdiff_t lda = A.ld(), stra = A.stride(), ldb = B.ld(), strb = B.stride();
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("sytrs", A, B));
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<R, 1> red(sycl::range<1>(2 * (wg / 32)), h);
         sycl::local_accessor<int, 1> redi(sycl::range<1>(wg / 32), h);
@@ -254,6 +262,7 @@ Event sytrs_native_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t grp = static_cast<std::ptrdiff_t>(it.get_group(0));
                 const std::ptrdiff_t b = grp / nrhs, c = grp % nrhs;
+                if (mask != nullptr && mask[b] == 0) return;
                 if (skip_info != nullptr && skip_info[b] != 0) return;
                 const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
                 const Tile<D> G{ap + b * stra, lda, n, upper};
@@ -305,7 +314,7 @@ int blocked_chunk(Queue& ctx, int n, int batch) {
 // ?sytf2 on the trailing sub-matrix from the item's own first unfinished column.
 template <typename T>
 void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool upper, int wg, int k0, bool tail,
-                  int* state, int* piv, int32_t* info) {
+                  int* state, int* piv, int32_t* info, const std::uint8_t* mask) {
     using D = Dev<T>;
     using R = Real<T>;
     constexpr int nb = kSytrfBlockedNb;
@@ -319,6 +328,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before g.bar()
                 const Group<R> g{it, &red[0], &red[wg / 32], &redi[0], lid, wg};
                 D* const item = ap + b * stra;
                 const Tile<D> S{item, lda, n, upper};
@@ -359,7 +369,7 @@ void blocked_step(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool
 // rank is the item's own (nb, or nb + 1 after a 2 x 2 block took column k0 + nb).
 template <typename T>
 void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, bool upper, int wg, int k0,
-                   const int* state) {
+                   const int* state, const std::uint8_t* mask) {
     using D = Dev<T>;
     constexpr int nb = kSytrfBlockedNb, ub = kSytrfBlockedUb;
     const int kt = k0 + nb + 1;
@@ -373,6 +383,7 @@ void blocked_trail(Queue& ctx, T* a, int lda, int stra, T* w, int n, int cb, boo
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t grp = static_cast<std::ptrdiff_t>(it.get_group(0));
                 const std::ptrdiff_t b = grp / nblk;
+                if (mask != nullptr && mask[b] == 0) return;
                 const int t = static_cast<int>(grp % nblk);
                 const Tile<D> S{ap + b * stra, lda, n, upper};
                 const sytrf_device::WTile<D> W{wp + b * static_cast<std::ptrdiff_t>(n) * (nb + 1), n, n, nb + 1, upper};
@@ -425,20 +436,25 @@ Event sytrf_blocked_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
     BumpAllocator pool(workspace);
     auto ws = blocked_layout<T>(ctx, pool, n, chunk + batch % chunk);
     const bool info_requested = info_out.size() >= static_cast<std::size_t>(batch);
+    const Span<const std::uint8_t> mask = detail::call_mask("sytrf_blocked", A);
     auto sync = [&] { if (!ctx.in_order()) ctx.wait(); };
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
         T* const a = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stra;
         int* const piv = pivots.as_span<int>().data() + static_cast<std::ptrdiff_t>(b0) * n;
         int32_t* const info = info_requested ? info_out.data() + b0 : ws.info.data();
-        ctx->fill(info, int32_t(0), static_cast<std::size_t>(cb));
+        // The drop hazard: every view and pointer below is rebuilt from data_ptr, so each part
+        // carries its own slice of the mask.
+        const Span<const std::uint8_t> part_mask = mask.empty() ? mask : mask.subspan(b0, cb);
+        const std::uint8_t* const pm = detail::mask_ptr(part_mask);
+        detail::info_clear(ctx, Span<int32_t>(info, static_cast<std::size_t>(cb)), cb, part_mask);
         ctx->fill(ws.state.data(), 0, 2 * static_cast<std::size_t>(cb));
         sync();
         int k0 = 0;
         for (; n - k0 > nb; k0 += nb) {
-            blocked_step<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, false, ws.state.data(), piv, info);
+            blocked_step<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, false, ws.state.data(), piv, info, pm);
             sync();
-            blocked_trail<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, ws.state.data());
+            blocked_trail<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, ws.state.data(), pm);
             sync();
             // A22 -= L21 W21^T below each diagonal block, in physical coordinates (Upper: above).
             const int kt = k0 + r;
@@ -450,15 +466,17 @@ Event sytrf_blocked_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
                 const int lcol = upper ? n - k0 - r : k0;
                 const int wrow = upper ? n - j0 - jb : j0;
                 using MV = MatrixView<T, MatrixFormat::Dense>;
-                const MV L(a + crow + static_cast<std::ptrdiff_t>(lcol) * lda, m2, r, lda, stra, cb, ws.pl.data());
-                const MV Wv(ws.w.data() + wrow, jb, r, n, n * r, cb, ws.pw.data());
-                const MV C(a + crow + static_cast<std::ptrdiff_t>(ccol) * lda, m2, jb, lda, stra, cb, ws.pc.data());
+                const MV L = MV(a + crow + static_cast<std::ptrdiff_t>(lcol) * lda, m2, r, lda, stra, cb, ws.pl.data())
+                                 .with_batch_mask(part_mask);
+                const MV Wv(ws.w.data() + wrow, jb, r, n, n * r, cb, ws.pw.data());  // scratch: adopts the mask
+                const MV C = MV(a + crow + static_cast<std::ptrdiff_t>(ccol) * lda, m2, jb, lda, stra, cb, ws.pc.data())
+                                 .with_batch_mask(part_mask);
                 (void)trailing_gemm(ctx, L, Wv, C, T(-1), T(1), Transpose::NoTrans, Transpose::Trans,
                                     ComputePrecision::Default);
                 sync();
             }
         }
-        blocked_step<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, true, ws.state.data(), piv, info);
+        blocked_step<T>(ctx, a, lda, stra, ws.w.data(), n, cb, upper, wg, k0, true, ws.state.data(), piv, info, pm);
         sync();
     }
     return ctx.get_event();
