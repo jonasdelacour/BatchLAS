@@ -391,6 +391,57 @@ TYPED_TEST(SyevJacobiCtaTest, NaNInputLeavesNoStaleSlot) {
     }
 }
 
+// A batch tail: batch 1025 at n = 13 (P = 16) leaves dead partitions in the last work-group,
+// beside the live one in its sub-group (multiplier 1) and as whole dead warps (multiplier 4).
+// A dead partition sweeps a zero tile and stores nothing (known-defects.md, defect 23). A, W
+// and info are held BITWISE to batch 1024 at multiplier 1 (no dead partition); no slot
+// outside the items (ld/stride gaps, items past the batch) may change.
+TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
+    using Scalar = typename TestFixture::ScalarType;
+    using Real = typename base_type<Scalar>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    constexpr int n = 13, ld = n + 3, stride = ld * n + 5, pad = 3;
+    const Scalar poison = Scalar(Real(-777.25));
+    const int32_t info_poison = 12345;
+    const auto A1 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, 1, /*seed=*/2026);
+
+    struct Out {
+        UnifiedVector<Scalar> a;
+        UnifiedVector<Real> w;
+        UnifiedVector<int32_t> info;
+    };
+    const auto run = [&](int batch, size_t mul) {
+        Out o{UnifiedVector<Scalar>(static_cast<size_t>(batch + pad) * stride, poison),
+              UnifiedVector<Real>(static_cast<size_t>(batch + pad) * n, Real(-777.25)),
+              UnifiedVector<int32_t>(static_cast<size_t>(batch + pad), info_poison)};
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) o.a[static_cast<size_t>(b) * stride + i + j * ld] = A1.view()(i, j, 0);
+        MatrixView<Scalar, MatrixFormat::Dense> A(o.a.data(), n, n, ld, stride, batch);
+        JacobiParams<Scalar> params{};
+        params.cta_wg_size_multiplier = mul;
+        syev_jacobi_cta<B, Scalar>(*this->ctx, A, Span<Real>(o.w.data(), static_cast<size_t>(batch) * n),
+                                   JobType::EigenVectors, Uplo::Lower, Span<std::byte>(), params,
+                                   Span<int32_t>(o.info.data(), static_cast<size_t>(batch)))
+            .wait();
+        return o;
+    };
+    const auto ref = run(1024, 1);
+    ASSERT_EQ(ref.info[0], 0) << "the reference item did not converge";
+    for (const size_t mul : {size_t(1), size_t(4)}) {
+        SCOPED_TRACE(::testing::Message() << "cta_wg_size_multiplier " << mul);
+        const auto got = run(1025, mul);
+        const auto ha = test_utils::expect_items_bitwise_and_gaps_poisoned(got.a.data(), got.a.size(), ref.a.data(),
+                                                                           1025, stride, n, n, ld, poison, "A");
+        const auto hw = test_utils::expect_items_bitwise_and_gaps_poisoned(got.w.data(), got.w.size(), ref.w.data(),
+                                                                           1025, n, 1, n, 1, Real(-777.25), "W");
+        (void)test_utils::expect_items_bitwise_and_gaps_poisoned(got.info.data(), got.info.size(), ref.info.data(),
+                                                                 1025, 1, 1, 1, 1, info_poison, "info");
+        this->RecordProperty("fnv_A_mul" + std::to_string(mul), std::to_string(ha));
+        this->RecordProperty("fnv_W_mul" + std::to_string(mul), std::to_string(hw));
+    }
+}
+
 // Verifies that the float kernel agrees with an exact-input double reference to
 // within a small multiple of eps*||A||, i.e. that it is backward stable at the
 // level theory predicts. This is what licenses the ||A||-scaled values check used

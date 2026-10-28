@@ -1832,6 +1832,55 @@ TYPED_TEST(GesvdTest, GebrdCtaEmptyBatchIsANoOp) {
     }
 }
 
+// A batch tail: batch 1025 at n = 13 (P = 16, two partitions per sub-group) leaves dead
+// partitions in the last work-group, beside the live one in its sub-group (multiplier 1) and
+// as whole dead warps (multiplier 4). gebrd_cta's barriers are work-group wide, so a dead
+// partition runs to the end and stores nothing (known-defects.md, defect 23). Every item is
+// held BITWISE to batch 1024 at multiplier 1 (no dead partition), and no slot outside the
+// items (ld/inc/stride gaps, items past the batch) may change. Dropping one `live` store
+// guard writes item 0 and turns this red.
+TYPED_TEST(GesvdTest, GebrdCtaBatchTailStoresNothingAndKeepsItemsBitwise) {
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "gebrd_cta requires sub-group 32";
+    } else {
+        constexpr int n = 13, ld = n + 3, stride = ld * n + 5, inc = 2, vstride = inc * n + 3, pad = 3;
+        const Real poison = Real(-777.25);
+        std::mt19937 rng(20261028u);
+        std::uniform_real_distribution<Real> dist(Real(-1), Real(1));
+        std::vector<Real> a0(n * n);
+        for (auto& x : a0) x = dist(rng);
+        const std::array<int, 5> rows{n, 1, 1, 1, 1}, cols{n, n, n - 1, n, n}, lds{ld, inc, inc, inc, inc};
+        const auto run = [&](int batch, size_t mul) {
+            std::vector<UnifiedVector<Real>> out;
+            out.emplace_back(static_cast<size_t>(batch + pad) * stride, poison);
+            for (int v = 0; v < 4; ++v) out.emplace_back(static_cast<size_t>(batch + pad) * vstride, poison);
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) out[0][static_cast<size_t>(b) * stride + i + j * ld] = a0[i + j * n];
+            MatrixView<Real, MatrixFormat::Dense> A(out[0].data(), n, n, ld, stride, batch);
+            VectorView<Real> d(out[1].data(), n, batch, inc, vstride), e(out[2].data(), n - 1, batch, inc, vstride);
+            VectorView<Real> tauq(out[3].data(), n, batch, inc, vstride), taup(out[4].data(), n, batch, inc, vstride);
+            (void)gebrd_cta<B, Real>(*this->ctx, A, d, e, tauq, taup, mul);
+            this->ctx->wait();
+            return out;
+        };
+        const auto ref = run(1024, 1);
+        for (const size_t mul : {size_t(1), size_t(4)}) {
+            SCOPED_TRACE(::testing::Message() << "cta_wg_size_multiplier " << mul);
+            const auto got = run(1025, mul);
+            const char* names[5] = {"A", "d", "e", "tauq", "taup"};
+            for (int k = 0; k < 5; ++k) {
+                const auto h = test_utils::expect_items_bitwise_and_gaps_poisoned(
+                    got[k].data(), got[k].size(), ref[k].data(), 1025, k == 0 ? stride : vstride, rows[k], cols[k],
+                    lds[k], poison, names[k]);
+                this->RecordProperty(std::string("fnv_") + names[k] + "_mul" + std::to_string(mul), std::to_string(h));
+            }
+        }
+    }
+}
+
 TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
