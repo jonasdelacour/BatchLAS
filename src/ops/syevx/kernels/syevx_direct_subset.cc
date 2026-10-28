@@ -33,6 +33,7 @@
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -64,6 +65,7 @@ Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& V,
                           const SyevxParams<T>& params,
                           Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
     using Real = typename base_type<T>::type;
 
     if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {

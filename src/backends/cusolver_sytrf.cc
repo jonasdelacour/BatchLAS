@@ -8,6 +8,7 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/blas/functions/sytrf.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <complex>
 
@@ -52,6 +53,7 @@ size_t sytrf_vendor_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::De
 template <Backend B, typename T>
 Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                    Span<std::byte> workspace, Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::sytrf, "sytrf_vendor", B, A);
     static LinalgHandle<B> handle;
     BumpAllocator pool(workspace);
     const auto l = sytrf_vendor_layout<B, T>(ctx, pool, A, info_out);

@@ -13,6 +13,7 @@
 
 #include <src/ops/spmm/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/spmm/spmm_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -72,6 +73,8 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 template <Backend B, typename T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     return std::visit(overloaded{
         [&](Direct) {
             if constexpr (MF != MatrixFormat::CSR) {
@@ -134,6 +137,7 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            Span<std::byte> workspace) {
+    (void)batchlas::detail::call_mask("spmm", A, B_mat, C);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, k = A as stored, n = nrhs.
@@ -154,6 +158,7 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA,
                         Transpose transB) {
+    (void)batchlas::detail::call_mask("spmm", A, B_mat, C);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::spmm::spec, ctx, ops::spmm::key_of<T, MFormat>(A, C, transA, transB), ops::spmm::candidates<T>(),

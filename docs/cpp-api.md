@@ -379,6 +379,25 @@ a zero dimension (the shape-only view used for workspace-size queries).
 > against many right-hand sides, fold the batch into columns (packed `B` with `ld == k`,
 > `stride == k*n` is one `k × (n·batch)` matrix) or replicate the matrix.
 
+### A batch mask on a view {#a-batch-mask-on-a-view}
+
+A view can carry a per-item mask, one byte per item, nonzero meaning active:
+`A.with_batch_mask(mask)` on a `MatrixView` or `VectorView`, or `Matrix::enable_batch_mask()`,
+which returns the owned, writable bytes (all ones to start). The mask may be device-only
+(`sycl::malloc_device`, written by your kernel): the library never reads it on the host, and
+`with_batch_mask` checks only its length (empty or `batch_size()`, else
+`batchlas::invalid_argument`; an empty span clears it). Slices, `batch_range`, `batch_item`,
+`with_active_dims` and `astype` keep the mask; views built from a raw pointer start unmasked.
+
+- **Utilities honour it now:** the `fill_*` family, `copy`, `scale`, `symmetrize`, `hermitize`,
+  `triangularize`, `all_close` (an inactive item compares true), `transpose` and the `linalg`
+  elementwise helpers leave an inactive item bit-for-bit untouched.
+- **Ops refuse it until migrated.** An op family that does not yet skip inactive items refuses a
+  masked view (`batchlas::unsupported` or `NoRouteError`; a pin on it throws), so no op silently
+  ignores a mask. Vendor families always refuse. Operands of one call must share one mask span.
+
+Design, kernel contract and the migration plan: @ref design_masked_batches.
+
 ### Row-major source data {#row-major-source-data}
 
 For `gemm`, use the [operand swap](#row-major-data-the-operand-swap) (no copy). Otherwise convert:

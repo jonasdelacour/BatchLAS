@@ -18,6 +18,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/functions/syev.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -71,6 +72,7 @@ Event syevx_direct(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& V,
                    const SyevxParams<T>& params,
                    Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask("syevx_direct", A, V);
     using float_type = typename base_type<T>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {

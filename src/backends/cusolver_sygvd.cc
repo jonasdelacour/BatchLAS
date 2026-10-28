@@ -7,6 +7,7 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/blas/functions/sygvd.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <complex>
 
@@ -61,6 +62,7 @@ template <Backend B, typename T>
 Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
                    Span<typename base_type<T>::type> w, int itype, JobType jobz, Uplo uplo, Span<std::byte> workspace,
                    Span<int32_t> info_out) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::sygvd, "sygvd_vendor", B, A, Bm);
     static LinalgHandle<B> handle;
     BumpAllocator pool(workspace);
     const auto l = sygvd_vendor_layout<B, T>(ctx, pool, A, Bm, w, itype, jobz, uplo, info_out);

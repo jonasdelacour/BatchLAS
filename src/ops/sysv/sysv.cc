@@ -12,6 +12,7 @@
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/ops/sytrs/sytrs.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -38,7 +39,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // which no sytrf family serves.
 template <class T>
 bool can_run(const SysvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
-    const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
+    const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous() && !detail::any_batch_mask(A, B);
     return std::visit(overloaded{
         [&](Cta) {
             return d.is_gpu && d.has_sg32 && homogeneous && d.max_wg >= sycl_sytrf::kSytrfCtaWg && A.rows() >= 1 &&
@@ -98,6 +99,7 @@ template <Backend Back, typename T>
 Event sysv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
     sytrs_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("sysv", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return ctx.create_event_after_external_work();
     if (A.is_heterogeneous() || B.is_heterogeneous())
         throw batchlas::internal_error("sysv: a heterogeneous batch, which no sysv kernel serves.");
@@ -118,6 +120,7 @@ template <Backend Back, typename T>
 size_t sysv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
     sytrs_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("sysv", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
     if (A.is_heterogeneous() || B.is_heterogeneous())
         throw batchlas::internal_error("sysv_buffer_size: a heterogeneous batch, which no sysv kernel serves.");

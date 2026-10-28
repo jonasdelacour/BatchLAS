@@ -10,6 +10,7 @@
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -1184,6 +1185,7 @@ Event latrd_lower_panel(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
                         int32_t wg_hint,
                         bool fuse_trailing_update) {
+    ::batchlas::detail::refuse_batch_mask("latrd_lower_panel", a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
     (void)B;
     validate_latrd_lower_panel_panel_dims(a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
 
@@ -1209,6 +1211,7 @@ Event latrd_lower_panel(Queue& ctx,
                         int32_t ib,
                         int32_t wg_hint,
                         bool fuse_trailing_update) {
+    ::batchlas::detail::refuse_batch_mask("latrd_lower_panel", a_in, e_out, tau_out, w_in);
     (void)B;
     validate_latrd_lower_panel_dims(a_in, e_out, tau_out, w_in, j0, ib);
 

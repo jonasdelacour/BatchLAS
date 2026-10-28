@@ -14,6 +14,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -365,6 +366,7 @@ Event bdsdc(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask("bdsdc", d, e, u, vh);
     if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {

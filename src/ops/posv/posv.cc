@@ -13,6 +13,7 @@
 #include <src/ops/posv/choice.hh>
 #include <src/ops/potrs/potrs.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/getrs/getrs_native.hh>
 #include <src/kernels/common/solve_native.hh>
 #include <src/util/template-instantiations.hh>
@@ -42,6 +43,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView
 template <typename T>
 bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& B) {
+    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
@@ -105,6 +107,7 @@ template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     posv_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("posv", A, B);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::posv::throw_if_unservable<T>(A, B, "posv");
@@ -126,6 +129,7 @@ template <Backend Back, typename T>
 size_t posv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
     posv_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("posv_buffer_size", A, B);
     if (A.batch_size() == 0) return 0;
     ops::posv::throw_if_unservable<T>(A, B, "posv_buffer_size");
     const auto c = select::pick<Back, T>(

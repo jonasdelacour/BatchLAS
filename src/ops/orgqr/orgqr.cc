@@ -10,6 +10,7 @@
 
 #include <src/ops/orgqr/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/orgqr/orgqr_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -39,6 +40,7 @@ select::Key key_of(const MV<T>& A) {
 // driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
 template <typename T>
 bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     return std::visit(overloaded{
         [&](Blocked) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
@@ -95,6 +97,7 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     orgqr_validate_params<T>(A);
+    (void)detail::call_mask("orgqr", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: k = min(m, n) reflectors, (Left, NoTrans).
@@ -111,6 +114,7 @@ Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
 template <Backend Back, typename T>
 size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     orgqr_validate_params<T>(A);
+    (void)detail::call_mask("orgqr_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),

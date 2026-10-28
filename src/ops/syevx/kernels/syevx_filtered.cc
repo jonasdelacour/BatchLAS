@@ -37,6 +37,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas {
@@ -83,6 +84,7 @@ Event syevx_filtered(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& V,
                      const SyevxParams<T>& params,
                      Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask("syevx_filtered", A, V);
     using Real = typename base_type<T>::type;
 
     const int64_t n = A.rows();

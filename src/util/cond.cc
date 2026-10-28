@@ -2,6 +2,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 #include <batchlas/util/mempool.hh>
 #include <complex>
@@ -113,6 +114,7 @@ namespace batchlas
                 const Span<T> conds,
                 const Span<std::byte> workspace)
     {
+        detail::refuse_batch_mask("cond", A);
         return cond_impl<B>(ctx, A, norm_type, conds, workspace);
     }
 
@@ -122,6 +124,7 @@ namespace batchlas
                             const MatrixView<T, MF> &A,
                             const NormType norm_type)
     {
+        detail::refuse_batch_mask("cond", A);
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
                 throw batchlas::unsupported("cond: Spectral norm only supported for dense symmetric/Hermitian matrices");
@@ -150,6 +153,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
+        detail::refuse_batch_mask("cond", A);
         UnifiedVector<T> conds(A.batch_size());
         auto workspace = ctx.workspace(cond_buffer_size<B>(ctx, A, norm_type));
         cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.span()).wait();

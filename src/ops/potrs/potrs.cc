@@ -11,6 +11,7 @@
 #include <src/ops/potrs/choice.hh>
 #include <src/ops/potrs/potrs.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <string>
@@ -33,6 +34,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Uplo uplo) {
 // (trsm refuses what it cannot take); a heterogeneous batch was refused before selection.
 template <class T>
 bool can_run(const PotrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
+    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
     return std::visit(overloaded{
         [&](Fused) { return fused_fits<T>(d, A.rows(), B.cols()); },
         [&](Trsm) { return true; },
@@ -58,6 +60,7 @@ template <Backend Back, typename T>
 Event potrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             Uplo uplo) {
     potrs_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("potrs", A, B);
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::potrs::throw_if_unservable<T>(A, B);
     // The coverage row's key: m = k = order, n = nrhs, and uplo (the field separating rows).

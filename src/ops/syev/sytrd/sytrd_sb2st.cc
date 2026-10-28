@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/mempool.hh>
 
@@ -495,6 +496,7 @@ Event sytrd_sb2st(Queue& ctx,
                   int32_t kd,
                   const Span<std::byte>& ws,
                   int32_t block_size) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sb2st", B, ab_in, d_out, e_out, tau_out);
     validate_sytrd_sb2st_dims(ab_in, d_out, e_out, tau_out, uplo, kd);
 
     if (!ctx.in_order()) {

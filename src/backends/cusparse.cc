@@ -9,6 +9,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/backends/backend_handle_impl.hh>
+#include <src/util/batch_mask.hh>
 #include <algorithm>
 #include <complex>
 #include <cstdint>
@@ -230,6 +231,7 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", B, A, B_mat, C);
         static LinalgHandle<B> handle;
 
         SpmmCsrBatchPlan plan;

@@ -25,6 +25,7 @@
 #include <type_traits>
 #include <vector>
 #include <src/ops/ormqr/vendor.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -572,6 +573,7 @@ Event syev_two_stage(Queue& ctx,
                      const Span<std::byte>& ws,
                      StedcParams<typename base_type<T>::type> stedc_params,
                      Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_two_stage", B, a_in);
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());

@@ -17,6 +17,7 @@
 #include <src/ops/syev/steqr/steqr_cta_device.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 
 #include <complex>
 #include <cstdint>
@@ -450,6 +451,7 @@ Event syev_cta_fused(Queue& ctx,
                      SteqrParams<T> steqr_params,
                      size_t cta_wg_size_multiplier,
                      Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_cta_fused", B, a_in);
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {

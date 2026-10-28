@@ -19,6 +19,7 @@
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/expansion_budget.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -59,6 +60,8 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     constexpr bool kWired = kExpandWired<B>;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
@@ -125,6 +128,7 @@ Event launch(Queue& q, const SymmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, FloatingOrComplexScalar T>
 Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
+    (void)batchlas::detail::call_mask("symm", A, B, C);
     backend::shape::validate_product<batchlas::invalid_argument>("symm", A, B, C, side);
     // An empty problem is a no-op under any pin, as syrk's and trmm's are (the cuBLAS loop faults on one).
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();

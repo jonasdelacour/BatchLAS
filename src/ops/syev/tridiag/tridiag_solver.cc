@@ -17,6 +17,7 @@
 #include <batchlas/blas/linalg.hh>
 
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -158,6 +159,7 @@ Event tridiagonal_solver(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& Q,
                          size_t n,
                          size_t batch_size) {
+    ::batchlas::detail::refuse_batch_mask("tridiagonal_solver", Q);
     using real_t = typename base_type<T>::type;
     auto pool = BumpAllocator(workspace);
 

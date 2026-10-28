@@ -11,6 +11,7 @@
 
 #include <src/ops/potrf/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -34,6 +35,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
 template <typename T>
 bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              Uplo uplo) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     const int64_t n = A.rows();
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1;
@@ -109,6 +111,7 @@ template <Backend B, typename T>
 Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
             Span<int32_t> info) {
     potrf_validate_params<T>(A, uplo);
+    (void)detail::call_mask("potrf", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // uplo is part of the coverage key; never inferred.
@@ -122,6 +125,7 @@ Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
+    (void)detail::call_mask("potrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
