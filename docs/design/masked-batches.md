@@ -291,6 +291,19 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   fused guard (potrs `fused`, posv `cta`), potrf blocked's fixup guard (potrf `blocked`, plus the posv
   shapes whose potrf child is `blocked`), potri blocked's sub-view masks (potri `blocked`), potrs'
   trsm views (potrs `trsm`, posv `blocked`), and posv's re-attach (the B-only posv cases).
+- **W3a, the tridiagonal stages** (`tests/steqr_mask_tests.cc`, `tridiag_mask_tests.cc`,
+  `stedc_mask_tests.cc`; Mac, acpp Metal float, the acpp CPU queue and NETLIB float and double,
+  2026-10-28): steqr (cta, wg, legacy), stebz, stein, tridiagonal_solver and stedc run a masked
+  batch natively. stedc's deflation maximum at n = 512 decided bit-identical: with only odd items
+  active the back-transform takes the narrow GEMM (16 columns) where the unmasked call takes the
+  full one (512), and Z kept its bits. The mask tests poison the workspace: zeroed, an inactive
+  item's working copy is an empty problem and a dropped steqr guard stores its Z back unchanged.
+  Defeating one guard per build turned red only its own paths: stebz, stein and
+  tridiagonal_solver (their `*EveryPattern` and saturating cases, plus their row in
+  `batch_mask_entries_tests`); steqr cta's `live` fold (the CTA cases and stedc's recursive leaves,
+  Metal only); steqr wg's sweep (every NETLIB steqr case, Metal n = 40, stedc on the CPU queue);
+  steqr_legacy's (NETLIB stedc only); stedc's in-place diagonal edit (the recursive cases); the
+  per-level expanded mask (the level cases, through `info`).
 
 ## Rejected alternatives {#masked-batches-rejected}
 

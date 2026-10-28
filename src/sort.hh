@@ -23,6 +23,7 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (!data.active(bid)) return;  // I1: before the barrier, uniform per work-group
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
             for (int i = tid; i < n; i += bdim) temp_mem[i] = data(indices(i, bid), bid);
@@ -74,6 +75,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
                 int rem = index % (cols * n);
                 int col = rem / n;
                 int row = rem % n;
+                if (!dst_view.active(batch_id)) continue;  // I3
                 dst_view(row, col, batch_id) = src_view(row, indices(col, batch_id), batch_id);
             }
         });
@@ -103,6 +105,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto cta = item.get_group();
             auto bid = item.get_group_linear_id();
+            if (!data_view.active(bid)) return;  // I1
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
             K* batch_indices = indices.batch_item(bid).data_ptr();
@@ -163,6 +166,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (!data.active(bid)) return;  // I1: an inactive item's order is never read
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();

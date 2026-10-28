@@ -12,6 +12,7 @@
 #include <src/sort.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -72,7 +73,8 @@ Event steqr_impl(Queue& ctx,
             auto dbid = d.batch_item(i);
             auto ix = 0;
             auto sub_problem_ix = 0;
-            while (ix < n - 1) {
+            // An inactive item lists no sub-problem, so neither the sweep nor the rotations touch it.
+            while (e.active(i) && ix < n - 1) {
                 auto start_ix = ix;
                 if (ebid(ix) != T(0)) {
                     for (ix = ix + 1; ix < n - 1; ++ix) {
@@ -340,11 +342,16 @@ SteqrLegacyWorkspace<T> steqr_legacy_layout(Queue& ctx,
 }
 
 template <Backend B, typename T>
-Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                   JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues_in, const Span<std::byte>& ws,
+                   JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects_in,
                    Span<int32_t> info) {
     const int64_t n = d_in.size();
     const int64_t batch_size = d_in.batch_size();
+    // The working copies are rebuilt from the pool, so they take the call's mask back on.
+    const auto mask = batchlas::detail::call_mask("steqr_legacy", d_in, e_in, eigenvalues_in, eigvects_in);
+    const VectorView<T> eigenvalues = eigenvalues_in.with_batch_mask(mask);
+    const MatrixView<T, MatrixFormat::Dense> eigvects =
+        jobz == JobType::EigenVectors ? eigvects_in.with_batch_mask(mask) : eigvects_in;
 
     if (jobz == JobType::EigenVectors) {
         // Ensure the eigenvector matrix is square and matches the problem size.
@@ -361,8 +368,8 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
 
     auto pool = BumpAllocator(ws);
     auto wsl = steqr_legacy_layout<T>(ctx, pool, n, batch_size, jobz, params, eigenvalues, eigvects);
-    auto d = wsl.d;
-    auto e = wsl.e;
+    const VectorView<T> d = wsl.d.with_batch_mask(mask);
+    const VectorView<T> e = wsl.e.with_batch_mask(mask);
     //Copy inputs to working buffers
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
@@ -385,6 +392,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
 
         ctx -> submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range(batch_size), [=](sycl::id<1> id) {
+                if (!e.active(id[0])) return;  // I3: neutral for the host's convergence read
                 auto ebid = e.batch_item(id[0]);
                 for (int64_t j = 0; j < n - 1; ++j) {
                     if (ebid(j) != T(0)) {
@@ -412,6 +420,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
         ctx->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
+                if (!e.active(id[0])) return;  // I3
                 auto ebid = e.batch_item(id[0]);
                 int32_t unconverged = 0;
                 for (int64_t j = 0; j < n - 1; ++j) {
@@ -426,6 +435,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
         batchlas::impl::parallel_for(cgh, sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto intra = item.get_local_id(0);
+            if (!eigenvalues.active(bid)) return;  // I1, no barrier
             eigenvalues(intra, bid) = d(intra, bid);
         });
     });
