@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <sycl/sycl.hpp>
 
+#include <batchlas/error.hh>
 #include <batchlas/util/sycl-span.hh>
 
 #include <src/queue.hh>
@@ -23,6 +24,21 @@ inline void info_clear(Queue& ctx, Span<int32_t> info, int64_t batch) {
     if (int32_t* out = info_ptr(info, batch)) {
         ctx->memset(out, 0, sizeof(int32_t) * static_cast<size_t>(batch));
     }
+}
+
+// Masked: an inactive item's slot is left untouched, so a kernel replaces the memset. The mask
+// (possibly device-only) is read in the kernel only; an empty mask is the unmasked clear.
+inline void info_clear(Queue& ctx, Span<int32_t> info, int64_t batch, Span<const std::uint8_t> mask) {
+    if (mask.empty()) return info_clear(ctx, info, batch);
+    int32_t* out = info_ptr(info, batch);
+    if (!out) return;
+    if (mask.size() < static_cast<size_t>(batch)) throw batchlas::invalid_argument("info_clear: the batch mask is shorter than the batch");
+    const std::uint8_t* m = mask.data();
+    ctx->submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+            if (m[id[0]]) out[id[0]] = 0;
+        });
+    });
 }
 
 // fetch_max, not a store: several producers share an item and the answer is "did ANY fail".
@@ -51,6 +67,28 @@ inline void info_from_flags(Queue& ctx,
     const bool invert = one_means_converged;
     ctx->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+            const int32_t flag = flags[id[0]];
+            out[id[0]] = invert ? (flag != 0 ? 0 : 1) : (flag > 0 ? flag : 0);
+        });
+    });
+}
+
+// Masked info_from_flags: inactive slots are untouched. An empty mask is the unmasked overload.
+inline void info_from_flags(Queue& ctx,
+                            Span<int32_t> info,
+                            const int32_t* flags,
+                            int64_t batch,
+                            bool one_means_converged,
+                            Span<const std::uint8_t> mask) {
+    if (mask.empty()) return info_from_flags(ctx, info, flags, batch, one_means_converged);
+    int32_t* out = info_ptr(info, batch);
+    if (!out || !flags) return;
+    if (mask.size() < static_cast<size_t>(batch)) throw batchlas::invalid_argument("info_from_flags: the batch mask is shorter than the batch");
+    const bool invert = one_means_converged;
+    const std::uint8_t* m = mask.data();
+    ctx->submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> id) {
+            if (!m[id[0]]) return;
             const int32_t flag = flags[id[0]];
             out[id[0]] = invert ? (flag != 0 ? 0 : 1) : (flag > 0 ? flag : 0);
         });

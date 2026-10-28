@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extra.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -13,6 +14,7 @@ namespace batchlas {
                          const MatrixView<T, MF> &B) {
         detail::require_device_fp64<T>(ctx, "transpose");
         constexpr int TILE = 16;
+        const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("transpose", A, B));
         ctx->submit([&](sycl::handler &cgh) {
             auto src = A.data_ptr();
             auto dst = B.data_ptr();
@@ -32,6 +34,7 @@ namespace batchlas {
                     sycl::range<3>(1, TILE, TILE)),
                 [=](sycl::nd_item<3> item) {
                     size_t b = item.get_group(0);
+                    if (mask && !mask[b]) return;  // uniform per work-group: before the barrier
                     size_t tile_x = item.get_group(1) * TILE;
                     size_t tile_y = item.get_group(2) * TILE;
                     size_t local_x = item.get_local_id(1);
@@ -68,6 +71,8 @@ namespace batchlas {
     Matrix<T, MF> transpose(Queue &ctx,
                             const MatrixView<T, MF> &A) {
         Matrix<T, MF> result(A.cols(), A.rows(), A.batch_size());
+        // The result keeps A's mask (copied on ctx, after its producer); its inactive items stay uninitialised.
+        if (A.has_batch_mask()) ctx->memcpy(result.enable_batch_mask().data(), A.batch_mask().data(), A.batch_mask().size());
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
         (void)transpose_impl(ctx, A, result);
