@@ -46,12 +46,11 @@ select::Key key_of(const MV<T>& A) {
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, typename T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
-    // Masked: NETLIB's host loop skips an inactive item; the strided vendor calls cannot.
+    // Masked: blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         [&](Blocked) {
-            // mask: lift after trsm (the zero and permutation kernels already honour it)
-            return !masked && d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
+            return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
         [&](Vendor) {

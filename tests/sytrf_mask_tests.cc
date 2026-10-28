@@ -3,7 +3,7 @@
 // tests/masked_contract.hh: every mask pattern on a device-only mask, complex symmetric (not
 // Hermitian) data, padded ld and stride, both triangles, and a singular item (info > 0, which sysv's
 // solve skips). A, the packed int32 ipiv, info and B are all outputs: an inactive item keeps every
-// byte. sytrs `blocked` refuses until its trsm honours the mask. The heavy tier adds the
+// byte. sytrs `blocked` runs its trsm on the masked part views (lift 1). The heavy tier adds the
 // saturating identical-item batch. evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -110,6 +110,8 @@ struct Problem {
         c.batch = s.batch;
         c.chunk_items = s.chunk_items;
         c.identical_items = s.identical;
+        // sytrs blocked's two trsm take the vendor unmasked and a native family masked.
+        c.masked_reference = op == Op::sytrs && s.spelling == "blocked" && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
             fill_a();
             fill_b();
@@ -215,33 +217,15 @@ TYPED_TEST(SytrfMask, SytrsEveryFamilyBothTriangles) {
                 this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {f, n, 3, 6, u});
 }
 
-// blocked's two trsm run on the masked part views, so it refuses until trsm honours the mask (W1b):
-// a strict pin throws on the masked call and writes nothing; Auto walks on to a native family.
-TYPED_TEST(SytrfMask, SytrsBlockedRefusesUntilTrsmHonoursTheMask) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::B;
+// sytrs blocked: the converted factor and gathered B per part, its two trsm on the masked part
+// views; parts of 3 and 4 items carry their own slice (the chunk patterns).
+TYPED_TEST(SytrfMask, SytrsBlockedPartsCarryTheirSlice) {
     if (this->kHost) GTEST_SKIP() << "blocked is a GPU family";
-    Queue& q = *this->ctx;
-    Problem<T, B> p(q, Op::sytrs, {"blocked", 8, 2, 4});
-    const auto c = p.make_case();
-    const mc::DeviceMask m(q, {0, 1, 0, 1});
-    const std::size_t need = c.buffer_size(m.span());
-    UnifiedVector<std::byte> ws(std::max<std::size_t>(need, 1));
-    {
-        const select::ScopedPin<ops::sytrs::SytrsChoice> pin("sytrs", "blocked", select::StrictPin{});
-        c.prepare();
-        c.call({}, p.sized(ws.to_span(), c.buffer_size({})));  // the shape runs unmasked
-        q.wait();
-        c.prepare();
-        q.wait();
-        const std::vector<T> before(p.Bm.data_ptr(), p.Bm.data_ptr() + std::size_t(p.Bm.stride()) * 4);
-        EXPECT_ANY_THROW(c.call(m.span(), p.sized(ws.to_span(), need)));
-        q.wait();
-        EXPECT_EQ(0, std::memcmp(before.data(), p.Bm.data_ptr(), before.size() * sizeof(T))) << "the refused call wrote B";
+    for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
+        this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {"blocked", 8, 3, 6, u});
+        this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {"blocked", 45, 2, 9, u, false, 3});
     }
-    c.prepare();
-    c.call(m.span(), p.sized(ws.to_span(), need));
-    q.wait();
+    this->template check<ops::sytrs::SytrsChoice>(Op::sytrs, "sytrs", {"blocked", 70, 4, 12, Uplo::Lower, false, 4});
 }
 
 TYPED_TEST(SytrfMask, SysvEveryFamilyBothTriangles) {

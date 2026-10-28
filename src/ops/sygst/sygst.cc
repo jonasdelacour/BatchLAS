@@ -43,16 +43,15 @@ inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 1
 template <Backend B, class T>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
     const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
-    // The NETLIB vendor honours a batch mask; Blocked and TwoSided keep refusing it.
-    const bool masked = batchlas::detail::any_batch_mask(A, Bf);
+    // Every family honours a batch mask: Blocked and TwoSided through their native children, the
+    // vendor (NETLIB only) in its host loop.
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());
-            // mask: lift after trsm, trmm, syr2k/her2k (W1b)
-            return homogeneous && !masked && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagWg &&
+            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagWg &&
                    static_cast<std::int64_t>(sycl_sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
         },
-        [&](TwoSided) { return homogeneous && !masked; },  // mask: lift after trsm, trmm (W1b)
+        [&](TwoSided) { return homogeneous; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
     }, c);
 }

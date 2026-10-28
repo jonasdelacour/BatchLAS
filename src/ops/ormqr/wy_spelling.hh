@@ -2,7 +2,7 @@
 #pragma once
 
 /// @file
-/// @brief ormqr_blocked's W2 = op(T) W1 spelling (gemm or trmm), also read by can_run (masks).
+/// @brief ormqr_blocked's W2 = op(T) W1 spelling (gemm or trmm).
 
 #include <batchlas/settings.hh>
 
@@ -40,12 +40,6 @@ inline bool wy_trmm_applicable(int ib) {
     constexpr bool tile_kernel_enabled = select::level3_tile_substitution_enabled<B, T>;
     constexpr bool type_beats_gemm_at_this_m = !batchlas::detail::is_complex<T>::value;
     return tile_kernel_enabled && type_beats_gemm_at_this_m && ib <= 64;
-}
-
-// Only the Left update has a trmm leg, and the gate is monotone in ib: ib = 1 answers for all.
-template <Backend B, typename T>
-inline bool wy_reaches_trmm(Side side) {
-    return side == Side::Left && wy_trmm_applicable<B, T>(1);
 }
 
 }  // namespace batchlas::ops::ormqr

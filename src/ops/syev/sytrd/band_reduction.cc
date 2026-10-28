@@ -1440,7 +1440,6 @@ Event sytrd_band_reduction(Queue& ctx,
                            int32_t kd,
                            const Span<std::byte>& ws,
                            SytrdBandReductionParams params) {
-    ::batchlas::detail::refuse_batch_mask("sytrd_band_reduction", ab_in, d_out, e_out, tau_out);  // mask: lift after geqrf, ormqr (W2c)
     const auto mask = ::batchlas::detail::call_mask("sytrd_band_reduction", ab_in, d_out, e_out, tau_out);
     validate_band_reduction_dims(ab_in, d_out, e_out, tau_out, kd);
 
@@ -1463,7 +1462,6 @@ Event sytrd_band_reduction_single_step(Queue& ctx,
                                        int32_t kd,
                                        const Span<std::byte>& ws,
                                        SytrdBandReductionParams params) {
-    ::batchlas::detail::refuse_batch_mask("sytrd_band_reduction_single_step", ab_in, abw_out);  // mask: lift after geqrf, ormqr (W2c)
     const auto mask = ::batchlas::detail::call_mask("sytrd_band_reduction_single_step", ab_in, abw_out);
     return sytrd_band_reduction_single_step_core<B, T>(ctx, ab_in, abw_out, uplo, kd, ws, params, mask);
 }

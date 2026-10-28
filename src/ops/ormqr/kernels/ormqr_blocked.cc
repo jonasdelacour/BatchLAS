@@ -296,10 +296,6 @@ Event ormqr_blocked(Queue& ctx,
                     Span<T> tau,
                     Span<std::byte> workspace,
                     int32_t block_size) {
-    // mask: lift after trmm. Only the Left update's trmm leg ignores a mask; every other step
-    // (pack_v, larft, the gemms) honours it.
-    if (ops::ormqr::wy_reaches_trmm<B, T>(side))
-        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_blocked", B, a_in, c_in);
     // Both operands carry the call's mask whichever brought it.
     const auto mask = ::batchlas::detail::call_mask("ormqr_blocked", a_in, c_in);
     const bool adopt = !mask.empty() && a_in.batch_size() == c_in.batch_size();
