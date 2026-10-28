@@ -199,6 +199,18 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W2b, LU** (`tests/getrf_mask_tests.cc`, `tests/getrs_mask_tests.cc`; Apple M5 Max under
+  AdaptiveCpp, Metal float and complex float, NETLIB every scalar, 2026-10-28): getrf `tiny` (I2)
+  and `cta` (I1, packed sub-group tiles included), getrs `cta` (I1), gesv `tiny` (I2) and NETLIB's
+  getrf, getrs and getri host loops (I4) run a masked batch, as do gesv `blocked` and inv, whose
+  children honour it. The `blocked` families of getrf, getrs and getri carry the mask (per-part
+  slice, panel leaves, laswp and gather kernels) but refuse until trsm does. Defeating one guard at
+  a time turned red only its own pins and the composites over it: tiny's fold (its pins, the
+  packed holes, device Auto, and gesv `blocked`); cta's returns (its pins, and gesv `blocked` at
+  cta's ceiling); getrs `cta`'s NoTrans return (its NoTrans pins only); gesv `tiny`'s fold (its pins
+  only); each host loop's skip (its NETLIB pin and Auto, plus gesv `blocked` over getrf and getrs, inv over
+  getri); cta's `info_clear` reverted to a fill (the `info` sentinel only). An all-active mask
+  stayed green under every break.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

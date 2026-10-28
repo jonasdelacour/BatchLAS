@@ -120,8 +120,7 @@ BATCHLAS_INTERNAL_API bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_
 // THE TWO PANEL LEAVES, one contract: `piv_stride` is the matrix ORDER, `piv_base` the
 // panel's first global row, `info_ptr` READ as well as written (zero it before panel 0).
 // The register leaf adds a WIDTH ceiling `nb` (a short final panel arrives with n < nb)
-// and a REGISTER height ceiling `max_m`; 0 = absent. `mask` is the batch mask from the first
-// item (null: unmasked); an inactive item's panel, pivots and info are left untouched.
+// and a REGISTER height ceiling `max_m`; 0 = absent. `mask` (null: none) skips inactive items.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 template <typename T>
 BATCHLAS_INTERNAL_API int getrf_panel_reg_nb();

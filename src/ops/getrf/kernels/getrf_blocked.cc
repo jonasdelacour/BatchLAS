@@ -288,8 +288,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int* const piv_ptr = piv_i32.data() + static_cast<std::ptrdiff_t>(b0) * mn;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
-        // This part's slice of the batch mask: every launch below and every sub-view skips its
-        // inactive items, whose matrix, pivots and info stay untouched.
+        // This part's mask slice: every launch below and every sub-view skips its inactive items.
         const Span<const std::uint8_t> pmask =
             mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
         const std::uint8_t* const pm = batchlas::detail::mask_ptr(pmask);

@@ -29,8 +29,7 @@ namespace batchlas {
                                const MatrixView<T, MatrixFormat::Dense>& A) {
         auto data = pool.allocate<T>(ctx, A.data().size());
         auto ptrs = pool.allocate<T*>(ctx, A.batch_size());
-        // A raw-pointer view starts unmasked: Acopy re-attaches A's mask, so getrf and getri skip
-        // the same items (an inactive item's Acopy and pivots are scratch, its Ainv untouched).
+        // A raw-pointer view starts unmasked: Acopy re-attaches A's mask for getrf and getri.
         return {
             MatrixView<T, MatrixFormat::Dense>(data.data(),
                                                A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
