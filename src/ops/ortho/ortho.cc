@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>
 #include <src/select/vendor.hh>
@@ -137,6 +138,7 @@ namespace batchlas {
                 Transpose transA,
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo) {
+        detail::refuse_batch_mask("ortho", A);
         //If transA == NoTrans we find the orthonormal basis of the column space
         //Else we find the orthonormal basis of the row space
         using float_t = typename base_type<T>::type;
@@ -443,6 +445,7 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Transpose transA,
                              OrthoAlgorithm algo) {
+        detail::refuse_batch_mask("ortho", A);
         auto [m, k] = get_effective_dims(A, transA);
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
@@ -462,6 +465,7 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo,
                 size_t iterations) {
+        detail::refuse_batch_mask("ortho", A, M);
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
@@ -514,6 +518,7 @@ namespace batchlas {
                              Transpose transM,
                              OrthoAlgorithm algo,
                              size_t iterations) {
+        detail::refuse_batch_mask("ortho", A, M);
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto batch_size = A.batch_size();

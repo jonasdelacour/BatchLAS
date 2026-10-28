@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 
 #include <src/util/template-instantiations.hh>
@@ -1159,6 +1160,7 @@ template <Backend B, typename T>
 ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::CSR>& A,
                                      const ILUKParams<T>& params) {
+    detail::refuse_batch_mask("iluk", A);
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
     check_batch_sparsity_on_device<B, T>(ctx, A);
 
@@ -1228,6 +1230,7 @@ template <Backend B, typename T>
 size_t iluk_buffer_size(Queue& ctx,
                         const MatrixView<T, MatrixFormat::CSR>& A,
                         const ILUKParams<T>& params) {
+    detail::refuse_batch_mask("iluk", A);
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
 
     const int n = A.rows();
@@ -1258,6 +1261,7 @@ ILUKView<T> iluk_factorize(Queue& ctx,
                            Span<std::byte> workspace,
                            const ILUKParams<T>& params,
                            size_t* bytes_used) {
+    detail::refuse_batch_mask("iluk", A);
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
     check_batch_sparsity_on_device<B, T>(ctx, A);
 
@@ -1334,6 +1338,7 @@ Event iluk_apply(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& rhs,
                  const MatrixView<T, MatrixFormat::Dense>& out,
                  Span<std::byte>) {
+    detail::refuse_batch_mask("iluk_apply", rhs, out);
     if (rhs.rows() != M.n || out.rows() != M.n) {
         throw batchlas::invalid_argument("iluk_apply: rhs/out row dimension must match factor rows");
     }

@@ -9,8 +9,8 @@
 #include <batchlas/blas/functions/syev_align.hh>
 #include <batchlas/util/mempool.hh>
 
-#include <src/queue.hh>
 #include <src/util/batch_mask.hh>
+#include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <sycl/sycl.hpp>
@@ -218,8 +218,8 @@ template <Backend B, typename T>
 Event syev_align(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V_old,
                  Span<typename base_type<T>::type> eigenvalues, const MatrixView<T, MatrixFormat::Dense>& V,
                  typename base_type<T>::type tol, Span<std::byte> workspace) {
+    detail::refuse_batch_mask("syev_align", V_old, V);
     syev_align_validate_params<T>(V_old, eigenvalues, V);
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_align", B, V_old, V);
     if (!(tol >= 0)) throw batchlas::invalid_argument("syev_align: tol must be >= 0, got " + std::to_string(tol));
     if (V.batch_size() == 0 || V.cols() == 0) return ctx.create_event_after_external_work();
     // gemm, rotation, copy and apply chain through ws.m / ws.vcopy, so they need an in-order queue.
@@ -231,8 +231,8 @@ template <Backend B, typename T>
 size_t syev_align_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V_old,
                               Span<typename base_type<T>::type> eigenvalues,
                               const MatrixView<T, MatrixFormat::Dense>& V) {
+    detail::refuse_batch_mask("syev_align", V_old, V);
     syev_align_validate_params<T>(V_old, eigenvalues, V);
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_align_buffer_size", B, V_old, V);
     if (V.batch_size() == 0 || V.cols() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();
     (void)ops::syev_align::carve<T>(ctx.device(), pool, V.rows(), V.cols(), V.batch_size());

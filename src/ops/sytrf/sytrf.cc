@@ -10,6 +10,7 @@
 #include <src/ops/sytrf/choice.hh>
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -41,13 +42,13 @@ select::Key key_of(const MV<T>& A) {
 template <Backend B, class T>
 bool can_run(const SytrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 &&
+    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && !detail::any_batch_mask(A) && n >= 1 &&
                         A.batch_size() >= 1 && d.max_wg >= sycl_sytrf::kSytrfCtaWg;
     return std::visit(overloaded{
         [&](Cta) { return native && n <= sycl_sytrf::kSytrfCtaMaxN; },
         [&](Wg) { return native; },
         [&](Blocked) { return native; },  // its gemm selects for itself; the public gemm has a last resort
-        [&](Vendor) { return vendor_linked<B> && d.has_vendor && !A.is_heterogeneous(); },
+        [&](Vendor) { return vendor_linked<B> && d.has_vendor && !A.is_heterogeneous() && !detail::any_batch_mask(A); },
     }, c);
 }
 
@@ -90,6 +91,7 @@ template <Backend B, typename T>
 Event sytrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
             Span<std::byte> work_space, Span<int32_t> info) {
     sytrf_validate_params<T>(A, uplo);
+    (void)detail::call_mask("sytrf", A);
     // An empty problem is a no-op under any pin: it never reaches selection.
     if (A.batch_size() == 0 || A.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
@@ -103,6 +105,7 @@ Event sytrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, 
 template <Backend B, typename T>
 size_t sytrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     sytrf_validate_params<T>(A, uplo);
+    (void)detail::call_mask("sytrf", A);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
     const auto c = select::pick<B, T>(
         ops::sytrf::spec, ctx, ops::sytrf::key_of<T>(A), ops::sytrf::candidates<T>(),

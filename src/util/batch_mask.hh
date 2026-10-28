@@ -72,4 +72,14 @@ void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
         throw NoRouteError(op, backend, scalar_kind_of<T>, std::string(who) + ": batch mask not supported yet");
 }
 
+// The entry of an op no family of which honours the mask yet: validates the masks, then refuses a masked call.
+// @throws batchlas::invalid_argument for mismatched masks; batchlas::unsupported for any masked operand
+template <typename... Views>
+void refuse_batch_mask(const char* op, const Views&... v) {
+    (void)call_mask(op, v...);
+    if (any_batch_mask(v...)) {
+        throw batchlas::unsupported(std::string(op) + ": a batch mask is not supported by this op yet");
+    }
+}
+
 }  // namespace batchlas::detail
