@@ -108,8 +108,10 @@ bool u_diagonals_are_usable(const T* vals,
                             const int* diag_positions,
                             int n,
                             int batch_size,
-                            const T& diagonal_shift) {
+                            const T& diagonal_shift,
+                            const uint8_t* host_mask = nullptr) {
     for (int b = 0; b < batch_size; ++b) {
+        if (host_mask != nullptr && host_mask[b] == 0) continue;  // an inactive item's factor is scratch
         for (int i = 0; i < n; ++i) {
             int32_t status = 0;
             (void)stabilize_pivot_or_mark(vals[diag_positions[b * n + i]], diagonal_shift, &status);
@@ -120,7 +122,7 @@ bool u_diagonals_are_usable(const T* vals,
 }
 
 template <typename T>
-bool has_identical_batch_sparsity(const MatrixView<T, MatrixFormat::CSR>& A) {
+bool has_identical_batch_sparsity(const MatrixView<T, MatrixFormat::CSR>& A, const uint8_t* host_mask) {
     if (A.batch_size() <= 1) return true;
     const auto ro = A.row_offsets();
     const auto ci = A.col_indices();
@@ -128,6 +130,7 @@ bool has_identical_batch_sparsity(const MatrixView<T, MatrixFormat::CSR>& A) {
     const int offset_stride = A.offset_stride();
     const int matrix_stride = A.matrix_stride();
     for (int b = 1; b < A.batch_size(); ++b) {
+        if (host_mask != nullptr && host_mask[b] == 0) continue;
         const int ro_base = b * offset_stride;
         const int ci_base = b * matrix_stride;
         for (int i = 0; i < rows + 1; ++i) {
@@ -330,7 +333,7 @@ struct HostFactor {
 // the factorization that follows validates before it uses anything.
 template <typename T>
 void validate_iluk_params_or_throw(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params,
-                                   bool check_batch_sparsity = true) {
+                                   bool check_batch_sparsity = true, const uint8_t* host_mask = nullptr) {
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("iluk: matrix must be square");
     }
@@ -350,15 +353,16 @@ void validate_iluk_params_or_throw(const MatrixView<T, MatrixFormat::CSR>& A, co
         throw batchlas::invalid_argument(
             "iluk: disabling batch sparsity validation is not supported; current implementation requires identical CSR sparsity across the batch");
     }
-    if (check_batch_sparsity && A.batch_size() > 1 && !has_identical_batch_sparsity(A)) {
+    if (check_batch_sparsity && A.batch_size() > 1 && !has_identical_batch_sparsity(A, host_mask)) {
         throw batchlas::invalid_argument(
             "iluk: heterogeneous batch sparsity is not supported; batches must share an identical CSR pattern");
     }
 }
 
 template <typename T>
-HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params) {
-    validate_iluk_params_or_throw(A, params);
+HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params,
+                           const uint8_t* host_mask) {
+    validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/true, host_mask);
 
     const int n = A.rows();
     const int batch_size = A.batch_size();
@@ -481,7 +485,10 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
     {
         std::vector<int> col_to_slot(static_cast<std::size_t>(n), -1);
         std::vector<std::pair<RealT<T>, int>> candidates;
-        for (int b = 0; b < batch_size; ++b) factor_batch_element(b, col_to_slot, candidates);
+        for (int b = 0; b < batch_size; ++b) {
+            if (host_mask != nullptr && host_mask[b] == 0) continue;
+            factor_batch_element(b, col_to_slot, candidates);
+        }
     }
 
     for (int b = 0; b < batch_size; ++b) {
@@ -492,7 +499,8 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
     }
 
     // Compaction: an entry survives if any batch element kept it, so the batch keeps
-    // sharing one pattern. compact_pos maps a symbolic slot to its compacted slot.
+    // sharing one pattern. compact_pos maps a symbolic slot to its compacted slot. An
+    // inactive item keeps nothing: the union is over the active items.
     HostFactor<T> out;
     out.n = n;
     out.batch_size = batch_size;
@@ -506,6 +514,7 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
         for (int p = 0; p < row_nnz; ++p) {
             bool keep_entry = (p == diag_local[static_cast<std::size_t>(i)]);
             for (int b = 0; b < batch_size && !keep_entry; ++b) {
+                if (host_mask != nullptr && host_mask[b] == 0) continue;
                 if (sym_keep[static_cast<std::size_t>(b) * stride + static_cast<std::size_t>(rs + p)] != 0) keep_entry = true;
             }
             if (keep_entry) {
@@ -557,16 +566,18 @@ void write_host_factor(const HostFactor<T>& host,
                        Span<int> row_offsets,
                        Span<int> diag_positions,
                        int matrix_stride,
-                       int offset_stride) {
+                       int offset_stride,
+                       const uint8_t* host_mask) {
     const int nnz = host.nnz;
     for (int b = 0; b < batch; ++b) {
+        const bool active = host_mask == nullptr || host_mask[b] != 0;
         const std::size_t src_base = static_cast<std::size_t>(b) * static_cast<std::size_t>(nnz);
         const std::size_t val_base = static_cast<std::size_t>(b) * static_cast<std::size_t>(matrix_stride);
         const std::size_t ro_base = static_cast<std::size_t>(b) * static_cast<std::size_t>(offset_stride);
         for (int i = 0; i < n + 1; ++i) row_offsets[ro_base + static_cast<std::size_t>(i)] = host.row_offsets[static_cast<std::size_t>(i)];
         for (int p = 0; p < nnz; ++p) {
             col_indices[val_base + static_cast<std::size_t>(p)] = host.col_indices[static_cast<std::size_t>(p)];
-            values[val_base + static_cast<std::size_t>(p)] = host.values[src_base + static_cast<std::size_t>(p)];
+            if (active) values[val_base + static_cast<std::size_t>(p)] = host.values[src_base + static_cast<std::size_t>(p)];
         }
         for (int i = 0; i < n; ++i) {
             diag_positions[static_cast<std::size_t>(b * n + i)] =
@@ -774,7 +785,7 @@ PackedInts pack_ints(std::initializer_list<const std::vector<int>*> arrays, std:
 // every element's indices back across the bus, which is exactly the kind of
 // batch-proportional host work this path exists to avoid.
 template <Backend B, typename T>
-void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat::CSR>& A) {
+void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat::CSR>& A, const uint8_t* mask) {
     const int batch = A.batch_size();
     if (batch <= 1) return;
     const int rows = A.rows();
@@ -788,6 +799,7 @@ void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat
         const int linear = static_cast<int>(id[0]);
         const int b = linear / per_element + 1;
         const int k = linear % per_element;
+        if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item's pattern is not read
         if (k <= rows) {
             if (kv.row_offsets_[b * kv.offset_stride_ + k] != kv.row_offsets_[k]) *flag = 1;
         } else {
@@ -827,7 +839,8 @@ template <Backend B, typename T>
 DeviceFactorOut<T> run_device_numeric(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::CSR>& A,
                                       const ILUKSymbolic& sym,
-                                      const ILUKParams<T>& params) {
+                                      const ILUKParams<T>& params,
+                                      const uint8_t* mask) {
     const int n = sym.n;
     const int batch = A.batch_size();
     const int sym_nnz = sym.sym_nnz;
@@ -862,10 +875,13 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
     const auto akv = A.kernel_view();
     const auto* a_to_sym = packed.at(3);
 
-    // Scatter A into the symbolic pattern; slots with no counterpart stay zero.
+    // Scatter A into the symbolic pattern; slots with no counterpart stay zero. Under a batch
+    // mask every per-item kernel below skips an inactive item (I3): its columns of `work` stay
+    // scratch, which only the union and diagonal kernels could read, and they skip it too.
     const int a_nnz = sym.a_nnz;
     ctx->parallel_for<ILUKZeroKernel<B, T>>(
         sycl::range<1>(static_cast<size_t>(sym_nnz) * batch), [=](sycl::id<1> id) {
+        if (mask != nullptr && mask[id[0] % batch] == 0) return;
         work[id[0]] = T(0);
     });
     ctx.wait_and_throw();  // the zero fill must land before A is scattered over it
@@ -874,6 +890,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         const int linear = static_cast<int>(id[0]);
         const int p = linear / batch;
         const int b = linear % batch;
+        if (mask != nullptr && mask[b] == 0) return;
         const int slot = a_to_sym[p];
         if (slot >= 0) work[static_cast<size_t>(slot) * batch + b] = akv.data_[b * akv.matrix_stride_ + p];
     });
@@ -915,6 +932,8 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             const int linear = static_cast<int>(id[0]);
             const int t = linear / batch;
             const int b = linear % batch;
+            // An inactive item never raises the pivot status, so it cannot fail the call.
+            if (mask != nullptr && mask[b] == 0) return;
             const int i = level_rows[begin + t];
 
             auto at = [&](int slot) -> T& { return work[static_cast<size_t>(slot) * batch + b]; };
@@ -1005,6 +1024,8 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         for (int b = 0; b < batch && keep == 0; ++b) {
             // Dropped entries were zeroed, and any entry at or below the drop
             // threshold was dropped, so a non-zero value is exactly a kept one.
+            // An inactive item keeps nothing: the union is over the active items.
+            if (mask != nullptr && mask[b] == 0) continue;
             if (abs_value(work[slot * batch + b]) != RealT<T>(0)) keep = 1;
         }
         ku[slot] = keep;
@@ -1056,6 +1077,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
         const int linear = static_cast<int>(id[0]);
         const int i = linear / batch;
         const int b = linear % batch;
+        if (mask != nullptr && mask[b] == 0) return;  // neutral: an inactive item counts as usable
         const int slot = c2s[diag_off[i]];
         int32_t local = 0;
         (void)stabilize_pivot_no_throw(work[static_cast<size_t>(slot) * batch + b], RealT<T>(0),
@@ -1084,7 +1106,8 @@ void write_factor_to_storage(Queue& ctx,
                              Span<int> row_offsets,
                              Span<int> diag_positions,
                              int matrix_stride,
-                             int offset_stride) {
+                             int offset_stride,
+                             const uint8_t* mask) {
     const int nnz = dev.nnz;
     auto* vals = values.data();
     auto* ci = col_indices.data();
@@ -1101,8 +1124,11 @@ void write_factor_to_storage(Queue& ctx,
         const int linear = static_cast<int>(id[0]);
         const int q = linear / batch;
         const int b = linear % batch;
-        vals[static_cast<size_t>(b) * matrix_stride + q] = src[static_cast<size_t>(c2s[q]) * batch + b];
+        // The pattern is shared, so every item gets it (an unmasked apply stays in bounds);
+        // an inactive item's values keep their bytes.
         ci[static_cast<size_t>(b) * matrix_stride + q] = host_ci[q];
+        if (mask != nullptr && mask[b] == 0) return;
+        vals[static_cast<size_t>(b) * matrix_stride + q] = src[static_cast<size_t>(c2s[q]) * batch + b];
     });
     ctx->parallel_for<ILUKRowOffsetKernel<B, T>>(
         sycl::range<1>(static_cast<size_t>(n + 1) * batch), [=](sycl::id<1> id) {
@@ -1119,6 +1145,23 @@ void write_factor_to_storage(Queue& ctx,
         dp[static_cast<size_t>(b) * n + i] = b * matrix_stride + diag_off[i];
     });
     ctx.wait_and_throw();
+}
+
+// The host path computes from host-read values, so it needs the mask's bytes on the host. Only
+// the host backend's CPU queue makes a device-only mask host-addressable (I4: read once the queue
+// drains); a device backend's host path refuses. A correctness term, not a route: the path still
+// follows batch_size, and BATCHLAS_ILUK_DEVICE=1 takes the device path, which honours the mask.
+template <Backend B>
+std::vector<uint8_t> host_path_mask(Queue& ctx, Span<const uint8_t> mask) {
+    if (mask.empty()) return {};
+    if constexpr (B != Backend::NETLIB) {
+        throw batchlas::unsupported(
+            "iluk: batch mask not supported on the host path (small batch or BATCHLAS_ILUK_DEVICE=0) of a device "
+            "backend; BATCHLAS_ILUK_DEVICE=1 takes the device path, which honours it");
+    } else {
+        ctx.wait();
+        return std::vector<uint8_t>(mask.data(), mask.data() + mask.size());
+    }
 }
 
 }  // namespace
@@ -1160,15 +1203,21 @@ template <Backend B, typename T>
 ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
                                      const MatrixView<T, MatrixFormat::CSR>& A,
                                      const ILUKParams<T>& params) {
-    detail::refuse_batch_mask("iluk", A);
+    // Batch mask: an inactive item is never read past item 0's shared pattern and never fails the
+    // call; the pattern is the union over the active items; an inactive item's factor values are
+    // scratch. The result does not carry the mask (iluk_apply takes it from rhs and out).
+    const auto mask = detail::call_mask("iluk", A);
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
-    check_batch_sparsity_on_device<B, T>(ctx, A);
 
     const int n = A.rows();
     const int batch_size = A.batch_size();
+    const bool on_device = iluk_prefer_device(batch_size);
+    const auto host_mask = on_device ? std::vector<uint8_t>{} : host_path_mask<B>(ctx, mask);
+    const uint8_t* hm = host_mask.empty() ? nullptr : host_mask.data();
+    check_batch_sparsity_on_device<B, T>(ctx, A, detail::mask_ptr(mask));
 
-    if (!iluk_prefer_device(batch_size)) {
-        const auto host = compute_iluk(A, params);
+    if (!on_device) {
+        const auto host = compute_iluk(A, params, hm);
         ILUKPreconditioner<T> result;
         result.lu = Matrix<T, MatrixFormat::CSR>(n, n, NonZeros{host.nnz}, batch_size);
         result.diag_positions = UnifiedVector<int>(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch_size));
@@ -1189,15 +1238,15 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
         auto host_view = result.lu.view();
         write_host_factor(host, n, batch_size, host_view.data(), host_view.col_indices(),
                           host_view.row_offsets(), result.diag_positions,
-                          host_view.matrix_stride(), host_view.offset_stride());
+                          host_view.matrix_stride(), host_view.offset_stride(), hm);
         result.u_diagonals_usable = u_diagonals_are_usable(host_view.data().data(),
                                                            result.diag_positions.data(), n, batch_size,
-                                                           result.diagonal_shift);
+                                                           result.diagonal_shift, hm);
         return result;
     }
 
     const auto sym = build_iluk_symbolic(A.row_offsets(), A.col_indices(), n, A.nnz(), params.levels_of_fill);
-    auto dev = run_device_numeric<B, T>(ctx, A, sym, params);
+    auto dev = run_device_numeric<B, T>(ctx, A, sym, params, detail::mask_ptr(mask));
 
     ILUKPreconditioner<T> result;
     result.lu = Matrix<T, MatrixFormat::CSR>(n, n, NonZeros{dev.nnz}, batch_size);
@@ -1221,7 +1270,7 @@ ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
     auto lu_view = result.lu.view();
     write_factor_to_storage<B, T>(ctx, dev, n, batch_size, lu_view.data(), lu_view.col_indices(),
                                   lu_view.row_offsets(), result.diag_positions,
-                                  lu_view.matrix_stride(), lu_view.offset_stride());
+                                  lu_view.matrix_stride(), lu_view.offset_stride(), detail::mask_ptr(mask));
     result.u_diagonals_usable = dev.u_diagonals_usable;
     return result;
 }
@@ -1230,7 +1279,7 @@ template <Backend B, typename T>
 size_t iluk_buffer_size(Queue& ctx,
                         const MatrixView<T, MatrixFormat::CSR>& A,
                         const ILUKParams<T>& params) {
-    detail::refuse_batch_mask("iluk", A);
+    (void)detail::call_mask("iluk", A);  // the size is the symbolic bound: independent of the mask
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
 
     const int n = A.rows();
@@ -1261,21 +1310,25 @@ ILUKView<T> iluk_factorize(Queue& ctx,
                            Span<std::byte> workspace,
                            const ILUKParams<T>& params,
                            size_t* bytes_used) {
-    detail::refuse_batch_mask("iluk", A);
+    // As the owning overload; an inactive item's values in `workspace` keep their bytes, and the
+    // returned view is unmasked (its raw-pointer lu does not re-attach the mask on purpose).
+    const auto mask = detail::call_mask("iluk", A);
     validate_iluk_params_or_throw(A, params, /*check_batch_sparsity=*/false);
-    check_batch_sparsity_on_device<B, T>(ctx, A);
 
     const int n = A.rows();
     const int batch_size = A.batch_size();
     const bool on_device = iluk_prefer_device(batch_size);
+    const auto host_mask = on_device ? std::vector<uint8_t>{} : host_path_mask<B>(ctx, mask);
+    const uint8_t* hm = host_mask.empty() ? nullptr : host_mask.data();
+    check_batch_sparsity_on_device<B, T>(ctx, A, detail::mask_ptr(mask));
 
     std::optional<HostFactor<T>> host;
     std::optional<DeviceFactorOut<T>> dev_opt;
     if (on_device) {
         const auto sym = build_iluk_symbolic(A.row_offsets(), A.col_indices(), n, A.nnz(), params.levels_of_fill);
-        dev_opt = run_device_numeric<B, T>(ctx, A, sym, params);
+        dev_opt = run_device_numeric<B, T>(ctx, A, sym, params, detail::mask_ptr(mask));
     } else {
-        host = compute_iluk(A, params);
+        host = compute_iluk(A, params, hm);
     }
     const int nnz = on_device ? dev_opt->nnz : host->nnz;
     const LevelSchedule& sched_l = on_device ? dev_opt->l : host->l;
@@ -1296,9 +1349,9 @@ ILUKView<T> iluk_factorize(Queue& ctx,
     // replicated per batch element rather than shared.
     if (on_device) {
         write_factor_to_storage<B, T>(ctx, *dev_opt, n, batch_size, values, col_indices, row_offsets,
-                                      diag_positions, nnz, n + 1);
+                                      diag_positions, nnz, n + 1, detail::mask_ptr(mask));
     } else {
-        write_host_factor(*host, n, batch_size, values, col_indices, row_offsets, diag_positions, nnz, n + 1);
+        write_host_factor(*host, n, batch_size, values, col_indices, row_offsets, diag_positions, nnz, n + 1, hm);
     }
 
     // The level schedules are a few n-sized arrays derived from the compacted
@@ -1325,7 +1378,7 @@ ILUKView<T> iluk_factorize(Queue& ctx,
     view.diagonal_shift = params.diagonal_shift;
     view.u_diagonals_usable = on_device
         ? dev_opt->u_diagonals_usable
-        : u_diagonals_are_usable(values.data(), diag_positions.data(), n, batch_size, params.diagonal_shift);
+        : u_diagonals_are_usable(values.data(), diag_positions.data(), n, batch_size, params.diagonal_shift, hm);
     if (bytes_used != nullptr) {
         *bytes_used = static_cast<size_t>(workspace.size() - pool.remaining().size());
     }
@@ -1338,7 +1391,9 @@ Event iluk_apply(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& rhs,
                  const MatrixView<T, MatrixFormat::Dense>& out,
                  Span<std::byte>) {
-    detail::refuse_batch_mask("iluk_apply", rhs, out);
+    // rhs and out (and M.lu, if its caller attached one) share one mask; an inactive item's out
+    // keeps every byte. The factor of an item that was inactive at factorization is scratch.
+    const uint8_t* mask = detail::mask_ptr(detail::call_mask("iluk_apply", M.lu, rhs, out));
     if (rhs.rows() != M.n || out.rows() != M.n) {
         throw batchlas::invalid_argument("iluk_apply: rhs/out row dimension must match factor rows");
     }
@@ -1397,6 +1452,7 @@ Event iluk_apply(Queue& ctx,
         const int b = linear / nrhs;
         const int col = linear % nrhs;
         const int lid = static_cast<int>(item.get_local_id(0));
+        if (mask != nullptr && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
 
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
