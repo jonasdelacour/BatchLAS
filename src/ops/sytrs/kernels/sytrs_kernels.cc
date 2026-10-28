@@ -14,6 +14,7 @@
 #include <src/select/select.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <batchlas/error.hh>
 #include <batchlas/tuning_params.hh>
@@ -68,7 +69,7 @@ void check_solve_args(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixV
 
 template <typename T, int R>
 Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-                 bool rev, const int* piv, const int32_t* skip, int nsg) {
+                 bool rev, const int* piv, const int32_t* skip, const std::uint8_t* mask, int nsg) {
     using D = Dev<T>;
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
@@ -86,6 +87,7 @@ Event cta_launch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const 
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const std::ptrdiff_t b = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 if (skip != nullptr && skip[b] != 0) return;
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const auto sg = it.get_sub_group();
@@ -154,7 +156,8 @@ inline int blocked_part(int chunk, int batch) { return batch < 2 * chunk ? batch
 // One work-group per item: stage and convert the factor into lw, gather B into bw (P^T B).
 template <typename T>
 void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb, int strb, const int* piv, int n,
-                 int nrhs, int cb, bool rev, int wg, const BlockedWs<T>& ws, const int32_t* skip) {
+                 int nrhs, int cb, bool rev, int wg, const BlockedWs<T>& ws, const int32_t* skip,
+                 const std::uint8_t* mask) {
     using D = Dev<T>;
     const D* const ap = reinterpret_cast<const D*>(a);
     const D* const bp = reinterpret_cast<const D*>(b);
@@ -171,6 +174,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(cb) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const std::ptrdiff_t i0 = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (mask != nullptr && mask[i0] == 0) return;
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int lid = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t nn = static_cast<std::ptrdiff_t>(n) * n, nb = static_cast<std::ptrdiff_t>(n) * nrhs;
@@ -217,7 +221,7 @@ void prep_launch(Queue& ctx, const T* a, int lda, int stra, const T* b, int ldb,
 // bw := D^-1 bw, one work-item per (row, rhs, item); the first row of a 2 x 2 block writes both.
 template <typename T>
 void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int cb, bool rev, const BlockedWs<T>& ws,
-                 const int32_t* skip) {
+                 const int32_t* skip, const std::uint8_t* mask) {
     using D = Dev<T>;
     const D* const ap = reinterpret_cast<const D*>(a);
     D* const bw = reinterpret_cast<D*>(ws.bw.data());
@@ -233,6 +237,7 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
                 const int t = static_cast<int>(g % n);
                 const std::size_t rest = g / n;
                 const std::ptrdiff_t i0 = static_cast<std::ptrdiff_t>(rest / nrhs);
+                if (mask != nullptr && mask[i0] == 0) return;
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int kd = kw[i0 * n + t];
                 if (kd == 2) return;
@@ -252,7 +257,7 @@ void diag_launch(Queue& ctx, const T* a, int lda, int stra, int n, int nrhs, int
 // B := P bw: row t of the solved system goes back to the row it was gathered from.
 template <typename T>
 void scatter_launch(Queue& ctx, T* b, int ldb, int strb, int n, int nrhs, int cb, bool rev, const BlockedWs<T>& ws,
-                    const int32_t* skip) {
+                    const int32_t* skip, const std::uint8_t* mask) {
     using D = Dev<T>;
     D* const bp = reinterpret_cast<D*>(b);
     const D* const bw = reinterpret_cast<const D*>(ws.bw.data());
@@ -269,6 +274,7 @@ void scatter_launch(Queue& ctx, T* b, int ldb, int strb, int n, int nrhs, int cb
                 const std::size_t rest = g / n;
                 const std::ptrdiff_t i0 = static_cast<std::ptrdiff_t>(rest / nrhs);
                 const std::ptrdiff_t c = static_cast<std::ptrdiff_t>(rest % nrhs);
+                if (mask != nullptr && mask[i0] == 0) return;
                 if (skip != nullptr && skip[i0] != 0) return;
                 const int lt = rev ? n - 1 - t : t;
                 const int s = rev ? n - 1 - pw[i0 * n + lt] : pw[i0 * n + lt];
@@ -298,9 +304,10 @@ Event sytrs_cta_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     const int nsg = std::min<int>(max_sg, static_cast<int>(B.cols()));
     const bool rev = uplo == Uplo::Upper;
     const int* const piv = pivots.as_span<int>().data();
-    if (n <= 32) return cta_launch<T, 1>(ctx, A, B, rev, piv, skip_info, nsg);
-    if (n <= 64) return cta_launch<T, 2>(ctx, A, B, rev, piv, skip_info, nsg);
-    return cta_launch<T, 4>(ctx, A, B, rev, piv, skip_info, nsg);
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("sytrs_cta", A, B));
+    if (n <= 32) return cta_launch<T, 1>(ctx, A, B, rev, piv, skip_info, mask, nsg);
+    if (n <= 64) return cta_launch<T, 2>(ctx, A, B, rev, piv, skip_info, mask, nsg);
+    return cta_launch<T, 4>(ctx, A, B, rev, piv, skip_info, mask, nsg);
 }
 
 template <typename T>
@@ -333,23 +340,27 @@ Event sytrs_blocked_dispatch(Queue& ctx, const MatrixView<T, MatrixFormat::Dense
     const int* const piv = pivots.as_span<int>().data();
     auto sync = [&] { if (!ctx.in_order()) ctx.wait(); };
     using MV = MatrixView<T, MatrixFormat::Dense>;
+    const Span<const std::uint8_t> mask = detail::call_mask("sytrs_blocked", A, B);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
         const T* const a = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride();
         T* const bb = B.data_ptr() + static_cast<std::ptrdiff_t>(b0) * B.stride();
         const int32_t* const skip = skip_info ? skip_info + b0 : nullptr;
+        // The drop hazard: the kernels and the trsm views are rebuilt per part, so each takes its slice.
+        const Span<const std::uint8_t> part_mask = mask.empty() ? mask : mask.subspan(b0, cb);
+        const std::uint8_t* const pm = detail::mask_ptr(part_mask);
         prep_launch<T>(ctx, a, A.ld(), A.stride(), bb, B.ld(), B.stride(), piv + static_cast<std::ptrdiff_t>(b0) * n, n,
-                       nrhs, cb, rev, wg, ws, skip);
+                       nrhs, cb, rev, wg, ws, skip, pm);
         sync();
-        const MV Lv(ws.lw.data(), n, n, n, n * n, cb, ws.pl.data());
-        const MV Bv(ws.bw.data(), n, nrhs, n, n * nrhs, cb, ws.pb.data());
+        const MV Lv = MV(ws.lw.data(), n, n, n, n * n, cb, ws.pl.data()).with_batch_mask(part_mask);
+        const MV Bv = MV(ws.bw.data(), n, nrhs, n, n * nrhs, cb, ws.pb.data()).with_batch_mask(part_mask);
         (void)solve_trsm(ctx, Lv, Bv, T(1), Side::Left, uplo, Transpose::NoTrans, Diag::Unit);
         sync();
-        diag_launch<T>(ctx, a, A.ld(), A.stride(), n, nrhs, cb, rev, ws, skip);
+        diag_launch<T>(ctx, a, A.ld(), A.stride(), n, nrhs, cb, rev, ws, skip, pm);
         sync();
         (void)solve_trsm(ctx, Lv, Bv, T(1), Side::Left, uplo, Transpose::Trans, Diag::Unit);
         sync();
-        scatter_launch<T>(ctx, bb, B.ld(), B.stride(), n, nrhs, cb, rev, ws, skip);
+        scatter_launch<T>(ctx, bb, B.ld(), B.stride(), n, nrhs, cb, rev, ws, skip, pm);
         sync();
     }
     return ctx.get_event();

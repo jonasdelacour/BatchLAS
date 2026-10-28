@@ -244,6 +244,12 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   body); spmm's gather (its NoTrans cases, the scatter green). Dropping the mask slice in
   `level3::batch_range` turned red every family that launches through it, at every masked pattern.
   The unmasked `sg_left` instances keep base's registers and stack on all 44 kernels.
+- **W4b, sytrf, sytrs, sysv** (`tests/sytrf_mask_tests.cc`; NETLIB every scalar, Metal float and
+  complex float, 2026-10-28): sytrf `cta`, `wg`, `blocked`, sytrs `cta`, `wg`, sysv `cta`, `compose`
+  and LAPACKE's sytrf and sytrs host loops run a masked batch; A, the packed ipiv, `info` and B of an
+  inactive item keep every byte, a singular item included. `blocked` slices the mask per part, on
+  its kernels and its gemm views (the chunk patterns at n = 45 and 170). sytrs `blocked` refuses
+  until trsm honours the mask; cuSOLVER's sytrf refuses permanently.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

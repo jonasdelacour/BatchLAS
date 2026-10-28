@@ -798,11 +798,12 @@ namespace batchlas{
 
     // LAPACKE ?sytrf / ?sytrs per item. The pivots are written as int32 straight into the packed
     // first half of the int64 span (lapack_int is int32 in this build; a mismatch fails to compile),
-    // the format the native kernels read. evidence: docs/perf/sytrf.md
+    // the format the native kernels read. A batch mask is read inside the host task (idiom I4): an
+    // inactive item's A, ipiv and info are never touched. evidence: docs/perf/sytrf.md
     template <Backend B, typename T>
     Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
                        Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::sytrf, "sytrf_vendor", B, A);
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sytrf_vendor", A));
         auto A_view = A;
         auto piv = pivots.as_span<int>();
         auto info = info_out;
@@ -810,6 +811,7 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrf", [=] {
             const int n = A_view.rows();
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssytrf, LAPACKE_dsytrf, LAPACKE_csytrf, LAPACKE_zsytrf, Layout::ColMajor, uplo, n,
                     A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n);
@@ -827,13 +829,14 @@ namespace batchlas{
     Event sytrs_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<int64_t> pivots,
                        const int32_t* skip_info) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::sytrs, "sytrs_vendor", B, A, Bm);
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sytrs_vendor", A, Bm));
         auto A_view = A;
         auto B_view = Bm;
         auto piv = pivots.as_span<int>();
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrs", [=] {
             const int n = A_view.rows();
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 if (skip_info != nullptr && skip_info[i] != 0) continue;
                 (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssytrs, LAPACKE_dsytrs, LAPACKE_csytrs, LAPACKE_zsytrs, Layout::ColMajor, uplo, n,

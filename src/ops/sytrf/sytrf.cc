@@ -39,16 +39,20 @@ select::Key key_of(const MV<T>& A) {
 
 // Correctness only (R3): each clause is the argument check at the top of that driver's *_dispatch.
 // The vendor loops run every item at the top-level order, so no family takes a heterogeneous batch.
+// Every native family and LAPACKE's host loop honour a batch mask; cuSOLVER's per-item calls refuse it.
 template <Backend B, class T>
 bool can_run(const SytrfChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && !detail::any_batch_mask(A) && n >= 1 &&
+    const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 &&
                         A.batch_size() >= 1 && d.max_wg >= sycl_sytrf::kSytrfCtaWg;
     return std::visit(overloaded{
         [&](Cta) { return native && n <= sycl_sytrf::kSytrfCtaMaxN; },
         [&](Wg) { return native; },
-        [&](Blocked) { return native; },  // its gemm selects for itself; the public gemm has a last resort
-        [&](Vendor) { return vendor_linked<B> && d.has_vendor && !A.is_heterogeneous() && !detail::any_batch_mask(A); },
+        [&](Blocked) { return native; },  // its gemm selects for itself (and honours the mask, W1a)
+        [&](Vendor) {
+            return vendor_linked<B> && d.has_vendor && !A.is_heterogeneous() &&
+                   (B == Backend::NETLIB || !detail::any_batch_mask(A));
+        },
     }, c);
 }
 
