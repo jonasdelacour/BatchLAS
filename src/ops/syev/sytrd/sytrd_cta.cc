@@ -32,7 +32,8 @@ namespace batchlas {
                               VectorView<T>& e,
                               VectorView<T>& tau,
                               int32_t n,
-                              size_t cta_wg_size_multiplier) {
+                              size_t cta_wg_size_multiplier,
+                              const std::uint8_t* mask) {
         const auto batch_size = a.batch_size();
         if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
             throw batchlas::invalid_argument("sytd2_cta_impl: invalid n or matrix sizes for CTA partition.");
@@ -110,6 +111,8 @@ namespace batchlas {
                     const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     if (prob_id >= static_cast<int32_t>(batch_size)) return;
+                    // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
+                    const bool live = mask == nullptr || mask[prob_id] != 0;
 
                     auto A_prob = A_view.batch_item(prob_id);
                     auto D_prob = D_view.batch_item(prob_id);
@@ -123,7 +126,7 @@ namespace batchlas {
                     // Build the Hermitian tile from the named triangle only (defect 14): each lane
                     // loads its row of that triangle, coalesced, and writes the conjugate mirror.
                     // The diagonal's imaginary part is dropped, as {c,z}hetrd does.
-                    if (lane < n) {
+                    if (live && lane < n) {
                         for (int32_t c = 0; c < n; ++c) {
                             if (Upper ? lane > c : lane < c) continue;
                             T v = A_prob(lane, c);
@@ -158,10 +161,10 @@ namespace batchlas {
                             lane);
 
                         // Read the tridiagonal straight off the reduced tile.
-                        if (lane < n) {
+                        if (live && lane < n) {
                             D_prob(lane) = A_local[base_a + lane + lane * static_cast<int32_t>(P)];
                         }
-                        if (lane < (n - 1)) {
+                        if (live && lane < (n - 1)) {
                             E_prob(lane) = A_local[base_a + lane + (lane + 1) * static_cast<int32_t>(P)];
                             TAU_prob(lane) = tau_lane;
                         }
@@ -205,7 +208,7 @@ namespace batchlas {
                                 A_local[base_a + col + s * static_cast<int32_t>(P)] = batchlas::device::detail::conj(alpha);
                             }
 
-                            if (lane == 0) {
+                            if (live && lane == 0) {
                                 E_prob(i) = alpha;
                                 TAU_prob(i) = taui;
                                 D_prob(i) = A_local[base_a + i + i * static_cast<int32_t>(P)];
@@ -276,7 +279,7 @@ namespace batchlas {
                                 group_barrier(part);
                             }
                         }
-                        if (lane == 0) {
+                        if (live && lane == 0) {
                             D_prob(n - 1) = A_local[base_a + (n - 1) + (n - 1) * static_cast<int32_t>(P)];
                         }
                     }
@@ -284,7 +287,7 @@ namespace batchlas {
                     group_barrier(part);
 
                     // Write back A.
-                    if (lane < n) {
+                    if (live && lane < n) {
                         for (int32_t c = 0; c < n; ++c) {
                             A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
                         }
@@ -305,7 +308,8 @@ namespace batchlas {
                     const Span<std::byte>& ws,
                     size_t cta_wg_size_multiplier) {
         (void)ws;
-        batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_cta", B, a_in, d_out, e_out, tau_out);
+        const std::uint8_t* mask =
+            batchlas::detail::mask_ptr(batchlas::detail::call_mask("sytrd_cta", a_in, d_out, e_out, tau_out));
         if (a_in.rows() != a_in.cols()) {
             throw batchlas::invalid_argument("sytrd_cta: A must be square.");
         }
@@ -335,9 +339,9 @@ namespace batchlas {
         auto launch = [&](auto P_tag, bool upper) {
             constexpr int32_t P = decltype(P_tag)::value;
             if (upper) {
-                sytd2_cta_impl<T, P, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier);
+                sytd2_cta_impl<T, P, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
             } else {
-                sytd2_cta_impl<T, P, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier);
+                sytd2_cta_impl<T, P, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
             }
         };
 

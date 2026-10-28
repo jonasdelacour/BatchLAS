@@ -225,7 +225,8 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                                           const MatrixView<T, MatrixFormat::Dense>& a,
                                           const VectorView<T>& e,
                                           const VectorView<T>& tau,
-                                          const MatrixView<T, MatrixFormat::Dense>& w) {
+                                          const MatrixView<T, MatrixFormat::Dense>& w,
+                                          const std::uint8_t* mask) {
     constexpr int wg = WG;
 
     (void)q->submit([&](sycl::handler& h) {
@@ -248,7 +249,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
@@ -492,7 +493,8 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                                         const VectorView<T>& e,
                                         const VectorView<T>& tau,
                                         const MatrixView<T, MatrixFormat::Dense>& w,
-                                        int groups) {
+                                        int groups,
+                                        const std::uint8_t* mask) {
     constexpr int wg = WG;
     const int n_host = a.rows();
     const int batch_host = a.batch_size();
@@ -549,6 +551,8 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
 
                 const int glid = static_cast<int>(it.get_group_linear_id());
                 const int b = glid / G;
+                // I1 per item: all G work-groups of an inactive item leave before its grid barrier.
+                if (mask != nullptr && mask[b] == 0) return;
                 const int gg = glid - b * G;
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
@@ -810,7 +814,8 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
                                           const MatrixView<T, MatrixFormat::Dense>& a,
                                           const VectorView<T>& e,
                                           const VectorView<T>& tau,
-                                          const MatrixView<T, MatrixFormat::Dense>& w) {
+                                          const MatrixView<T, MatrixFormat::Dense>& w,
+                                          const std::uint8_t* mask) {
     constexpr int wg = WG;
     const int n = a.rows();
     const int batch = a.batch_size();
@@ -854,7 +859,7 @@ Event latrd_lower_panel_batched_wg_device(Queue& q,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
                 const int lid = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
@@ -1049,12 +1054,13 @@ Event latrd_lower_panel_batched_grid_dispatch(Queue& q,
                                               const VectorView<T>& tau,
                                               const MatrixView<T, MatrixFormat::Dense>& w,
                                               bool fuse_trailing_update,
-                                              const GridLaunch& gl) {
+                                              const GridLaunch& gl,
+                                              const std::uint8_t* mask) {
     auto call = [&](auto wg_tag) {
         constexpr int WG = decltype(wg_tag)::value;
         if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_grid<T, WG, true>(q, a, e, tau, w, gl.groups);
-        return latrd_lower_panel_batched_wg_grid<T, WG, false>(q, a, e, tau, w, gl.groups);
+            return latrd_lower_panel_batched_wg_grid<T, WG, true>(q, a, e, tau, w, gl.groups, mask);
+        return latrd_lower_panel_batched_wg_grid<T, WG, false>(q, a, e, tau, w, gl.groups, mask);
     };
     if (gl.wg <= 32)  return call(std::integral_constant<int, 32>{});
     if (gl.wg <= 64)  return call(std::integral_constant<int, 64>{});
@@ -1072,24 +1078,26 @@ Event latrd_lower_panel_batched(Queue& q,
                                 bool fuse_trailing_update) {
     const int n = a.rows();
     const bool use_device = use_device_latrd();
+    const std::uint8_t* mask =
+        ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("latrd_lower_panel", a, e, tau, w));
 
     auto call_legacy = [&](auto wg_tag) {
         constexpr int WG = decltype(wg_tag)::value;
         if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_legacy<T, WG, true>(q, a, e, tau, w);
-        return latrd_lower_panel_batched_wg_legacy<T, WG, false>(q, a, e, tau, w);
+            return latrd_lower_panel_batched_wg_legacy<T, WG, true>(q, a, e, tau, w, mask);
+        return latrd_lower_panel_batched_wg_legacy<T, WG, false>(q, a, e, tau, w, mask);
     };
     auto call_device = [&](auto wg_tag) {
         constexpr int WG = decltype(wg_tag)::value;
         if (fuse_trailing_update)
-            return latrd_lower_panel_batched_wg_device<T, WG, true>(q, a, e, tau, w);
-        return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w);
+            return latrd_lower_panel_batched_wg_device<T, WG, true>(q, a, e, tau, w, mask);
+        return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w, mask);
     };
 
     if (use_grid_latrd(n)) {
         const GridLaunch gl = choose_grid_launch(q, n, a.batch_size());
         if (gl.groups > 1) {
-            return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl);
+            return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl, mask);
         }
         // G == 1: fall through to the legacy kernel verbatim.
     }
@@ -1185,7 +1193,7 @@ Event latrd_lower_panel(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& w_panel_in,
                         int32_t wg_hint,
                         bool fuse_trailing_update) {
-    ::batchlas::detail::refuse_batch_mask("latrd_lower_panel", a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
+    (void)::batchlas::detail::call_mask("latrd_lower_panel", a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
     (void)B;
     validate_latrd_lower_panel_panel_dims(a_panel_in, e_panel_out, tau_panel_out, w_panel_in);
 
@@ -1211,7 +1219,7 @@ Event latrd_lower_panel(Queue& ctx,
                         int32_t ib,
                         int32_t wg_hint,
                         bool fuse_trailing_update) {
-    ::batchlas::detail::refuse_batch_mask("latrd_lower_panel", a_in, e_out, tau_out, w_in);
+    (void)::batchlas::detail::call_mask("latrd_lower_panel", a_in, e_out, tau_out, w_in);
     (void)B;
     validate_latrd_lower_panel_dims(a_in, e_out, tau_out, w_in, j0, ib);
 

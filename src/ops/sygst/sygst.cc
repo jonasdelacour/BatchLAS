@@ -42,15 +42,17 @@ inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 1
 // Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
 template <Backend B, class T>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
-    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1 &&
-                             !batchlas::detail::any_batch_mask(A, Bf);  // no family reads the mask yet
+    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
+    // The NETLIB vendor honours a batch mask; Blocked and TwoSided keep refusing it.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bf);
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());
-            return homogeneous && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagWg &&
+            // mask: lift after trsm, trmm, syr2k/her2k (W1b)
+            return homogeneous && !masked && d.is_gpu && blocked_nb_compiled(b.nb) && d.max_wg >= sycl_sygst::kDiagWg &&
                    static_cast<std::int64_t>(sycl_sygst::diag_slm_bytes<T>(kb)) <= d.slm_budget;
         },
-        [&](TwoSided) { return homogeneous; },
+        [&](TwoSided) { return homogeneous && !masked; },  // mask: lift after trsm, trmm (W1b)
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
     }, c);
 }

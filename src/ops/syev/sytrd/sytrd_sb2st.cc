@@ -68,7 +68,8 @@ Event kd0_extract(Queue& q,
                   const MatrixView<T, MatrixFormat::Dense>& ab,
                   const VectorView<typename base_type<T>::type>& d,
                   const VectorView<typename base_type<T>::type>& e,
-                  const VectorView<T>& tau) {
+                  const VectorView<T>& tau,
+                  const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
     using Real = typename base_type<T>::type;
@@ -82,6 +83,7 @@ Event kd0_extract(Queue& q,
         h.parallel_for<Kd0ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             auto AB = ABv.batch_item(b);
             auto Db = dv.batch_item(b);
             auto Eb = ev.batch_item(b);
@@ -110,7 +112,8 @@ Event kd1_extract_lower(Queue& q,
                         const MatrixView<T, MatrixFormat::Dense>& ab,
                         const VectorView<typename base_type<T>::type>& d,
                         const VectorView<typename base_type<T>::type>& e,
-                        const VectorView<T>& tau) {
+                        const VectorView<T>& tau,
+                  const std::uint8_t* mask) {
     const int n = ab.cols();
     const int batch = ab.batch_size();
     using Real = typename base_type<T>::type;
@@ -124,6 +127,7 @@ Event kd1_extract_lower(Queue& q,
         h.parallel_for<Kd1ExtractKernel<T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                             [=](sycl::id<1> idx) {
             const int b = static_cast<int>(idx[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             auto AB = ABv.batch_item(b);
             auto Db = dv.batch_item(b);
             auto Eb = ev.batch_item(b);
@@ -168,7 +172,8 @@ Event btrd_lower_inplace(Queue& q,
                          VectorView<T> work,
                          VectorView<typename base_type<T>::type> d,
                          VectorView<typename base_type<T>::type> e,
-                         VectorView<T> tau) {
+                         VectorView<T> tau,
+                         const std::uint8_t* mask) {
     (void)q->submit([&](sycl::handler& h) {
         constexpr int kWorkGroupSize = 128;
         const int batch = ab.batch_size();
@@ -183,6 +188,7 @@ Event btrd_lower_inplace(Queue& q,
             using Ops = detail::btrd_givens_ops<T>;
 
             const int b = static_cast<int>(it.get_group(0));
+            if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group, before any barrier
             const int lid = static_cast<int>(it.get_local_id(0));
             const int lsize = static_cast<int>(it.get_local_range(0));
 
@@ -496,7 +502,8 @@ Event sytrd_sb2st(Queue& ctx,
                   int32_t kd,
                   const Span<std::byte>& ws,
                   int32_t block_size) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sb2st", B, ab_in, d_out, e_out, tau_out);
+    const std::uint8_t* mask =
+        batchlas::detail::mask_ptr(batchlas::detail::call_mask("sytrd_sb2st", ab_in, d_out, e_out, tau_out));
     validate_sytrd_sb2st_dims(ab_in, d_out, e_out, tau_out, uplo, kd);
 
     if (!ctx.in_order()) {
@@ -515,11 +522,11 @@ Event sytrd_sb2st(Queue& ctx,
 
     // Fast paths.
     if (kd_i == 0) {
-        (void)kd0_extract<T>(ctx, ab_in, d_out, e_out, tau_out);
+        (void)kd0_extract<T>(ctx, ab_in, d_out, e_out, tau_out, mask);
         return ctx.get_event();
     }
     if (kd_i == 1) {
-        (void)kd1_extract_lower<T>(ctx, ab_in, d_out, e_out, tau_out);
+        (void)kd1_extract_lower<T>(ctx, ab_in, d_out, e_out, tau_out, mask);
         return ctx.get_event();
     }
 
@@ -590,9 +597,9 @@ Event sytrd_sb2st(Queue& ctx,
     }
 
     if (can_use_subgroup) {
-        (void)detail::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+        (void)detail::btrd_lower_inplace_subgroup_dispatch<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
     } else {
-        (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out);
+        (void)btrd_lower_inplace<T>(ctx, ABwork, n, kd_i, Cv, WORKv, d_out, e_out, tau_out, mask);
     }
 
     return ctx.get_event();
