@@ -152,17 +152,17 @@ protected:
 
     // Bit-identical to the unmasked call where the route allows it: Direct everywhere, and LOBPCG
     // with Householder (complex T). Elsewhere EXPECT_VERIFY mode: m equal, and an item the unmasked
-    // call converged converges with W within 1e3 eps of it. Inactive items are bit-exact either way.
+    // call converged converges with W within max(1e3 eps, the relative tolerance) of it. Inactive items are bit-exact either way.
     void check(const std::string& what, int n, int batch, int neigs, JobType jobz, const SyevxParams<T>& p,
                bool same = false) {
         SCOPED_TRACE(what + " n " + std::to_string(n) + " batch " + std::to_string(batch) + " neigs " +
                      std::to_string(neigs) + (jobz == JobType::EigenVectors ? " V" : " N"));
         Queue& q = *this->ctx;
-        // The unmasked reference would route a level-2/3 or potrf child to the vendor on a GPU,
+        // The unmasked reference would route a level-2/3, potrf or QR child to the vendor on a GPU,
         // which refuses the masked call: both runs pin them `native`.
-        std::array<std::optional<select::ScopedPin<std::monostate>>, 7> children;
+        std::array<std::optional<select::ScopedPin<std::monostate>>, 10> children;
         if (!kHost) {
-            const char* ops[] = {"gemm", "gemv", "trsm", "trmm", "syrk", "herk", "potrf"};
+            const char* ops[] = {"gemm", "gemv", "trsm", "trmm", "syrk", "herk", "potrf", "geqrf", "orgqr", "ormqr"};
             for (std::size_t i = 0; i < children.size(); ++i) children[i].emplace(ops[i], "native");
         }
         Problem<T, B> pr(q, n, batch, neigs, jobz, p, same);
@@ -180,7 +180,9 @@ protected:
             m_ref.assign(pr.m.data(), pr.m.data() + pr.m.size());
             if (p.iterations > 0) EXPECT_GT(std::count(info_ref.begin(), info_ref.end(), 0), 0) << "the unmasked call converged no item";
             c.verify_active = [&](const std::string& pattern, std::span<const int> active) {
-                const R tol = R(1000) * std::numeric_limits<R>::epsilon();
+                // An item stops at the solver's tolerance, and the masked call's iteration count (and
+                // Filtered's degree) can differ, so W agrees to that tolerance, not to the rounding.
+                const R tol = std::max(R(1000) * std::numeric_limits<R>::epsilon(), R(std::abs(p.relative_tolerance)));
                 for (const int b : active) {
                     EXPECT_EQ(pr.m[std::size_t(b)], m_ref[std::size_t(b)]) << pattern << " m of item " << b;
                     if (info_ref[std::size_t(b)] != 0) continue;  // an unconverged reference bounds nothing
