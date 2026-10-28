@@ -55,11 +55,11 @@ inline GesvdBidiagSolver gesvd_bidiag_solver() {
     return GesvdBidiagSolver::Bdsdc;
 }
 
-// gesvd_blocked's general path honours a mask only where every child it reaches does: not stedc
-// (bdsdc, normal), not NETLIB's host gemm. Canonical jobs. mask: lift after stedc (W3a)
+// gesvd_blocked's general path honours a mask wherever every child it reaches does: each bidiagonal
+// solver does, NETLIB's host gemm does not. Canonical jobs.
 template <Backend B, typename T>
 bool gesvd_blocked_honours_mask(std::int64_t, std::int64_t, bool, bool) {
-    return select::native_gpu_backend<B> && gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsqr;
+    return select::native_gpu_backend<B>;
 }
 
 }  // namespace batchlas::sycl_gesvd

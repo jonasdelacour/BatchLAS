@@ -65,8 +65,7 @@ Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& V,
                           const SyevxParams<T>& params,
                           Span<int32_t> info) {
-    // The plumbing below carries the mask to every child and kernel; the children refuse it today.
-    ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);  // mask: lift after stebz, stein (W3a), sytrd_sy2sb
+    // The plumbing below carries the mask to every child and kernel, each of which honours it.
     const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct_subset", A, V);
     using Real = typename base_type<T>::type;
 
@@ -407,7 +406,6 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         return 0;
     } else {
         // Must reject exactly what the solver rejects.
-        ::batchlas::detail::refuse_batch_mask("syevx_direct_subset_buffer_size", A, V);  // mask: lift after stebz, stein (W3a), sytrd_sy2sb
         const auto mask = ::batchlas::detail::call_mask("syevx_direct_subset_buffer_size", A, V);
         (void)W;
         const int32_t n = static_cast<int32_t>(A.rows());

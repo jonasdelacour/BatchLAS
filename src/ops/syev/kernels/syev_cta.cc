@@ -711,7 +711,6 @@ Event syev_cta(Queue& ctx,
                SteqrParams<T> steqr_params,
                size_t cta_wg_size_multiplier,
                Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_cta", B, a_in);  // mask: lift after steqr (W3a)
     (void)::batchlas::detail::call_mask("syev_cta", a_in);  // a_in.batch_range carries each part's slice
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());

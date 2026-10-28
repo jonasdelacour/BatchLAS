@@ -651,7 +651,6 @@ Event syev_blocked(Queue& ctx,
                    const Span<std::byte>& ws,
                    StedcParams<typename base_type<T>::type> stedc_params,
                    Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_blocked", B, a_in);  // mask: lift after stedc, stebz (W3a)
     (void)::batchlas::detail::call_mask("syev_blocked", a_in);  // a_in.batch_range carries each part's slice
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());
