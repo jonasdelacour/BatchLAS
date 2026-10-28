@@ -199,6 +199,20 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W4c, ortho, norm, cond, ritz_values, syevx, iluk** (`tests/norm_mask_tests.cc`,
+  `tests/ortho_mask_tests.cc`, `tests/syevx_mask_tests.cc`, `tests/iluk_mask_tests.cc`; acpp Metal
+  float and complex float, NETLIB every scalar, 2026-10-28): norm (every type), cond, ortho's CGS2,
+  SVQB, SVQB2 and (on a host device) Householder, ritz_values, syevx `Direct`, `LOBPCG` and `Filtered`, and iluk's
+  device factorisation and apply run a masked batch; a call whose child still refuses (potrf under
+  ortho's Cholesky family, the host BLAS gemm on NETLIB, getri `blocked` under cond on a GPU, ILU(k)
+  under LOBPCG) throws before writing. Filtered's batch filter degree is a cross-item host minimum,
+  and an ILU(k) pattern is the union over active items: both are checked within a bound. On
+  AdaptiveCpp a guard tests a captured bool, not the pointer: a captured null mask read as non-null
+  in a Metal kernel, and the JIT's specialisation on the pointer moved CGS2's rounding after a
+  projection (ortho(A, M) is checked by value there). Defeating one guard at a time turned red only
+  its own cases, on the patterns with an inactive item; ortho's transposed copy is the exception, a
+  round trip that rewrites an inactive item with its own bits. syevx `DirectSubset` and lanczos
+  carry the mask but refuse until stebz, stein, steqr, sort (W3a) and sytrd_sy2sb honour it.
 - **W2b, LU** (`tests/getrf_mask_tests.cc`, `tests/getrs_mask_tests.cc`; Apple M5 Max under
   AdaptiveCpp, Metal float and complex float, NETLIB every scalar, 2026-10-28): getrf `tiny` (I2)
   and `cta` (I1, packed sub-group tiles included), getrs `cta` (I1), gesv `tiny` (I2) and NETLIB's
