@@ -856,7 +856,6 @@ Event sytrd_blocked(Queue& ctx,
                     Uplo uplo,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_blocked", B, a_in, d_out, e_out, tau_out);  // mask: lift after syr2k, her2k (W1b)
     const Span<const std::uint8_t> mask = batchlas::detail::call_mask("sytrd_blocked", a_in, d_out, e_out, tau_out);
     validate_sytrd_dims(a_in, d_out, e_out, tau_out);
 

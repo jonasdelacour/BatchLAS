@@ -349,7 +349,7 @@ TYPED_TEST(GesvdMask, SaturatingJacobiIsBitIdentical) {
 }
 
 // blocked over bdsqr: gebrd, bdsqr and both ormbr back-transforms skip an inactive item, per part
-// of the L2 chunk loop too. Shapes where the left back-transform would reach trmm refuse instead.
+// of the L2 chunk loop too.
 TYPED_TEST(GesvdMask, BlockedOverBdsqrLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -368,8 +368,8 @@ TYPED_TEST(GesvdMask, BlockedOverBdsqrLeavesInactiveItemsUntouched) {
     }
 }
 
-// Where blocked reaches a child that ignores the mask (bdsdc's stedc by default; trmm on the
-// left back-transform), a strict pin refuses the masked call and writes nothing.
+// Where blocked reaches a child that ignores the mask (bdsdc's stedc by default), a strict pin
+// refuses the masked call and writes nothing.
 TYPED_TEST(GesvdMask, BlockedRefusesWhereAChildIgnoresTheMask) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -487,7 +487,7 @@ TYPED_TEST(GesvdMask, BdsqrFailureFoldIgnoresInactiveItems) {
 }
 
 // ormbr: 'P' Right through its cta glue (square <= 32) and the blocked WY apply (several blocks),
-// 'Q' Left through ormqx_cta, and through ormqr_blocked where its Left update does not reach trmm.
+// 'Q' Left through ormqx_cta and through ormqr_blocked.
 TYPED_TEST(GesvdMask, OrmbrLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
@@ -498,7 +498,7 @@ TYPED_TEST(GesvdMask, OrmbrLeavesInactiveItemsUntouched) {
     this->check_ormbr('P', 20, 14, 9, 14, 12, C, 4);
     this->check_ormbr('P', 20, 14, 9, 14, 12, N, 4);
     this->check_ormbr('Q', 13, 13, 13, 13, 40, N, 32);
-    if (!ops::ormqr::wy_reaches_trmm<B, T>(Side::Left)) this->check_ormbr('Q', 20, 14, 20, 9, 12, N, 4);
+    this->check_ormbr('Q', 20, 14, 20, 9, 12, N, 4);
 }
 
 #ifdef BATCHLAS_GEBRD_CTA_CC_PATH

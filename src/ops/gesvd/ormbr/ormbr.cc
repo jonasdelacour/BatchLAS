@@ -393,7 +393,7 @@ Event ormbr(Queue& ctx,
     // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before any child runs.
     if constexpr (!select::native_gpu_backend<B>) ::batchlas::detail::refuse_batch_mask("ormbr", a_in, tau_in, c_in);
     // Every operand carries the call's mask whichever brought it, so the children see it. 'Q' runs
-    // ormqx_cta or ormqr_blocked, which refuses a mask itself where its Left update reaches trmm.
+    // ormqx_cta or ormqr_blocked.
     const auto mask = ::batchlas::detail::call_mask("ormbr", a_in, tau_in, c_in);
     const bool adopt = !mask.empty() && a_in.batch_size() == c_in.batch_size() && tau_in.batch_size() == c_in.batch_size();
     const auto a = adopt ? a_in.with_batch_mask(mask) : a_in;

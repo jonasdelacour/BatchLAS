@@ -9,7 +9,6 @@
 #include <batchlas/blas/functions/ormqr.hh>
 
 #include <src/ops/orgqr/choice.hh>
-#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
 #include <src/ops/orgqr/orgqr_native.hh>
@@ -44,11 +43,10 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
     const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         // Masked: the identity and copy-back kernels skip an inactive item, and the apply is the
-        // routed ormqr (Left, NoTrans). mask: lift after trmm (that ormqr's trmm leg)
+        // routed ormqr (Left, NoTrans).
         [&](Blocked) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
-                   A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows() &&
-                   !(masked && ops::ormqr::wy_reaches_trmm<B, T>(Side::Left));
+                   A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
         // NETLIB's host loop skips an inactive item; a strided vendor call cannot.
         [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && (!masked || B == Backend::NETLIB); },

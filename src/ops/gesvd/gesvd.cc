@@ -94,7 +94,7 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && !masked && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) {
-            // mask: lift after stedc (W3a), trmm (W1b); Hermitian: syev_blocked
+            // mask: lift after stedc (W3a); Hermitian: syev_blocked
             const bool mask_ok = !masked || (!j.herm && sycl_gesvd::gesvd_blocked_honours_mask<B, T>(
                                                             m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None));
             return native && mask_ok && (!j.herm || square);

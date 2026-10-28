@@ -2,8 +2,9 @@
 // syev honours a batch mask (W3b) in cta_fused, jacobi and the host backend's LAPACKE loop, each
 // pinned and reached, on tests/masked_contract.hh: A, w and info of an inactive item untouched,
 // active items the unmasked call's. The tridiagonal stages the composites call (sytrd_cta, sb2st in
-// its three kernels, sb2st_hh with its back-transform, latrd's legacy and device panels) and
-// syev_align are checked without a pin. Every mask is device-only; data complex where T is, ld,
+// its three kernels, sb2st_hh with its back-transform, latrd's legacy, device and (CUDA) grid
+// panels, and the lifted sytrd_blocked, sytrd_sy2sb and band reduction) and syev_align are checked
+// without a pin. Every mask is device-only; data complex where T is, ld,
 // stride and inc padded, holes inside packed sub-groups, and a 1024-item identical batch for the
 // local-memory kernels. evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
@@ -21,9 +22,12 @@
 #include <tests/test_utils.hh>
 
 #include <algorithm>
+#include <cmath>
 #include <complex>
 #include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -287,15 +291,20 @@ TYPED_TEST(SyevMask, Sb2stHhAndItsBackTransformLeaveInactiveItemsUntouched) {
     }
 }
 
-// latrd_lower_panel, sytrd_blocked's panel: the legacy and device kernels (I1). The grid kernel
-// never runs on Metal or a host device (latrd_lower_panel.cc), so a CUDA box has to cover it.
+// latrd_lower_panel, sytrd_blocked's panel: the legacy and device kernels (I1), and on CUDA the grid
+// kernel, whose G work-groups of an inactive item all leave before its grid barrier (it never runs
+// on Metal or a host device, so a CUDA box has to cover it).
 TYPED_TEST(SyevMask, LatrdPanelLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     if (!this->gpu()) GTEST_SKIP() << "latrd's panel is a GPU kernel";
     Queue& q = *this->ctx;
-    const int n = 21, ib = 4, j0 = 3, batch = 10;
-    for (const char* impl : {"legacy", "device"}) {
+    const int ib = 4, j0 = 3, batch = 10;
+    // grid at n = 100: four work-groups per item share its software grid barrier (40 resident).
+    const bool cuda = B == Backend::CUDA;
+    for (const char* impl : {"legacy", "device", "grid"}) {
+        if (impl[0] == 'g' && !cuda) continue;  // never on Metal or a host device: a CUDA-only check
+        const int n = impl[0] == 'g' ? 100 : 21;
         SCOPED_TRACE(impl);
         const ScopedEnvVar pin("BATCHLAS_LATRD_IMPL", impl);
         Matrix<T> A = ts::padded<T>(n, n, batch), W = ts::padded<T>(n, ib + 2, batch);
@@ -315,6 +324,129 @@ TYPED_TEST(SyevMask, LatrdPanelLeavesInactiveItemsUntouched) {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("W", W.view()),
                                            e.output("e"), tau.output("tau")};
         };
+        mc::check(q, c);
+    }
+}
+
+// The lifted sytrd composites (lift 1), unpinned: sytrd_blocked (latrd panels, then syr2k / her2k),
+// sytrd_sy2sb (geqrf panels, larft, symm / hemm, syr2k / her2k) and the band reduction (geqrf and
+// ormqr per sweep). Their children route on their own Auto, which on a vendor backend takes the
+// vendor unmasked, so the masked patterns compare with the all-active masked call.
+TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    constexpr Backend B = TestFixture::B;
+    if (!this->gpu()) GTEST_SKIP() << "on the host backend their level-3 children are its BLAS, which refuses";
+    Queue& q = *this->ctx;
+    const bool vendor = B == Backend::CUDA || B == Backend::ROCM;
+    const int batch = 10;
+    const Uplo u = Uplo::Lower;  // the only triangle the three composites implement
+    for (const int n : {45, 70}) {
+        {
+            SCOPED_TRACE("sytrd_blocked n " + std::to_string(n) + " " + ts::uplo_name(u));
+            Matrix<T> A = ts::padded<T>(n, n, batch);
+            PaddedVec<T> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+            mc::Case c;
+            c.batch = batch;
+            c.masked_reference = vendor;
+            c.prepare = [&] {
+                fill_items(A.data_ptr(), std::size_t(A.stride()), batch, 4, false);
+                d.poison(), e.poison(), tau.poison();
+            };
+            c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+                sytrd_blocked<B, T>(q, A.view().with_batch_mask(m), d.view(m), e.view(m), tau.view(m), u, ws, 16);
+            };
+            c.buffer_size = [&](Span<const std::uint8_t> m) {
+                return sytrd_blocked_buffer_size<B, T>(q, A.view().with_batch_mask(m), d.view(m), e.view(m), tau.view(m), u,
+                                                       16);
+            };
+            c.outputs = [&] {
+                return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), d.output("d"), e.output("e"),
+                                               tau.output("tau")};
+            };
+            mc::check(q, c);
+        }
+    }
+    for (const int kd : {4, 8}) {
+        {
+            const int n = 40;
+            SCOPED_TRACE("sytrd_sy2sb n " + std::to_string(n) + " kd " + std::to_string(kd) + " " + ts::uplo_name(u));
+            Matrix<T> A = ts::padded<T>(n, n, batch), AB = ts::padded<T>(kd + 1, n, batch);
+            PaddedVec<T> tau(n - kd, batch);
+            mc::Case c;
+            c.batch = batch;
+            c.masked_reference = vendor;
+            c.prepare = [&] {
+                fill_items(A.data_ptr(), std::size_t(A.stride()), batch, 6, false);
+                std::fill_n(AB.data_ptr(), std::size_t(AB.stride()) * batch, ts::poison<T>());
+                tau.poison();
+            };
+            c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+                sytrd_sy2sb<B, T>(q, A.view().with_batch_mask(m), AB.view().with_batch_mask(m), tau.view(m), u, kd, ws);
+            };
+            c.buffer_size = [&](Span<const std::uint8_t> m) {
+                return sytrd_sy2sb_buffer_size<B, T>(q, A.view().with_batch_mask(m), AB.view().with_batch_mask(m),
+                                                     tau.view(m), u, kd);
+            };
+            c.outputs = [&] {
+                return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("AB", AB.view()),
+                                               tau.output("tau")};
+            };
+            mc::check(q, c);
+        }
+    }
+    for (const int kd : {3, 6}) {
+        const int n = 30;
+        SCOPED_TRACE("sytrd_band_reduction n " + std::to_string(n) + " kd " + std::to_string(kd));
+        Matrix<T> AB = ts::padded<T>(kd + 1, n, batch);
+        PaddedVec<R> d(n, batch), e(n - 1, batch);
+        PaddedVec<T> tau(n - 1, batch);
+        mc::Case c;
+        c.batch = batch;
+        c.masked_reference = vendor;
+        c.prepare = [&] {
+            fill_items(AB.data_ptr(), std::size_t(AB.stride()), batch, 7, false);
+            d.poison(), e.poison(), tau.poison();
+        };
+        c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+            sytrd_band_reduction<B, T>(q, AB.view().with_batch_mask(m), d.view(m), e.view(m), tau.view(m), Uplo::Lower, kd,
+                                       ws, int32_t(4));
+        };
+        c.buffer_size = [&](Span<const std::uint8_t> m) {
+            return sytrd_band_reduction_buffer_size<B, T>(q, AB.view().with_batch_mask(m), d.view(m), e.view(m), tau.view(m),
+                                                          Uplo::Lower, kd, int32_t(4));
+        };
+        c.outputs = [&] {
+            return std::vector<mc::Output>{mc::Output::matrix("AB", AB.view()), d.output("d"), e.output("e"),
+                                           tau.output("tau")};
+        };
+        {
+            // Not run-to-run deterministic on CUDA (kd 6 every run, kd 3 on item 3 now and then),
+            // unmasked as masked and with the same zeroed workspace (an open defect, lift 1):
+            // EXPECT_VERIFY on d and |e| against one unmasked call. Inactive items stay bit-for-bit checked.
+            c.prepare();
+            {
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(c.buffer_size({}), 1));
+                c.call({}, ws.to_span());
+                q.wait();
+            }
+            const std::vector<R> d_ref(d.buf.begin(), d.buf.end()), e_ref(e.buf.begin(), e.buf.end());
+            c.verify_active = [&, d_ref, e_ref](const std::string&, std::span<const int> active) {
+                R scale = 0;
+                for (const R v : d_ref) scale = std::max(scale, std::abs(v));
+                const R tol = R(1000) * std::numeric_limits<R>::epsilon() * std::max(scale, R(1));
+                for (const int b : active) {
+                    for (int i = 0; i < n; ++i) {
+                        const std::size_t k = std::size_t(b) * d.stride + std::size_t(i) * d.inc;
+                        EXPECT_NEAR(d.buf[k], d_ref[k], tol) << "d: active item " << b << " row " << i;
+                    }
+                    for (int i = 0; i < n - 1; ++i) {
+                        const std::size_t k = std::size_t(b) * e.stride + std::size_t(i) * e.inc;
+                        EXPECT_NEAR(std::abs(e.buf[k]), std::abs(e_ref[k]), tol) << "e: active item " << b << " row " << i;
+                    }
+                }
+            };
+        }
         mc::check(q, c);
     }
 }

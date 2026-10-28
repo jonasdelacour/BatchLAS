@@ -360,7 +360,6 @@ Event sytrd_sy2sb(Queue& ctx,
                   Uplo uplo,
                   int32_t kd,
                   const Span<std::byte>& ws) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sy2sb", B, a_in, ab_out, tau_out);  // mask: lift after geqrf, ormqr (W2c), syr2k, her2k, symm, hemm (W1b)
     const Span<const std::uint8_t> mask = batchlas::detail::call_mask("sytrd_sy2sb", a_in, ab_out, tau_out);
     const std::uint8_t* mask_p = batchlas::detail::mask_ptr(mask);
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);

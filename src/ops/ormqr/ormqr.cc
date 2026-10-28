@@ -12,7 +12,6 @@
 
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/ormqr/vendor.hh>
-#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
@@ -58,8 +57,7 @@ bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, cons
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
-        // mask: lift after trmm (the Left update's trmm leg; wy_spelling.hh)
-        [&](Blocked) { return defined && d.is_gpu && !(masked && wy_reaches_trmm<B, T>(side)); },
+        [&](Blocked) { return defined && d.is_gpu; },
         [&](Vendor) { return defined && d.has_vendor && (!masked || B == Backend::NETLIB); },
     }, c);
 }

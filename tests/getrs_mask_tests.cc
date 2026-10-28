@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 // The LU consumers honour a batch mask (W2b), each family pinned and reached, on
 // tests/masked_contract.hh: getrs (device: cta in every transpose form; NETLIB: the host loop),
-// gesv (device: tiny; both: blocked, which runs the masked getrf and getrs), getri and inv (NETLIB:
-// the host loop). Every pattern runs on a device-only mask, complex data, padded ld and stride; an
-// inactive item's B, X, pivots, info and C are bit-identical to the poisoned input. getri's
-// blocked family and inv on a device keep refusing until trsm honours the mask.
+// getrs blocked, gesv (device: tiny; both: blocked, which runs the masked getrf and getrs), getri
+// (device: blocked; NETLIB: the host loop) and inv. Every pattern runs on a device-only mask, complex
+// data, padded ld and stride; an inactive item's B, X, pivots, info and C are bit-identical to the
+// poisoned input. A strided vendor refuses permanently.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -22,7 +22,6 @@
 #include <src/ops/getri/choice.hh>
 #include <src/ops/getrs/choice.hh>
 #include <src/select/vendor.hh>
-#include <src/util/resident_capacity.hh>
 #include <tests/masked_contract.hh>
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
@@ -47,6 +46,7 @@ struct Shape {
     int wg_items = 0;
     bool identical = false;
     bool singular = true;  ///< item 5 has a zero third column (info = 3)
+    int chunk_items = 0;
 };
 
 std::string label(const Shape& s) {
@@ -122,6 +122,10 @@ struct Problem {
         c.batch = s.batch;
         c.wg_items = s.wg_items;
         c.identical_items = s.identical;
+        c.chunk_items = s.chunk_items;
+        // The blocked families and inv run trsm and gemm (gesv: getrf and getrs) on their own Auto,
+        // which takes the vendor unmasked and a native family masked.
+        c.masked_reference = (s.spelling == "blocked" || s.spelling == "inv") && (B == Backend::CUDA || B == Backend::ROCM);
         return c;
     }
 
@@ -245,29 +249,52 @@ TYPED_TEST(LuSolveMask, GesvEveryFamilyLeavesInactiveItemsUntouched) {
             this->gesv_check({"tiny", n, n == 13 ? 4 : 2, 24, Transpose::NoTrans, TestFixture::tiny_items(n)});
         }
     }
-    // blocked = the masked getrf, then the masked getrs (each on its own Auto). On a device the
-    // larger order is cta's ceiling: above it only getrf's blocked family runs, which waits for trsm.
+    // blocked = the masked getrf, then the masked getrs (each on its own Auto); 70 is past cta's
+    // ceiling on most devices, where getrf's blocked family runs.
     this->gesv_check({"blocked", 11, 3, 12});
-    int big = 40;
-    if (this->device()) {
-        const std::size_t budget =
-            resident::device_slm_budget(this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-        big = std::min(big, sycl_getrf::getrf_cta_max_n_for_slm<T>(budget));
+    this->gesv_check({"blocked", 40, 2, 8});
+    if (this->device()) this->gesv_check({"blocked", 70, 3, 12, Transpose::NoTrans, 0, false, true, 4});
+}
+
+// getrs blocked: the interchange kernels and the two trsm per transpose form, at one block and past it.
+TYPED_TEST(LuSolveMask, GetrsBlockedLeavesInactiveItemsUntouched) {
+    if (!this->device()) GTEST_SKIP() << "blocked is a device family";
+    for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+        this->getrs_check({"blocked", 9, 3, 12, t});
+        this->getrs_check({"blocked", 70, 5, 8, t});
     }
-    this->gesv_check({"blocked", big, 2, 8});
+}
+
+// getri blocked (the zero and permutation kernels, its trsm and gemm) and inv, which runs it.
+TYPED_TEST(LuSolveMask, GetriBlockedAndInvLeaveInactiveItemsUntouched) {
+    if (!this->device()) GTEST_SKIP() << "getri blocked is a device family";
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    Queue& q = *this->ctx;
+    for (const Shape& s : {Shape{"blocked", 7, 0, 12}, Shape{"blocked", 70, 0, 8}}) {
+        SCOPED_TRACE("getri " + label(s));
+        Problem<T, B> p(q, s);
+        mc::check<ops::getri::GetriChoice>(q, "getri", s.spelling, p.getri_case());
+    }
+    for (const Shape& s : {Shape{"inv", 6, 0, 12}, Shape{"inv", 45, 0, 8}}) {
+        SCOPED_TRACE(label(s));
+        Problem<T, B> p(q, s);
+        mc::check(q, p.inv_case());
+    }
 }
 
 // The saturating batch (>= 1024, identical items): gesv tiny's packed partitions, getrs cta's tile.
 TYPED_TEST(LuSolveMask, SaturatingBatchIsBitIdentical) {
     if (!this->device()) GTEST_SKIP() << "tiny and cta are device families";
     this->gesv_check({"tiny", 8, 2, 1024, Transpose::NoTrans, 8, true});
-    this->gesv_check({"tiny", 20, 1, 1024, Transpose::NoTrans, 2, true});
+    using T = typename TestFixture::T;
+    if (20 <= sycl_gesv::gesv_tiny_max_n<T>()) this->gesv_check({"tiny", 20, 1, 1024, Transpose::NoTrans, 2, true});
     this->getrs_check({"cta", 24, 2, 1024, Transpose::NoTrans, 0, true});
     this->getrs_check({"cta", 24, 2, 1024, Transpose::ConjTrans, 0, true});
 }
 
 TYPED_TEST(LuSolveMask, GetriAndInvOnTheHostLoop) {
-    if (!this->host_loop()) GTEST_SKIP() << "getri honours the mask on NETLIB only until trsm does";
+    if (!this->host_loop()) GTEST_SKIP() << "the host loop is NETLIB's vendor family";
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     Queue& q = *this->ctx;
@@ -283,9 +310,9 @@ TYPED_TEST(LuSolveMask, GetriAndInvOnTheHostLoop) {
     }
 }
 
-// Families that keep refusing: getrs blocked and getri blocked (until trsm), a strided vendor
-// (permanently). Each pin runs unmasked first, then the masked call throws and writes nothing.
-TYPED_TEST(LuSolveMask, WaitingAndStridedFamiliesRefuseBeforeWriting) {
+// A strided vendor refuses permanently. Each pin runs unmasked first, then the masked call throws
+// and writes nothing.
+TYPED_TEST(LuSolveMask, StridedVendorRefusesBeforeWriting) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     Queue& q = *this->ctx;
@@ -294,10 +321,6 @@ TYPED_TEST(LuSolveMask, WaitingAndStridedFamiliesRefuseBeforeWriting) {
         std::string spelling;
     };
     std::vector<Refusal> v;
-    if (this->device()) {
-        v.push_back({"getrs", "blocked"});
-        v.push_back({"getri", "blocked"});
-    }
     if constexpr (B != Backend::NETLIB)
         if (select::factorization_vendor_available<B>) {
             v.push_back({"getrs", "vendor"});

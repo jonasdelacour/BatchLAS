@@ -15,7 +15,6 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/select/vendor.hh>
 #include <tests/masked_contract.hh>
 #include <tests/test_utils.hh>
@@ -292,54 +291,23 @@ std::vector<Entry<T>> routed_entries() {
         for (auto& e : level3_entries<T, B>())
             if (e.name != "spmm") out.push_back(std::move(e));
     }
-    // getrf, getrs and gesv honour the mask (W2b): tests/getrf_mask_tests.cc and
-    // tests/getrs_mask_tests.cc hold their contract. getri and inv honour it on NETLIB only: on a
-    // device, getri's blocked family waits for trsm and the vendor's strided call refuses.
-    // geqrf honours the mask (W2c): tests/geqrf_mask_tests.cc holds its contract. orgqr and
-    // ormqr (Left) honour it except where blocked's Left apply reaches trmm (W1b) on a device.
-    if (B != Backend::NETLIB && ops::ormqr::wy_reaches_trmm<B, T>(Side::Left)) {
-        out.push_back({"orgqr", true, [=](P& p) {
-                           if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-                           orgqr<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-                       }});
-        out.push_back({"ormqr", true, [=](P& p) {
-                           if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-                           ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
-                       }});
-    }
     // gesvd honours the mask through jacobi and NETLIB's host loop (W4a, gesvd_mask_tests); its
     // Hermitian form has neither, so on a device every family refuses it.
     if constexpr (B != Backend::NETLIB)
         out.push_back({"gesvd(hermitian)", true, [=](P& p) {
                            gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
                        }});
-    if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
-        out.push_back({"getri", true,
-                       [=](P& p) {
-                           if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-                           getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-                       }});
-        out.push_back({"inv", true, [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); }});
-        out.push_back({"inv(owning)", true, [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); }});
-        // The host backend's sygst and sygvd are LAPACKE loops that honour the mask (W3c): the
-        // contract is sygvd_mask_tests'. Every device family still refuses.
-        out.push_back({"sygst", true,
-                       [=](P& p) {
-                           if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-                           sygst<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws);
-                       }});
+    // getrf, getrs, gesv, getri and inv honour the mask (W2b, lift 1): tests/getrf_mask_tests.cc and
+    // tests/getrs_mask_tests.cc hold their contract. geqrf, orgqr and ormqr honour it (W2c, lift 1):
+    // tests/geqrf_mask_tests.cc and tests/ormqr_mask_tests.cc. sygst honours it in every family (W3c,
+    // lift 1): tests/sygvd_mask_tests.cc.
+    if constexpr (B != Backend::NETLIB) {
+        // The host backend's sygvd is a LAPACKE loop that honours the mask (W3c); every device family
+        // refuses until potrf (W2a) and syev (W3a) do.
         out.push_back({"sygvd", true, [=](P& p) {
                            sygvd<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
                                        p.ispan());
                        }});
-        out.push_back({"getri(pinned blocked)", true,
-                       [=](P& p) {
-                           // blocked writes P into C before its trsm: its can_run refuses a masked A or C.
-                           const select::ScopedPin<std::monostate> pin("getri", "blocked", select::StrictPin{});
-                           if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-                           getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-                       },
-                       true});
     }
     return out;
 }
@@ -459,28 +427,12 @@ std::vector<Entry<T>> direct_entries() {
     add("gesvd_cta(hermitian)", [=](P& p) {
         gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
     });
-    // gesvdj_cta, gebrd_unblocked, gebrd_cta and bdsqr honour the mask (W4a): gesvd_mask_tests.
-    // ormqx_cta honours the mask (W2c). ormqr_blocked's Left apply refuses where it reaches trmm;
-    // on NETLIB its gemm children refuse.
-    if (B == Backend::NETLIB || ops::ormqr::wy_reaches_trmm<B, T>(Side::Left))
+    // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask
+    // on a device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. On
+    // NETLIB ormqr_blocked's gemm children are the host BLAS, which refuses.
+    if constexpr (B == Backend::NETLIB)
         add("ormqr_blocked",
             [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
-    add("sytrd_blocked", [=](P& p) {
-        sytrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws);
-    });
-    add("sytrd_sy2sb", [=](P& p) { sytrd_sy2sb<B, T>(p.q, p.mat(p.a), p.mat(p.z, kKd + 1), p.vec(p.tau), L, kKd, p.ws); });
-    add("sytrd_band_reduction", [=](P& p) {
-        sytrd_band_reduction<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws,
-                                   int32_t(4));
-    });
-    add("sytrd_band_reduction(params)", [=](P& p) {
-        sytrd_band_reduction<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws,
-                                   SytrdBandReductionParams{});
-    });
-    add("sytrd_band_reduction_single_step", [=](P& p) {
-        sytrd_band_reduction_single_step<B, T>(p.q, p.mat(p.z, kKd + 1), p.mat(p.v, kN - 1), L, kKd, p.ws,
-                                               SytrdBandReductionParams{});
-    });
     // gebrd_blocked and ormbr honour the mask on a device (W4a); NETLIB's gemm children cannot.
     if constexpr (B == Backend::NETLIB) {
         add("gebrd_blocked", [=](P& p) {

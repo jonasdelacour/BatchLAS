@@ -43,7 +43,7 @@ bool can_run(const SygvdChoice& c, const select::Device& d, const Args<T>& a) {
     // The NETLIB vendor honours a batch mask (cuSOLVER cannot skip an item); Compose keeps refusing it.
     const bool masked = batchlas::detail::any_batch_mask(a.A, a.B);
     return std::visit(overloaded{
-        [&](Compose) { return homogeneous && !masked; },  // mask: lift after potrf (W2a), trsm, trmm (W1b), syev
+        [&](Compose) { return homogeneous && !masked; },  // mask: lift after potrf (W2a), syev
         [&](Vendor) {
             return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored && (!masked || B == Backend::NETLIB);
         },

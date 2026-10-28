@@ -565,7 +565,7 @@ Event syev_two_stage(Queue& ctx,
                      const Span<std::byte>& ws,
                      StedcParams<typename base_type<T>::type> stedc_params,
                      Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_two_stage", B, a_in);  // mask: lift after sytrd_sy2sb, stedc, stebz, ormqr_blocked
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_two_stage", B, a_in);  // mask: lift after stedc, stebz (W3a)
     const Span<const std::uint8_t> mask_span = ::batchlas::detail::call_mask("syev_two_stage", a_in);
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());

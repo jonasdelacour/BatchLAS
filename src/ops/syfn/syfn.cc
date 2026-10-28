@@ -118,7 +118,7 @@ void check_call(const Queue& q, const char* op, Span<int32_t> info, int64_t batc
 template <Backend B, typename T>
 Event syfn(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& F,
            SyfnFunction<typename base_type<T>::type> fn, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
-    detail::refuse_batch_mask("syfn", A, F);  // mask: lift after syev, syrk/herk (W1b)
+    detail::refuse_batch_mask("syfn", A, F);  // mask: lift after syev
     const Span<const std::uint8_t> mask = detail::call_mask("syfn", A, F);
     syfn_validate_params<T>(A, F, fn, uplo);
     ops::syfn::check_call(ctx, "syfn", info, A.batch_size(), fn);
@@ -141,7 +141,7 @@ template <Backend B, typename T>
 size_t syfn_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& F, SyfnFunction<typename base_type<T>::type> fn,
                         Uplo uplo) {
-    detail::refuse_batch_mask("syfn", A, F);  // mask: lift after syev, syrk/herk (W1b)
+    detail::refuse_batch_mask("syfn", A, F);  // mask: lift after syev
     const Span<const std::uint8_t> mask = detail::call_mask("syfn", A, F);
     syfn_validate_params<T>(A, F, fn, uplo);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
@@ -154,7 +154,7 @@ template <Backend B, typename T>
 Event syfn_from_eigen(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V,
                       Span<typename base_type<T>::type> eigenvalues, const MatrixView<T, MatrixFormat::Dense>& F,
                       SyfnFunction<typename base_type<T>::type> fn, Span<std::byte> workspace, Span<int32_t> info) {
-    detail::refuse_batch_mask("syfn_from_eigen", V, F);  // mask: lift after syrk/herk (W1b)
+    detail::refuse_batch_mask("syfn_from_eigen", V, F);  // mask: lift with syfn (W3b); its syrk/herk honours it
     const Span<const std::uint8_t> mask = detail::call_mask("syfn_from_eigen", V, F);
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
     ops::syfn::check_call(ctx, "syfn_from_eigen", info, V.batch_size(), fn);
@@ -173,7 +173,7 @@ size_t syfn_from_eigen_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
                                    Span<typename base_type<T>::type> eigenvalues,
                                    const MatrixView<T, MatrixFormat::Dense>& F,
                                    SyfnFunction<typename base_type<T>::type> fn) {
-    detail::refuse_batch_mask("syfn_from_eigen", V, F);  // mask: lift after syrk/herk (W1b)
+    detail::refuse_batch_mask("syfn_from_eigen", V, F);  // mask: lift with syfn (W3b); its syrk/herk honours it
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
     if (V.batch_size() == 0 || V.rows() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();

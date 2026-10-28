@@ -56,14 +56,10 @@ inline GesvdBidiagSolver gesvd_bidiag_solver() {
 }
 
 // gesvd_blocked's general path honours a mask only where every child it reaches does: not stedc
-// (bdsdc, normal), not trmm (ormqr_blocked's Left update; ormqx_cta takes square n <= 32), not
-// NETLIB's host gemm. Canonical jobs. mask: lift after stedc (W3a), trmm (W1b)
+// (bdsdc, normal), not NETLIB's host gemm. Canonical jobs. mask: lift after stedc (W3a)
 template <Backend B, typename T>
-bool gesvd_blocked_honours_mask(std::int64_t m, std::int64_t n, bool want_u, bool want_vh) {
-    const bool left_apply = m >= n ? want_u : want_vh;  // m < n solves A^H: its U is A's V^H
-    const bool left_cta = m == n && m <= 32;
-    return select::native_gpu_backend<B> && gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsqr &&
-           !(left_apply && !left_cta && ops::ormqr::wy_reaches_trmm<B, T>(Side::Left));
+bool gesvd_blocked_honours_mask(std::int64_t, std::int64_t, bool, bool) {
+    return select::native_gpu_backend<B> && gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsqr;
 }
 
 }  // namespace batchlas::sycl_gesvd

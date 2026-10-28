@@ -49,7 +49,7 @@ bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, cons
                    static_cast<std::int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(static_cast<int>(n))) <= d.slm_budget;
         },
         // Its trsm selects for itself; the public trsm has a last resort.
-        [&](Blocked) { return native && !detail::any_batch_mask(A, Bm); },  // mask: lift after trsm
+        [&](Blocked) { return native; },
         [&](Wg) { return native; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
     }, c);

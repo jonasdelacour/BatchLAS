@@ -37,7 +37,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // re-check exactly this at their entry. A non-conforming pair (A not square, rows or batch
 // disagreeing) is left to the vendor, as before. NETLIB writes true int64 pivots where the
 // natives read packed 1-based int32, a silent wrong answer, so no native runs under it.
-// Masked: cta and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
+// Masked: cta, blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
 template <Backend B, typename T>
 bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
     const bool masked = detail::any_batch_mask(A, Bm);
@@ -53,8 +53,7 @@ bool can_run(const GetrsChoice& c, const select::Device& d, const MV<T>& A, cons
                    nrhs <= sycl_getrs::kGetrsFusedMaxRhs &&
                    static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
         },
-        // mask: lift after trsm (the interchange kernels already honour it)
-        [&](Blocked) { return native && !masked && sycl_getrs::getrs_blocked_available<T>(); },
+        [&](Blocked) { return native && sycl_getrs::getrs_blocked_available<T>(); },
         [&](Vendor) {
             return d.has_vendor && !A.is_heterogeneous() && !Bm.is_heterogeneous() && (!masked || B == Backend::NETLIB);
         },

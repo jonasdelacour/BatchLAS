@@ -40,8 +40,8 @@ select::Key key_of(const MV<T>& A) {
 // Correctness only (R3): false means the driver would throw or answer wrongly. Each clause is the
 // argument check at the top of that driver's *_dispatch. One launch covers the batch with a single
 // (n, ld, stride), so no family takes a heterogeneous batch: every vendor runs each item at the
-// top-level order (known-defects #12). Masked: tiny, cta and NETLIB's host loop skip an inactive
-// item; the strided vendor calls cannot.
+// top-level order (known-defects #12). Masked: tiny, cta, blocked and NETLIB's host loop skip an
+// inactive item; the strided vendor calls cannot.
 template <Backend B, typename T>
 bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
     const bool masked = detail::any_batch_mask(A);
@@ -61,8 +61,7 @@ bool can_run(const GetrfChoice& c, const select::Device& d, const MV<T>& A) {
         },
         [&](Blocked) {
             // min_blocks 1: the driver asks whether the panel leaf's argmax slots fit at all.
-            // mask: lift after trsm (the panel, laswp and gemm steps already honour it)
-            return native && !masked && sycl_getrf::getrf_blocked_available<T>() &&
+            return native && sycl_getrf::getrf_blocked_available<T>() &&
                    sycl_getrf::getrf_cta_max_n_for_slm<T>(budget, 1) >= 1;
         },
         // cuBLAS getrfBatched is square-only (it would factor rows() x rows()); LAPACKE and rocSOLVER take m x n.

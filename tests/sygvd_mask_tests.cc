@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // sygvd and sygst honour a batch mask (W3c) in the host backend's LAPACKE family, pinned `vendor`
 // and reached, on tests/masked_contract.hh: A, B, w and info of an inactive item untouched, active
-// items the unmasked call's. Compose, Blocked and TwoSided keep refusing until their children
-// (potrf, trsm, trmm, syr2k/her2k, syev's composites) honour the mask; select_tests' BatchPolicy
-// holds that refusal. Device-only masks, complex data, padded ld and stride.
+// items the unmasked call's. sygst's Blocked and TwoSided run their native children on the masked
+// views (lift 1). sygvd's Compose keeps refusing until potrf and syev's composites honour the mask;
+// select_tests' BatchPolicy holds that refusal. Device-only masks, complex data, padded ld and stride.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -44,11 +44,8 @@ protected:
     using R = typename base_type<T>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    void SetUp() override {
-        test_utils::BatchLASTest<Config>::SetUp();
-        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
-        if constexpr (B != Backend::NETLIB) GTEST_SKIP() << "every device family still refuses a mask (W1b, W2a, W3a)";
-    }
+    bool host() const { return B == Backend::NETLIB; }
+    bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
 
     // A: item-dependent small values over 8 (complex where T is). B: Hermitian positive definite,
     // diagonal n + 2 over off-diagonals of at most 1 / 2, so sygvd's potrf succeeds on every item.
@@ -71,6 +68,7 @@ protected:
 TYPED_TEST_SUITE(SygvdMask, Types);
 
 TYPED_TEST(SygvdMask, VendorLeavesInactiveItemsUntouched) {
+    if (!this->host()) GTEST_SKIP() << "every device family of sygvd still refuses a mask (W2a, W3a)";
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     constexpr Backend B = TestFixture::B;
@@ -111,6 +109,7 @@ TYPED_TEST(SygvdMask, VendorLeavesInactiveItemsUntouched) {
 
 // sygst on a Cholesky factor: the factor is any triangle with a positive diagonal to LAPACKE.
 TYPED_TEST(SygvdMask, SygstVendorLeavesInactiveItemsUntouched) {
+    if (!this->host()) GTEST_SKIP() << "the LAPACKE family is the host backend's";
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     Queue& q = *this->ctx;
@@ -134,6 +133,42 @@ TYPED_TEST(SygvdMask, SygstVendorLeavesInactiveItemsUntouched) {
                 };
                 mc::check<ops::sygst::SygstChoice>(q, "sygst", "vendor", c);
             }
+}
+
+// sygst's device families, pinned and reached: blocked (the SLM diagonal kernel, trsm, trmm,
+// gemm and syr2k / her2k per block; its part loop at 3 items under the chunk patterns) and twosided
+// (hermitize, two trsm or trmm), one block (n = 6) and three (n = 70), every itype, both triangles.
+// Their children route on their own Auto, which takes the vendor unmasked on a vendor backend.
+TYPED_TEST(SygvdMask, SygstDeviceFamiliesLeaveInactiveItemsUntouched) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    if (this->host() || !this->gpu()) GTEST_SKIP() << "blocked and twosided are device families";
+    Queue& q = *this->ctx;
+    for (const char* fam : {"blocked:nb=32", "twosided"})
+        for (const int n : {6, 70})
+            for (const int itype : {1, 2, 3})
+                for (const Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+                    const int batch = 9;
+                    SCOPED_TRACE(std::string(fam) + " n " + std::to_string(n) + " itype " + std::to_string(itype) + " " +
+                                 ts::uplo_name(uplo));
+                    Matrix<T> A = ts::padded<T>(n, n, batch), Bm = ts::padded<T>(n, n, batch);
+                    mc::Case c;
+                    c.batch = batch;
+                    c.chunk_items = fam[0] == 'b' && n > 32 ? 3 : 0;
+                    c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
+                    c.prepare = [&] { TestFixture::fill(A, Bm, n, batch); };
+                    c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+                        sygst<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), itype, uplo, ws);
+                    };
+                    c.buffer_size = [&](Span<const std::uint8_t> m) {
+                        return sygst_buffer_size<B, T>(q, A.view().with_batch_mask(m), Bm.view().with_batch_mask(m), itype,
+                                                       uplo);
+                    };
+                    c.outputs = [&] {
+                        return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("B", Bm.view())};
+                    };
+                    mc::check<ops::sygst::SygstChoice>(q, "sygst", fam, c);
+                }
 }
 
 }  // namespace

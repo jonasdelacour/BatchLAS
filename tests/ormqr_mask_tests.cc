@@ -2,8 +2,8 @@
 // ormqr, orgqr and ormqx_cta honour a batch mask (W2c) on tests/masked_contract.hh: an inactive
 // item's C (ormqr, ormqx_cta) or A (orgqr) is bit-for-bit untouched, an active one equals the
 // unmasked call on the same pin. Device-only masks, complex data, padded ld and stride, a tau batch
-// stride with a gap. ormqr's and orgqr's blocked family runs a masked view wherever its Left apply
-// does not reach trmm (W1b), and refuses it there; NETLIB's host loops skip an inactive item;
+// stride with a gap. ormqr's and orgqr's blocked family runs a masked view on both sides, its Left
+// apply's trmm leg included (W1b); NETLIB's host loops skip an inactive item;
 // ormqx_cta folds the mask into its packed partitions (holes inside a sub-group).
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
@@ -17,7 +17,6 @@
 
 #include <src/ops/orgqr/choice.hh>
 #include <src/ops/ormqr/choice.hh>
-#include <src/ops/ormqr/wy_spelling.hh>
 #include <tests/masked_contract.hh>
 #include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
@@ -81,6 +80,8 @@ struct OrmqrProblem {
         c.wg_items = s.wg_items;
         c.chunk_items = s.chunk_items;
         c.identical_items = s.identical;
+        // blocked's gemm children take the vendor unmasked and a native family masked.
+        c.masked_reference = s.spelling == "blocked" && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
             fill(A.data_ptr(), std::size_t(A.stride()) * s.batch, std::size_t(A.stride()), 1, s.identical);
             fill(C.data_ptr(), std::size_t(C.stride()) * s.batch, std::size_t(C.stride()), 9, s.identical);
@@ -115,6 +116,7 @@ struct OrgqrProblem {
         c.batch = s.batch;
         c.chunk_items = s.chunk_items;
         c.identical_items = s.identical;
+        c.masked_reference = s.spelling == "blocked" && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
             fill(A.data_ptr(), std::size_t(A.stride()) * s.batch, std::size_t(A.stride()), 2, s.identical);
             fill(tau.data(), tau.size(), std::size_t(s.n), 6, s.identical, 1.0 / 8);
@@ -178,8 +180,6 @@ protected:
     static constexpr Transpose kC = Transpose::ConjTrans;
 
     bool gpu() const { return this->ctx->device().type == DeviceType::GPU; }
-    // A masked blocked apply refuses where its Left update reaches trmm: mask: lift after trmm.
-    static bool blocked_masked(Side side) { return !ops::ormqr::wy_reaches_trmm<B, T>(side); }
 
     void check_ormqr(const Shape& s) {
         SCOPED_TRACE(label(s));
@@ -213,37 +213,13 @@ TYPED_TEST_SUITE(OrmqrMask, Types);
 TYPED_TEST(OrmqrMask, BlockedLeavesInactiveItemsUntouched) {
     if (!this->gpu()) GTEST_SKIP() << "blocked is a GPU family";
     constexpr Transpose kC = TestFixture::kC;
-    std::vector<Shape> v{{"blocked", 30, 21, 40, 24, Side::Right, Transpose::NoTrans, 16, 0, 8},
-                         {"blocked", 19, 37, 33, 12, Side::Right, kC, 16}};
-    if (TestFixture::blocked_masked(Side::Left)) {
-        v.push_back({"blocked", 45, 13, 40, 24, Side::Left, Transpose::NoTrans, 16, 0, 8});
-        v.push_back({"blocked", 37, 9, 20, 12, Side::Left, kC, 16});
-    }
-    for (const Shape& s : v) this->check_ormqr(s);
-    if (TestFixture::blocked_masked(Side::Left)) {
-        this->check_orgqr({"blocked", 45, 40, 40, 24, Side::Left, Transpose::NoTrans, 0, 0, 8});
-        this->check_orgqr({"blocked", 33, 33, 33, 12});
-    }
-}
-
-// Where blocked's Left apply reaches trmm, a strict pin refuses the masked call and writes nothing.
-TYPED_TEST(OrmqrMask, BlockedLeftRefusesWhereItReachesTrmm) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::B;
-    if (!this->gpu() || TestFixture::blocked_masked(Side::Left)) GTEST_SKIP() << "no trmm leg here";
-    Queue& q = *this->ctx;
-    const Shape s{"blocked", 45, 13, 40, 8, Side::Left, Transpose::NoTrans, 16};
-    OrmqrProblem<T, B> p(q, s);
-    const mc::Case c = p.make_case();
-    const std::size_t ws_bytes = c.buffer_size({});
-    UnifiedVector<std::byte> ws(std::max<std::size_t>(ws_bytes, 1));
-    c.prepare();
-    q.wait();
-    const auto before = mc::detail::snapshot(c.outputs(), s.batch);
-    const mc::DeviceMask mask(q, mc::patterns(s.batch)[2].bytes);
-    const select::ScopedPin<ops::ormqr::OrmqrChoice> pin("ormqr", "blocked", select::StrictPin{});
-    EXPECT_THROW((c.call(mask.span(), {ws.data(), ws_bytes}), q.wait()), batchlas::invalid_argument);
-    EXPECT_TRUE(mc::detail::snapshot(c.outputs(), s.batch) == before) << "the refused blocked pin wrote C";
+    for (const Shape& s : {Shape{"blocked", 30, 21, 40, 24, Side::Right, Transpose::NoTrans, 16, 0, 8},
+                           Shape{"blocked", 19, 37, 33, 12, Side::Right, kC, 16},
+                           Shape{"blocked", 45, 13, 40, 24, Side::Left, Transpose::NoTrans, 16, 0, 8},
+                           Shape{"blocked", 37, 9, 20, 12, Side::Left, kC, 16}})
+        this->check_ormqr(s);
+    this->check_orgqr({"blocked", 45, 40, 40, 24, Side::Left, Transpose::NoTrans, 0, 0, 8});
+    this->check_orgqr({"blocked", 33, 33, 33, 12});
 }
 
 TYPED_TEST(OrmqrMask, NetlibHostLoopsSkipInactiveItems) {

@@ -3,8 +3,8 @@
 // tests/masked_contract.hh: every mask pattern (the packed work-group holes for tiny's partitions
 // and cta's sub-group tiles), a device-only mask, complex data, padded ld and stride, a singular
 // item (info > 0) and pivots that move. An inactive item's A, pivots and info are bit-identical to
-// the poisoned input. Device: tiny, cta (square and m x n); NETLIB: the LAPACKE host loop (I4).
-// blocked keeps refusing until trsm honours the mask, and a strided vendor refuses permanently.
+// the poisoned input. Device: tiny, cta (square and m x n), blocked (several panels, its part loop
+// under the chunk patterns); NETLIB: the LAPACKE host loop (I4). A strided vendor refuses permanently.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -41,6 +41,7 @@ struct Shape {
     int m, n, batch;
     int wg_items = 0;        ///< items per packed work-group: the hole patterns
     bool identical = false;  ///< every item the same input (the saturating case)
+    int chunk_items = 0;     ///< blocked's part size: the chunk-edge patterns
 };
 
 std::string label(const Shape& s) {
@@ -88,6 +89,9 @@ struct Problem {
         c.batch = s.batch;
         c.wg_items = s.wg_items;
         c.identical_items = s.identical;
+        c.chunk_items = s.chunk_items;
+        // Auto, and blocked's trsm and gemm, take the vendor unmasked and a native family masked.
+        c.masked_reference = (s.spelling == "auto" || s.spelling == "blocked") && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] {
             std::fill_n(A.data_ptr(), std::size_t(A.stride()) * s.batch, test_support::poison<T>());
             fill();
@@ -172,18 +176,28 @@ TYPED_TEST(GetrfMask, EveryFamilyLeavesInactiveItemsUntouched) {
 TYPED_TEST(GetrfMask, SaturatingBatchIsBitIdentical) {
     if (!this->device()) GTEST_SKIP() << "tiny and cta are device families";
     this->check({"tiny", 8, 8, 1024, 8, true});
-    this->check({"tiny", 17, 17, 1024, 2, true});
+    using T = typename TestFixture::T;
+    if (17 <= sycl_getrf::getrf_tiny_max_n<T>()) this->check({"tiny", 17, 17, 1024, 2, true});
     const int n = std::min(24, this->cta_cap());
     this->check({"cta", n, n, 1024, this->cta_items(n, n), true});
 }
 
-// blocked's trailing update calls trsm, which refuses a masked view until W1b: its pin is refused
-// before anything is written. A strided vendor (cuBLAS, rocSOLVER) refuses permanently.
-TYPED_TEST(GetrfMask, BlockedAndStridedVendorRefuseBeforeWriting) {
+// blocked: three panels of 32 (the short final one included), both m x n orientations, and the part
+// loop at 4 items per part (each part's slice on its panel, laswp, trsm and gemm views).
+TYPED_TEST(GetrfMask, BlockedLeavesInactiveItemsUntouched) {
+    if (!this->device()) GTEST_SKIP() << "blocked is a device family";
+    this->check({"blocked", 20, 20, 12});
+    this->check({"blocked", 70, 70, 12, 0, false, 4});
+    this->check({"blocked", 90, 60, 9, 0, false, 3});
+    this->check({"blocked", 50, 80, 8, 0, false, 4});
+}
+
+// A strided vendor (cuBLAS, rocSOLVER) refuses permanently: its pin is refused before anything is
+// written.
+TYPED_TEST(GetrfMask, StridedVendorRefusesBeforeWriting) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::B;
     std::vector<std::string> refused;
-    if (this->device()) refused.push_back("blocked");
     if constexpr (B != Backend::NETLIB)
         if (select::factorization_vendor_available<B>) refused.push_back("vendor");
     if (refused.empty()) GTEST_SKIP() << "nothing refuses on this backend";

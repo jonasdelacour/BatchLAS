@@ -61,11 +61,11 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
-        [&](Cta) { return cta_steqr && !masked; },  // mask: lift after steqr (W3a), ormqx_cta (W2c)
+        [&](Cta) { return cta_steqr && !masked; },  // mask: lift after steqr (W3a)
         [&](CtaFused) { return cta_steqr; },
         [&](Jacobi) { return small; },
-        [&](Blocked) { return large && !masked; },     // mask: lift after stedc, stebz (W3a), syr2k/her2k (W1b)
-        [&](TwoStage) { return large && !masked; },    // mask: lift after stedc, stebz, geqrf, ormqr, symm/hemm, syr2k/her2k
+        [&](Blocked) { return large && !masked; },     // mask: lift after stedc, stebz (W3a)
+        [&](TwoStage) { return large && !masked; },    // mask: lift after stedc, stebz (W3a)
         [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB); },
     }, c);
 }

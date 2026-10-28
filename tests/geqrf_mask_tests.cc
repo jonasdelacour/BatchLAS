@@ -77,6 +77,8 @@ struct Problem {
         c.wg_items = s.wg_items;
         c.chunk_items = s.chunk_items;
         c.identical_items = s.identical;
+        // blocked's gemm children take the vendor unmasked and a native family masked.
+        c.masked_reference = s.spelling == "blocked" && (B == Backend::CUDA || B == Backend::ROCM);
         c.prepare = [this] { fill(); };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
             geqrf<B, T>(q, A.view().with_batch_mask(mask), tau.to_span(), ws);
@@ -146,7 +148,11 @@ TYPED_TEST(GeqrfMask, TinyAndCtaLeaveInactiveItemsUntouched) {
 // wide and a tall form, and parts of 8 items: each part takes its mask slice.
 TYPED_TEST(GeqrfMask, BlockedSlicesTheMaskPerPartThroughEveryLeaf) {
     if (!this->gpu()) GTEST_SKIP() << "blocked is a GPU driver";
-    std::vector<Shape> v{{"blocked", 70, 50, 24, 0, 8}, {"blocked", 40, 70, 20}, {"blocked", 300, 40, 12}};
+    std::vector<Shape> v{{"blocked", 70, 50, 24, 0, 8}, {"blocked", 40, 70, 20}};
+    // The global leaf takes a panel past the device's SLM: the shortest such height here.
+    int tall = 300;
+    while (tall < 4800 && this->blocked_leaf(tall, 40) != 2) tall *= 2;
+    v.push_back({"blocked", tall, 40, tall > 1200 ? 6 : 12});
     v.push_back({"blocked", 70, 50, 12, 0, 0, false, "reg"});
     std::vector<int> leaves;
     for (const Shape& s : v) leaves.push_back(s.leaf ? 3 : this->blocked_leaf(s.m, s.n));
