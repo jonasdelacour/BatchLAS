@@ -13,6 +13,7 @@
 #include <src/ops/potri/choice.hh>
 #include <src/ops/potri/potri_native.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <algorithm>
@@ -42,6 +43,7 @@ int cta_ceiling(const select::Device& d) {
 // a CTA block (the whole matrix, or one nb x nb diagonal block) within the device's local memory.
 template <class T>
 bool can_run(const PotriChoice& c, const select::Device& d, const MV<T>& A) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     const bool homogeneous = !A.is_heterogeneous() && A.rows() >= 1 && A.batch_size() >= 1 && d.max_wg >= 1;
     const int n = A.rows();
     return std::visit(overloaded{
@@ -87,6 +89,7 @@ template <Backend Back, typename T>
 Event potri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, bool full, Span<std::byte> work_space,
             Span<int32_t> info) {
     potri_validate_params<T>(A, uplo);
+    (void)detail::call_mask("potri", A);
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::potri::throw_if_unservable<T>(A, "potri");
     if (!info.empty() && info.size() < static_cast<std::size_t>(A.batch_size()))
@@ -108,6 +111,7 @@ Event potri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, 
 template <Backend Back, typename T>
 size_t potri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     potri_validate_params<T>(A, uplo);
+    (void)detail::call_mask("potri_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     ops::potri::throw_if_unservable<T>(A, "potri_buffer_size");
     const auto c = select::pick<Back, T>(

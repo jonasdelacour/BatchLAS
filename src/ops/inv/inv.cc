@@ -3,6 +3,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/util/template-instantiations.hh>
@@ -43,6 +44,8 @@ namespace batchlas {
               const MatrixView<T, MatrixFormat::Dense>& A,
               const MatrixView<T, MatrixFormat::Dense>& Ainv,
               Span<std::byte> workspace) {
+        (void)detail::call_mask("inv", A, Ainv);
+        if (detail::any_batch_mask(A, Ainv)) throw batchlas::unsupported("inv: a batch mask is not honoured yet");
         BumpAllocator pool(workspace);
         auto ws = inv_layout<B, T>(ctx, pool, A);
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
@@ -56,6 +59,8 @@ namespace batchlas {
     template <Backend B, typename T>
     size_t inv_buffer_size(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A) {
+        (void)detail::call_mask("inv", A);
+        if (detail::any_batch_mask(A)) throw batchlas::unsupported("inv: a batch mask is not honoured yet");
         return workspace_bytes([&](BumpAllocator& pool) { return inv_layout<B, T>(ctx, pool, A); });
     }
 

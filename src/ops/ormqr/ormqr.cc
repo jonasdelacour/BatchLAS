@@ -13,6 +13,7 @@
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/ormqr/vendor.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <algorithm>
@@ -50,6 +51,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // batch past 65535 as slices, vendor-free too (known-defects #16).
 template <typename T>
 bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
+    if (::batchlas::detail::any_batch_mask(A, C)) return false;  // no family honours a batch mask yet
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
@@ -114,6 +116,7 @@ template <Backend Back, typename T>
 Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Side side, Transpose trans, Span<T> tau, Span<std::byte> workspace, int32_t block_size_hint) {
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
+    (void)::batchlas::detail::call_mask("ormqr", A, C);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key (m, n = A's extents, k = reflectors); select::run adds the backend.
@@ -141,6 +144,7 @@ size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
                          const MatrixView<T, MatrixFormat::Dense>& C, Side side, Transpose trans, Span<T> tau,
                          int32_t block_size_hint) {
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr_buffer_size");
+    (void)::batchlas::detail::call_mask("ormqr_buffer_size", A, C);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),

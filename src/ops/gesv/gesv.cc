@@ -12,6 +12,7 @@
 
 #include <src/ops/gesv/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/kernels/common/solve_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -39,6 +40,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // heterogeneous batch.
 template <Backend Bk, typename T>
 bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
+    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
@@ -98,6 +100,7 @@ template <Backend Back, typename T>
 Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
     gesv_validate_params<T>(A, B);
+    (void)detail::call_mask("gesv", A, B);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::gesv::throw_if_unservable<T>(A, B, "gesv");
@@ -114,6 +117,7 @@ template <Backend Back, typename T>
 size_t gesv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B) {
     gesv_validate_params<T>(A, B);
+    (void)detail::call_mask("gesv_buffer_size", A, B);
     if (A.batch_size() == 0) return 0;
     ops::gesv::throw_if_unservable<T>(A, B, "gesv_buffer_size");
     const auto c = select::pick<Back, T>(
