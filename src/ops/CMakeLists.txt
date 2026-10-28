@@ -103,6 +103,7 @@ set(EXTENSIONS_EIGEN_SOURCES
     syev/kernels/syev_two_stage.cc
     lanczos/lanczos.cc
     ritz_values/ritz_values.cc
+    syev_align/syev_align.cc
     syfn/syfn.cc
     syfn/kernels/syfn_kernels.cc
 )
