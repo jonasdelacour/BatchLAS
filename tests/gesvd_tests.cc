@@ -32,6 +32,7 @@
 #include <type_traits>
 #include <vector>
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
 
@@ -40,6 +41,7 @@
 #include <src/util/resident_capacity.hh>
 
 using namespace batchlas;
+namespace ts = test_support;
 
 template <typename T, Backend B>
 struct GesvdConfig {
@@ -1846,7 +1848,7 @@ TYPED_TEST(GesvdTest, GebrdCtaBatchTailStoresNothingAndKeepsItemsBitwise) {
         GTEST_SKIP() << "gebrd_cta requires sub-group 32";
     } else {
         constexpr int n = 13, ld = n + 3, stride = ld * n + 5, inc = 2, vstride = inc * n + 3, pad = 3;
-        const Real poison = Real(-777.25);
+        const Real poison = ts::poison<Real>();
         std::mt19937 rng(20261028u);
         std::uniform_real_distribution<Real> dist(Real(-1), Real(1));
         std::vector<Real> a0(n * n);
@@ -1872,10 +1874,18 @@ TYPED_TEST(GesvdTest, GebrdCtaBatchTailStoresNothingAndKeepsItemsBitwise) {
             const auto got = run(1025, mul);
             const char* names[5] = {"A", "d", "e", "tauq", "taup"};
             for (int k = 0; k < 5; ++k) {
-                const auto h = test_utils::expect_items_bitwise_and_gaps_poisoned(
-                    got[k].data(), got[k].size(), ref[k].data(), 1025, k == 0 ? stride : vstride, rows[k], cols[k],
-                    lds[k], poison, names[k]);
-                this->RecordProperty(std::string("fnv_") + names[k] + "_mul" + std::to_string(mul), std::to_string(h));
+                SCOPED_TRACE(names[k]);
+                const int s = k == 0 ? stride : vstride;
+                const auto view = [&](const UnifiedVector<Real>& v, int off, int batch) {
+                    return ts::MV<Real>(const_cast<Real*>(v.data()) + static_cast<size_t>(off) * s, rows[k], cols[k], lds[k], s, batch);
+                };
+                // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+                EXPECT_TRUE(ts::items_bit_identical_to(view(got[k], 0, 1024), view(ref[k], 0, 1024)));
+                EXPECT_TRUE(ts::items_bit_identical_to(view(got[k], 1024, 1), view(ref[k], 0, 1)));
+                // the gaps of the live items and every slot of the items past the batch stay poison
+                EXPECT_TRUE(ts::unwritten_outside(view(got[k], 0, 1025), ts::Live::block()));
+                const std::array<int, 3> tail{1025, 1026, 1027};
+                EXPECT_TRUE(ts::unwritten_outside(view(got[k], 0, 1025 + pad), ts::Live::nothing(), tail));
             }
         }
     }

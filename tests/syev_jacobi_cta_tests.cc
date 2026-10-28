@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <array>
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/enums.hh>
@@ -9,6 +10,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
 
@@ -23,6 +25,7 @@
 #include <vector>
 
 using namespace batchlas;
+namespace ts = test_support;
 
 namespace {
 
@@ -401,8 +404,9 @@ TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     using Real = typename base_type<Scalar>::type;
     constexpr Backend B = TestFixture::BackendType;
     constexpr int n = 13, ld = n + 3, stride = ld * n + 5, pad = 3;
-    const Scalar poison = Scalar(Real(-777.25));
-    const int32_t info_poison = 12345;
+    const Scalar poison = ts::poison<Scalar>();
+    const Real wpoison = ts::poison<Real>();
+    const int32_t info_poison = 12345;  // ts::poison needs a MatrixView scalar; info has no view
     const auto A1 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, 1, /*seed=*/2026);
 
     struct Out {
@@ -412,7 +416,7 @@ TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     };
     const auto run = [&](int batch, size_t mul) {
         Out o{UnifiedVector<Scalar>(static_cast<size_t>(batch + pad) * stride, poison),
-              UnifiedVector<Real>(static_cast<size_t>(batch + pad) * n, Real(-777.25)),
+              UnifiedVector<Real>(static_cast<size_t>(batch + pad) * n, wpoison),
               UnifiedVector<int32_t>(static_cast<size_t>(batch + pad), info_poison)};
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
@@ -431,14 +435,24 @@ TYPED_TEST(SyevJacobiCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     for (const size_t mul : {size_t(1), size_t(4)}) {
         SCOPED_TRACE(::testing::Message() << "cta_wg_size_multiplier " << mul);
         const auto got = run(1025, mul);
-        const auto ha = test_utils::expect_items_bitwise_and_gaps_poisoned(got.a.data(), got.a.size(), ref.a.data(),
-                                                                           1025, stride, n, n, ld, poison, "A");
-        const auto hw = test_utils::expect_items_bitwise_and_gaps_poisoned(got.w.data(), got.w.size(), ref.w.data(),
-                                                                           1025, n, 1, n, 1, Real(-777.25), "W");
-        (void)test_utils::expect_items_bitwise_and_gaps_poisoned(got.info.data(), got.info.size(), ref.info.data(),
-                                                                 1025, 1, 1, 1, 1, info_poison, "info");
-        this->RecordProperty("fnv_A_mul" + std::to_string(mul), std::to_string(ha));
-        this->RecordProperty("fnv_W_mul" + std::to_string(mul), std::to_string(hw));
+        const std::array<int, 3> tail{1025, 1026, 1027};
+        const auto check = [&](auto& g, auto& r, int rows, int cols, int ldv, int s, const char* what) {
+            using E = std::remove_pointer_t<decltype(g.data())>;
+            const auto view = [&](auto& v, int off, int batch) {
+                return ts::MV<E>(v.data() + static_cast<size_t>(off) * s, rows, cols, ldv, s, batch);
+            };
+            SCOPED_TRACE(what);
+            // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+            EXPECT_TRUE(ts::items_bit_identical_to(view(g, 0, 1024), view(r, 0, 1024)));
+            EXPECT_TRUE(ts::items_bit_identical_to(view(g, 1024, 1), view(r, 0, 1)));
+            // the gaps of the live items and every slot of the items past the batch stay poison
+            EXPECT_TRUE(ts::unwritten_outside(view(g, 0, 1025), ts::Live::block()));
+            EXPECT_TRUE(ts::unwritten_outside(view(g, 0, 1025 + pad), ts::Live::nothing(), tail));
+        };
+        check(got.a, ref.a, n, n, ld, stride, "A");
+        check(got.w, ref.w, 1, n, 1, n, "W");
+        for (int b = 0; b < 1025 + pad; ++b)  // info: local loop, an int32 vector is no MatrixView
+            EXPECT_EQ(got.info[b], b < 1025 ? ref.info[b < 1024 ? b : 0] : info_poison) << "info item " << b;
     }
 }
 

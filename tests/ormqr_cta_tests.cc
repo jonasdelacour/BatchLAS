@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <array>
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/matrix.hh>
@@ -23,8 +24,11 @@ inline bool is_missing_subgroup32_message(const std::string& msg) {
 
 } // namespace
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/ormqr_verify.hh>
+
+namespace ts = test_support;
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 
@@ -143,7 +147,7 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 TYPED_TEST(OrmqrCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
     using T = typename TestFixture::ScalarType;
     constexpr int n = 13, ld = n + 3, stride = ld * n + 5, pad = 3;
-    const T poison = T(-777.25);
+    const T poison = ts::poison<T>();
 
     Queue ctx_cpu("cpu");
     Matrix<T, MatrixFormat::Dense> F = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, 1, /*seed=*/2026);
@@ -176,9 +180,16 @@ TYPED_TEST(OrmqrCtaTest, BatchTailStoresNothingAndKeepsItemsBitwise) {
         for (const size_t mul : {size_t(1), size_t(4)}) {
             SCOPED_TRACE(::testing::Message() << "side " << int(side) << ", cta_wg_size_multiplier " << mul);
             const auto got = run(1025, side, mul);
-            const auto h = test_utils::expect_items_bitwise_and_gaps_poisoned(got.data(), got.size(), ref.data(), 1025,
-                                                                              stride, n, n, ld, poison, "C");
-            this->RecordProperty("fnv_C_side" + std::to_string(int(side)) + "_mul" + std::to_string(mul), std::to_string(h));
+            const auto view = [&](const UnifiedVector<T>& v, int off, int batch) {
+                return ts::MV<T>(const_cast<T*>(v.data()) + static_cast<size_t>(off) * stride, n, n, ld, stride, batch);
+            };
+            // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+            EXPECT_TRUE(ts::items_bit_identical_to(view(got, 0, 1024), view(ref, 0, 1024)));
+            EXPECT_TRUE(ts::items_bit_identical_to(view(got, 1024, 1), view(ref, 0, 1)));
+            // the gaps of the live items and every slot of the items past the batch stay poison
+            EXPECT_TRUE(ts::unwritten_outside(view(got, 0, 1025), ts::Live::block()));
+            const std::array<int, 3> tail{1025, 1026, 1027};
+            EXPECT_TRUE(ts::unwritten_outside(view(got, 0, 1025 + pad), ts::Live::nothing(), tail));
         }
     }
 }

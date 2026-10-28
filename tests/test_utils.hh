@@ -2,7 +2,6 @@
 #pragma once
 #include <batchlas/backend_config.h>
 #include <cstdint>
-#include <cstring>
 #include <tuple>
 #include <gtest/gtest.h>
 #include <batchlas/blas/enums.hh>
@@ -307,37 +306,6 @@ template <typename T>
     return ::testing::AssertionFailure() << batchlas::verify::detail::kind_name(kind) << ": value " << value << " exceeds bound "
                                          << batchlas::verify::bound<T>(kind, n, slack) << " (n=" << n << ", slack " << slack.factor
                                          << " (" << slack.reason << "))";
-}
-
-// A batched strided output against one reference item, BITWISE. Element (i, j) of item b sits
-// at b * stride + i + j * ld for b < batch, i < rows, j < cols (a vector: rows = 1, ld = inc);
-// it must equal ref_item[i + j * ld]. Every other slot of got[0, len) -- the ld/inc/stride gaps
-// and the items past `batch` -- must still hold `poison`. Returns an FNV-1a hash of got.
-template <typename T>
-std::uint64_t expect_items_bitwise_and_gaps_poisoned(const T* got, std::size_t len, const T* ref_item,
-                                                     int batch, int stride, int rows, int cols, int ld,
-                                                     T poison, const char* what) {
-    std::size_t bad_items = 0, bad_gaps = 0;
-    std::uint64_t h = 1469598103934665603ull;
-    for (std::size_t p = 0; p < len; ++p) {
-        const std::size_t b = p / static_cast<std::size_t>(stride);
-        const int off = static_cast<int>(p % static_cast<std::size_t>(stride));
-        const int i = off % ld, j = off / ld;
-        const bool item = b < static_cast<std::size_t>(batch) && i < rows && j < cols;
-        const T& want = item ? ref_item[i + j * ld] : poison;
-        if (std::memcmp(&got[p], &want, sizeof(T)) != 0) {
-            const std::size_t bad = item ? bad_items++ : bad_gaps++;
-            if (bad < 3) {
-                ADD_FAILURE() << what << ": slot " << p << " (item " << b << ", " << i << ", " << j
-                              << (item ? ") differs from the reference item" : ") outside the batch was written");
-            }
-        }
-        const auto* bytes = reinterpret_cast<const unsigned char*>(&got[p]);
-        for (std::size_t k = 0; k < sizeof(T); ++k) h = (h ^ bytes[k]) * 1099511628211ull;
-    }
-    EXPECT_EQ(bad_items, 0u) << what << ": live items not bit-identical to the reference";
-    EXPECT_EQ(bad_gaps, 0u) << what << ": slots outside the live items were written";
-    return h;
 }
 
 // A vendor build's "no route": select::pick's batchlas::unsupported("<op>: no runnable kernel on ...").
