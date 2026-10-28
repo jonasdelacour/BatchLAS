@@ -39,7 +39,8 @@ namespace batchlas {
     template <Backend B, typename T>
     void ortho_transpose_copy(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& src,
-                              const MatrixView<T, MatrixFormat::Dense>& dst) {
+                              const MatrixView<T, MatrixFormat::Dense>& dst,
+                              const std::uint8_t* mask) {
         const int64_t r = src.rows(), c = src.cols();
         const int64_t lds = src.ld(), ldd = dst.ld(), ss = src.stride(), sd = dst.stride();
         const T* s = src.data_ptr();
@@ -48,6 +49,7 @@ namespace batchlas {
         ctx->parallel_for<OrthoTransposeCopyKernel<B, T>>(sycl::range<1>(total), [=](sycl::id<1> id) {
             const int64_t lin = int64_t(id[0]);
             const int64_t b = lin / (r * c), e = lin % (r * c);
+            if (mask && !mask[b]) return;
             const int64_t i = e % c, j = e / c;
             d[b * sd + j * ldd + i] = s[b * ss + i * lds + j];
         });
@@ -75,6 +77,14 @@ namespace batchlas {
         return ctx.device().type != DeviceType::GPU;
     }
 
+    // The Cholesky family runs potrf, which refuses a masked view: refuse before any write.
+    // mask: lift after potrf (W2a)
+    inline void ortho_refuse_masked_cholesky(Span<const std::uint8_t> mask, OrthoAlgorithm algo) {
+        const bool cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 ||
+                              algo == OrthoAlgorithm::ShiftChol3;
+        if (!mask.empty() && cholesky) throw batchlas::unsupported(detail::batch_mask_refusal("ortho (Cholesky)"));
+    }
+
     // Single description of ortho's workspace; see workspace_bytes() in
     // util/mempool.hh.
     //
@@ -93,7 +103,8 @@ namespace batchlas {
                                    int64_t m,
                                    int64_t k,
                                    OrthoAlgorithm algo,
-                                   bool row_arm) {
+                                   bool row_arm,
+                                   Span<const std::uint8_t> mask) {
         using float_t = typename base_type<T>::type;
         constexpr auto fmt = MatrixFormat::Dense;
         const auto batch_size = A.batch_size();
@@ -109,7 +120,8 @@ namespace batchlas {
         auto matATAmem = pool.allocate<T*>(ctx, batch_size);
         static_cast<void>(matAmem);
 
-        auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data());
+        // Every scratch view carries the call's mask, so each size query asks for the masked family.
+        auto C = MatrixView<T, fmt>(ATA.data(), k, k, k, k * k, batch_size, matATAmem.data()).with_batch_mask(mask);
         auto potrf_ws = pool.allocate<std::byte>(ctx, is_cholesky ? potrf_buffer_size<B>(ctx, C, Uplo::Lower) : 0);
 
         auto diags = pool.allocate<float_t>(ctx, is_svqb ? batch_size * k : 0);
@@ -124,7 +136,9 @@ namespace batchlas {
         const bool transposed_copy = is_householder && row_arm;
         auto At = pool.allocate<T>(ctx, transposed_copy ? m * k * batch_size : 0);
         auto Atptrs = pool.allocate<T*>(ctx, transposed_copy ? batch_size : 0);
-        auto H = transposed_copy ? MatrixView<T, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()) : A;
+        auto H = transposed_copy
+                     ? MatrixView<T, fmt>(At.data(), m, k, m, m * k, batch_size, Atptrs.data()).with_batch_mask(mask)
+                     : A;
         auto tau = pool.allocate<T>(ctx, is_householder ? k * batch_size : 0);
         auto geqrf_ws = pool.allocate<std::byte>(ctx, is_householder ? geqrf_buffer_size<B>(ctx, H, tau) : 0);
         auto orgqr_ws = pool.allocate<std::byte>(ctx, is_householder ? orgqr_buffer_size<B>(ctx, H, tau) : 0);
@@ -138,7 +152,8 @@ namespace batchlas {
                 Transpose transA,
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo) {
-        detail::refuse_batch_mask("ortho", A);
+        const auto mask = detail::call_mask("ortho", A);
+        const std::uint8_t* mk = detail::mask_ptr(mask);
         //If transA == NoTrans we find the orthonormal basis of the column space
         //Else we find the orthonormal basis of the row space
         using float_t = typename base_type<T>::type;
@@ -151,13 +166,14 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
+        ortho_refuse_masked_cholesky(mask, algo);
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
         Transpose inv_trans = is_A_trans ? Transpose::NoTrans :
                             std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
         assert(k <= m);
         //If k > m && transA == NoTrans the columns of A are linearly dependent
         //Else if k > m && transA == Trans the rows of A are linearly dependent
-        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans);
+        auto wsl = ortho_layout<B, T>(ctx, pool, A, m, k, algo, is_A_trans, mask);
         auto C = wsl.C;
         auto potrf_workspace = wsl.potrf_ws;
         auto ATA_stride = k * k;
@@ -210,6 +226,7 @@ namespace batchlas {
             if constexpr (detail::is_complex<T>::value) {
                 auto x = v;
                 ctx->parallel_for(sycl::range<2>(size_t(x.batch_size()), size_t(x.size())), [=](sycl::id<2> id) {
+                    if (mk && !mk[id[0]]) return;
                     auto& e = x(int(id[1]), int(id[0]));
                     e = std::conj(e);
                 });
@@ -227,9 +244,10 @@ namespace batchlas {
             auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
             for (int i = 0; i < k; i++){
                 // The first i vectors and vector i, in stored orientation: columns, or rows of A.
-                auto A_i = is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
-                                      : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size);
-                auto C = VectorView(Ymem.data(), i, batch_size);
+                auto A_i = (is_A_trans ? MatrixView<T, fmt>(A.data_ptr(), i, m, A.ld(), A.stride(), batch_size)
+                                       : MatrixView<T, fmt>(A.data_ptr(), m, i, A.ld(), A.stride(), batch_size))
+                               .with_batch_mask(mask);
+                auto C = VectorView(Ymem.data(), i, batch_size).with_batch_mask(mask);
                 auto A_next = is_A_trans ? A(i, Slice()) : A(Slice(), i);
                 if (i > 0){ //If it's the first vector we just need to normalize it
                     // Rows: the gemv pair below projects conj(row i) against the rows, so for
@@ -259,6 +277,7 @@ namespace batchlas {
                             auto tid = item.get_local_linear_id();
                             auto bid = item.get_group_linear_id();
                             auto cta = item.get_group();
+                            if (mk && !mk[bid]) return;  // uniform per work-group, before the barrier
                             T* A_local_vector = Aptr + int64_t(bid) * A_stride + vbase;
                             auto Anext_squared_span = Span(static_cast<float_t*>(util::get_raw_ptr(Anext_squared)), m);
 
@@ -287,6 +306,7 @@ namespace batchlas {
                     auto tid = item.get_local_linear_id();
                     auto bid = item.get_group_linear_id();
                     auto cta = item.get_group();
+                    if (mk && !mk[bid]) return;
                     auto ATA_acc = ATA_ptr + bid * ATA_stride;
                     // ||A||_F^2 = trace(A^H A) bounds ||A||_2^2; the shift scales with the Gram
                     // matrix, so with the square of the norm, in the real type's epsilon.
@@ -317,6 +337,7 @@ namespace batchlas {
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
+                if (mk && !mk[bid]) return;
                 auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
                 auto diags_acc = diags.subspan(bid * k, k);
 
@@ -336,6 +357,7 @@ namespace batchlas {
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();
+                if (mk && !mk[bid]) return;
                 auto D_acc = diags.subspan(bid * k, k);
                 D_local[tid] = D_acc[tid];
                 sycl::group_barrier(cta);
@@ -358,6 +380,7 @@ namespace batchlas {
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();
+                if (mk && !mk[bid]) return;
                 auto D_acc = diags.subspan(bid * k, k);
                 D_local[tid] = D_acc[tid];
                 sycl::group_barrier(cta);
@@ -376,7 +399,7 @@ namespace batchlas {
         };
         // The m x k vectors op(A) C land in output_basis as columns; rows of A take their conjugates.
         auto svqb_into_A = [&]() {
-            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+            auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
             svqb_alg(A, output_view);
             auto A_stride = A.stride();
             auto A_ld = A.ld();
@@ -384,6 +407,7 @@ namespace batchlas {
             auto wgs = std::min(get_kernel_max_wg_size<StridedCopyKernel<B, T>>(ctx), size_t(m * k));
             ctx -> parallel_for<StridedCopyKernel<B,T>>(sycl::nd_range<1>(sycl::range{size_t(batch_size * wgs)}, sycl::range{size_t(wgs)}), [=](sycl::nd_item<1> item){
                 auto batch_idx = item.get_group().get_group_id()[0];
+                if (mk && !mk[batch_idx]) return;
                 for (int linear_ix = item.get_local_linear_id(); linear_ix < m * k; linear_ix += item.get_group().get_local_linear_range()) {
                     auto i = linear_ix % m;
                     auto j = linear_ix / m;
@@ -410,10 +434,10 @@ namespace batchlas {
                 shift_chol_alg();
                 break;
             case OrthoAlgorithm::Householder: {
-                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, A, wsl.H);
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, A, wsl.H, mk);
                 (void)geqrf<B>(ctx, wsl.H, wsl.tau, wsl.geqrf_ws);
                 (void)orgqr<B>(ctx, wsl.H, wsl.tau, wsl.orgqr_ws);
-                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, wsl.H, A);
+                if (is_A_trans) ortho_transpose_copy<B, T>(ctx, wsl.H, A, mk);
                 break;
             }
             case OrthoAlgorithm::CGS2:
@@ -428,7 +452,7 @@ namespace batchlas {
                     svqb_into_A();
                     break;
                 }
-                auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size);
+                auto output_view = MatrixView<T,fmt>(output_basis.data(), m, k, m, k*m, batch_size).with_batch_mask(mask);
                 svqb_alg(A, output_view);
                 svqb_alg(output_view, A);
                 break;
@@ -445,14 +469,15 @@ namespace batchlas {
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Transpose transA,
                              OrthoAlgorithm algo) {
-        detail::refuse_batch_mask("ortho", A);
+        const auto mask = detail::call_mask("ortho", A);
         auto [m, k] = get_effective_dims(A, transA);
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
+        ortho_refuse_masked_cholesky(mask, algo);
         const bool row_arm = transA != Transpose::NoTrans;
         return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
-            return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm);
+            return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm, mask);
         });
     }
 
@@ -465,10 +490,11 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo,
                 size_t iterations) {
-        detail::refuse_batch_mask("ortho", A, M);
+        const auto mask = detail::call_mask("ortho", A, M);
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
+        ortho_refuse_masked_cholesky(mask, algo);
         BumpAllocator pool(workspace);
         constexpr auto fmt = MatrixFormat::Dense;
         //When orthogonalizing against an external basis M,
@@ -490,8 +516,10 @@ namespace batchlas {
         auto inv_transM = transM == trans ? no_trans : trans;
         auto batch_size = A.batch_size();
         auto MAmem = pool.allocate<T>(ctx, nM*nA * batch_size);
-        auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo));
-        auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size);
+        // A carries the call's mask even when only M did, so its own ortho skips the same items.
+        const auto Am = A.with_batch_mask(mask);
+        auto orthoworkspace = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, Am, transA, algo));
+        auto descrMA = MatrixView<T, fmt>(MAmem.data(), nM, nA, nM, nM*nA, batch_size).with_batch_mask(mask);
         auto isAtrans = transA == trans;
         // ConjTrans for complex: a bool cast to Transpose is Trans, which projects onto conj(M).
         auto is_first_transposed = ((transA == trans) || (transM == trans)) ? trans : no_trans;
@@ -505,7 +533,7 @@ namespace batchlas {
                     A,
                     {.alpha = T(-1.0), .beta = T(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
 
-            (void)ortho<B>(ctx, A, transA, orthoworkspace, algo);
+            (void)ortho<B>(ctx, Am, transA, orthoworkspace, algo);
         }
         return ctx.get_event();
     }
@@ -518,7 +546,7 @@ namespace batchlas {
                              Transpose transM,
                              OrthoAlgorithm algo,
                              size_t iterations) {
-        detail::refuse_batch_mask("ortho", A, M);
+        const auto mask = detail::call_mask("ortho", A, M);
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto batch_size = A.batch_size();
@@ -526,7 +554,7 @@ namespace batchlas {
             algo = OrthoAlgorithm::Householder;
         }
 
-        return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A, transA, algo)) +
+        return  BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, A.with_batch_mask(mask), transA, algo)) +
                 BumpAllocator::allocation_size<T>(ctx, nM*nA * batch_size);
     }
 

@@ -35,12 +35,15 @@ namespace batchlas
                         const int n = A.rows();
                         const int batch_size = A.batch_size();
 
+                        const auto mask = detail::call_mask("cond", A);
+                        const std::uint8_t* mk = detail::mask_ptr(mask);
                         auto pool = BumpAllocator(workspace);
                         auto A_buf = pool.allocate<T>(ctx, A.data().size());
                         auto A_ptrs = pool.allocate<T*>(ctx, A.batch_size());
                         auto A_copy = MatrixView<T, MatrixFormat::Dense>(A_buf.data(),
                                                                          A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                                                         A_ptrs.data());
+                                                                         A_ptrs.data())
+                                          .with_batch_mask(mask);
 
                         Event copy_e = MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
                         ctx.enqueue(copy_e);
@@ -60,6 +63,7 @@ namespace batchlas
 
                         ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
                             const size_t b = idx[0];
+                            if (mk && !mk[b]) return;
                             const Real* ev = eig_span.data() + b * n;
                             Real max_v = sycl::fabs(ev[0]);
                             Real min_v = max_v;
@@ -84,10 +88,13 @@ namespace batchlas
                         if (norm_type == NormType::Spectral) {
                             return cond_spectral_impl<B>(ctx, A, conds, workspace);
                         }
+                        const auto mask = detail::call_mask("cond", A);
+                        const std::uint8_t* mk = detail::mask_ptr(mask);
                         auto pool = BumpAllocator(workspace);
                         auto Ainv = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, A.data().size()).data(),
                                                                      A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                                                     pool.allocate<T*>(ctx, A.batch_size()).data());
+                                                                     pool.allocate<T*>(ctx, A.batch_size()).data())
+                                        .with_batch_mask(mask);
 
                         auto inv_workspace = pool.allocate<std::byte>(ctx, inv_buffer_size<B>(ctx, A));
                         auto A_norms = pool.allocate<T>(ctx, A.batch_size());
@@ -100,6 +107,7 @@ namespace batchlas
                         (void)norm(ctx, Ainv, norm_type, A_inv_norms);
                         (void)norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
+                            if (mk && !mk[i]) return;
                             conds[i] = A_inv_norms[i] * A_norms[i];
                         });
                         return ctx.get_event();
@@ -114,7 +122,7 @@ namespace batchlas
                 const Span<T> conds,
                 const Span<std::byte> workspace)
     {
-        detail::refuse_batch_mask("cond", A);
+        (void)detail::call_mask("cond", A);
         return cond_impl<B>(ctx, A, norm_type, conds, workspace);
     }
 
@@ -124,7 +132,7 @@ namespace batchlas
                             const MatrixView<T, MF> &A,
                             const NormType norm_type)
     {
-        detail::refuse_batch_mask("cond", A);
+        (void)detail::call_mask("cond", A);
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
                 throw batchlas::unsupported("cond: Spectral norm only supported for dense symmetric/Hermitian matrices");
@@ -153,7 +161,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
-        detail::refuse_batch_mask("cond", A);
+        (void)detail::call_mask("cond", A);
         UnifiedVector<T> conds(A.batch_size());
         auto workspace = ctx.workspace(cond_buffer_size<B>(ctx, A, norm_type));
         cond_impl<B>(ctx, A, norm_type, conds.to_span(), workspace.span()).wait();
