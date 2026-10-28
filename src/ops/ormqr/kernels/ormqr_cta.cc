@@ -241,14 +241,17 @@ inline void ormqx_cta_impl(Queue& ctx,
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= static_cast<int32_t>(batch_size)) return;
+                // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
+                // batch) applies tau = 0 reflectors to nothing and stores nothing.
+                const bool live = prob_id < static_cast<int32_t>(batch_size);
+                const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(prob_id);
-                auto TAU_prob = TAU_view.batch_item(prob_id);
-                auto C_prob = C_view.batch_item(prob_id);
+                auto A_prob = A_view.batch_item(pid);
+                auto TAU_prob = TAU_view.batch_item(pid);
+                auto C_prob = C_view.batch_item(pid);
                 const int32_t base_v = part_id * static_cast<int32_t>(P);
 
-                const bool active_col = (lane < n);
+                const bool active_col = live && (lane < n);
                 const int32_t j = lane;
 
                 // Register column buffer for column j.
@@ -307,7 +310,7 @@ BATCHLAS_UNROLL_FULL
                 const int32_t step = descending ? -1 : 1;
 
                 for (int32_t ii = i0; ii != i1; ii += step) {
-                    const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
+                    const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
                     const T tau_eff = TransposeOrConj ? batchlas::device::detail::conj(tau_i) : tau_i;
 
                     // Stage the reflector indexed by *absolute row*, explicitly zeroed
@@ -317,7 +320,7 @@ BATCHLAS_UNROLL_FULL
                     if constexpr (!QL) {
                         // QR: reflector ii is stored in column ii with v(ii) == 1 and
                         // v(0:ii-1) == 0; its support ends at row n-1.
-                        const bool in_support = (lane >= ii) && (lane < n);
+                        const bool in_support = live && (lane >= ii) && (lane < n);
                         V_local[base_v + lane] =
                             !in_support ? T(0) : ((lane == ii) ? T(1) : A_prob(lane, ii));
                     } else {
@@ -325,7 +328,7 @@ BATCHLAS_UNROLL_FULL
                         // (n-k)+ii, v(pivot) == 1 and v(pivot+1:) == 0.
                         const int32_t col = (n - k) + ii;
                         const int32_t pivot = (n - k) + ii;
-                        const bool in_support = (lane <= pivot) && (lane < n);
+                        const bool in_support = live && (lane <= pivot) && (lane < n);
                         V_local[base_v + lane] =
                             !in_support ? T(0) : ((lane == pivot) ? T(1) : A_prob(lane, col));
                     }
@@ -395,11 +398,15 @@ BATCHLAS_UNROLL_FULL
 
                     const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
+                    // NO EARLY RETURN, as in the LEFT kernel: a dead partition carries a
+                    // zero tile and tau = 0, and stores nothing.
+                    const bool live = prob_id < static_cast<int32_t>(batch_size);
+                    const int32_t pid = live ? prob_id : 0;
+                    const bool row_live = live && (lane < n);
 
-                    auto A_prob = A_view.batch_item(prob_id);
-                    auto TAU_prob = TAU_view.batch_item(prob_id);
-                    auto C_prob = C_view.batch_item(prob_id);
+                    auto A_prob = A_view.batch_item(pid);
+                    auto TAU_prob = TAU_view.batch_item(pid);
+                    auto C_prob = C_view.batch_item(pid);
 
                     const int32_t base_c = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
@@ -408,7 +415,7 @@ BATCHLAS_UNROLL_FULL
                     const int32_t P_i = static_cast<int32_t>(P);
 
                     // Load C into local memory (column-major).
-                    if (lane < n) {
+                    if (row_live) {
                         for (int32_t col = 0; col < n; ++col) {
                             C_local[base_c + lane + col * P_i] = C_prob(lane, col);
                         }
@@ -429,7 +436,7 @@ BATCHLAS_UNROLL_FULL
                     const int32_t step = descending ? -1 : 1;
 
                     for (int32_t ii = i0; ii != i1; ii += step) {
-                        const T tau_i = (ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
+                        const T tau_i = (live && ii >= 0 && ii < k) ? TAU_prob(ii) : T(0);
 
                         // Build v and compute (offset,len) for this reflector.
                         int32_t offset = 0;
@@ -443,7 +450,7 @@ BATCHLAS_UNROLL_FULL
                             if (lane < len) {
                                 const int32_t row = offset + lane;
                                 const int32_t col = ii;
-                                V_local[base_v + lane] = (lane == 0) ? T(1) : A_prob(row, col);
+                                V_local[base_v + lane] = (lane == 0) ? T(1) : (live ? A_prob(row, col) : T(0));
                             } else {
                                 V_local[base_v + lane] = T(0);
                             }
@@ -458,7 +465,7 @@ BATCHLAS_UNROLL_FULL
 
                             if (lane < len) {
                                 const int32_t row = lane;
-                                V_local[base_v + lane] = (row == pivot) ? T(1) : A_prob(row, col);
+                                V_local[base_v + lane] = (row == pivot) ? T(1) : (live ? A_prob(row, col) : T(0));
                             } else {
                                 V_local[base_v + lane] = T(0);
                             }
@@ -485,7 +492,7 @@ BATCHLAS_UNROLL_FULL
                     }
 
                     // Write back C.
-                    if (lane < n) {
+                    if (row_live) {
                         for (int32_t col = 0; col < n; ++col) {
                             C_prob(lane, col) = C_local[base_c + lane + col * P_i];
                         }
