@@ -55,6 +55,7 @@ struct Shape {
     int wg_items = 0;        ///< items per packed work-group
     bool identical = false;  ///< every item the same input (the saturating case)
     int chunk = 0;           ///< forced part size (BATCHLAS_TUNE_L2_CHUNK_ITEMS) for the chunked drivers
+    bool only_b = false;     ///< the mask rides on B alone: A adopts it (posv's potrf child sees A first)
 };
 
 const char* op_name(Op o) {
@@ -105,7 +106,9 @@ struct Problem {
         b_image.assign(bp, bp + std::size_t(Bm.stride()) * s.batch);
     }
 
-    MatrixView<T, MatrixFormat::Dense> a(Span<const std::uint8_t> m) { return A.view().with_batch_mask(m); }
+    MatrixView<T, MatrixFormat::Dense> a(Span<const std::uint8_t> m) {
+        return A.view().with_batch_mask(s.only_b ? Span<const std::uint8_t>{} : m);
+    }
     MatrixView<T, MatrixFormat::Dense> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }
 
     mc::Case make_case() {
@@ -301,6 +304,11 @@ TYPED_TEST(PotrfMask, SolveFamiliesLeaveInactiveItemsUntouched) {
         this->template check<ops::potrs::PotrsChoice>({Op::potrs, "fused", n, r, 16, u});
     this->template check<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 6, 2, 16, Uplo::Upper});
     this->template check<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 50, 3, 16, Uplo::Lower});
+    // The mask on B alone still covers A and info.
+    for (const char* sp : {"cta", "blocked"})
+        this->template check<ops::posv::PosvChoice>({Op::posv, sp, 21, 2, 16, Uplo::Lower, 0, false, 0, true});
+    this->template check<ops::potrs::PotrsChoice>({Op::potrs, "fused", 21, 2, 16, Uplo::Upper, 0, false, 0, true});
+    this->template check<ops::potrs::PotrsChoice>({Op::potrs, "trsm", 21, 2, 16, Uplo::Lower, 0, false, 0, true});
 }
 
 // The vendor's batched call cannot skip an item: a strict pin refuses the masked call before it
