@@ -172,6 +172,7 @@ Event launch_register_tiled(Queue& ctx,
         const int stride_b = B.stride();
         const int stride_c = C.stride();
         const int batch = A.batch_size();
+        const std::uint8_t* mask = item_mask(A, B, C);
         const bool packet_a = use_packet_a;
         const bool packet_b = use_packet_b;
 
@@ -181,7 +182,7 @@ Event launch_register_tiled(Queue& ctx,
                 const int bid = static_cast<int>(item.get_group(0));
                 const int local_row = static_cast<int>(item.get_local_id(1));
                 const int local_col = static_cast<int>(item.get_local_id(2));
-                if (bid >= batch) {
+                if (bid >= batch || item_off(mask, bid)) {
                     return;
                 }
 

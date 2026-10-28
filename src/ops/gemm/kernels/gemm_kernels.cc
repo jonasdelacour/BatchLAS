@@ -18,9 +18,10 @@ class GemmSplitKReduceKernel;
 
 // C = alpha (W[z s] + ... + W[z s + s - 1]) + beta C per item z, the slices summed in that fixed
 // order (deterministic, no atomics); beta = 0 never reads C. One work-item per element, m fastest.
+// An item the mask switches off is skipped here as in the slices, which left its partials unwritten.
 template <typename T>
 Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int splits,
-                    const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta) {
+                    const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
     constexpr int kWg = 256;
     // mn <= ldw n <= INT_MAX (can_run), but the padded range and the global id can pass it.
@@ -37,9 +38,9 @@ Event splitk_reduce(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& W, int
         batchlas::impl::parallel_for<GemmSplitKReduceKernel<T>>(
             h, sycl::nd_range<2>(global, sycl::range<2>(1, kWg)), [=](sycl::nd_item<2> item) {
                 const size_t g = item.get_global_id(1);
-                if (g >= static_cast<size_t>(mn)) return;
-                const int e = static_cast<int>(g);
                 const auto b = static_cast<std::ptrdiff_t>(item.get_group(0));
+                if (g >= static_cast<size_t>(mn) || item_off(mask, b)) return;
+                const int e = static_cast<int>(g);
                 const int j = e / m, i = e - j * m;
                 const D* p = w_ptr + b * splits * stride_w + i + static_cast<std::ptrdiff_t>(j) * ldw;
                 D acc = p[0];
@@ -174,21 +175,22 @@ Event gemm_splitk(Queue& ctx, int tm, int tn, int tk, int splits, const MatrixVi
     BumpAllocator pool(lease.span());
     const auto partials = pool.allocate<T>(ctx, elems);
     const MatrixView<T, MatrixFormat::Dense> W(partials.data(), m, n, int(ldw), int(ldw * n), batch * splits);
+    const std::uint8_t* mask = item_mask(A, B, C);
     std::optional<Event> out;
     static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
         constexpr og::WideCfg c = og::wide_configs[I];
         if (out || !og::splitk_host(c) || c.m != tm || c.n != tn || c.k != tk) return;
         refuse_over_budget(ctx, "splitk", og::wide_slm_bytes<T>(c), c.threads());
         gemm_wide_row<T, decltype(I)::value, true, 0>(out, ctx, A, B, W, T(1), T(0), transA, transB,
-                                                      WideSplit{splits, kc});
+                                                      WideSplit{splits, kc, mask});
         gemm_wide_row<T, decltype(I)::value, true, 1>(out, ctx, A, B, W, T(1), T(0), transA, transB,
-                                                      WideSplit{splits, kc});
+                                                      WideSplit{splits, kc, mask});
     });
     if (!out) refuse(spelling + " has no instantiation for this transpose form");
     // An out-of-order queue would let the reduction overtake the slices.
     if (!ctx.in_order()) out->wait();
     BATCHLAS_KERNEL_TRACE_SCOPE("gemm_splitk_reduce");
-    return splitk_reduce<T>(ctx, W, splits, C, alpha, beta);
+    return splitk_reduce<T>(ctx, W, splits, C, alpha, beta, mask);
 }
 
 #define GEMM_LAUNCHERS(T)                                                                                       \

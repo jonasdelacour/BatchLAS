@@ -16,6 +16,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <tests/masked_contract.hh>
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -832,6 +834,136 @@ TYPED_TEST(GemvCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     }
 }
 
+// The batch-mask contract (masked_contract.hh) on one pinned body. `on` names the operands
+// that carry the mask (A, X, Y); the others adopt it. y is the only output; its item stride
+// includes the inc gaps, which hold poison. evidence: docs/design/masked-batches.md#masked-batches-tests
+struct MaskCase {
+    C c;
+    Transpose t;
+    int m, n, batch;
+    const char* segt;  // BATCHLAS_GEMV_SEGT for a cta body (nullptr: auto); expects body `width`
+    int width;         // 1 = body 1/2/3, >= 2 = body 4 (direct N) or body 5 (cta) at that W
+    int wg_items;      // items one work-group (body 5: one sub-group) spans: the hole patterns
+    const char* on = "AXY";
+    bool beta_zero = false;
+    int period = 0;
+};
+
+std::string mask_label(const MaskCase& k) {
+    return select::to_string(k.c) + " " + trans_s(k.t) + " m=" + std::to_string(k.m) + " n=" + std::to_string(k.n) +
+           " batch=" + std::to_string(k.batch) + " W=" + std::to_string(k.width) + " on=" + k.on +
+           (k.beta_zero ? " beta=0" : "");
+}
+
+template <typename T, Backend B>
+void check_masked(Queue& q, const MaskCase& k) {
+    SCOPED_TRACE(mask_label(k));
+    const ScopedEnvVar segt("BATCHLAS_GEMV_SEGT", k.segt);
+    if (std::holds_alternative<gv::Cta>(k.c))
+        ASSERT_EQ(sycl_gemv::gemv_seg_trans_width_debug<T>(q, k.m, std::int64_t(k.n) * k.batch), k.width)
+            << "the cta case does not run the body it names";
+    else if (k.t == Transpose::NoTrans)
+        ASSERT_EQ(k.m <= 16, k.width >= 2) << "body 4 runs exactly when out <= 16 (gemv_seg_width)";
+    Spec s{k.t, k.m, k.n, k.batch};
+    s.beta_zero = k.beta_zero;
+    s.period = k.period;
+    s.seed = 9100u + 17u * k.m + k.n;
+    auto p = make_problem<T>(s);
+    const std::string on = k.on;
+    masked_contract::Case mc;
+    mc.batch = k.batch;
+    mc.wg_items = k.wg_items;
+    mc.identical_items = k.period == 1;
+    mc.prepare = [&] { std::copy(p.mem0.data(), p.mem0.data() + p.mem0.size(), p.mem.data()); };
+    mc.call = [&](Span<const std::uint8_t> mask, Span<std::byte>) {
+        const auto pick = [&](char v) { return on.find(v) != std::string::npos ? mask : Span<const std::uint8_t>{}; };
+        (void)gemv<B, T>(q, p.A().with_batch_mask(pick('A')), p.X().with_batch_mask(pick('X')),
+                         p.Y().with_batch_mask(pick('Y')), p.alpha, p.beta, k.t);
+    };
+    mc.outputs = [&] {
+        const std::size_t bytes = std::size_t(p.sy) * sizeof(T);
+        return std::vector<masked_contract::Output>{
+            {"y", reinterpret_cast<const std::byte*>(p.mem.data() + p.y_off), bytes, bytes}};
+    };
+    masked_contract::check<C>(q, "gemv", select::to_string(k.c), mc);
+}
+
+// Every native body under its pin: body 1 (flattened, out > 16), body 4 (one sub-group per item),
+// body 2 (flattened, transposed), body 3 (one sub-group per output) and body 5 at W = 2, 4, 8 with
+// out = 3, so a sub-group's outputs straddle items and a hole sits inside it. Non-natural ld,
+// inc and strides (Problem), complex data, Trans and ConjTrans, beta != 0 and beta == 0.
+TYPED_TEST(GemvCandidates, MaskedBatchLeavesInactiveItemsUntouched) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    const C direct{gv::Direct{}}, cta{gv::Cta{}};
+    const auto N = Transpose::NoTrans, Tr = Transpose::Trans, Cj = Transpose::ConjTrans;
+    const MaskCase cases[] = {
+        {direct, N, 19, 7, 37, nullptr, 1, 3},         {direct, N, 19, 7, 37, nullptr, 1, 3, "Y", true},
+        {direct, N, 5, 9, 37, nullptr, 4, 8},          {direct, N, 5, 9, 37, nullptr, 4, 8, "A", true},
+        {direct, Cj, 7, 13, 37, nullptr, 1, 3},        {direct, Tr, 7, 13, 37, nullptr, 1, 3, "X", true},
+        {cta, Cj, 40, 6, 37, "off", 1, 3},             {cta, Tr, 40, 6, 37, "off", 1, 3, "AXY", true},
+        {cta, Cj, 12, 3, 37, "8", 8, 3},               {cta, Tr, 12, 3, 37, "8", 8, 3, "Y", true},
+        {cta, Cj, 12, 3, 37, "4", 4, 3},               {cta, Tr, 12, 3, 37, "2", 2, 3, "X", true},
+    };
+    for (const MaskCase& k : cases) {
+        if (!TestFixture::expect_runs(k.c, k.t)) continue;
+        check_masked<T, B>(*this->ctx, k);
+        if (::testing::Test::HasFatalFailure()) return;
+    }
+}
+
+// A saturating batch of one repeated item, half of it masked: the flattened and sub-group bodies
+// at batch 1024, each active item bit-identical to the first.
+TYPED_TEST(GemvCandidates, MaskedSaturatingBatchIsBitIdentical) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    const C direct{gv::Direct{}}, cta{gv::Cta{}};
+    const MaskCase cases[] = {
+        {direct, Transpose::NoTrans, 33, 17, 1024, nullptr, 1, 2, "AXY", false, 1},
+        {direct, Transpose::NoTrans, 6, 17, 1024, nullptr, 4, 8, "AXY", false, 1},
+        {cta, Transpose::ConjTrans, 70, 5, 1024, "off", 1, 2, "AXY", false, 1},
+        {cta, Transpose::ConjTrans, 20, 3, 1024, "8", 8, 3, "AXY", true, 1},
+    };
+    for (const MaskCase& k : cases) {
+        check_masked<T, B>(*this->ctx, k);
+        if (::testing::Test::HasFatalFailure()) return;
+    }
+}
+
+// The vendor stays refused for a masked call: its pin throws, and Auto runs a native body.
+TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::B;
+    if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor BLAS in this build";
+    const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, {0, 1, 0, 1});
+    for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
+        Spec s{t, 24, 6, 4};
+        auto p = make_problem<T>(s);
+        const auto masked = [&] {
+            (void)gemv<B, T>(q, p.A().with_batch_mask(mask.span()), p.X(), p.Y(), p.alpha, p.beta, t);
+            q.wait();
+        };
+        {
+            const Pin pin("gemv", "vendor", select::StrictPin{});
+            this->run(p);  // the unmasked call runs on this pin, so the masked throw is the mask's
+            p.mem = p.mem0;
+            try {
+                masked();
+                ADD_FAILURE() << trans_s(t) << ": a vendor pin ran a masked call";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("(strict): no vendor candidate"), std::string::npos) << e.what();
+            }
+        }
+        p.mem = p.mem0;
+        EXPECT_NE(traced_choice(masked), "vendor") << trans_s(t);
+        for (int it : {0, 2})
+            for (int o = 0; o < s.out(); ++o)
+                EXPECT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem0[p.yi(it, o)])) << "inactive item " << it;
+    }
+}
+
 // On a host queue there is no
 // table, so the last resort decides: the vendor (netlib) where compiled, else direct; cta's
 // sub-group body cannot run there, and a direct pin runs and is correct.
@@ -867,6 +999,20 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
             this->ctx->wait();
         }
         expect_gemv(*this->ctx, d, std::string("cpu direct ") + trans_s(t));
+    }
+}
+
+// The direct bodies 1 and 2 honour a device-only mask on a host queue too.
+TYPED_TEST(GemvCandidatesCpu, MaskedDirectLeavesInactiveItemsUntouched) {
+    using T = typename TypeParam::ScalarType;
+    static constexpr Backend B = TypeParam::BackendVal;
+    if (!this->ctx) GTEST_SKIP() << "no queue";
+    if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    const C direct{gv::Direct{}};
+    for (const MaskCase& k : {MaskCase{direct, Transpose::NoTrans, 19, 7, 37, nullptr, 1, 3},
+                              MaskCase{direct, Transpose::ConjTrans, 7, 13, 37, nullptr, 1, 3, "Y", true}}) {
+        check_masked<T, B>(*this->ctx, k);
+        if (::testing::Test::HasFatalFailure()) return;
     }
 }
 

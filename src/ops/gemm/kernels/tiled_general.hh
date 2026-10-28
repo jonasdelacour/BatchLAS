@@ -45,6 +45,7 @@ Event launch_tiled_general(Queue& ctx,
         const int stride_b = B.stride();
         const int stride_c = C.stride();
         const int batch = A.batch_size();
+        const std::uint8_t* mask = item_mask(A, B, C);
 
         batchlas::impl::parallel_for<GemmTiledGeneralKernel<T, Tile, OpA, OpB>>(h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
             const int bid = static_cast<int>(item.get_group(0));
@@ -52,7 +53,7 @@ Event launch_tiled_general(Queue& ctx,
             const int local_col = static_cast<int>(item.get_local_id(2));
             const int row = static_cast<int>(item.get_group(1) * Tile + local_row);
             const int col = static_cast<int>(item.get_group(2) * Tile + local_col);
-            if (bid >= batch) {
+            if (bid >= batch || item_off(mask, bid)) {
                 return;
             }
 

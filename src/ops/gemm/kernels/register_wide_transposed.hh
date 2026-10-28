@@ -44,10 +44,12 @@ template <typename T, int M, int N, int K, int TTM, int TTN, int OA, int OB, int
 class GemmWideTransposedKernel;
 
 // Split-k: group z of batch * splits computes item z / splits over k in [slice kc, slice kc + kc)
-// and stores item z of C (the partials, alpha = 1, beta = 0; gemm_splitk reduces them).
+// and stores item z of C (the partials, alpha = 1, beta = 0; gemm_splitk reduces them). `mask` is
+// the call's batch mask, by item (z / splits), since C here is the unmasked partials view.
 struct WideSplit {
     int splits = 1;
     int kc = 0;
+    const std::uint8_t* mask = nullptr;
 };
 
 namespace wide_transposed {
@@ -346,6 +348,7 @@ Event launch_wide_transposed_leg(Queue& ctx,
         const int stride_b = static_cast<int>(B.stride());
         const int stride_c = static_cast<int>(C.stride());
         const int batch = static_cast<int>(A.batch_size());
+        const std::uint8_t* mask = Split ? split.mask : item_mask(A, B, C);
 
         D alpha_d;
         D beta_d;
@@ -365,7 +368,7 @@ Event launch_wide_transposed_leg(Queue& ctx,
                     k_lo = (z - bid * splits) * kc;
                     k_hi = sycl::min(k, k_lo + kc);
                 }
-                if (bid >= batch) {
+                if (bid >= batch || item_off(mask, bid)) {
                     return;
                 }
 

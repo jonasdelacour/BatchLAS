@@ -51,6 +51,7 @@ struct GemmK8S4LargeBody {
     int batch;
     float alpha, beta;
     sycl::local_accessor<float, 1> tile;
+    const std::uint8_t* mask;  // the batch mask; null unmasked
 
     // One operand's copies of a slab, packet (down E) or k-contiguous (KC): E / 32 elements per lane,
     // or on the Vec leg (packet only) E / 128 granules, 1024 / E k rows apart, edge granules clipped.
@@ -87,7 +88,7 @@ struct GemmK8S4LargeBody {
 
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
-        if (bid >= batch) return;
+        if (bid >= batch || item_off(mask, bid)) return;
         const int tid = static_cast<int>(item.get_local_id(2));
         const int lane = tid & 31, warp = tid >> 5;
         // The 128x128 kernel's lane swizzle and 2 x 4 warp grid, bands 32 rows / 16 columns apart.
@@ -276,7 +277,7 @@ Event launch_register_k8_s4_large_leg(Queue& ctx, const MatrixView<float, Matrix
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<float, 1> tile(sycl::range<1>(Body::Elems), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
-                  A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile};
+                  A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile, item_mask(A, B, C)};
         batchlas::impl::parallel_for<GemmRegisterK8S4LargeKernel<TM, TN, OpA, OpB, Vec16>>(
             h, sycl::nd_range<3>(global, local), GemmK8S4LargeKernel<Body>{body});
     });

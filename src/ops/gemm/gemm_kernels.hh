@@ -5,8 +5,23 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <src/util/batch_mask.hh>
+
+#include <cstdint>
 
 namespace batchlas::sycl_gemm {
+
+// The call's batch mask as a kernel argument (null: unmasked). A, B and C share one span, so a
+// chunk's views (batch_range) hand its slice to the chunk's launch.
+template <typename T>
+inline const std::uint8_t* item_mask(const MatrixView<T, MatrixFormat::Dense>& A,
+                                     const MatrixView<T, MatrixFormat::Dense>& B,
+                                     const MatrixView<T, MatrixFormat::Dense>& C) {
+    return batchlas::detail::mask_ptr(batchlas::detail::call_mask("gemm", A, B, C));
+}
+
+// The guard of a kernel with one item per work-group (I1): uniform, before any barrier.
+inline bool item_off(const std::uint8_t* mask, std::int64_t b) { return mask != nullptr && mask[b] == 0; }
 
 // Trace identities only (BATCHLAS_KERNEL_TRACE names). Which kernel runs is decided by
 // src/ops/gemm/gemm.cc; each launcher below names the instantiation it took.
