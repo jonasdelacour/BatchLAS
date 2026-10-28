@@ -34,10 +34,13 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Uplo uplo) {
 // (trsm refuses what it cannot take); a heterogeneous batch was refused before selection.
 template <class T>
 bool can_run(const PotrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
-    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
+    // Both families pass the masked views to their solve as they are.
+    const bool masked = detail::any_batch_mask(A, B);
     return std::visit(overloaded{
-        [&](Fused) { return fused_fits<T>(d, A.rows(), B.cols()); },
-        [&](Trsm) { return true; },
+        // mask: lift after potrs_fused_dispatch (src/ops/getrs/kernels/getrs_fused.cc, W2b).
+        [&](Fused) { return !masked && fused_fits<T>(d, A.rows(), B.cols()); },
+        // mask: lift after trsm.
+        [&](Trsm) { return !masked; },
     }, c);
 }
 

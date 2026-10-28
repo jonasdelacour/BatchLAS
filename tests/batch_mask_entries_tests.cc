@@ -243,7 +243,6 @@ std::vector<Entry<T>> routed_entries() {
         {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
-        {"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }},
         {"getrf", true, [=](P& p) { getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); }},
         {"getrs", true,
          [=](P& p) {
@@ -273,11 +272,6 @@ std::vector<Entry<T>> routed_entries() {
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan()); }},
         {"gesv", true, [=](P& p) { gesv<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.pspan(), p.ws, p.ispan()); }},
         {"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }},
-        {"potri", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
-             potri<B, T>(p.q, p.mat(p.a), L, true, p.ws, p.ispan());
-         }},
         {"potrs", true,
          [=](P& p) {
              if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
@@ -309,8 +303,12 @@ std::vector<Entry<T>> routed_entries() {
         {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
     };
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
-    if constexpr (B == Backend::NETLIB)
+    // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses; potri's cta runs
+    // on either backend (potrf_mask_tests holds both contracts).
+    if constexpr (B == Backend::NETLIB) {
         for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
+        out.push_back({"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
+    }
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
@@ -533,7 +531,7 @@ std::vector<Entry<T>> direct_entries() {
         p.q.wait();
         iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
     });
-    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
+    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, cond
         add("steqr", [=](P& p) {
             steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
         });
@@ -564,7 +562,6 @@ std::vector<Entry<T>> direct_entries() {
             tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
         });
         add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
-        add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
     }
     return out;
 }

@@ -12,6 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -168,7 +169,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
                           Span<int32_t> info,
                           const PotrfLpanelLaunch& p,
-                          int n, int batch) {
+                          int n, int batch, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
@@ -220,7 +221,9 @@ Event potrf_lpanel_launch(Queue& ctx,
                 // work-group barrier, so a lane that leaves early -- or runs fewer panels --
                 // hangs the group. A dead slot runs the whole body against matrix 0 with
                 // its stores suppressed.
-                const bool live = (matrix_id < batch);
+                // The batch mask folds in here (I2): an inactive item is a dead slot like a tail one.
+                const bool in_range = (matrix_id < batch);
+                const bool live = in_range && (mask == nullptr || mask[matrix_id] != 0);
 
                 D* sA = &panel[0] + static_cast<std::ptrdiff_t>(slot) * slda * NB;
                 D* sB = reinterpret_cast<D*>(&block[0]) +
@@ -230,7 +233,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                 // Built from data_ptr() + b*stride, never MatrixView::operator()(Slice,Slice):
                 // its 6-arg ctor defaults stride to ld*cols when 0 is passed, after which
                 // every batch item but the first reads the wrong matrix.
-                D* Ag = a_ptr + static_cast<std::ptrdiff_t>(live ? matrix_id : 0) * stride_a;
+                D* Ag = a_ptr + static_cast<std::ptrdiff_t>(in_range ? matrix_id : 0) * stride_a;
 
                 potrf_native::potrf_lpanel_body<D, R, NB>(it, tid, L, live, sA, slda, sB, fl,
                                                           Ag, ldg, n);
@@ -318,12 +321,13 @@ Event potrf_lpanel_dispatch(Queue& ctx,
                              ? info_out
                              : potrf_lpanel_layout<T>(ctx, pool, batch);
 
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
     if constexpr (std::is_same_v<T, float>) {
         if (nb == 16) {
-            return potrf_lpanel_launch<T, 16>(ctx, A, info, p, n, batch);
+            return potrf_lpanel_launch<T, 16>(ctx, A, info, p, n, batch, mask);
         }
     }
-    return potrf_lpanel_launch<T, PotrfLpanelConst<T>::NB>(ctx, A, info, p, n, batch);
+    return potrf_lpanel_launch<T, PotrfLpanelConst<T>::NB>(ctx, A, info, p, n, batch, mask);
 }
 
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.

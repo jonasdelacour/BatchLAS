@@ -15,6 +15,7 @@
 #include <src/sycl/kernel_attrs.hh>
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
+#include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -90,6 +91,8 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
     D* const slots = reinterpret_cast<D*>(stash.slots);
     int32_t* const flags = stash.flags;
     const int sn = stash.n, origin = stash.origin;
+    // A's batch mask (the blocked driver's views carry their part's slice): one item per group, I1.
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potri", A));
     const std::ptrdiff_t tri = static_cast<std::ptrdiff_t>(sn) * (sn + 1) / 2;
 
     ctx->submit([&](sycl::handler& h) {
@@ -101,6 +104,7 @@ Event potri_cta(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo up
             const int tid = static_cast<int>(it.get_local_linear_id());
             const std::size_t g = it.get_group_linear_id();
             const std::ptrdiff_t item = static_cast<std::ptrdiff_t>(g / nblk);
+            if (mask != nullptr && mask[item] == 0) return;  // work-group uniform, before any collective
             const int j0 = static_cast<int>(g % nblk) * bn;
             const int m = sycl::min(bn, n - j0);
             const int mpw = (m + TS - 1) / TS * TS;

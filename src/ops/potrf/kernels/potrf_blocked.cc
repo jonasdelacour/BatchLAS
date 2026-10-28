@@ -12,6 +12,8 @@
 
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
+#include <src/kernels/common/info_span.hh>
 
 #include <batchlas/util/mempool.hh>
 
@@ -195,7 +197,7 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
                                 T* a_ptr, int ld, int stride,
                                 int j, int ib, int m2, int batch,
                                 int32_t* info_ptr, const int32_t* leaf_ptr,
-                                int wg, bool upper) {
+                                int wg, bool upper, const std::uint8_t* mask) {
     // Lower: the whole column panel A(j:n, j:j+ib) (rows x ib). Upper: the whole row panel
     // A(j:j+ib, j:n), stored as ib rows x cols columns.
     const int rows = ib + m2;
@@ -210,6 +212,7 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 const int tid = static_cast<int>(it.get_local_linear_id());
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the barrier; leaf_info is stale
 
                 // Every work-item must read info[b] before any writes it, or the merge races.
                 const int32_t prev = info_ptr[b];
@@ -302,6 +305,9 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int stride = A.stride();
     T* const prod_ptr = ws.product.data();
 
+    // Every view below carries its part's slice of the mask, so each child skips the inactive items.
+    const Span<const std::uint8_t> mask = detail::call_mask("potrf", A);
+
     const int fixup_wg = std::min<int>(
         128, std::max<int>(32, static_cast<int>(
                                    dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE))));
@@ -310,13 +316,15 @@ Event potrf_blocked_dispatch(Queue& ctx,
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         int32_t* const info_ptr = info_requested ? info_out.data() + b0 : ws.info.data();
+        const Span<const std::uint8_t> part_mask =
+            mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
 
         // Out of order, the previous part's last fixup may still write the shared ws.info (and
         // read leaf_info): a late info[b] != 0 quenches this part's item b to identity.
         if (b0 > 0 && !ctx.in_order()) ctx.wait();
 
         // Not optional: the merge reads info[b] for an earlier panel's failure; info_out is dirty.
-        ctx->fill(info_ptr, int32_t(0), static_cast<std::size_t>(cb));
+        detail::info_clear(ctx, Span<int32_t>(info_ptr, static_cast<std::size_t>(cb)), cb, part_mask);
         if (!ctx.in_order()) ctx.wait();
 
         // The explicit 6-arg constructor, never operator()(Slice, Slice): the constructor defaults
@@ -324,7 +332,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
         auto sub = [&](int r0, int nr, int c0, int nc, T** ptrs) {
             return MatrixView<T, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-                nr, nc, ld, stride, cb, ptrs);
+                nr, nc, ld, stride, cb, ptrs).with_batch_mask(part_mask);
         };
 
         for (int j = 0; j < n; j += nb) {
@@ -344,7 +352,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
             if (!ctx.in_order()) ctx.wait();
 
             (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, cb,
-                                               info_ptr, ws.leaf_info.data(), fixup_wg, upper);
+                                               info_ptr, ws.leaf_info.data(), fixup_wg, upper,
+                                               detail::mask_ptr(part_mask));
 
             if (m2 == 0) break;
 
