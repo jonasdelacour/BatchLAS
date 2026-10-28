@@ -61,6 +61,16 @@ if(BATCHLAS_ACPP_SLM_OPTIN AND APPLE)
     message(FATAL_ERROR "BATCHLAS_ACPP_SLM_OPTIN is a CUDA cuLaunchKernel interposer; macOS has no CUDA")
 endif()
 
+# -ffp-contract of every BatchLAS TU, host and device: on (default) fuses a*b+c within one
+# expression, off never fuses. evidence: docs/guide/build.md#guide_build_fp_contract
+set(BATCHLAS_FP_CONTRACT "on" CACHE STRING "Floating-point contraction of BatchLAS TUs: on|off")
+set_property(CACHE BATCHLAS_FP_CONTRACT PROPERTY STRINGS on off)
+string(TOLOWER "${BATCHLAS_FP_CONTRACT}" BATCHLAS_FP_CONTRACT_RESOLVED)
+if(NOT BATCHLAS_FP_CONTRACT_RESOLVED MATCHES "^(on|off)$")
+    message(FATAL_ERROR "BATCHLAS_FP_CONTRACT must be on or off (got '${BATCHLAS_FP_CONTRACT}')")
+endif()
+message(STATUS "Floating-point contraction: -ffp-contract=${BATCHLAS_FP_CONTRACT_RESOLVED}")
+
 # Is BatchLAS the top-level project, or was it pulled in with add_subdirectory()
 # / FetchContent? Anything that writes global state has to be conditional on
 # this. PROJECT_IS_TOP_LEVEL would be the idiomatic spelling but needs CMake
@@ -414,6 +424,8 @@ endif()
 # evidence: docs/perf/blackwell.md#icpx-fast-fp-model
 target_compile_options(batchlas_build_options INTERFACE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:IntelLLVM>,$<BOOL:${BATCHLAS_SYCL_IMPL_DPCPP}>>:-ffp-model=precise>
+    # DPC++ already contracts with `on`; only `off` is spelled out (after -ffp-model, which sets it).
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<BOOL:${BATCHLAS_SYCL_IMPL_DPCPP}>,$<STREQUAL:${BATCHLAS_FP_CONTRACT_RESOLVED},off>>:-ffp-contract=off>
     ${_BATCHLAS_DEBUG_COMPILE_OPTIONS}
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:MinSizeRel>>:-Os>

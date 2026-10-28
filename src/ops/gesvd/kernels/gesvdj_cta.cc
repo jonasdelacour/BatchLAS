@@ -16,6 +16,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 #include <algorithm>
 #include <complex>
 #include <limits>
@@ -860,6 +861,7 @@ Event gesvdj_cta(Queue& ctx,
                  const Span<std::byte>& ws,
                  GesvdjParams<T> params,
                  Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvdj_cta", B, a_in, u_out, vh_out);
     (void)ws;
 
     validate_gesvdj_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta");

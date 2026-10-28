@@ -11,7 +11,9 @@
 #include <batchlas/blas/functions/trsm.hh>
 
 #include <src/ops/posv/choice.hh>
+#include <src/ops/potrs/potrs.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/getrs/getrs_native.hh>
 #include <src/kernels/common/solve_native.hh>
 #include <src/util/template-instantiations.hh>
@@ -41,6 +43,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView
 template <typename T>
 bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& B) {
+    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
@@ -49,11 +52,7 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
             return native && n <= sycl_posv::posv_tiny_max_n<T>() && nrhs <= sycl_posv::kPosvTinyMaxRhs &&
                    d.max_wg >= sycl_posv::kPosvTinyWgSize;
         },
-        [&](Cta) {
-            const auto cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(static_cast<std::size_t>(d.slm_budget));
-            return native && nrhs <= sycl_getrs::kGetrsFusedMaxRhs &&
-                   static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs) <= cap;
-        },
+        [&](Cta) { return native && ops::potrs::fused_fits<T>(d, n, nrhs); },
         [&](Blocked) { return homogeneous; },
     }, c);
 }
@@ -67,22 +66,12 @@ Event launch(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::De
             // The public potrf, then BOTH triangular solves in one kernel: two nrhs = 1 trsm
             // launches stream L twice at a fraction of the bandwidth one fused pass gets.
             (void)potrf<B, T>(q, A, uplo, ws, info);
-            return sycl_getrs::potrs_fused_dispatch<T>(q, A, Bm, uplo);
+            return ops::potrs::solve<B, T>(q, A, Bm, uplo, true);
         },
         [&](Blocked) {
-            // No split: trsm takes no workspace, so potrf owns the whole span.
+            // No split: the solve takes no workspace, so potrf owns the whole span.
             (void)potrf<B, T>(q, A, uplo, ws, info);
-            // ConjTrans only for a complex scalar: a real backend may refuse ConjTrans, and
-            // for a real matrix Trans is the same operation. For a real T, base_type<T> IS T.
-            constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
-            constexpr Transpose kAdj = kReal ? Transpose::Trans : Transpose::ConjTrans;
-            const T one = T(1);
-            if (uplo == Uplo::Lower) {
-                (void)trsm<B, T>(q, A, Bm, one, Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit);
-                return trsm<B, T>(q, A, Bm, one, Side::Left, Uplo::Lower, kAdj, Diag::NonUnit);
-            }
-            (void)trsm<B, T>(q, A, Bm, one, Side::Left, Uplo::Upper, kAdj, Diag::NonUnit);
-            return trsm<B, T>(q, A, Bm, one, Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit);
+            return ops::potrs::solve<B, T>(q, A, Bm, uplo, false);
         },
     }, c);
 }
@@ -118,6 +107,7 @@ template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     posv_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("posv", A, B);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::posv::throw_if_unservable<T>(A, B, "posv");
@@ -139,6 +129,7 @@ template <Backend Back, typename T>
 size_t posv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
     posv_validate_params<T>(A, B, uplo);
+    (void)detail::call_mask("posv_buffer_size", A, B);
     if (A.batch_size() == 0) return 0;
     ops::posv::throw_if_unservable<T>(A, B, "posv_buffer_size");
     const auto c = select::pick<Back, T>(

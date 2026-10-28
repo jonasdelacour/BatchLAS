@@ -178,6 +178,8 @@ target_sources(batchlas_selection_obj PRIVATE ops/ormqr/ormqr.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/getrf/getrf.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/getrs/getrs.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/getri/getri.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/potrs/potrs.cc ops/potri/potri.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/potrs/kernels/potrs_trsm.cc ops/potri/kernels/potri_blocked.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_selection_obj PRIVATE ops/spmm/spmm.cc)
@@ -188,7 +190,13 @@ target_sources(batchlas_selection_obj PRIVATE ops/syev/syev.cc)
 # evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/symm/symm.cc ops/hemm/hemm.cc ops/herk/herk.cc)
 target_sources(batchlas_extensions_level3_obj PRIVATE ops/her2k/her2k.cc ops/syrk/syrk.cc ops/syr2k/syr2k.cc)
-target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc)
+target_sources(batchlas_extensions_level3_obj PRIVATE ops/trmm/trmm.cc ops/symm/kernels/symm_mirror.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sytrf/sytrf.cc ops/sytrs/sytrs.cc ops/sysv/sysv.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sygst/sygst.cc ops/sygvd/sygvd.cc)
+# The sygst Blocked/TwoSided and sygvd Compose drivers: host code over public routed ops, so they sit
+# with the op .cc they came from (no device symbol; the diagonal kernel lives in src/ops/CMakeLists.txt).
+target_sources(batchlas_selection_obj PRIVATE ops/sygst/kernels/sygst_blocked.cc ops/sygst/kernels/sygst_twosided.cc)
+target_sources(batchlas_selection_obj PRIVATE ops/sygvd/kernels/sygvd_compose.cc)
 add_subdirectory(ops)
 add_subdirectory(util)
 
@@ -438,7 +446,10 @@ else()
 endif()
 
 
-if(BATCHLAS_HAS_HOST_BACKEND)
+# Linked only when the library may call LAPACKE/CBLAS (BATCHLAS_HAS_LAPACKE/CBLAS: found AND
+# vendor math allowed). A vendor-free build keeps the host device family but calls no netlib, so
+# no libbatchlas*.so records DT_NEEDED on it; batchlas_verify (static, test-only) links it itself.
+if(BATCHLAS_HAS_HOST_BACKEND AND BATCHLAS_HAS_LAPACKE AND BATCHLAS_HAS_CBLAS)
     # PRIVATE: these are absolute -dev symlink paths
     # (/usr/lib/x86_64-linux-gnu/liblapacke.so). PUBLIC put them verbatim into
     # the exported BatchLAS::batchlas_backends interface, so a consumer on a

@@ -10,6 +10,7 @@
 
 #include <src/ops/gemv/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/gemv/gemv_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -55,6 +56,7 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const VectorView<T>& X,
              const VectorView<T>& Y, Transpose transA) {
+    if (std::holds_alternative<Vendor>(c) && batchlas::detail::any_batch_mask(A, X, Y)) return false;  // strided
     const bool native = !A.is_heterogeneous() && A.rows() >= 0 && A.cols() >= 0 && A.batch_size() >= 1 &&
                         X.batch_size() == A.batch_size() && Y.batch_size() == A.batch_size() &&
                         X.size() == red_len<T>(A, transA) && Y.size() == out_len<T>(A, transA);
@@ -86,6 +88,7 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 template <Backend Back, typename T>
 Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
            T alpha, T beta, Transpose transA) {
+    (void)batchlas::detail::call_mask("gemv", A, X, Y);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.

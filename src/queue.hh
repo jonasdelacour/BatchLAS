@@ -291,9 +291,17 @@ struct QueueImpl : public sycl::queue{
         last_event_.rebind_owner();
     }
 
+    struct SharedContexts {
+        std::mutex m;
+        std::unordered_map<std::uint64_t, sycl::context> contexts;
+    };
+    static SharedContexts& shared_contexts() {
+        static SharedContexts s;
+        return s;
+    }
+
     static const sycl::context& shared_context(Device dev) {
-        static std::mutex m;
-        static std::unordered_map<std::uint64_t, sycl::context> contexts;
+        auto& [m, contexts] = shared_contexts();
         const std::uint64_t key = (static_cast<std::uint64_t>(dev.idx) & 0xffffffffull) |
                                   (static_cast<std::uint64_t>(static_cast<int>(dev.type)) << 32);
         std::lock_guard<std::mutex> lock(m);
@@ -303,6 +311,18 @@ struct QueueImpl : public sycl::queue{
         const sycl::device sycl_dev = device_arrays.at((int)dev.type).at(dev.idx);
         auto [new_it, _] = contexts.emplace(key, sycl::context(sycl_dev));
         return new_it->second;
+    }
+
+    // The USM kind of `p` in the shared contexts made so far, which hold every Queue's allocations
+    // but a sycl_interop one's; unknown is plain host memory or another SYCL context's.
+    static sycl::usm::alloc usm_kind(const void* p) {
+        auto& [m, contexts] = shared_contexts();
+        std::lock_guard<std::mutex> lock(m);
+        for (const auto& [key, ctx] : contexts) {
+            const sycl::usm::alloc kind = sycl::get_pointer_type(p, ctx);
+            if (kind != sycl::usm::alloc::unknown) return kind;
+        }
+        return sycl::usm::alloc::unknown;
     }
 
     // Exported so the vague-linkage fold yields ONE device cache per process, not one per library.

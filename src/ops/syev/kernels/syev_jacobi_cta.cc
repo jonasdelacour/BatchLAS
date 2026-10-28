@@ -14,6 +14,7 @@
 #include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 #include <complex>
 #include <limits>
 #include <numeric>
@@ -215,8 +216,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const int32_t pairs_per_round = mm / 2;
                 const int32_t rounds = mm - 1;
 
-                // Build the shared pivot-pair table. This must happen before any
-                // early return, since it ends in a work-group barrier.
+                // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
                     const int32_t k = idx - t * pairs_per_round;
@@ -236,9 +236,10 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= nb) return;
+                // NO EARLY RETURN: a dead partition sweeps a zero tile and stores nothing.
+                const bool live = prob_id < nb;
 
-                auto A_prob = A_view.batch_item(prob_id);
+                auto A_prob = A_view.batch_item(live ? prob_id : 0);
 
                 const int32_t base_a = part_id * static_cast<int32_t>(kTileElems);
                 const int32_t base_z = ComputeVectors ? (part_id * static_cast<int32_t>(kTileElems)) : 0;
@@ -250,7 +251,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // selects a padded index.
                 for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                     T v = T(0);
-                    if (lane < nn && c < nn) {
+                    if (live && lane < nn && c < nn) {
                         if constexpr (Upper) {
                             v = (lane <= c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
                         } else {
@@ -469,13 +470,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // may report for the item. A STORE, not a raise: this kernel is the
                 // single writer for the item, so a converged item is set to 0 here
                 // rather than by a separate clear kernel that could race with it.
-                if (lane == 0) detail::info_store(info_dev, prob_id, converged ? 0 : 1);
+                if (live && lane == 0) detail::info_store(info_dev, prob_id, converged ? 0 : 1);
 
                 // ---- Sort by rank and write back. ----
                 // Rank is computed in parallel (one lane per eigenvalue) rather
                 // than by a serial sort on the leader; ties break on index so the
                 // permutation is a bijection.
-                if (row_lane) {
+                if (live && row_lane) {
                     const Real wj = real_part_j(A_local[base_a + lane + lane * LD]);
                     int32_t dst = lane;
                     if (do_sort) {
@@ -516,6 +517,7 @@ Event syev_jacobi_cta(Queue& ctx,
                       const Span<std::byte>& ws,
                       JacobiParams<T> params,
                       Span<int32_t> info) {
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_jacobi_cta", B, a_in);
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {

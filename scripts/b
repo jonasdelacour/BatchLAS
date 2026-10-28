@@ -67,15 +67,84 @@ case ${LIBRARY_PATH:-} in
         unset LIBRARY_PATH ;;
 esac
 
-lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
-info="$lock.info"
-me="pid $$ user $(id -un) since $(date '+%F %T') building '${targets[*]:-<everything>}' in $build"
+mem_avail_gb() {
+    if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo
+    else vm_stat | awk -v pg="$(sysctl -n hw.pagesize)" '/^Pages (free|inactive|speculative|purgeable):/ { gsub("\\.", "", $NF); n += $NF } END { printf "%d", n * pg / 1073741824 }'; fi
+}
+
 # macOS has no flock(1); perl's flock(2) on the inherited fd 9 holds until this shell exits.
 lock9() {
     if command -v flock >/dev/null; then flock "$@" 9
     else perl -MFcntl=:flock -e 'open(my $f, "<&=", 9) or exit 2; exit(flock($f, LOCK_EX | ($ARGV[0] eq "-n" ? LOCK_NB : 0)) ? 0 : 1)' -- "${1:-}"; fi
 }
-if [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
+# Memory admission needs setsid, GNU tail --pid and flock(1); macOS takes the exclusive lock.
+[ -r /proc/meminfo ] || : "${BATCHLAS_BUILD_LOCK_MODE:=exclusive}"
+
+# Memory admission (the default): builds run side by side; RAM is the only limit. A build is
+# admitted when MemAvailable >= BATCHLAS_ADMIT_MEM_GB, holding a short admission lock while it
+# ramps up so two starters cannot both see the same free memory. While it runs, every build but
+# the oldest pauses (SIGSTOP) when MemAvailable falls below BATCHLAS_PAUSE_MEM_GB and resumes
+# above BATCHLAS_RESUME_MEM_GB, so progress continues and the box (zero swap) never OOMs.
+# BATCHLAS_BUILD_LOCK_MODE=exclusive restores the one-build-per-box lock below.
+if [ "${BATCHLAS_BUILD_LOCK_MODE:-mem}" = mem ] && [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
+    admit_gb=${BATCHLAS_ADMIT_MEM_GB:-36}
+    pause_gb=${BATCHLAS_PAUSE_MEM_GB:-10}
+    resume_gb=${BATCHLAS_RESUME_MEM_GB:-24}
+    ramp_s=${BATCHLAS_ADMIT_RAMP_S:-120}
+    reg=/tmp/batchlas-builds
+    mkdir -p "$reg" 2>/dev/null && chmod 777 "$reg" 2>/dev/null || true
+    alock=${BATCHLAS_ADMIT_LOCK:-/tmp/batchlas-build-admit.lock}
+    [ -e "$alock" ] || { : > "$alock" && chmod 666 "$alock"; } 2>/dev/null || true
+    exec 8<"$alock"
+    flock 8
+    while [ "$(mem_avail_gb)" -lt "$admit_gb" ]; do
+        echo "b: MemAvailable $(mem_avail_gb) GB < ${admit_gb} GB admission threshold; waiting" >&2
+        sleep 20
+    done
+    mkdir -p "$build/logs"
+    tag=$(printf '%s' "${targets[*]:-all}" | tr -c 'A-Za-z0-9_.-' '+' | cut -c1-80)
+    log="$build/logs/$(date +%Y%m%d-%H%M%S)-$tag.log"
+    cmd=(cmake --build "$build" -j "$jobs")
+    [ "${#targets[@]}" -eq 0 ] || cmd+=(--target "${targets[@]}")
+    echo "b: ${cmd[*]}   (log: $log; admitted at MemAvailable $(mem_avail_gb) GB)" >&2
+    t0=$(date +%s)
+    setsid "${cmd[@]}" > "$log" 2>&1 &
+    bpid=$!
+    printf '%s %s\n' "$t0" "$build" > "$reg/$bpid"
+    trap 'kill -CONT -- -"$bpid" 2>/dev/null; kill -TERM -- -"$bpid" 2>/dev/null; rm -f "$reg/$bpid"' INT TERM
+    released=0; paused=0; tail_pid=""
+    tail -n +1 -f "$log" --pid="$bpid" &
+    tail_pid=$!
+    while kill -0 "$bpid" 2>/dev/null; do
+        sleep 5
+        if [ "$released" = 0 ] && [ $(( $(date +%s) - t0 )) -ge "$ramp_s" ]; then flock -u 8; released=1; fi
+        avail=$(mem_avail_gb)
+        oldest=$(for f in "$reg"/*; do [ -f "$f" ] || continue; p=${f##*/}
+                 kill -0 "$p" 2>/dev/null || { rm -f "$f"; continue; }; printf '%s %s\n' "$(cut -d' ' -f1 "$f")" "$p"; done |
+                 sort -n | head -n1 | cut -d' ' -f2 || true)
+        if [ "$paused" = 0 ] && [ "$avail" -lt "$pause_gb" ] && [ "$oldest" != "$bpid" ]; then
+            kill -STOP -- -"$bpid" 2>/dev/null && paused=1
+            echo "b: MemAvailable ${avail} GB < ${pause_gb} GB: paused this build (an older build keeps running)" >&2
+            [ "$released" = 1 ] || { flock -u 8; released=1; }
+        elif [ "$paused" = 1 ] && { [ "$avail" -ge "$resume_gb" ] || [ "$oldest" = "$bpid" ]; }; then
+            kill -CONT -- -"$bpid" 2>/dev/null; paused=0
+            echo "b: MemAvailable ${avail} GB: resumed" >&2
+        fi
+    done
+    [ "$released" = 1 ] || flock -u 8
+    rc=0; wait "$bpid" || rc=$?
+    wait "$tail_pid" 2>/dev/null || true
+    rm -f "$reg/$bpid"
+    t1=$(date +%s)
+    printf 'b: exit %s after %dm%02ds (%s)\n' "$rc" $(( (t1 - t0) / 60 )) $(( (t1 - t0) % 60 )) "$log" >&2
+    [ "$rc" -eq 0 ] || exit "$rc"
+    BATCHLAS_SKIP_BUILD=1
+fi
+
+lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
+info="$lock.info"
+me="pid $$ user $(id -un) since $(date '+%F %T') building '${targets[*]:-<everything>}' in $build"
+if [ "${BATCHLAS_SKIP_BUILD:-0}" != 1 ] && [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
     [ -e "$lock" ] || { : > "$lock" && chmod 666 "$lock"; } 2>/dev/null || true
     exec 9<"$lock"
     if ! lock9 -n; then
@@ -92,10 +161,7 @@ if [ "${BATCHLAS_BUILD_LOCK_HELD:-0}" != 1 ]; then
     { printf '%s\n' "$me" > "$info" && chmod 666 "$info"; } 2>/dev/null || true
 fi
 
-mem_avail_gb() {
-    if [ -r /proc/meminfo ]; then awk '/^MemAvailable:/ { printf "%d", $2 / 1048576 }' /proc/meminfo
-    else vm_stat | awk -v pg="$(sysctl -n hw.pagesize)" '/^Pages (free|inactive|speculative|purgeable):/ { gsub("\\.", "", $NF); n += $NF } END { printf "%d", n * pg / 1073741824 }'; fi
-}
+if [ "${BATCHLAS_SKIP_BUILD:-0}" != 1 ]; then
 # macOS swaps and compresses, and its free+inactive estimate is conservative: a lower floor.
 [ -r /proc/meminfo ] && min_gb=${BATCHLAS_MIN_MEM_GB:-16} || min_gb=${BATCHLAS_MIN_MEM_GB:-8}
 max_wait=${BATCHLAS_MEM_WAIT_MAX:-1800}
@@ -123,6 +189,7 @@ rc=0
 t1=$(date +%s)
 printf 'b: exit %s after %dm%02ds (%s)\n' "$rc" $(( (t1 - t0) / 60 )) $(( (t1 - t0) % 60 )) "$log" >&2
 [ "$rc" -eq 0 ] || exit "$rc"
+fi
 
 # cmake --build with several targets can exit 0 and skip links (agent guide section 7).
 missing=0

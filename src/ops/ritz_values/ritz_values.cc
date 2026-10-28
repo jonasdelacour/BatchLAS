@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -26,6 +27,7 @@ namespace batchlas {
                       const MatrixView<T, MatrixFormat::Dense>& V,
                       const VectorView<typename base_type<T>::type>& ritz_vals,
                       Span<std::byte> workspace) {
+        detail::refuse_batch_mask("ritz_values", A, V, ritz_vals);
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -149,6 +151,7 @@ namespace batchlas {
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals) {
+        detail::refuse_batch_mask("ritz_values", A, V, ritz_vals);
         const auto batch_size = A.batch_size();
         const auto n = A.rows();
         const auto k = V.cols();

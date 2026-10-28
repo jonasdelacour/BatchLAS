@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
@@ -119,10 +120,19 @@ namespace batchlas {
                     const int32_t base_v = part_id * static_cast<int32_t>(P);
                     const int32_t base_w = part_id * static_cast<int32_t>(P);
 
-                    // Load A into local memory (column-major).
+                    // Build the Hermitian tile from the named triangle only (defect 14): each lane
+                    // loads its row of that triangle, coalesced, and writes the conjugate mirror.
+                    // The diagonal's imaginary part is dropped, as {c,z}hetrd does.
                     if (lane < n) {
                         for (int32_t c = 0; c < n; ++c) {
-                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = A_prob(lane, c);
+                            if (Upper ? lane > c : lane < c) continue;
+                            T v = A_prob(lane, c);
+                            if (lane == c) {
+                                if constexpr (detail::is_complex<T>::value) v = T(v.real(), typename base_type<T>::type(0));
+                            } else {
+                                A_local[base_a + c + lane * static_cast<int32_t>(P)] = batchlas::device::detail::conj(v);
+                            }
+                            A_local[base_a + lane + c * static_cast<int32_t>(P)] = v;
                         }
                         // Pad remaining columns to keep reads defined.
                         for (int32_t c = n; c < static_cast<int32_t>(P); ++c) {
@@ -295,6 +305,7 @@ namespace batchlas {
                     const Span<std::byte>& ws,
                     size_t cta_wg_size_multiplier) {
         (void)ws;
+        batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_cta", B, a_in, d_out, e_out, tau_out);
         if (a_in.rows() != a_in.cols()) {
             throw batchlas::invalid_argument("sytrd_cta: A must be square.");
         }

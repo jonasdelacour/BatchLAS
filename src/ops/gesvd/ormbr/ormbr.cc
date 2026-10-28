@@ -10,6 +10,7 @@
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/kernels/common/larft_wy.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <cctype>
@@ -372,6 +373,7 @@ Event ormbr(Queue& ctx,
             Transpose trans,
             const Span<std::byte>& ws,
             int32_t block_size) {
+    ::batchlas::detail::refuse_batch_mask("ormbr", a, tau, c);
     validate_ormbr_dims(a, tau, c, vect, side);
 
     const char v = upper_ascii(vect);

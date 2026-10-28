@@ -9,6 +9,7 @@
 
 #include <src/ops/geqrf/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/geqrf/geqrf_native.hh>
 
 #include <cstddef>
@@ -26,6 +27,7 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 // Blocked take any m x n, Tiny only square. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
 template <typename T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
+    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);

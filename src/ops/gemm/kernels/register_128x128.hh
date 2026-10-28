@@ -184,12 +184,13 @@ struct Gemm128x128Body {
     int batch;
     T alpha, beta;
     sycl::local_accessor<T, 1> tile_a, tile_b;
+    const std::uint8_t* mask;  // the batch mask; null unmasked
 
     BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)
     BATCHLAS_GEMM_REQD_WG(Threads)
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
-        if (bid >= batch) {
+        if (bid >= batch || item_off(mask, bid)) {
             return;
         }
         const int tid = static_cast<int>(item.get_local_id(2));
@@ -617,7 +618,8 @@ Event launch_register_128x128_k8_leg(Queue& ctx,
         sycl::local_accessor<T, 1> tile_a(sycl::range<1>(Body::TileAElems), h);
         sycl::local_accessor<T, 1> tile_b(sycl::range<1>(Body::TileBElems), h);
         Body body{A.data_ptr(), B.data_ptr(), C.data_ptr(), m, n, k, A.ld(), B.ld(), C.ld(),
-                  A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b};
+                  A.stride(), B.stride(), C.stride(), A.batch_size(), alpha, beta, tile_a, tile_b,
+                  item_mask(A, B, C)};
         using Name = GemmRegister128x128Kernel<T, AlignedFastPath, StagedEpilogue, OpA, OpB, Stages>;
         // Out of line, the copy_async asm's memory clobber reloads every member through `this` (a
         // stack copy of the functor) after each copy: 23-33x slower. Stages > 2 always inlines.

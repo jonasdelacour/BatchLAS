@@ -8,11 +8,13 @@
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -175,7 +177,7 @@ Event gemv_direct_notrans(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
                           const VectorView<T>& X,
                           const VectorView<T>& Y,
-                          T alpha, T beta) {
+                          T alpha, T beta, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -225,6 +227,7 @@ Event gemv_direct_notrans(Queue& ctx,
                 if (gid >= total) return;
 
                 const int64_t b = gid / out_len;
+                if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item's y is untouched
                 const int i = static_cast<int>(gid - b * out_len);
 
                 const D* Ab = a_ptr + b * stride_a;
@@ -260,7 +263,7 @@ Event gemv_seg_notrans(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const VectorView<T>& X,
                        const VectorView<T>& Y,
-                       T alpha, T beta) {
+                       T alpha, T beta, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -313,8 +316,9 @@ Event gemv_seg_notrans(Queue& ctx,
                     static_cast<int64_t>(it.get_group_linear_id()) * sgs +
                     static_cast<int64_t>(sg.get_group_linear_id());
 
-                // SUB-GROUP UNIFORM: the fold must never see a partial sub-group.
-                if (b >= nbatch) return;
+                // SUB-GROUP UNIFORM: the fold must never see a partial sub-group. b is the
+                // sub-group's item, so the mask test is uniform too.
+                if (b >= nbatch || (mask != nullptr && mask[b] == 0)) return;
 
                 const int i = lane % seg;
                 const int jsub = lane / seg;
@@ -365,7 +369,7 @@ Event gemv_direct_trans(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         const VectorView<T>& X,
                         const VectorView<T>& Y,
-                        T alpha, T beta, bool conjugate) {
+                        T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -413,6 +417,7 @@ Event gemv_direct_trans(Queue& ctx,
                 if (gid >= total) return;
 
                 const int64_t b = gid / out_len;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int j = static_cast<int>(gid - b * out_len);
 
                 const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
@@ -449,7 +454,7 @@ Event gemv_cta_trans(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A,
                      const VectorView<T>& X,
                      const VectorView<T>& Y,
-                     T alpha, T beta, bool conjugate) {
+                     T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -508,7 +513,9 @@ Event gemv_cta_trans(Queue& ctx,
                 // SUB-GROUP UNIFORM: all 32 lanes return here, or none.
                 if (sg_out >= total) return;
 
+                // b is the sub-group's (one output's) item: this return is uniform as well.
                 const int64_t b = sg_out / out_len;
+                if (mask != nullptr && mask[b] == 0) return;
                 const int j = static_cast<int>(sg_out - b * out_len);
 
                 const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
@@ -555,7 +562,7 @@ Event gemv_seg_trans(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& A,
                      const VectorView<T>& X,
                      const VectorView<T>& Y,
-                     T alpha, T beta, bool conjugate) {
+                     T alpha, T beta, bool conjugate, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     static_assert(W >= 2 && W <= 32 && (W & (W - 1)) == 0, "W must be a power of two in [2, 32]");
@@ -623,13 +630,15 @@ Event gemv_seg_trans(Queue& ctx,
                 const int o = lane / kLanes;         // which of the W outputs
 
                 const int64_t sg_out = base + o;
-                // MASKED, NOT RETURNED. A tail sub-group is partially in range.
-                const bool active = (sg_out < total);
+                // MASKED, NOT RETURNED. A tail sub-group is partially in range, and its W
+                // outputs can straddle items, so the batch mask folds in here too (I2).
+                const bool in_range = (sg_out < total);
                 // CLAMPED, so an inactive group forms no out-of-range address.
-                const int64_t sg_out_c = active ? sg_out : (total - 1);
+                const int64_t sg_out_c = in_range ? sg_out : (total - 1);
 
                 const int64_t b = sg_out_c / out_len;
                 const int j = static_cast<int>(sg_out_c - b * out_len);
+                const bool active = in_range && (mask == nullptr || mask[b] != 0);
 
                 const D* Acol = a_ptr + b * stride_a + static_cast<int64_t>(j) * lda;
                 const D* xb = x_ptr + b * stride_x;
@@ -699,6 +708,7 @@ Event gemv_native_direct(Queue& ctx,
                          const VectorView<T>& Y,
                          T alpha, T beta, Transpose transA) {
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("gemv", A, X, Y));
 
     if (transA == Transpose::NoTrans) {
         // THE GATE IS THE ENUMERATED SUB-GROUP SIZE, never MAX_SUB_GROUP_SIZE:
@@ -706,17 +716,17 @@ Event gemv_native_direct(Queue& ctx,
         const int w = gemv_seg_width(A.rows());
         if (w >= 2 && ctx.device().supports_sub_group_size(32)) {
             switch (w) {
-                case 32: return gemv_seg_notrans<T, 32>(ctx, A, X, Y, alpha, beta);
-                case 16: return gemv_seg_notrans<T, 16>(ctx, A, X, Y, alpha, beta);
-                case 8:  return gemv_seg_notrans<T, 8>(ctx, A, X, Y, alpha, beta);
-                case 4:  return gemv_seg_notrans<T, 4>(ctx, A, X, Y, alpha, beta);
-                default: return gemv_seg_notrans<T, 2>(ctx, A, X, Y, alpha, beta);
+                case 32: return gemv_seg_notrans<T, 32>(ctx, A, X, Y, alpha, beta, mask);
+                case 16: return gemv_seg_notrans<T, 16>(ctx, A, X, Y, alpha, beta, mask);
+                case 8:  return gemv_seg_notrans<T, 8>(ctx, A, X, Y, alpha, beta, mask);
+                case 4:  return gemv_seg_notrans<T, 4>(ctx, A, X, Y, alpha, beta, mask);
+                default: return gemv_seg_notrans<T, 2>(ctx, A, X, Y, alpha, beta, mask);
             }
         }
-        return gemv_direct_notrans<T>(ctx, A, X, Y, alpha, beta);
+        return gemv_direct_notrans<T>(ctx, A, X, Y, alpha, beta, mask);
     }
     return gemv_direct_trans<T>(ctx, A, X, Y, alpha, beta,
-                                transA == Transpose::ConjTrans);
+                                transA == Transpose::ConjTrans, mask);
 }
 
 template <typename T>
@@ -733,6 +743,7 @@ Event gemv_native_cta(Queue& ctx,
             "`direct` choice's job (BATCHLAS_GEMV_ROUTE=direct).");
     }
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("gemv", A, X, Y));
 
     // BODY 5 vs BODY 3 is a device-and-shape choice, not a family: a `cta` pin does
     // not identify which kernel ran (gemv_seg_trans_width_debug does).
@@ -744,17 +755,17 @@ Event gemv_native_cta(Queue& ctx,
         if (w >= 2 && ctx.device().supports_sub_group_size(32)) {
             switch (w) {
                 case 8: return gemv_seg_trans<T, 8>(ctx, A, X, Y, alpha, beta,
-                                                    transA == Transpose::ConjTrans);
+                                                    transA == Transpose::ConjTrans, mask);
                 case 4: return gemv_seg_trans<T, 4>(ctx, A, X, Y, alpha, beta,
-                                                    transA == Transpose::ConjTrans);
+                                                    transA == Transpose::ConjTrans, mask);
                 default: return gemv_seg_trans<T, 2>(ctx, A, X, Y, alpha, beta,
-                                                     transA == Transpose::ConjTrans);
+                                                     transA == Transpose::ConjTrans, mask);
             }
         }
     }
 
     return gemv_cta_trans<T>(ctx, A, X, Y, alpha, beta,
-                             transA == Transpose::ConjTrans);
+                             transA == Transpose::ConjTrans, mask);
 }
 
 // The capability flags live in the same TU as the kernels, so a build that drops

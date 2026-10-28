@@ -172,15 +172,25 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `trmm(ctx, A, B, C, opts)` | `C := α·op(A)·B` or `α·B·op(A)` | **`C`**; `B` untouched |
 | `trsm(ctx, A, B, opts)` | solves `op(A)·X = α·B` or `X·op(A) = α·B` | **`B`**, overwritten with `X` |
 | `potrf(ctx, A, opts)` | Cholesky, `A = L·Lᴴ` or `Uᴴ·U` | `A` in place, `uplo` triangle |
+| `potrs(ctx, A, B, uplo)` | solves `A·X = B` from `potrf`'s factor | `B`; `A` read-only |
+| `potri(ctx, A, uplo, full, ws, info)` | `A⁻¹` from `potrf`'s factor (LAPACK `?potri`) | `A` in place, `uplo` triangle (both with `full`) |
 | `getrf(ctx, A, pivots)` | LU with partial pivoting | `A` and `pivots` |
 | `getrs(ctx, A, B, pivots, opts)` | solves `op(A)·X = B` from `getrf`'s factors | `B` |
 | `getri(ctx, A, C, pivots)` | `C := A⁻¹` from `getrf`'s factors | **`C`**; `A` read-only |
 | `gesv(ctx, A, B, pivots, ws)` | solves `A·X = B` by LU with partial pivoting | `A` (L and U), `B` (X), `pivots` |
 | `posv(ctx, A, B, uplo, ws)` | solves `A·X = B` for Hermitian positive-definite `A` | `A` (Cholesky factor, `uplo` triangle), `B` (X) |
+| `sytrf(ctx, A, uplo, pivots, ws)` | Bunch-Kaufman `A = L·D·Lᵀ` or `U·D·Uᵀ`, `A` symmetric (complex: not Hermitian) | `uplo` triangle of `A`, `pivots` (LAPACK `ipiv`, @ref perf_sytrf) |
+| `sytrs(ctx, A, B, uplo, pivots, ws)` / `sysv(ctx, A, B, uplo, pivots, ws)` | solves `A·X = B` from `sytrf`'s factors / `sytrf` then `sytrs` | `B` (and `A`, `pivots` for `sysv`) |
 | `geqrf(ctx, A, tau)` / `orgqr(ctx, A, tau)` | QR with Householder reflectors / expand to explicit `Q` | `A`, `tau` |
 | `ormqr(ctx, A, C, tau, opts)` | `C := op(Q)·C` (`Left`) or `C·op(Q)` (`Right`) with `geqrf`'s `Q` | `C` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
 | `gesvd(ctx, A, S, U, Vh, opts)` | `A = U·Σ·Vᴴ` | `S` descending, `U`, `Vh` per `jobu`/`jobvh`; `A` overwritten |
+| `syev_align(ctx, V_old, W, V, tol, ws)` | per cluster of `W` (gap ≤ `tol`·max\|W\|): `V_c := V_c·R`, the Procrustes rotation onto `V_old`; then every `(V_oldᴴV)ᵢᵢ ≥ 0` | `V` |
+| `syfn(ctx, A, F, fn, uplo, ws, info)` | `F := V·f(Λ)·Vᴴ` from `syev` of the `uplo` triangle; `fn` = `SyfnFunction<R>::inv_sqrt()`, `sqrt()`, `inverse()`, `exp()` or `with_weights(w)`; out-of-domain eigenvalues weigh 0 and are counted in `info` (@ref perf_syfn) | **`F`**, in full and exactly Hermitian; `A` read-only, `F` may be `A` |
+| `syfn_from_eigen(ctx, V, W, F, fn, ws, info)` | `F := V·diag(f(W))·Vᴴ` from given pairs, `V` n×m (e.g. occupied orbitals); the density-matrix step | **`F`**, in full; its storage span must not overlap `V`'s |
+| `sygst(ctx, A, B, itype, uplo, ws)` | `A := L⁻¹·A·L⁻ᴴ` / `U⁻ᴴ·A·U⁻¹` (itype 1) or `Lᴴ·A·L` / `U·A·Uᴴ` (2, 3) from `potrf`'s factor in `B` (LAPACK `?sygst`, @ref perf_sygvd) | `uplo` triangle of `A`; `B` read-only |
+| `sygvd(ctx, A, B, W, itype, jobz, uplo, ws, info)` | `A·x = λ·B·x` (itype 1), `A·B·x = λ·x` (2), `B·A·x = λ·x` (3), B positive definite (LAPACK `?sygvd`; `hegvd` is the same call) | `W` ascending; `A` gets eigenvectors (`Xᴴ·B·X = I`; itype 3 `Xᴴ·B⁻¹·X = I`); `B` gets its Cholesky factor; `info` `n + i` for a non-positive-definite `B` |
+| `sygvd_factored(ctx, A, F, W, itype, jobz, uplo, ws, info)` | `sygvd` with `B` already factored by `potrf` (factor once, solve many times) | as `sygvd`; `F` read-only |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` and `S` are the **real**
 counterpart of `T` (n·batch and min(m,n)·batch).
@@ -206,8 +216,8 @@ C.symmetrize(ctx, Uplo::Lower).wait();   // hermitize() for herk/her2k
 - `symm`, `syrk` and `syr2k` are constrained to **real** `T`; `hemm`, `herk` and `her2k` to
   **complex** `T`; `gemm`, `gemv`, `trmm` and `trsm` take both. `herk`'s `α` and `β` and `her2k`'s
   `β` are real.
-- `potrf`, `getrf`, `getri`, `gesv`, `posv` and the eigen/SVD routines optionally report per-item
-  status ([Per-item status](#per-item-status)).
+- `potrf`, `getrf`, `getri`, `gesv`, `posv`, `potri`, `sytrf`, `sysv` and the eigen/SVD routines
+  optionally report per-item status ([Per-item status](#per-item-status)).
 
 ### trsm: alpha follows the matrices {#trsm-alpha-moved-next-to-the-matrices}
 
@@ -368,6 +378,25 @@ a zero dimension (the shape-only view used for workspace-size queries).
 > one matrix reads `batch` consecutive items, past the end of the buffer. To multiply one matrix
 > against many right-hand sides, fold the batch into columns (packed `B` with `ld == k`,
 > `stride == k*n` is one `k × (n·batch)` matrix) or replicate the matrix.
+
+### A batch mask on a view {#a-batch-mask-on-a-view}
+
+A view can carry a per-item mask, one byte per item, nonzero meaning active:
+`A.with_batch_mask(mask)` on a `MatrixView` or `VectorView`, or `Matrix::enable_batch_mask()`,
+which returns the owned, writable bytes (all ones to start). The mask may be device-only
+(`sycl::malloc_device`, written by your kernel): the library never reads it on the host, and
+`with_batch_mask` checks only its length (empty or `batch_size()`, else
+`batchlas::invalid_argument`; an empty span clears it). Slices, `batch_range`, `batch_item`,
+`with_active_dims` and `astype` keep the mask; views built from a raw pointer start unmasked.
+
+- **Utilities honour it now:** the `fill_*` family, `copy`, `scale`, `symmetrize`, `hermitize`,
+  `triangularize`, `all_close` (an inactive item compares true), `transpose` and the `linalg`
+  elementwise helpers leave an inactive item bit-for-bit untouched.
+- **Ops refuse it until migrated.** An op family that does not yet skip inactive items refuses a
+  masked view (`batchlas::unsupported` or `NoRouteError`; a pin on it throws), so no op silently
+  ignores a mask. Vendor families always refuse. Operands of one call must share one mask span.
+
+Design, kernel contract and the migration plan: @ref design_masked_batches.
 
 ### Row-major source data {#row-major-source-data}
 
@@ -582,11 +611,12 @@ one. Device-side errors surface at `ctx.wait_and_throw()`, not at the enqueuing 
 
 ### Per-item status
 
-Ten routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
-LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv`, `posv`
-report factorisation status; `syev`, `syevx`, `gesvd`, `steqr`, `stedc` report convergence status.
-It is a field on `PotrfOptions` and a trailing parameter elsewhere (the option-struct `syev` and
-`gesvd` spellings take none):
+Fourteen routines report a per-item status, opt-in, as one `Span<int32_t>` entry per batch item with
+LAPACK's convention (`0` good, positive otherwise): `potrf`, `getrf`, `getri`, `gesv`, `posv`,
+`sytrf` and `sysv` report factorisation status, `potri` a zero factor diagonal; `syev`, `syevx`,
+`gesvd`, `steqr`, `stedc` report convergence status; `sygvd` reports both (`n + i` for a
+factorisation failure of `B`). It is a field on `PotrfOptions` and a trailing parameter elsewhere
+(the option-struct `syev` and `gesvd` spellings take none):
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
@@ -858,6 +888,7 @@ For SYCL-typed interop include `<batchlas/sycl_interop.hh>`, the one BatchLAS he
 batchlas::sycl_queue(const Queue&)   -> sycl::queue&
 batchlas::sycl_event(const Event&)   -> sycl::event
 batchlas::event_from_sycl(sycl::event) -> Event
+batchlas::queue_from_sycl(const sycl::context&, const sycl::device&, bool in_order = true) -> Queue
 ```
 
 ```cpp
@@ -870,9 +901,34 @@ batchlas::potrf(ctx, A, {.uplo = Uplo::Lower}); // waits for `mine`
 my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
 ```
 
-Both queues must share a SYCL context. Pointers from `cudaMalloc`, `cudaMallocManaged`,
+Both queues must share a SYCL context ([`queue_from_sycl`](#queue-from-sycl-inside-your-own-context)
+builds a Queue in yours). Pointers from `cudaMalloc`, `cudaMallocManaged`,
 `sycl::malloc_device` and `sycl::malloc_host` wrap into `Span`/`MatrixView` zero-copy when reachable
 from that context.
+
+### A Queue inside your own SYCL context {#queue-from-sycl-inside-your-own-context}
+
+`queue_from_sycl(ctx, dev, in_order)` builds a root `Queue`, like `Queue(Device)`, whose SYCL
+queue lives in *your* context: `sycl_queue(q).get_context() == ctx`. Use it when your USM comes from
+a context of your own (for example `sycl::malloc_shared` on a context several queues share): that
+memory is then reachable from the Queue, zero-copy, with no copy into BatchLAS's default context.
+
+```cpp
+sycl::context my_ctx(dev);
+float* a = sycl::malloc_shared<float>(size_t(n) * n * batch, dev, my_ctx);
+Queue q = batchlas::queue_from_sycl(my_ctx, dev);   // in order by default
+MatrixView<float> A(a, n, n, n, n * n, batch);
+batchlas::potrf(q, A, PotrfOptions{}).wait();   // Event is [[nodiscard]]
+sycl::free(a, my_ctx);                              // only after the wait
+```
+
+- `in_order` defaults to `true`; pass `false` for an out-of-order Queue.
+- The Queue has its own SYCL queue, workspace arena and event chain, and constructing it closes
+  `batchlas::configure()` as any root Queue does. It does not own `ctx`; SYCL keeps the context
+  alive while the Queue exists.
+- **Throws `batchlas::device_error`** when `dev` is not one of the root devices BatchLAS enumerates
+  (`Device::get_devices(type)`): a sub-device from `create_sub_devices`, or a device of a backend
+  the runtime does not list. It throws the same type when `dev` is not part of `ctx`.
 
 ## The `linalg` convenience layer
 

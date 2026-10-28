@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -931,6 +932,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info)
 {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "stedc", B, d, e, eigenvalues, eigvects);
     if (d.size() != e.size() + 1) {
         throw batchlas::invalid_argument("The size of e must be one less than the size of d.");
     }

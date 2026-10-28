@@ -22,10 +22,13 @@
 
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/sytrf.hh>
+#include <batchlas/blas/functions/sygvd.hh>
 
 #include <src/backends/gemm_heterogeneous.hh>
 #include <src/backends/host_blas_health.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas{
@@ -121,6 +124,7 @@ namespace batchlas{
                Transpose transA,
                Transpose transB,
                Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::spmm, "spmm_vendor", Back, A, B, C);
         static_cast<void>(workspace); // no workspace needed for CPU implementation
         auto A_view = A;
         auto B_view = B;
@@ -224,6 +228,7 @@ namespace batchlas{
                    Transpose transA,
                    Transpose transB,
                    ComputePrecision precision) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", B, descrA, descrB, descrC);
         static_cast<void>(precision);
         auto A_view = descrA;
         auto B_view = descrB;
@@ -291,6 +296,7 @@ namespace batchlas{
                T alpha,
                T beta,
                Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
         auto A_view = A;
         auto X_view = X;
         auto Y_view = Y;
@@ -348,6 +354,7 @@ namespace batchlas{
         Transpose transA,
         Diag diag,
         T alpha) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", B, descrA, descrB);
         // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
         // alpha LAST, unlike the public trsm, which takes it third. The two
         // orders coexisted for as long as each TU declared its own public trsm;
@@ -464,6 +471,7 @@ namespace batchlas{
                T beta,
                Side side,
                Uplo uplo) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::symm, "symm_vendor", B, A, Bmat, Cmat);
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
@@ -511,6 +519,7 @@ namespace batchlas{
                T beta,
                Side side,
                Uplo uplo) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::hemm, "hemm_vendor", B, A, Bmat, Cmat);
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
@@ -559,6 +568,7 @@ namespace batchlas{
                float_t<T> beta,
                Uplo uplo,
                Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::herk, "herk_vendor", B, A, Cmat);
         auto A_view = A;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
@@ -603,6 +613,7 @@ namespace batchlas{
                 float_t<T> beta,
                 Uplo uplo,
                 Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::her2k, "her2k_vendor", B, A, Bmat, Cmat);
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
@@ -647,6 +658,7 @@ namespace batchlas{
                T beta,
                Uplo uplo,
                Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syrk, "syrk_vendor", B, A, Cmat);
         auto A_view = A;
         auto C_view = Cmat;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
@@ -689,6 +701,7 @@ namespace batchlas{
                 T beta,
                 Uplo uplo,
                 Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syr2k, "syr2k_vendor", B, A, Bmat, Cmat);
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
@@ -736,6 +749,7 @@ namespace batchlas{
                Uplo uplo,
                Transpose transA,
                Diag diag) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", B, A, Bmat, Cmat);
         auto A_view = A;
         auto B_view = Bmat;
         auto C_view = Cmat;
@@ -782,12 +796,125 @@ namespace batchlas{
 
     namespace backend {
 
+    // LAPACKE ?sytrf / ?sytrs per item. The pivots are written as int32 straight into the packed
+    // first half of the int64 span (lapack_int is int32 in this build; a mismatch fails to compile),
+    // the format the native kernels read. evidence: docs/perf/sytrf.md
+    template <Backend B, typename T>
+    Event sytrf_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<int64_t> pivots,
+                       Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::sytrf, "sytrf_vendor", B, A);
+        auto A_view = A;
+        auto piv = pivots.as_span<int>();
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrf", [=] {
+            const int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssytrf, LAPACKE_dsytrf, LAPACKE_csytrf, LAPACKE_zsytrf, Layout::ColMajor, uplo, n,
+                    A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n);
+                if (want_info) info[i] = static_cast<int32_t>(st);
+            }
+        });
+    }
+
+    template <Backend B, typename T>
+    size_t sytrf_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/, Uplo /*uplo*/) {
+        return 0;
+    }
+
+    template <Backend B, typename T>
+    Event sytrs_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<int64_t> pivots,
+                       const int32_t* skip_info) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::sytrs, "sytrs_vendor", B, A, Bm);
+        auto A_view = A;
+        auto B_view = Bm;
+        auto piv = pivots.as_span<int>();
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sytrs", [=] {
+            const int n = A_view.rows();
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (skip_info != nullptr && skip_info[i] != 0) continue;
+                (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssytrs, LAPACKE_dsytrs, LAPACKE_csytrs, LAPACKE_zsytrs, Layout::ColMajor, uplo, n,
+                    B_view.cols(), A_view[i].data_ptr(), A_view.ld(), piv.data() + static_cast<size_t>(i) * n,
+                    B_view[i].data_ptr(), B_view.ld());
+            }
+        });
+    }
+
+    #define NETLIB_SYTRF_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sytrs_vendor)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYTRF_OPS, Backend::NETLIB)
+    #undef NETLIB_SYTRF_OPS
+
+    // LAPACKE ?sygst/?hegst and ?sygvd/?hegvd per item: sygst's and sygvd's vendor families on the host.
+    // evidence: docs/perf/sygvd.md#sygvd-routes
+    template <Backend B, typename T>
+    Event sygst_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, int itype, Uplo uplo,
+                       Span<std::byte> /*workspace*/) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::sygst, "sygst_vendor", B, A, Bm);
+        auto a = A;
+        auto b = Bm;
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygst", [=] {
+            for (int i = 0; i < a.batch_size(); ++i)
+                (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssygst, LAPACKE_dsygst, LAPACKE_chegst, LAPACKE_zhegst, Layout::ColMajor, itype, uplo,
+                    a.rows(), a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld());
+        });
+    }
+
+    template <Backend B, typename T>
+    Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& Bm, Span<typename base_type<T>::type> w, int itype,
+                       JobType jobz, Uplo uplo, Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::sygvd, "sygvd_vendor", B, A, Bm);
+        auto a = A;
+        auto b = Bm;
+        auto eig = w;
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(A.batch_size());
+        return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygvd", [=] {
+            const int n = a.rows();
+            for (int i = 0; i < a.batch_size(); ++i) {
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssygvd, LAPACKE_dsygvd, LAPACKE_chegvd, LAPACKE_zhegvd, Layout::ColMajor, itype, jobz,
+                    uplo, n, a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld(),
+                    base_float_ptr_convert(eig.subspan(static_cast<size_t>(i) * n).data()));
+                if (want_info) info[i] = static_cast<int32_t>(st);
+            }
+        });
+    }
+
+    template <Backend B, typename T>
+    size_t sygvd_vendor_buffer_size(Queue& /*ctx*/, const MatrixView<T, MatrixFormat::Dense>& /*A*/,
+                                    const MatrixView<T, MatrixFormat::Dense>& /*Bm*/,
+                                    Span<typename base_type<T>::type> /*w*/, int /*itype*/, JobType /*jobz*/,
+                                    Uplo /*uplo*/) {
+        return 0;
+    }
+
+    #define NETLIB_SYGVD_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygst_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygvd_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, sygvd_vendor_buffer_size)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_SYGVD_OPS, Backend::NETLIB)
+    #undef NETLIB_SYGVD_OPS
+
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
     Event potrf_vendor(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace,
                     Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, descrA);
         static_cast<void>(workspace);
         auto A_view = descrA;
         // LAPACKE reports failure only through its return value, and this loop
@@ -828,6 +955,7 @@ namespace batchlas{
                       Uplo uplo,
                       Span<std::byte> /*workspace*/,
                       Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, descrA);
         auto A_view = descrA;
         auto eig = eigenvalues;
         // call_backend_nh_r, not call_backend_nh: `_nh` DISCARDS the return value,
@@ -884,6 +1012,7 @@ namespace batchlas{
                        SvdVectors jobvh,
                        Span<std::byte> workspace,
                        Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_vendor", B, A, U, Vh);
         static_cast<void>(workspace);
 
         // This path calls LAPACKE directly rather than going through
@@ -1021,6 +1150,7 @@ namespace batchlas{
                 Transpose transA,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto B_view = B;
@@ -1082,6 +1212,7 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto piv = pivots;
@@ -1145,6 +1276,7 @@ namespace batchlas{
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto C_view = C;
@@ -1199,6 +1331,7 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
@@ -1241,6 +1374,7 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
@@ -1288,6 +1422,7 @@ namespace batchlas{
                       Transpose trans,
                       Span<T> tau,
                       Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
         auto A_view = A;
         auto C_view = C;
         auto tau_view = tau;

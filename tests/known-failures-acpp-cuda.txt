@@ -1,0 +1,90 @@
+# Known test failures of an AdaptiveCpp MULTIPASS CUDA build (BATCHLAS_SYCL_IMPL=ACPP,
+# BATCHLAS_ACPP_TARGETS=cuda:sm_XX). A debt ledger, not an allowlist: read the header of
+# tests/known-failures.txt, which governs this file too.
+#
+# SELF-CONTAINED, like tests/known-failures-acpp.txt (the generic/SSCP ledger) and
+# tests/known-failures-acpp-metal.txt. .github/ci/compare_failures.py reads THIS file when the
+# tree's cache names a cuda: BATCHLAS_ACPP_TARGETS (or --acpp-targets cuda:...). A separate file,
+# because an entry for a multipass-only failure would read NEWLY PASSING on a generic tree.
+#
+# PRESET: verified 2026-10-26 on the 2x RTX 4090 box (sm_89, GPU 0, shared with other jobs),
+# tree build-acpp-mp at branch fz/t-acpp: AdaptiveCpp develop 94ab0d58 (LLVM 20) at
+# /opt/adaptivecpp-llvm20-cuda12.8, BATCHLAS_ACPP_CUDA_PATH=/usr/local/cuda-12.8,
+# --acpp-targets=cuda:sm_89, RelWithDebInfo, vendor libraries on, no CPU target (so no NETLIB
+# instantiation runs), BATCHLAS_ACPP_SLM_OPTIN=OFF; full ctest, serial, at 7b004b44: 147 entries,
+# 25 failed. The seven getrf/getri entries were re-run after the register-panel fix: all passed.
+# Design: docs/design/sycl-implementations.md#sycl-impl-cuda-aot.
+#
+# DELIBERATELY ABSENT, not multipass. tune_tests has two red cases here:
+# TuneHash.OpLevelHashUnchangedByFamilyPrefixes (gemm, posv, potrf, trsm pins) is also red on the
+# same box's DPC++ main tree, but TuneHash.SharedKernelHeadersAreCommonInEverySpec (potri_spec.cc
+# lacks include/batchlas/util/group-collectives.hh in its common headers) is a BRANCH DEFECT of
+# the PR #193 integration branch, to fix with the TuneHash pins before merge
+# (scripts/agent/repin_tune_hashes.py), not an environment absence. Also absent:
+# tune_race_gpu_tests (an L2-warm vs cold timing ratio on a GPU other jobs were using) and
+# sytrf_tests, killed after 53 min in ctest once while two standalone runs of all 40 cases passed
+# in about 3 min. device_calls_tests and acpp_jit_tests are not registered on a multipass tree.
+# The host ledger (tests/known-failures-host-<host>.txt) is NOT read for an acpp tree.
+# getrf/getri: the ~280-line cascade after a silently dropped register-panel launch is gone
+# (docs/design/known-defects.md#getrf-register-panel-unlaunched-on-acpp-multipass); those seven
+# entries passed serially on this tree after the 256-row acpp cap (2026-10-26).
+
+# 48 KiB local-memory cap (docs/design/sycl-implementations.md#sycl-impl-slm-budget): acpp reports
+# 49,152 B, the budget is 45,056 B, so gemm reg:m=128:n=64:k=32 and wide:m=64:n=64:k=16 (cdouble)
+# and herk gram at cdouble n=128 cannot run on sm_89. These cases assume the 99 KiB opt-in and do
+# not skip on test_utils::kSlmCappedAt48KiB (test defect; BATCHLAS_ACPP_SLM_OPTIN=ON not tried).
+gemm_candidates_tests::GemmCandidates/0.BetaZeroKeepsNegativeZeroOnEveryNativeChoice;type_param=(anonymous namespace)::Cfg<float,(batchlas::Backend)1>
+gemm_candidates_tests::GemmCandidates/0.RegScalarStagingEveryFormAtSaturatingBatch;type_param=(anonymous namespace)::Cfg<float,(batchlas::Backend)1>
+gemm_candidates_tests::GemmCandidates/3.AutoReadsEveryKeyField;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+gemm_candidates_tests::GemmCandidates/3.BetaZeroKeepsNegativeZeroOnEveryNativeChoice;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+gemm_candidates_tests::GemmCandidates/3.ClassWordsAndSpellings;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+gemm_candidates_tests::GemmCandidates/3.CoalescedCEpilogueEveryTileAtSaturatingBatch;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+herk_tests::HerkTest/1.MatchesGemmReference;type_param=HerkConfig<std::complex<double>,(batchlas::Backend)1>
+herk_tests_1::HerkTest/1.MatchesGemmReference;type_param=HerkConfig<std::complex<double>,(batchlas::Backend)1>
+hermitian_candidates_tests::HermitianCandidates/1.ComplexSymmetricSyrkFamilies;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+hermitian_candidates_tests::HermitianCandidates/1.HerkPinnedFamiliesStraddleTheirLimits;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
+
+# Saturating-batch bit-identity: items of one repeated matrix differ (syev chunks, gesvd blocked,
+# syev_align). The same cases pass on DPC++ and on acpp generic. Cause open: a local-memory race
+# that only multipass scheduling exposes is the first suspect.
+gesvd_tests::GesvdGeneralComplexTest/0.BlockedPastTheGridIsBitIdentical;type_param=GesvdConfig<std::complex<float>,(batchlas::Backend)1>
+gesvd_tests::GesvdGeneralComplexTest/0.BlockedSaturatingBatchIsBitIdentical;type_param=GesvdConfig<std::complex<float>,(batchlas::Backend)1>
+gesvd_tests::GesvdGeneralComplexTest/1.BlockedSaturatingBatchIsBitIdentical;type_param=GesvdConfig<std::complex<double>,(batchlas::Backend)1>
+gesvd_tests::GesvdTest/0.BlockedChunksAtSaturatingBatchAreBitIdentical;type_param=GesvdConfig<float,(batchlas::Backend)1>
+gesvd_tests::GesvdTest/0.BlockedPastTheGridIsBitIdentical;type_param=GesvdConfig<float,(batchlas::Backend)1>
+gesvd_tests::GesvdTest/1.BlockedChunksAtSaturatingBatchAreBitIdentical;type_param=GesvdConfig<double,(batchlas::Backend)1>
+syev_align_tests::SyevAlignTest/0.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<float,(batchlas::Backend)1>
+syev_align_tests::SyevAlignTest/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<double,(batchlas::Backend)1>
+syev_align_tests::SyevAlignTest/2.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<std::complex<float>,(batchlas::Backend)1>
+syev_align_tests::SyevAlignTest/3.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<std::complex<double>,(batchlas::Backend)1>
+syev_tests::SyevTest/0.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<float,(batchlas::Backend)1>
+syev_tests::SyevTest/1.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<double,(batchlas::Backend)1>
+syev_tests::SyevTest/2.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<std::complex<float>,(batchlas::Backend)1>
+syev_tests::SyevTest/3.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<std::complex<double>,(batchlas::Backend)1>
+
+# Error model: on multipass CUDA a launch with 1 MiB of local memory is not reported at the launch
+# or the next wait (QueueAsyncErrors.*), and queue_from_sycl accepts the CPU device it should
+# reject as foreign (SyclInterop.QueueFromSyclRejectsForeignDevice). Cause open.
+util_device_queue_tests::QueueAsyncErrors.ErrorCollectedByAQueueCopySurfacesAtTheNextWait
+util_device_queue_tests::QueueAsyncErrors.OversizedLocalMemoryThrowsFromTheLaunch
+util_device_queue_tests::SyclInterop.QueueFromSyclRejectsForeignDevice
+
+# Shared with DPC++ (tests/known-failures.txt): docs/design/known-defects.md, "lanczos returns a
+# spectrum".
+lanczos_tests::LanczosStride.ClosedFormSpectrum
+lanczos_tests::LanczosTestBase.LanczosTest
+lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+
+# Seen once on this tree, cause open: linalg::syev values after the scratch is freed
+# (LinalgWrappers.ScratchOutlivesKernels), gesvd cta U orthogonality for float and double (entry 18
+# of docs/design/known-defects.md lists only the float case on generic), and the sytrd_blocked latrd
+# grid path (sytrd_blocked_tests flakes on untouched main too).
+gesvd_tests::GesvdTest/0.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<float,(batchlas::Backend)1>
+gesvd_tests::GesvdTest/1.CtaProviderCoversAllJobCombinations;type_param=GesvdConfig<double,(batchlas::Backend)1>
+linalg_layer_tests::LinalgWrappers.ScratchOutlivesKernels
+sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal
+
+# Table content, not multipass (was excused by the per-host ledger, which an acpp tree no longer
+# reads): gemm.sm_120.txt has 0 timed double and cdouble rows (tests/tuned_tables_tests.cc:497).
+tuned_tables_tests::TunedTables.Sm120TablesAreDeepLedgerTablesNamingTheirLedger

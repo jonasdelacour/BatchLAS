@@ -23,10 +23,11 @@
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
 #include <src/ops/gemm/kernels/vec4.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
 
 namespace batchlas::sycl_gemm_small {
 
-template <typename T, int NB>
+template <typename T, int NB, bool Masked>
 class GemmSmallBatchedKernel;
 
 inline constexpr int kSmallWg = 128;
@@ -47,13 +48,17 @@ inline int small_bucket(int max_dim) {
 template <int NB>
 inline constexpr std::int64_t kSmallBatchedSlmElems = std::int64_t(kSmallWg / (2 * NB)) * NB * (NB + 1);
 
-template <typename T, int NB>
+// Masked: the batch mask folds into `live` (several items share a work-group's barriers, so an
+// inactive one is clamped like a tail slot, never returned). A template so the unmasked instance
+// is the kernel as it was: the fold cost 2-4.5% unmasked in a packed kernel (potrf tiny).
+// evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
+template <typename T, int NB, bool Masked>
 Event launch_small_batched(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
                            const MatrixView<T, MatrixFormat::Dense>& B,
                            const MatrixView<T, MatrixFormat::Dense>& C,
                            T alpha, T beta, Transpose transA, Transpose transB,
-                           int m, int n, int k) {
+                           int m, int n, int k, const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
     constexpr bool kCx = sycl_device::dev_is_complex_v<D>;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -86,7 +91,7 @@ Event launch_small_batched(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> slm(sycl::range<1>(static_cast<std::size_t>(kG) * NB * kLdb), h);
-        batchlas::impl::parallel_for<GemmSmallBatchedKernel<T, NB>>(h,
+        batchlas::impl::parallel_for<GemmSmallBatchedKernel<T, NB, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * kSmallWg),
                               sycl::range<1>(kSmallWg)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -96,7 +101,8 @@ Event launch_small_batched(Queue& ctx,
                 const int tt = t % kTpm;
                 const int mat = static_cast<int>(it.get_group(0)) * kG + slot;
                 // Clamped, never returned: every lane must reach the barriers below.
-                const bool live = mat < batch;
+                bool live = mat < batch;
+                if constexpr (Masked) live = live && mask[mat] != 0;
                 const std::ptrdiff_t bi = live ? mat : 0;
                 const int r = tt % NB;
                 const int c0 = (tt / NB) * kCpt;
@@ -202,7 +208,7 @@ Event launch_small_tiled(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& B,
                          const MatrixView<T, MatrixFormat::Dense>& C,
-                         T alpha, T beta, int m, int n, int k) {
+                         T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
     using V4 = sycl_gemm::Vec4<T>;
     constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
     constexpr int kWg = kTr * kTr;
@@ -226,6 +232,7 @@ Event launch_small_tiled(Queue& ctx,
             [=](sycl::nd_item<1> it) {
                 const int t = static_cast<int>(it.get_local_id(0));
                 const std::ptrdiff_t bi = static_cast<std::ptrdiff_t>(it.get_group(0));
+                if (sycl_gemm::item_off(mask, bi)) return;  // one item per work-group: before the barrier
                 const int kp = (k + 3) & ~3;
                 T* const sA = &slm[0];           // sA[l * kLd + r]
                 T* const sB = sA + NB * kLd;     // sB[c * kLd + l]
@@ -304,11 +311,20 @@ Event small_tiled(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B,
                   const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha, T beta, int m, int n, int k) {
+                  T alpha, T beta, int m, int n, int k, const std::uint8_t* mask) {
     if (beta == T(0)) {
-        return launch_small_tiled<T, NB, false>(ctx, A, B, C, alpha, beta, m, n, k);
+        return launch_small_tiled<T, NB, false>(ctx, A, B, C, alpha, beta, m, n, k, mask);
     }
-    return launch_small_tiled<T, NB, true>(ctx, A, B, C, alpha, beta, m, n, k);
+    return launch_small_tiled<T, NB, true>(ctx, A, B, C, alpha, beta, m, n, k, mask);
+}
+
+template <typename T, int NB>
+Event launch_small_batched_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
+                               T alpha, T beta, Transpose transA, Transpose transB, int m, int n, int k,
+                               const std::uint8_t* mask) {
+    if (mask) return launch_small_batched<T, NB, true>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
+    return launch_small_batched<T, NB, false>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, nullptr);
 }
 
 template <typename T>
@@ -319,23 +335,24 @@ Event small_batched(Queue& ctx,
                     T alpha, T beta, Transpose transA, Transpose transB,
                     int m, int n, int k) {
     const int max_dim = m > n ? (m > k ? m : k) : (n > k ? n : k);
+    const std::uint8_t* mask = sycl_gemm::item_mask(A, B, C);
     if constexpr (std::is_same_v<T, float>) {
         if (transA == Transpose::NoTrans && transB == Transpose::NoTrans && max_dim > 32 &&
             max_dim <= kSmallTiledMaxDim) {
-            return max_dim <= 48 ? small_tiled<T, 48>(ctx, A, B, C, alpha, beta, m, n, k)
-                                 : small_tiled<T, 56>(ctx, A, B, C, alpha, beta, m, n, k);
+            return max_dim <= 48 ? small_tiled<T, 48>(ctx, A, B, C, alpha, beta, m, n, k, mask)
+                                 : small_tiled<T, 56>(ctx, A, B, C, alpha, beta, m, n, k, mask);
         }
     }
     switch (small_bucket(max_dim)) {
     case 8:
-        return launch_small_batched<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+        return launch_small_batched_leg<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
     case 16:
-        return launch_small_batched<T, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+        return launch_small_batched_leg<T, 16>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
     case 32:
-        return launch_small_batched<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+        return launch_small_batched_leg<T, 32>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
     default:
         if constexpr (kSmallMaxDimFor<T> >= 64)
-            return launch_small_batched<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+            return launch_small_batched_leg<T, 64>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k, mask);
         else throw ::batchlas::internal_error("gemm small: max(m, n, k) above this scalar's ceiling reached the kernel");
     }
 }

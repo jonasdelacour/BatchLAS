@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/mempool.hh>
@@ -11,7 +12,10 @@
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/kernels/common/larft_wy.hh>
 #include <src/ops/geqrf/geqrf.hh>  // geqrf_buffer_size_bound: sized once, run on sub-views
+#include <src/ops/her2k/route.hh>
+#include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <algorithm>
@@ -200,6 +204,94 @@ Event copy_tau_panel_to_out(Queue& q,
     return q.get_event();
 }
 
+struct Sy2sbWyTag;
+
+// Per-panel scratch of the two-sided update, sized for the i = 0 panel (pn0 x pk0), which
+// bounds every later one. V, P, Y are pn x pk; Tf, M1, M2 are pk x pk.
+template <typename T>
+struct Sy2sbUpdateScratch {
+    Span<T> v, p, y, tf, m1, m2;
+
+    static size_t bytes(Queue& q, int pn0, int pk0, int batch) {
+        const size_t tall = static_cast<size_t>(pn0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
+        const size_t small = static_cast<size_t>(pk0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
+        return 3 * BumpAllocator::allocation_size<T>(q, tall) + 3 * BumpAllocator::allocation_size<T>(q, small);
+    }
+
+    static Sy2sbUpdateScratch allocate(Queue& q, BumpAllocator& pool, int pn0, int pk0, int batch) {
+        const size_t tall = static_cast<size_t>(pn0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
+        const size_t small = static_cast<size_t>(pk0) * static_cast<size_t>(pk0) * static_cast<size_t>(batch);
+        Sy2sbUpdateScratch s;
+        s.v = pool.allocate<T>(q, tall);
+        s.p = pool.allocate<T>(q, tall);
+        s.y = pool.allocate<T>(q, tall);
+        s.tf = pool.allocate<T>(q, small);
+        s.m1 = pool.allocate<T>(q, small);
+        s.m2 = pool.allocate<T>(q, small);
+        return s;
+    }
+};
+
+// A22 -= V W^H + W V^H, writing the lower triangle. syr2k / her2k only where a batched kernel
+// exists (as in sytrd_blocked); the GEMM pair elsewhere also writes the upper triangle, but a
+// lower entry of the result depends only on the same lower entry of A22, never on the upper.
+template <Backend B, typename T>
+void rank2k_lower_update(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& V,
+                         const MatrixView<T, MatrixFormat::Dense>& W,
+                         const MatrixView<T, MatrixFormat::Dense>& A22) {
+    constexpr bool rank2k_supported = select::level3_tile_substitution_enabled<B, T> &&
+                                      (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    if constexpr (rank2k_supported) {
+        if constexpr (detail::is_complex<T>::value) {
+            if (ops::her2k::picks_batched_route<B, T>(ctx, V, W, A22, Transpose::NoTrans)) {
+                (void)her2k<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = float_t<T>(1)});
+                return;
+            }
+        } else {
+            (void)syr2k<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = T(1)});
+            return;
+        }
+    }
+    (void)gemm<B>(ctx, V, W, A22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+    (void)gemm<B>(ctx, W, V, A22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
+}
+
+// A22 := Q^H A22 Q for the panel's Q = I - V T V^H, reading only A22's lower triangle (LAPACK
+// sytrd_sy2sb): Y = A22 V T (symm / hemm, Lower), W = Y - V (T^H V^H Y) / 2, then
+// A22 -= V W^H + W V^H. Vg is the geqrf output (pn x pk, V strictly below its diagonal).
+template <Backend B, typename T>
+void two_sided_update_lower(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& Vg,
+                            Span<T> tau_panel,
+                            const MatrixView<T, MatrixFormat::Dense>& A22,
+                            const Sy2sbUpdateScratch<T>& s) {
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    const int pn = Vg.rows();
+    const int pk = Vg.cols();
+    const int batch = Vg.batch_size();
+    const MV V(s.v.data(), pn, pk, pn, pn * pk, batch);
+    const MV P(s.p.data(), pn, pk, pn, pn * pk, batch);
+    const MV Y(s.y.data(), pn, pk, pn, pn * pk, batch);
+    const MV Tf(s.tf.data(), pk, pk, pk, pk * pk, batch);
+    const MV M1(s.m1.data(), pk, pk, pk, pk * pk, batch);
+    const MV M2(s.m2.data(), pk, pk, pk, pk * pk, batch);
+
+    (void)wy::pack_v_panel_batched<Sy2sbWyTag, T>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
+    (void)wy::larft_forward_columnwise_batched_t<Sy2sbWyTag, T, false>(
+        ctx, Tf.data_ptr(), Tf.ld(), Tf.stride(), V.data_ptr(), V.ld(), V.stride(), pn, pk,
+        tau_panel.data(), /*tau_stride=*/pk, /*tau_offset=*/0, batch);
+    (void)gemm<B>(ctx, V, Tf, P, GemmOptions<T>{});
+    if constexpr (detail::is_complex<T>::value)
+        (void)hemm<B, T>(ctx, A22, P, Y, T(1), T(0), Side::Left, Uplo::Lower);
+    else
+        (void)symm<B, T>(ctx, A22, P, Y, T(1), T(0), Side::Left, Uplo::Lower);
+    (void)gemm<B>(ctx, V, Y, M1, {.transA = Transpose::ConjTrans});
+    (void)gemm<B>(ctx, Tf, M1, M2, {.transA = Transpose::ConjTrans});
+    (void)gemm<B>(ctx, V, M2, Y, {.alpha = T(-0.5), .beta = T(1)});
+    rank2k_lower_update<B, T>(ctx, V, Y, A22);
+}
+
 } // namespace
 
 template <Backend B, typename T>
@@ -225,10 +317,8 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         const int pn0 = n - kd_i;
         const int pk0 = std::min(pn0, kd_i);
         auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
-        // Widest blocks the loop can pass to ormqr (see the main loop): both
-        // shrink with i, so the i = 0 panel bounds every later one.
+        // Bounds the one-sided ormqr of the short final panel's strip (see the main loop).
         auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
-        auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
 
         const size_t tau_elems = static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         T* tau_tmp = sycl::malloc_shared<T>(tau_elems, ctx->get_device(), ctx->get_context());
@@ -245,11 +335,11 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         const size_t geqrf_ws = geqrf_buffer_size_bound<B, T>(ctx, V0, tau_span);
         const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
-        const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span, ormqr_nb_hint);
-        const size_t panel_ws = std::max(geqrf_ws, std::max(ormqr_l_ws, ormqr_r_ws));
+        const size_t panel_ws = std::max(geqrf_ws, ormqr_l_ws);
 
         sycl::free(tau_tmp, ctx->get_context());
         size += BumpAllocator::allocation_size<std::byte>(ctx, panel_ws);
+        size += Sy2sbUpdateScratch<T>::bytes(ctx, pn0, pk0, batch);
     }
 
     return size;
@@ -263,6 +353,7 @@ Event sytrd_sy2sb(Queue& ctx,
                   Uplo uplo,
                   int32_t kd,
                   const Span<std::byte>& ws) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sy2sb", B, a_in, ab_out, tau_out);
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
 
     if (!ctx.in_order()) {
@@ -299,7 +390,6 @@ Event sytrd_sy2sb(Queue& ctx,
     auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
     // Must match the shapes queried in sytrd_sy2sb_buffer_size exactly.
     auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
-    auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
     const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
     // Same hint used for the query and for every ormqr call in the loop below.
@@ -308,11 +398,9 @@ Event sytrd_sy2sb(Queue& ctx,
     const size_t ormqr_l_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left,
                                                            Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
                                                            ormqr_nb_hint);
-    const size_t ormqr_r_ws_bytes = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans,
-                                                           Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)),
-                                                           ormqr_nb_hint);
-    const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, std::max(ormqr_l_ws_bytes, ormqr_r_ws_bytes));
+    const size_t panel_ws_bytes = std::max(geqrf_ws_bytes, ormqr_l_ws_bytes);
     auto panel_ws = pool.allocate<std::byte>(ctx, panel_ws_bytes);
+    const auto update_ws = Sy2sbUpdateScratch<T>::allocate(ctx, pool, pn0, pk0, batch);
 
 
     // Main loop: i advances in blocks of kd.
@@ -323,17 +411,15 @@ Event sytrd_sy2sb(Queue& ctx,
 
         auto V = a_in({i + kd_i, SliceEnd()}, {i, i + pk});           // (pn x pk)
 
-        // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), so Q^H must hit
-        // EVERY column left of the trailing block, not just A22. When pk < kd (final
-        // panel), columns [i+pk, i+kd) are neither zero nor in the panel; starting the
-        // left apply at column i+pk (and the right apply at row i+pk) covers them.
-        // Columns < i are already zero below row i+kd and [i, i+pk) become R inside
-        // geqrf, so at pk == kd both reduce to the A22-only apply. The leftover columns
+        // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), read and written on the
+        // lower triangle only: the trailing block A22 gets both sides (two_sided_update_lower)
+        // and the strip below the band left of it gets Q^H. Columns < i are already zero below
+        // row i+kd and [i, i+pk) become R inside geqrf, so the strip is columns [i+pk, i+kd),
+        // empty unless the final panel is short (pk < kd). Skipping it corrupts the band,
+        // visible only at n % kd >= 2 (at 1 the leftover Q is 1x1 with tau = 0). Its upper
+        // mirror, rows [i+pk, i+kd) right of the band, is never read. The leftover columns
         // are the tail [n-kd, n), which the copy after the loop picks up.
-        // Skipping them corrupts the band, visible only at n % kd >= 2 (at 1 the
-        // leftover Q is 1x1 with tau = 0).
-        auto A_left = a_in({i + kd_i, SliceEnd()}, {i + pk, SliceEnd()});
-        auto A_right = a_in({i + pk, SliceEnd()}, {i + kd_i, SliceEnd()});
+        auto A22 = a_in({i + kd_i, SliceEnd()}, {i + kd_i, SliceEnd()});
 
         // tau panel span is packed with per-batch stride = pk.
         Span<T> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
@@ -346,15 +432,13 @@ Event sytrd_sy2sb(Queue& ctx,
         // Copy band portion into AB for columns i..i+pk-1.
         (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i);
 
-        // A := Q^H A Q on the rows/columns Q acts on. The two ranges overlap
-        // exactly on the trailing block, so it gets both sides and everything
-        // else gets one.
-        const Transpose trans_left_it = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
-        // The hint is clamped to k = min(rows, cols) inside the dispatch, so on a
-        // short final panel (pk < kd) it degrades to min(nb, pk) and the workspace
-        // sized from the i = 0 panel still bounds it.
-        (void)ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws, ormqr_nb_hint);
-        (void)ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws, ormqr_nb_hint);
+        if (pk < kd_i) {
+            // The hint is clamped to k = min(rows, cols) inside the dispatch, so it degrades
+            // to min(nb, pk) and the workspace sized from the i = 0 panel still bounds it.
+            auto A_strip = a_in({i + kd_i, SliceEnd()}, {i + pk, i + kd_i});
+            (void)ormqr<B, T>(ctx, V, A_strip, Side::Left, trans_left, tau_panel_span, panel_ws, ormqr_nb_hint);
+        }
+        two_sided_update_lower<B, T>(ctx, V, tau_panel_span, A22, update_ws);
 
         // Store tau panel into output tau at offset i.
         (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);

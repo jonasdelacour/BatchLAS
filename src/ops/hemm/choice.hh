@@ -2,8 +2,9 @@
 #pragma once
 
 /// @file
-/// @brief hemm: expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
+/// @brief hemm: mirror, expand, vendor. evidence: docs/perf/level3.md @ingroup api_selection_ops
 
+#include <src/ops/symm/mirror_tile.hh>
 #include <src/select/select.hh>
 
 #include <array>
@@ -12,15 +13,16 @@
 
 namespace batchlas::ops::hemm {
 
+struct Mirror : select::NoFields<"mirror"> {};  ///< wide v2's gemm tile staging A's named triangle, conjugated
 struct Expand : select::NoFields<"expand"> {};  ///< expand_mirrored<Conjugate> into scratch + the public gemm, chunked
 struct Vendor : select::NoFields<"vendor"> {};  ///< backend::hemm_vendor (cublas?hemm / cblas_?hemm loop)
 
-using HemmChoice = std::variant<Expand, Vendor>;  ///< fieldless: expansion ld, chunk and gemm tile derived
+using HemmChoice = std::variant<Mirror, Expand, Vendor>;  ///< fieldless: tiles, expansion ld, chunk and gemm derived
 
-template <typename T>  /// Every compiled choice, in tie-break order: the expansion, then the vendor loop.
+template <typename T>  /// Every compiled choice, in tie-break order: the scratch-free mirror, expand, vendor.
 constexpr auto candidates() { return select::all_of<HemmChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};  ///< nothing in the row runs
+inline constexpr std::array<std::string_view, 3> last_resort{"mirror", "expand", "vendor"};  ///< nothing in the row runs
 inline constexpr select::OpSpec spec{Op::hemm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
 /// Keys: m, n = C's extents; batch (side is no key: the old rule read max(m, n)).

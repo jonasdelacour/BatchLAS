@@ -8,6 +8,7 @@
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/local_mem.hh>
+#include <src/util/batch_mask.hh>
 
 #include <array>
 #include <numeric>
@@ -150,18 +151,22 @@ inline void gebrd_cta_impl(Queue& ctx,
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= static_cast<int32_t>(batch_size)) return;
+                // NO EARLY RETURN: every it.barrier below is work-group wide, so a dead
+                // partition (batch % probs_per_wg != 0) runs a zero tile (tau = 0
+                // throughout) and stores nothing.
+                const bool live = prob_id < static_cast<int32_t>(batch_size);
+                const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(prob_id);
-                auto D_prob = D_view.batch_item(prob_id);
-                auto E_prob = E_view.batch_item(prob_id);
-                auto TAUQ_prob = TAUQ_view.batch_item(prob_id);
-                auto TAUP_prob = TAUP_view.batch_item(prob_id);
+                auto A_prob = A_view.batch_item(pid);
+                auto D_prob = D_view.batch_item(pid);
+                auto E_prob = E_view.batch_item(pid);
+                auto TAUQ_prob = TAUQ_view.batch_item(pid);
+                auto TAUP_prob = TAUP_view.batch_item(pid);
 
                 const int32_t base_a = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
                 for (int32_t c = 0; c < n; ++c) {
                     if (lane < n) {
-                        A_local[base_a + lane + c * static_cast<int32_t>(P)] = A_prob(lane, c);
+                        A_local[base_a + lane + c * static_cast<int32_t>(P)] = live ? A_prob(lane, c) : T(0);
                     }
                 }
                 it.barrier(sycl::access::fence_space::local_space);
@@ -180,8 +185,10 @@ inline void gebrd_cta_impl(Queue& ctx,
                     const T tau_l = larfg_small(part, n - i, lane, i, alpha_l, x_l, x_l_active);
                     if (lane == i) {
                         A_local[base_a + i + i * static_cast<int32_t>(P)] = alpha_l;
-                        D_prob(i) = static_cast<Real>(alpha_l);
-                        TAUQ_prob(i) = tau_l;
+                        if (live) {
+                            D_prob(i) = static_cast<Real>(alpha_l);
+                            TAUQ_prob(i) = tau_l;
+                        }
                     } else if (x_l_active) {
                         A_local[base_a + lane + i * static_cast<int32_t>(P)] = x_l;
                     }
@@ -218,8 +225,10 @@ inline void gebrd_cta_impl(Queue& ctx,
                     const T tau_r = larfg_small(part, n - (i + 1), lane, i + 1, alpha_r, x_r, x_r_active);
                     if (lane == i + 1) {
                         A_local[base_a + i + (i + 1) * static_cast<int32_t>(P)] = alpha_r;
-                        E_prob(i) = static_cast<Real>(alpha_r);
-                        TAUP_prob(i) = tau_r;
+                        if (live) {
+                            E_prob(i) = static_cast<Real>(alpha_r);
+                            TAUP_prob(i) = tau_r;
+                        }
                     } else if (x_r_active) {
                         A_local[base_a + i + lane * static_cast<int32_t>(P)] = x_r;
                     }
@@ -242,12 +251,12 @@ inline void gebrd_cta_impl(Queue& ctx,
                     it.barrier(sycl::access::fence_space::local_space);
                 }
 
-                if (lane == n - 1) {
+                if (live && lane == n - 1) {
                     TAUP_prob(n - 1) = T(0);
                 }
 
                 for (int32_t c = 0; c < n; ++c) {
-                    if (lane < n) {
+                    if (live && lane < n) {
                         A_prob(lane, c) = A_local[base_a + lane + c * static_cast<int32_t>(P)];
                     }
                 }
@@ -265,6 +274,7 @@ Event gebrd_cta(Queue& ctx,
                 const VectorView<T>& tauq_out,
                 const VectorView<T>& taup_out,
                 size_t cta_wg_size_multiplier) {
+    ::batchlas::detail::refuse_batch_mask("gebrd_cta", a_in, d_out, e_out, tauq_out, taup_out);
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }

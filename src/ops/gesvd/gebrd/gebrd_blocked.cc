@@ -9,6 +9,7 @@
 #include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <stdexcept>
@@ -388,6 +389,7 @@ Event gebrd_blocked(Queue& ctx,
                     const VectorView<T>& taup_out,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
+    ::batchlas::detail::refuse_batch_mask("gebrd_blocked", a_in, d_out, e_out, tauq_out, taup_out);
     return gebrd_blocked_impl<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);
 }
 

@@ -9,6 +9,7 @@
 #include <stdexcept>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 namespace batchlas::linalg {
@@ -51,6 +52,7 @@ Event elementwise_into(Queue& ctx,
     ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::elementwise");
     check_same_shape(A, B, "linalg::elementwise_into");
     check_same_shape(A, C, "linalg::elementwise_into");
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::elementwise_into", A, B, C));
 
     const size_t rows = static_cast<size_t>(A.rows());
     const size_t cols = static_cast<size_t>(A.cols());
@@ -72,6 +74,7 @@ Event elementwise_into(Queue& ctx,
             const size_t stride = item.get_global_range(0);
             for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
                 const size_t b = flat / (rows * cols);
+                if (mask && !mask[b]) continue;
                 const size_t rem = flat % (rows * cols);
                 const size_t col = rem / rows;
                 const size_t row = rem % rows;
@@ -91,6 +94,7 @@ Event axpby_into(Queue& ctx,
     ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::axpby");
     check_same_shape(A, B, "linalg::axpby_into");
     check_same_shape(A, C, "linalg::axpby_into");
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::axpby_into", A, B, C));
 
     const size_t rows = static_cast<size_t>(A.rows());
     const size_t cols = static_cast<size_t>(A.cols());
@@ -109,6 +113,7 @@ Event axpby_into(Queue& ctx,
             const size_t stride = item.get_global_range(0);
             for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
                 const size_t b = flat / (rows * cols);
+                if (mask && !mask[b]) continue;
                 const size_t rem = flat % (rows * cols);
                 const size_t col = rem / rows;
                 const size_t row = rem % rows;
@@ -126,6 +131,7 @@ Event triangular_mask_into(Queue& ctx,
                            int64_t k) {
     ::batchlas::detail::require_device_fp64<T>(ctx, "linalg::triangular_mask");
     check_same_shape(A, C, "linalg::triangular_mask_into");
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("linalg::triangular_mask_into", A, C));
 
     const size_t rows = static_cast<size_t>(A.rows());
     const size_t cols = static_cast<size_t>(A.cols());
@@ -147,6 +153,7 @@ Event triangular_mask_into(Queue& ctx,
             const size_t stride = item.get_global_range(0);
             for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
                 const size_t b = flat / (rows * cols);
+                if (mask && !mask[b]) continue;
                 const size_t rem = flat % (rows * cols);
                 const size_t col = rem / rows;
                 const size_t row = rem % rows;

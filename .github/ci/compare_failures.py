@@ -108,6 +108,10 @@ DEFAULT_KNOWN_ACPP = os.path.join(REPO, "tests", "known-failures-acpp.txt")
 # self-contained ledger: no device fp64 and a different GPU, so few entries are shared.
 DEFAULT_KNOWN_ACPP_METAL = os.path.join(REPO, "tests", "known-failures-acpp-metal.txt")
 
+# An AdaptiveCpp multipass CUDA tree (BATCHLAS_ACPP_TARGETS=cuda:sm_XX) has a fourth: its
+# failures differ from the generic tree's, and a multipass-only entry would read NEWLY PASSING there.
+DEFAULT_KNOWN_ACPP_CUDA = os.path.join(REPO, "tests", "known-failures-acpp-cuda.txt")
+
 
 def cache_value_of(build_dir, name, keep_empty=False):
     """The value of cache entry NAME in a configured tree's CMakeCache.txt, or None.
@@ -133,16 +137,21 @@ def sycl_impl_of(build_dir):
 # A per-machine supplement, read on top of the default ledger only (never with --known): defects
 # that reproduce on one box's driver, DPC++ build or GPU and nowhere else (the 2x4090 box's
 # native_cpu and SYCL-assertion crashes). It may name a whole ctest test, which the main ledger
-# avoids, because a crashed binary writes no gtest XML to name a case from.
-def default_host_ledger():
-    host = socket.gethostname().split(".", 1)[0].lower()
+# avoids, because a crashed binary writes no gtest XML to name a case from. DPC++ trees only: its
+# entries pin DPC++ type_params and whole binaries, which on an acpp tree would excuse other crashes.
+def default_host_ledger(impl, host=None):
+    if impl == "ACPP":
+        return None
+    host = (host or socket.gethostname()).split(".", 1)[0].lower()
     path = os.path.join(REPO, "tests", "known-failures-host-%s.txt" % host)
     return path if os.path.isfile(path) else None
 
 
-def default_ledger(impl, gpu_family):
+def default_ledger(impl, gpu_family, acpp_targets=None):
     if impl == "ACPP" and gpu_family == "METAL":
         return DEFAULT_KNOWN_ACPP_METAL
+    if impl == "ACPP" and (acpp_targets or "").startswith("cuda:"):
+        return DEFAULT_KNOWN_ACPP_CUDA
     return DEFAULT_KNOWN_ACPP if impl == "ACPP" else DEFAULT_KNOWN
 
 # The only two <skipped message> values ctest 3.28 emits for a real skip. A
@@ -423,6 +432,20 @@ def self_test():
             fh.write(_FIXTURE_JUNIT)
         open(known, "w").close()
         base = ["compare_failures", "--junit", junit, "--known", known]
+        for want, sel in ((DEFAULT_KNOWN_ACPP_CUDA, ("ACPP", None, "cuda:sm_89")),
+                          (DEFAULT_KNOWN_ACPP, ("ACPP", None, "generic")),
+                          (DEFAULT_KNOWN_ACPP_METAL, ("ACPP", "METAL", "generic")),
+                          (DEFAULT_KNOWN, ("DPCPP", None, "cuda:sm_89"))):
+            got = default_ledger(*sel)
+            ok = got == want
+            bad += not ok
+            print("  %s ledger for %s: %s" % ("ok  " if ok else "FAIL", sel, os.path.basename(got)))
+        host_ledger = os.path.join(REPO, "tests", "known-failures-host-jrhnbr.txt")
+        for want, impl in ((None, "ACPP"), (host_ledger, "DPCPP"), (host_ledger, None)):
+            got = default_host_ledger(impl, "JRHNBR.local")
+            ok = got == want
+            bad += not ok
+            print("  %s host ledger for %s: %s" % ("ok  " if ok else "FAIL", impl, got and os.path.basename(got)))
         cases = [
             (["--expected-tests-from", build, "--label-exclude", "slow"], 0,
              "1 registered outside -LE slow, 1 in the junit"),
@@ -496,8 +519,9 @@ def main(argv):
                              "tests/known-failures-acpp-metal.txt for an AdaptiveCpp Metal build)")
     parser.add_argument("--host-ledger", metavar="FILE",
                         help="per-machine supplement read on top of the ledger (default: "
-                             "tests/known-failures-host-<short hostname>.txt when it exists and "
-                             "--known is not given; 'none' disables it)")
+                             "tests/known-failures-host-<short hostname>.txt when it exists, "
+                             "--known is not given and the tree is not AdaptiveCpp; 'none' "
+                             "disables it)")
     parser.add_argument("--sycl-impl", choices=("DPCPP", "ACPP"),
                         help="the SYCL implementation the run was built with; picks the default "
                              "ledger (default: read from --build-dir, else DPCPP)")
@@ -505,6 +529,9 @@ def main(argv):
                         help="BATCHLAS_GPU_FAMILY_RESOLVED of the tested tree; METAL with ACPP picks "
                              "tests/known-failures-acpp-metal.txt (default: read from --build-dir, "
                              "else the BATCHLAS_GPU_FAMILY_RESOLVED environment variable)")
+    parser.add_argument("--acpp-targets", metavar="TARGETS",
+                        help="BATCHLAS_ACPP_TARGETS of the tested tree; cuda:sm_XX with ACPP picks "
+                             "tests/known-failures-acpp-cuda.txt (default: read from --build-dir)")
     parser.add_argument("--build-dir", metavar="DIR",
                         help="the tested build tree; its CMakeCache.txt names the SYCL implementation")
     parser.add_argument("--require", metavar="NAME", action="append", default=[],
@@ -545,11 +572,14 @@ def main(argv):
     if family == "METAL" and impl is None:
         impl = "ACPP"  # Metal is reachable only through AdaptiveCpp.
     if args.host_ledger is None and args.known is None:
-        args.host_ledger = default_host_ledger()
+        args.host_ledger = default_host_ledger(impl)
     if args.host_ledger == "none":
         args.host_ledger = None
     if args.known is None:
-        args.known = default_ledger(impl, family)
+        targets = args.acpp_targets
+        if targets is None and args.build_dir:
+            targets = cache_value_of(args.build_dir, "BATCHLAS_ACPP_TARGETS")
+        args.known = default_ledger(impl, family, targets)
     print("compare_failures: ledger %s (SYCL implementation %s%s)"
           % (os.path.relpath(args.known, REPO), impl or "DPCPP, by default",
              ", GPU family " + family if family else ""))

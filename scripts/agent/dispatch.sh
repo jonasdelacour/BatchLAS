@@ -184,6 +184,8 @@ cmd_hosts() {
             echo \"dispatches running: \$($(count_running "$h"))\"
             command -v flock >/dev/null && [ -e /tmp/batchlas-build.lock ] && ! flock -n /tmp/batchlas-build.lock true &&
                 echo \"build lock held: \$(cat /tmp/batchlas-build.lock.info 2>/dev/null)\"
+            n=0; for f in /tmp/batchlas-builds/*; do [ -f \$f ] && kill -0 \${f##*/} 2>/dev/null && n=\$((n+1)); done
+            [ \$n = 0 ] || echo \"scripts/b builds running (memory admission): \$n\"
             command -v nvidia-smi >/dev/null && timeout 20 nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total --format=csv,noheader | sed 's/^/gpu /'
             true" 2>&1 | grep -v 'stdio forwarding\|Connection closed\|channel 0' || echo "(unreachable)"
     done

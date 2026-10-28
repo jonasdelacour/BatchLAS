@@ -12,6 +12,7 @@
 
 #include <batchlas/blas/functions/syev.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 // This file contains cuSOLVER primitives implementation
 namespace batchlas {
@@ -52,6 +53,7 @@ namespace batchlas {
                     Uplo uplo,
                     Span<std::byte> workspace,
                     Span<int32_t> info_out) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::potrf, "potrf_vendor", B, descrA);
         static LinalgHandle<B> handle;
         BumpAllocator pool(workspace);
         // Keep `backend::`: the VENDOR query, never the public facade one (unqualified lookup found
@@ -91,6 +93,7 @@ namespace batchlas {
                           Uplo uplo,
                           Span<std::byte> workspace,
                           Span<int32_t> info_out) {
+            ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, descrA);
             static LinalgHandle<B> handle;
             handle.setStream(ctx);  // for the in-function bufferSize queries below
             BumpAllocator pool(workspace);
@@ -423,6 +426,7 @@ namespace batchlas {
                            SvdVectors jobvh,
                            Span<std::byte> workspace,
                            Span<int32_t> info_out) {
+            ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_vendor", B, A, U, Vh);
             if (!gesvd_detail::batched_route_ok(A)) {
                 throw batchlas::unsupported(
                     "gesvd_vendor (CUSOLVER): only the gesvdjBatched route is implemented "

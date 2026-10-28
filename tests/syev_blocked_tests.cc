@@ -12,6 +12,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
+#include <src/select/vendor.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -37,7 +38,16 @@ struct SyevBlockedConfig {
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
 template <typename Config>
-class SyevBlockedTest : public test_utils::BatchLASTest<Config> {};
+class SyevBlockedTest : public test_utils::BatchLASTest<Config> {
+protected:
+    // Vendor-free: the CPU has no syev route and no netlib reference (docs/perf/syev.md#syev-vendor-free-double-band).
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
+        if (Config::BackendVal == Backend::NETLIB && !batchlas::select::kHasNetlib)
+            GTEST_SKIP() << "vendor-free build: no syev route on the CPU";
+    }
+};
 
 TYPED_TEST_SUITE(SyevBlockedTest, SyevBlockedTestTypes);
 

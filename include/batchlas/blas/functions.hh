@@ -26,12 +26,20 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
+#include <batchlas/blas/functions/potri.hh>
+#include <batchlas/blas/functions/potrs.hh>
 #include <batchlas/blas/functions/spmm.hh>
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/sytrf.hh>
+#include <batchlas/blas/functions/sysv.hh>
+#include <batchlas/blas/functions/syev_align.hh>
+#include <batchlas/blas/functions/syfn.hh>
+#include <batchlas/blas/functions/sygst.hh>
+#include <batchlas/blas/functions/sygvd.hh>
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/functions/trsm.hh>
 

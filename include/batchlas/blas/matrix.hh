@@ -160,6 +160,13 @@ namespace batchlas {
         int  matrix_stride_ = 0;     ///< CSR: element distance between items' value (and index) arrays.
         int  offset_stride_ = 0;     ///< CSR: element distance between items' offset arrays.
 
+        /// @brief One byte per item, nonzero = active; null when the view is unmasked (every item active).
+        const std::uint8_t* mask_ = nullptr;
+
+        /// @brief True when batch item @p b takes part in the call: no mask, or a nonzero mask byte.
+        /// @pre 0 <= b < batch_size_ when a mask is attached
+        inline constexpr bool active(int64_t b) const { return mask_ == nullptr || mask_[b] != 0; }
+
         /// @brief Dense element (i, j) of batch item b: `data_[b * stride_ + j * ld_ + i]`.
         /// @pre 0 <= i < rows_, 0 <= j < cols_, 0 <= b < batch_size_ (asserted in debug builds)
         template <MatrixFormat MF = MType>
@@ -195,10 +202,12 @@ namespace batchlas {
         /// @brief A single-item view (batch_size_ = 1) of batch item @p b.
         ///
         /// Dense: rows and columns are the item's active extents, and the result is
-        /// homogeneous. An out-of-range @p b yields a 0 x 0 view rather than a fault.
+        /// homogeneous. A mask moves to the item (`batch_item(b).active(0) == active(b)`).
+        /// An out-of-range @p b yields a 0 x 0 view rather than a fault.
         inline constexpr KernelMatrixView batch_item(int b) const {
             KernelMatrixView out = *this;
             if (b < 0 || b >= batch_size_) { out.rows_ = out.cols_ = 0; return out; }
+            if (mask_) out.mask_ = mask_ + b;
             if constexpr (MType == MatrixFormat::Dense) {
                 // int64_t as in operator(): an overflowed product here poisons a raw pointer.
                 out.data_ += static_cast<int64_t>(b) * stride_;
@@ -331,6 +340,18 @@ namespace batchlas {
             }
         }
 
+        // Length only: the bytes may live in device-only memory, so they are never read here.
+        inline void check_batch_mask_length(std::size_t mask_size, int batch_size) {
+            if (mask_size != 0 && mask_size != static_cast<std::size_t>(batch_size < 0 ? 0 : batch_size)) {
+                throw batchlas::invalid_argument("with_batch_mask: the mask holds " + std::to_string(mask_size) +
+                                                 " bytes but the view has " + std::to_string(batch_size) +
+                                                 " batch items");
+            }
+        }
+
+        // Host copy of mask bytes for astype (no Queue); throws for a device-only source. Defined in src/matrix.cc.
+        BATCHLAS_API void copy_batch_mask(Span<std::uint8_t> dst, Span<const std::uint8_t> src);
+
         inline int dense_active_rows(int rows_capacity, Span<int> active_rows, int batch_index) {
             return active_rows.empty() ? rows_capacity : active_rows[batch_index];
         }
@@ -447,7 +468,9 @@ namespace batchlas {
             assert(c_len > 0 && "Invalid slice dimensions in KernelMatrixView row extraction");
         }
         T* row_data = data_ + row + c_start * ld_;
-        return VectorView<T>(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
+        VectorView<T> out(row_data, static_cast<int>(c_len), batch_size_, ld_, stride_);
+        if (mask_) out.batch_mask_ = Span<const std::uint8_t>(mask_, static_cast<std::size_t>(batch_size_));
+        return out;
     }
 
     template <typename T, MatrixFormat MType>
@@ -459,7 +482,9 @@ namespace batchlas {
             assert(r_len > 0 && "Invalid slice dimensions in KernelMatrixView column extraction");
         }
         T* col_data = data_ + r_start + col * ld_;
-        return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
+        VectorView<T> out(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
+        if (mask_) out.batch_mask_ = Span<const std::uint8_t>(mask_, static_cast<std::size_t>(batch_size_));
+        return out;
     }
     /// @endcond
 
@@ -519,7 +544,7 @@ namespace batchlas {
                   int nnz, int rows, int cols, int matrix_stride = 0,
                   int offset_stride = 0, int batch_size = 1, T** data_ptrs = nullptr) = delete;
 
-        /// @brief Views a batched vector as n x 1 (Column) or 1 x n (Row) matrices; the stride carries over.
+        /// @brief Views a batched vector as n x 1 (Column) or 1 x n (Row) matrices; the stride and the batch mask carry over.
         /// @throws batchlas::invalid_argument for Column when the vector's inc != 1
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
@@ -527,7 +552,8 @@ namespace batchlas {
 
         /// @brief View of @p matrix_view with any of its extents or strides overridden; a value <= 0 keeps the view's.
         ///
-        /// Active extents carry over only when every override is a no-op.
+        /// Active extents carry over only when every override is a no-op; the batch mask carries over
+        /// unless the batch size changes, which throws batchlas::invalid_argument on a masked view.
         template <typename U = T, MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         MatrixView(const MatrixView<T, MType>& matrix_view,
@@ -631,7 +657,35 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Span<int> active_cols() const { return active_cols_; }
 
+        /// @name Batch mask
+        /// One byte per item, nonzero = active. An op skips an inactive item and leaves its
+        /// outputs bit-for-bit untouched. The mask is not owned and may be device-only
+        /// (`sycl::malloc_device`): the library never reads it on the host.
+        /// @{
+
+        /// @brief A copy of this view with @p mask attached (not copied: it must outlive the view);
+        ///        an empty span clears the mask.
+        /// @throws batchlas::invalid_argument unless @p mask is empty or holds batch_size() bytes
+        ///         (only the length is checked; the bytes are never read)
+        MatrixView<T, MType> with_batch_mask(Span<const std::uint8_t> mask) const {
+            detail::check_batch_mask_length(mask.size(), batch_size_);
+            MatrixView<T, MType> out = *this;
+            out.batch_mask_ = mask;
+            return out;
+        }
+        /// @brief with_batch_mask() for a mutable span (a Matrix's batch_mask(), a UnifiedVector's to_span()).
+        MatrixView<T, MType> with_batch_mask(Span<std::uint8_t> mask) const {
+            return with_batch_mask(Span<const std::uint8_t>(mask.data(), mask.size()));
+        }
+        /// @brief The attached mask; empty when unmasked.
+        Span<const std::uint8_t> batch_mask() const { return batch_mask_; }
+        /// @brief True when a mask is attached.
+        bool has_batch_mask() const { return !batch_mask_.empty(); }
+        /// @}
+
         /// @brief Packed dense copy with every element converted by `static_cast<U>`; host loop, no Queue.
+        ///        A batch mask is copied into the result's own (enable_batch_mask()) on the host.
+        /// @throws batchlas::unsupported for a device-only (device USM) batch mask
         template <typename U>
         Matrix<U, MType> astype() const;
 
@@ -801,6 +855,15 @@ namespace batchlas {
         static double eigen_residual(Queue& ctx, const MatrixView& A, const MatrixView& V, const VectorView<float_t<T>>& w,
                                      std::span<const int> items = {});
 
+        /// @brief The generalized eigen residual of @p itype with W = diag(w) over X's columns: 1 (A X = B X W)
+        ///        ||A0 X - B0 X W||_F / (||A0||_F ||X||_F), 2 (A B X = X W) ||A0 (B0 X) - X W||_F / (||A0||_F ||B0 X||_F),
+        ///        3 (B A X = X W) ||B0 (A0 X) - X W||_F / (||B0||_F ||A0 X||_F). A0 and B0 are read whole; an empty
+        ///        @p B0 (rows() == 0) is the identity, every itype then the standard problem.
+        /// @throws batchlas::invalid_argument for an itype outside 1..3 or a dimension mismatch
+        static double generalized_eigen_residual(Queue& ctx, const MatrixView& A0, const MatrixView& B0, const MatrixView& X,
+                                                 const VectorView<float_t<T>>& w, int itype = 1,
+                                                 std::span<const int> items = {});
+
         /// @brief max |w - ref| / scale per item; ref[item] holds w.size() values in the caller's order.
         static double values_error(const VectorView<float_t<T>>& w, const std::vector<std::vector<double>>& ref,
                                    double scale, std::span<const int> items = {});
@@ -905,7 +968,7 @@ namespace batchlas {
             return at(row, col, batch);
         }
 
-        /// @brief View of the sub-block @p rows x @p cols of every item; keeps ld and stride, never copies.
+        /// @brief View of the sub-block @p rows x @p cols of every item; keeps ld, stride and the batch mask; never copies.
         /// @throws batchlas::invalid_argument if either slice is empty; batchlas::out_of_range past a dimension
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
@@ -919,7 +982,9 @@ namespace batchlas {
             // Trap: the slice keeps the parent's pointer array, which holds *unsliced* base
             // addresses until data_ptrs(ctx) refills it for this view.
             // evidence: docs/design/matrix-model.md#matrix-model-the-pointer-array-and-sliced-views
-            return MatrixView<T, MType>(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
+            MatrixView<T, MType> out(data_ptr() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
+            out.batch_mask_ = batch_mask_;
+            return out;
         }
 
         /// @brief View of rows @p rows over all columns of every item.
@@ -939,7 +1004,8 @@ namespace batchlas {
                 throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + row;
-            return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_)
+                .with_batch_mask(batch_mask_);
         }
 
         /// @brief Part of column @p col of every item as a batched VectorView (inc = 1, stride = stride()).
@@ -952,7 +1018,8 @@ namespace batchlas {
                 throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
             auto offset = col * ld_ + r_start;
-            return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_);
+            return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_)
+                .with_batch_mask(batch_mask_);
         }
 
         /// @name In-place fills and transforms
@@ -1240,11 +1307,12 @@ namespace batchlas {
         /// @brief A batch-size-1 view of item @p batch_index.
         ///
         /// Dense: its active extents, the parent's ld, no pointer array. CSR: the parent's strides.
+        /// A mask becomes the item's one byte (`batch_mask().subspan(batch_index, 1)`).
         /// @throws batchlas::out_of_range if @p batch_index is outside [0, batch_size())
         MatrixView<T, MType> batch_item(int batch_index) const;
 
         /// @brief Items [@p first, @p first + @p count) as one view: the same extents, ld and stride,
-        ///        the matching range of any active extents, no pointer array.
+        ///        the matching range of any active extents and of the batch mask, no pointer array.
         /// @throws batchlas::out_of_range if @p count < 1 or the range leaves [0, batch_size())
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
@@ -1257,6 +1325,7 @@ namespace batchlas {
                                      stride_, count);
             if (!active_rows_.empty()) out.active_rows_ = active_rows_.subspan(first, count);
             if (!active_cols_.empty()) out.active_cols_ = active_cols_.subspan(first, count);
+            if (!batch_mask_.empty()) out.batch_mask_ = batch_mask_.subspan(first, count);
             return out;
         }
 
@@ -1359,6 +1428,7 @@ namespace batchlas {
             kv.active_rows_ = active_rows_.empty() ? nullptr : active_rows_.data();
             kv.active_cols_ = active_cols_.empty() ? nullptr : active_cols_.data();
             kv.batch_size_ = batch_size_;
+            kv.mask_       = batch_mask_.empty() ? nullptr : batch_mask_.data();
             if constexpr (MType == MatrixFormat::CSR) {
                 kv.row_offsets_   = const_cast<int*>(row_offsets_.data());
                 kv.col_indices_   = const_cast<int*>(col_indices_.data());
@@ -1378,6 +1448,8 @@ namespace batchlas {
         int stride_ = 0;
         Span<int> active_rows_;
         Span<int> active_cols_;
+        // Empty = unmasked. Possibly device-only: never dereferenced on the host.
+        Span<const std::uint8_t> batch_mask_;
 
         Span<T*> data_ptrs_;  // may alias the parent Matrix's pointer array
 
@@ -1625,7 +1697,7 @@ namespace batchlas {
         Matrix(const Matrix& other)
             : Base(other), values_(other.values_), ptrs_(other.ptrs_), active_rows_store_(other.active_rows_store_),
               active_cols_store_(other.active_cols_store_), row_offsets_store_(other.row_offsets_store_),
-              col_indices_store_(other.col_indices_store_) {
+              col_indices_store_(other.col_indices_store_), batch_mask_store_(other.batch_mask_store_) {
             this->backend_handle_.reset();
             for (std::size_t b = 0; b < ptrs_.size(); ++b) ptrs_[b] = values_.data() + static_cast<std::ptrdiff_t>(b) * stride_;
             bind();
@@ -1640,13 +1712,14 @@ namespace batchlas {
             active_cols_store_ = std::move(other.active_cols_store_);
             row_offsets_store_ = std::move(other.row_offsets_store_);
             col_indices_store_ = std::move(other.col_indices_store_);
+            batch_mask_store_ = std::move(other.batch_mask_store_);
             bind();
             other.bind();
             return *this;
         }
         /// @}
 
-        /// @brief Deep copy in this matrix's own layout (ld, stride, CSR strides, active extents).
+        /// @brief Deep copy in this matrix's own layout (ld, stride, CSR strides, active extents, batch mask).
         Matrix<T, MType> clone() const {
             Matrix<T, MType> result = [&]() -> Matrix<T, MType> {
                 if constexpr (MType == MatrixFormat::CSR) {
@@ -1671,6 +1744,10 @@ namespace batchlas {
             } else if (this->is_heterogeneous()) {
                 result.set_active_dims(this->active_rows(), this->active_cols());
             }
+            if (batch_mask_store_.size() != 0) {
+                result.batch_mask_store_ = batch_mask_store_;
+                result.bind();
+            }
             return result;
         }
 
@@ -1682,7 +1759,7 @@ namespace batchlas {
         /// @throws batchlas::unsupported on a CSR matrix
         MatrixView<T, MType> view(int rows, int cols, int ld = -1, int stride = -1) const;
 
-        /// @brief Dense copy with every element converted by `static_cast<U>`, in this layout.
+        /// @brief Dense copy with every element converted by `static_cast<U>`, in this layout; a batch mask is copied as by MatrixView::astype().
         template <typename U>
         Matrix<U, MType> astype() const;
         using Base::astype;
@@ -1735,6 +1812,20 @@ namespace batchlas {
             return *this;
         }
 
+        /// @brief Allocates an owned batch mask (USM shared, batch_size() bytes) if there is none, sets every
+        ///        item active, and attaches it to this matrix and every view taken from it afterwards.
+        /// @return the writable mask: write it on the host, or from a kernel on any queue of the device
+        Span<std::uint8_t> enable_batch_mask() {
+            if (batch_mask_store_.size() != static_cast<std::size_t>(batch_size_))
+                batch_mask_store_ = UnifiedVector<std::uint8_t>(static_cast<std::size_t>(batch_size_));
+            batch_mask_store_.fill(std::uint8_t{1});
+            bind();
+            return batch_mask_store_.to_span();
+        }
+
+        /// @brief The owned mask, writable; empty until enable_batch_mask().
+        Span<std::uint8_t> batch_mask() const { return batch_mask_store_.to_span(); }
+
     private:
         // Points the view half at the owned storage; rerun after every (re)allocation.
         void bind() {
@@ -1744,6 +1835,7 @@ namespace batchlas {
             this->active_cols_ = active_cols_store_.to_span();
             this->row_offsets_ = row_offsets_store_.to_span();
             this->col_indices_ = col_indices_store_.to_span();
+            this->batch_mask_ = Span<const std::uint8_t>(batch_mask_store_.data(), batch_mask_store_.size());
         }
 
         UnifiedVector<T> values_;
@@ -1752,6 +1844,7 @@ namespace batchlas {
         UnifiedVector<int> active_cols_store_;
         UnifiedVector<int> row_offsets_store_;
         UnifiedVector<int> col_indices_store_;
+        UnifiedVector<std::uint8_t> batch_mask_store_;
     };
 
     /// @brief Creates the backend descriptor for a view (src/backends/matrix_handle_impl.cc).
@@ -1904,14 +1997,39 @@ namespace batchlas {
         /// @brief at(@p i, @p batch).
         T& operator()(int i, int batch = 0) const {return at(i, batch);}
 
-        /// @brief A batch-size-1 view of item @p batch_index.
+        /// @brief A batch-size-1 view of item @p batch_index; a mask becomes the item's one byte.
         VectorView<T> batch_item(int batch_index) const {
             // For a single batch, we need (size-1)*inc + 1 elements starting at batch_index * stride
             const std::size_t single_batch_length = (size_ > 0) ? ((size_ - 1) * inc_ + 1) : 0;
-            return VectorView<T>(Span<T>(data_.data() + static_cast<int64_t>(batch_index) * stride_, single_batch_length), size_, 1, inc_, 0);
+            VectorView<T> out(Span<T>(data_.data() + static_cast<int64_t>(batch_index) * stride_, single_batch_length), size_, 1, inc_, 0);
+            if (!batch_mask_.empty()) out.batch_mask_ = batch_mask_.subspan(static_cast<std::size_t>(batch_index), 1);
+            return out;
         }
 
-        /// @brief Entries @p slice of every item; keeps inc, stride and batch size.
+        /// @name Batch mask
+        /// As MatrixView's: one byte per item, nonzero = active, not owned, possibly device-only.
+        /// @{
+        /// @brief A copy of this view with @p mask attached; an empty span clears it.
+        /// @throws batchlas::invalid_argument unless @p mask is empty or holds batch_size() bytes
+        VectorView<T> with_batch_mask(Span<const std::uint8_t> mask) const {
+            detail::check_batch_mask_length(mask.size(), batch_size_);
+            VectorView<T> out = *this;
+            out.batch_mask_ = mask;
+            return out;
+        }
+        /// @brief with_batch_mask() for a mutable span.
+        VectorView<T> with_batch_mask(Span<std::uint8_t> mask) const {
+            return with_batch_mask(Span<const std::uint8_t>(mask.data(), mask.size()));
+        }
+        /// @brief The attached mask; empty when unmasked.
+        Span<const std::uint8_t> batch_mask() const { return batch_mask_; }
+        /// @brief True when a mask is attached.
+        bool has_batch_mask() const { return !batch_mask_.empty(); }
+        /// @brief True when item @p b takes part in the call; usable on the host only for a host-readable mask.
+        bool active(int64_t b) const { return batch_mask_.data() == nullptr || batch_mask_.data()[b] != 0; }
+        /// @}
+
+        /// @brief Entries @p slice of every item; keeps inc, stride, batch size and the batch mask.
         /// @pre The slice is non-empty (asserted in debug builds)
         VectorView<T> operator()(Slice slice) const {
             int64_t n;
@@ -1929,7 +2047,9 @@ namespace batchlas {
                 assert("Invalid slice dimensions for VectorView encountered in operator()(Slice)" && false);
             }
             const auto required = required_span_length(static_cast<int>(n), inc_, stride_, batch_size_);
-            return VectorView<T>(Span<T>(data_.data() + slice.start * inc_, required), n, batch_size_, inc_, stride_);
+            VectorView<T> out(Span<T>(data_.data() + slice.start * inc_, required), n, batch_size_, inc_, stride_);
+            out.batch_mask_ = batch_mask_;
+            return out;
         }
 
         /// @brief Prints the leading @p max_elements entries of each item in scientific notation.
@@ -1961,11 +2081,15 @@ namespace batchlas {
         }
 
     protected:
+        // KernelMatrixView's row and column views attach its mask without the host-side check.
+        template <typename, MatrixFormat> friend struct KernelMatrixView;
+
         Span<T> data_;
         int size_ = 0;
         int inc_ = 1;
         int stride_ = 0;
         int batch_size_ = 1;
+        Span<const std::uint8_t> batch_mask_;  // empty = unmasked; possibly device-only
     };
 
     /// @brief Owning batch of `batch_size()` vectors of length `size()` in USM shared memory.
@@ -2089,6 +2213,7 @@ namespace batchlas {
     Matrix<U, MType> Matrix<T, MType>::astype() const {
         static_assert(MType == MatrixFormat::Dense, "Matrix::astype only supports dense matrices");
         Matrix<U, MType> result(rows_, cols_, batch_size_, ld_, stride_);
+        if (this->has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), this->batch_mask_);
         auto src = this->data();
         auto dst = result.data();
         for (std::size_t i = 0; i < dst.size(); ++i) {
@@ -2102,6 +2227,7 @@ namespace batchlas {
     Matrix<U, MType> MatrixView<T, MType>::astype() const {
         static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
         Matrix<U, MType> result(rows_, cols_, batch_size_);
+        if (has_batch_mask()) detail::copy_batch_mask(result.enable_batch_mask(), batch_mask_);
         // Deliberately a host loop, not a kernel: astype takes no Queue, and building one
         // (then waiting on it) would cost more than the copy.
         const T* src_ptr = data_.data();
@@ -2131,6 +2257,7 @@ namespace batchlas {
     Matrix<U, MType> MatrixView<T, MType>::astype(std::span<const int> items) const {
         static_assert(MType == MatrixFormat::Dense, "MatrixView::astype only supports dense matrices");
         if (is_heterogeneous()) throw batchlas::invalid_argument("MatrixView::astype: heterogeneous views are not supported");
+        if (has_batch_mask()) throw batchlas::unsupported("MatrixView::astype(items): batch mask not supported yet");
         Matrix<U, MType> result(rows_, cols_, static_cast<int>(items.size()));
         const std::size_t packed = static_cast<std::size_t>(rows_) * static_cast<std::size_t>(cols_);
         U* dst = result.data().data();
@@ -2163,6 +2290,7 @@ namespace batchlas {
     template <typename T>
     template <typename U>
     Vector<U> VectorView<T>::astype() const {
+        if (has_batch_mask()) throw batchlas::unsupported("VectorView::astype: batch mask not supported yet");
         Vector<U> result(size_, batch_size_, Stride{stride_}, Inc{inc_});
         for (int b = 0; b < batch_size_; ++b) {
             for (int i = 0; i < size_; ++i) {

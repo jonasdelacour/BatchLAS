@@ -9,6 +9,7 @@
 #include <src/queue.hh>
 #include <src/ops/syevx/syevx.hh>
 #include <src/util/internal-api.hh>
+#include <src/util/batch_mask.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
 #include <complex>
@@ -347,6 +348,8 @@ Event syevx(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params,
             Span<int32_t> info) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syevx", B, A, V);
+    (void)batchlas::detail::call_mask("syevx", A, V);
     validate_syevx_preconditioner_params<T, MFormat>(params);
     // This overload can report a data-dependent count, so a Value range is legal.
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
@@ -413,6 +416,8 @@ size_t syevx_buffer_size(Queue& ctx,
                          JobType jobz,
                          const MatrixView<T, MatrixFormat::Dense>& V,
                          const SyevxParams<T>& params) {
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syevx_buffer_size", B, A, V);
+    (void)batchlas::detail::call_mask("syevx_buffer_size", A, V);
     validate_syevx_preconditioner_params<T, MFormat>(params);
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
                                             /*value_range_reportable=*/true);

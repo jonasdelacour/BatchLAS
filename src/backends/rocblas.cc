@@ -11,6 +11,7 @@
 #include <src/backends/batch_launch.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/backends/gemm_heterogeneous.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
 
@@ -26,6 +27,7 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                ComputePrecision precision) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", Back, A, B, C);
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
             throw batchlas::invalid_argument("gemm: incompatible matrix dimensions");
         }
@@ -91,6 +93,7 @@ namespace batchlas {
         T alpha,
         T beta,
         Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
@@ -126,6 +129,7 @@ namespace batchlas {
                Transpose transA,
                Diag diag,
                T alpha) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", B, A, Bmat);
         // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
         // alpha LAST, unlike the public trsm, which takes it third. The two
         // orders coexisted for as long as each TU declared its own public trsm;
@@ -166,6 +170,7 @@ namespace batchlas {
                T beta,
                Uplo uplo,
                Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syrk, "syrk_vendor", B, A, C);
         static LinalgHandle<B> handle;
 
         const auto [n, k] = backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
@@ -202,6 +207,7 @@ namespace batchlas {
                 T beta,
                 Uplo uplo,
                 Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syr2k, "syr2k_vendor", B, A, Bmat, C);
         static LinalgHandle<B> handle;
 
         const auto [n, k] = backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, Bmat, C, transA, /*hermitian=*/false);
@@ -240,6 +246,7 @@ namespace batchlas {
                Uplo uplo,
                Transpose transA,
                Diag diag) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", B, A, Bmat, C);
         static LinalgHandle<B> handle;
 
         const auto [m, n, k] = backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, Bmat, C, side);

@@ -11,6 +11,7 @@
 
 #include <src/ops/gemm/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/backends/gemm_heterogeneous.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/util/template-instantiations.hh>
@@ -107,16 +108,20 @@ bool native_serves_precision(ComputePrecision p, bool has_vendor) {
     return false;
 }
 
+// The kernels also run on a host SYCL device, but a CPU with a host BLAS keeps it (maintainer
+// decision, plan §13); without one (a vendor-free host queue) they are its only gemm, as before.
+inline bool natives_run_on(const select::Device& d) { return d.is_gpu || !d.has_vendor; }
+
 // Correctness only (R3): false means the launcher would throw or answer wrongly. Every register
 // and wide tile hard-wires its transpose form, so a form it does not instantiate is refused
 // here (a silent wrong answer otherwise). evidence: docs/perf/gemm.md#choices-flat-selection-p34
 template <typename T>
 bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, const MV<T>& C,
              Transpose ta, Transpose tb, ComputePrecision precision) {
+    // Every native family honours a batch mask; the vendor's strided call cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, B, C);
     const Dims s = dims_of<T>(A, B, ta, tb);
-    // The kernels also run on a host SYCL device, but a CPU with a host BLAS keeps it (maintainer
-    // decision, plan §13); without one (a vendor-free host queue) they are its only gemm, as before.
-    const bool device = d.is_gpu || !d.has_vendor;
+    const bool device = natives_run_on(d);
     const bool native = device && native_serves_precision<T>(precision, d.has_vendor) && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
@@ -156,13 +161,14 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
                    splitk_ld(s.m) * s.n <= std::numeric_limits<int>::max() &&
                    splitk_item_bytes<T>(s.m, s.n, sk.s) <= d.scratch_budget / batch;
         },
-        [&](Vendor) { return d.has_vendor; },
+        [&](Vendor) { return d.has_vendor && !masked; },
     }, c);
 }
 
 // Runs `fn` on consecutive batch chunks of at most `chunk` items, so a native kernel that puts the
 // batch in grid z serves any batch. The chunks are disjoint in C and the views are the strided
-// ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call.
+// ones the kernels read (data_ptr, ld, stride), so each chunk is an independent call; batch_range
+// hands each chunk its slice of the batch mask.
 template <typename T, typename Fn>
 Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, std::int64_t chunk, Fn&& fn) {
     const std::int64_t batch = A.batch_size();
@@ -170,10 +176,7 @@ Event for_batch_chunks(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C
     Event last;
     for (std::int64_t off = 0; off < batch; off += chunk) {
         const int n = static_cast<int>(std::min(chunk, batch - off));
-        auto sub = [&](const MV<T>& M) {
-            return MV<T>(M.data_ptr() + off * M.stride(), static_cast<int>(M.rows()), static_cast<int>(M.cols()),
-                         M.ld(), M.stride(), n);
-        };
+        auto sub = [&](const MV<T>& M) { return M.batch_range(static_cast<int>(off), n); };
         last = fn(sub(A), sub(Bm), sub(C));
     }
     // The chunk Events are not chained: an out-of-order Queue is drained so `last` covers them all.
@@ -229,10 +232,19 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 // gemm takes no caller workspace (no gemm_buffer_size): splitk leases its partials from the Queue.
 template <Backend Back, typename T>
 Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
+           const MatrixView<T, MatrixFormat::Dense>& C_, T alpha, T beta, Transpose transA, Transpose transB,
            ComputePrecision precision) {
+    // C carries the call's mask whichever operand brought it: the k = 0 writes below and in the
+    // heterogeneous loop are C's own (fill_zeros, scale and batch_item honour it).
+    const auto mask = batchlas::detail::call_mask("gemm", A, B, C_);
+    const bool adopt = !mask.empty() && mask.size() == static_cast<std::size_t>(C_.batch_size());  // else validate throws
+    const MatrixView<T, MatrixFormat::Dense> C = adopt ? C_.with_batch_mask(mask) : C_;
+    // Where no native family runs, refuse before the heterogeneous loop writes a k = 0 item.
+    if (!mask.empty() && !ops::gemm::natives_run_on(select::device_of<Back>(ctx, ops::gemm::spec.vendor)))
+        batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm", Back, A, B, C);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
-        // Items are homogeneous by construction, so the recursion is one level deep.
+        // Items are homogeneous by construction, so the recursion is one level deep; each batch-1
+        // child carries its item's mask byte and skips on the device.
         return backend::detail::gemm_heterogeneous_loop<T>(
             ctx, A, B, C, beta, transA, transB,
             [&](const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,

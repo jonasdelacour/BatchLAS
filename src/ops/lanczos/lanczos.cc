@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 //Implementation file for Lanczos algorithm
+#include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/math-helpers.hh>
 #include <src/util/template-instantiations.hh>
@@ -44,6 +45,7 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
                 const LanczosParams<T>& params) {
+        detail::refuse_batch_mask("lanczos", A, V);
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -219,6 +221,7 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
         const LanczosParams<T>& params
     ) {
+        detail::refuse_batch_mask("lanczos", A, V);
         auto n = A.rows();
         auto batch_size = A.batch_size();
         auto padded_vector_view = MatrixView(V.data_ptr(), n, 2, n, (n+1)*n, batch_size);

@@ -18,6 +18,7 @@
 #include <src/ops/trmm/kernels/trmm_triangular_tiles.hh>
 #include <src/expansion_budget.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -55,6 +56,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 template <Backend B, typename T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
@@ -132,6 +135,7 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, typename T>
 Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
+    (void)batchlas::detail::call_mask("trmm", A, B, C);
     (void)backend::shape::validate_product<batchlas::invalid_argument>("trmm", A, B, C, side);
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
     // and the cuBLAS loop faults on one.

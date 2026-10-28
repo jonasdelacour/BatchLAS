@@ -16,6 +16,7 @@
 #include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
 #include <src/ops/syrk/kernels/syrk_triangular_tiles.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -50,6 +51,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& C,
              Transpose transA) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, C)) return false;
     const std::int64_t n = C.rows(), k = inner<T>(A, transA);
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
     const bool gpu = d.is_gpu && homogeneous && n >= 1 && C.batch_size() >= 1;
@@ -117,6 +120,7 @@ Event launch(Queue& q, const HerkChoice& c, const MV<T>& A, const MV<T>& C, floa
 template <Backend Back, ComplexScalar T>
 Event herk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            float_t<T> alpha, float_t<T> beta, Uplo uplo, Transpose transA) {
+    (void)batchlas::detail::call_mask("herk", A, C);
     backend::shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::herk::inner<T>(A, transA),

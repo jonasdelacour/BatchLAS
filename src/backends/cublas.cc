@@ -23,6 +23,7 @@
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 namespace batchlas {
     namespace backend {
@@ -113,6 +114,7 @@ namespace batchlas {
                       Transpose transA,
                       Transpose transB,
                       ComputePrecision precision) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemm, "gemm_vendor", Back, A, B, C);
         // The library call only: which kernel runs is decided by the public gemm
         // (src/ops/gemm/gemm.cc), which reaches here through its `vendor` choice. A direct caller's
         // heterogeneous batch is walked member by member.
@@ -169,6 +171,7 @@ namespace batchlas {
                       T beta,
                       Side side,
                       Uplo uplo) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::symm, "symm_vendor", Back, A, B, C);
         // The expand family is symm's own (src/ops/symm/symm.cc); this is the per-item cublas?symm loop only.
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
@@ -183,6 +186,7 @@ namespace batchlas {
                            T beta,
                            Side side,
                            Uplo uplo) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::hemm, "hemm_vendor", Back, A, B, C);
         static LinalgHandle<Back> handle;
 
         const auto [m, n, k] = shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
@@ -216,6 +220,7 @@ namespace batchlas {
                       float_t<T> beta,
                       Uplo uplo,
                       Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::herk, "herk_vendor", Back, A, C);
         static LinalgHandle<Back> handle;
 
         const auto [n, k] = shape::validate_rank_k<batchlas::invalid_argument>("herk", A, C, transA, /*hermitian=*/true);
@@ -248,6 +253,7 @@ namespace batchlas {
                        float_t<T> beta,
                        Uplo uplo,
                        Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::her2k, "her2k_vendor", Back, A, B, C);
         static LinalgHandle<Back> handle;
 
         const auto [n, k] = shape::validate_rank_2k<batchlas::invalid_argument>("her2k", A, B, C, transA, /*hermitian=*/true);
@@ -317,6 +323,7 @@ namespace batchlas {
                       T beta,
                       Uplo uplo,
                       Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syrk, "syrk_vendor", Back, A, C);
         // The gram and triangular tile kernels are syrk's own families (src/ops/syrk/syrk.cc);
         // this is the per-item cublas?syrk loop only.
         return syrk_vendor_impl<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
@@ -364,6 +371,7 @@ namespace batchlas {
                        T beta,
                        Uplo uplo,
                        Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::syr2k, "syr2k_vendor", Back, A, B, C);
         // The tile route is chosen in src/ops/syr2k/syr2k.cc; this is the library loop only.
         return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
     }
@@ -412,6 +420,7 @@ namespace batchlas {
                       Uplo uplo,
                       Transpose transA,
                       Diag diag) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trmm, "trmm_vendor", Back, A, B, C);
         return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
@@ -423,6 +432,7 @@ namespace batchlas {
         T alpha,
         T beta,
         Transpose transA) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gemv, "gemv_vendor", B, A, X, Y);
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
@@ -451,6 +461,7 @@ namespace batchlas {
                    Transpose transA,
                    Diag diag,
                    T alpha) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm_vendor", Back, A, B);
         static LinalgHandle<Back> handle;
         auto [kB, n] = get_effective_dims(B, Transpose::NoTrans);
         auto batch_size = A.batch_size();
@@ -593,6 +604,7 @@ namespace batchlas {
         const MatrixView<T,MatrixFormat::Dense>& A, //In place reflectors (Lower triangle of A)
         Span<T> tau,
         Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
@@ -687,6 +699,7 @@ namespace batchlas {
                 Transpose trans,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
         static LinalgHandle<B> handle;
         auto m = C.rows();
         auto n = C.cols();
@@ -771,6 +784,7 @@ namespace batchlas {
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
+        ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
         static LinalgHandle<B> handle;
         auto m = A.rows();
         auto n = A.cols();
@@ -846,6 +860,7 @@ namespace batchlas {
         Transpose transA,
         Span<int64_t> pivots,
         Span<std::byte> workspace) {
+            ::batchlas::detail::refuse_batch_mask<T>(Op::getrs, "getrs_vendor", Back, A, B);
             static LinalgHandle<Back> handle;
             auto n = A.rows();
             auto nrhs = B.cols();
@@ -903,6 +918,7 @@ namespace batchlas {
         Span<int64_t> pivots,
         Span<std::byte> workspace,
         Span<int32_t> info_out) {
+            ::batchlas::detail::refuse_batch_mask<T>(Op::getrf, "getrf_vendor", B, A);
             static LinalgHandle<B> handle;
             auto n = A.rows();
             auto batch_size = A.batch_size();
@@ -935,6 +951,7 @@ namespace batchlas {
         Span<int64_t> pivots,
         Span<std::byte> workspace,
         Span<int32_t> info_out) {
+            ::batchlas::detail::refuse_batch_mask<T>(Op::getri, "getri_vendor", B, A, C);
             if (A.data_ptr() == C.data_ptr()) {
                 throw batchlas::invalid_argument("getri_vendor (CUBLAS): cublas<t>getriBatched is out of place; C aliases A");
             }

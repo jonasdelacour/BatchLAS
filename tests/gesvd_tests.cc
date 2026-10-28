@@ -32,6 +32,7 @@
 #include <type_traits>
 #include <vector>
 
+#include <tests/test_support/storage.hh>
 #include <tests/test_utils.hh>
 #include <tests/eigen_verify.hh>
 
@@ -40,6 +41,7 @@
 #include <src/util/resident_capacity.hh>
 
 using namespace batchlas;
+namespace ts = test_support;
 
 template <typename T, Backend B>
 struct GesvdConfig {
@@ -1829,6 +1831,63 @@ TYPED_TEST(GesvdTest, GebrdCtaEmptyBatchIsANoOp) {
         };
         EXPECT_NO_THROW(run());
         for (size_t i = 0; i < sentinel.size(); ++i) ASSERT_EQ(sentinel[i], Real(7)) << "index " << i;
+    }
+}
+
+// A batch tail: batch 1025 at n = 13 (P = 16, two partitions per sub-group) leaves dead
+// partitions in the last work-group, beside the live one in its sub-group (multiplier 1) and
+// as whole dead warps (multiplier 4). gebrd_cta's barriers are work-group wide, so a dead
+// partition runs to the end and stores nothing (known-defects.md, defect 23). Every item is
+// held BITWISE to batch 1024 at multiplier 1 (no dead partition), and no slot outside the
+// items (ld/inc/stride gaps, items past the batch) may change. Dropping one `live` store
+// guard writes item 0 and turns this red.
+TYPED_TEST(GesvdTest, GebrdCtaBatchTailStoresNothingAndKeepsItemsBitwise) {
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "gebrd_cta requires sub-group 32";
+    } else {
+        constexpr int n = 13, ld = n + 3, stride = ld * n + 5, inc = 2, vstride = inc * n + 3, pad = 3;
+        const Real poison = ts::poison<Real>();
+        std::mt19937 rng(20261028u);
+        std::uniform_real_distribution<Real> dist(Real(-1), Real(1));
+        std::vector<Real> a0(n * n);
+        for (auto& x : a0) x = dist(rng);
+        const std::array<int, 5> rows{n, 1, 1, 1, 1}, cols{n, n, n - 1, n, n}, lds{ld, inc, inc, inc, inc};
+        const auto run = [&](int batch, size_t mul) {
+            std::vector<UnifiedVector<Real>> out;
+            out.emplace_back(static_cast<size_t>(batch + pad) * stride, poison);
+            for (int v = 0; v < 4; ++v) out.emplace_back(static_cast<size_t>(batch + pad) * vstride, poison);
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) out[0][static_cast<size_t>(b) * stride + i + j * ld] = a0[i + j * n];
+            MatrixView<Real, MatrixFormat::Dense> A(out[0].data(), n, n, ld, stride, batch);
+            VectorView<Real> d(out[1].data(), n, batch, inc, vstride), e(out[2].data(), n - 1, batch, inc, vstride);
+            VectorView<Real> tauq(out[3].data(), n, batch, inc, vstride), taup(out[4].data(), n, batch, inc, vstride);
+            (void)gebrd_cta<B, Real>(*this->ctx, A, d, e, tauq, taup, mul);
+            this->ctx->wait();
+            return out;
+        };
+        const auto ref = run(1024, 1);
+        for (const size_t mul : {size_t(1), size_t(4)}) {
+            SCOPED_TRACE(::testing::Message() << "cta_wg_size_multiplier " << mul);
+            const auto got = run(1025, mul);
+            const char* names[5] = {"A", "d", "e", "tauq", "taup"};
+            for (int k = 0; k < 5; ++k) {
+                SCOPED_TRACE(names[k]);
+                const int s = k == 0 ? stride : vstride;
+                const auto view = [&](const UnifiedVector<Real>& v, int off, int batch) {
+                    return ts::MV<Real>(const_cast<Real*>(v.data()) + static_cast<size_t>(off) * s, rows[k], cols[k], lds[k], s, batch);
+                };
+                // items 0..1023 and the last live item against the batch-1024 reference, whole stride
+                EXPECT_TRUE(ts::items_bit_identical_to(view(got[k], 0, 1024), view(ref[k], 0, 1024)));
+                EXPECT_TRUE(ts::items_bit_identical_to(view(got[k], 1024, 1), view(ref[k], 0, 1)));
+                // the gaps of the live items and every slot of the items past the batch stay poison
+                EXPECT_TRUE(ts::unwritten_outside(view(got[k], 0, 1025), ts::Live::block()));
+                const std::array<int, 3> tail{1025, 1026, 1027};
+                EXPECT_TRUE(ts::unwritten_outside(view(got[k], 0, 1025 + pad), ts::Live::nothing(), tail));
+            }
+        }
     }
 }
 

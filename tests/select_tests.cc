@@ -10,8 +10,31 @@
 #include <batchlas/settings.hh>
 #include <batchlas/util/env.hh>
 
+#include <src/ops/gemm/choice.hh>
+#include <src/ops/gemv/choice.hh>
+#include <src/ops/geqrf/choice.hh>
+#include <src/ops/gesv/choice.hh>
+#include <src/ops/gesvd/choice.hh>
+#include <src/ops/getrf/choice.hh>
+#include <src/ops/getri/choice.hh>
+#include <src/ops/getrs/choice.hh>
+#include <src/ops/hemm/choice.hh>
+#include <src/ops/her2k/choice.hh>
+#include <src/ops/herk/choice.hh>
+#include <src/ops/orgqr/choice.hh>
+#include <src/ops/ormqr/choice.hh>
+#include <src/ops/posv/choice.hh>
+#include <src/ops/potrf/choice.hh>
+#include <src/ops/spmm/choice.hh>
+#include <src/ops/syev/choice.hh>
+#include <src/ops/symm/choice.hh>
+#include <src/ops/syr2k/choice.hh>
+#include <src/ops/syrk/choice.hh>
+#include <src/ops/trmm/choice.hh>
+#include <src/ops/trsm/choice.hh>
 #include <src/select/coverage.hh>
 #include <src/select/select.hh>
+#include <tests/masked_contract.hh>
 #include <tests/test_utils.hh>
 
 #include <algorithm>
@@ -1105,6 +1128,9 @@ struct OpBattery {
     batchlas::UnifiedVector<std::int32_t> info;
     batchlas::UnifiedVector<int> act, ro, ci;
     batchlas::UnifiedVector<T*> pa, pb, pc;  // the per-item pointer arrays a vendor batched call fills
+    batchlas::Span<const std::uint8_t> mask, mask_a;  // every view's batch mask; A and the CSR take mask_a if set
+    // NETLIB pivots are int64; the GPU backends pack 1-based int32 into the same storage.
+    static constexpr std::size_t piv_bytes = B == Backend::NETLIB ? sizeof(std::int64_t) : sizeof(std::int32_t);
 
     static T sentinel() { return Dense<T>::make(RealOf<T>(-999), RealOf<T>(777)); }
     std::size_t items() const { return std::size_t(std::max(batch, 1)); }
@@ -1122,11 +1148,47 @@ struct OpBattery {
     Dense<T> view(batchlas::UnifiedVector<T>& buf, bool het) {
         T** ptrs = &buf == &a ? pa.data() : (&buf == &b ? pb.data() : pc.data());
         Dense<T> v(buf.data(), n, n, ld, stride, batch, ptrs);
-        return het ? v.with_active_dims(act.to_span(), act.to_span()) : v;
+        if (het) v = v.with_active_dims(act.to_span(), act.to_span());
+        const auto m = &buf == &a && !mask_a.empty() ? mask_a : mask;
+        return m.empty() ? v : v.with_batch_mask(m);
     }
-    batchlas::VectorView<T> vec(batchlas::UnifiedVector<T>& buf) { return {buf.data(), n, batch, 2, 2 * n + 3}; }
+    batchlas::VectorView<T> vec(batchlas::UnifiedVector<T>& buf) {
+        const batchlas::VectorView<T> v{buf.data(), n, batch, 2, 2 * n + 3};
+        return mask.empty() ? v : v.with_batch_mask(mask);
+    }
     batchlas::MatrixView<T, MatrixFormat::CSR> csr() {
-        return {vals.data(), ro.data(), ci.data(), n, n, batchlas::NonZeros{n}, n + 2, 0, batch};
+        const batchlas::MatrixView<T, MatrixFormat::CSR> v{vals.data(), ro.data(), ci.data(), n, n,
+                                                           batchlas::NonZeros{n}, n + 2, 0, batch};
+        const auto m = mask_a.empty() ? mask : mask_a;
+        return m.empty() ? v : v.with_batch_mask(m);
+    }
+    // Well-posed inputs: each item's n x n block of A, B and C Hermitian and diagonally dominant
+    // (item-dependent), identity pivots, tau 1/2. The padding keeps the sentinel.
+    void prime() {
+        for (auto* buf : {&a, &b, &c})
+            for (std::size_t it = 0; it < items(); ++it)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i) {
+                        const RealOf<T> re = i == j ? RealOf<T>(2 * n + it) : RealOf<T>(0.25) * RealOf<T>(i + j + 1);
+                        const RealOf<T> im = i == j ? RealOf<T>(0) : RealOf<T>(0.125) * RealOf<T>(i > j ? i - j : j - i);
+                        (*buf)[it * stride + std::size_t(j) * ld + i] = Dense<T>::make(re, i > j ? im : -im);
+                    }
+        for (std::size_t k = 0; k < std::size_t(n) * items(); ++k) {
+            const std::int64_t p = std::int64_t(k % n) + 1;
+            std::memcpy(reinterpret_cast<std::byte*>(piv.data()) + k * piv_bytes, &p, piv_bytes);  // little-endian
+        }
+        for (std::size_t k = 0; k < tau.size(); ++k) tau[k] = T(0.5);
+    }
+    // Every per-item output region, for the masked policy checks.
+    std::vector<masked_contract::Output> outputs() {
+        const auto sv = [](const char* name, const auto& v, std::size_t per) {
+            const std::size_t bytes = per * sizeof(*v.data());
+            return masked_contract::Output{name, reinterpret_cast<const std::byte*>(v.data()), bytes, bytes};
+        };
+        return {sv("A", a, stride),     sv("B", b, stride),       sv("C", c, stride), sv("x", vx, 2 * n + 3),
+                sv("y", vy, 2 * n + 3), sv("vals", vals, n + 2), sv("w", w, n),      sv("tau", tau, n),
+                {"piv", reinterpret_cast<const std::byte*>(piv.data()), n * piv_bytes, n * piv_bytes},
+                sv("info", info, 1)};
     }
     batchlas::Span<RealOf<T>> wspan() { return {w.data(), std::size_t(n) * items()}; }
     batchlas::Span<T> tspan() { return {tau.data(), std::size_t(n) * items()}; }
@@ -1314,6 +1376,208 @@ TYPED_TEST(BatchPolicy, HeterogeneousBatchNeverRunsAFamilyThatIgnoresIt) {
             EXPECT_TRUE(refused_upfront || dynamic_cast<const batchlas::unsupported*>(&e)) << name << ": " << what;
         }
     }
+}
+
+// The batch mask: the pins a test walks per op, "auto" first, then every compiled candidate's
+// spelling. evidence: docs/design/masked-batches.md#masked-batches-refusal-policy
+template <typename Choice, std::size_t N>
+std::vector<std::string> spellings(const std::array<Choice, N>& cs) {
+    std::vector<std::string> out{"auto"};
+    for (const Choice& c : cs) out.push_back(sel::to_string(c));
+    return out;
+}
+
+template <typename T>
+std::vector<std::string> pins_of(const std::string& op) {
+    namespace o = batchlas::ops;
+    const std::map<std::string, std::function<std::vector<std::string>()>> by_op = {
+        {"gemm", [] { return spellings(o::gemm::candidates<T>()); }},
+        {"gemv", [] { return spellings(o::gemv::candidates<T>()); }},
+        {"trsm", [] { return spellings(o::trsm::candidates<T>()); }},
+        {"trmm", [] { return spellings(o::trmm::candidates<T>()); }},
+        {"potrf", [] { return spellings(o::potrf::candidates<T>()); }},
+        {"getrf", [] { return spellings(o::getrf::candidates<T>()); }},
+        {"getrs", [] { return spellings(o::getrs::candidates<T>()); }},
+        {"getri", [] { return spellings(o::getri::candidates<T>()); }},
+        {"geqrf", [] { return spellings(o::geqrf::candidates<T>()); }},
+        {"orgqr", [] { return spellings(o::orgqr::candidates<T>()); }},
+        {"ormqr", [] { return spellings(o::ormqr::candidates<T>()); }},
+        {"syev", [] { return spellings(o::syev::candidates<T>()); }},
+        {"gesvd", [] { return spellings(o::gesvd::candidates<T>()); }},
+        {"gesv", [] { return spellings(o::gesv::candidates<T>()); }},
+        {"posv", [] { return spellings(o::posv::candidates<T>()); }},
+        {"spmm", [] { return spellings(o::spmm::candidates<T>()); }},
+        {"hemm", [] { return spellings(o::hemm::candidates<T>()); }},
+        {"herk", [] { return spellings(o::herk::candidates<T>()); }},
+        {"her2k", [] { return spellings(o::her2k::candidates<T>()); }},
+        {"symm", [] { return spellings(o::symm::candidates<T>()); }},
+        {"syrk", [] { return spellings(o::syrk::candidates<T>()); }},
+        {"syr2k", [] { return spellings(o::syr2k::candidates<T>()); }},
+    };
+    const auto it = by_op.find(op);
+    if (it == by_op.end()) {
+        ADD_FAILURE() << op << ": no pin list; add its candidates here";
+        return {"auto"};
+    }
+    return it->second();
+}
+
+// A masked call that did not run: a selection refusal (no family takes a masked view, or the
+// pinned one, or no candidate of a strict class word, can run it), never another error.
+bool is_mask_refusal(const std::exception& e) {
+    if (dynamic_cast<const batchlas::unsupported*>(&e)) return true;
+    const std::string what = e.what();
+    return dynamic_cast<const batchlas::invalid_argument*>(&e) &&
+           (what.find("cannot run this shape") != std::string::npos || what.find("(strict): no ") != std::string::npos);
+}
+
+template <typename T, Backend B>
+void run_op(OpBattery<T, B>& ops, const std::string& name) {
+    for (const auto& [n, call] : ops.calls(false))
+        if (n == name) {
+            call();
+            ops.q.wait();
+            return;
+        }
+    FAIL() << name << ": not in the battery";
+}
+
+// items 0 and 2 inactive: the first item and an interior hole.
+const masked_contract::Pattern& alternating4() {
+    static const masked_contract::Pattern p = masked_contract::by_rule("alternating", 4, [](int b) { return b % 2 == 1; });
+    return p;
+}
+
+// Every op on every pin the backend runs unmasked (shape refusals are filtered first, so they
+// cannot pass as mask refusals), with a device-only mask {0, 1, 0, 1}: the call is refused, or
+// it leaves every output of items 0 and 2 bit-identical. Red under a family that ignores the mask.
+// A migrated op's non-vendor pin must run on a device backend (W1a: gemm), so a family cannot pass
+// by refusing again; the host backend's natives yield to its BLAS, which refuses.
+TYPED_TEST(BatchPolicy, MaskedBatchNeverRunsAFamilyThatIgnoresIt) {
+    const std::set<std::string> migrated{"gemm"};
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    batchlas::UnifiedVector<std::byte> work(std::size_t(1) << 24);
+    const batchlas::Span<std::byte> ws{work.data(), work.size()};
+    const auto& pat = alternating4();
+    const masked_contract::DeviceMask mask(*this->ctx, pat.bytes);
+    std::vector<std::string> names;
+    for (const auto& entry : OpBattery<T, B>(*this->ctx, 4, ws).calls(false)) names.push_back(entry.first);
+    for (const std::string& name : names) {
+        int runnable = 0;
+        for (const std::string& pin : pins_of<T>(name)) {
+            SCOPED_TRACE(name + " pinned " + pin);
+            const sel::ScopedPin<std::monostate> scoped(name, pin, sel::StrictPin{});
+            try {
+                OpBattery<T, B> plain(*this->ctx, 4, ws);
+                plain.prime();
+                run_op(plain, name);
+            } catch (const std::exception&) {
+                continue;
+            }
+            ++runnable;
+            OpBattery<T, B> ops(*this->ctx, 4, ws);
+            ops.prime();
+            ops.mask = mask.span();
+            const auto outs = ops.outputs();
+            const auto before = masked_contract::detail::snapshot(outs, 4);
+            std::string refused;
+            try {
+                run_op(ops, name);
+            } catch (const std::exception& e) {
+                refused = e.what();
+                EXPECT_TRUE(is_mask_refusal(e)) << "a masked call threw something other than a refusal: " << refused;
+                EXPECT_FALSE(migrated.count(name) && pin != "vendor" && B != Backend::NETLIB)
+                    << "a migrated family refused: " << refused;
+            }
+            const auto after = masked_contract::detail::snapshot(outs, 4);
+            for (std::size_t o = 0; o < outs.size(); ++o)
+                for (int b = 0; b < 4; ++b)
+                    if (!pat.active(b))
+                        EXPECT_TRUE(masked_contract::detail::item_equal(after[o], before[o], outs[o], b))
+                            << (refused.empty() ? "ran a masked batch and wrote " : "refused after writing ")
+                            << outs[o].name << " of inactive item " << b;
+        }
+        EXPECT_GT(runnable, 0) << name << ": no pin ran unmasked, so the masked check saw nothing";
+    }
+}
+
+// A and the CSR carry one mask, every other operand another span with the same bytes: the call
+// throws before writing anything. An op that accepts one shared mask must name the disagreement.
+TYPED_TEST(BatchPolicy, MaskedOperandsMustAgree) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    batchlas::UnifiedVector<std::byte> work(std::size_t(1) << 24);
+    const batchlas::Span<std::byte> ws{work.data(), work.size()};
+    const masked_contract::DeviceMask m1(*this->ctx, alternating4().bytes), m2(*this->ctx, alternating4().bytes);
+    const std::set<std::string> one_operand{"potrf", "getrf", "geqrf", "orgqr", "syev"};
+    std::vector<std::string> names;
+    for (const auto& entry : OpBattery<T, B>(*this->ctx, 4, ws).calls(false)) names.push_back(entry.first);
+    for (const std::string& name : names) {
+        if (one_operand.count(name)) continue;
+        SCOPED_TRACE(name);
+        bool honours = false;
+        try {
+            OpBattery<T, B> shared(*this->ctx, 4, ws);
+            shared.prime();
+            shared.mask = m1.span();
+            run_op(shared, name);
+            honours = true;
+        } catch (const std::exception&) {
+        }
+        OpBattery<T, B> ops(*this->ctx, 4, ws);
+        ops.prime();
+        ops.mask_a = m1.span();
+        ops.mask = m2.span();
+        const auto outs = ops.outputs();
+        const auto before = masked_contract::detail::snapshot(outs, 4);
+        try {
+            run_op(ops, name);
+            ADD_FAILURE() << name << " ran operands that carry two different masks";
+        } catch (const std::exception& e) {
+            if (honours)
+                EXPECT_NE(std::string(e.what()).find("operands carry different batch masks"), std::string::npos) << e.what();
+        }
+        EXPECT_TRUE(masked_contract::detail::snapshot(outs, 4) == before) << name << " wrote before refusing";
+    }
+}
+
+// with_batch_mask() checks the length only (a device-only span is never read): batch - 1 and
+// batch + 1 throw on every view kind, the batch's length binds, an empty span clears.
+TYPED_TEST(BatchPolicy, MaskLengthIsChecked) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    OpBattery<T, B> ops(*this->ctx, 4, {});
+    const masked_contract::DeviceMask m3(*this->ctx, std::vector<std::uint8_t>(3, 1)),
+        m4(*this->ctx, alternating4().bytes), m5(*this->ctx, std::vector<std::uint8_t>(5, 1));
+    const auto length_error = [](const auto& attach) {
+        try {
+            attach();
+        } catch (const batchlas::invalid_argument& e) {
+            return std::string(e.what()).find("with_batch_mask") != std::string::npos;
+        }
+        return false;
+    };
+    const auto check = [&](const auto& v, const char* kind) {
+        SCOPED_TRACE(kind);
+        EXPECT_TRUE(length_error([&] { (void)v.with_batch_mask(m3.span()); }));
+        EXPECT_TRUE(length_error([&] { (void)v.with_batch_mask(m5.span()); }));
+        const auto masked = v.with_batch_mask(m4.span());
+        EXPECT_TRUE(masked.has_batch_mask());
+        EXPECT_EQ(masked.batch_mask().data(), m4.span().data());
+        EXPECT_EQ(masked.batch_mask().size(), 4u);
+        EXPECT_FALSE(masked.with_batch_mask(batchlas::Span<const std::uint8_t>{}).has_batch_mask());
+    };
+    check(ops.view(ops.a, false), "dense");
+    check(ops.view(ops.a, true), "heterogeneous dense");
+    check(ops.vec(ops.vx), "vector");
+    check(ops.csr(), "csr");
+    batchlas::Matrix<T> owned(OpBattery<T, B>::n, OpBattery<T, B>::n, 4);
+    check(owned, "matrix");
+    EXPECT_EQ(owned.enable_batch_mask().size(), 4u);
+    EXPECT_EQ(owned.view().batch_mask().size(), 4u);
+    EXPECT_EQ(ops.view(ops.a, false).with_batch_mask(m4.span()).batch_range(1, 2).batch_mask().data(),
+              m4.span().data() + 1);
 }
 
 }  // namespace

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <stdexcept>
 #include <type_traits>
+#include <src/util/batch_mask.hh>
 #include <src/linalg-impl.hh>
 #include <src/queue.hh>
 #include <src/math-helpers.hh>
@@ -208,6 +209,7 @@ namespace batchlas
               const NormType norm_type,
               const Span<float_t<T>> norms)
     {
+        detail::refuse_batch_mask("norm", A);
         detail::require_device_fp64<T>(ctx, "norm");
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
@@ -224,6 +226,7 @@ namespace batchlas
                           const MatrixView<T, MF> &A,
                           const NormType norm_type)
     {
+        detail::refuse_batch_mask("norm", A);
         detail::require_device_fp64<T>(ctx, "norm");
         // Allocate memory for the results
         UnifiedVector<float_t<T>> norms(A.batch_size());

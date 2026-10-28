@@ -40,18 +40,23 @@ set(TEST_TARGETS
     error_model_tests
     linalg_layer_tests
     gemm_tests
+    gemm_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
     gemv_tests
     matrix_tests
     matrix_view_tests
+    batch_mask_view_tests
+    batch_mask_entries_tests
+    masked_contract_tests
     trsm_tests
     potrf_tests
     potrf_candidates_tests
     posv_candidates_tests
     trsm_candidates_tests
     symm_candidates_tests
+    symm_mirror_tests
     gemm_candidates_tests
     gemv_candidates_tests
     getrf_candidates_tests
@@ -63,6 +68,8 @@ set(TEST_TARGETS
     getrf_tests
     gesv_tests
     posv_tests
+    potri_tests
+    potrs_tests
     ortho_tests
     inverse_tests
     norm_tests
@@ -110,6 +117,10 @@ set(TEST_TARGETS
     syev_two_stage_tests
     syev_candidates_tests
     syrk_candidates_tests
+    sytrf_tests
+    syev_align_tests
+    syfn_tests
+    sygvd_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -178,18 +189,19 @@ endif()
 # ---------------------------------------------------------------------------
 set(BATCHLAS_TEST_LABELS_util
     sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests philox_tests
-    mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
+    mempool_tests matrix_tests matrix_view_tests batch_mask_view_tests batch_mask_entries_tests masked_contract_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
-    syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
+    device_blas_tests gemm_tests gemm_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
+    syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
-    gesv_tests posv_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
+    gesv_tests posv_tests potri_tests potrs_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests)
+    transpose_tests norm_tests cond_tests inverse_tests
+    sytrf_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
@@ -201,7 +213,8 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
-    gesvd_candidates_tests syev_candidates_tests)
+    gesvd_candidates_tests syev_candidates_tests
+    syev_align_tests syfn_tests sygvd_tests)
 set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests spmm_tests spmm_candidates_tests)
 
@@ -249,22 +262,24 @@ set(BATCHLAS_HEAVY_TEST_PATTERNS
     *FreshChildAgreesWithAWorkerAfterALargerLaunch*
     *EigenvaluesOnlyLowerMatchesNetlib*
     *GradedHermitianRunsAtN512*
-    *PastTheGrid*)
+    *PastTheGrid*
+    *DoubleBandEvery*)
 string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
 # Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
 # binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy
 # entry that selects no case (a stale line, or cases compiled out in this configuration)
 # reports SKIPPED rather than a silent pass.
 set(BATCHLAS_HEAVY_TESTS
-    gemm_candidates_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
+    gemm_candidates_tests gemm_mask_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
     gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
     getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
     orgqr_candidates_tests ormqr_candidates_tests posv_candidates_tests
-    potrf_candidates_tests potrf_tests spmm_candidates_tests spmm_tests syev_blocked_tests
+    potrf_candidates_tests potrf_tests potri_tests potrs_tests spmm_candidates_tests spmm_tests syev_blocked_tests
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
-    syev_tests)
+    syev_tests sygvd_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -492,6 +507,10 @@ function(batchlas_add_test_target test_name)
             # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
             set_tests_properties(${_entry} PROPERTIES TIMEOUT 300)
         endif()
+        if(test_name STREQUAL "sytrf_tests")
+            # NonFiniteAndAliasedItemsTerminate: a lane-divergent pivot decision deadlocks, not fails.
+            set_tests_properties(${_entry} PROPERTIES TIMEOUT 1800)
+        endif()
     endforeach()
     set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
     if(_env)
@@ -646,8 +665,9 @@ set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
 # what an icpx build without -ffp-model=precise produces, 6-15x slower and green
 # in every functional test. Skips (77) when there is no NVPTX image or no cuobjdump.
 # evidence: docs/perf/blackwell.md#device-call-guard
+# Not for acpp multipass CUDA: its fat binaries carry cubin only, no PTX to scan.
 find_package(Python3 QUIET COMPONENTS Interpreter)
-if(Python3_Interpreter_FOUND)
+if(Python3_Interpreter_FOUND AND NOT BATCHLAS_ACPP_CUDA_AOT_ARCH)
     set(_device_calls_args "${PROJECT_BINARY_DIR}")
     if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
         list(APPEND _device_calls_args --cuobjdump "${CUDAToolkit_BIN_DIR}/cuobjdump")
@@ -677,6 +697,10 @@ foreach(_bin IN LISTS _acpp_jit_bins)
         set(_acpp_jit_ok OFF)
     endif()
 endforeach()
+# Multipass CUDA (cuda:sm_XX) compiles ahead of time: nothing reaches the JIT cache it scans.
+if(BATCHLAS_ACPP_CUDA_AOT_ARCH)
+    set(_acpp_jit_ok OFF)
+endif()
 if(Python3_Interpreter_FOUND AND BATCHLAS_HAS_CUDA_BACKEND AND _acpp_jit_ok)
     set(_cuda "BATCHLAS_TEST_BACKEND=CUDA")
     add_test(NAME acpp_jit_tests

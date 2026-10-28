@@ -23,6 +23,7 @@
 #include <batchlas/settings.hh>
 #include <src/ops/syev/vendor.hh>
 #include <src/ops/syev/choice.hh>
+#include <src/util/batch_mask.hh>
 #include <optional>
 #include <string>
 
@@ -210,6 +211,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const SyevxParams<T>& params,
                 Span<int32_t> info
         ) {
+        ::batchlas::detail::refuse_batch_mask("syevx_lobpcg", A, V);
         using float_type = typename base_type<T>::type;
 
         // LOBPCG converges to an extreme and cannot honour il/iu; public entry point.

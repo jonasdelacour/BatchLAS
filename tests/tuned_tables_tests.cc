@@ -18,6 +18,9 @@
 #include <src/ops/gemv/choice.hh>
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/getri/choice.hh>
+#include <src/ops/potri/choice.hh>
+#include <src/ops/potri/potri_native.hh>
+#include <src/ops/potrs/choice.hh>
 #include <src/ops/gesv/choice.hh>
 #include <src/ops/gesvd/choice.hh>
 #include <src/ops/spmm/choice.hh>
@@ -29,6 +32,11 @@
 #include <src/ops/hemm/choice.hh>
 #include <src/ops/herk/choice.hh>
 #include <src/ops/her2k/choice.hh>
+#include <src/ops/sytrf/choice.hh>
+#include <src/ops/sysv/choice.hh>
+#include <src/ops/sytrs/choice.hh>
+#include <src/ops/sygst/choice.hh>
+#include <src/ops/sygvd/choice.hh>
 #include <src/select/select.hh>
 
 #include <algorithm>
@@ -136,6 +144,20 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(getri::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(getri::candidates<std::complex<double>>());
     }
+    namespace potri = batchlas::ops::potri;
+    if (op == "potri") {
+        if (dtype == "float") return spellings(potri::candidates<float>());
+        if (dtype == "double") return spellings(potri::candidates<double>());
+        if (dtype == "cfloat") return spellings(potri::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(potri::candidates<std::complex<double>>());
+    }
+    namespace potrs = batchlas::ops::potrs;
+    if (op == "potrs") {
+        if (dtype == "float") return spellings(potrs::candidates<float>());
+        if (dtype == "double") return spellings(potrs::candidates<double>());
+        if (dtype == "cfloat") return spellings(potrs::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(potrs::candidates<std::complex<double>>());
+    }
     namespace gesv = batchlas::ops::gesv;
     if (op == "gesv") {
         if (dtype == "float") return spellings(gesv::candidates<float>());
@@ -192,6 +214,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
+    // sytrf, sysv and sytrs compile one candidate list for every dtype.
+    if (op == "sytrf") return spellings(batchlas::ops::sytrf::candidates<float>());
+    if (op == "sysv") return spellings(batchlas::ops::sysv::candidates<float>());
+    if (op == "sytrs") return spellings(batchlas::ops::sytrs::candidates<float>());
+    // sygst and sygvd: fieldless families, one list for every dtype.
+    if (op == "sygst") return spellings(batchlas::ops::sygst::candidates<float>());
+    if (op == "sygvd") return spellings(batchlas::ops::sygvd::candidates<float>());
     // complex-only: their real spellings are symm, syrk and syr2k.
     if (op == "hemm" && dtype[0] == 'c') return spellings(batchlas::ops::hemm::candidates<std::complex<float>>());
     if (op == "herk" && dtype[0] == 'c') return spellings(batchlas::ops::herk::candidates<std::complex<float>>());
@@ -290,6 +319,8 @@ std::string key_spec(const std::string& op) {
     if (op == "getrf") join(batchlas::ops::getrf::key_names);
     if (op == "getrs") join(batchlas::ops::getrs::key_names);
     if (op == "getri") join(batchlas::ops::getri::key_names);
+    if (op == "potri") join(batchlas::ops::potri::key_names);
+    if (op == "potrs") join(batchlas::ops::potrs::key_names);
     if (op == "gesv") join(batchlas::ops::gesv::key_names);
     if (op == "gesvd") join(batchlas::ops::gesvd::key_names);
     if (op == "spmm") join(batchlas::ops::spmm::key_names);
@@ -298,6 +329,11 @@ std::string key_spec(const std::string& op) {
     if (op == "syrk") join(batchlas::ops::syrk::key_names);
     if (op == "syr2k") join(batchlas::ops::syr2k::key_names);
     if (op == "trmm") join(batchlas::ops::trmm::key_names);
+    if (op == "sytrf") join(batchlas::ops::sytrf::key_names);
+    if (op == "sysv") join(batchlas::ops::sysv::key_names);
+    if (op == "sytrs") join(batchlas::ops::sytrs::key_names);
+    if (op == "sygst") join(batchlas::ops::sygst::key_names);
+    if (op == "sygvd") join(batchlas::ops::sygvd::key_names);
     if (op == "hemm") join(batchlas::ops::hemm::key_names);
     if (op == "herk") join(batchlas::ops::herk::key_names);
     if (op == "her2k") join(batchlas::ops::her2k::key_names);
@@ -449,8 +485,8 @@ TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     const std::set<std::string> real_only{};
     const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
-                           "herk", "her2k"})
+                           "getri", "potri", "potrs", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
+                           "herk", "her2k", "sytrf", "sysv", "sytrs", "sygst", "sygvd"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
@@ -733,6 +769,135 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
             }
 }
 
+// potri's tables (docs/perf/potri.md#potri-selection): sm_89 float and cfloat are timed (the deep
+// campaign, refinement rows included), the rest transcribed from them with a row per choice-grid cell; no row ranks cta first above the type's CTA ceiling on these 99 KB parts (can_run would
+// skip it, so such a row would only hide the runner-up's order), and blocked:nb=128 is float's alone.
+TEST(TunedTables, PotriTablesCoverTheChoiceGridAndRankCtaOnlyWhereItFits) {
+    namespace potri = batchlas::ops::potri;
+    constexpr std::size_t kSlm = 99 * 1024 - 4096;  // sm_89 and sm_120 LOCAL_MEM_SIZE less the reserve
+    namespace sp = batchlas::sycl_potri;
+    const std::map<std::string, int> ceiling{{"float", sp::cta_max_n<float>(kSlm, 1024)},
+                                             {"double", sp::cta_max_n<double>(kSlm, 1024)},
+                                             {"cfloat", sp::cta_max_n<std::complex<float>>(kSlm, 1024)},
+                                             {"cdouble", sp::cta_max_n<std::complex<double>>(kSlm, 1024)}};
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded("potri", dt, dev);
+            std::set<std::string> got;
+            std::size_t timed = 0;
+            for (const auto& row : t.rows) {
+                got.insert(row.keys[0] + " " + row.keys[1]);
+                timed += row.timed;
+                const int n = std::stoi(row.keys[0]);
+                EXPECT_TRUE(row.ranked.front().spelling != "cta" || n <= ceiling.at(dt))
+                    << dt << " " << dev << " " << row.keys[0] << " " << row.keys[1];
+                for (const auto& e : row.ranked)
+                    EXPECT_TRUE(e.spelling != "blocked:nb=128" || std::string(dt) == "float") << dt << " " << dev;
+            }
+            const bool measured = std::string(dev) == "sm_89" && (std::string(dt) == "float" || std::string(dt) == "cfloat");
+            // Measured: the cells over the campaign's operand cap have no row; the nearest measured one decides.
+            if (measured) EXPECT_GT(timed, 50u) << dt << " " << dev;
+            else EXPECT_EQ(timed, 0u) << dt << " " << dev;
+            for (int n : potri::grid_n)
+                for (int b : potri::grid_batch)
+                    EXPECT_TRUE(measured || got.count(std::to_string(n) + " " + std::to_string(b))) << dt << " " << dev << " " << n << " " << b;
+        }
+}
+
+// sygvd is transcribed on both devices (no timing): one row per grid cell and jobz, compose first
+// everywhere. A retune replaces rows with timed ones and this test goes with them.
+TEST(TunedTables, SygvdTranscribedTablesHoldTheChoiceGridComposeFirst) {
+    namespace sygvd = batchlas::ops::sygvd;
+    std::set<std::string> want_vd;
+    for (const char* j : {"N", "V"})
+        for (int n : sygvd::grid_n)
+            for (int b : sygvd::grid_batch) want_vd.insert(std::string(j) + " " + std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            std::set<std::string> got_vd;
+            for (const auto& row : embedded("sygvd", dt, dev).rows) {
+                got_vd.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
+                EXPECT_EQ(row.ranked.front().spelling, "compose") << dt << " " << dev << " " << row.keys[1];
+            }
+            EXPECT_EQ(got_vd, want_vd) << dt << " " << dev;
+        }
+}
+
+// sytrf's table is transcribed on both devices (no timing, docs/perf/sytrf.md#sytrf-the-blocked-route): one
+// row per grid cell, cta first through n = 32, wg first through 128, blocked first from 256, and every
+// row ranks blocked. A retune replaces rows with timed ones and this test goes with them.
+TEST(TunedTables, SytrfTranscribedTablesHoldExactlyTheChoiceGridAndPlaceBlocked) {
+    namespace sytrf = batchlas::ops::sytrf;
+    std::set<std::string> want;
+    for (int n : sytrf::grid_n)
+        for (int b : sytrf::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded("sytrf", dt, dev);
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                got.insert(row.keys[0] + " " + row.keys[1]);
+                const int n = std::stoi(row.keys[0]);
+                const std::string first = n <= 32 ? "cta" : n <= 128 ? "wg" : "blocked";
+                EXPECT_EQ(row.ranked.front().spelling, first) << dt << " " << dev << " " << row.keys[0];
+                EXPECT_TRUE(std::any_of(row.ranked.begin(), row.ranked.end(),
+                                        [](const auto& e) { return e.spelling == "blocked"; }))
+                    << dt << " " << dev << " " << row.keys[0];
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+}
+
+// sygst (docs/perf/sygvd.md#sygst-measured): sm_89 float and cfloat are timed at every itype x uplo x
+// grid cell of at most 2 GiB of operands; every other dtype and device is transcribed from those rows (double from float,
+// cdouble from cfloat, sm_120 from sm_89's), so a transcribed row at a measured key ranks exactly as the
+// measured one. Every grid cell has a transcribed row; on the timed tables the nearest timed row decides.
+TEST(TunedTables, SygstTablesAreMeasuredOnSm89AndTranscribedFromIt) {
+    namespace sygst = batchlas::ops::sygst;
+    using Ranking = std::vector<std::string>;
+    auto ranking = [](const sel::TableRow& r) {
+        Ranking s;
+        for (const auto& e : r.ranked) s.push_back(e.spelling);
+        return s;
+    };
+    auto join = [](const sel::TableRow& r) { return r.keys[0] + " " + r.keys[1] + " " + r.keys[2] + " " + r.keys[3]; };
+    std::vector<std::pair<std::string, double>> cells;  // "itype uplo n batch", n^2 batch
+    for (const char* it : {"1", "2", "3"})
+        for (const char* ul : {"L", "U"})
+            for (int n : sygst::grid_n)
+                for (int b : sygst::grid_batch)
+                    cells.emplace_back(std::string(it) + " " + ul + " " + std::to_string(n) + " " + std::to_string(b),
+                                       double(n) * n * b);
+    std::map<std::string, std::map<std::string, Ranking>> measured;  // dtype -> key -> ranking
+    for (const char* dt : {"float", "cfloat"}) {
+        const double elem = dt[0] == 'c' ? 8.0 : 4.0;
+        std::set<std::string> timed;
+        for (const auto& row : embedded("sygst", dt, "sm_89").rows)
+            if (row.timed) {
+                timed.insert(join(row));
+                measured[dt][join(row)] = ranking(row);
+            }
+        for (const auto& [key, n2b] : cells)
+            if (4.0 * n2b * elem <= 2.0 * (1u << 30)) EXPECT_TRUE(timed.count(key)) << dt << " " << key;
+    }
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const std::string from = dt[0] == 'c' ? "cfloat" : "float";
+            std::set<std::string> got;
+            for (const auto& row : embedded("sygst", dt, dev).rows) {
+                const std::string key = join(row);
+                got.insert(key);
+                if (row.timed) {
+                    EXPECT_TRUE(std::string(dev) == "sm_89" && from == dt) << dt << " " << dev << " " << key;
+                    continue;
+                }
+                if (measured[from].count(key)) EXPECT_EQ(ranking(row), measured[from][key]) << dt << " " << dev << " " << key;
+            }
+            if (std::string(dev) == "sm_89" && from == dt) continue;  // past the cap the nearest timed row decides
+            for (const auto& c : cells) EXPECT_TRUE(got.count(c.first)) << dt << " " << dev << " " << c.first;
+        }
+}
 // gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on sm_89.
 TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gesv = batchlas::ops::gesv;

@@ -1,0 +1,366 @@
+# op=potri device=sm_89 batchlas=f517330f-gap kernels=855dcffb family_kernels=cta:a4f420f6,blocked:ec495e30 date=2026-10-26
+# source=ledger:benchmarks/results/tuning/ledger/potri.sm_89.jsonl tiers=deep:177,coarse:0,calibrate:0,preview:0,custom:0,converted:0,prior:0,transcribed:186
+# keys: dtype:exact n:log:3 batch:log
+dtype=float n=1 batch=128 | cta 0.008796 | blocked:nb=64 0.01346 | blocked:nb=128 0.01348 # deep
+dtype=float n=1 batch=512 | cta 0.009466 | blocked:nb=64 0.01456 | blocked:nb=128 0.01468 # deep
+dtype=float n=1 batch=2048 | cta 0.01062 | blocked:nb=64 0.01614 | blocked:nb=128 0.01627 # deep
+dtype=float n=1 batch=8192 | cta 0.01990 | blocked:nb=64 0.03048 | blocked:nb=128 0.03049 # deep
+dtype=float n=1 batch=32768 | cta 0.05588 | blocked:nb=64 0.08904 | blocked:nb=128 0.08906 # deep
+dtype=float n=2 batch=128 | cta 0.009015 | blocked:nb=128 0.01350 | blocked:nb=64 0.01359 # deep
+dtype=float n=2 batch=512 | cta 0.009125 | blocked:nb=128 0.01398 | blocked:nb=64 0.01401 # deep
+dtype=float n=2 batch=2048 | cta 0.01047 | blocked:nb=64 0.01586 | blocked:nb=128 0.01605 # deep
+dtype=float n=2 batch=8192 | cta 0.01991 | blocked:nb=128 0.03063 | blocked:nb=64 0.03068 # deep
+dtype=float n=2 batch=32768 | cta 0.05668 | blocked:nb=128 0.08999 | blocked:nb=64 0.09013 # deep
+dtype=float n=3 batch=128 | cta 0.009025 | blocked:nb=64 0.01357 | blocked:nb=128 0.01374 # deep
+dtype=float n=3 batch=512 | cta 0.009100 | blocked:nb=128 0.01398 | blocked:nb=64 0.01400 # deep
+dtype=float n=3 batch=2048 | cta 0.01043 | blocked:nb=128 0.01604 | blocked:nb=64 0.01622 # deep
+dtype=float n=3 batch=8192 | cta 0.02003 | blocked:nb=128 0.03077 | blocked:nb=64 0.03089 # deep
+dtype=float n=3 batch=32768 | cta 0.05678 | blocked:nb=128 0.08988 | blocked:nb=64 0.08990 # deep
+dtype=float n=4 batch=128 | cta 0.008647 | blocked:nb=64 0.01314 | blocked:nb=128 0.01327 # deep
+dtype=float n=4 batch=512 | cta 0.009854 | blocked:nb=128 0.01390 | blocked:nb=64 0.01400 # deep
+dtype=float n=4 batch=2048 | cta 0.01020 | blocked:nb=128 0.01570 | blocked:nb=64 0.01577 # deep
+dtype=float n=4 batch=8192 | cta 0.01917 | blocked:nb=64 0.02984 | blocked:nb=128 0.02989 # deep
+dtype=float n=4 batch=32768 | cta 0.05345 | blocked:nb=128 0.08688 | blocked:nb=64 0.08694 # deep
+dtype=float n=6 batch=128 | cta 0.01068 | blocked:nb=128 0.01433 | blocked:nb=64 0.01457 # deep
+dtype=float n=6 batch=512 | cta 0.01075 | blocked:nb=64 0.01500 | blocked:nb=128 0.01502 # deep
+dtype=float n=6 batch=2048 | cta 0.01206 | blocked:nb=128 0.01741 | blocked:nb=64 0.01748 # deep
+dtype=float n=6 batch=8192 | cta 0.02571 | blocked:nb=128 0.03679 | blocked:nb=64 0.03689 # deep
+dtype=float n=6 batch=32768 | cta 0.07839 | blocked:nb=128 0.1134 | blocked:nb=64 0.1136 # deep
+dtype=float n=8 batch=128 | cta 0.01030 | blocked:nb=128 0.01422 | blocked:nb=64 0.01431 # deep
+dtype=float n=8 batch=512 | cta 0.009757 | blocked:nb=128 0.01449 | blocked:nb=64 0.01458 # deep
+dtype=float n=8 batch=2048 | cta 0.01172 | blocked:nb=128 0.01717 | blocked:nb=64 0.01718 # deep
+dtype=float n=8 batch=8192 | cta 0.02460 | blocked:nb=128 0.03534 | blocked:nb=64 0.03555 # deep
+dtype=float n=8 batch=32768 | cta 0.07288 | blocked:nb=128 0.1082 | blocked:nb=64 0.1083 # deep
+dtype=float n=12 batch=128 | cta 0.01104 | blocked:nb=64 0.01618 | blocked:nb=128 0.01619 # deep
+dtype=float n=12 batch=512 | cta 0.01140 | blocked:nb=128 0.01720 | blocked:nb=64 0.01728 # deep
+dtype=float n=12 batch=2048 | cta 0.01422 | blocked:nb=64 0.02051 | blocked:nb=128 0.02066 # deep
+dtype=float n=12 batch=8192 | cta 0.03337 | blocked:nb=128 0.04734 | blocked:nb=64 0.04735 # deep
+dtype=float n=12 batch=32768 | cta 0.1067 | blocked:nb=64 0.1546 | blocked:nb=128 0.1549 # deep
+dtype=float n=16 batch=128 | cta 0.01203 | blocked:nb=64 0.01801 | blocked:nb=128 0.01807 # deep
+dtype=float n=16 batch=512 | cta 0.01229 | blocked:nb=64 0.01856 | blocked:nb=128 0.01861 # deep
+dtype=float n=16 batch=2048 | cta 0.01630 | blocked:nb=64 0.02320 | blocked:nb=128 0.02326 # deep
+dtype=float n=16 batch=8192 | cta 0.04108 | blocked:nb=128 0.05812 | blocked:nb=64 0.05816 # deep
+dtype=float n=16 batch=32768 | cta 0.1354 | blocked:nb=64 0.1962 | blocked:nb=128 0.1963 # deep
+dtype=float n=24 batch=128 | cta 0.01628 | blocked:nb=128 0.02420 | blocked:nb=64 0.02423 # deep
+dtype=float n=24 batch=512 | cta 0.01656 | blocked:nb=128 0.02500 | blocked:nb=64 0.02501 # deep
+dtype=float n=24 batch=2048 | cta 0.02287 | blocked:nb=64 0.03257 | blocked:nb=128 0.03262 # deep
+dtype=float n=24 batch=8192 | cta 0.06496 | blocked:nb=64 0.09494 | blocked:nb=128 0.09500 # deep
+dtype=float n=24 batch=32768 | cta 0.2295 | blocked:nb=128 0.3465 | blocked:nb=64 0.3472 # deep
+dtype=float n=32 batch=128 | cta 0.01602 | blocked:nb=64 0.02329 | blocked:nb=128 0.02340 # deep
+dtype=float n=32 batch=512 | cta 0.01799 | blocked:nb=64 0.02578 | blocked:nb=128 0.02582 # deep
+dtype=float n=32 batch=2048 | cta 0.03789 | blocked:nb=64 0.05209 | blocked:nb=128 0.05222 # deep
+dtype=float n=32 batch=8192 | cta 0.1215 | blocked:nb=128 0.1705 | blocked:nb=64 0.1708 # deep
+dtype=float n=32 batch=32768 | cta 0.4527 | blocked:nb=64 0.6731 | blocked:nb=128 0.6734 # deep
+dtype=float n=48 batch=128 | cta 0.01986 | blocked:nb=64 0.02875 | blocked:nb=128 0.02882 # deep
+dtype=float n=48 batch=512 | cta 0.02562 | blocked:nb=128 0.03502 | blocked:nb=64 0.03515 # deep
+dtype=float n=48 batch=2048 | cta 0.07641 | blocked:nb=128 0.1076 | blocked:nb=64 0.1076 # deep
+dtype=float n=48 batch=8192 | cta 0.2470 | blocked:nb=64 0.3593 | blocked:nb=128 0.3595 # deep
+dtype=float n=48 batch=32768 | cta 0.9279 | blocked:nb=128 1.515 | blocked:nb=64 1.515 # deep
+dtype=float n=64 batch=128 | cta 0.02246 | blocked:nb=128 0.03088 | blocked:nb=64 0.03088 # deep
+dtype=float n=64 batch=512 | cta 0.04455 | blocked:nb=128 0.05854 | blocked:nb=64 0.05862 # deep
+dtype=float n=64 batch=2048 | cta 0.1207 | blocked:nb=64 0.1653 | blocked:nb=128 0.1655 # deep
+dtype=float n=64 batch=8192 | cta 0.4351 | blocked:nb=64 0.6892 | blocked:nb=128 0.6893 # deep
+dtype=float n=64 batch=32768 | cta 1.687 | blocked:nb=128 2.717 | blocked:nb=64 2.718 # deep
+dtype=float n=96 batch=128 | cta 0.03092 | blocked:nb=128 0.04051 | blocked:nb=64 0.07266 # deep
+dtype=float n=96 batch=512 | cta 0.1016 | blocked:nb=128 0.1304 | blocked:nb=64 0.1560 # deep
+dtype=float n=96 batch=2048 | cta 0.3893 | blocked:nb=128 0.4998 | blocked:nb=64 0.5622 # deep
+dtype=float n=96 batch=8192 | cta 1.601 | blocked:nb=64 2.190 | blocked:nb=128 2.269 # deep
+dtype=float n=96 batch=32768 | cta 6.445 | blocked:nb=64 8.528 | blocked:nb=128 9.111 # deep
+dtype=float n=128 batch=128 | cta 0.04729 | blocked:nb=128 0.05924 | blocked:nb=64 0.08679 # deep
+dtype=float n=128 batch=512 | cta 0.1838 | blocked:nb=64 0.2323 | blocked:nb=128 0.2343 # deep
+dtype=float n=128 batch=2048 | cta 0.7062 | blocked:nb=64 0.8231 | blocked:nb=128 0.9140 # deep
+dtype=float n=128 batch=8192 | cta 2.632 | blocked:nb=64 3.097 | blocked:nb=128 3.493 # deep
+dtype=float n=142 batch=128 | cta 0.05726 | blocked:nb=64 0.1342 | blocked:nb=128 0.1492 # deep
+dtype=float n=142 batch=512 | cta 0.2123 | blocked:nb=64 0.3523 | blocked:nb=128 0.4519 # deep
+dtype=float n=142 batch=2048 | cta 0.8082 | blocked:nb=64 1.349 | blocked:nb=128 1.768 # deep
+dtype=float n=142 batch=8192 | cta 3.236 | blocked:nb=64 5.163 | blocked:nb=128 7.062 # deep
+dtype=float n=149 batch=128 | cta 0.06293 | blocked:nb=64 0.1454 | blocked:nb=128 0.1665 # deep
+dtype=float n=149 batch=512 | cta 0.2274 | blocked:nb=64 0.3664 | blocked:nb=128 0.4743 # deep
+dtype=float n=149 batch=2048 | cta 0.9035 | blocked:nb=64 1.463 | blocked:nb=128 1.881 # deep
+dtype=float n=149 batch=8192 | cta 3.621 | blocked:nb=64 5.588 | blocked:nb=128 7.508 # deep
+dtype=float n=157 batch=128 | blocked:nb=64 0.1519 | blocked:nb=128 0.1731 # deep
+dtype=float n=157 batch=512 | blocked:nb=64 0.3897 | blocked:nb=128 0.5001 # deep
+dtype=float n=157 batch=2048 | blocked:nb=64 1.465 | blocked:nb=128 1.987 # deep
+dtype=float n=157 batch=8192 | blocked:nb=64 5.927 | blocked:nb=128 7.929 # deep
+dtype=float n=192 batch=128 | blocked:nb=64 0.1712 | blocked:nb=128 0.1871 # deep
+dtype=float n=192 batch=512 | blocked:nb=64 0.4609 | blocked:nb=128 0.6187 # deep
+dtype=float n=192 batch=2048 | blocked:nb=64 1.872 | blocked:nb=128 2.390 # deep
+dtype=float n=192 batch=8192 | blocked:nb=64 7.535 | blocked:nb=128 9.463 # deep
+dtype=float n=256 batch=128 | blocked:nb=128 0.2285 | blocked:nb=64 0.2853 # deep
+dtype=float n=256 batch=512 | blocked:nb=64 0.9393 | blocked:nb=128 0.9146 # deep
+dtype=float n=256 batch=2048 | blocked:nb=64 3.421 | blocked:nb=128 3.464 # deep
+dtype=float n=314 batch=512 | blocked:nb=64 1.518 | blocked:nb=128 1.576 # deep
+dtype=float n=314 batch=2048 | blocked:nb=64 6.185 | blocked:nb=128 6.296 # deep
+dtype=float n=330 batch=512 | blocked:nb=128 1.745 | blocked:nb=64 1.907 # deep
+dtype=float n=330 batch=2048 | blocked:nb=128 6.998 | blocked:nb=64 7.736 # deep
+dtype=float n=347 batch=512 | blocked:nb=128 1.920 | blocked:nb=64 2.051 # deep
+dtype=float n=347 batch=2048 | blocked:nb=128 7.678 | blocked:nb=64 8.333 # deep
+dtype=float n=384 batch=128 | blocked:nb=128 0.5154 | blocked:nb=64 0.6460 # deep
+dtype=float n=384 batch=512 | blocked:nb=128 2.106 | blocked:nb=64 2.332 # deep
+dtype=float n=384 batch=2048 | blocked:nb=128 8.508 | blocked:nb=64 9.452 # deep
+dtype=float n=384 batch=32768 | blocked:nb=128 - | blocked:nb=64 - # transcribed
+dtype=float n=512 batch=128 | blocked:nb=128 0.9515 | blocked:nb=64 1.238 # deep
+dtype=float n=512 batch=512 | blocked:nb=128 3.892 | blocked:nb=64 5.090 # deep
+dtype=float n=512 batch=32768 | blocked:nb=128 - | blocked:nb=64 - # transcribed
+dtype=double n=1 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=1 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=1 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=1 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=1 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=2 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=2 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=2 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=2 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=2 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=3 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=3 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=3 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=3 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=3 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=4 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=4 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=4 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=4 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=4 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=6 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=6 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=6 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=6 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=6 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=8 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=8 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=8 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=8 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=8 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=12 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=12 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=12 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=12 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=12 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=16 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=16 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=16 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=16 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=16 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=24 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=24 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=24 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=24 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=24 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=32 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=32 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=32 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=32 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=32 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=48 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=48 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=48 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=48 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=48 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=64 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=64 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=64 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=64 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=64 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=96 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=96 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=96 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=96 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=96 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=double n=128 batch=128 | blocked:nb=64 - # transcribed
+dtype=double n=128 batch=512 | blocked:nb=64 - # transcribed
+dtype=double n=128 batch=2048 | blocked:nb=64 - # transcribed
+dtype=double n=128 batch=8192 | blocked:nb=64 - # transcribed
+dtype=double n=128 batch=32768 | blocked:nb=64 - # transcribed
+dtype=double n=192 batch=128 | blocked:nb=64 - # transcribed
+dtype=double n=192 batch=512 | blocked:nb=64 - # transcribed
+dtype=double n=192 batch=2048 | blocked:nb=64 - # transcribed
+dtype=double n=192 batch=8192 | blocked:nb=64 - # transcribed
+dtype=double n=192 batch=32768 | blocked:nb=64 - # transcribed
+dtype=double n=256 batch=128 | blocked:nb=64 - # transcribed
+dtype=double n=256 batch=512 | blocked:nb=64 - # transcribed
+dtype=double n=256 batch=2048 | blocked:nb=64 - # transcribed
+dtype=double n=256 batch=8192 | blocked:nb=64 - # transcribed
+dtype=double n=256 batch=32768 | blocked:nb=64 - # transcribed
+dtype=double n=384 batch=128 | blocked:nb=64 - # transcribed
+dtype=double n=384 batch=512 | blocked:nb=64 - # transcribed
+dtype=double n=384 batch=2048 | blocked:nb=64 - # transcribed
+dtype=double n=384 batch=8192 | blocked:nb=64 - # transcribed
+dtype=double n=384 batch=32768 | blocked:nb=64 - # transcribed
+dtype=double n=512 batch=128 | blocked:nb=64 - # transcribed
+dtype=double n=512 batch=512 | blocked:nb=64 - # transcribed
+dtype=double n=512 batch=2048 | blocked:nb=64 - # transcribed
+dtype=double n=512 batch=8192 | blocked:nb=64 - # transcribed
+dtype=double n=512 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cfloat n=1 batch=128 | cta 0.009326 | blocked:nb=64 0.01396 # deep
+dtype=cfloat n=1 batch=512 | cta 0.009668 | blocked:nb=64 0.01459 # deep
+dtype=cfloat n=1 batch=2048 | cta 0.01362 | blocked:nb=64 0.01979 # deep
+dtype=cfloat n=1 batch=8192 | cta 0.02996 | blocked:nb=64 0.04145 # deep
+dtype=cfloat n=1 batch=32768 | cta 0.08225 | blocked:nb=64 0.1186 # deep
+dtype=cfloat n=2 batch=128 | cta 0.009324 | blocked:nb=64 0.01376 # deep
+dtype=cfloat n=2 batch=512 | cta 0.009461 | blocked:nb=64 0.01413 # deep
+dtype=cfloat n=2 batch=2048 | cta 0.01371 | blocked:nb=64 0.01944 # deep
+dtype=cfloat n=2 batch=8192 | cta 0.02755 | blocked:nb=64 0.03874 # deep
+dtype=cfloat n=2 batch=32768 | cta 0.08376 | blocked:nb=64 0.1200 # deep
+dtype=cfloat n=3 batch=128 | cta 0.009570 | blocked:nb=64 0.01379 # deep
+dtype=cfloat n=3 batch=512 | cta 0.009449 | blocked:nb=64 0.01418 # deep
+dtype=cfloat n=3 batch=2048 | cta 0.01346 | blocked:nb=64 0.01925 # deep
+dtype=cfloat n=3 batch=8192 | cta 0.02738 | blocked:nb=64 0.03862 # deep
+dtype=cfloat n=3 batch=32768 | cta 0.08352 | blocked:nb=64 0.1199 # deep
+dtype=cfloat n=4 batch=128 | cta 0.009133 | blocked:nb=64 0.01355 # deep
+dtype=cfloat n=4 batch=512 | cta 0.009146 | blocked:nb=64 0.01405 # deep
+dtype=cfloat n=4 batch=2048 | cta 0.01318 | blocked:nb=64 0.01883 # deep
+dtype=cfloat n=4 batch=8192 | cta 0.02564 | blocked:nb=64 0.03672 # deep
+dtype=cfloat n=4 batch=32768 | cta 0.07737 | blocked:nb=64 0.1131 # deep
+dtype=cfloat n=6 batch=128 | cta 0.01109 | blocked:nb=64 0.01582 # deep
+dtype=cfloat n=6 batch=512 | cta 0.01308 | blocked:nb=64 0.01894 # deep
+dtype=cfloat n=6 batch=2048 | cta 0.01780 | blocked:nb=64 0.02467 # deep
+dtype=cfloat n=6 batch=8192 | cta 0.04066 | blocked:nb=64 0.05331 # deep
+dtype=cfloat n=6 batch=32768 | cta 0.1352 | blocked:nb=64 0.1743 # deep
+dtype=cfloat n=8 batch=128 | cta 0.01030 | blocked:nb=64 0.01566 # deep
+dtype=cfloat n=8 batch=512 | cta 0.01054 | blocked:nb=64 0.01547 # deep
+dtype=cfloat n=8 batch=2048 | cta 0.01712 | blocked:nb=64 0.02314 # deep
+dtype=cfloat n=8 batch=8192 | cta 0.03847 | blocked:nb=64 0.05065 # deep
+dtype=cfloat n=8 batch=32768 | cta 0.1249 | blocked:nb=64 0.1630 # deep
+dtype=cfloat n=12 batch=128 | cta 0.01228 | blocked:nb=64 0.01750 # deep
+dtype=cfloat n=12 batch=512 | cta 0.01495 | blocked:nb=64 0.02124 # deep
+dtype=cfloat n=12 batch=2048 | cta 0.02289 | blocked:nb=64 0.02986 # deep
+dtype=cfloat n=12 batch=8192 | cta 0.05604 | blocked:nb=64 0.07187 # deep
+dtype=cfloat n=12 batch=32768 | cta 0.1884 | blocked:nb=64 0.2427 # deep
+dtype=cfloat n=16 batch=128 | cta 0.01418 | blocked:nb=64 0.01991 # deep
+dtype=cfloat n=16 batch=512 | cta 0.01455 | blocked:nb=64 0.02073 # deep
+dtype=cfloat n=16 batch=2048 | cta 0.02797 | blocked:nb=64 0.03617 # deep
+dtype=cfloat n=16 batch=8192 | cta 0.07063 | blocked:nb=64 0.09168 # deep
+dtype=cfloat n=16 batch=32768 | cta 0.2462 | blocked:nb=64 0.3155 # deep
+dtype=cfloat n=24 batch=128 | cta 0.01931 | blocked:nb=64 0.02735 # deep
+dtype=cfloat n=24 batch=512 | cta 0.02020 | blocked:nb=64 0.02842 # deep
+dtype=cfloat n=24 batch=2048 | cta 0.04531 | blocked:nb=64 0.05723 # deep
+dtype=cfloat n=24 batch=8192 | cta 0.1192 | blocked:nb=64 0.1584 # deep
+dtype=cfloat n=24 batch=32768 | cta 0.4285 | blocked:nb=64 0.6394 # deep
+dtype=cfloat n=32 batch=128 | cta 0.02011 | blocked:nb=64 0.02734 # deep
+dtype=cfloat n=32 batch=512 | cta 0.02566 | blocked:nb=64 0.03315 # deep
+dtype=cfloat n=32 batch=2048 | cta 0.07283 | blocked:nb=64 0.08856 # deep
+dtype=cfloat n=32 batch=8192 | cta 0.2352 | blocked:nb=64 0.2982 # deep
+dtype=cfloat n=32 batch=32768 | cta 0.8942 | blocked:nb=64 1.217 # deep
+dtype=cfloat n=48 batch=128 | cta 0.02655 | blocked:nb=64 0.03533 # deep
+dtype=cfloat n=48 batch=512 | cta 0.04497 | blocked:nb=64 0.05598 # deep
+dtype=cfloat n=48 batch=2048 | cta 0.1352 | blocked:nb=64 0.1666 # deep
+dtype=cfloat n=48 batch=8192 | cta 0.5049 | blocked:nb=64 0.7061 # deep
+dtype=cfloat n=48 batch=32768 | cta 1.947 | blocked:nb=64 2.750 # deep
+dtype=cfloat n=64 batch=128 | cta 0.03196 | blocked:nb=64 0.04090 # deep
+dtype=cfloat n=64 batch=512 | cta 0.07436 | blocked:nb=64 0.09014 # deep
+dtype=cfloat n=64 batch=2048 | cta 0.2647 | blocked:nb=64 0.3227 # deep
+dtype=cfloat n=64 batch=8192 | cta 0.9926 | blocked:nb=64 1.411 # deep
+dtype=cfloat n=64 batch=32768 | cta 3.821 | blocked:nb=64 5.599 # deep
+dtype=cfloat n=96 batch=128 | cta 0.05412 | blocked:nb=64 0.1148 # deep
+dtype=cfloat n=96 batch=512 | cta 0.1905 | blocked:nb=64 0.2800 # deep
+dtype=cfloat n=96 batch=2048 | cta 0.7603 | blocked:nb=64 1.176 # deep
+dtype=cfloat n=96 batch=8192 | cta 3.073 | blocked:nb=64 4.480 # deep
+dtype=cfloat n=128 batch=128 | blocked:nb=64 0.1520 # deep
+dtype=cfloat n=128 batch=512 | blocked:nb=64 0.4362 # deep
+dtype=cfloat n=128 batch=2048 | blocked:nb=64 1.785 # deep
+dtype=cfloat n=128 batch=8192 | blocked:nb=64 7.164 # deep
+dtype=cfloat n=192 batch=128 | blocked:nb=64 0.3612 # deep
+dtype=cfloat n=192 batch=512 | blocked:nb=64 1.223 # deep
+dtype=cfloat n=192 batch=2048 | blocked:nb=64 4.917 # deep
+dtype=cfloat n=256 batch=128 | blocked:nb=64 0.6638 # deep
+dtype=cfloat n=256 batch=512 | blocked:nb=64 2.511 # deep
+dtype=cfloat n=256 batch=2048 | blocked:nb=64 9.331 # deep
+dtype=cfloat n=256 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cfloat n=384 batch=128 | blocked:nb=64 1.749 # deep
+dtype=cfloat n=384 batch=512 | blocked:nb=64 6.967 # deep
+dtype=cfloat n=384 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cfloat n=512 batch=128 | blocked:nb=64 3.551 # deep
+dtype=cfloat n=512 batch=512 | blocked:nb=64 14.25 # deep
+dtype=cfloat n=512 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cfloat n=512 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=1 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=1 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=1 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=1 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=1 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=2 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=2 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=2 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=2 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=2 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=3 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=3 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=3 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=3 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=3 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=4 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=4 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=4 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=4 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=4 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=6 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=6 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=6 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=6 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=6 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=8 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=8 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=8 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=8 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=8 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=12 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=12 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=12 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=12 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=12 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=16 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=16 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=16 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=16 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=16 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=24 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=24 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=24 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=24 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=24 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=32 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=32 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=32 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=32 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=32 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=48 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=48 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=48 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=48 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=48 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=64 batch=128 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=64 batch=512 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=64 batch=2048 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=64 batch=8192 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=64 batch=32768 | cta - | blocked:nb=64 - # transcribed
+dtype=cdouble n=96 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=96 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=96 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=96 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=96 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=128 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=128 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=128 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=128 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=128 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=192 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=192 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=192 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=192 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=192 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=256 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=256 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=256 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=256 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=256 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=384 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=384 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=384 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=384 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=384 batch=32768 | blocked:nb=64 - # transcribed
+dtype=cdouble n=512 batch=128 | blocked:nb=64 - # transcribed
+dtype=cdouble n=512 batch=512 | blocked:nb=64 - # transcribed
+dtype=cdouble n=512 batch=2048 | blocked:nb=64 - # transcribed
+dtype=cdouble n=512 batch=8192 | blocked:nb=64 - # transcribed
+dtype=cdouble n=512 batch=32768 | blocked:nb=64 - # transcribed

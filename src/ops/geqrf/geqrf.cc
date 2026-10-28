@@ -76,6 +76,7 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     geqrf_validate_params<T>(A);
+    (void)detail::call_mask("geqrf", A);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m, n and k = min(m, n).
@@ -91,6 +92,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
 template <Backend Back, typename T>
 size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     geqrf_validate_params<T>(A);
+    (void)detail::call_mask("geqrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::geqrf::spec, ctx, ops::geqrf::key_of<T>(A), ops::geqrf::candidates<T>(),
@@ -101,6 +103,7 @@ size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
 template <Backend Back, typename T>
 std::size_t geqrf_buffer_size_bound(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     geqrf_validate_params<T>(A);
+    (void)detail::call_mask("geqrf_buffer_size", A);
     if (A.batch_size() == 0) return 0;
     const select::Device& d = select::device_of<Back>(ctx, ops::geqrf::spec.vendor);
     std::size_t need = 0;
