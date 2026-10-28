@@ -396,6 +396,7 @@ Matrix<T, MType>::Matrix(const T* values, const int* row_offsets, const int* col
 template <typename T, MatrixFormat MType>
 template <MatrixFormat NewMType>
 Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshold) const {
+    ::batchlas::detail::refuse_batch_mask("Matrix::convert_to", *this);
     Queue q = default_queue_for<T>(); // Use default queue
 
     // Handle identity conversion (same format)
@@ -1873,6 +1874,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major(const Queue& ctx, int row_pitch) const {
+    ::batchlas::detail::refuse_batch_mask("Matrix::to_column_major", *this);
     detail::require_device_fp64<T>(ctx, "Matrix::to_column_major");
     // The source holds row-major data. Its row pitch is what the caller says it is
     // (default: packed, pitch cols -- allowed only where the layout leaves no room
@@ -1926,6 +1928,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_column_major(int row_pitch) const {
+    ::batchlas::detail::refuse_batch_mask("Matrix::to_column_major", *this);
     // Builds a queue of its own, and waits on it before returning.
     Queue q = default_queue_for<T>();
     return to_column_major(q, row_pitch);
@@ -1936,6 +1939,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major(const Queue& ctx) const {
+    ::batchlas::detail::refuse_batch_mask("Matrix::to_row_major", *this);
     detail::require_device_fp64<T>(ctx, "Matrix::to_row_major");
     // The source is read column-major with this matrix' own ld_/stride_.
     check_column_major_extent(rows_, cols_, static_cast<size_t>(ld_),
@@ -1990,6 +1994,7 @@ template <typename T, MatrixFormat MType>
 template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 Matrix<T, MType> Matrix<T, MType>::to_row_major() const {
+    ::batchlas::detail::refuse_batch_mask("Matrix::to_row_major", *this);
     // Builds a queue of its own, and waits on it before returning.
     Queue q = default_queue_for<T>();
     return to_row_major(q);

@@ -45,14 +45,14 @@ const std::vector<std::uint8_t> kAlternating{0, 1, 0, 1};
 
 // Every operand of every entry, primed with well-posed data: Hermitian, diagonally dominant items,
 // a diagonal CSR pattern, a positive tridiagonal (d, e). With `only` < 0 every view carries `mask`;
-// otherwise only the views of buffer `only` (an index into buffers()) do. `used` records them.
+// otherwise only view number `only` does (see masks()).
 template <typename T>
 struct Pool {
     Queue& q;
     Span<const std::uint8_t> mask;
     Span<std::byte> ws;
-    int only = -1;
-    std::vector<int>* used = nullptr;
+    int only = -1, views = 0;
+    std::vector<std::pair<int, std::string>>* used = nullptr;
     UnifiedVector<T> a, b, c, z, v, tq, tp, tau, vals;
     UnifiedVector<Real<T>> d, e, w, s;
     UnifiedVector<T*> pa, pb, pc;
@@ -103,13 +103,17 @@ struct Pool {
         add("piv32", piv32), add("info", info), add("m", m), add("counts", counts);
         return out;
     }
+    // Keyed on the view, not the buffer: the k-th view the call builds, so two views of one buffer
+    // are masked one at a time. `used` gets each view's ordinal and buffer name.
     bool masks(const void* data) {
-        const auto all = buffers();
-        int idx = -1;
-        for (std::size_t i = 0; i < all.size(); ++i)
-            if (std::get<1>(all[i]) == data) idx = int(i);
-        if (used && idx >= 0 && std::find(used->begin(), used->end(), idx) == used->end()) used->push_back(idx);
-        return masked() && (only < 0 || only == idx);
+        const int ordinal = views++;
+        if (used) {
+            std::string name = "?";
+            for (const auto& [n, ptr, bytes] : buffers())
+                if (ptr == data) name = n;
+            used->emplace_back(ordinal, name + " (view " + std::to_string(ordinal) + ")");
+        }
+        return masked() && (only < 0 || only == ordinal);
     }
     MV<T> mat(UnifiedVector<T>& buf, int rows = kN, int cols = kN) {
         T** ptrs = &buf == &a ? pa.data() : &buf == &b ? pb.data() : &buf == &c ? pc.data() : nullptr;
@@ -152,11 +156,10 @@ struct Entry {
 // One masked run (`only` as for Pool): a refusal, and every operand byte unchanged.
 template <typename T>
 void expect_refused(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mask, Span<std::byte> ws, int only,
-                    std::vector<int>* used) {
+                    const std::string& view, std::vector<std::pair<int, std::string>>* used) {
     Pool<T> p(q, mask, ws, only);
     p.used = used;
-    SCOPED_TRACE(only < 0 ? std::string("every operand masked")
-                          : std::string("only ") + std::get<0>(p.buffers()[std::size_t(only)]) + " masked");
+    SCOPED_TRACE(only < 0 ? std::string("every operand masked") : "only " + view + " masked");
     const auto before = p.snapshot();
     std::string what;
     bool refused = false;
@@ -201,10 +204,10 @@ bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mas
             return false;
         }
     }
-    std::vector<int> used;  // the operands the call views, recorded by the every-operand run
-    expect_refused(q, entry, mask, ws, -1, &used);
+    std::vector<std::pair<int, std::string>> used;  // the views the call builds, recorded by the every-operand run
+    expect_refused(q, entry, mask, ws, -1, "", &used);
     EXPECT_FALSE(used.empty()) << "the entry views no operand";
-    for (int idx : used) expect_refused(q, entry, mask, ws, idx, nullptr);
+    for (const auto& [ordinal, view] : used) expect_refused(q, entry, mask, ws, ordinal, view, nullptr);
     return true;
 }
 
@@ -611,6 +614,21 @@ std::vector<Entry<T>> check_entries() {
     add("MatrixView::astype(device-only mask)", [=](P& p) { (void)p.mat(p.a).template astype<T>(); });
     add("MatrixView::astype(items)", [=](P& p) { (void)p.mat(p.a).template astype<T>(std::span<const int>{}); });
     add("VectorView::astype", [=](P& p) { (void)p.vec(p.tq).template astype<T>(); });
+    // A Matrix carries its own (shared) store, so these copy the device-only bytes into it.
+    const auto owned = [](P& p) {
+        Matrix<T> M(p.a.data(), kN, kN, kLd, kStride, kBatch);
+        if (p.masks(p.a.data())) {
+            auto store = M.enable_batch_mask();
+            p.q->memcpy(store.data(), p.mask.data(), store.size());
+            p.q.wait();
+        }
+        return M;
+    };
+    add("Matrix::to_column_major", [=](P& p) { (void)owned(p).to_column_major(p.q); });
+    add("Matrix::to_column_major(own queue)", [=](P& p) { (void)owned(p).to_column_major(); });
+    add("Matrix::to_row_major", [=](P& p) { (void)owned(p).to_row_major(p.q); });
+    add("Matrix::to_row_major(own queue)", [=](P& p) { (void)owned(p).to_row_major(); });
+    add("Matrix::convert_to<CSR>", [=](P& p) { (void)owned(p).template convert_to<MatrixFormat::CSR>(); });
     return out;
 }
 
