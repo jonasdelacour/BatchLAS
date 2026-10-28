@@ -337,7 +337,8 @@ namespace batchlas {
                 batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * k)}, sycl::range{size_t(k)}), [=](sycl::nd_item<1> item){
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
-                if (mk && !mk[bid]) return;
+                // The SVQB scalings write only scratch (C, diags), so they take no item guard: on
+                // AdaptiveCpp's Metal target one broke complex<float> SVQB (cause not found).
                 auto ATA_acc = Span(ATA_ptr + bid * k * k, k * k);
                 auto diags_acc = diags.subspan(bid * k, k);
 
@@ -357,7 +358,6 @@ namespace batchlas {
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();
-                if (mk && !mk[bid]) return;
                 auto D_acc = diags.subspan(bid * k, k);
                 D_local[tid] = D_acc[tid];
                 sycl::group_barrier(cta);
@@ -380,7 +380,6 @@ namespace batchlas {
                 auto tid = item.get_local_linear_id();
                 auto bid = item.get_group_linear_id();
                 auto cta = item.get_group();
-                if (mk && !mk[bid]) return;
                 auto D_acc = diags.subspan(bid * k, k);
                 D_local[tid] = D_acc[tid];
                 sycl::group_barrier(cta);

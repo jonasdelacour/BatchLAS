@@ -51,6 +51,8 @@ set(TEST_TARGETS
     level3_mask_tests
     spmm_mask_tests
     sytrf_mask_tests
+    norm_mask_tests
+    ortho_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -210,10 +212,10 @@ set(BATCHLAS_TEST_LABELS_blas
     geqrf_candidates_tests
     gesv_tests posv_tests potri_tests potrs_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests
+    transpose_tests norm_tests cond_tests inverse_tests norm_mask_tests
     sytrf_tests sytrf_mask_tests)
 set(BATCHLAS_TEST_LABELS_ortho
-    ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
+    ortho_tests ortho_mask_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
@@ -290,6 +292,7 @@ set(BATCHLAS_HEAVY_TESTS
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
     syev_tests sygvd_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)

@@ -511,13 +511,16 @@ std::vector<Entry<T>> direct_entries() {
     add("syevx_filtered", [=](P& p) {
         syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
     });
-    add("ritz_values", [=](P& p) {
-        ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
-    });
-    add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
-    add("ortho(M)", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); });
-    add("norm", [=](P& p) { norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.w)); });
-    add("norm(owning)", [=](P& p) { (void)norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a)); });
+    // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
+    // hold their contract. ortho's Cholesky family (the default Chol2 on a GPU) refuses until potrf
+    // does; on the host backend ritz_values and ortho(M) reach its BLAS gemm, which refuses.
+    if constexpr (B != Backend::NETLIB) add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
+    out.push_back({"ortho(M)", B == Backend::NETLIB,
+                   [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"ritz_values", true, [=](P& p) {
+                           ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
+                       }});
     add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
     add("syfn_from_eigen", [=](P& p) {
         syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
@@ -562,11 +565,10 @@ std::vector<Entry<T>> direct_entries() {
         add("bdsdc(vectors)", [=](P& p) {
             bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
         });
-        add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
-        add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
         add("tridiagonal_solver", [=](P& p) {
             tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
         });
+        // lanczos carries the mask but refuses until steqr and sort honour it (W3a).
         add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
         add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
     }
@@ -683,8 +685,7 @@ std::vector<Entry<T>> linalg_entries() {
         (void)linalg::svd<T>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
     });
     add("linalg::lu", [=](P& p) { (void)linalg::lu<T>(p.q, p.mat(p.a)); });
-    add("linalg::norm", [=](P& p) { (void)linalg::norm<T>(p.q, p.mat(p.a)); });
-    if constexpr (!is_std_complex_v<T>) add("linalg::cond", [=](P& p) { (void)linalg::cond<T>(p.q, p.mat(p.a)); });
+    // linalg::norm and linalg::cond forward to norm and cond, which honour the mask (W4c).
     return out;
 }
 
