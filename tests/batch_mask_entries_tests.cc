@@ -245,10 +245,6 @@ std::vector<Entry<T>> routed_entries() {
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
         {"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }},
-        {"gesvd", true,
-         [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
-        {"gesvd(hermitian)", true,
-         [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan()); }},
         {"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }},
         {"potri", true,
          [=](P& p) {
@@ -294,6 +290,12 @@ std::vector<Entry<T>> routed_entries() {
                            ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
                        }});
     }
+    // gesvd honours the mask through jacobi and NETLIB's host loop (W4a, gesvd_mask_tests); its
+    // Hermitian form has neither, so on a device every family refuses it.
+    if constexpr (B != Backend::NETLIB)
+        out.push_back({"gesvd(hermitian)", true, [=](P& p) {
+                           gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
+                       }});
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
         out.push_back({"getri", true,
                        [=](P& p) {
@@ -401,10 +403,11 @@ std::vector<Entry<T>> vendor_entries() {
             add("syev_vendor", [=](P& p) {
                 backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
             });
-        add("gesvd_vendor", [=](P& p) {
-            backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
-                                        SvdVectors::All, p.ws, p.ispan());
-        });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (gesvd_mask_tests)
+            add("gesvd_vendor", [=](P& p) {
+                backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
+                                            SvdVectors::All, p.ws, p.ispan());
+            });
     }
     if constexpr (sv::sparse_vendor_available<B>) {
         add("spmm_vendor", [=](P& p) {
@@ -455,7 +458,7 @@ std::vector<Entry<T>> direct_entries() {
     add("gesvd_cta(hermitian)", [=](P& p) {
         gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
     });
-    add("gesvdj_cta", [=](P& p) { gesvdj_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws); });
+    // gesvdj_cta, gebrd_unblocked, gebrd_cta and bdsqr honour the mask (W4a): gesvd_mask_tests.
     // ormqx_cta honours the mask (W2c). ormqr_blocked's Left apply refuses where it reaches trmm;
     // on NETLIB its gemm children refuse.
     if (B == Backend::NETLIB || ops::ormqr::wy_reaches_trmm<B, T>(Side::Left))
@@ -477,15 +480,13 @@ std::vector<Entry<T>> direct_entries() {
         sytrd_band_reduction_single_step<B, T>(p.q, p.mat(p.z, kKd + 1), p.mat(p.v, kN - 1), L, kKd, p.ws,
                                                SytrdBandReductionParams{});
     });
-    add("gebrd_unblocked", [=](P& p) {
-        gebrd_unblocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp));
-    });
-    add("gebrd_cta",
-        [=](P& p) { gebrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp)); });
-    add("gebrd_blocked", [=](P& p) {
-        gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
-    });
-    add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
+    // gebrd_blocked and ormbr honour the mask on a device (W4a); NETLIB's gemm children cannot.
+    if constexpr (B == Backend::NETLIB) {
+        add("gebrd_blocked", [=](P& p) {
+            gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
+        });
+        add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
+    }
     add("syevx", [=](P& p) { syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z)); });
     add("syevx(m)", [=](P& p) {
         syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z));
@@ -546,10 +547,6 @@ std::vector<Entry<T>> direct_entries() {
         add("stein(counts)", [=](P& p) {
             stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
                         p.mat(p.z), p.ws);
-        });
-        add("bdsqr", [=](P& p) { bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-        add("bdsqr(vectors)", [=](P& p) {
-            bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
         });
         add("bdsdc", [=](P& p) { bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
         add("bdsdc(vectors)", [=](P& p) {

@@ -88,7 +88,8 @@ inline void gebrd_cta_impl(Queue& ctx,
                            const VectorView<T>& tauq,
                            const VectorView<T>& taup,
                            int32_t n,
-                           size_t cta_wg_size_multiplier) {
+                           size_t cta_wg_size_multiplier,
+                           const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
 
     const auto batch_size = a.batch_size();
@@ -151,10 +152,11 @@ inline void gebrd_cta_impl(Queue& ctx,
 
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // NO EARLY RETURN: every it.barrier below is work-group wide, so a dead
-                // partition (batch % probs_per_wg != 0) runs a zero tile (tau = 0
-                // throughout) and stores nothing.
-                const bool live = prob_id < static_cast<int32_t>(batch_size);
+                // NO EARLY RETURN (I2): every it.barrier below is work-group wide, so a dead
+                // partition (batch % probs_per_wg != 0, or an inactive item) runs a zero tile
+                // (tau = 0 throughout) and stores nothing.
+                const bool live = prob_id < static_cast<int32_t>(batch_size) &&
+                                  (mask == nullptr || mask[prob_id] != 0);
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);
@@ -274,7 +276,9 @@ Event gebrd_cta(Queue& ctx,
                 const VectorView<T>& tauq_out,
                 const VectorView<T>& taup_out,
                 size_t cta_wg_size_multiplier) {
-    ::batchlas::detail::refuse_batch_mask("gebrd_cta", a_in, d_out, e_out, tauq_out, taup_out);
+    // The packed kernel folds the mask into `live` (I2): an inactive item's A, d, e and taus are untouched.
+    const std::uint8_t* const mask =
+        ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("gebrd_cta", a_in, d_out, e_out, tauq_out, taup_out));
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }
@@ -299,7 +303,7 @@ Event gebrd_cta(Queue& ctx,
         auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
         auto launch = [&](auto P_tag) {
             constexpr int32_t P = decltype(P_tag)::value;
-            gebrd_cta_impl<T, P>(ctx, a, d_out, e_out, tauq_out, taup_out, static_cast<int32_t>(n64), cta_wg_size_multiplier);
+            gebrd_cta_impl<T, P>(ctx, a, d_out, e_out, tauq_out, taup_out, static_cast<int32_t>(n64), cta_wg_size_multiplier, mask);
         };
 
         if (n64 <= 4) {

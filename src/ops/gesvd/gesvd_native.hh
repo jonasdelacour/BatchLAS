@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The gesvd drivers' own shape ceilings, sycl-free, read by gesvd's can_run and the drivers.
+// The gesvd drivers' own shape ceilings and mask predicate, read by gesvd's can_run and the drivers.
+
+#include <batchlas/settings.hh>
+
+#include <src/ops/ormqr/wy_spelling.hh>
 
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <type_traits>
 
 namespace batchlas::sycl_gesvd {
@@ -36,5 +41,29 @@ constexpr std::int64_t gesvd_jacobi_max_dim(bool want_vectors, std::size_t slm_b
 // Largest max(m, n) of gesvd_cta (one sub-group per matrix) and of cuSOLVER's gesvdjBatched.
 inline constexpr std::int64_t kGesvdCtaMaxDim = 32;
 inline constexpr std::int64_t kGesvdVendorCudaMaxDim = 32;
+
+// The Blocked path's bidiagonal solver, BATCHLAS_GESVD_BIDIAG = bdsdc (default) | normal | bdsqr.
+// evidence: docs/perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver
+enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
+
+inline GesvdBidiagSolver gesvd_bidiag_solver() {
+    const char* v = batchlas::settings().selection.gesvd_bidiag.get();
+    if (v == nullptr) return GesvdBidiagSolver::Bdsdc;
+    const std::string s(v);
+    if (s == "bdsqr") return GesvdBidiagSolver::Bdsqr;
+    if (s == "normal") return GesvdBidiagSolver::NormalEquations;
+    return GesvdBidiagSolver::Bdsdc;
+}
+
+// gesvd_blocked's general path honours a mask only where every child it reaches does: not stedc
+// (bdsdc, normal), not trmm (ormqr_blocked's Left update; ormqx_cta takes square n <= 32), not
+// NETLIB's host gemm. Canonical jobs. mask: lift after stedc (W3a), trmm (W1b)
+template <Backend B, typename T>
+bool gesvd_blocked_honours_mask(std::int64_t m, std::int64_t n, bool want_u, bool want_vh) {
+    const bool left_apply = m >= n ? want_u : want_vh;  // m < n solves A^H: its U is A's V^H
+    const bool left_cta = m == n && m <= 32;
+    return select::native_gpu_backend<B> && gesvd_bidiag_solver() == GesvdBidiagSolver::Bdsqr &&
+           !(left_apply && !left_cta && ops::ormqr::wy_reaches_trmm<B, T>(Side::Left));
+}
 
 }  // namespace batchlas::sycl_gesvd

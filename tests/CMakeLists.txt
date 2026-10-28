@@ -47,6 +47,7 @@ set(TEST_TARGETS
     sygvd_mask_tests
     geqrf_mask_tests
     ormqr_mask_tests
+    gesvd_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -220,7 +221,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
     gesvd_candidates_tests syev_candidates_tests
-    syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests)
+    syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests gesvd_mask_tests)
 set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests spmm_tests spmm_candidates_tests)
 
@@ -279,7 +280,7 @@ set(BATCHLAS_HEAVY_TESTS
     gemm_candidates_tests gemm_mask_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests geqrf_mask_tests
     gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
     getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
-    orgqr_candidates_tests ormqr_candidates_tests ormqr_mask_tests posv_candidates_tests
+    orgqr_candidates_tests ormqr_candidates_tests ormqr_mask_tests gesvd_mask_tests posv_candidates_tests
     potrf_candidates_tests potrf_tests potri_tests potrs_tests spmm_candidates_tests spmm_tests syev_blocked_tests
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
@@ -445,6 +446,10 @@ function(batchlas_add_test_target test_name)
     if(test_name STREQUAL "getrf_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_GETRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/getrf/kernels/getrf_tiny.cc")
+    endif()
+    if(test_name STREQUAL "gesvd_mask_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
     endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE

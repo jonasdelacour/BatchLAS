@@ -1019,7 +1019,9 @@ namespace batchlas{
                        SvdVectors jobvh,
                        Span<std::byte> workspace,
                        Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_vendor", B, A, U, Vh);
+        // I4: the host loop below runs after ctx.wait(), so it reads the (possibly device-only,
+        // host-addressable here) mask itself; an inactive item's A, s, U, Vh and info are untouched.
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("gesvd_vendor", A, U, Vh));
         static_cast<void>(workspace);
 
         // This path calls LAPACKE directly rather than going through
@@ -1077,6 +1079,7 @@ namespace batchlas{
         std::vector<typename base_type<T>::type> superb(static_cast<std::size_t>(std::max(0, k - 1)));
         auto& A_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(A);
         for (int b = 0; b < batch; ++b) {
+            if (mask != nullptr && mask[b] == 0) continue;
             auto Ab = A_mut.batch_item(b);
             auto Ub = U.batch_item(b);
             auto Vhb = Vh.batch_item(b);

@@ -20,7 +20,8 @@ Event gebrd_unblocked_real(Queue& ctx,
                            const VectorView<typename base_type<T>::type>& d,
                            const VectorView<typename base_type<T>::type>& e,
                            const VectorView<T>& tauq,
-                           const VectorView<T>& taup) {
+                           const VectorView<T>& taup,
+                           const std::uint8_t* mask) {
     static_assert(!detail::is_complex<T>::value, "gebrd_unblocked_real expects real scalar type");
     using Real = typename base_type<T>::type;
 
@@ -38,6 +39,7 @@ Event gebrd_unblocked_real(Queue& ctx,
 
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
 
             for (int32_t i = 0; i < k; ++i) {
                 // Left Householder: annihilate A(i+1:m-1, i)
@@ -135,7 +137,8 @@ Event gebrd_unblocked_complex(Queue& ctx,
                               const VectorView<typename base_type<T>::type>& d,
                               const VectorView<typename base_type<T>::type>& e,
                               const VectorView<T>& tauq,
-                              const VectorView<T>& taup) {
+                              const VectorView<T>& taup,
+                              const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
     using gebrd_detail::conj;
     const int32_t m = static_cast<int32_t>(a.rows());
@@ -150,6 +153,7 @@ Event gebrd_unblocked_complex(Queue& ctx,
         auto TAUP = taup;
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
             for (int32_t i = 0; i < n; ++i) {
                 Real sigma = Real(0);
                 for (int32_t r = i + 1; r < m; ++r) sigma += detail::norm_squared(A(r, i, b));
@@ -203,16 +207,17 @@ Event gebrd_unblocked(Queue& ctx,
                       const VectorView<typename base_type<T>::type>& e,
                       const VectorView<T>& tauq,
                       const VectorView<T>& taup) {
-    ::batchlas::detail::refuse_batch_mask("gebrd_unblocked", a, d, e, tauq, taup);
+    const std::uint8_t* const mask =
+        ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("gebrd_unblocked", a, d, e, tauq, taup));
     static_cast<void>(B);
 
     if (a.rows() < a.cols()) {
         throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
     if constexpr (detail::is_complex<T>::value) {
-        return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup);
+        return gebrd_unblocked_complex<T>(ctx, a, d, e, tauq, taup, mask);
     } else {
-        return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);
+        return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup, mask);
     }
 }
 
