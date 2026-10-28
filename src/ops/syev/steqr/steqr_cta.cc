@@ -103,7 +103,8 @@ namespace batchlas {
                     // Clamp, do not return: a chunk past the batch end still runs the
                     // solve, on a zero problem, so every lane of the warp reaches every
                     // collective. A zero tridiagonal is all 1x1 blocks and never chases.
-                    const bool live = prob_id < static_cast<int32_t>(batch_size);
+                    // I2: an inactive item is a dead chunk, solved on zeros and never stored.
+                    const bool live = prob_id < static_cast<int32_t>(batch_size) && d.active(prob_id);
                     const int32_t b = live ? prob_id : 0;
                     auto d_prob = d.batch_item(b);
                     auto e_prob = e.batch_item(b);
@@ -158,14 +159,17 @@ namespace batchlas {
                     const MatrixView<T, MatrixFormat::Dense>& eigvects,
                     Span<int32_t> info) {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_cta");
-        batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr_cta", B, d_in, e_in, eigenvalues, eigvects);
+        // The working copies are rebuilt from the pool, so they take the call's mask back on.
+        const auto mask = batchlas::detail::call_mask("steqr_cta", d_in, e_in, eigenvalues, eigvects);
         if (eigvects.rows() != eigvects.cols()) {
             throw batchlas::invalid_argument("Matrix must be square for eigenvalue computation.");
         }
+        const VectorView<T> evals = eigenvalues.with_batch_mask(mask);
+        auto eigvects_mut = jobz == JobType::EigenVectors ? eigvects.with_batch_mask(mask) : eigvects;
         if (jobz == JobType::EigenVectors && !params.back_transform) {
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)eigvects.fill_identity(ctx);
+            (void)eigvects_mut.fill_identity(ctx);
         }
 
         const int64_t n = d_in.size();
@@ -177,9 +181,9 @@ namespace batchlas {
         const auto e_stride = params.transpose_working_vectors ? 1 : n - 1;
 
         auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, increment, d_stride, batch_size)),
-                               n, batch_size, increment, d_stride);
+                               n, batch_size, increment, d_stride).with_batch_mask(mask);
         auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
-                               n - 1, batch_size, increment, e_stride);
+                               n - 1, batch_size, increment, e_stride).with_batch_mask(mask);
 
         // `info` is caller USM: when supplied it is written in place and the pool draw is
         // skipped, so the int32 term in steqr_cta_buffer_size stays UNCONDITIONAL. Only
@@ -195,7 +199,6 @@ namespace batchlas {
         (void)VectorView<T>::copy(ctx, d, d_in);
         (void)VectorView<T>::copy(ctx, e, e_in);
 
-        auto& eigvects_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects);
 
         // CTA backend: choose an optimal compile-time partition size P in {4,8,16,32}.
         // Requires warp-sized sub-groups (32) on NVIDIA.
@@ -237,7 +240,7 @@ namespace batchlas {
         }
 
         // Copy back eigenvalues.
-        (void)VectorView<T>::copy(ctx, eigenvalues, d);
+        (void)VectorView<T>::copy(ctx, evals, d);
 
         // Optional fail-fast diagnostics: avoids silent non-convergence.
         // Note: checking requires synchronization, so keep it opt-in.
@@ -265,7 +268,7 @@ namespace batchlas {
 
         if (params.sort) {
             auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
-            (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
+            (void)sort(ctx, evals, eigvects_mut, jobz, params.sort_order, ws_sort);
         }
 
         return ctx.get_event();

@@ -41,6 +41,9 @@ set(TEST_TARGETS
     linalg_layer_tests
     gemm_tests
     gemm_mask_tests
+    steqr_mask_tests
+    stedc_mask_tests
+    tridiag_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -207,6 +210,7 @@ set(BATCHLAS_TEST_LABELS_ortho
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
+    steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
@@ -280,6 +284,8 @@ set(BATCHLAS_HEAVY_TESTS
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
     syev_tests sygvd_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)

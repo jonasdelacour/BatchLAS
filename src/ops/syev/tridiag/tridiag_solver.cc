@@ -159,7 +159,7 @@ Event tridiagonal_solver(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& Q,
                          size_t n,
                          size_t batch_size) {
-    ::batchlas::detail::refuse_batch_mask("tridiagonal_solver", Q);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("tridiagonal_solver", Q));
     using real_t = typename base_type<T>::type;
     auto pool = BumpAllocator(workspace);
 
@@ -185,6 +185,7 @@ Event tridiagonal_solver(Queue& ctx,
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*32, 32), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first barrier; status stays 0
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();

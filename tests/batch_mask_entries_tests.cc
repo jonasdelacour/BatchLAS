@@ -231,6 +231,52 @@ std::vector<Entry<T>> gemm_entries() {
 }
 
 // The routed ops: the public op entries, each refused by every family's can_run term.
+// The tridiagonal stages that honour the mask (W3a), each with the outputs it writes: name, item
+// stride and item length in bytes. tests/steqr_mask_tests.cc and tridiag_mask_tests.cc hold their
+// contracts; here every operand alone carries the mask as well.
+template <typename T>
+struct NativeEntry {
+    Entry<T> entry;
+    std::vector<std::tuple<std::string, std::size_t, std::size_t>> outputs;
+};
+
+template <typename T, Backend B>
+std::vector<NativeEntry<T>> tridiag_entries() {
+    std::vector<NativeEntry<T>> out;
+    if constexpr (!is_std_complex_v<T>) {
+        using P = Pool<T>;
+        const auto ev = JobType::EigenVectors;
+        const std::size_t mat = kStride * sizeof(T), vec = kVecStride * sizeof(T), one = sizeof(std::int32_t);
+        const std::tuple<std::string, std::size_t, std::size_t> Z{"Z", mat, mat}, w{"w", vec, kN * sizeof(T)},
+            info{"info", one, one}, m{"m", one, one};
+        const auto add = [&](const char* name, std::function<void(P&)> f, std::vector<std::tuple<std::string, std::size_t, std::size_t>> o) {
+            out.push_back({{name, false, std::move(f)}, std::move(o)});
+        };
+        add("steqr", [=](P& p) {
+            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
+        }, {Z, w, info});
+        add("steqr_cta", [=](P& p) {
+            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
+                            p.ispan());
+        }, {Z, w, info});
+        add("stedc", [=](P& p) {
+            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
+        }, {Z, w, info});
+        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); },
+            {w, m});
+        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); },
+            {Z});
+        add("stein(counts)", [=](P& p) {
+            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
+                        p.mat(p.z), p.ws);
+        }, {Z});
+        add("tridiagonal_solver", [=](P& p) {
+            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
+        }, {Z, {"w", kN * sizeof(T), kN * sizeof(T)}});
+    }
+    return out;
+}
+
 // gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 template <typename T, Backend B>
 std::vector<Entry<T>> routed_entries() {
@@ -534,22 +580,6 @@ std::vector<Entry<T>> direct_entries() {
         iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
     });
     if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
-        add("steqr", [=](P& p) {
-            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
-        });
-        add("steqr_cta", [=](P& p) {
-            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
-                            p.ispan());
-        });
-        add("stedc", [=](P& p) {
-            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
-        });
-        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); });
-        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); });
-        add("stein(counts)", [=](P& p) {
-            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
-                        p.mat(p.z), p.ws);
-        });
         add("bdsqr", [=](P& p) { bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
         add("bdsqr(vectors)", [=](P& p) {
             bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
@@ -560,9 +590,6 @@ std::vector<Entry<T>> direct_entries() {
         });
         add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
         add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
-        add("tridiagonal_solver", [=](P& p) {
-            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
-        });
         add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
         add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
     }
@@ -758,6 +785,57 @@ TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
                     const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
                     EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
                         << "C item " << b << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
+                }
+            }
+        }
+    }
+}
+
+// The W3a tridiagonal stages run a masked batch natively on every backend, whichever operand
+// carries the mask: an output's inactive items (0, 2) bit-identical, its active ones the unmasked
+// call's, every other operand unwritten.
+TYPED_TEST(BatchMaskEntries, TridiagonalStagesRunADeviceOnlyMaskNatively) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (is_std_complex_v<T>) GTEST_SKIP() << "real-only stages";
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& [e, outs] : tridiag_entries<T, B>()) {
+        SCOPED_TRACE(e.name);
+        Pool<T> plain(q, {}, this->ws());
+        e.call(plain);
+        q.wait();
+        const auto want = plain.snapshot();
+        std::vector<std::pair<int, std::string>> used;
+        {
+            Pool<T> probe(q, mask.span(), this->ws(), -1);
+            probe.used = &used;
+            e.call(probe);
+            q.wait();
+        }
+        std::vector<int> onlys{-1};
+        for (const auto& u : used) onlys.push_back(u.first);
+        for (const int only : onlys) {
+            SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+            Pool<T> p(q, mask.span(), this->ws(), only);
+            const auto before = p.snapshot();
+            ASSERT_NO_THROW({
+                e.call(p);
+                q.wait();
+            });
+            const auto after = p.snapshot();
+            for (std::size_t i = 0; i < before.size(); ++i) {
+                const std::string name = std::get<0>(p.buffers()[i]);
+                const auto o = std::find_if(outs.begin(), outs.end(), [&](const auto& t) { return std::get<0>(t) == name; });
+                if (o == outs.end()) {
+                    EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << name;
+                    continue;
+                }
+                for (int b = 0; b < kBatch; ++b) {
+                    const std::size_t off = std::size_t(b) * std::get<1>(*o), len = std::get<2>(*o);
+                    const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
+                    EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
+                        << name << " item " << b << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
                 }
             }
         }
