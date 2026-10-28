@@ -15,6 +15,7 @@
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/select/vendor.hh>
 #include <tests/masked_contract.hh>
 #include <tests/test_utils.hh>
@@ -255,17 +256,6 @@ std::vector<Entry<T>> routed_entries() {
              if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
              getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
          }},
-        {"geqrf", true, [=](P& p) { geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); }},
-        {"orgqr", true,
-         [=](P& p) {
-             if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-             orgqr<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-         }},
-        {"ormqr", true,
-         [=](P& p) {
-             if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-             ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
-         }},
         {"syev", true, [=](P& p) { syev<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan()); }},
         {"gesvd", true,
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
@@ -311,6 +301,18 @@ std::vector<Entry<T>> routed_entries() {
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
     if constexpr (B == Backend::NETLIB)
         for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
+    // geqrf honours the mask (W2c): tests/geqrf_mask_tests.cc holds its contract. orgqr and
+    // ormqr (Left) honour it except where blocked's Left apply reaches trmm (W1b) on a device.
+    if (B != Backend::NETLIB && ops::ormqr::wy_reaches_trmm<B, T>(Side::Left)) {
+        out.push_back({"orgqr", true, [=](P& p) {
+                           if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
+                           orgqr<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
+                       }});
+        out.push_back({"ormqr", true, [=](P& p) {
+                           if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
+                           ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
+                       }});
+    }
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
@@ -379,11 +381,14 @@ std::vector<Entry<T>> vendor_entries() {
         }
     }
     if constexpr (sv::factorization_vendor_available<B>) {
-        add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
-        add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
-        add("ormqr_vendor", [=](P& p) {
-            backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
-        });
+        // NETLIB's QR host loops honour the mask (W2c, idiom I4); a strided vendor call cannot.
+        if constexpr (B != Backend::NETLIB) {
+            add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("ormqr_vendor", [=](P& p) {
+                backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
+            });
+        }
         add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
         add("getrs_vendor", [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
         add("getri_vendor", [=](P& p) {
@@ -450,10 +455,11 @@ std::vector<Entry<T>> direct_entries() {
         gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
     });
     add("gesvdj_cta", [=](P& p) { gesvdj_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws); });
-    add("ormqx_cta", [=](P& p) {
-        ormqx_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), Uplo::Lower, Side::Left, N, kN, p.ws);
-    });
-    add("ormqr_blocked", [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
+    // ormqx_cta honours the mask (W2c). ormqr_blocked's Left apply refuses where it reaches trmm;
+    // on NETLIB its gemm children refuse.
+    if (B == Backend::NETLIB || ops::ormqr::wy_reaches_trmm<B, T>(Side::Left))
+        add("ormqr_blocked",
+            [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
     add("sytrd_cta", [=](P& p) { sytrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws); });
     add("sytrd_blocked", [=](P& p) {
         sytrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws);
