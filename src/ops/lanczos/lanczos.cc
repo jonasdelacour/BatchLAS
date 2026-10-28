@@ -45,7 +45,12 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
                 const LanczosParams<T>& params) {
+        // The plumbing below carries the mask (scratch views, both kernels, ortho, gemm/spmm);
+        // steqr and the trailing sort still ignore it. mask: lift after steqr, sort (W3a)
         detail::refuse_batch_mask("lanczos", A, V);
+        const auto mask = detail::call_mask("lanczos", A, V);
+        const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -62,15 +67,15 @@ namespace batchlas {
         //Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
         // Known defect: both columns are multiplied, one is consumed.
         // evidence: docs/design/known-defects.md#defect-3-lanczos-issues-a-two-column-multiply-and-consumes-one-column
-        auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size);
+        auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
+        auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size).with_batch_mask(mask);
 
         Span<std::byte> spmm_buffer;
         if constexpr (!(MF == MatrixFormat::Dense)){
             spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
         }
-        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size),
-            MatrixView(Vmem.data(), n, n-2, n, (n+1)*n, batch_size), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
+        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size).with_batch_mask(mask),
+            MatrixView(Vmem.data(), n, n-2, n, (n+1)*n, batch_size).with_batch_mask(mask), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
 
         auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
         auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
@@ -85,6 +90,7 @@ namespace batchlas {
                 auto reduce_mem = sycl::local_accessor<T>(n, h);
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
+                    if (masked && !mk[bid]) return;  // I1, before the group reduction
                     auto tid = item.get_local_linear_id();
                     auto bdim = item.get_local_range()[0];
                     auto cta = item.get_group();
@@ -107,8 +113,8 @@ namespace batchlas {
         auto lanczos_iteration = [&](const int iterations){
             for (int it = 0; it < iterations; it++) {
                 if (it > 0) {
-                    auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data());
-                    auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data());
+                    auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data()).with_batch_mask(mask);
+                    auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data()).with_batch_mask(mask);
                     if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
                         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                         // is already ordered after this one and the Event carries nothing the caller needs.
@@ -116,7 +122,7 @@ namespace batchlas {
                     }
                 }
 
-                auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size);
+                auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size).with_batch_mask(mask);
                 auto spmm_start = std::chrono::steady_clock::now();
                 if constexpr (!(MF == MatrixFormat::Dense)) {
                     (void)spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
@@ -130,6 +136,7 @@ namespace batchlas {
                     auto dot_mem = sycl::local_accessor<T>(n, h);
                     batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
+                        if (masked && !mk[bid]) return;
                         auto tid = item.get_local_linear_id();
                         auto wg = item.get_local_range()[0];
                         auto cta = item.get_group();
@@ -177,9 +184,9 @@ namespace batchlas {
         const auto steqr_params = lanczos_steqr_params<T>();
         auto steqr_ws = pool.allocate<std::byte>(ctx, steqr_buffer_size<T>(
                                                     ctx,
-                                                    VectorView<real_t>(alphas.data(), n, batch_size),
-                                                    lanczos_offdiagonals<real_t>(betas.data(), n, batch_size),
-                                                    VectorView<real_t>(W.data(), n, batch_size),
+                                                    VectorView<real_t>(alphas.data(), n, batch_size).with_batch_mask(mask),
+                                                    lanczos_offdiagonals<real_t>(betas.data(), n, batch_size).with_batch_mask(mask),
+                                                    VectorView<real_t>(W.data(), n, batch_size).with_batch_mask(mask),
                                                     jobz,
                                                     steqr_params));
 
@@ -187,19 +194,19 @@ namespace batchlas {
         lanczos_iteration(n);
 
         (void)steqr<B> (ctx,
-            VectorView<real_t>(alphas.data(), n, batch_size),
-            lanczos_offdiagonals<real_t>(betas.data(), n, batch_size),
-            VectorView<real_t>(W.data(), n, batch_size),
+            VectorView<real_t>(alphas.data(), n, batch_size).with_batch_mask(mask),
+            lanczos_offdiagonals<real_t>(betas.data(), n, batch_size).with_batch_mask(mask),
+            VectorView<real_t>(W.data(), n, batch_size).with_batch_mask(mask),
             steqr_ws,
             jobz,
             steqr_params,
-            MatrixView<T, MatrixFormat::Dense>(Q_eigenvectors.data(), n, n, n, n*n, batch_size)
+            MatrixView<T, MatrixFormat::Dense>(Q_eigenvectors.data(), n, n, n, n*n, batch_size).with_batch_mask(mask)
         );
 
         if (jobz == JobType::EigenVectors) {
             (void)gemm<B>(ctx,
-                    MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size),
-                    MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
+                    MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size).with_batch_mask(mask),
+                    MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size).with_batch_mask(mask),
                     V,
                     GemmOptions<T>{});
         }
@@ -221,7 +228,7 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
         const LanczosParams<T>& params
     ) {
-        detail::refuse_batch_mask("lanczos", A, V);
+        detail::refuse_batch_mask("lanczos", A, V);  // mask: lift after steqr, sort (W3a)
         auto n = A.rows();
         auto batch_size = A.batch_size();
         auto padded_vector_view = MatrixView(V.data_ptr(), n, 2, n, (n+1)*n, batch_size);

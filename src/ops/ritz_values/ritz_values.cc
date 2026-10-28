@@ -27,7 +27,9 @@ namespace batchlas {
                       const MatrixView<T, MatrixFormat::Dense>& V,
                       const VectorView<typename base_type<T>::type>& ritz_vals,
                       Span<std::byte> workspace) {
-        detail::refuse_batch_mask("ritz_values", A, V, ritz_vals);
+        const auto mask = detail::call_mask("ritz_values", A, V, ritz_vals);
+        const std::uint8_t* mk = detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
         using real_t = typename base_type<T>::type;
 
         auto pool = BumpAllocator(workspace);
@@ -43,7 +45,8 @@ namespace batchlas {
 
         // Allocate workspace for A*V computation
         auto AV_mem = pool.allocate<T>(ctx, n * k * batch_size);
-        auto AV = MatrixView<T, MatrixFormat::Dense>(AV_mem.data(), n, k, n, n * k, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto AV = MatrixView<T, MatrixFormat::Dense>(AV_mem.data(), n, k, n, n * k, batch_size, pool.allocate<T*>(ctx, batch_size).data())
+                      .with_batch_mask(mask);
 
         Event last_event;
 
@@ -94,6 +97,8 @@ namespace batchlas {
                     // Decompose group_id into batch and trial vector indices
                     int b = group_id / k;
                     int j = group_id % k;
+                    // Uniform per work-group (one (b, j) pair each), so the barriers below stay matched.
+                    if (masked && !mk[b]) continue;
 
                     // Compute v_j^T * (A*v_j) using work-group reduction
                     // Each thread computes partial sum for its assigned elements
@@ -151,7 +156,7 @@ namespace batchlas {
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals) {
-        detail::refuse_batch_mask("ritz_values", A, V, ritz_vals);
+        const auto mask = detail::call_mask("ritz_values", A, V, ritz_vals);
         const auto batch_size = A.batch_size();
         const auto n = A.rows();
         const auto k = V.cols();
@@ -161,7 +166,7 @@ namespace batchlas {
             auto av = pool.allocate<T>(ctx, n * k * batch_size);
             (void)pool.allocate<T*>(ctx, batch_size);
             if constexpr (MFormat != MatrixFormat::Dense) {
-                auto AV = MatrixView<T, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr);
+                auto AV = MatrixView<T, MatrixFormat::Dense>(av.data(), n, k, n, n * k, batch_size, nullptr).with_batch_mask(mask);
                 (void)pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, V, AV, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
             return 0;

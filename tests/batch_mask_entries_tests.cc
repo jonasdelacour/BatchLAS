@@ -488,14 +488,9 @@ std::vector<Entry<T>> direct_entries() {
         });
         add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
     }
-    add("syevx", [=](P& p) { syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z)); });
-    add("syevx(m)", [=](P& p) {
-        syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z));
-    });
-    add("syevx_direct", [=](P& p) {
-        syevx_direct<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z),
-                                                SyevxParams<T>());
-    });
+    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
+    // Filtered refuse it on the host backend (its gemm is the host BLAS) and with the default Chol2
+    // ortho on a GPU; with another ortho on a GPU they honour it (syevx_mask_tests).
     add("syevx_direct_subset", [=](P& p) {
         syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
                                                        p.mat(p.z), SyevxParams<T>());
@@ -506,13 +501,16 @@ std::vector<Entry<T>> direct_entries() {
     add("syevx_filtered", [=](P& p) {
         syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
     });
-    add("ritz_values", [=](P& p) {
-        ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
-    });
-    add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
-    add("ortho(M)", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); });
-    add("norm", [=](P& p) { norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.w)); });
-    add("norm(owning)", [=](P& p) { (void)norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a)); });
+    // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
+    // hold their contract. ortho's Cholesky family (the default Chol2 on a GPU) refuses until potrf
+    // does; on the host backend ritz_values and ortho(M) reach its BLAS gemm, which refuses.
+    if constexpr (B != Backend::NETLIB) add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
+    out.push_back({"ortho(M)", B == Backend::NETLIB,
+                   [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"ritz_values", true, [=](P& p) {
+                           ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
+                       }});
     add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
     add("syfn_from_eigen", [=](P& p) {
         syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
@@ -520,19 +518,14 @@ std::vector<Entry<T>> direct_entries() {
     // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
     if constexpr (B == Backend::NETLIB)
         add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
-    add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
-    add("iluk_factorize(workspace)",
-        [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
-    add("iluk_apply", [=](P& p) {
-        // The factor comes from the unmasked matrix (a workspace of its own): only rhs and out are masked.
-        UnifiedVector<std::byte> fws(std::size_t(1) << 20);
-        const MatrixView<T, MatrixFormat::CSR> plain(p.vals.data(), p.ro.data(), p.ci.data(), kN, kN, NonZeros{kN},
-                                                     kVecStride, kN + 1, kBatch);
-        const auto M = iluk_factorize<B, T>(p.q, plain, Span<std::byte>(fws.data(), fws.size()), ILUKParams<T>(), nullptr);
-        p.q.wait();
-        iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
-    });
-    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, cond
+    // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
+    // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
+    if constexpr (B != Backend::NETLIB) {
+        add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
+        add("iluk_factorize(workspace)",
+            [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
+    }
+    if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
         add("steqr", [=](P& p) {
             steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
         });
@@ -553,11 +546,10 @@ std::vector<Entry<T>> direct_entries() {
         add("bdsdc(vectors)", [=](P& p) {
             bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
         });
-        add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
-        add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
         add("tridiagonal_solver", [=](P& p) {
             tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
         });
+        // lanczos carries the mask but refuses until steqr and sort honour it (W3a).
         add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
     }
     return out;
@@ -673,8 +665,7 @@ std::vector<Entry<T>> linalg_entries() {
         (void)linalg::svd<T>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
     });
     add("linalg::lu", [=](P& p) { (void)linalg::lu<T>(p.q, p.mat(p.a)); });
-    add("linalg::norm", [=](P& p) { (void)linalg::norm<T>(p.q, p.mat(p.a)); });
-    if constexpr (!is_std_complex_v<T>) add("linalg::cond", [=](P& p) { (void)linalg::cond<T>(p.q, p.mat(p.a)); });
+    // linalg::norm and linalg::cond forward to norm and cond, which honour the mask (W4c).
     return out;
 }
 

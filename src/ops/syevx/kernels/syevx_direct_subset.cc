@@ -65,10 +65,13 @@ Event syevx_direct_subset(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& V,
                           const SyevxParams<T>& params,
                           Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);
+    // The plumbing below carries the mask to every child and kernel; the children refuse it today.
+    ::batchlas::detail::refuse_batch_mask("syevx_direct_subset", A, V);  // mask: lift after stebz, stein (W3a), sytrd_sy2sb
+    const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_direct_subset", A, V);
     using Real = typename base_type<T>::type;
 
     if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {
+        (void)mask;
         (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
         (void)jobz; (void)V; (void)params; (void)info;
         throw batchlas::unsupported(
@@ -84,7 +87,7 @@ Event syevx_direct_subset(Queue& ctx,
         // Reported as converged (0) deliberately, although stebz/stein measure no
         // convergence: an unwritten span would be worse.
         // evidence: docs/design/syevx.md#syevx-directsubset-reported-as-converged-with-a-caveat
-        detail::info_clear(ctx, info, batch);
+        detail::info_clear(ctx, info, batch, mask);
 
         if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_direct_subset: A must be square");
         // A capacity above n is fine (clamped); zero is not, stein requires k >= 1.
@@ -153,23 +156,27 @@ Event syevx_direct_subset(Queue& ctx,
         // syevx must not modify A, and sy2sb overwrites its input.
         auto a_copy_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * n * batch);
         auto a_copy_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
-        MatrixView<T, MatrixFormat::Dense> a(a_copy_span.data(), n, n, n,
-                                             static_cast<int64_t>(n) * n, batch,
-                                             a_copy_ptrs.data());
+        // Every workspace view carries the call's mask, so each child skips the same items.
+        const auto a = MatrixView<T, MatrixFormat::Dense>(a_copy_span.data(), n, n, n,
+                                                          static_cast<int64_t>(n) * n, batch,
+                                                          a_copy_ptrs.data())
+                           .with_batch_mask(mask);
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, A);
 
         // Stage 1: dense -> band.
         auto ab_span = pool.allocate<T>(ctx, static_cast<size_t>(kd + 1) * n * batch);
-        MatrixView<T, MatrixFormat::Dense> ab_view(ab_span.data(), kd + 1, n, kd + 1,
-                                                   static_cast<int64_t>(kd + 1) * n, batch);
+        const auto ab_view = MatrixView<T, MatrixFormat::Dense>(ab_span.data(), kd + 1, n, kd + 1,
+                                                                static_cast<int64_t>(kd + 1) * n, batch)
+                                 .with_batch_mask(mask);
         auto tau_sy2sb_span = pool.allocate<T>(ctx, static_cast<size_t>(tau_sy2sb_n) * batch);
-        VectorView<T> tau_sy2sb_view(tau_sy2sb_span, tau_sy2sb_n, batch, 1, tau_sy2sb_n);
+        const auto tau_sy2sb_view =
+            VectorView<T>(tau_sy2sb_span, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
 
         Span<T> phase_span;
         VectorView<T> phase_view;
         if (want_eigenvectors) {
             phase_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * batch);
-            phase_view = VectorView<T>(phase_span, n, batch, 1, n);
+            phase_view = VectorView<T>(phase_span, n, batch, 1, n).with_batch_mask(mask);
         }
 
         {
@@ -184,8 +191,9 @@ Event syevx_direct_subset(Queue& ctx,
         // eigenvalues-only then discards Q2.
         auto d_span = pool.allocate<Real>(ctx, static_cast<size_t>(n) * batch);
         auto e_span = pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
-        VectorView<Real> d_view(d_span, n, batch, 1, n);
-        VectorView<Real> e_view(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
+        const auto d_view = VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask);
+        const auto e_view =
+            VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
 
         Span<T> v_sb2st_span;
         Span<T> tau_sb2st_hh_span;
@@ -198,10 +206,10 @@ Event syevx_direct_subset(Queue& ctx,
             tau_sb2st_hh_span = pool.allocate<T>(ctx, static_cast<size_t>(nr) * batch);
             auto ab_tri_span = pool.allocate<T>(ctx, static_cast<size_t>(2) * n * batch);
             v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
-                v_sb2st_span.data(), kd, nr, kd, static_cast<int64_t>(kd) * nr, batch);
-            tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr);
-            MatrixView<T, MatrixFormat::Dense> ab_tri_view(
-                ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch);
+                v_sb2st_span.data(), kd, nr, kd, static_cast<int64_t>(kd) * nr, batch).with_batch_mask(mask);
+            tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask);
+            const auto ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
+                ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * n, batch).with_batch_mask(mask);
 
             const size_t bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             auto hh_ws = pool.allocate<std::byte>(ctx, bytes);
@@ -218,8 +226,8 @@ Event syevx_direct_subset(Queue& ctx,
             }
         } else {
             auto tau_sb2st_span = pool.allocate<T>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
-            VectorView<T> tau_sb2st_view(tau_sb2st_span, std::max(0, n - 1), batch, 1,
-                                         std::max(0, n - 1));
+            const auto tau_sb2st_view = VectorView<T>(tau_sb2st_span, std::max(0, n - 1), batch, 1,
+                                                      std::max(0, n - 1)).with_batch_mask(mask);
             const size_t bytes = sytrd_sb2st_buffer_size<B, T>(ctx, ab_view, d_view, e_view,
                                                                tau_sb2st_view, Uplo::Lower, kd,
                                                                sb2st_block_size);
@@ -234,8 +242,8 @@ Event syevx_direct_subset(Queue& ctx,
         // kernel below. Asking stebz for Descending here corrupts stein's clustering.
         auto w_sub_span = pool.allocate<Real>(ctx, w_sub_len * batch);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
-        VectorView<Real> w_sub(w_sub_span, static_cast<int>(w_sub_len), batch, 1,
-                               static_cast<int>(w_sub_len));
+        const auto w_sub = VectorView<Real>(w_sub_span, static_cast<int>(w_sub_len), batch, 1,
+                                            static_cast<int>(w_sub_len)).with_batch_mask(mask);
 
         StebzParams<Real> bp;
         bp.range = rr.value_range ? EigenRangeType::Value : EigenRangeType::Index;
@@ -256,7 +264,7 @@ Event syevx_direct_subset(Queue& ctx,
             {
                 const size_t bytes = stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp);
                 auto stein_ws = pool.allocate<std::byte>(ctx, bytes);
-                auto V_sub = V({0, n}, {0, capacity});
+                auto V_sub = V({0, n}, {0, capacity}).with_batch_mask(mask);
                 // Per-item counts read on the device, so no host sync is introduced
                 // between the two calls. Critically, stein ZEROES columns
                 // [m[b], capacity) rather than leaving stale workspace there; the
@@ -266,7 +274,7 @@ Event syevx_direct_subset(Queue& ctx,
                                V_sub, stein_ws, sp);
 
                 apply_phase_rows<Real>(ctx, V_sub,
-                                       VectorView<Real>(phase_span.data(), n, batch, 1, n));
+                                       VectorView<Real>(phase_span.data(), n, batch, 1, n).with_batch_mask(mask));
 
                 // V := Q2 V, over `capacity` columns rather than n, and at that uniform
                 // count even when item b found only m[b] < capacity: the trailing
@@ -286,6 +294,7 @@ Event syevx_direct_subset(Queue& ctx,
                 if (tau_sy2sb_n > 0) {
                     auto v1_view = a({kd, SliceEnd()}, {0, tau_sy2sb_n});
                     auto v_sub_rows = V_sub({kd, SliceEnd()}, Slice{});
+                    // Flat per-item tau: follows the call mask carried by v1_view.
                     Span<T> tau1_flat(tau_sy2sb_span.data(),
                                       static_cast<size_t>(tau_sy2sb_n) * batch);
 
@@ -326,6 +335,8 @@ Event syevx_direct_subset(Queue& ctx,
         const int64_t w_in_stride = static_cast<int64_t>(w_sub_len);
         const int32_t* m_in = m_span.data();
         int32_t* m_out = m.empty() ? nullptr : m.data();
+        const std::uint8_t* mk = ::batchlas::detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;
 
         const size_t wg = std::min<size_t>(256, static_cast<size_t>(std::max<int64_t>(n, 1)));
         ctx->submit([&](sycl::handler& h) {
@@ -335,6 +346,7 @@ Event syevx_direct_subset(Queue& ctx,
                     const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
+                    if (masked && !mk[bid]) return;  // I1
 
                     // True count for this item, as stebz found it; for a value range it is
                     // data dependent and may exceed the capacity. Signed and clamped at
@@ -394,7 +406,10 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         (void)ctx; (void)A; (void)W; (void)neigs; (void)jobz; (void)V; (void)params;
         return 0;
     } else {
-        (void)W; (void)V;
+        // Must reject exactly what the solver rejects.
+        ::batchlas::detail::refuse_batch_mask("syevx_direct_subset_buffer_size", A, V);  // mask: lift after stebz, stein (W3a), sytrd_sy2sb
+        const auto mask = ::batchlas::detail::call_mask("syevx_direct_subset_buffer_size", A, V);
+        (void)W;
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
         const int64_t capacity = static_cast<int64_t>(neigs);
@@ -426,13 +441,17 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         }
 
         // Shapes must match the runtime views exactly so the provider choices agree.
-        MatrixView<T, MatrixFormat::Dense> a_dummy(nullptr, n, n, n, static_cast<int64_t>(n) * n, batch);
-        MatrixView<T, MatrixFormat::Dense> ab_dummy(nullptr, kd + 1, n, kd + 1,
-                                                    static_cast<int64_t>(kd + 1) * n, batch);
-        VectorView<T> tau_sy2sb_dummy(nullptr, tau_sy2sb_n, batch, 1, tau_sy2sb_n);
-        VectorView<Real> d_dummy(nullptr, n, batch, 1, n);
-        VectorView<Real> e_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        VectorView<T> tau_sb2st_dummy(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
+        // Masked like the runtime views, so each size query picks the masked family.
+        using MV = MatrixView<T, MatrixFormat::Dense>;
+        const auto a_dummy = MV(nullptr, n, n, n, static_cast<int64_t>(n) * n, batch).with_batch_mask(mask);
+        const auto ab_dummy =
+            MV(nullptr, kd + 1, n, kd + 1, static_cast<int64_t>(kd + 1) * n, batch).with_batch_mask(mask);
+        const auto tau_sy2sb_dummy = VectorView<T>(nullptr, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask);
+        const auto d_dummy = VectorView<Real>(nullptr, n, batch, 1, n).with_batch_mask(mask);
+        const auto e_dummy =
+            VectorView<Real>(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
+        const auto tau_sb2st_dummy =
+            VectorView<T>(nullptr, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask);
 
         bytes += BumpAllocator::allocation_size<std::byte>(
             ctx, sytrd_sy2sb_buffer_size<B, T>(ctx, a_dummy, ab_dummy, tau_sy2sb_dummy, Uplo::Lower, kd));
@@ -473,11 +492,11 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
             // Q1 back-transform; shapes mirror the runtime slices exactly.
             if (tau_sy2sb_n > 0) {
                 const int32_t rows_below_kd = std::max<int32_t>(0, n - kd);
-                MatrixView<T, MatrixFormat::Dense> v1_dummy(nullptr, rows_below_kd, tau_sy2sb_n, n,
-                                                            static_cast<int64_t>(n) * n, batch);
-                MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, rows_below_kd,
-                                                           static_cast<int>(capacity), n,
-                                                           static_cast<int64_t>(n) * capacity, batch);
+                const auto v1_dummy =
+                    MV(nullptr, rows_below_kd, tau_sy2sb_n, n, static_cast<int64_t>(n) * n, batch).with_batch_mask(mask);
+                const auto c_dummy = MV(nullptr, rows_below_kd, static_cast<int>(capacity), n,
+                                        static_cast<int64_t>(n) * capacity, batch)
+                                         .with_batch_mask(mask);
                 Span<T> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
                 if constexpr (B == Backend::NETLIB) {
