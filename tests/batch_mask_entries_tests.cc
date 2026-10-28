@@ -315,15 +315,7 @@ std::vector<Entry<T>> routed_entries() {
     const T one(1), half(0.5);
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
-    const auto all = SvdVectors::All;
-    std::vector<Entry<T>> out = {
-        {"sygvd_factored", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-             sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                  p.ispan());
-         }},
-    };
+    std::vector<Entry<T>> out;
     // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
     // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
     // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses, and with it posv and
@@ -337,24 +329,19 @@ std::vector<Entry<T>> routed_entries() {
         for (auto& e : level3_entries<T, B>())
             if (e.name != "spmm") out.push_back(std::move(e));
     }
-    // gesvd honours the mask through jacobi and NETLIB's host loop (W4a, gesvd_mask_tests); its
-    // Hermitian form has neither, so on a device every family refuses it.
-    if constexpr (B != Backend::NETLIB)
-        out.push_back({"gesvd(hermitian)", true, [=](P& p) {
-                           gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
-                       }});
     // getrf, getrs, gesv, getri and inv honour the mask (W2b, lift 1): tests/getrf_mask_tests.cc and
     // tests/getrs_mask_tests.cc hold their contract. geqrf, orgqr and ormqr honour it (W2c, lift 1):
     // tests/geqrf_mask_tests.cc and tests/ormqr_mask_tests.cc. sygst honours it in every family (W3c,
     // lift 1): tests/sygvd_mask_tests.cc.
-    if constexpr (B != Backend::NETLIB) {
-        // The host backend's sygvd is a LAPACKE loop that honours the mask (W3c); every device family
-        // refuses until potrf (W2a) and syev (W3a) do.
-        out.push_back({"sygvd", true, [=](P& p) {
-                           sygvd<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                       p.ispan());
+    // gesvd and sygvd honour the mask in every family but the device vendors (lift 2: gesvd_mask_tests,
+    // sygvd_mask_tests). On the host backend sygvd_factored has only compose, whose back-transform
+    // (trsm, trmm) is its BLAS, which refuses.
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"sygvd_factored", true, [=](P& p) {
+                           if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
+                           sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L,
+                                                p.ws, p.ispan());
                        }});
-    }
     return out;
 }
 
@@ -456,23 +443,13 @@ std::vector<Entry<T>> direct_entries() {
     const auto ev = JobType::EigenVectors;
     std::vector<Entry<T>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
-    add("syev_cta", [=](P& p) { syev_cta<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    // syev_cta_fused, syev_jacobi_cta, sytrd_cta, sytrd_sb2st and latrd_lower_panel honour the mask
-    // (W3b): their contract is syev_mask_tests'.
-    add("syev_blocked", [=](P& p) { syev_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_two_stage", [=](P& p) { syev_two_stage<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("gesvd_blocked", [=](P& p) {
-        gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
-    });
-    add("gesvd_blocked(hermitian)", [=](P& p) {
-        gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
-    });
-    add("gesvd_cta", [=](P& p) {
-        gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
-    });
-    add("gesvd_cta(hermitian)", [=](P& p) {
-        gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
-    });
+    // Every syev and gesvd family honours the mask on a device (lift 2: syev_mask_tests and
+    // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked's
+    // general path refuses (its gemm is the host BLAS).
+    if constexpr (B == Backend::NETLIB)
+        add("gesvd_blocked", [=](P& p) {
+            gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
+        });
     // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask
     // on a device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. On
     // NETLIB ormqr_blocked's gemm children are the host BLAS, which refuses.
@@ -489,10 +466,12 @@ std::vector<Entry<T>> direct_entries() {
     // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
     // Filtered refuse it on the host backend (its gemm is the host BLAS) and with the default Chol2
     // ortho on a GPU; with another ortho on a GPU they honour it (syevx_mask_tests).
-    add("syevx_direct_subset", [=](P& p) {
-        syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
-                                                       p.mat(p.z), SyevxParams<T>());
-    });
+    // DirectSubset (real only) honours it on a device (lift 2); on the host backend sy2sb's gemm refuses.
+    if constexpr (B == Backend::NETLIB && !is_std_complex_v<T>)
+        add("syevx_direct_subset", [=](P& p) {
+            syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
+                                                           p.mat(p.z), SyevxParams<T>());
+        });
     add("syevx_lobpcg", [=](P& p) {
         syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
     });
@@ -509,10 +488,13 @@ std::vector<Entry<T>> direct_entries() {
         out.push_back({"ritz_values", true, [=](P& p) {
                            ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
                        }});
-    add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
-    add("syfn_from_eigen", [=](P& p) {
-        syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
-    });
+    // syfn honours the mask on a device (lift 2, syev_mask_tests); the host backend's syrk is its BLAS.
+    if constexpr (B == Backend::NETLIB) {
+        add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
+        add("syfn_from_eigen", [=](P& p) {
+            syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
+        });
+    }
     // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
     if constexpr (B == Backend::NETLIB)
         add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
@@ -524,12 +506,11 @@ std::vector<Entry<T>> direct_entries() {
             [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
     }
     if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
-        add("bdsdc", [=](P& p) { bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-        add("bdsdc(vectors)", [=](P& p) {
-            bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
-        });
-        // lanczos carries the mask but refuses until steqr and sort honour it (W3a).
-        add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
+        // bdsdc honours the mask on either backend, lanczos on a device (lift 2: gesvd_mask_tests,
+        // syevx_mask_tests); on the host backend lanczos's gemm is its BLAS.
+        if constexpr (B == Backend::NETLIB)
+            add("lanczos",
+                [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
     }
     return out;
 }
@@ -678,6 +659,8 @@ TYPED_TEST_SUITE(BatchMaskEntries, EntryTypes);
 TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    // Every routed op honours the mask on a device (lift 2): only the host backend's BLAS-bound ops refuse.
+    if (B != Backend::NETLIB) GTEST_SKIP() << "every routed op honours a mask on a device backend";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     // Only a build without the backend's library may lack a route (herk has no native kernel).
@@ -855,8 +838,9 @@ TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
     for (const auto& e : linalg_entries<T>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
-// The syev capability queries answer from can_run, so a masked view is one no family supports.
-TYPED_TEST(BatchMaskEntries, SyevSupportQueriesAnswerNoForAMaskedView) {
+// The syev capability queries answer from can_run, and every native family honours the mask (lift
+// 2): a masked view gets the unmasked view's answers.
+TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
     using T = typename TestFixture::ScalarType;
     namespace sd = ops::syev::detail;
     constexpr Backend B = TestFixture::BackendType;
@@ -869,9 +853,10 @@ TYPED_TEST(BatchMaskEntries, SyevSupportQueriesAnswerNoForAMaskedView) {
                 sd::syev_supports_two_stage<T>(q, A, Uplo::Lower))
         << "no family supports the unmasked view, so the masked answers prove nothing";
     Pool<T> p(q, mask.span(), this->ws());
-    EXPECT_FALSE(sd::syev_supports_cta<T>(q, p.mat(p.a)));
-    EXPECT_FALSE(sd::syev_supports_blocked<T>(q, p.mat(p.a), Uplo::Lower));
-    EXPECT_FALSE(sd::syev_supports_two_stage<T>(q, p.mat(p.a), Uplo::Lower));
+    EXPECT_EQ(sd::syev_supports_cta<T>(q, p.mat(p.a)), sd::syev_supports_cta<T>(q, A));
+    EXPECT_EQ(sd::syev_supports_blocked<T>(q, p.mat(p.a), Uplo::Lower), sd::syev_supports_blocked<T>(q, A, Uplo::Lower));
+    EXPECT_EQ(sd::syev_supports_two_stage<T>(q, p.mat(p.a), Uplo::Lower),
+              sd::syev_supports_two_stage<T>(q, A, Uplo::Lower));
 }
 
 // astype copies the mask on the host with no Queue: shared USM copies, a device-only or a foreign
