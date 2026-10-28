@@ -461,6 +461,10 @@ function(batchlas_add_test_target test_name)
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
     endif()
+    if(test_name STREQUAL "ormqr_mask_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_ORMQR_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/ormqr/kernels/ormqr_cta.cc")
+    endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_INCLUDE_DIR_PATH="${PROJECT_SOURCE_DIR}/include/batchlas")
@@ -618,28 +622,6 @@ foreach(_i RANGE ${_rp_last})
     list(GET BATCHLAS_ROUTE_PINNED_TESTS ${_env_i} _rp_env)
     batchlas_add_route_pinned_test(${_rp_name} "${_rp_env}")
 endforeach()
-
-# gebrd_cta and ormqx_cta pack several items per work-group; a dead or masked partition must
-# reach every barrier (defect 23, docs/design/masked-batches.md#masked-batches-kernel-contract).
-# Metal and the value tests tolerate a partition that returns first, so these run the batch-tail
-# cases (batch 1025) under compute-sanitizer's synccheck, which reports the divergent barrier.
-find_program(BATCHLAS_COMPUTE_SANITIZER compute-sanitizer HINTS "${CUDAToolkit_BIN_DIR}")
-if(BATCHLAS_HAS_CUDA_BACKEND AND BATCHLAS_COMPUTE_SANITIZER)
-    foreach(_sc "gesvd_tests;gebrd_cta_synccheck;*GebrdCtaBatchTail*"
-                "ormqr_cta_tests;ormqx_cta_synccheck;*BatchTailStoresNothing*")
-        list(GET _sc 0 _sc_bin)
-        list(GET _sc 1 _sc_name)
-        list(GET _sc 2 _sc_filter)
-        if(TARGET ${_sc_bin})
-            add_test(NAME ${_sc_name}
-                     COMMAND ${BATCHLAS_COMPUTE_SANITIZER} --tool synccheck --error-exitcode 1
-                             $<TARGET_FILE:${_sc_bin}> "--gtest_filter=${_sc_filter}")
-            batchlas_test_needs_gpu(${_sc_name})
-            batchlas_test_component(_component ${_sc_bin})
-            set_tests_properties(${_sc_name} PROPERTIES LABELS "${_component};cuda-only")
-        endif()
-    endforeach()
-endif()
 
 # An AdaptiveCpp Metal tree: ACPP_ADAPTIVITY_LEVEL=0 must make a GPU Queue throw (it would JIT
 # a TU's double kernels with its float ones). The unset arm runs inside backend_dispatch_tests.
