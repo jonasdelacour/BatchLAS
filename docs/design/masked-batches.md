@@ -222,6 +222,15 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   the work-group holes), always as "inactive item written". `none` and `all-active` stayed green,
   and no active item differed. Latrd's grid panel cannot run on Metal or a host device and is
   untested here.
+- **W2c, QR** (`tests/geqrf_mask_tests.cc`, `tests/ormqr_mask_tests.cc`; Apple M5 Max Metal float and
+  cfloat, NETLIB every scalar, 2026-10-28): geqrf's tiny, cta, blocked and NETLIB families, ormqx_cta,
+  NETLIB's ormqr and orgqr, and the blocked ormqr and orgqr wherever the Left update does not reach
+  trmm run a masked batch. Defeating one guard at a time turned red only its own cases: tiny's
+  `Masked` fold (the tiny shapes); cta's packed sub-group return (cta's packed shapes and blocked's
+  short trailing panels, which take that leaf); blocked's per-part slice (its 8-item-part shape);
+  ormqx_cta's `live` fold (every ormqx_cta form); orgqr's copy-back skip (the orgqr blocked shapes);
+  each NETLIB loop (its op's vendor cases). ormqx_cta's old per-partition return before a barrier
+  stayed green on Metal: that fix is held by review, not by a test.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

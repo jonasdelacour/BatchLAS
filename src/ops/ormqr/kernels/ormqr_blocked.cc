@@ -11,6 +11,7 @@
 
 #include <src/math-helpers.hh>
 #include <src/kernels/common/larft_wy.hh>
+#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
@@ -31,39 +32,7 @@ struct OrmqrWyTag;
 
 namespace {
 
-// larft builds T upper triangular and zeroes the half below, so W2 = op(T) W1
-// can be spelled as a trmm rather than a GEMM through those zeros.
-// BATCHLAS_ORMQR_WY=gemm|trmm pins the spelling past the routing below.
-enum class WyPin { Measured, Gemm, Trmm };
-
-inline WyPin wy_pin() {
-    // Latched: this feeds a sizing decision as well as the call.
-    static const WyPin result = []() {
-        const char* v = batchlas::settings().selection.ormqr_wy.get();
-        if (!v) return WyPin::Measured;
-        const std::string s(v);
-        if (s == "gemm") return WyPin::Gemm;
-        if (s == "trmm") return WyPin::Trmm;
-        return WyPin::Measured;
-    }();
-    return result;
-}
-
-// Substitute the trmm only where its batched triangular tile kernel is both
-// enabled and ahead of the GEMM it replaces: real types, ib <= 64.
-// evidence: docs/perf/qr.md#ormqr-wy-trmm-gate
-template <Backend B, typename T>
-inline bool wy_trmm_applicable(int ib) {
-    const WyPin pin = wy_pin();
-    if (pin != WyPin::Measured) {
-        return pin == WyPin::Trmm;
-    }
-    // Ask whether the tile substitution is enabled for (B, T), not what the
-    // backend is: a vendor-free build is still Backend::CUDA.
-    constexpr bool tile_kernel_enabled = select::level3_tile_substitution_enabled<B, T>;
-    constexpr bool type_beats_gemm_at_this_m = !detail::is_complex<T>::value;
-    return tile_kernel_enabled && type_beats_gemm_at_this_m && ib <= 64;
-}
+using ops::ormqr::wy_trmm_applicable;
 
 inline bool use_device_ormqr() {
     static const bool result = []() {
@@ -196,14 +165,18 @@ Event ormqr_blocked_impl(Queue& ctx,
 
     const bool transpose_apply = (trans != Transpose::NoTrans);
 
+    // a and c carry one mask (ormqr_blocked attaches it to both); batch_range slices it per part.
     for (int b0 = 0, batch = 0; b0 < batch_all; b0 += batch) {
         batch = batch_all - b0 < 2 * chunk ? batch_all - b0 : chunk;   // the last part takes the remainder
         const auto a = a_all.batch_range(b0, batch);
         const auto c = c_all.batch_range(b0, batch);
         const Span<T> tau = tau_all.subspan(static_cast<size_t>(b0) * k, static_cast<size_t>(batch) * k);
+        const auto mask = ::batchlas::detail::call_mask("ormqr_blocked", a, c);
+        const std::uint8_t* const mask_p = ::batchlas::detail::mask_ptr(mask);
 
-        MatrixView<T, MatrixFormat::Dense> Vmat(Vbuf.data(), nq, nb, nq, nq * nb, batch);
-        MatrixView<T, MatrixFormat::Dense> Tmat(Tbuf.data(), nb, nb, nb, nb * nb, batch);
+        // Workspace views are rebuilt from raw pointers: each re-attaches the part's mask.
+        const auto Vmat = MatrixView<T, MatrixFormat::Dense>(Vbuf.data(), nq, nb, nq, nq * nb, batch).with_batch_mask(mask);
+        const auto Tmat = MatrixView<T, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, nb * nb, batch).with_batch_mask(mask);
 
         auto apply_block = [&](int i0) {
             const int ib = std::min(nb, k - i0);
@@ -212,7 +185,7 @@ Event ormqr_blocked_impl(Queue& ctx,
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("ormqr_blocked.pack_v_panel");
                 (void)wy::pack_v_panel_batched<OrmqrWyTag, T>(
-                    q, Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), a, i0, ib, nq);
+                    q, Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), a, i0, ib, nq, mask_p);
             }
 
             {
@@ -221,7 +194,7 @@ Event ormqr_blocked_impl(Queue& ctx,
                     q, Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
                     Vmat.data_ptr(), Vmat.ld(), Vmat.stride(), m, ib,
                     tau.data(), /*tau_stride=*/k, /*tau_offset=*/i0, batch,
-                    /*use_device=*/use_device_ormqr());
+                    /*use_device=*/use_device_ormqr(), mask_p);
             }
 
             if (side == Side::Left) {
@@ -229,8 +202,8 @@ Event ormqr_blocked_impl(Queue& ctx,
                 auto Vblk = Vmat({0, m}, {0, ib});
                 auto Tblk = Tmat({0, ib}, {0, ib});
 
-                MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), nb, nC, nb, nb * nC, batch);
-                MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), nb, nC, nb, nb * nC, batch);
+                const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
+                const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, nb * nC, batch).with_batch_mask(mask);
                 auto W1 = W1full({0, ib}, Slice());
                 auto W2 = W2full({0, ib}, Slice());
 
@@ -254,8 +227,8 @@ Event ormqr_blocked_impl(Queue& ctx,
                 auto Vblk = Vmat({0, m}, {0, ib});
                 auto Tblk = Tmat({0, ib}, {0, ib});
 
-                MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, mC * nb, batch);
-                MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), mC, nb, mC, mC * nb, batch);
+                const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
+                const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, mC * nb, batch).with_batch_mask(mask);
                 auto W1 = W1full(Slice(), {0, ib});
                 auto W2 = W2full(Slice(), {0, ib});
 
@@ -316,14 +289,22 @@ size_t ormqr_blocked_buffer_size(Queue& ctx,
 
 template <Backend B, typename T>
 Event ormqr_blocked(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& a,
-                    const MatrixView<T, MatrixFormat::Dense>& c,
+                    const MatrixView<T, MatrixFormat::Dense>& a_in,
+                    const MatrixView<T, MatrixFormat::Dense>& c_in,
                     Side side,
                     Transpose trans,
                     Span<T> tau,
                     Span<std::byte> workspace,
                     int32_t block_size) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_blocked", B, a, c);
+    // mask: lift after trmm. Only the Left update's trmm leg ignores a mask; every other step
+    // (pack_v, larft, the gemms) honours it.
+    if (ops::ormqr::wy_reaches_trmm<B, T>(side))
+        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_blocked", B, a_in, c_in);
+    // Both operands carry the call's mask whichever brought it.
+    const auto mask = ::batchlas::detail::call_mask("ormqr_blocked", a_in, c_in);
+    const bool adopt = !mask.empty() && a_in.batch_size() == c_in.batch_size();
+    const auto a = adopt ? a_in.with_batch_mask(mask) : a_in;
+    const auto c = adopt ? c_in.with_batch_mask(mask) : c_in;
     validate_ormqr_dims(a, c, side, tau);
 
     if (!ctx.in_order()) {

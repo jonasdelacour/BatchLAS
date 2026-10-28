@@ -24,6 +24,7 @@
 #include <sycl/sycl.hpp>
 
 #include <cstddef>
+#include <cstdint>
 
 namespace batchlas::wy {
 
@@ -50,7 +51,8 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
                                                const T* v_data, int ld_v, int stride_v,
                                                int m, int ib,
                                                const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch) {
+                                               int tau_offset, int batch,
+                                               const std::uint8_t* mask) {
     static_assert(WG > 0, "WG must be positive");
 
     return q->submit([&](sycl::handler& h) {
@@ -59,7 +61,7 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
                 T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
                 const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
@@ -126,7 +128,8 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
                                                const T* v_data, int ld_v, int stride_v,
                                                int m, int ib,
                                                const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch) {
+                                               int tau_offset, int batch,
+                                               const std::uint8_t* mask) {
     static_assert(WG > 0, "WG must be positive");
 
     return q->submit([&](sycl::handler& h) {
@@ -135,7 +138,7 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
                               sycl::range<1>(static_cast<size_t>(WG))),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
                 T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
                 const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
@@ -197,16 +200,17 @@ sycl::event larft_forward_columnwise_batched_t(Queue& q,
                                                const T* v_data, int ld_v, int stride_v,
                                                int m, int ib,
                                                const T* tau_data, int tau_stride,
-                                               int tau_offset, int batch) {
+                                               int tau_offset, int batch,
+                                               const std::uint8_t* mask = nullptr) {
     const auto pick = [&]<int WG>(std::integral_constant<int, WG>) {
         if constexpr (UseDevice) {
             return detail::larft_forward_columnwise_wg_device<Tag, T, WG>(
                 q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                tau_data, tau_stride, tau_offset, batch);
+                tau_data, tau_stride, tau_offset, batch, mask);
         } else {
             return detail::larft_forward_columnwise_wg_legacy<Tag, T, WG>(
                 q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                tau_data, tau_stride, tau_offset, batch);
+                tau_data, tau_stride, tau_offset, batch, mask);
         }
     };
 
@@ -225,14 +229,15 @@ sycl::event larft_forward_columnwise_batched(Queue& q,
                                              int m, int ib,
                                              const T* tau_data, int tau_stride,
                                              int tau_offset, int batch,
-                                             bool use_device) {
+                                             bool use_device,
+                                             const std::uint8_t* mask = nullptr) {
     return use_device
                ? larft_forward_columnwise_batched_t<Tag, T, true>(
                      q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                     tau_data, tau_stride, tau_offset, batch)
+                     tau_data, tau_stride, tau_offset, batch, mask)
                : larft_forward_columnwise_batched_t<Tag, T, false>(
                      q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                     tau_data, tau_stride, tau_offset, batch);
+                     tau_data, tau_stride, tau_offset, batch, mask);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +252,8 @@ template <typename Tag, typename T>
 sycl::event pack_v_panel_batched(Queue& q,
                                  T* v_out, int ld_v_out, int stride_v_out,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
-                                 int i0, int ib, int nq) {
+                                 int i0, int ib, int nq,
+                                 const std::uint8_t* mask = nullptr) {
     const int m = nq - i0;
     const int ld_a = a.ld();
     const int stride_a = a.stride();
@@ -263,6 +269,7 @@ sycl::event pack_v_panel_batched(Queue& q,
                            static_cast<size_t>(m)),
             [=](sycl::id<3> idx) {
                 const int b = static_cast<int>(idx[0]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int c = static_cast<int>(idx[1]);
                 const int r = static_cast<int>(idx[2]);
                 T val = T(0);

@@ -12,6 +12,7 @@
 
 #include <src/ops/ormqr/choice.hh>
 #include <src/ops/ormqr/vendor.hh>
+#include <src/ops/ormqr/wy_spelling.hh>
 #include <src/select/select.hh>
 #include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
@@ -48,15 +49,18 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
 // and cuSOLVER / LAPACKE / rocSOLVER unmqr reject 'T' (cuSOLVER status 3). Blocked is also kept
 // off non-GPU queues; dimension checks are left to the drivers. Both run
 // each item at the top-level extents (no heterogeneous A or C). No batch term: the sub-ops run a
-// batch past 65535 as slices, vendor-free too (known-defects #16).
-template <typename T>
-bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose trans) {
-    if (::batchlas::detail::any_batch_mask(A, C)) return false;  // no family honours a batch mask yet
+// batch past 65535 as slices, vendor-free too (known-defects #16). Masked: Blocked and NETLIB's host
+// loop skip an inactive item; a strided vendor call cannot.
+template <Backend B, typename T>
+bool can_run(const OrmqrChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Side side,
+             Transpose trans) {
+    const bool masked = ::batchlas::detail::any_batch_mask(A, C);
     const bool defined = !(is_std_complex_v<T> && trans == Transpose::Trans) && !A.is_heterogeneous() &&
                          !C.is_heterogeneous();
     return std::visit(overloaded{
-        [&](Blocked) { return defined && d.is_gpu; },
-        [&](Vendor) { return defined && d.has_vendor; },
+        // mask: lift after trmm (the Left update's trmm leg; wy_spelling.hh)
+        [&](Blocked) { return defined && d.is_gpu && !(masked && wy_reaches_trmm<B, T>(side)); },
+        [&](Vendor) { return defined && d.has_vendor && (!masked || B == Backend::NETLIB); },
     }, c);
 }
 
@@ -113,10 +117,14 @@ Event launch(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Sid
 }  // namespace ops::ormqr
 
 template <Backend Back, typename T>
-Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
+Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const MatrixView<T, MatrixFormat::Dense>& C_,
             Side side, Transpose trans, Span<T> tau, Span<std::byte> workspace, int32_t block_size_hint) {
     ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
-    (void)::batchlas::detail::call_mask("ormqr", A, C);
+    // Both operands carry the call's mask whichever brought it, so the family's views see it.
+    const auto mask = ::batchlas::detail::call_mask("ormqr", A_, C_);
+    const bool adopt = !mask.empty() && A_.batch_size() == C_.batch_size();
+    const auto A = adopt ? A_.with_batch_mask(mask) : A_;
+    const auto C = adopt ? C_.with_batch_mask(mask) : C_;
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key (m, n = A's extents, k = reflectors); select::run adds the backend.
@@ -125,7 +133,7 @@ Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     const select::Key key = ops::ormqr::key_of<T>(A, C, side, trans);
     return select::run<Back, T>(
         ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, A, C, trans); }, shape, key,
+        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<Back, T>(c, d, A, C, side, trans); }, shape, key,
         [&](const auto& c) {
             // Blocked fits its batch part to the workspace it holds (a caller sized at a larger shape
             // may hold less than this shape's part) and throws workspace_error itself below one item.
@@ -148,7 +156,7 @@ size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<T>(k, d, A, C, trans); });
+        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<Back, T>(k, d, A, C, side, trans); });
     return ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint);
 }
 

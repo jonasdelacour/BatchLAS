@@ -845,7 +845,7 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     ok.is_gpu = ok.has_sg32 = true;
     ok.slm_budget = 97280;
     const MVof<T> sq(nullptr, 8, 8, 8, 64, 2), big(nullptr, 400, 90, 400, 36000, 2);
-    auto runs = [](const select::Device& d, const MVof<T>& A, const C& c) { return gq::can_run<T>(c, d, A); };
+    auto runs = [](const select::Device& d, const MVof<T>& A, const C& c) { return gq::can_run<Backend::CUDA, T>(c, d, A); };
     const C tiny = gq::Tiny{}, cta = gq::Cta{}, blocked = gq::Blocked{}, vendor = gq::Vendor{};
     ASSERT_TRUE(runs(ok, sq, tiny) && runs(ok, sq, cta) && runs(ok, sq, blocked) && runs(ok, big, blocked));
     EXPECT_FALSE(runs(ok, sq, vendor));

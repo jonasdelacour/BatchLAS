@@ -24,10 +24,10 @@ template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
 // Correctness only (R3): each clause is its driver's check. No family takes a heterogeneous batch; Cta and
-// Blocked take any m x n, Tiny only square. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
-template <typename T>
+// Blocked take any m x n, Tiny only square; masked, natives or NETLIB. evidence: docs/perf/qr.md#geqrf-wide-shapes-m-less-than-n
+template <Backend B, typename T>
 bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
-    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
+    const bool masked = detail::any_batch_mask(A);
     const std::int64_t m = A.rows(), n = A.cols();
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
@@ -39,7 +39,7 @@ bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
             return native && sycl_geqrf::geqrf_blocked_available<T>() &&
                    sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && (!masked || B == Backend::NETLIB); },
     }, c);
 }
 

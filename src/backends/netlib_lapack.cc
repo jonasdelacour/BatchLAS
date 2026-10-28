@@ -1346,7 +1346,9 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::geqrf, "geqrf_vendor", B, A);
+        // I4: the host loop reads the (possibly device-only, host-addressable here) mask itself;
+        // an inactive item's A and tau are untouched.
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("geqrf_vendor", A));
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
@@ -1354,6 +1356,7 @@ namespace batchlas{
             int m = A_view.rows();
             int n = A_view.cols();
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgeqrf, LAPACKE_dgeqrf, LAPACKE_cgeqrf, LAPACKE_zgeqrf,
                     Layout::ColMajor,
@@ -1389,7 +1392,8 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::orgqr, "orgqr_vendor", B, A);
+        // I4, as geqrf_vendor: an inactive item's A is untouched.
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("orgqr_vendor", A));
         static_cast<void>(workspace);
         auto A_view = A;
         auto tau_view = tau;
@@ -1398,6 +1402,7 @@ namespace batchlas{
             int n = A_view.cols();
             int k = std::min(m, n);
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sorgqr, LAPACKE_dorgqr, LAPACKE_cungqr, LAPACKE_zungqr,
                     Layout::ColMajor,
@@ -1437,7 +1442,8 @@ namespace batchlas{
                       Transpose trans,
                       Span<T> tau,
                       Span<std::byte> workspace) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqr_vendor", B, A, C);
+        // I4, as geqrf_vendor: an inactive item's C is untouched.
+        const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("ormqr_vendor", A, C));
         auto A_view = A;
         auto C_view = C;
         auto tau_view = tau;
@@ -1447,6 +1453,7 @@ namespace batchlas{
             int n = C_view.cols();
             int k = std::min(A_view.rows(), A_view.cols());
             for (int i = 0; i < A_view.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 call_backend_nh<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
                     Layout::ColMajor,

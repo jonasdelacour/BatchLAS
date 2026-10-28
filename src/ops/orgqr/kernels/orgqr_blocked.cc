@@ -9,6 +9,7 @@
 #include <src/ops/orgqr/orgqr_native.hh>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/grid_chunk.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -209,7 +210,11 @@ Event orgqr_blocked_dispatch(Queue& ctx,
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
         const auto Apart = A.batch_range(b0, cb);
         const Span<T> tau_part = tau.subspan(static_cast<std::size_t>(b0) * k, static_cast<std::size_t>(cb) * k);
-        const auto C = orgqr_c_view<T>(ws.c.data(), m, n, cb);
+        // C is rebuilt from the workspace pointer, so it re-attaches the part's mask (the drop hazard);
+        // both kernels below skip an inactive item (I3), whose A is then untouched.
+        const auto mask = ::batchlas::detail::call_mask("orgqr_blocked", Apart);
+        const std::uint8_t* const mask_p = ::batchlas::detail::mask_ptr(mask);
+        const auto C = orgqr_c_view<T>(ws.c.data(), m, n, cb).with_batch_mask(mask);
 
         // Out of order, the previous part's copy-back may still be reading C.
         if (b0 > 0 && !ctx.in_order()) ctx.wait();
@@ -226,6 +231,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
                                static_cast<std::size_t>(m)),
                 [=](sycl::id<3> idx) {
                     const std::size_t b = idx[0];
+                    if (mask_p != nullptr && mask_p[b] == 0) return;
                     const int c = static_cast<int>(idx[1]);
                     const int r = static_cast<int>(idx[2]);
                     cp[b * stride_c + static_cast<std::size_t>(r) +
@@ -257,6 +263,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
                                static_cast<std::size_t>(m)),
                 [=](sycl::id<3> idx) {
                     const std::size_t b = idx[0];
+                    if (mask_p != nullptr && mask_p[b] == 0) return;
                     const int c = static_cast<int>(idx[1]);
                     const int r = static_cast<int>(idx[2]);
                     ap[static_cast<std::ptrdiff_t>(b) * stride_a +

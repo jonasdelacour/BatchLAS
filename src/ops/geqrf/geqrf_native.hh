@@ -113,7 +113,7 @@ BATCHLAS_INTERNAL_API Event geqrf_blocked_dispatch(Queue& ctx,
 
 // Raw pointers, not a MatrixView: a slice carries the PARENT pointer array. tau is indexed
 // tau_ptr[b * tau_batch_stride + tau_offset + j] with k = min(rows, cols) of the WHOLE matrix;
-// a panel-derived stride scatters tau silently, and only for batch > 1.
+// a panel-derived stride scatters tau silently, and only for batch > 1. `mask`: these items' batch mask.
 template <typename T>
 Event geqrf_panel_factorize(Queue& ctx,
                             T* a_ptr, int ld, int stride,
@@ -121,7 +121,8 @@ Event geqrf_panel_factorize(Queue& ctx,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
                             bool* used_resident_out = nullptr,
                             GeqrfPanelLeaf leaf = GeqrfPanelLeaf::Auto,
-                            GeqrfPanelLeaf* leaf_used_out = nullptr);
+                            GeqrfPanelLeaf* leaf_used_out = nullptr,
+                            const std::uint8_t* mask = nullptr);
 
 // The CTA TIER's predicate, occupancy-scaled: capacity, this gate and the launcher's are ONE.
 template <typename T>
