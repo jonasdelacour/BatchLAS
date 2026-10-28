@@ -2,10 +2,11 @@
 // syevx honours a batch mask (W4c) on tests/masked_contract.hh: A, W, V, m and info of an inactive
 // item keep every byte, and an active item equals the unmasked call with the public syev pinned
 // strictly (cta_fused on a GPU, the LAPACKE loop on the host backend). Direct runs every range on
-// both backends. LOBPCG and Filtered run on a GPU with a non-Cholesky ortho; on the host backend
-// (gemm is the host BLAS), with a Cholesky ortho on a GPU, and on DirectSubset (stebz, stein and
-// sytrd_sy2sb refuse) a masked call throws before any write. Every mask is device-only; data
-// complex where T is, ld and stride padded for A and V, W, m and info poisoned.
+// both backends, DirectSubset (lift 2, real T) every range unpinned on a GPU. LOBPCG and Filtered
+// run on a GPU with a non-Cholesky ortho; on the host backend (gemm is the host BLAS: these and
+// DirectSubset) and with a Cholesky ortho on a GPU a masked call throws before any write. lanczos
+// (lift 2) runs dense, real T, on a GPU. Every mask is device-only; data complex where T is, ld and
+// stride padded for A and V, W, m and info poisoned.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -228,6 +229,37 @@ protected:
             EXPECT_EQ(0, std::memcmp(before[o].data(), outs[o].base, before[o].size())) << outs[o].name << " was written";
     }
 
+    // DirectSubset (sy2sb, sb2st_hh, stebz, stein, the two back-transforms) routes no syevx Choice and
+    // calls no syev: unpinned, the masked call must reach sy2sb's geqrf and no syev. Its children
+    // route on their own Auto, so on a vendor backend masked patterns compare with all-active masked.
+    void check_subset(const std::string& what, int n, int batch, int neigs, JobType jobz, const SyevxParams<T>& p) {
+        SCOPED_TRACE(what + " n " + std::to_string(n) + " neigs " + std::to_string(neigs) +
+                     (jobz == JobType::EigenVectors ? " V" : " N"));
+        Queue& q = *this->ctx;
+        Problem<T, B> pr(q, n, batch, neigs, jobz, p, false);
+        auto c = pr.make_case(0);
+        c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
+        if (!reached_checked_) {
+            reached_checked_ = true;
+            const auto rows = test_support::reached_rows([&] {
+                std::vector<std::uint8_t> bytes(std::size_t(batch), 1);
+                bytes[0] = 0;
+                const mc::DeviceMask mask(q, bytes);
+                UnifiedVector<std::byte> ws(std::max<std::size_t>(pr.buffer_size(mask.span()), 1));
+                pr.prepare();
+                pr.call(mask.span(), ws.to_span());
+                q.wait();
+            });
+            const auto has = [&](const char* op) {
+                return std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.op == op; });
+            };
+            EXPECT_TRUE(has("geqrf")) << "the masked call never reached DirectSubset's sy2sb";
+            EXPECT_FALSE(has("syev")) << "the masked call ran syev: Direct, not DirectSubset";
+        }
+        mc::check(q, c);
+    }
+    bool reached_checked_ = false;
+
     static SyevxParams<T> params(SyevxAlgorithm a) {
         SyevxParams<T> p;
         p.method = a;
@@ -365,17 +397,89 @@ TYPED_TEST(SyevxMask, CholeskyOrthoRefusesOnAGpu) {
                                  16, 8, 3, TestFixture::iterative(a, true, o));
 }
 
-// DirectSubset carries the mask to every child, but stebz, stein and sytrd_sy2sb refuse it.
-TYPED_TEST(SyevxMask, DirectSubsetRefusesUntilItsChildrenHonourTheMask) {
+// DirectSubset by name, every range and both jobz, at sizes over sy2sb's band: active items
+// bit-identical (stebz and stein bisect and iterate per item, no cross-item host decision).
+TYPED_TEST(SyevxMask, DirectSubsetLeavesInactiveItemsUntouched) {
     using T = typename TestFixture::T;
     if constexpr (is_std_complex_v<T>) {
         GTEST_SKIP() << "DirectSubset is real only (complex falls back to Direct)";
     } else {
-        auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
-        p.select = SyevxSelect::Index;
-        p.il = 1;
-        p.iu = 3;
-        this->expect_refused("direct_subset", 12, 8, 3, p);
+        if (TestFixture::kHost) {  // its gemm is the host BLAS: refused before any write
+            auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
+            p.select = SyevxSelect::Index;
+            p.il = 1;
+            p.iu = 3;
+            this->expect_refused("direct_subset", 40, 8, 3, p);
+            return;
+        }
+        for (const int n : {40, 70})
+            for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors}) {
+                for (const bool largest : {true, false}) {
+                    auto p = TestFixture::params(SyevxAlgorithm::DirectSubset);
+                    p.find_largest = largest;
+                    this->check_subset(largest ? "subset largest" : "subset smallest", n, 12, 3, j, p);
+                }
+                auto idx = TestFixture::params(SyevxAlgorithm::DirectSubset);
+                idx.select = SyevxSelect::Index;
+                idx.il = 2;
+                idx.iu = 5;
+                idx.order = SortOrder::Descending;
+                this->check_subset("subset index", n, 12, 4, j, idx);
+                auto val = TestFixture::params(SyevxAlgorithm::DirectSubset);
+                val.select = SyevxSelect::Value;  // (2, 20]: 6 values, over the capacity 4
+                val.vl = Real<T>(2);
+                val.vu = Real<T>(20);
+                this->check_subset("subset value", n, 12, 4, j, val);
+            }
+    }
+}
+
+// lanczos on dense A (full-length Krylov basis, CGS2 ortho by default, steqr, gemm and the sort):
+// W and V of an inactive item untouched, A read only. Its gemm and ortho route on their own Auto.
+TYPED_TEST(SyevxMask, LanczosLeavesInactiveItemsUntouched) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (is_std_complex_v<T>) {
+        GTEST_SKIP() << "the lanczos case runs real T";
+    } else {
+        if (TestFixture::kHost) GTEST_SKIP() << "lanczos's steqr CTA kernel is not built for the host device, unmasked too";
+        Queue& q = *this->ctx;
+        const int batch = 12;
+        for (const int n : {12, 40})
+            for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
+                for (const SortOrder order : {SortOrder::Ascending, SortOrder::Descending}) {
+                    SCOPED_TRACE("lanczos n " + std::to_string(n) + (j == JobType::EigenVectors ? " V " : " N ") +
+                                 (order == SortOrder::Ascending ? "ascending" : "descending"));
+                    LanczosParams<T> lp;
+                    lp.sort_order = order;
+                    Matrix<T> A = ts::padded<T>(n, n, batch), V = ts::padded<T>(n, n, batch);
+                    UnifiedVector<R> w(std::size_t(n) * batch);
+                    const bool vecs = j == JobType::EigenVectors;
+                    const auto v_of = [&](Span<const std::uint8_t> m) {
+                        return vecs ? V.view().with_batch_mask(m) : MatrixView<T, MatrixFormat::Dense>();
+                    };
+                    mc::Case c;
+                    c.batch = batch;
+                    c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
+                    c.prepare = [&] {
+                        fill_hermitian(A, n, batch, false);
+                        std::fill_n(V.data_ptr(), std::size_t(V.stride()) * batch, ts::poison<T>());
+                        std::fill_n(w.data(), w.size(), ts::poison<R>());
+                    };
+                    c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+                        (void)lanczos<B, T, MatrixFormat::Dense>(q, A.view().with_batch_mask(m), w.to_span(), ws, j, v_of(m), lp);
+                    };
+                    c.buffer_size = [&](Span<const std::uint8_t> m) {
+                        return lanczos_buffer_size<B, T, MatrixFormat::Dense>(q, A.view().with_batch_mask(m), w.to_span(), j,
+                                                                             v_of(m), lp);
+                    };
+                    c.outputs = [&] {
+                        return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("V", V.view()),
+                                                       mc::Output::span<R>("W", {w.data(), w.size()}, std::size_t(n))};
+                    };
+                    mc::check(q, c);
+                }
     }
 }
 
