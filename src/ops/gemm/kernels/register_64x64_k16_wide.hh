@@ -295,6 +295,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
         const int stride_b = static_cast<int>(B.stride());
         const int stride_c = static_cast<int>(C.stride());
         const int batch = static_cast<int>(A.batch_size());
+        const std::uint8_t* mask = item_mask(A, B, C);
 
         D alpha_d;
         D beta_d;
@@ -304,7 +305,7 @@ Event launch_register_64x64_k16_wide(Queue& ctx,
         batchlas::impl::parallel_for<GemmRegister64x64K16WideKernel<T, AlignedFastPath>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
-                if (bid >= batch) {
+                if (bid >= batch || item_off(mask, bid)) {
                     return;
                 }
 
@@ -831,6 +832,7 @@ struct GemmWide64Body {
     int batch;
     D alpha, beta;
     sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a, tile_b;
+    const std::uint8_t* mask;  // the batch mask; null unmasked
 
     // A thread's first staged element (kb, ib) of an operand. Along i: granule tid % GPR of row
     // tid / GPR (the next one KStep rows down). Along k: CF columns of VecN k, row group kq;
@@ -884,7 +886,7 @@ struct GemmWide64Body {
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;
         const int bid = static_cast<int>(item.get_group(0));
-        if (bid >= batch) return;
+        if (bid >= batch || item_off(mask, bid)) return;
         const int tid = static_cast<int>(item.get_local_id(2));
         const int ty = tid & 15, tx = tid >> 4;  // m, n: lanes one apart are one granule apart in m
         const int m0 = static_cast<int>(item.get_group(1)) * TileM;
@@ -1110,7 +1112,7 @@ Event launch_wide64_v2_leg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
         Body body{reinterpret_cast<const float*>(A.data_ptr()), reinterpret_cast<const float*>(B.data_ptr()),
                   reinterpret_cast<D*>(C.data_ptr()), m, n, k, static_cast<int>(A.ld()), static_cast<int>(B.ld()),
                   static_cast<int>(C.ld()), A.stride(), B.stride(), C.stride(), static_cast<int>(A.batch_size()),
-                  alpha_d, beta_d, tile_a, tile_b};
+                  alpha_d, beta_d, tile_a, tile_b, item_mask(A, B, C)};
         batchlas::impl::parallel_for<Name>(h, sycl::nd_range<3>(global, local), body);
     });
     return ctx.get_event();

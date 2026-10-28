@@ -211,6 +211,25 @@ bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mas
     return true;
 }
 
+// gemm, whose native families honour the mask (W1a): plain, and heterogeneous with a k == 0 item.
+template <typename T, Backend B>
+std::vector<Entry<T>> gemm_entries() {
+    using P = Pool<T>;
+    const T one(1), half(0.5);
+    const auto N = Transpose::NoTrans;
+    return {
+        {"gemm", true, [=](P& p) { gemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N); }},
+        {"gemm(heterogeneous, a k == 0 item)", true,
+         [=](P& p) {
+             // Item 0 (inactive) is empty and item 1 (active) has k == 0: the loop writes C there itself.
+             const auto A = p.mat(p.a).with_active_dims(p.first_empty.to_span(), p.second_k0.to_span());
+             const auto Bm = p.mat(p.b).with_active_dims(p.second_k0.to_span(), p.full.to_span());
+             const auto Cm = p.mat(p.c).with_active_dims(p.first_empty.to_span(), p.full.to_span());
+             gemm<B, T>(p.q, A, Bm, Cm, one, half, N, N);
+         }},
+    };
+}
+
 // The routed ops: the public op entries, each refused by every family's can_run term.
 template <typename T, Backend B>
 std::vector<Entry<T>> routed_entries() {
@@ -220,7 +239,6 @@ std::vector<Entry<T>> routed_entries() {
     const auto N = Transpose::NoTrans;
     const auto all = SvdVectors::All;
     std::vector<Entry<T>> out = {
-        {"gemm", true, [=](P& p) { gemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N); }},
         {"gemv", true, [=](P& p) { gemv<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp), one, half, N); }},
         {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
         {"trmm", true,
@@ -289,15 +307,10 @@ std::vector<Entry<T>> routed_entries() {
              sytrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws);
          }},
         {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
-        {"gemm(heterogeneous, a k == 0 item)", true,
-         [=](P& p) {
-             // Item 0 (inactive) is empty and item 1 (active) has k == 0: the loop writes C there itself.
-             const auto A = p.mat(p.a).with_active_dims(p.first_empty.to_span(), p.second_k0.to_span());
-             const auto Bm = p.mat(p.b).with_active_dims(p.second_k0.to_span(), p.full.to_span());
-             const auto Cm = p.mat(p.c).with_active_dims(p.first_empty.to_span(), p.full.to_span());
-             gemm<B, T>(p.q, A, Bm, Cm, one, half, N, N);
-         }},
     };
+    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
+    if constexpr (B == Backend::NETLIB)
+        for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
     if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
@@ -709,6 +722,46 @@ TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     int checked = 0;
     for (const auto& e : routed_entries<T, B>()) checked += check_refuses<T>(q, e, mask.span(), this->ws(), unroutable);
     EXPECT_GT(checked, 0) << "no routed op ran unmasked, so no refusal was checked";
+}
+
+// gemm runs a masked batch natively on a device backend, whichever operand carries the mask: C's
+// inactive items (0, 2) bit-identical, its active ones the unmasked call's, A and B unwritten.
+TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "the host backend's gemm is its BLAS, which refuses";
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& e : gemm_entries<T, B>()) {
+        SCOPED_TRACE(e.name);
+        Pool<T> plain(q, {}, this->ws());
+        e.call(plain);
+        q.wait();
+        const auto want = plain.snapshot();
+        for (const int only : {-1, 0, 1, 2}) {
+            SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+            Pool<T> p(q, mask.span(), this->ws(), only);
+            const auto before = p.snapshot();
+            ASSERT_NO_THROW({
+                e.call(p);
+                q.wait();
+            });
+            const auto after = p.snapshot();
+            for (std::size_t i = 0; i < before.size(); ++i) {
+                const std::string name = std::get<0>(p.buffers()[i]);
+                if (name != "C") {
+                    EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << name;
+                    continue;
+                }
+                for (int b = 0; b < kBatch; ++b) {
+                    const std::size_t off = std::size_t(b) * kStride * sizeof(T), len = kStride * sizeof(T);
+                    const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
+                    EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
+                        << "C item " << b << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
+                }
+            }
+        }
+    }
 }
 
 TYPED_TEST(BatchMaskEntries, VendorEntriesRefuseADeviceOnlyMask) {

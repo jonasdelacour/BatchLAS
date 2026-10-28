@@ -298,6 +298,7 @@ Event launch_direct(Queue& ctx,
         const int stride_b = B.stride();
         const int stride_c = C.stride();
         const int batch = A.batch_size();
+        const std::uint8_t* mask = item_mask(A, B, C);
         const Transpose op_a = transA;
         const Transpose op_b = transB;
 
@@ -305,7 +306,7 @@ Event launch_direct(Queue& ctx,
             const int bid = static_cast<int>(item.get_group(0));
             const int row = static_cast<int>(item.get_global_id(1));
             const int col = static_cast<int>(item.get_global_id(2));
-            if (bid >= batch || row >= m || col >= n) {
+            if (bid >= batch || row >= m || col >= n || item_off(mask, bid)) {
                 return;
             }
 

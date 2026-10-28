@@ -40,6 +40,7 @@ set(TEST_TARGETS
     error_model_tests
     linalg_layer_tests
     gemm_tests
+    gemm_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -193,7 +194,7 @@ set(BATCHLAS_TEST_LABELS_util
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
+    device_blas_tests gemm_tests gemm_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
@@ -269,7 +270,7 @@ string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERN
 # entry that selects no case (a stale line, or cases compiled out in this configuration)
 # reports SKIPPED rather than a silent pass.
 set(BATCHLAS_HEAVY_TESTS
-    gemm_candidates_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
+    gemm_candidates_tests gemm_mask_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
     gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
     getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
     orgqr_candidates_tests ormqr_candidates_tests posv_candidates_tests

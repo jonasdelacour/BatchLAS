@@ -192,6 +192,13 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
 - Per wave: drop `active()` in one family (red: that pin's patterns with holes); stop slicing the
   mask in `batch_range` (red: the chunk patterns); drop one vendor refusal (red: `BatchPolicy` on
   that vendor); revert `info_clear` to a memset (red: the `info` sentinel only).
+- **W1a, gemm** (`tests/gemm_mask_tests.cc`; sm_89, every scalar, 2026-10-28): every native family
+  runs a masked batch and the vendor refuses. Defeating one guard at a time turned red only its own
+  cases: `direct`'s I1 return (the `direct` pins, `PastTheGrid`'s direct part, and Auto where it
+  picks `direct`); wide v2's (its three rows on the non-double scalars, double's own 64x64x16
+  kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
+  the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
+  (`PastTheGrid` only). An all-active mask stayed green under every break.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

@@ -1451,7 +1451,10 @@ const masked_contract::Pattern& alternating4() {
 // Every op on every pin the backend runs unmasked (shape refusals are filtered first, so they
 // cannot pass as mask refusals), with a device-only mask {0, 1, 0, 1}: the call is refused, or
 // it leaves every output of items 0 and 2 bit-identical. Red under a family that ignores the mask.
+// A migrated op's non-vendor pin must run on a device backend (W1a: gemm), so a family cannot pass
+// by refusing again; the host backend's natives yield to its BLAS, which refuses.
 TYPED_TEST(BatchPolicy, MaskedBatchNeverRunsAFamilyThatIgnoresIt) {
+    const std::set<std::string> migrated{"gemm"};
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
     batchlas::UnifiedVector<std::byte> work(std::size_t(1) << 24);
@@ -1484,6 +1487,8 @@ TYPED_TEST(BatchPolicy, MaskedBatchNeverRunsAFamilyThatIgnoresIt) {
             } catch (const std::exception& e) {
                 refused = e.what();
                 EXPECT_TRUE(is_mask_refusal(e)) << "a masked call threw something other than a refusal: " << refused;
+                EXPECT_FALSE(migrated.count(name) && pin != "vendor" && B != Backend::NETLIB)
+                    << "a migrated family refused: " << refused;
             }
             const auto after = masked_contract::detail::snapshot(outs, 4);
             for (std::size_t o = 0; o < outs.size(); ++o)
