@@ -8,6 +8,7 @@
 #include <src/queue.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -120,7 +121,7 @@ Event spmm_gather(Queue& ctx,
                   const MatrixView<T, MatrixFormat::CSR>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B_mat,
                   const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha, T beta, Transpose transB) {
+                  T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -183,6 +184,7 @@ Event spmm_gather(Queue& ctx,
                 if (gid >= total) return;
 
                 const int64_t b = gid / rowblocks;
+                if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item's C is untouched
                 const int64_t rem = gid - b * rowblocks;
                 const int64_t cb = rem / out_rows;
                 const int i = static_cast<int>(rem - cb * static_cast<int64_t>(out_rows));
@@ -248,14 +250,14 @@ Event spmm_gather_pair(Queue& ctx,
                        const MatrixView<T, MatrixFormat::CSR>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B_mat,
                        const MatrixView<T, MatrixFormat::Dense>& C,
-                       T alpha, T beta, Transpose transB) {
+                       T alpha, T beta, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     if constexpr (dev_is_complex_v<D>) {
         if (spmm_pair_aligned<D>(A.data_ptr(), B_mat.data_ptr(), C.data_ptr())) {
-            return spmm_gather<T, NC, true>(ctx, A, B_mat, C, alpha, beta, transB);
+            return spmm_gather<T, NC, true>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
     }
-    return spmm_gather<T, NC, false>(ctx, A, B_mat, C, alpha, beta, transB);
+    return spmm_gather<T, NC, false>(ctx, A, B_mat, C, alpha, beta, transB, mask);
 }
 
 // Scale arm: runs only ahead of the scatter, which cannot fold beta into its
@@ -264,7 +266,7 @@ Event spmm_gather_pair(Queue& ctx,
 template <typename T>
 Event spmm_scale(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& C,
-                 T beta, int out_rows, int batch) {
+                 T beta, int out_rows, int batch, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -300,6 +302,7 @@ Event spmm_scale(Queue& ctx,
                 if (gid >= total) return;
 
                 const int64_t b = gid / stride_out;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int64_t r = gid - b * stride_out;
                 const int c = static_cast<int>(r / rows_out);
                 const int j = static_cast<int>(r - static_cast<int64_t>(c) * rows_out);
@@ -323,7 +326,7 @@ Event spmm_scatter(Queue& ctx,
                    const MatrixView<T, MatrixFormat::CSR>& A,
                    const MatrixView<T, MatrixFormat::Dense>& B_mat,
                    const MatrixView<T, MatrixFormat::Dense>& C,
-                   T alpha, int out_rows, bool conjugate_a, Transpose transB) {
+                   T alpha, int out_rows, bool conjugate_a, Transpose transB, const std::uint8_t* mask) {
     using D = typename DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
 
@@ -382,6 +385,7 @@ Event spmm_scatter(Queue& ctx,
                 if (gid >= total) return;
 
                 const int64_t b = gid / rows_in;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int i = static_cast<int>(gid - b * static_cast<int64_t>(rows_in));
 
                 const int64_t ro = b * a_os;
@@ -451,21 +455,22 @@ Event spmm_native_csr(Queue& ctx,
     // Deliberately NOT reference ?GEMV's (alpha == 0 && beta == 1) quick return:
     // at alpha == 0 the answer is still C = beta*C, which the arms below write.
     if (out_rows == 0 || nrhs == 0 || batch <= 0) return ctx.get_event();
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("spmm", A, B_mat, C));
 
     if (a_notrans) {
         // nrhs <= 2 is the lanczos shape; everything else gets the full block.
         if (nrhs <= 2) {
-            return spmm_gather_pair<T, 2>(ctx, A, B_mat, C, alpha, beta, transB);
+            return spmm_gather_pair<T, 2>(ctx, A, B_mat, C, alpha, beta, transB, mask);
         }
-        return spmm_gather_pair<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB);
+        return spmm_gather_pair<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB, mask);
     }
 
     // Ordered: the scale must complete before the first atomic. The default queue
     // is in_order; an out-of-order one pays one host wait here.
-    (void)spmm_scale<T>(ctx, C, beta, out_rows, batch);
+    (void)spmm_scale<T>(ctx, C, beta, out_rows, batch, mask);
     if (!ctx.in_order()) ctx.wait();
     return spmm_scatter<T>(ctx, A, B_mat, C, alpha, out_rows,
-                           transA == Transpose::ConjTrans, transB);
+                           transA == Transpose::ConjTrans, transB, mask);
 }
 
 // Specialised in the same TU as the kernels, so a build that drops this file

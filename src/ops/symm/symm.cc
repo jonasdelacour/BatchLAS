@@ -60,8 +60,8 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, typename T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Mirror and Expand honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = kExpandWired<B>;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
@@ -72,7 +72,7 @@ bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>
                    (C.rows() + mirror::tile<T>() - 1) / mirror::tile<T>() <= d.max_groups_yz;
         },
         [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
-        [&](Vendor) { return kVendorWired<B, T> && d.has_vendor && homogeneous; },
+        [&](Vendor) { return kVendorWired<B, T> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

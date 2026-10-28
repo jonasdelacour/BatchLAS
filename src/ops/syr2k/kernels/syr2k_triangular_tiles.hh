@@ -12,6 +12,7 @@
 #include <src/kernels/common/triangular_tiles.hh>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 #include <src/sycl/kernel_attrs.hh>
 
@@ -97,11 +98,13 @@ Event launch_syr2k_triangular_tiles(Queue& ctx,
         const int stride_c = C.stride();
         const int batch = A.batch_size();
         const bool lower = uplo == Uplo::Lower;
+        // The batch mask (null unmasked); one item per work-group, so its return is uniform (I1).
+        const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("syr2k", A, B, C));
 
         batchlas::impl::parallel_for<Syr2kTriangularTilesKernel<T, TransOperand, AlignedFastPath, Conjugate>>(h,
             sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
-                if (bid >= batch) {
+                if (bid >= batch || (mask != nullptr && mask[bid] == 0)) {
                     return;
                 }
                 // The m index is the fastest-varying one, so lanes that differ

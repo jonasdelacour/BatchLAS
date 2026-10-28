@@ -14,6 +14,7 @@
 #include <src/ops/gemm/kernels/epilogue_linear.hh>
 #include <src/linalg-impl.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 
 #include <sycl/sycl.hpp>
@@ -74,6 +75,7 @@ struct SymmMirrorBody {
     bool lower;
     D alpha, beta;
     sycl::local_accessor<wide_scalar::Vec16<float>, 1> tile_a, tile_b;
+    const std::uint8_t* mask;  // the batch mask; null unmasked
 
     // The k-contiguous gload map (G::first_k<true> is the element leg's map when that leg pads).
     static int kc_k(int t) {
@@ -132,7 +134,7 @@ BATCHLAS_UNROLL_FULL
     __attribute__((always_inline)) void operator()(sycl::nd_item<3> item) const {
         using namespace wide_v2;
         const int bid = static_cast<int>(item.get_group(0));
-        if (bid >= batch) return;
+        if (bid >= batch || (mask != nullptr && mask[bid] == 0)) return;  // I1: before any barrier
         const int tid = static_cast<int>(item.get_local_id(2));
         const int ty = tid & 15, tx = tid >> 4;
         const int m0 = static_cast<int>(item.get_group(1)) * 64;
@@ -309,7 +311,8 @@ Event launch_wide(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
         Body body{reinterpret_cast<const float*>(Ag.data_ptr()), reinterpret_cast<const float*>(Bg.data_ptr()),
                   reinterpret_cast<D*>(C.data_ptr()), m, n, k, static_cast<int>(Ag.ld()), static_cast<int>(Bg.ld()),
                   static_cast<int>(C.ld()), Ag.stride(), Bg.stride(), C.stride(), static_cast<int>(C.batch_size()),
-                  lower, alpha_d, beta_d, tile_a, tile_b};
+                  lower, alpha_d, beta_d, tile_a, tile_b,
+                  batchlas::detail::mask_ptr(batchlas::detail::call_mask("symm", A, Bm, C))};
         batchlas::impl::parallel_for<SymmMirrorKernel<T, Right, Herm, VecLoads>>(h, sycl::nd_range<3>(global, local),
                                                                                 body);
     });
@@ -338,10 +341,11 @@ Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T 
         T* c_ptr = C.data_ptr();
         const int lda = A.ld(), ldb = Bm.ld(), ldc = C.ld(), batch = C.batch_size();
         const std::ptrdiff_t stride_a = A.stride(), stride_b = Bm.stride(), stride_c = C.stride();
+        const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("symm", A, Bm, C));
         batchlas::impl::parallel_for<SymmMirrorTiledKernel<T, Right>>(
             h, sycl::nd_range<3>(global, local), [=](sycl::nd_item<3> item) {
                 const int bid = static_cast<int>(item.get_group(0));
-                if (bid >= batch) return;
+                if (bid >= batch || (mask != nullptr && mask[bid] == 0)) return;  // I1: before any barrier
                 const int lr = static_cast<int>(item.get_local_id(1)), lc = static_cast<int>(item.get_local_id(2));
                 const int row = static_cast<int>(item.get_group(1)) * Tile + lr;
                 const int col = static_cast<int>(item.get_group(2)) * Tile + lc;
@@ -371,10 +375,10 @@ Event launch_tiled(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T 
     return q.get_event();
 }
 
+// The chunk's items with its slice of the batch mask.
 template <typename T>
 MV<T> items(const MV<T>& v, int first, int count) {
-    return MV<T>(v.data_ptr() + static_cast<std::ptrdiff_t>(first) * v.stride(), v.rows(), v.cols(), v.ld(),
-                 v.stride(), count);
+    return v.batch_range(first, count);
 }
 
 }  // namespace

@@ -45,8 +45,8 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, typename T>
 bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Mirror and Expand honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
@@ -60,7 +60,7 @@ bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>
                    A.batch_size() >= 1 &&
                    backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1;
         },
-        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous; },
+        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

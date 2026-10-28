@@ -56,8 +56,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 template <Backend B, typename T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Both natives honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     constexpr bool kWired = select::native_gpu_backend<B>;  // D6: portable kernels, wired for CUDA and SYCL
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
@@ -68,7 +68,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
                    backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= d.max_groups_yz;
         },
         [&](Expand) { return native && backend::detail::expansion_chunk<T>(q, A.rows(), 1, d.max_groups_yz) >= 1; },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 
@@ -76,8 +76,11 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
 // diagonal), then one strided-batched gemm at beta = 0: the caller's A may hold anything in the
 // storage TRMM must not read, so the gemm cannot be pointed at it.
 template <Backend B, typename T>
-Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, Side side, Uplo uplo,
+Event launch_expand(Queue& ctx, const MV<T>& A, const MV<T>& Bm_, const MV<T>& C_, T alpha, Side side, Uplo uplo,
                     Transpose transA, Diag diag) {
+    // The gemm sees scratch in place of A, so B and C carry the mask whichever operand brought it.
+    const auto mask = batchlas::detail::call_mask("trmm", A, Bm_, C_);
+    const MV<T> Bm = level3::adopt_mask(Bm_, mask), C = level3::adopt_mask(C_, mask);
     const int k = A.rows(), batch = A.batch_size();
     const int ld = backend::detail::expanded_ld<T>(k);
     const int chunk = backend::detail::expansion_chunk<T>(ctx, k, batch, level3::grid_chunk<B>(ctx));

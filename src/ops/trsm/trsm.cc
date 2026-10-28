@@ -45,8 +45,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side, Transpose transA) 
 // batch, and neither does the vendor, which runs at the full storage order (known-defects #12).
 template <typename T>
 bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, Side side) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, B)) return false;
+    // Every native family honours a batch mask; the vendor's strided call cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, B);
     const std::int64_t order = A.rows(), q = rhs_count<T>(B, side);
     const bool native = d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 &&
                         A.batch_size() >= 1;
@@ -60,7 +60,7 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const
                    d.max_wg >= sycl_trsm::kTrsmSgLeftWgSize;
         },
         [&](Blocked) { return native && v1_fits && sycl_trsm::trsm_blocked_available<T>() && cta_max >= 1; },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous(); },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !B.is_heterogeneous() && !masked; },
     }, c);
 }
 
