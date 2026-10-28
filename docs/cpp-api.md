@@ -183,6 +183,8 @@ and `op(A)` is `A`, `Aᵀ` or `Aᴴ` according to `trans`. Shapes and constraint
 | `ormqr(ctx, A, C, tau, opts)` | `C := op(Q)·C` (`Left`) or `C·op(Q)` (`Right`) with `geqrf`'s `Q` | `C` |
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` ascending; `A` gets eigenvectors when `jobz == JobType::EigenVectors` |
 | `gesvd(ctx, A, S, U, Vh, opts)` | `A = U·Σ·Vᴴ` | `S` descending, `U`, `Vh` per `jobu`/`jobvh`; `A` overwritten |
+| `syfn(ctx, A, F, fn, uplo, ws, info)` | `F := V·f(Λ)·Vᴴ` from `syev` of the `uplo` triangle; `fn` = `SyfnFunction<R>::inv_sqrt()`, `sqrt()`, `inverse()`, `exp()` or `with_weights(w)`; out-of-domain eigenvalues weigh 0 and are counted in `info` (@ref perf_syfn) | **`F`**, in full and exactly Hermitian; `A` read-only, `F` may be `A` |
+| `syfn_from_eigen(ctx, V, W, F, fn, ws, info)` | `F := V·diag(f(W))·Vᴴ` from given pairs, `V` n×m (e.g. occupied orbitals); the density-matrix step | **`F`**, in full; its storage span must not overlap `V`'s |
 
 `pivots` is `int64_t` (n·batch), `tau` is `T` (min(m,n)·batch) and `W` and `S` are the **real**
 counterpart of `T` (n·batch and min(m,n)·batch).

@@ -34,6 +34,7 @@
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/blas/functions/syfn.hh>
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/functions/trsm.hh>
 
