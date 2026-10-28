@@ -12,6 +12,7 @@
 
 #include <src/ops/gesvd/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/gesvd/gesvd_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -68,10 +69,11 @@ bool packed(const MV<T>& M) {
 // runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
 template <Backend B, typename T>
-bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const Job& j) {
+bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const MV<T>& Vh,
+             const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
-    const bool homogeneous = !A.is_heterogeneous();
+    const bool homogeneous = !A.is_heterogeneous() && !detail::any_batch_mask(A, U, Vh);
     const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
     const bool vendor_binds = B == Backend::CUDA
@@ -142,6 +144,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
+    (void)detail::call_mask("gesvd", A, U, Vh);
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
     // The scope opens before sizing, so a driver that refuses the shape still leaves its row, as before.
@@ -149,7 +152,7 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
                                 .batch = A.batch_size(), .uplo = herm.value_or(Uplo::Lower)};
     const select::Key key = key_of<T>(A, j);
     return select::run<B, T>(
-        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<B, T>(c, d, A, U, j); },
+        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<B, T>(c, d, A, U, Vh, j); },
         shape, key, [&](const auto& c) {
             if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
                 throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
@@ -163,9 +166,10 @@ template <Backend B, typename T>
 std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
     if (A.batch_size() == 0) return 0;
+    (void)detail::call_mask("gesvd", A, U, Vh);
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
-                                      [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, U, j); });
+                                      [&](const auto& k, const auto& d) { return can_run<B, T>(k, d, A, U, Vh, j); });
     return workspace<B, T>(ctx, c, A, s, U, Vh, j);
 }
 

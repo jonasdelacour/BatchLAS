@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/linalg.hh>
+#include <src/util/batch_mask.hh>
 #include <src/math-helpers.hh>
 
 namespace batchlas {
 
 template <MatrixFormat MType, typename T>
 Event lascl(Queue& ctx, const MatrixView<T, MType>& mat, T cfrom, T cto) {
+    detail::refuse_batch_mask("lascl", mat);
     detail::require_device_fp64<T>(ctx, "lascl");
     constexpr T zero = T(0);
     constexpr T one  = T(1);

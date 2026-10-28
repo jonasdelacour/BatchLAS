@@ -59,4 +59,17 @@ Span<const std::uint8_t> call_mask(const char* op, const Views&... v) {
     return out;
 }
 
+// True when any operand view carries a batch mask: the correctness term of a family that ignores it.
+template <class... V> bool any_batch_mask(const V&... v) { return (v.has_batch_mask() || ...); }
+
+// The entry of an op no family of which honours the mask yet: validates the masks, then refuses a masked call.
+// @throws batchlas::invalid_argument for mismatched masks; batchlas::unsupported for any masked operand
+template <typename... Views>
+void refuse_batch_mask(const char* op, const Views&... v) {
+    (void)call_mask(op, v...);
+    if (any_batch_mask(v...)) {
+        throw batchlas::unsupported(std::string(op) + ": a batch mask is not supported by this op yet");
+    }
+}
+
 }  // namespace batchlas::detail

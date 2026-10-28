@@ -12,6 +12,7 @@
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/util/mempool.hh>
 
+#include <src/util/batch_mask.hh>
 #include <src/ops/syfn/syfn_native.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -108,6 +109,7 @@ void check_call(const Queue& q, const char* op, Span<int32_t> info, int64_t batc
 template <Backend B, typename T>
 Event syfn(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& F,
            SyfnFunction<typename base_type<T>::type> fn, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
+    detail::refuse_batch_mask("syfn", A, F);
     syfn_validate_params<T>(A, F, fn, uplo);
     ops::syfn::check_call(ctx, "syfn", info, A.batch_size(), fn);
     const int64_t n = A.rows(), batch = A.batch_size();
@@ -129,6 +131,7 @@ template <Backend B, typename T>
 size_t syfn_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& F, SyfnFunction<typename base_type<T>::type> fn,
                         Uplo uplo) {
+    detail::refuse_batch_mask("syfn", A, F);
     syfn_validate_params<T>(A, F, fn, uplo);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();
@@ -140,6 +143,7 @@ template <Backend B, typename T>
 Event syfn_from_eigen(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V,
                       Span<typename base_type<T>::type> eigenvalues, const MatrixView<T, MatrixFormat::Dense>& F,
                       SyfnFunction<typename base_type<T>::type> fn, Span<std::byte> workspace, Span<int32_t> info) {
+    detail::refuse_batch_mask("syfn_from_eigen", V, F);
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
     ops::syfn::check_call(ctx, "syfn_from_eigen", info, V.batch_size(), fn);
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
@@ -157,6 +161,7 @@ size_t syfn_from_eigen_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
                                    Span<typename base_type<T>::type> eigenvalues,
                                    const MatrixView<T, MatrixFormat::Dense>& F,
                                    SyfnFunction<typename base_type<T>::type> fn) {
+    detail::refuse_batch_mask("syfn_from_eigen", V, F);
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
     if (V.batch_size() == 0 || V.rows() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();

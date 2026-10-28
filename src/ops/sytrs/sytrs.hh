@@ -12,6 +12,7 @@
 #include <src/ops/sytrf/sytrf_native.hh>
 #include <src/ops/sytrs/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/vendor.hh>
 
 #include <cstddef>
@@ -38,7 +39,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& Bm) {
 template <Backend B, class T>
 bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
-    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous();
+    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !detail::any_batch_mask(A, Bm);
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 &&
                         A.batch_size() >= 1 && d.max_wg >= 32;
     return std::visit(overloaded{
