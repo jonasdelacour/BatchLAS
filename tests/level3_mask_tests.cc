@@ -243,11 +243,9 @@ TYPED_TEST_SUITE(Level3Mask, Types);
 // families over the public gemm (expand, fold).
 TYPED_TEST(Level3Mask, EveryNativeFamilyLeavesInactiveItemsUntouched) { this->every_family(12, false); }
 
-// The saturating batch (>= 1024, identical items) on every family; then each launch chunk takes
-// its slice of the mask: the 65535-item grid chunk of the tile kernels and mirror, and the
-// expansion chunk of expand and fold under a lowered BATCHLAS_EXPAND_MAX_BYTES.
-TYPED_TEST(Level3Mask, SaturatingEveryFamilyAndEveryChunk) {
-    using T = typename TestFixture::T;
+// The saturating batch (>= 1024, identical items) on every family; then the 65535-item grid chunk
+// of the tile kernels and mirror takes its slice of the mask.
+TYPED_TEST(Level3Mask, SaturatingEveryFamilyAndTheGridChunk) {
     this->every_family(1024, true);
     const int grid = int(ops::trmm::kMaxGridBatch), big = 2 * grid + 7;
     const auto L = Uplo::Lower;
@@ -258,7 +256,15 @@ TYPED_TEST(Level3Mask, SaturatingEveryFamilyAndEveryChunk) {
                                                 TestFixture::symm_op(Side::Left, L), false, false);
     this->template check<ops::syrk::SyrkChoice>("syrk", Spec{"gram", {3, 2}, {1, 1}, {3, 3}, big, false, false, grid},
                                                 TestFixture::syrk_op(L, N), false, false);
-    // Seven items per expansion chunk.
+}
+
+// Each expansion chunk of expand and fold takes its slice of the mask: seven items per chunk under
+// a lowered BATCHLAS_EXPAND_MAX_BYTES, the chunk-edge and wholly inactive part patterns.
+TYPED_TEST(Level3Mask, ExpansionChunksTakeTheirMaskSlice) {
+    using T = typename TestFixture::T;
+    const int grid = int(ops::trmm::kMaxGridBatch);
+    const auto L = Uplo::Lower;
+    const auto N = Transpose::NoTrans;
     const int n = 9, batch = 31;
     Queue& q = *this->ctx;
     const std::string cap = std::to_string(backend::detail::expanded_workspace_bytes<T>(q, n, 7));

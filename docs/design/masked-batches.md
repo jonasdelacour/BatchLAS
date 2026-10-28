@@ -199,6 +199,19 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W1b, level 3, trsm and spmm** (`tests/trsm_mask_tests.cc`, `tests/level3_mask_tests.cc`,
+  `tests/spmm_mask_tests.cc`; sm_89, every scalar, 2026-10-28): every native family of trsm, trmm,
+  symm, hemm, syrk, herk, syr2k, her2k and spmm runs a masked batch and every vendor refuses. The
+  families over the public gemm (trsm `blocked`, `expand`, `fold`) pin gemm too, and the level-3
+  helpers adopt the call's mask onto B and C, since the gemm sees scratch in place of A. spmm's
+  gather is bit-identical; its scatter is checked by backward error. Defeating one guard at a time
+  turned red only its own cases: trsm `cta`'s I1 return (the `cta` and `blocked` pins, which solve
+  their diagonal blocks with `cta`); `sg_left`'s `Masked` fold (every `sg_left` bucket, holes in
+  packed sub-groups included); syrk's gram tile (syrk and herk `gram`); `fold_hermitian` (herk and
+  her2k `fold`, chunks included); the mirror body (symm and hemm `mirror` except double's tiled
+  body); spmm's gather (its NoTrans cases, the scatter green). Dropping the mask slice in
+  `level3::batch_range` turned red every family that launches through it, at every masked pattern.
+  The unmasked `sg_left` instances keep base's registers and stack on all 44 kernels.
 
 ## Rejected alternatives {#masked-batches-rejected}
 
