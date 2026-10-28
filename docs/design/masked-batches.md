@@ -199,6 +199,15 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W2c, QR** (`tests/geqrf_mask_tests.cc`, `tests/ormqr_mask_tests.cc`; Apple M5 Max Metal float and
+  cfloat, NETLIB every scalar, 2026-10-28): geqrf's tiny, cta, blocked and NETLIB families, ormqx_cta,
+  NETLIB's ormqr and orgqr, and the blocked ormqr and orgqr wherever the Left update does not reach
+  trmm run a masked batch. Defeating one guard at a time turned red only its own cases: tiny's
+  `Masked` fold (the tiny shapes); cta's packed sub-group return (cta's packed shapes and blocked's
+  short trailing panels, which take that leaf); blocked's per-part slice (its 8-item-part shape);
+  ormqx_cta's `live` fold (every ormqx_cta form); orgqr's copy-back skip (the orgqr blocked shapes);
+  each NETLIB loop (its op's vendor cases). ormqx_cta's old per-partition return before a barrier
+  stayed green on Metal: that fix is held by review, not by a test.
 
 ## Rejected alternatives {#masked-batches-rejected}
 
