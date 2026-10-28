@@ -19,7 +19,9 @@ runpath: an ELF whose RUNPATH/RPATH names the seed would load the SEED's librari
 relinked. Entries under OLD_BUILD are rewritten in place to $ORIGIN-relative form (what
 CMAKE_BUILD_RPATH_USE_ORIGIN emits; always shorter than an absolute path here). An ELF whose
 fixed string does not fit, or whose string shares bytes with another .dynstr name, is deleted
-so make relinks it. --check only reports and exits 1 on any seed path.
+so make relinks it. A Mach-O's LC_RPATH entries get the @loader_path form through
+install_name_tool and an ad-hoc re-sign (deleted for relink if either fails).
+--check only reports and exits 1 on any seed path.
 
 mtimes: unchanged files get the seed checkout's mtime for the same path (the seed tree was
 built against those), changed files get now.
@@ -33,6 +35,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import time
@@ -41,6 +44,7 @@ SKIP_SUFFIXES = (".o", ".a", ".so", ".bin", ".cubin", ".fatbin", ".ptx", ".gch",
                  ".gz", ".xz", ".zst", ".pdf")
 MAX_TEXT_BYTES = 64 << 20
 NOT_PATH_CHAR = rb"(?![A-Za-z0-9_.+\-])"
+MACHO_MAGIC = (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")
 
 
 def build_pattern(pairs):
@@ -163,14 +167,14 @@ def seed_entry(entry, olds, news):
     return any(under(entry, o) for o in olds) and not any(under(entry, n) for n in news)
 
 
-def fixed_runpath(value, elf_dir, old_build, new_build, old_src, new_src):
+def fixed_runpath(value, elf_dir, old_build, new_build, old_src, new_src, origin="$ORIGIN"):
     out = []
     for entry in value.split(":"):
         if not seed_entry(entry, [old_build, old_src], [new_build, new_src]):
             out.append(entry)
         elif under(entry, old_build):
             rel = os.path.relpath(new_build + entry[len(old_build):], elf_dir)
-            out.append("$ORIGIN" if rel == "." else "$ORIGIN/" + rel)
+            out.append(origin if rel == "." else origin + "/" + rel)
         else:
             out.append(new_src + entry[len(old_src):])
     return ":".join(out)
@@ -178,6 +182,33 @@ def fixed_runpath(value, elf_dir, old_build, new_build, old_src, new_src):
 
 def names_seed(value, olds, news=()):
     return any(seed_entry(e, olds, news) for e in value.split(":"))
+
+
+def macho_rpaths(path):
+    out = subprocess.run(["otool", "-l", path], capture_output=True, text=True).stdout
+    return re.findall(r"cmd LC_RPATH\n\s+cmdsize \d+\n\s+path (.*) \(offset \d+\)", out)
+
+
+def fix_macho(path, dirpath, old_build, new_build, old_src, new_src, check):
+    """Returns 'bad', 'patched', 'deleted' or None (no seed rpath)."""
+    stale = [r for r in macho_rpaths(path) if names_seed(r, [old_build, old_src], [new_build, new_src])]
+    if not stale:
+        return None
+    if check:
+        print("runpath: %s still names the seed: %s" % (path, ":".join(stale)))
+        return "bad"
+    st = os.stat(path)
+    cmd = ["install_name_tool"]
+    for r in stale:
+        cmd += ["-rpath", r, fixed_runpath(r, dirpath, old_build, new_build, old_src, new_src, "@loader_path")]
+    ok = subprocess.run(cmd + [path], capture_output=True).returncode == 0
+    ok = ok and subprocess.run(["codesign", "-f", "-s", "-", path], capture_output=True).returncode == 0
+    if not ok:
+        os.unlink(path)
+        print("runpath: deleted %s (install_name_tool/codesign failed); make will relink it" % path)
+        return "deleted"
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns))
+    return "patched"
 
 
 def runpath_tree(root, old_build, new_build, old_src=None, new_src=None, check=False):
@@ -190,8 +221,15 @@ def runpath_tree(root, old_build, new_build, old_src=None, new_src=None, check=F
                 continue
             try:
                 with open(path, "rb") as fh:
-                    if fh.read(4) != b"\x7fELF":
-                        continue
+                    magic = fh.read(4)
+                if magic in MACHO_MAGIC:
+                    r = fix_macho(path, dirpath, old_build, new_build, old_src, new_src, check)
+                    bad += r == "bad"
+                    patched += r == "patched"
+                    deleted += r == "deleted"
+                    continue
+                if magic != b"\x7fELF":
+                    continue
                 with open(path, "rb") as fh:
                     elf = Elf(fh.read())
                 found = elf.runpath()
@@ -222,9 +260,9 @@ def runpath_tree(root, old_build, new_build, old_src=None, new_src=None, check=F
                 deleted += 1
                 print("runpath: deleted %s (fixed RUNPATH does not fit); make will relink it" % path)
     if check:
-        print("runpath check: %d ELF file(s) still name the seed" % bad)
+        print("runpath check: %d ELF/Mach-O file(s) still name the seed" % bad)
         return 1 if bad else 0
-    print("runpath: %d ELF file(s) patched to $ORIGIN form, %d deleted for relink" % (patched, deleted))
+    print("runpath: %d ELF/Mach-O file(s) patched to $ORIGIN/@loader_path form, %d deleted for relink" % (patched, deleted))
     return 0
 
 
@@ -359,6 +397,8 @@ def self_test():
                                         "/r/W/build", "/r/B", "/r/W"), "/opt/l:$ORIGIN/../src")
     expect("same dir", fixed_runpath("/r/B/build/src", "/r/W/build/src", "/r/B/build", "/r/W/build",
                                      None, None), "$ORIGIN")
+    expect("loader_path form", fixed_runpath("/r/B/build/src", "/r/W/build/tests", "/r/B/build",
+                                             "/r/W/build", None, None, "@loader_path"), "@loader_path/../src")
     expect("seed named", names_seed("/opt/l:/r/B/build/src", ["/r/B/build"]), True)
     expect("prefix is not a path", names_seed("/r/B/build-x/src", ["/r/B/build"]), False)
     expect("destination below the seed source", names_seed("/r/B/.wt/x/build/src", ["/r/B/build", "/r/B"],
