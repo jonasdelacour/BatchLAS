@@ -22,18 +22,20 @@
 
 namespace batchlas {
 
-    template <typename T, size_t P, bool Upper>
+    template <typename T, size_t P, bool Upper, bool Masked>
     class Sytd2CTAKernel;
 
-    template <typename T, size_t P, bool Upper>
-    inline void sytd2_cta_impl(Queue& ctx,
-                              MatrixView<T, MatrixFormat::Dense>& a,
-                              VectorView<T>& d,
-                              VectorView<T>& e,
-                              VectorView<T>& tau,
-                              int32_t n,
-                              size_t cta_wg_size_multiplier,
-                              const std::uint8_t* mask) {
+    // Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel
+    // as it was (the runtime fold measured 1.1% on float n = 16 at batch 4096).
+    template <typename T, size_t P, bool Upper, bool Masked>
+    inline void sytd2_cta_impl_m(Queue& ctx,
+                                 MatrixView<T, MatrixFormat::Dense>& a,
+                                 VectorView<T>& d,
+                                 VectorView<T>& e,
+                                 VectorView<T>& tau,
+                                 int32_t n,
+                                 size_t cta_wg_size_multiplier,
+                                 const std::uint8_t* mask) {
         const auto batch_size = a.batch_size();
         if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
             throw batchlas::invalid_argument("sytd2_cta_impl: invalid n or matrix sizes for CTA partition.");
@@ -94,7 +96,7 @@ namespace batchlas {
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto W_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            impl::parallel_for<Sytd2CTAKernel<T, P, Upper>>(cgh,
+            impl::parallel_for<Sytd2CTAKernel<T, P, Upper, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto wg = it.get_group();
@@ -112,7 +114,12 @@ namespace batchlas {
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     if (prob_id >= static_cast<int32_t>(batch_size)) return;
                     // I2: an inactive item of the batch mask reduces a zero tile and stores nothing.
-                    const bool live = mask == nullptr || mask[prob_id] != 0;
+                    // const, and no capture of the mask when unmasked: a mutable flag the nested lambdas
+                    // take by reference lands in local memory.
+                    const bool live = [&] {
+                        if constexpr (Masked) return mask[prob_id] != 0;
+                        else return true;
+                    }();
 
                     auto A_prob = A_view.batch_item(prob_id);
                     auto D_prob = D_view.batch_item(prob_id);
@@ -294,6 +301,13 @@ namespace batchlas {
                     }
                 });
         });
+    }
+
+    template <typename T, size_t P, bool Upper>
+    inline void sytd2_cta_impl(Queue& ctx, MatrixView<T, MatrixFormat::Dense>& a, VectorView<T>& d, VectorView<T>& e,
+                               VectorView<T>& tau, int32_t n, size_t cta_wg_size_multiplier, const std::uint8_t* mask) {
+        if (mask != nullptr) return sytd2_cta_impl_m<T, P, Upper, true>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
+        sytd2_cta_impl_m<T, P, Upper, false>(ctx, a, d, e, tau, n, cta_wg_size_multiplier, mask);
     }
 
     // Public wrapper: pick a compile-time P in {4,8,16,32} and choose triangle at runtime.

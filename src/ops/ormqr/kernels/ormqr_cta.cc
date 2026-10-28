@@ -80,7 +80,7 @@ inline T group_sum(const Group& g, T v) {
 
 } // namespace detail
 
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
 
 // Apply one Householder reflector H = I - tau * v * v^H to C.
@@ -153,15 +153,17 @@ inline void apply_reflector_small(const Partition& part,
     }
 }
 
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
-inline void ormqx_cta_impl(Queue& ctx,
-                           MatrixView<T, MatrixFormat::Dense>& a,
-                           VectorView<T>& tau,
-                           MatrixView<T, MatrixFormat::Dense>& c,
-                           int32_t n,
-                           int32_t k,
-                           size_t cta_wg_size_multiplier,
-                           const std::uint8_t* mask) {
+// Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
+// it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
+inline void ormqx_cta_impl_m(Queue& ctx,
+                             MatrixView<T, MatrixFormat::Dense>& a,
+                             VectorView<T>& tau,
+                             MatrixView<T, MatrixFormat::Dense>& c,
+                             int32_t n,
+                             int32_t k,
+                             size_t cta_wg_size_multiplier,
+                             const std::uint8_t* mask) {
     const auto batch_size = a.batch_size();
 
     if (n < 0 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n || c.rows() != n || c.cols() != n) {
@@ -233,7 +235,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                 ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
                 (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(cgh,
+            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -250,8 +252,10 @@ inline void ormqx_cta_impl(Queue& ctx,
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
                 // batch, or an inactive item: I2) applies tau = 0 reflectors to nothing and
                 // stores nothing.
-                const bool live = prob_id < static_cast<int32_t>(batch_size) &&
-                                  (mask == nullptr || mask[prob_id] != 0);
+                const bool live = [&] {
+                    if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
+                    else return prob_id < static_cast<int32_t>(batch_size);
+                }();
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);
@@ -392,7 +396,7 @@ BATCHLAS_UNROLL_FULL
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto Work_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(cgh,
+            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto sg = it.get_sub_group();
@@ -408,8 +412,10 @@ BATCHLAS_UNROLL_FULL
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
                     // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
                     // inactive item) carries a zero tile and tau = 0, and stores nothing.
-                    const bool live = prob_id < static_cast<int32_t>(batch_size) &&
-                                      (mask == nullptr || mask[prob_id] != 0);
+                    const bool live = [&] {
+                        if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
+                        else return prob_id < static_cast<int32_t>(batch_size);
+                    }();
                     const int32_t pid = live ? prob_id : 0;
                     const bool row_live = live && (lane < n);
 
@@ -509,6 +515,15 @@ BATCHLAS_UNROLL_FULL
                 });
         }
     });
+}
+
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
+inline void ormqx_cta_impl(Queue& ctx, MatrixView<T, MatrixFormat::Dense>& a, VectorView<T>& tau,
+                           MatrixView<T, MatrixFormat::Dense>& c, int32_t n, int32_t k,
+                           size_t cta_wg_size_multiplier, const std::uint8_t* mask) {
+    if (mask != nullptr)
+        return ormqx_cta_impl_m<T, P, QL, Left, TransposeOrConj, true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
+    ormqx_cta_impl_m<T, P, QL, Left, TransposeOrConj, false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
 }
 
 // Public entrypoint.
