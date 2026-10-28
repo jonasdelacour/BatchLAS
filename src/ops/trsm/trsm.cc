@@ -11,6 +11,7 @@
 
 #include <src/ops/trsm/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/trsm/trsm_native.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -44,6 +45,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side, Transpose transA) 
 // batch, and neither does the vendor, which runs at the full storage order (known-defects #12).
 template <typename T>
 bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, Side side) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, B)) return false;
     const std::int64_t order = A.rows(), q = rhs_count<T>(B, side);
     const bool native = d.is_gpu && !A.is_heterogeneous() && !B.is_heterogeneous() && order >= 1 && q >= 1 &&
                         A.batch_size() >= 1;
@@ -92,6 +95,7 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
 template <Backend Back, typename T>
 Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
+    (void)batchlas::detail::call_mask("trsm", A, B);
     trsm_validate_params(A, B, side, uplo, transA, diag);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();

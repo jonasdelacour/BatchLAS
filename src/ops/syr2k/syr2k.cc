@@ -11,6 +11,7 @@
 #include <src/ops/level3/batched.hh>
 #include <src/ops/syr2k/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/ops/syr2k/kernels/syr2k_triangular_tiles.hh>
 #include <src/util/template-instantiations.hh>
@@ -48,6 +49,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
              Transpose transA) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const std::int64_t side = (n + backend::detail::kTriangularTile - 1) / backend::detail::kTriangularTile;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
@@ -94,6 +97,7 @@ Event launch(Queue& q, const Syr2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
 template <Backend Back, FloatingOrComplexScalar T>
 Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Uplo uplo, Transpose transA) {
+    (void)batchlas::detail::call_mask("syr2k", A, B, C);
     backend::shape::validate_rank_2k<batchlas::invalid_argument>("syr2k", A, B, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
         throw batchlas::invalid_argument("syr2k: ConjTrans with a complex T is her2k's, not a symmetric update");

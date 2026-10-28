@@ -16,6 +16,7 @@
 #include <src/ops/symm/kernels/symm_mirror.hh>
 #include <src/ops/level3/batched.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -44,6 +45,8 @@ select::Key key_of(const MV<T>& C) {
 template <Backend B, typename T>
 bool can_run(const HemmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     constexpr bool kWired = select::native_gpu_backend<B> || B == Backend::ROCM;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
@@ -92,6 +95,7 @@ Event launch(Queue& q, const HemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
+    (void)batchlas::detail::call_mask("hemm", A, B, C);
     backend::shape::validate_product<batchlas::invalid_argument>("hemm", A, B, C, side);
     // An empty problem is a no-op in every build and under any pin, as symm's is.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();

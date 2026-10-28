@@ -11,6 +11,7 @@
 
 #include <src/ops/gemm/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/backends/gemm_heterogeneous.hh>
 #include <src/ops/gemm/gemm_kernels.hh>
 #include <src/util/template-instantiations.hh>
@@ -113,6 +114,8 @@ bool native_serves_precision(ComputePrecision p, bool has_vendor) {
 template <typename T>
 bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B, const MV<T>& C,
              Transpose ta, Transpose tb, ComputePrecision precision) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, B, C)) return false;
     const Dims s = dims_of<T>(A, B, ta, tb);
     // The kernels also run on a host SYCL device, but a CPU with a host BLAS keeps it (maintainer
     // decision, plan §13); without one (a vendor-free host queue) they are its only gemm, as before.
@@ -231,6 +234,7 @@ template <Backend Back, typename T>
 Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            ComputePrecision precision) {
+    (void)batchlas::detail::call_mask("gemm", A, B, C);
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
         // Items are homogeneous by construction, so the recursion is one level deep.
         return backend::detail::gemm_heterogeneous_loop<T>(

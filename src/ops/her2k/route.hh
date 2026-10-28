@@ -9,6 +9,7 @@
 #include <src/expansion_budget.hh>
 #include <src/ops/her2k/choice.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 
 #include <cstdint>
 #include <stdexcept>
@@ -36,6 +37,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(select::overloaded{
         [&](Triangular) {

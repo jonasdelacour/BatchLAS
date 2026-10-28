@@ -47,6 +47,11 @@ inline void merge_call_mask(const char* op, const View& v, int64_t call_batch, S
     }
 }
 
+// True when any operand view carries a batch mask: the correctness term a family adds to can_run
+// until its kernels honour the mask.
+template <class... V>
+bool any_batch_mask(const V&... v) { return (v.has_batch_mask() || ...); }
+
 // The one span shared by the masked operands whose batch is the call batch (the largest operand
 // batch); empty when no operand is masked. Unmasked operands adopt it. Compares pointer and length.
 // @throws batchlas::invalid_argument for two different spans, or a masked broadcast operand

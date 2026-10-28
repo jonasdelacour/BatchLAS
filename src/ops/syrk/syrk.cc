@@ -14,6 +14,7 @@
 #include <src/ops/syrk/kernels/syrk_gram_tiles.hh>
 #include <src/ops/syrk/kernels/syrk_triangular_tiles.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -52,6 +53,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Shapes are validated before this runs.
 template <Backend B, typename T>
 bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
+    // A masked call is refused by every family until its kernels honour the mask.
+    if (batchlas::detail::any_batch_mask(A, C)) return false;
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
@@ -109,6 +112,7 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
 template <Backend Back, FloatingOrComplexScalar T>
 Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
            T alpha, T beta, Uplo uplo, Transpose transA) {
+    (void)batchlas::detail::call_mask("syrk", A, C);
     (void)backend::shape::validate_rank_k<batchlas::invalid_argument>("syrk", A, C, transA, /*hermitian=*/false);
     if (ComplexScalar<T> && transA == Transpose::ConjTrans)
         throw batchlas::invalid_argument("syrk: ConjTrans with a complex T is herk's A^H A, not a symmetric update");
