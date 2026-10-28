@@ -260,6 +260,14 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   `potrf_vendor`'s own entry refusal (NoRouteError): red on the strict vendor pin and Auto double,
   nothing written. posv `tiny` and `lpanel` take `Masked` too: their runtime fold cost 4.3% and 4.2%
   on complex float at batch 32768.
+- **W4a, gesvd** (`tests/gesvd_mask_tests.cc`; Apple M5 Max Metal float and cfloat, NETLIB every
+  scalar, 2026-10-28): gesvd's `jacobi` (I2, its tail return removed), NETLIB's host loop (I4) and
+  `blocked` over bdsqr without a trmm leg run a masked batch, as do gebrd's three kernels, bdsqr and
+  ormbr on a device. bdsdc, `blocked` over bdsdc, `cta` and the Hermitian forms carry the plumbing
+  and refuse until stedc, steqr and the syev composites land. gebrd_cta's early return was already
+  gone (#209); restoring it stays green on Metal, and a source scan in the test now holds it. Each
+  family's guard defeated alone turned red only its own cases and the composites over it, always
+  as "inactive item written"; bdsqr's non-neutral fold flag turned red only its fold case.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

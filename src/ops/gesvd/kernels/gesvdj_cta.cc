@@ -128,7 +128,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             int32_t cols,     // C = min(m,n), cols of the solved matrix
                             int32_t left_cols,// columns of the left factor to emit: R (All) or C (Thin)
                             GesvdjParams<T> params,
-                            int32_t* info) {
+                            int32_t* info,
+                            const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
 
     const auto batch_size = a_in.batch_size();
@@ -252,8 +253,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const int32_t rounds = mp - 1;
 
                 // Pair table: stride kRotSlots (not pairs_per_round, they differ
-                // when CC < P); unused slots hold a sentinel failing `< CC`. Must
-                // precede the `prob_id >= nb` return: it ends in a wg barrier.
+                // when CC < P); unused slots hold a sentinel failing `< CC`.
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
@@ -278,11 +278,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= nb) return;
+                // NO EARLY RETURN (I2): partitions share a sub-group's barriers, so a dead
+                // partition (a batch tail or an inactive item) solves a zero tile and stores nothing.
+                const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
+                const int32_t pid = live ? prob_id : 0;
 
-                auto A_prob = A_view.batch_item(prob_id);
-                auto U_prob = U_view.batch_item(prob_id);
-                auto Vh_prob = Vh_view.batch_item(prob_id);
+                auto A_prob = A_view.batch_item(pid);
+                auto U_prob = U_view.batch_item(pid);
+                auto Vh_prob = Vh_view.batch_item(pid);
 
                 const int32_t base_a = part_id * static_cast<int32_t>(kTileElems);
                 const int32_t base_v = ComputeV ? (part_id * static_cast<int32_t>(kTileElems)) : 0;
@@ -297,7 +300,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                     for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
                         T v = T(0);
-                        if (row < RR && c < CC) {
+                        if (live && row < RR && c < CC) {
                             // Solve A^H, not A^T: A^T is wrong for complex only.
                             // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
                             v = transposed_f ? batchlas::device::detail::conj(A_prob(c, row)) : A_prob(row, c);
@@ -591,13 +594,13 @@ BATCHLAS_UNROLL_FULL
                 group_barrier(part);
 
 
-                if (SW != nullptr && lane == 0) {
+                if (live && SW != nullptr && lane == 0) {
                     SW[prob_id] = sweeps_used;
                 }
                 // Converged means `zero_sweeps >= 2`, not `sweeps_used <
                 // max_sweeps`. zero_sweeps is partition-uniform, so lane 0 reports.
                 // A STORE, not a raise: this kernel is the item's single writer.
-                if (lane == 0) {
+                if (live && lane == 0) {
                     detail::info_store(info_dev, prob_id, (zero_sweeps < 2) ? 1 : 0);
                 }
 
@@ -638,7 +641,7 @@ BATCHLAS_UNROLL_FULL
 
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                     const int32_t col = lane + cc * static_cast<int32_t>(P);
-                    if (col < CC) {
+                    if (live && col < CC) {
                         const int32_t src = static_cast<int32_t>(Inv_local[base_p + col]);
                         S[static_cast<int64_t>(prob_id) * CC + col] =
                             inv_beta * sycl::sqrt(Nrm_local[base_n + src]);
@@ -746,7 +749,7 @@ BATCHLAS_UNROLL_FULL
                         // U(lane, dst): dst is the output COLUMN, Thin truncates it.
                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                             const int32_t row = lane + rr * static_cast<int32_t>(P);
-                            if (row >= RR) continue;
+                            if (!live || row >= RR) continue;
                             for (int32_t dst = 0; dst < LC; ++dst) {
                                 const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                                 U_prob(row, dst) = A_local[base_a + row + c * LD];
@@ -758,7 +761,7 @@ BATCHLAS_UNROLL_FULL
                         // numbers).
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                             const int32_t dst = lane + cc * static_cast<int32_t>(P);
-                            if (dst >= LC) continue;
+                            if (!live || dst >= LC) continue;
                             const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                             for (int32_t r = 0; r < RR; ++r) {
                                 Vh_prob(dst, r) = batchlas::device::detail::conj(A_local[base_a + r + c * LD]);
@@ -773,7 +776,7 @@ BATCHLAS_UNROLL_FULL
                         // Vh(lane, r) = conj(V(r, c_lane))
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                             const int32_t dst = lane + cc * static_cast<int32_t>(P);
-                            if (dst >= CC) continue;
+                            if (!live || dst >= CC) continue;
                             const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                             for (int32_t r = 0; r < CC; ++r) {
                                 Vh_prob(dst, r) = batchlas::device::detail::conj(V_local[base_v + r + c * LD]);
@@ -783,7 +786,7 @@ BATCHLAS_UNROLL_FULL
                         // U = V' directly. Here lane is the output ROW.
                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                             const int32_t row = lane + rr * static_cast<int32_t>(P);
-                            if (row >= CC) continue;
+                            if (!live || row >= CC) continue;
                             for (int32_t dst = 0; dst < CC; ++dst) {
                                 const int32_t c = static_cast<int32_t>(Inv_local[base_p + dst]);
                                 U_prob(row, dst) = V_local[base_v + row + c * LD];
@@ -861,7 +864,9 @@ Event gesvdj_cta(Queue& ctx,
                  const Span<std::byte>& ws,
                  GesvdjParams<T> params,
                  Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvdj_cta", B, a_in, u_out, vh_out);
+    // The packed kernel folds the mask into `live` (I2): an inactive item's outputs are untouched.
+    const std::uint8_t* const mask =
+        ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("gesvdj_cta", a_in, u_out, vh_out));
     (void)ws;
 
     validate_gesvdj_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta");
@@ -909,9 +914,9 @@ Event gesvdj_cta(Queue& ctx,
         constexpr size_t Pv = decltype(P_tag)::value;
         constexpr size_t Cv = decltype(C_tag)::value;
         if (want_right) {
-            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr);
+            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
         } else {
-            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr);
+            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr, mask);
         }
     };
 

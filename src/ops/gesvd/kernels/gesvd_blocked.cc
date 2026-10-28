@@ -49,21 +49,8 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
 
-// Bidiagonal solver of the Blocked path, BATCHLAS_GESVD_BIDIAG:
-//   bdsdc (default)  Golub-Kahan 2n tridiagonal -> stedc   accurate, ~as fast
-//   normal           tridiagonal of B^T B                  squares kappa; A/B only
-//   bdsqr            one thread per matrix, zero-shift QR  accurate, 300-400x slower
-// evidence: docs/perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver
-enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
-
-inline GesvdBidiagSolver gesvd_bidiag_solver() {
-    const char* v = batchlas::settings().selection.gesvd_bidiag.get();
-    if (v == nullptr) return GesvdBidiagSolver::Bdsdc;
-    const std::string s(v);
-    if (s == "bdsqr") return GesvdBidiagSolver::Bdsqr;
-    if (s == "normal") return GesvdBidiagSolver::NormalEquations;
-    return GesvdBidiagSolver::Bdsdc;
-}
+using sycl_gesvd::GesvdBidiagSolver;
+using sycl_gesvd::gesvd_bidiag_solver;
 
 // True when the Blocked path solves the bidiagonal problem DIRECTLY (bdsdc or
 // bdsqr) rather than through the tridiagonal of B^T B. Both direct solvers write
@@ -361,6 +348,7 @@ void finalize_values_only(Queue& ctx,
                           Span<T> singular_values) {
     const int32_t n = static_cast<int32_t>(evals.size());
     const int32_t batch = static_cast<int32_t>(evals.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(evals.batch_mask());
 
     ctx->submit([&](sycl::handler& h) {
         auto Evals = evals;
@@ -370,6 +358,7 @@ void finalize_values_only(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
+            if (mask != nullptr && mask[b] == 0) return;  // I3: s of an inactive item is untouched
             const int32_t src = (n - 1) - tgt;
             const T lambda = sycl::fmax(Evals(src, b), T(0));
             s_out[static_cast<size_t>(b) * static_cast<size_t>(n) + static_cast<size_t>(tgt)] = sycl::sqrt(lambda);
@@ -432,6 +421,7 @@ void finalize_hermitian_values(Queue& ctx,
                                Span<Real> singular_values) {
     const int32_t n = static_cast<int32_t>(eigenvalues.size());
     const int32_t batch = static_cast<int32_t>(eigenvalues.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(eigenvalues.batch_mask());
 
     ctx->submit([&](sycl::handler& h) {
         auto Evals = eigenvalues;
@@ -441,6 +431,7 @@ void finalize_hermitian_values(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t i = linear - b * n;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             const int32_t src = Perm(i, b);
             s_out[static_cast<size_t>(b) * static_cast<size_t>(n) + static_cast<size_t>(i)] = sycl::fabs(Evals(src, b));
         });
@@ -460,6 +451,7 @@ void build_hermitian_vectors(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(eigenvectors.rows());
     const int32_t batch = static_cast<int32_t>(eigenvectors.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(eigenvectors.batch_mask());
     auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u_out);
     auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh_out);
 
@@ -473,6 +465,7 @@ void build_hermitian_vectors(Queue& ctx,
             const int32_t linear = static_cast<int32_t>(tid[0]);
             const int32_t b = linear / n;
             const int32_t tgt = linear - b * n;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             const int32_t src = Perm(tgt, b);
             const Real lambda = Evals(src, b);
             const T sign = (lambda < Real(0)) ? T(-1) : T(1);
@@ -501,6 +494,7 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
     const int32_t rows = static_cast<int32_t>(m_out.rows());
     const int32_t cols = static_cast<int32_t>(m_out.cols());
     const int32_t batch = static_cast<int32_t>(m_out.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(m_out.batch_mask());
     ctx->submit([&](sycl::handler& h) {
         auto M = mut.kernel_view();
         h.parallel_for(sycl::range<2>(static_cast<size_t>(batch),
@@ -510,6 +504,7 @@ void set_identity(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& m_out) {
             const int32_t lin = static_cast<int32_t>(id[1]);
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             M(r, c, b) = (r == c) ? T(1) : T(0);
         });
     });
@@ -522,12 +517,14 @@ void expand_real_block(Queue& ctx, const MatrixView<typename base_type<T>::type,
     auto& dst_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(dst);
     const int32_t rows = static_cast<int32_t>(src.rows());
     const int32_t cols = static_cast<int32_t>(src.cols());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(dst.batch_mask());
     ctx->submit([&](sycl::handler& h) {
         auto S = src.kernel_view();
         auto D = dst_mut.kernel_view();
         h.parallel_for(sycl::range<2>(static_cast<size_t>(src.batch_size()), static_cast<size_t>(rows) * cols),
                        [=](sycl::id<2> id) {
             const int32_t b = static_cast<int32_t>(id[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             const int32_t lin = static_cast<int32_t>(id[1]);
             const int32_t c = lin / rows;
             const int32_t r = lin - c * rows;
@@ -542,6 +539,7 @@ template <typename T>
 void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& a) {
     auto& a_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a);
     const int32_t n = static_cast<int32_t>(a.rows());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(a.batch_mask());
     ctx->submit([&](sycl::handler& h) {
         auto A = a_mut.kernel_view();
         h.parallel_for(sycl::range<2>(static_cast<size_t>(a.batch_size()), static_cast<size_t>(n) * n),
@@ -550,6 +548,7 @@ void mirror_lower_to_upper(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>&
             const int32_t lin = static_cast<int32_t>(id[1]);
             const int32_t c = lin / n;
             const int32_t r = lin - c * n;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             if (r > c) A(c, r, b) = batchlas::device::detail::conj(A(r, c, b));
         });
     });
@@ -564,6 +563,7 @@ void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, con
         auto& dst_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(dst);
         const int32_t rows = static_cast<int32_t>(src.rows());
         const int32_t cols = static_cast<int32_t>(src.cols());
+        const std::uint8_t* const mask = batchlas::detail::mask_ptr(dst.batch_mask());
         ctx->submit([&](sycl::handler& h) {
             auto S = src.kernel_view();
             auto D = dst_mut.kernel_view();
@@ -573,6 +573,7 @@ void adjoint_into(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, con
                 const int32_t lin = static_cast<int32_t>(id[1]);
                 const int32_t c = lin / rows;
                 const int32_t r = lin - c * rows;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 D(c, r, b) = batchlas::device::detail::conj(S(r, c, b));
             });
         });
@@ -592,6 +593,7 @@ void build_bidiag_vectors(Queue& ctx,
                           bool want_vh) {
     const int32_t k = static_cast<int32_t>(bidiag_d.size());
     const int32_t batch = static_cast<int32_t>(bidiag_d.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(bidiag_d.batch_mask());
     auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u_out);
     auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh_out);
 
@@ -603,6 +605,7 @@ void build_bidiag_vectors(Queue& ctx,
                 const int32_t linear = static_cast<int32_t>(tid[0]);
                 const int32_t b = linear / k;
                 const int32_t tgt = linear - b * k;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int32_t src = (k - 1) - tgt;
                 for (int32_t i = 0; i < k; ++i) {
                     Vh(tgt, i, b) = V(i, src, b);
@@ -626,6 +629,7 @@ void build_bidiag_vectors(Queue& ctx,
                 const int32_t linear = static_cast<int32_t>(tid[0]);
                 const int32_t b = linear / u_cols;
                 const int32_t tgt = linear - b * u_cols;
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const T sigma_max = sycl::sqrt(sycl::fmax(Evals(k - 1, b), T(0)));
                 const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
 
@@ -654,24 +658,34 @@ void build_bidiag_vectors(Queue& ctx,
     }
 }
 
+// The cross-item host decision: true when any item has a singular value at or below its tolerance.
+// A device kernel writes one flag per item, the neutral 0 for an inactive one, so the host fold reads
+// no inactive item's singular values (docs/design/masked-batches.md#masked-batches-refusal-policy).
 template <typename T>
 bool has_tiny_singular_values(Queue& ctx,
                               int32_t k,
                               int32_t batch,
-                              Span<T> singular_values) {
-    ctx.wait_and_throw();
-
-    for (int32_t b = 0; b < batch; ++b) {
-        const T* sb = singular_values.data() + static_cast<size_t>(b) * static_cast<size_t>(k);
-        const T sigma_max = sb[0];
-        const T tol_zero = gesvd_zero_sigma_tol(sigma_max);
-        for (int32_t i = 0; i < k; ++i) {
-            if (sb[i] <= tol_zero) {
-                return true;
+                              Span<T> singular_values,
+                              Span<int32_t> flags,
+                              const std::uint8_t* mask) {
+    ctx->submit([&](sycl::handler& h) {
+        const T* s_in = singular_values.data();
+        int32_t* f = flags.data();
+        h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
+            const int32_t b = static_cast<int32_t>(tid[0]);
+            int32_t tiny = 0;
+            if (mask == nullptr || mask[b] != 0) {
+                const T* sb = s_in + static_cast<size_t>(b) * static_cast<size_t>(k);
+                const T tol_zero = gesvd_zero_sigma_tol(sb[0]);
+                for (int32_t i = 0; i < k; ++i) tiny |= (sb[i] <= tol_zero) ? 1 : 0;
             }
-        }
+            f[b] = tiny;
+        });
+    });
+    ctx.wait_and_throw();
+    for (int32_t b = 0; b < batch; ++b) {
+        if (flags[static_cast<size_t>(b)] != 0) return true;
     }
-
     return false;
 }
 
@@ -683,6 +697,7 @@ void patch_zero_left_vectors(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& u_out) {
     const int32_t m = static_cast<int32_t>(left_vecs.rows());
     const int32_t batch = static_cast<int32_t>(left_vecs.batch_size());
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(left_vecs.batch_mask());
     auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u_out);
 
     ctx->submit([&](sycl::handler& h) {
@@ -695,6 +710,7 @@ void patch_zero_left_vectors(Queue& ctx,
             const int32_t b = linear / m;
             const int32_t tgt = linear - b * m;
             const int32_t src = (m - 1) - tgt;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             const T* sb = s_in + static_cast<size_t>(b) * static_cast<size_t>(sigma_count);
             const T tol_zero = gesvd_zero_sigma_tol(sb[0]);
             if (tgt < sigma_count && sb[tgt] > tol_zero) {
@@ -796,10 +812,13 @@ Event gesvd_native_impl(Queue& ctx,
         const int32_t n = static_cast<int32_t>(a_in.cols());
         const int32_t k = std::min(m, n);
         const int32_t batch = static_cast<int32_t>(a_in.batch_size());
+        // A carries the call's mask (the entry adopts it); every view rebuilt from a raw
+        // pointer below re-attaches it, so each child and glue kernel skips an inactive item.
+        const Span<const std::uint8_t> mask = a_in.batch_mask();
         // The one clear for this call. gebrd and both back-transforms are direct,
         // so everything that can fail to converge sits under solve_tridiagonal /
         // bdsdc / bdsqr below, and all of those only raise. See info_span.hh.
-        detail::info_clear(ctx, info, batch);
+        detail::info_clear(ctx, info, batch, mask);
         jobu = canonical_jobu(jobu, m, k);
         jobvh = canonical_jobvh(jobvh, n, k);
         // `!= None`, not `== All`. Keeping the old idiom here is the silent
@@ -816,12 +835,9 @@ Event gesvd_native_impl(Queue& ctx,
             BumpAllocator pool(ws_mut);
 
             auto at_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(m) * static_cast<size_t>(batch));
-            MatrixView<T, MatrixFormat::Dense> at_view(at_span.data(),
-                                                       n,
-                                                       m,
-                                                       n,
-                                                       static_cast<int64_t>(n) * static_cast<int64_t>(m),
-                                                       batch);
+            const auto at_view = MatrixView<T, MatrixFormat::Dense>(at_span.data(), n, m, n,
+                                                                    static_cast<int64_t>(n) * m, batch)
+                                     .with_batch_mask(mask);
 
             MatrixView<T, MatrixFormat::Dense> ut_view;
             MatrixView<T, MatrixFormat::Dense> vht_view;
@@ -838,12 +854,9 @@ Event gesvd_native_impl(Queue& ctx,
 
             if (want_vh) {
                 auto ut_span = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(ut_cols) * static_cast<size_t>(batch));
-                ut_view = MatrixView<T, MatrixFormat::Dense>(ut_span.data(),
-                                                             n,
-                                                             ut_cols,
-                                                             n,
-                                                             static_cast<int64_t>(n) * static_cast<int64_t>(ut_cols),
-                                                             batch);
+                ut_view = MatrixView<T, MatrixFormat::Dense>(ut_span.data(), n, ut_cols, n,
+                                                             static_cast<int64_t>(n) * ut_cols, batch)
+                              .with_batch_mask(mask);
             } else {
                 auto ut_dummy = pool.allocate<T>(ctx, static_cast<size_t>(batch));
                 ut_view = MatrixView<T, MatrixFormat::Dense>(ut_dummy.data(), 1, 1, 1, 1, batch);
@@ -851,12 +864,9 @@ Event gesvd_native_impl(Queue& ctx,
 
             if (want_u) {
                 auto vht_span = pool.allocate<T>(ctx, static_cast<size_t>(m) * static_cast<size_t>(m) * static_cast<size_t>(batch));
-                vht_view = MatrixView<T, MatrixFormat::Dense>(vht_span.data(),
-                                                              m,
-                                                              m,
-                                                              m,
-                                                              static_cast<int64_t>(m) * static_cast<int64_t>(m),
-                                                              batch);
+                vht_view = MatrixView<T, MatrixFormat::Dense>(vht_span.data(), m, m, m, static_cast<int64_t>(m) * m,
+                                                              batch)
+                               .with_batch_mask(mask);
             } else {
                 auto vht_dummy = pool.allocate<T>(ctx, static_cast<size_t>(batch));
                 vht_view = MatrixView<T, MatrixFormat::Dense>(vht_dummy.data(), 1, 1, 1, 1, batch);
@@ -934,21 +944,23 @@ Event gesvd_native_impl(Queue& ctx,
         auto evals_span = pool.allocate<T>(ctx, static_cast<size_t>(max_order) * static_cast<size_t>(batch));
         auto sign_span = pool.allocate<T>(ctx, static_cast<size_t>(max_order) * static_cast<size_t>(batch));
 
-        VectorView<Real> d_view(d_span, k, batch, 1, k);
-        VectorView<Real> e_view(e_span, std::max(0, k - 1), batch, 1, std::max(1, k - 1));
-        VectorView<T> tauq_view(tauq_span, k, batch, 1, k);
-        VectorView<T> taup_view(taup_span, k, batch, 1, k);
-        VectorView<T> tri_d_right(tri_d_span, k, batch, 1, max_order);
-        VectorView<T> tri_e_right(tri_e_span, std::max(0, k - 1), batch, 1, std::max(1, max_order - 1));
-        VectorView<T> evals_right(evals_span, k, batch, 1, max_order);
-        VectorView<T> sign_right(sign_span, k, batch, 1, max_order);
+        const auto d_view = VectorView<Real>(d_span, k, batch, 1, k).with_batch_mask(mask);
+        const auto e_view = VectorView<Real>(e_span, std::max(0, k - 1), batch, 1, std::max(1, k - 1)).with_batch_mask(mask);
+        const auto tauq_view = VectorView<T>(tauq_span, k, batch, 1, k).with_batch_mask(mask);
+        const auto taup_view = VectorView<T>(taup_span, k, batch, 1, k).with_batch_mask(mask);
+        const auto tri_d_right = VectorView<T>(tri_d_span, k, batch, 1, max_order).with_batch_mask(mask);
+        const auto tri_e_right =
+            VectorView<T>(tri_e_span, std::max(0, k - 1), batch, 1, std::max(1, max_order - 1)).with_batch_mask(mask);
+        const auto evals_right = VectorView<T>(evals_span, k, batch, 1, max_order).with_batch_mask(mask);
+        const auto sign_right = VectorView<T>(sign_span, k, batch, 1, max_order).with_batch_mask(mask);
 
         MatrixView<T, MatrixFormat::Dense> vecs_view;
         // Not needed on a direct bidiagonal solve (bdsdc/bdsqr): those write
         // straight into u_out / vh_out, with no intermediate k x k matrix.
         if (tridiag_returns_vectors && !direct_bidiag) {
             auto vecs_span = pool.allocate<T>(ctx, static_cast<size_t>(k) * static_cast<size_t>(k) * static_cast<size_t>(batch));
-            vecs_view = MatrixView<T, MatrixFormat::Dense>(vecs_span.data(), k, k, k, static_cast<int64_t>(k) * static_cast<int64_t>(k), batch);
+            vecs_view = MatrixView<T, MatrixFormat::Dense>(vecs_span.data(), k, k, k, static_cast<int64_t>(k) * k, batch)
+                            .with_batch_mask(mask);
         }
 
         const JobType tridiag_job = tridiag_returns_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
@@ -1015,21 +1027,23 @@ Event gesvd_native_impl(Queue& ctx,
             }
 
             using RMV = MatrixView<Real, MatrixFormat::Dense>;
-            RMV u_sub(nullptr, 0, 0, 1, 1, batch);
-            RMV vh_sub(nullptr, 0, 0, 1, 1, batch);
+            RMV u_sub = RMV(nullptr, 0, 0, 1, 1, batch).with_batch_mask(mask);
+            RMV vh_sub = RMV(nullptr, 0, 0, 1, 1, batch).with_batch_mask(mask);
             if constexpr (kComplex) {
                 const auto kk = static_cast<int64_t>(k) * k;
                 if (want_u) {
-                    u_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch);
+                    u_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch)
+                                .with_batch_mask(mask);
                     set_identity<Real>(ctx, u_sub);
                 }
                 if (want_vh) {
-                    vh_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch);
+                    vh_sub = RMV(pool.allocate<Real>(ctx, static_cast<size_t>(kk) * batch).data(), k, k, k, kk, batch)
+                                 .with_batch_mask(mask);
                     set_identity<Real>(ctx, vh_sub);
                 }
             } else {
-                if (want_u) u_sub = RMV(u_out.data_ptr(), m, k, u_out.ld(), u_out.stride(), batch);
-                if (want_vh) vh_sub = RMV(vh_out.data_ptr(), k, n, vh_out.ld(), vh_out.stride(), batch);
+                if (want_u) u_sub = RMV(u_out.data_ptr(), m, k, u_out.ld(), u_out.stride(), batch).with_batch_mask(mask);
+                if (want_vh) vh_sub = RMV(vh_out.data_ptr(), k, n, vh_out.ld(), vh_out.stride(), batch).with_batch_mask(mask);
             }
 
             profiler.run("gesvd.bidiag_vectors", [&] {
@@ -1075,13 +1089,18 @@ Event gesvd_native_impl(Queue& ctx,
             build_bidiag_vectors(ctx, d_view, e_view, evals_right, vecs_view, singular_values, u_out, vh_out, want_u, want_vh);
         });
 
-        if (want_u && (m > k || has_tiny_singular_values(ctx, k, batch, singular_values))) {
-            VectorView<T> tri_d_left(tri_d_span, m, batch, 1, max_order);
-            VectorView<T> tri_e_left(tri_e_span, std::max(0, m - 1), batch, 1, std::max(1, max_order - 1));
-            VectorView<T> evals_left(evals_span, m, batch, 1, max_order);
-            VectorView<T> sign_left(sign_span, m, batch, 1, max_order);
+        const auto tiny_flags = want_u ? pool.allocate<int32_t>(ctx, static_cast<size_t>(batch)) : Span<int32_t>{};
+        if (want_u && (m > k || has_tiny_singular_values(ctx, k, batch, singular_values, tiny_flags,
+                                                         batchlas::detail::mask_ptr(mask)))) {
+            const auto tri_d_left = VectorView<T>(tri_d_span, m, batch, 1, max_order).with_batch_mask(mask);
+            const auto tri_e_left =
+                VectorView<T>(tri_e_span, std::max(0, m - 1), batch, 1, std::max(1, max_order - 1)).with_batch_mask(mask);
+            const auto evals_left = VectorView<T>(evals_span, m, batch, 1, max_order).with_batch_mask(mask);
+            const auto sign_left = VectorView<T>(sign_span, m, batch, 1, max_order).with_batch_mask(mask);
             auto left_vecs_span = pool.allocate<T>(ctx, static_cast<size_t>(m) * static_cast<size_t>(m) * static_cast<size_t>(batch));
-            MatrixView<T, MatrixFormat::Dense> left_vecs(left_vecs_span.data(), m, m, m, static_cast<int64_t>(m) * static_cast<int64_t>(m), batch);
+            const auto left_vecs = MatrixView<T, MatrixFormat::Dense>(left_vecs_span.data(), m, m, m,
+                                                                      static_cast<int64_t>(m) * m, batch)
+                                       .with_batch_mask(mask);
 
             profiler.run("gesvd.form_left_tridiag", [&] {
                 form_left_tridiagonal(ctx, d_view, e_view, m, tri_d_left, tri_e_left);
@@ -1175,8 +1194,9 @@ Event gesvd_native_hermitian_impl(Queue& ctx,
 
     auto eigvals_span = pool.allocate<Real>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
     auto perm_span = pool.allocate<int32_t>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
-    VectorView<Real> eigvals_view(eigvals_span, n, batch, 1, n);
-    VectorView<int32_t> perm_view(perm_span, n, batch, 1, n);
+    // A carries the call's mask (the entry adopts it); the scratch views re-attach it.
+    const auto eigvals_view = VectorView<Real>(eigvals_span, n, batch, 1, n).with_batch_mask(a_in.batch_mask());
+    const auto perm_view = VectorView<int32_t>(perm_span, n, batch, 1, n).with_batch_mask(a_in.batch_mask());
 
     const JobType jobz = need_vecs ? JobType::EigenVectors : JobType::NoEigenVectors;
     const size_t syev_ws_bytes = (mode == GesvdNativeMode::CTA)
@@ -1346,6 +1366,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
                                                                           static_cast<int32_t>(batch),
                                                                           JobType::EigenVectors,
                                                                           mode));
+                bytes += BumpAllocator::allocation_size<int32_t>(ctx, batch);            // tiny-value flags
                 bytes += BumpAllocator::allocation_size<T>(ctx, m * m * batch);          // left nullspace vectors
             }
             bytes += BumpAllocator::allocation_size<std::byte>(ctx, solver_bytes);
@@ -1418,6 +1439,13 @@ size_t gesvd_native_hermitian_buffer_size(Queue& ctx,
     return bytes;
 }
 
+// v with the call's mask, when it is a wanted factor: an unwanted one is never read and may have any batch.
+template <typename T>
+MatrixView<T, MatrixFormat::Dense> with_call_mask(const MatrixView<T, MatrixFormat::Dense>& v,
+                                                  Span<const std::uint8_t> mask, bool wanted) {
+    return mask.empty() || !wanted ? v : v.with_batch_mask(mask);
+}
+
 // Items per pass of the general blocked path: gebrd, bdsdc and both ormbr hand A, U and V^H
 // between kernels through L2, and the children size and route at this batch. An item is A
 // plus the factors it asks for. The query and the call must agree, so both use it.
@@ -1454,27 +1482,32 @@ Event gesvd_blocked(Queue& ctx,
                     SvdVectors jobvh,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
+    const int64_t k = std::min(a_in.rows(), a_in.cols());
+    const bool want_u = canonical_jobu(jobu, a_in.rows(), k) != SvdVectors::None;
+    const bool want_vh = canonical_jobvh(jobvh, a_in.cols(), k) != SvdVectors::None;
+    if (!sycl_gesvd::gesvd_blocked_honours_mask<B, T>(a_in.rows(), a_in.cols(), want_u, want_vh))
+        ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_blocked");
+    // A and every wanted factor carry the call's mask whichever brought it; batch_range slices it.
+    const auto mask = ::batchlas::detail::call_mask("gesvd_blocked", a_in, u_out, vh_out);
+    const auto a = with_call_mask(a_in, mask, true), u = with_call_mask(u_out, mask, want_u),
+               vh = with_call_mask(vh_out, mask, want_vh);
     const int batch = static_cast<int>(a_in.batch_size());
     const int chunk = gesvd_blocked_chunk<T>(ctx, a_in, jobu, jobvh);
     if (chunk >= batch) {
-        return gesvd_native_impl<B, T>(ctx, a_in, singular_values, u_out, vh_out, jobu, jobvh, ws,
+        return gesvd_native_impl<B, T>(ctx, a, singular_values, u, vh, jobu, jobvh, ws,
                                        GesvdNativeMode::Blocked, "gesvd_blocked", info);
     }
     // Each part is a complete SVD of its items on the one in-order queue (gesvd_native_impl
     // refuses any other), so parts reuse one part's workspace. An unwanted factor's view is
     // never read and may have any batch, so only wanted ones are sliced.
-    const int64_t k = std::min(a_in.rows(), a_in.cols());
-    const bool want_u = canonical_jobu(jobu, a_in.rows(), k) != SvdVectors::None;
-    const bool want_vh = canonical_jobvh(jobvh, a_in.cols(), k) != SvdVectors::None;
     const bool info_requested = info.size() >= static_cast<std::size_t>(batch);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
         (void)gesvd_native_impl<B, T>(
-            ctx, a_in.batch_range(b0, cb),
+            ctx, a.batch_range(b0, cb),
             singular_values.subspan(static_cast<std::size_t>(b0 * k), static_cast<std::size_t>(cb * k)),
-            want_u ? u_out.batch_range(b0, cb) : u_out, want_vh ? vh_out.batch_range(b0, cb) : vh_out, jobu, jobvh,
+            want_u ? u.batch_range(b0, cb) : u, want_vh ? vh.batch_range(b0, cb) : vh, jobu, jobvh,
             ws, GesvdNativeMode::Blocked, "gesvd_blocked",
             info_requested ? info.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb))
                            : Span<int32_t>{});
@@ -1493,9 +1526,11 @@ Event gesvd_blocked(Queue& ctx,
                     Uplo hermitian_uplo,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
+    // mask: lift after syev_blocked (sytrd_blocked, stedc, stebz, ormqr_blocked)
     ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
+    const auto a = with_call_mask(a_in, ::batchlas::detail::call_mask("gesvd_blocked", a_in, u_out, vh_out), true);
     return gesvd_native_hermitian_impl<B, T>(ctx,
-                                             a_in,
+                                             a,
                                              singular_values,
                                              u_out,
                                              vh_out,
@@ -1566,7 +1601,7 @@ Event gesvd_cta(Queue& ctx,
                 SvdVectors jobvh,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);  // mask: lift after steqr_cta (W3a)
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     // Its normal-equations branch is real-only; complex general is the blocked family's.
     if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
@@ -1586,11 +1621,12 @@ Event gesvd_cta(Queue& ctx,
                 "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
         }
     }
+    const auto mask = ::batchlas::detail::call_mask("gesvd_cta", a_in, u_out, vh_out);
     return gesvd_native_impl<B, T>(ctx,
-                                   a_in,
+                                   with_call_mask(a_in, mask, true),
                                    singular_values,
-                                   u_out,
-                                   vh_out,
+                                   with_call_mask(u_out, mask, jobu != SvdVectors::None),
+                                   with_call_mask(vh_out, mask, jobvh != SvdVectors::None),
                                    jobu,
                                    jobvh,
                                    ws,
@@ -1610,7 +1646,7 @@ Event gesvd_cta(Queue& ctx,
                 Uplo hermitian_uplo,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);
+    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);  // mask: lift after syev_cta (steqr)
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
@@ -1631,8 +1667,9 @@ Event gesvd_cta(Queue& ctx,
                 "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
         }
     }
+    const auto mask = ::batchlas::detail::call_mask("gesvd_cta", a_in, u_out, vh_out);
     return gesvd_native_hermitian_impl<B, T>(ctx,
-                                             a_in,
+                                             with_call_mask(a_in, mask, true),
                                              singular_values,
                                              u_out,
                                              vh_out,

@@ -82,8 +82,12 @@ Event ormbr_apply_p_cta(Queue& ctx,
     auto aq_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(n) * static_cast<size_t>(batch));
     auto tauq_buf = pool.allocate<T>(ctx, static_cast<size_t>(n) * static_cast<size_t>(batch));
 
-    MatrixView<T, MatrixFormat::Dense> aq_view(aq_buf.data(), n, n, n, static_cast<int64_t>(n) * static_cast<int64_t>(n), batch);
-    VectorView<T> tauq_view(tauq_buf, n, batch, 1, n);
+    // Rebuilt from raw pointers: re-attach the call's mask, which ormqx_cta then honours.
+    const auto mask_span = ::batchlas::detail::call_mask("ormbr", a, tau, c);
+    const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
+    const auto aq_view = MatrixView<T, MatrixFormat::Dense>(aq_buf.data(), n, n, n, static_cast<int64_t>(n) * n, batch)
+                             .with_batch_mask(mask_span);
+    const auto tauq_view = VectorView<T>(tauq_buf, n, batch, 1, n).with_batch_mask(mask_span);
 
     ctx->submit([&](sycl::handler& cgh) {
         auto A = a.kernel_view();
@@ -98,6 +102,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
             const int32_t row = static_cast<int32_t>(rem % nn);
             const int32_t col = static_cast<int32_t>(rem / nn);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
 
             AQ(row, col, b) = T(0);
             if (col >= 1) {
@@ -120,6 +125,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int64_t idx = static_cast<int64_t>(tid[0]);
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
 
             if (j == 0) {
                 TAUQ(j, b) = T(0);
@@ -160,7 +166,8 @@ sycl::event pack_p_panel_batched(Queue& q,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  int i0,
                                  int ib,
-                                 int nq) {
+                                 int nq,
+                                 const std::uint8_t* mask) {
     const int m = std::max(0, nq - i0 - 1);
     const int ld_a = a.ld();
     const int stride_a = a.stride();
@@ -175,6 +182,7 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 const int b = static_cast<int>(idx[0]);
                                                 const int r = static_cast<int>(idx[1]);
                                                 const int c = static_cast<int>(idx[2]);
+                                                if (mask != nullptr && mask[b] == 0) return;  // I3
                                                 T val = T(0);
                                                 if (r == c) {
                                                     val = T(1);
@@ -257,8 +265,13 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
     auto W1buf = pool.allocate<T>(ctx, w_elems * static_cast<size_t>(batch));
     auto W2buf = pool.allocate<T>(ctx, w_elems * static_cast<size_t>(batch));
 
-    MatrixView<T, MatrixFormat::Dense> Vmat(Vbuf.data(), nq - 1, nb, nq - 1, static_cast<int64_t>(nq - 1) * static_cast<int64_t>(nb), batch);
-    MatrixView<T, MatrixFormat::Dense> Tmat(Tbuf.data(), nb, nb, nb, static_cast<int64_t>(nb) * static_cast<int64_t>(nb), batch);
+    // Workspace views are rebuilt from raw pointers: each re-attaches the call's mask for gemm.
+    const auto mask_span = ::batchlas::detail::call_mask("ormbr", a, tau, c);
+    const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
+    const auto Vmat = MatrixView<T, MatrixFormat::Dense>(Vbuf.data(), nq - 1, nb, nq - 1,
+                                                         static_cast<int64_t>(nq - 1) * nb, batch).with_batch_mask(mask_span);
+    const auto Tmat = MatrixView<T, MatrixFormat::Dense>(Tbuf.data(), nb, nb, nb, static_cast<int64_t>(nb) * nb, batch)
+                          .with_batch_mask(mask_span);
 
     auto apply_block = [&](int i0) {
         const int ib = std::min(nb, k - i0);
@@ -269,14 +282,14 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
 
         (void)pack_p_panel_batched<T>(ctx,
                                       Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
-                                      a, i0, ib, nq);
+                                      a, i0, ib, nq, mask);
 
         (void)wy::larft_forward_columnwise_batched_t<OrmbrPWyTag, T, false>(ctx,
                                                                          Tmat.data_ptr(), Tmat.ld(), Tmat.stride(),
                                                                          Vmat.data_ptr(), Vmat.ld(), Vmat.stride(),
                                                                          m, ib,
                                                                          tau.data_ptr(), tau.stride(), i0,
-                                                                         batch);
+                                                                         batch, mask);
 
         auto Ublk = Vmat({0, m}, {0, ib});
         auto Tblk = Tmat({0, ib}, {0, ib});
@@ -284,8 +297,10 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
 
         if (side == Side::Left) {
             auto Csub = c({i0 + 1, SliceEnd()}, Slice());
-            MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * static_cast<int64_t>(nC), batch);
-            MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * static_cast<int64_t>(nC), batch);
+            const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
+                                    .with_batch_mask(mask_span);
+            const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), nb, nC, nb, static_cast<int64_t>(nb) * nC, batch)
+                                    .with_batch_mask(mask_span);
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
 
@@ -296,8 +311,10 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             (void)gemm<B>(ctx, Ublk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
             auto Csub = c(Slice(), {i0 + 1, SliceEnd()});
-            MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * static_cast<int64_t>(nb), batch);
-            MatrixView<T, MatrixFormat::Dense> W2full(W2buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * static_cast<int64_t>(nb), batch);
+            const auto W1full = MatrixView<T, MatrixFormat::Dense>(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
+                                    .with_batch_mask(mask_span);
+            const auto W2full = MatrixView<T, MatrixFormat::Dense>(W2buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * nb, batch)
+                                    .with_batch_mask(mask_span);
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
@@ -365,15 +382,23 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
 
 template <Backend B, typename T>
 Event ormbr(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& a,
-            const VectorView<T>& tau,
-            const MatrixView<T, MatrixFormat::Dense>& c,
+            const MatrixView<T, MatrixFormat::Dense>& a_in,
+            const VectorView<T>& tau_in,
+            const MatrixView<T, MatrixFormat::Dense>& c_in,
             char vect,
             Side side,
             Transpose trans,
             const Span<std::byte>& ws,
             int32_t block_size) {
-    ::batchlas::detail::refuse_batch_mask("ormbr", a, tau, c);
+    // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before any child runs.
+    if constexpr (!select::native_gpu_backend<B>) ::batchlas::detail::refuse_batch_mask("ormbr", a_in, tau_in, c_in);
+    // Every operand carries the call's mask whichever brought it, so the children see it. 'Q' runs
+    // ormqx_cta or ormqr_blocked, which refuses a mask itself where its Left update reaches trmm.
+    const auto mask = ::batchlas::detail::call_mask("ormbr", a_in, tau_in, c_in);
+    const bool adopt = !mask.empty() && a_in.batch_size() == c_in.batch_size() && tau_in.batch_size() == c_in.batch_size();
+    const auto a = adopt ? a_in.with_batch_mask(mask) : a_in;
+    const auto tau = adopt ? tau_in.with_batch_mask(mask) : tau_in;
+    const auto c = adopt ? c_in.with_batch_mask(mask) : c_in;
     validate_ormbr_dims(a, tau, c, vect, side);
 
     const char v = upper_ascii(vect);
