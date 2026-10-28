@@ -41,6 +41,7 @@ set(TEST_TARGETS
     linalg_layer_tests
     gemm_tests
     gemm_mask_tests
+    iluk_mask_tests
     getrf_mask_tests
     getrs_mask_tests
     syev_mask_tests

@@ -528,18 +528,13 @@ std::vector<Entry<T>> direct_entries() {
     // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
     if constexpr (B == Backend::NETLIB)
         add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
-    add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
-    add("iluk_factorize(workspace)",
-        [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
-    add("iluk_apply", [=](P& p) {
-        // The factor comes from the unmasked matrix (a workspace of its own): only rhs and out are masked.
-        UnifiedVector<std::byte> fws(std::size_t(1) << 20);
-        const MatrixView<T, MatrixFormat::CSR> plain(p.vals.data(), p.ro.data(), p.ci.data(), kN, kN, NonZeros{kN},
-                                                     kVecStride, kN + 1, kBatch);
-        const auto M = iluk_factorize<B, T>(p.q, plain, Span<std::byte>(fws.data(), fws.size()), ILUKParams<T>(), nullptr);
-        p.q.wait();
-        iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
-    });
+    // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
+    // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
+    if constexpr (B != Backend::NETLIB) {
+        add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
+        add("iluk_factorize(workspace)",
+            [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
+    }
     if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
         add("steqr", [=](P& p) {
             steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
