@@ -13,6 +13,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <batchlas/util/mempool.hh>
 
@@ -103,7 +104,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
                                   T* tau_ptr, int tau_batch_stride, int tau_offset,
-                                  int wg, int G) {
+                                  int wg, int G, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar HERE and never enters the
     // kernel body: its operator* is Annex-G conformant (isnan branch plus libcall).
     using DM = sycl_device::DevMap<T>;
@@ -141,13 +142,15 @@ Event geqrf_panel_resident_launch(Queue& ctx,
                     slot = sg_id;
                     tid = static_cast<int>(sg.get_local_linear_id());
                     lwg = static_cast<int>(sg.get_local_linear_range());
-                    // Sub-group-uniform, and this scope executes only sub-group barriers.
-                    if (b >= batch) return;
+                    // Sub-group-uniform, and this scope executes only sub-group barriers: an
+                    // inactive item (one per sub-group) returns as a tail sub-group does.
+                    if (b >= batch || (mask != nullptr && mask[b] == 0)) return;
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;
                     tid = static_cast<int>(it.get_local_linear_id());
                     lwg = static_cast<int>(it.get_local_range(0));
+                    if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group
                 }
 
                 D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
@@ -197,7 +200,7 @@ Event geqrf_panel_global_launch(Queue& ctx,
                                 T* a_ptr, int ld, int stride,
                                 int m, int n, int batch,
                                 T* tau_ptr, int tau_batch_stride, int tau_offset,
-                                int wg) {
+                                int wg, const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -213,6 +216,7 @@ Event geqrf_panel_global_launch(Queue& ctx,
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
                 gn::GeqrfGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
                 // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
                 gn::geqr2_panel_device<D, gn::GeqrfScope::WorkGroup>(
@@ -236,7 +240,8 @@ template <typename T>
 Event geqrf_panel_reg_launch(Queue& ctx,
                              T* a_ptr, int ld, int stride,
                              int m, int n, int batch,
-                             T* tau_ptr, int tau_batch_stride, int tau_offset) {
+                             T* tau_ptr, int tau_batch_stride, int tau_offset,
+                             const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     using R = gn::real_of<D>;
@@ -250,7 +255,7 @@ Event geqrf_panel_reg_launch(Queue& ctx,
         static_cast<void>(a_ptr); static_cast<void>(ld); static_cast<void>(stride);
         static_cast<void>(m); static_cast<void>(n); static_cast<void>(batch);
         static_cast<void>(tau_ptr); static_cast<void>(tau_batch_stride);
-        static_cast<void>(tau_offset); static_cast<void>(ctx);
+        static_cast<void>(tau_offset); static_cast<void>(ctx); static_cast<void>(mask);
         throw batchlas::unsupported(
             "geqrf: no register panel leaf is instantiated for this scalar type");
     } else {
@@ -270,6 +275,7 @@ Event geqrf_panel_reg_launch(Queue& ctx,
                                   sycl::range<1>(static_cast<std::size_t>(wg))),
                 [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                     const int b = static_cast<int>(it.get_group_linear_id());
+                    if (mask != nullptr && mask[b] == 0) return;  // I1: before the panel's barriers
                     gn::geqr2_panel_reg_device<D, N, R>(
                         it, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
                         tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset,
@@ -410,7 +416,8 @@ Event geqrf_panel_factorize(Queue& ctx,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
                             bool* used_resident_out,
                             GeqrfPanelLeaf leaf,
-                            GeqrfPanelLeaf* leaf_used_out) {
+                            GeqrfPanelLeaf* leaf_used_out,
+                            const std::uint8_t* mask) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -449,23 +456,23 @@ Event geqrf_panel_factorize(Queue& ctx,
 
     if (chosen == GeqrfPanelLeaf::Register) {
         return geqrf_panel_reg_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, tau_ptr,
-                                         tau_batch_stride, tau_offset);
+                                         tau_batch_stride, tau_offset, mask);
     }
     if (chosen == GeqrfPanelLeaf::Global) {
         return geqrf_panel_global_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, tau_ptr,
                                             tau_batch_stride, tau_offset,
-                                            geqrf_panel_wg(n, max_wg));
+                                            geqrf_panel_wg(n, max_wg), mask);
     }
 
     const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
     if (p.packed) {
         return geqrf_panel_resident_launch<T, gn::GeqrfScope::SubGroup>(
             ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
-            p.wg, p.G);
+            p.wg, p.G, mask);
     }
     return geqrf_panel_resident_launch<T, gn::GeqrfScope::WorkGroup>(
         ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
-        p.wg, 1);
+        p.wg, 1, mask);
 }
 
 // The CTA tier's direct entry point. Every gate can_run applies to the CTA arm is
@@ -525,7 +532,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
     bool resident = false;
     Event e = geqrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
                                        tau.data(), static_cast<int>(k), 0, &resident,
-                                       GeqrfPanelLeaf::Resident);
+                                       GeqrfPanelLeaf::Resident, nullptr,
+                                       ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("geqrf_cta", A)));
     if (!resident) {
         // Unreachable; asserted because a silent tier swap passes a pinned-route test.
         throw batchlas::internal_error(
@@ -549,7 +557,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
     template bool geqrf_panel_reg_preferred<T>(int, int, int);                                \
     template unsigned geqrf_panel_reg_debug_launch<T>(Queue&, int, int);                      \
     template Event geqrf_panel_factorize<T>(Queue&, T*, int, int, int, int, int, T*, int,     \
-                                            int, bool*, GeqrfPanelLeaf, GeqrfPanelLeaf*);     \
+                                            int, bool*, GeqrfPanelLeaf, GeqrfPanelLeaf*,      \
+                                            const std::uint8_t*);                             \
     template Event geqrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,   \
                                          Span<T>, Span<std::byte>);
 
