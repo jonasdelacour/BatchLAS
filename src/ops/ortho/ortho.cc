@@ -78,14 +78,6 @@ namespace batchlas {
         return ctx.device().type != DeviceType::GPU;
     }
 
-    // The Cholesky family runs potrf, which refuses a masked view: refuse before any write.
-    // mask: lift after potrf (W2a)
-    inline void ortho_refuse_masked_cholesky(Span<const std::uint8_t> mask, OrthoAlgorithm algo) {
-        const bool cholesky = algo == OrthoAlgorithm::Cholesky || algo == OrthoAlgorithm::Chol2 ||
-                              algo == OrthoAlgorithm::ShiftChol3;
-        if (!mask.empty() && cholesky) throw batchlas::unsupported(detail::batch_mask_refusal("ortho (Cholesky)"));
-    }
-
     // Single description of ortho's workspace; see workspace_bytes() in
     // util/mempool.hh.
     //
@@ -168,7 +160,6 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
-        ortho_refuse_masked_cholesky(mask, algo);
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
         Transpose inv_trans = is_A_trans ? Transpose::NoTrans :
                             std::is_same_v<T, std::complex<float_t>> ? Transpose::ConjTrans : Transpose::Trans;
@@ -476,7 +467,6 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
-        ortho_refuse_masked_cholesky(mask, algo);
         const bool row_arm = transA != Transpose::NoTrans;
         return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
             return ortho_layout<B, T>(ctx, pool, A, m, k, algo, row_arm, mask);
@@ -496,7 +486,6 @@ namespace batchlas {
         if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
-        ortho_refuse_masked_cholesky(mask, algo);
         BumpAllocator pool(workspace);
         constexpr auto fmt = MatrixFormat::Dense;
         //When orthogonalizing against an external basis M,

@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 // ortho and ritz_values honour a batch mask (W4c), on tests/masked_contract.hh. ortho runs every
 // algorithm the device serves (a host device forces Householder) on both arms (columns, and rows
-// through the transposed copy), and the external-basis overload; the Cholesky family refuses a
-// masked view before writing until potrf honours the mask (W2a). The public syev under SVQB is
-// pinned to a family that honours the mask. A device-only mask on every pattern, complex data,
+// through the transposed copy), and the external-basis overload, the Cholesky family included. The
+// public syev under SVQB is pinned to a family that honours the mask, and on a GPU every other child
+// to `native`, so the unmasked reference cannot route one to the vendor. A device-only mask on every pattern, complex data,
 // padded ld and stride. evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -19,10 +19,12 @@
 #include <tests/test_utils.hh>
 
 #include <algorithm>
+#include <array>
 #include <complex>
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <variant>
 #include <span>
 #include <string>
 #include <vector>
@@ -109,10 +111,15 @@ protected:
         if (!gpu()) return {OrthoAlgorithm::Householder};
         // Householder on a GPU waits for orgqr: its blocked family refuses a mask while its ormqr
         // reaches trmm (orgqr.cc, "mask: lift after trmm").
-        return {OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2};
+        return {OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB, OrthoAlgorithm::SVQB2,
+                OrthoAlgorithm::Cholesky, OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3};
     }
-    void pin_syev(SyevPin& pin, int k) const {
-        if (gpu() && k <= 32) pin.emplace("syev", "cta_fused", select::StrictPin{});
+    using ChildPins = std::array<std::optional<select::ScopedPin<std::monostate>>, 6>;
+    void pin_syev(SyevPin& pin, ChildPins& children, int k) const {
+        if (!gpu()) return;
+        if (k <= 32) pin.emplace("syev", "cta_fused", select::StrictPin{});
+        const char* ops[] = {"potrf", "trsm", "gemm", "gemv", "syrk", "herk"};
+        for (std::size_t i = 0; i < children.size(); ++i) children[i].emplace(ops[i], "native");
     }
 
     // m vectors of length... : `m` x `k` columns (NoTrans) or k x m rows (the row arm).
@@ -124,7 +131,8 @@ protected:
         const Transpose tr = rows ? rows_trans() : Transpose::NoTrans;
         Matrix<T> A = test_support::padded<T>(r, c, batch);
         SyevPin pin;
-        pin_syev(pin, k);
+        ChildPins children;
+        pin_syev(pin, children, k);
         mc::Case cs;
         cs.batch = batch;
         cs.identical_items = identical;
@@ -146,7 +154,8 @@ protected:
         Matrix<T> A = test_support::padded<T>(m, nA, batch);
         Matrix<T> M = test_support::padded<T>(m, nM, batch, 2, 3);
         SyevPin pin;
-        pin_syev(pin, nA);
+        ChildPins children;
+        pin_syev(pin, children, nA);
         const auto views = [&](Span<const std::uint8_t> mk) {
             return mask_on_m ? std::pair{A.view(), M.view().with_batch_mask(mk)}
                              : std::pair{A.view().with_batch_mask(mk), M.view()};
@@ -205,41 +214,11 @@ TYPED_TEST(OrthoMask, AgainstAnExternalBasis) {
         for (bool on_m : {false, true}) this->check_ortho_basis(a, 12, 4, 3, 6, on_m);
 }
 
-// The Cholesky family runs potrf, which refuses a masked view: ortho refuses first and writes nothing,
-// after the same call ran unmasked (so the throw is the mask's, not the shape's).
-TYPED_TEST(OrthoMask, CholeskyFamilyRefusesUntilPotrfHonoursTheMask) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::B;
-    if (!this->gpu()) GTEST_SKIP() << "a host device forces Householder";
-    Queue& q = *this->ctx;
-    const int m = 12, k = 5, batch = 4;
-    for (OrthoAlgorithm a : {OrthoAlgorithm::Cholesky, OrthoAlgorithm::Chol2, OrthoAlgorithm::ShiftChol3}) {
-        SCOPED_TRACE(algo_name(a));
-        Matrix<T> A = test_support::padded<T>(m, k, batch);
-        fill_full_rank(A, m, k, batch, false);
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(ortho_buffer_size<B, T>(q, A.view(), Transpose::NoTrans, a), 1));
-        ASSERT_NO_THROW(((void)ortho<B, T>(q, A.view(), Transpose::NoTrans, ws.to_span(), a)));
-        q.wait();
-        fill_full_rank(A, m, k, batch, false);
-        const std::vector<T> before(A.data_ptr(), A.data_ptr() + std::size_t(A.stride()) * batch);
-        const mc::DeviceMask mk(q, {0, 1, 0, 1});
-        EXPECT_THROW(((void)ortho_buffer_size<B, T>(q, A.view().with_batch_mask(mk.span()), Transpose::NoTrans, a)),
-                     batchlas::unsupported);
-        try {
-            (void)ortho<B, T>(q, A.view().with_batch_mask(mk.span()), Transpose::NoTrans, ws.to_span(), a);
-            ADD_FAILURE() << "a masked Cholesky ortho ran";
-        } catch (const batchlas::unsupported& e) {
-            EXPECT_NE(std::string(e.what()).find("batch mask"), std::string::npos) << e.what();
-        }
-        q.wait();
-        EXPECT_EQ(0, std::memcmp(before.data(), A.data_ptr(), before.size() * sizeof(T))) << "the refused call wrote A";
-    }
-}
-
 // 1024 identical items through the one-work-group-per-item kernels: active items bit-identical.
 TYPED_TEST(OrthoMask, SaturatingIdenticalBatch) {
     const auto algos = this->algorithms();
     this->check_ortho(algos.front(), false, 16, 4, 1024, true);
+    if (this->gpu()) this->check_ortho(OrthoAlgorithm::ShiftChol3, false, 16, 4, 1024, true);  // potrf, trsm packed
 }
 
 // ritz_values(A, V): AV through the public gemm, then one work-group per (item, column). The ritz

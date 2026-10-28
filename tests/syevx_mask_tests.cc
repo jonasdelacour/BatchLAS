@@ -2,8 +2,8 @@
 // syevx honours a batch mask (W4c) on tests/masked_contract.hh: A, W, V, m and info of an inactive
 // item keep every byte, and an active item equals the unmasked call with the public syev pinned
 // strictly (cta_fused on a GPU, the LAPACKE loop on the host backend). Direct runs every range on
-// both backends. LOBPCG and Filtered run on a GPU with a non-Cholesky ortho; on the host backend
-// (gemm is the host BLAS), with a Cholesky ortho on a GPU, and on DirectSubset (stebz, stein and
+// both backends. LOBPCG and Filtered run on a GPU with every ortho; on the host backend
+// (gemm is the host BLAS) and on DirectSubset (stebz, stein and
 // sytrd_sy2sb refuse) a masked call throws before any write. Every mask is device-only; data
 // complex where T is, ld and stride padded for A and V, W, m and info poisoned.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
@@ -26,7 +26,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <array>
 #include <optional>
+#include <variant>
 #include <span>
 #include <string>
 #include <vector>
@@ -156,6 +158,13 @@ protected:
         SCOPED_TRACE(what + " n " + std::to_string(n) + " batch " + std::to_string(batch) + " neigs " +
                      std::to_string(neigs) + (jobz == JobType::EigenVectors ? " V" : " N"));
         Queue& q = *this->ctx;
+        // The unmasked reference would route a level-2/3 or potrf child to the vendor on a GPU,
+        // which refuses the masked call: both runs pin them `native`.
+        std::array<std::optional<select::ScopedPin<std::monostate>>, 7> children;
+        if (!kHost) {
+            const char* ops[] = {"gemm", "gemv", "trsm", "trmm", "syrk", "herk", "potrf"};
+            for (std::size_t i = 0; i < children.size(); ++i) children[i].emplace(ops[i], "native");
+        }
         Problem<T, B> pr(q, n, batch, neigs, jobz, p, same);
         auto c = pr.make_case(items_per_subgroup(n));
         std::vector<R> w_ref;
@@ -355,14 +364,13 @@ TYPED_TEST(SyevxMask, LobpcgAndFilteredRefuseOnTheHostBackend) {
                              TestFixture::iterative(a, true));
 }
 
-// A Cholesky ortho runs potrf, which refuses a masked view: refused before the m fill.
-TYPED_TEST(SyevxMask, CholeskyOrthoRefusesOnAGpu) {
+// A Cholesky ortho runs potrf, trsm and the gram (all honour the mask) on the masked views.
+TYPED_TEST(SyevxMask, CholeskyOrthoOnAGpu) {
     if (TestFixture::kHost) GTEST_SKIP() << "the host device forces Householder ortho";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         for (const auto o : {OrthoAlgorithm::Chol2, OrthoAlgorithm::Cholesky, OrthoAlgorithm::ShiftChol3})
-            this->expect_refused(std::string(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered") + " ortho " +
-                                     std::to_string(int(o)),
-                                 16, 8, 3, TestFixture::iterative(a, true, o));
+            this->check(std::string(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered") + " ortho " + std::to_string(int(o)),
+                        16, 20, 3, JobType::EigenVectors, TestFixture::iterative(a, true, o));
 }
 
 // DirectSubset carries the mask to every child, but stebz, stein and sytrd_sy2sb refuse it.
