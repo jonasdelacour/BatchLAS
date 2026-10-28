@@ -56,7 +56,7 @@ select::Key key_of(const MV<T>& A, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const VectorView<T>& X,
              const VectorView<T>& Y, Transpose transA) {
-    if (batchlas::detail::any_batch_mask(A, X, Y)) return false;
+    if (std::holds_alternative<Vendor>(c) && batchlas::detail::any_batch_mask(A, X, Y)) return false;  // strided
     const bool native = !A.is_heterogeneous() && A.rows() >= 0 && A.cols() >= 0 && A.batch_size() >= 1 &&
                         X.batch_size() == A.batch_size() && Y.batch_size() == A.batch_size() &&
                         X.size() == red_len<T>(A, transA) && Y.size() == out_len<T>(A, transA);

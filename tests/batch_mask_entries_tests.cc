@@ -212,6 +212,7 @@ bool check_refuses(Queue& q, const Entry<T>& entry, Span<const std::uint8_t> mas
 }
 
 // The routed ops: the public op entries, each refused by every family's can_run term.
+// gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
 template <typename T, Backend B>
 std::vector<Entry<T>> routed_entries() {
     using P = Pool<T>;
@@ -221,7 +222,6 @@ std::vector<Entry<T>> routed_entries() {
     const auto all = SvdVectors::All;
     std::vector<Entry<T>> out = {
         {"gemm", true, [=](P& p) { gemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, N, N); }},
-        {"gemv", true, [=](P& p) { gemv<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp), one, half, N); }},
         {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
