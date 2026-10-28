@@ -97,7 +97,9 @@ struct Problem {
     }
     void poison_outputs() {
         std::memset(piv.data(), 0x5a, piv.size() * sizeof(int64_t));
-        std::fill_n(info.data(), info.size(), int32_t(-77));
+        // sysv's solve skips an item whose info is nonzero: a 0 sentinel keeps that skip from hiding
+        // an inactive item the solve wrote.
+        std::fill_n(info.data(), info.size(), op == Op::sysv ? int32_t(0) : int32_t(-77));
     }
     MatrixView<T> a(Span<const std::uint8_t> m) { return A.view().with_batch_mask(m); }
     MatrixView<T> b(Span<const std::uint8_t> m) { return Bm.view().with_batch_mask(m); }

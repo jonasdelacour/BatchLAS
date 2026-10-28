@@ -199,6 +199,12 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W4b, sytrf, sytrs, sysv** (`tests/sytrf_mask_tests.cc`; NETLIB every scalar, Metal float and
+  complex float, 2026-10-28): sytrf `cta`, `wg`, `blocked`, sytrs `cta`, `wg`, sysv `cta`, `compose`
+  and LAPACKE's sytrf and sytrs host loops run a masked batch; A, the packed ipiv, `info` and B of an
+  inactive item keep every byte, a singular item included. `blocked` slices the mask per part, on
+  its kernels and its gemm views (the chunk patterns at n = 45 and 170). sytrs `blocked` refuses
+  until trsm honours the mask; cuSOLVER's sytrf refuses permanently.
 
 ## Rejected alternatives {#masked-batches-rejected}
 
