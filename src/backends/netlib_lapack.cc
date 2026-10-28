@@ -856,14 +856,17 @@ namespace batchlas{
     Event sygst_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& Bm, int itype, Uplo uplo,
                        Span<std::byte> /*workspace*/) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::sygst, "sygst_vendor", B, A, Bm);
+        // I4: the mask is read inside the host task, after its producer on the in-order queue.
+        const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sygst_vendor", A, Bm));
         auto a = A;
         auto b = Bm;
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygst", [=] {
-            for (int i = 0; i < a.batch_size(); ++i)
+            for (int i = 0; i < a.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;
                 (void)call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssygst, LAPACKE_dsygst, LAPACKE_chegst, LAPACKE_zhegst, Layout::ColMajor, itype, uplo,
                     a.rows(), a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld());
+            }
         });
     }
 
@@ -871,7 +874,7 @@ namespace batchlas{
     Event sygvd_vendor(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& Bm, Span<typename base_type<T>::type> w, int itype,
                        JobType jobz, Uplo uplo, Span<std::byte> /*workspace*/, Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::sygvd, "sygvd_vendor", B, A, Bm);
+        const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("sygvd_vendor", A, Bm));
         auto a = A;
         auto b = Bm;
         auto eig = w;
@@ -880,6 +883,7 @@ namespace batchlas{
         return ::batchlas::detail::submit_host_task<T>(ctx, "netlib.sygvd", [=] {
             const int n = a.rows();
             for (int i = 0; i < a.batch_size(); ++i) {
+                if (mask != nullptr && mask[i] == 0) continue;  // I4
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssygvd, LAPACKE_dsygvd, LAPACKE_chegvd, LAPACKE_zhegvd, Layout::ColMajor, itype, jobz,
                     uplo, n, a[i].data_ptr(), a.ld(), b[i].data_ptr(), b.ld(),
@@ -955,7 +959,8 @@ namespace batchlas{
                       Uplo uplo,
                       Span<std::byte> /*workspace*/,
                       Span<int32_t> info_out) {
-        ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_vendor", B, descrA);
+        // I4: the mask is read inside the host task, after its producer on the in-order queue.
+        const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("syev_vendor", descrA));
         auto A_view = descrA;
         auto eig = eigenvalues;
         // call_backend_nh_r, not call_backend_nh: `_nh` DISCARDS the return value,
@@ -970,6 +975,7 @@ namespace batchlas{
         const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
         return ::batchlas::detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
             if (A_view.batch_size() == 1) {
+                if (mask != nullptr && mask[0] == 0) return;
                 auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                     Layout::ColMajor, jobtype, uplo,
@@ -978,6 +984,7 @@ namespace batchlas{
                 if (want_info) info[0] = static_cast<int32_t>(st);
             } else {
                 for (int i = 0; i < A_view.batch_size(); ++i) {
+                    if (mask != nullptr && mask[i] == 0) continue;
                     auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                         LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                         Layout::ColMajor, jobtype, uplo,

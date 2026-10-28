@@ -255,7 +255,6 @@ std::vector<Entry<T>> routed_entries() {
              if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
              ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
          }},
-        {"syev", true, [=](P& p) { syev<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan()); }},
         {"gesvd", true,
          [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
         {"gesvd(hermitian)", true,
@@ -273,15 +272,6 @@ std::vector<Entry<T>> routed_entries() {
          }},
         {"spmm", true,
          [=](P& p) { spmm<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws); }},
-        {"sygst", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-             sygst<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws);
-         }},
-        {"sygvd", true,
-         [=](P& p) {
-             sygvd<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws, p.ispan());
-         }},
         {"sygvd_factored", true,
          [=](P& p) {
              if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
@@ -310,6 +300,17 @@ std::vector<Entry<T>> routed_entries() {
                        }});
         out.push_back({"inv", true, [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); }});
         out.push_back({"inv(owning)", true, [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); }});
+        // The host backend's sygst and sygvd are LAPACKE loops that honour the mask (W3c): the
+        // contract is sygvd_mask_tests'. Every device family still refuses.
+        out.push_back({"sygst", true,
+                       [=](P& p) {
+                           if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
+                           sygst<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws);
+                       }});
+        out.push_back({"sygvd", true, [=](P& p) {
+                           sygvd<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
+                                       p.ispan());
+                       }});
         out.push_back({"getri(pinned blocked)", true,
                        [=](P& p) {
                            // blocked writes P into C before its trsm: its can_run refuses a masked A or C.
@@ -394,9 +395,10 @@ std::vector<Entry<T>> vendor_entries() {
     }
     if constexpr (sv::solver_vendor_available<B>) {
         add("potrf_vendor", [=](P& p) { backend::potrf_vendor<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); });
-        add("syev_vendor", [=](P& p) {
-            backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
-        });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (syev_mask_tests)
+            add("syev_vendor", [=](P& p) {
+                backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
+            });
         add("gesvd_vendor", [=](P& p) {
             backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
                                         SvdVectors::All, p.ws, p.ispan());
@@ -408,17 +410,17 @@ std::vector<Entry<T>> vendor_entries() {
         });
     }
     if constexpr ((B == Backend::CUDA && sv::kHasCudaVendor) || (B == Backend::NETLIB && sv::kHasNetlib)) {
-        add("sygvd_vendor", [=](P& p) {
-            backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                        p.ispan());
-        });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (sygvd_mask_tests)
+            add("sygvd_vendor", [=](P& p) {
+                backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
+                                            p.ispan());
+            });
         add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
     }
     if constexpr (B == Backend::NETLIB && sv::kHasNetlib) {
         add("sytrs_vendor", [=](P& p) {
             backend::sytrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), nullptr);
         });
-        add("sygst_vendor", [=](P& p) { backend::sygst_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws); });
     }
     return out;
 }
@@ -435,8 +437,8 @@ std::vector<Entry<T>> direct_entries() {
     std::vector<Entry<T>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
     add("syev_cta", [=](P& p) { syev_cta<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_cta_fused", [=](P& p) { syev_cta_fused<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_jacobi_cta", [=](P& p) { syev_jacobi_cta<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
+    // syev_cta_fused, syev_jacobi_cta, sytrd_cta, sytrd_sb2st and latrd_lower_panel honour the mask
+    // (W3b): their contract is syev_mask_tests'.
     add("syev_blocked", [=](P& p) { syev_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
     add("syev_two_stage", [=](P& p) { syev_two_stage<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
     add("gesvd_blocked", [=](P& p) {
@@ -456,14 +458,10 @@ std::vector<Entry<T>> direct_entries() {
         ormqx_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), Uplo::Lower, Side::Left, N, kN, p.ws);
     });
     add("ormqr_blocked", [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
-    add("sytrd_cta", [=](P& p) { sytrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws); });
     add("sytrd_blocked", [=](P& p) {
         sytrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws);
     });
     add("sytrd_sy2sb", [=](P& p) { sytrd_sy2sb<B, T>(p.q, p.mat(p.a), p.mat(p.z, kKd + 1), p.vec(p.tau), L, kKd, p.ws); });
-    add("sytrd_sb2st", [=](P& p) {
-        sytrd_sb2st<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws, 0);
-    });
     add("sytrd_band_reduction", [=](P& p) {
         sytrd_band_reduction<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws,
                                    int32_t(4));
@@ -475,12 +473,6 @@ std::vector<Entry<T>> direct_entries() {
     add("sytrd_band_reduction_single_step", [=](P& p) {
         sytrd_band_reduction_single_step<B, T>(p.q, p.mat(p.z, kKd + 1), p.mat(p.v, kN - 1), L, kKd, p.ws,
                                                SytrdBandReductionParams{});
-    });
-    add("latrd_lower_panel", [=](P& p) {
-        latrd_lower_panel<B, T>(p.q, p.mat(p.a), p.vec(p.tp, kN - 1), p.vec(p.tau), p.mat(p.z, kN, 2), 0, 2);
-    });
-    add("latrd_lower_panel(panel)", [=](P& p) {
-        latrd_lower_panel<B, T>(p.q, p.mat(p.a), p.vec(p.tp, kN - 1), p.vec(p.tau), p.mat(p.z, kN, 2));
     });
     add("gebrd_unblocked", [=](P& p) {
         gebrd_unblocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp));
@@ -520,7 +512,9 @@ std::vector<Entry<T>> direct_entries() {
     add("syfn_from_eigen", [=](P& p) {
         syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
     });
-    add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
+    // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
+    if constexpr (B == Backend::NETLIB)
+        add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
     add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
     add("iluk_factorize(workspace)",
         [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });

@@ -75,7 +75,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                 bool upper,
                                 const SteqrParams<T>& params,
                                 size_t cta_wg_size_multiplier,
-                                int32_t* info) {
+                                int32_t* info,
+                                const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
     constexpr bool kComplex = detail::is_complex<T>::value;
 
@@ -169,8 +170,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // Clamp, do not return: a dead chunk runs every stage on a zero matrix and writes nothing.
-                const bool live = prob_id < nb;
+                // Clamp, do not return: a dead chunk, or an inactive item of the batch mask, runs every
+                // stage on a zero matrix and writes nothing.
+                const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
 
                 const int32_t base_a = part_id * static_cast<int32_t>(kATileElems);
@@ -451,7 +453,7 @@ Event syev_cta_fused(Queue& ctx,
                      SteqrParams<T> steqr_params,
                      size_t cta_wg_size_multiplier,
                      Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_cta_fused", B, a_in);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("syev_cta_fused", a_in));
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {
@@ -499,9 +501,9 @@ Event syev_cta_fused(Queue& ctx,
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            syev_cta_fused_impl<T, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr);
+            syev_cta_fused_impl<T, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
         } else {
-            syev_cta_fused_impl<T, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr);
+            syev_cta_fused_impl<T, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr, mask);
         }
     };
 

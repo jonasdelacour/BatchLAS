@@ -39,11 +39,14 @@ select::Key key_of(const Args<T>& a) {
 // factored B; compose's children refuse what they cannot run themselves.
 template <Backend B, class T>
 bool can_run(const SygvdChoice& c, const select::Device& d, const Args<T>& a) {
-    const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1 &&
-                             !batchlas::detail::any_batch_mask(a.A, a.B);  // no family reads the mask yet
+    const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1;
+    // The NETLIB vendor honours a batch mask (cuSOLVER cannot skip an item); Compose keeps refusing it.
+    const bool masked = batchlas::detail::any_batch_mask(a.A, a.B);
     return std::visit(overloaded{
-        [&](Compose) { return homogeneous; },
-        [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored; },
+        [&](Compose) { return homogeneous && !masked; },  // mask: lift after potrf (W2a), trsm, trmm (W1b), syev
+        [&](Vendor) {
+            return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored && (!masked || B == Backend::NETLIB);
+        },
     }, c);
 }
 

@@ -211,6 +211,17 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   only); each host loop's skip (its NETLIB pin and Auto, plus gesv `blocked` over getrf and getrs, inv over
   getri); cta's `info_clear` reverted to a fill (the `info` sentinel only). An all-active mask
   stayed green under every break.
+- **W3b and W3c, syev, sygst, sygvd** (`tests/syev_mask_tests.cc`, `tests/sygvd_mask_tests.cc`;
+  acpp Metal float and complex float, NETLIB every scalar, 2026-10-28): syev's `cta_fused` and
+  `jacobi` and the host backend's LAPACKE syev, sygst and sygvd honour the mask, pinned and
+  reached; sytrd_cta, sb2st (both chases and the kd 0 and 1 copies), sb2st_hh with its three
+  back-transforms, latrd's legacy and device panels and syev_align are checked unpinned. The
+  composites (syev `cta`, `blocked`, `two_stage`; sygst `blocked`, `two_sided`; sygvd `compose`;
+  syfn) carry the plumbing and keep refusing until their children land. With each family's guard
+  defeated, only the masked patterns that have an inactive item went red (`alternating`, `single`,
+  the work-group holes), always as "inactive item written". `none` and `all-active` stayed green,
+  and no active item differed. Latrd's grid panel cannot run on Metal or a host device and is
+  untested here.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

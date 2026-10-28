@@ -41,7 +41,8 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                                   VectorView<T> work,
                                   VectorView<typename base_type<T>::type> d,
                                   VectorView<typename base_type<T>::type> e,
-                                  VectorView<T> tau) {
+                                  VectorView<T> tau,
+                                  const std::uint8_t* mask) {
     static_assert(P == 2 || P == 4 || P == 8 || P == 16 || P == 32);
     constexpr int32_t sg_size = 32;
     static_assert(sg_size % P == 0);
@@ -117,6 +118,8 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 if (prob_id >= batch) return;
+                // I2: an inactive item chases its scratch copy like any other and stores nothing.
+                const bool live = mask == nullptr || mask[prob_id] != 0;
 
                 auto ABv = ab.batch_item(prob_id);
                 auto Dv = d.batch_item(prob_id);
@@ -400,7 +403,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 }
 
                 invoke_one(partition, [&]() {
-                    Ops::finalize_tridiag(ABv, n, D, E, TAU);
+                    if (live) Ops::finalize_tridiag(ABv, n, D, E, TAU);
                 });
             });
     });
@@ -418,22 +421,23 @@ Event btrd_lower_inplace_subgroup_dispatch(Queue& q,
                                            VectorView<T> work,
                                            VectorView<typename base_type<T>::type> d,
                                            VectorView<typename base_type<T>::type> e,
-                                           VectorView<T> tau) {
+                                           VectorView<T> tau,
+                                           const std::uint8_t* mask) {
     // Choose a partition size that keeps enough lanes for typical kd<=32 while
     // allowing smaller partitions when kd is very small.
     if (kd <= 2) {
-        return btrd_lower_inplace_subgroup<T, 2>(q, ab, n, kd, c, work, d, e, tau);
+        return btrd_lower_inplace_subgroup<T, 2>(q, ab, n, kd, c, work, d, e, tau, mask);
     }
     if (kd <= 4) {
-        return btrd_lower_inplace_subgroup<T, 4>(q, ab, n, kd, c, work, d, e, tau);
+        return btrd_lower_inplace_subgroup<T, 4>(q, ab, n, kd, c, work, d, e, tau, mask);
     }
     if (kd <= 8) {
-        return btrd_lower_inplace_subgroup<T, 8>(q, ab, n, kd, c, work, d, e, tau);
+        return btrd_lower_inplace_subgroup<T, 8>(q, ab, n, kd, c, work, d, e, tau, mask);
     }
     if (kd <= 16) {
-        return btrd_lower_inplace_subgroup<T, 16>(q, ab, n, kd, c, work, d, e, tau);
+        return btrd_lower_inplace_subgroup<T, 16>(q, ab, n, kd, c, work, d, e, tau, mask);
     }
-    return btrd_lower_inplace_subgroup<T, 32>(q, ab, n, kd, c, work, d, e, tau);
+    return btrd_lower_inplace_subgroup<T, 32>(q, ab, n, kd, c, work, d, e, tau, mask);
 }
 
 // ---- Explicit template instantiations (needed because sytrd_sb2st.cc only sees the declaration) ----
@@ -446,7 +450,8 @@ template Event btrd_lower_inplace_subgroup_dispatch<BATCHLAS_UNPAREN fp>(Queue&,
                                                                           VectorView<BATCHLAS_UNPAREN fp>, \
                                                                           VectorView<BATCHLAS_UNPAREN real_fp>, \
                                                                           VectorView<BATCHLAS_UNPAREN real_fp>, \
-                                                                          VectorView<BATCHLAS_UNPAREN fp>);
+                                                                          VectorView<BATCHLAS_UNPAREN fp>, \
+                                                                          const std::uint8_t*);
 
 BATCHLAS_FOR_EACH_SYTRD_SB2ST_CTA_DISPATCH_TYPE(BTRD_LOWER_INPLACE_SUBGROUP_DISPATCH_INSTANTIATE)
 

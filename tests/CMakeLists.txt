@@ -43,6 +43,8 @@ set(TEST_TARGETS
     gemm_mask_tests
     getrf_mask_tests
     getrs_mask_tests
+    syev_mask_tests
+    sygvd_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -216,7 +218,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
     gesvd_candidates_tests syev_candidates_tests
-    syev_align_tests syfn_tests sygvd_tests)
+    syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests)
 set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests spmm_tests spmm_candidates_tests)
 

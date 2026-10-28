@@ -113,7 +113,7 @@ template <typename T>
 class ZeroABKernel;
 
 template <typename T>
-Event zero_ab(Queue& q, const MatrixView<T, MatrixFormat::Dense>& ab) {
+Event zero_ab(Queue& q, const MatrixView<T, MatrixFormat::Dense>& ab, const std::uint8_t* mask) {
     const int rows = ab.rows();
     const int cols = ab.cols();
     const int ldab = ab.ld();
@@ -128,6 +128,7 @@ Event zero_ab(Queue& q, const MatrixView<T, MatrixFormat::Dense>& ab) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
                 const int r = static_cast<int>(idx[2]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 T* AB = ab_ptr + b * stride_ab;
                 AB[r + j * ldab] = T(0);
             });
@@ -145,7 +146,8 @@ Event copy_band_lower(Queue& q,
                       const MatrixView<T, MatrixFormat::Dense>& ab,
                       int i0,
                       int pk,
-                      int kd) {
+                      int kd,
+                      const std::uint8_t* mask) {
     const int n = a.rows();
     const int lda = a.ld();
     const int stride_a = a.stride();
@@ -162,7 +164,7 @@ Event copy_band_lower(Queue& q,
                 const int b = static_cast<int>(idx[0]);
                 const int jj = static_cast<int>(idx[1]);
                 const int j = i0 + jj;
-                if (j < 0 || j >= n) return;
+                if (j < 0 || j >= n || (mask != nullptr && mask[b] == 0)) return;  // I3
 
                 const T* A = a_ptr + b * stride_a;
                 T* AB = ab_ptr + b * stride_ab;
@@ -186,7 +188,8 @@ Event copy_tau_panel_to_out(Queue& q,
                             int tau_panel_ld,
                             const VectorView<T>& tau_out,
                             int i0,
-                            int pk) {
+                            int pk,
+                            const std::uint8_t* mask) {
     const int stride_tau_out = tau_out.stride();
     T* tau_out_ptr = tau_out.data_ptr();
     const int batch = tau_out.batch_size();
@@ -197,6 +200,7 @@ Event copy_tau_panel_to_out(Queue& q,
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int j = static_cast<int>(idx[1]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 tau_out_ptr[b * stride_tau_out + (i0 + j)] = tau_panel[b * tau_panel_ld + j];
             });
     });
@@ -265,17 +269,18 @@ void two_sided_update_lower(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& Vg,
                             Span<T> tau_panel,
                             const MatrixView<T, MatrixFormat::Dense>& A22,
-                            const Sy2sbUpdateScratch<T>& s) {
+                            const Sy2sbUpdateScratch<T>& s,
+                            Span<const std::uint8_t> mask) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const int pn = Vg.rows();
     const int pk = Vg.cols();
     const int batch = Vg.batch_size();
-    const MV V(s.v.data(), pn, pk, pn, pn * pk, batch);
-    const MV P(s.p.data(), pn, pk, pn, pn * pk, batch);
-    const MV Y(s.y.data(), pn, pk, pn, pn * pk, batch);
-    const MV Tf(s.tf.data(), pk, pk, pk, pk * pk, batch);
-    const MV M1(s.m1.data(), pk, pk, pk, pk * pk, batch);
-    const MV M2(s.m2.data(), pk, pk, pk, pk * pk, batch);
+    const MV V = MV(s.v.data(), pn, pk, pn, pn * pk, batch).with_batch_mask(mask);
+    const MV P = MV(s.p.data(), pn, pk, pn, pn * pk, batch).with_batch_mask(mask);
+    const MV Y = MV(s.y.data(), pn, pk, pn, pn * pk, batch).with_batch_mask(mask);
+    const MV Tf = MV(s.tf.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
+    const MV M1 = MV(s.m1.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
+    const MV M2 = MV(s.m2.data(), pk, pk, pk, pk * pk, batch).with_batch_mask(mask);
 
     (void)wy::pack_v_panel_batched<Sy2sbWyTag, T>(ctx, V.data_ptr(), V.ld(), V.stride(), Vg, 0, pk, pn);
     (void)wy::larft_forward_columnwise_batched_t<Sy2sbWyTag, T, false>(
@@ -302,6 +307,8 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
                                Uplo uplo,
                                int32_t kd) {
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
+    const MatrixView<T, MatrixFormat::Dense> A =
+        a_in.with_batch_mask(batchlas::detail::call_mask("sytrd_sy2sb", a_in, ab_out, tau_out));
 
     const int n = a_in.rows();
     const int batch = a_in.batch_size();
@@ -316,9 +323,9 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
     if (kd_i > 0 && n > kd_i) {
         const int pn0 = n - kd_i;
         const int pk0 = std::min(pn0, kd_i);
-        auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
+        auto V0 = A({kd_i, SliceEnd()}, {0, pk0});
         // Bounds the one-sided ormqr of the short final panel's strip (see the main loop).
-        auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
+        auto A_left0 = A({kd_i, SliceEnd()}, {pk0, SliceEnd()});
 
         const size_t tau_elems = static_cast<size_t>(pk0) * static_cast<size_t>(batch);
         T* tau_tmp = sycl::malloc_shared<T>(tau_elems, ctx->get_device(), ctx->get_context());
@@ -353,8 +360,11 @@ Event sytrd_sy2sb(Queue& ctx,
                   Uplo uplo,
                   int32_t kd,
                   const Span<std::byte>& ws) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sy2sb", B, a_in, ab_out, tau_out);
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_sy2sb", B, a_in, ab_out, tau_out);  // mask: lift after geqrf, ormqr (W2c), syr2k, her2k, symm, hemm (W1b)
+    const Span<const std::uint8_t> mask = batchlas::detail::call_mask("sytrd_sy2sb", a_in, ab_out, tau_out);
+    const std::uint8_t* mask_p = batchlas::detail::mask_ptr(mask);
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
+    const MatrixView<T, MatrixFormat::Dense> A = a_in.with_batch_mask(mask);
 
     if (!ctx.in_order()) {
         throw batchlas::invalid_argument("sytrd_sy2sb: requires an in-order Queue");
@@ -371,11 +381,11 @@ Event sytrd_sy2sb(Queue& ctx,
     // Quick return: just copy the band.
     if (n <= 0) return ctx.get_event();
 
-    (void)zero_ab<T>(ctx, ab_out);
+    (void)zero_ab<T>(ctx, ab_out, mask_p);
 
     if (kd_i == 0 || n <= kd_i) {
         // Full band width covers the matrix (or degenerate kd=0): copy diagonal (and up to kd).
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/0, /*pk=*/n, /*kd=*/kd_i);
+        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/0, /*pk=*/n, /*kd=*/kd_i, mask_p);
         return ctx.get_event();
     }
 
@@ -387,9 +397,9 @@ Event sytrd_sy2sb(Queue& ctx,
     // Shared workspace for GEQRF + ORMQR on the largest panel/trailing block.
     const int pn0 = n - kd_i;
     const int pk0 = std::min(pn0, kd_i);
-    auto V0 = a_in({kd_i, SliceEnd()}, {0, pk0});
+    auto V0 = A({kd_i, SliceEnd()}, {0, pk0});
     // Must match the shapes queried in sytrd_sy2sb_buffer_size exactly.
-    auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
+    auto A_left0 = A({kd_i, SliceEnd()}, {pk0, SliceEnd()});
     const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const Transpose trans_left = detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
     // Same hint used for the query and for every ormqr call in the loop below.
@@ -409,7 +419,7 @@ Event sytrd_sy2sb(Queue& ctx,
         if (pn <= 0) break;
         const int pk = std::min(pn, kd_i);
 
-        auto V = a_in({i + kd_i, SliceEnd()}, {i, i + pk});           // (pn x pk)
+        auto V = A({i + kd_i, SliceEnd()}, {i, i + pk});           // (pn x pk)
 
         // The similarity is A := H^H A H with H = diag(I_{i+kd}, Q), read and written on the
         // lower triangle only: the trailing block A22 gets both sides (two_sided_update_lower)
@@ -419,7 +429,7 @@ Event sytrd_sy2sb(Queue& ctx,
         // visible only at n % kd >= 2 (at 1 the leftover Q is 1x1 with tau = 0). Its upper
         // mirror, rows [i+pk, i+kd) right of the band, is never read. The leftover columns
         // are the tail [n-kd, n), which the copy after the loop picks up.
-        auto A22 = a_in({i + kd_i, SliceEnd()}, {i + kd_i, SliceEnd()});
+        auto A22 = A({i + kd_i, SliceEnd()}, {i + kd_i, SliceEnd()});
 
         // tau panel span is packed with per-batch stride = pk.
         Span<T> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
@@ -430,24 +440,24 @@ Event sytrd_sy2sb(Queue& ctx,
         (void)geqrf<B, T>(ctx, V, tau_panel_span, panel_ws);
 
         // Copy band portion into AB for columns i..i+pk-1.
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i);
+        (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i, mask_p);
 
         if (pk < kd_i) {
             // The hint is clamped to k = min(rows, cols) inside the dispatch, so it degrades
             // to min(nb, pk) and the workspace sized from the i = 0 panel still bounds it.
-            auto A_strip = a_in({i + kd_i, SliceEnd()}, {i + pk, i + kd_i});
+            auto A_strip = A({i + kd_i, SliceEnd()}, {i + pk, i + kd_i});
             (void)ormqr<B, T>(ctx, V, A_strip, Side::Left, trans_left, tau_panel_span, panel_ws, ormqr_nb_hint);
         }
-        two_sided_update_lower<B, T>(ctx, V, tau_panel_span, A22, update_ws);
+        two_sided_update_lower<B, T>(ctx, V, tau_panel_span, A22, update_ws, mask);
 
         // Store tau panel into output tau at offset i.
-        (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);
+        (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk, mask_p);
     }
 
     // Copy remaining (already banded) trailing columns into AB.
     const int tail = std::max(0, n - kd_i);
     if (tail < n) {
-        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/tail, /*pk=*/n - tail, /*kd=*/kd_i);
+        (void)copy_band_lower<T>(ctx, a_in, ab_out, /*i0=*/tail, /*pk=*/n - tail, /*kd=*/kd_i, mask_p);
     }
 
     return ctx.get_event();
