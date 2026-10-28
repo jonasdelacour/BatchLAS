@@ -4,6 +4,7 @@
 #include <src/ops/syev/steqr/steqr_internal.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 namespace batchlas {
@@ -55,6 +56,7 @@ Event steqr(Queue& ctx,
     // touches an item that converged, so without this the caller would read
     // whatever was in its span for the healthy items. Everything below only ever
     // raises a status -- see the accumulator rule in src/kernels/common/info_span.hh.
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr", B, d_in, e_in, eigenvalues, eigvects);
     detail::info_clear(ctx, info, d_in.batch_size());
     return steqr_dispatch<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
 }

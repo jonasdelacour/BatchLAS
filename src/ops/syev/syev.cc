@@ -12,6 +12,7 @@
 #include <src/ops/syev/choice.hh>
 #include <src/ops/syev/vendor.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -51,7 +52,7 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 template <Backend B, typename T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool homogeneous = !A.is_heterogeneous();
+    const bool homogeneous = !A.is_heterogeneous() && !batchlas::detail::any_batch_mask(A);  // no family reads the mask yet
     const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
     const bool cta_steqr = small && B != Backend::ROCM;
@@ -109,6 +110,7 @@ Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, Job
 // Thrown before choose() so neither Auto nor a pin can take it.
 template <typename T>
 void validate(const MV<T>& A, const char* who) {
+    (void)batchlas::detail::call_mask(who, A);
     if (A.rows() != A.cols())
         throw batchlas::invalid_argument(std::string(who) + ": A must be square, got " + std::to_string(A.rows()) +
                                          " x " + std::to_string(A.cols()));

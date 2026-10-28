@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include <src/util/batch_mask.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
@@ -304,6 +305,7 @@ namespace batchlas {
                     const Span<std::byte>& ws,
                     size_t cta_wg_size_multiplier) {
         (void)ws;
+        batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_cta", B, a_in, d_out, e_out, tau_out);
         if (a_in.rows() != a_in.cols()) {
             throw batchlas::invalid_argument("sytrd_cta: A must be square.");
         }

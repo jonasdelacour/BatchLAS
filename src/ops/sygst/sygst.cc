@@ -12,6 +12,7 @@
 #include <src/ops/sygst/choice.hh>
 #include <src/ops/sygst/sygst_native.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/select/vendor.hh>
 #include <src/util/template-instantiations.hh>
 
@@ -41,7 +42,8 @@ inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 1
 // Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
 template <Backend B, class T>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
-    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
+    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1 &&
+                             !batchlas::detail::any_batch_mask(A, Bf);  // no family reads the mask yet
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());
@@ -89,6 +91,7 @@ template <Backend Back, typename T>
 Event sygst(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             int itype, Uplo uplo, Span<std::byte> work_space) {
     sygst_validate_params<T>("sygst", A, B, itype, uplo);
+    (void)batchlas::detail::call_mask("sygst", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return ctx.create_event_after_external_work();
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     const select::Key key = ops::sygst::key_of<T>(A, itype, uplo);
@@ -109,6 +112,7 @@ template <Backend Back, typename T>
 size_t sygst_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& B, int itype, Uplo uplo) {
     sygst_validate_params<T>("sygst_buffer_size", A, B, itype, uplo);
+    (void)batchlas::detail::call_mask("sygst_buffer_size", A, B);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
     return ops::sygst::workspace<Back, T>(ctx, ops::sygst::pick<Back, T>(ctx, A, B, itype, uplo), A, itype);
 }

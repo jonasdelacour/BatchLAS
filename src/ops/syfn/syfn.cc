@@ -14,6 +14,7 @@
 
 #include <src/ops/syfn/syfn_native.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <sycl/sycl.hpp>
@@ -109,6 +110,7 @@ template <Backend B, typename T>
 Event syfn(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& F,
            SyfnFunction<typename base_type<T>::type> fn, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     syfn_validate_params<T>(A, F, fn, uplo);
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syfn", B, A, F);
     ops::syfn::check_call(ctx, "syfn", info, A.batch_size(), fn);
     const int64_t n = A.rows(), batch = A.batch_size();
     if (batch == 0 || n == 0) return ctx.create_event_after_external_work();
@@ -130,6 +132,7 @@ size_t syfn_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& F, SyfnFunction<typename base_type<T>::type> fn,
                         Uplo uplo) {
     syfn_validate_params<T>(A, F, fn, uplo);
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syfn_buffer_size", B, A, F);
     if (A.batch_size() == 0 || A.rows() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();
     (void)ops::syfn::carve_full<B, T>(ctx, pool, A.rows(), A.batch_size(), uplo);
@@ -141,6 +144,7 @@ Event syfn_from_eigen(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V,
                       Span<typename base_type<T>::type> eigenvalues, const MatrixView<T, MatrixFormat::Dense>& F,
                       SyfnFunction<typename base_type<T>::type> fn, Span<std::byte> workspace, Span<int32_t> info) {
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syfn_from_eigen", B, V, F);
     ops::syfn::check_call(ctx, "syfn_from_eigen", info, V.batch_size(), fn);
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
     if (batch == 0 || n == 0) return ctx.create_event_after_external_work();
@@ -158,6 +162,7 @@ size_t syfn_from_eigen_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
                                    const MatrixView<T, MatrixFormat::Dense>& F,
                                    SyfnFunction<typename base_type<T>::type> fn) {
     syfn_from_eigen_validate_params<T>(V, eigenvalues, F, fn);
+    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syfn_from_eigen_buffer_size", B, V, F);
     if (V.batch_size() == 0 || V.rows() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();
     (void)ops::syfn::carve_core<T>(ctx.device(), pool, V.rows(), V.cols(), V.batch_size());

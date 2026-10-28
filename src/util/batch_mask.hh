@@ -6,6 +6,7 @@
 #include <string>
 
 #include <batchlas/error.hh>
+#include <batchlas/no_route.hh>
 #include <batchlas/util/sycl-span.hh>
 
 // The batch mask of one call: every operand view may carry one (MatrixView::with_batch_mask), and an
@@ -64,8 +65,11 @@ Span<const std::uint8_t> call_mask(const char* op, const Views&... v) {
     return out;
 }
 
-// True when any operand carries a batch mask: a can_run term for families that ignore it.
-template <class... V>
-bool any_batch_mask(const V&... v) { return (v.has_batch_mask() || ...); }
+// For an op without a selection: refuse a masked call at the public entry until its kernels honour the mask.
+template <class T, class... V>
+void refuse_batch_mask(Op op, const char* who, Backend backend, const V&... v) {
+    if (any_batch_mask(v...))
+        throw NoRouteError(op, backend, scalar_kind_of<T>, std::string(who) + ": batch mask not supported yet");
+}
 
 }  // namespace batchlas::detail
