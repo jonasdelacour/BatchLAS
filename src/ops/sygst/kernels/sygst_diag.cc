@@ -15,6 +15,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdint>
 
 namespace batchlas::sycl_sygst {
 
@@ -112,7 +113,7 @@ inline Col<D> apply(Col<D> c, const D* f, int ldf, int kb) {
 
 template <bool Inverse, int KB, typename T, typename D>
 void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* bp, int ldb, std::ptrdiff_t stride_b,
-                 int kb_rt, int batch, bool lower, D* hp, int ldh, std::ptrdiff_t stride_h) {
+                 int kb_rt, int batch, bool lower, D* hp, int ldh, std::ptrdiff_t stride_h, const std::uint8_t* mask) {
     const int kb = KB ? KB : kb_rt;
     const int ipw = diag_items_per_group<T>(kb), ldf = diag_ldf<T>(kb), lds = kb + 1;
     const int fper = kb * ldf, sper = kb * lds, groups = (batch + ipw - 1) / ipw;
@@ -128,11 +129,12 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                 D* const sbase = fbase + ipw * fper;
                 auto named = [=](int i, int c) { return lower ? i >= c : i <= c; };
                 // Column-wise and coalesced: thread t owns row t % kb of columns t / kb, + wg / kb, ...
+                // I2: a masked item is a dead partition, never loaded, computed or stored.
                 const int row = t % kb, cstep = wg / kb;
                 for (int idx = t / kb; idx < ipw * kb; idx += cstep) {
                     const int gi = idx / kb, c = idx - gi * kb;
                     const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch || !named(row, c)) continue;
+                    if (row >= kb || itm >= batch || (mask && !mask[itm]) || !named(row, c)) continue;
                     sbase[gi * sper + row + c * lds] = ap[itm * stride_a + static_cast<std::ptrdiff_t>(c) * lda + row];
                     const D bv = bp[itm * stride_b + static_cast<std::ptrdiff_t>(c) * ldb + row];
                     D* const fg = fbase + gi * fper;  // F(row, c) = B(row, c) or F(c, row) = conj(B(row, c))
@@ -140,7 +142,7 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                     else fg[fidx<Inverse>(c, row, ldf)] = sycl_device::dev_conj(bv);
                 }
                 const int g = t / kb, j = t - g * kb;
-                const bool active = g < ipw && first + g < batch;
+                const bool active = g < ipw && first + g < batch && (!mask || mask[first + g]);
                 const D* const f = fbase + (active ? g * fper : 0);
                 D* const s = sbase + (active ? g * sper : 0);
                 it.barrier(sycl::access::fence_space::local_space);
@@ -169,7 +171,7 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
                 for (int idx = t / kb; idx < ipw * kb; idx += cstep) {
                     const int gi = idx / kb, c = idx - gi * kb;
                     const std::ptrdiff_t itm = first + gi;
-                    if (row >= kb || itm >= batch) continue;
+                    if (row >= kb || itm >= batch || (mask && !mask[itm])) continue;
                     const D* const sg = sbase + gi * sper;
                     const D v = row == c ? real_only(sg[row + c * lds])
                                 : named(row, c) ? sg[row + c * lds] : sycl_device::dev_conj(sg[c + row * lds]);
@@ -184,7 +186,8 @@ void launch_diag(Queue& ctx, D* ap, int lda, std::ptrdiff_t stride_a, const D* b
 
 template <typename T>
 Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b, int ldb, std::ptrdiff_t stride_b,
-                 int kb, int batch, int itype, Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f) {
+                 int kb, int batch, int itype, Uplo uplo, T* full, int ldf, std::ptrdiff_t stride_f,
+                 const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     if (kb < 1 || kb > kDiagMaxOrder || batch < 1) return ctx.get_event();
@@ -194,7 +197,9 @@ Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b,
     const bool lo = uplo == Uplo::Lower;
     // Compile-time orders for the blocks nb 16, 32, 64 produce and n = 8; any other order runs generic.
     auto run = [&]<bool Inv>() {
-        auto go = [&]<int K>() { launch_diag<Inv, K, T>(ctx, ap, lda, stride_a, bp, ldb, stride_b, kb, batch, lo, hp, ldf, stride_f); };
+        auto go = [&]<int K>() {
+            launch_diag<Inv, K, T>(ctx, ap, lda, stride_a, bp, ldb, stride_b, kb, batch, lo, hp, ldf, stride_f, mask);
+        };
         if (kb == 32) go.template operator()<32>();
         else if (kb == 16) go.template operator()<16>();
         else if (kb == 8) go.template operator()<8>();
@@ -207,7 +212,7 @@ Event sygst_diag(Queue& ctx, T* a, int lda, std::ptrdiff_t stride_a, const T* b,
 
 template <typename T>
 Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int kb, int batch, Uplo uplo, T* full,
-                   int ldf, std::ptrdiff_t stride_f) {
+                   int ldf, std::ptrdiff_t stride_f, const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
     const D* const ap = reinterpret_cast<const D*>(a);
     D* const hp = reinterpret_cast<D*>(full);
@@ -217,6 +222,7 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
         h.parallel_for<SygstMirrorKernel<D>>(sycl::range<1>(per * static_cast<std::size_t>(batch)), [=](sycl::item<1> it) {
             const std::size_t e = it.get_id(0);
             const auto itm = static_cast<std::ptrdiff_t>(e / per);
+            if (mask && !mask[itm]) return;  // I3
             const int r = static_cast<int>(e % per), i = r % kb, c = r / kb;
             const bool own = lower ? i >= c : i <= c;
             const D* const src = ap + itm * stride_a;
@@ -230,8 +236,9 @@ Event sygst_mirror(Queue& ctx, const T* a, int lda, std::ptrdiff_t stride_a, int
 
 #define BATCHLAS_SYGST_DIAG_INSTANTIATE(T)                                                                  \
     template Event sygst_diag<T>(Queue&, T*, int, std::ptrdiff_t, const T*, int, std::ptrdiff_t, int, int, int, \
-                                 Uplo, T*, int, std::ptrdiff_t);                                               \
-    template Event sygst_mirror<T>(Queue&, const T*, int, std::ptrdiff_t, int, int, Uplo, T*, int, std::ptrdiff_t);
+                                 Uplo, T*, int, std::ptrdiff_t, const std::uint8_t*);                          \
+    template Event sygst_mirror<T>(Queue&, const T*, int, std::ptrdiff_t, int, int, Uplo, T*, int, std::ptrdiff_t, \
+                                   const std::uint8_t*);
 
 BATCHLAS_SYGST_DIAG_INSTANTIATE(float)
 BATCHLAS_SYGST_DIAG_INSTANTIATE(double)

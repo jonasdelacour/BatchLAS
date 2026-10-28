@@ -14,6 +14,7 @@
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/sygst/sygst_native.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <algorithm>
@@ -76,21 +77,25 @@ std::size_t blocked_workspace(Queue& q, const MV<T>& A, int nb, int itype) {
     return workspace_bytes([&](BumpAllocator& p) { return blocked_layout<T>(q, p, n, nb, itype, part); });
 }
 
-// One pass over cb items: views at absolute block offsets into A and B, and the workspace blocks.
+// One pass over cb items: views at absolute block offsets into A and B, and the workspace blocks, each
+// carrying the pass's slice of the call's mask (bmask is empty for a broadcast B).
 template <class T>
 struct Pass {
     T* a;
     const T* b;
     int lda, ldb, sa, sb, cb, n, nb;
     BlockedLayout<T> l;
+    Span<const std::uint8_t> mask, bmask;
     MV<T> A(int r0, int nr, int c0, int nc, T** p = nullptr) const {
-        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * lda + r0, nr, nc, lda, sa, cb, p);
+        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * lda + r0, nr, nc, lda, sa, cb, p).with_batch_mask(mask);
     }
     MV<T> Bm(int r0, int nr, int c0, int nc, T** p = nullptr) const {
-        return MV<T>(const_cast<T*>(b) + static_cast<std::ptrdiff_t>(c0) * ldb + r0, nr, nc, ldb, sb, cb, p);
+        return MV<T>(const_cast<T*>(b) + static_cast<std::ptrdiff_t>(c0) * ldb + r0, nr, nc, ldb, sb, cb, p)
+            .with_batch_mask(bmask);
     }
-    MV<T> W(int nr, int nc, int ld) const { return MV<T>(l.w.data(), nr, nc, ld, n * nb, cb); }
-    MV<T> H(int kb) const { return MV<T>(l.h.data(), kb, kb, nb, nb * nb, cb); }
+    MV<T> W(int nr, int nc, int ld) const { return MV<T>(l.w.data(), nr, nc, ld, n * nb, cb).with_batch_mask(mask); }
+    MV<T> H(int kb) const { return MV<T>(l.h.data(), kb, kb, nb, nb * nb, cb).with_batch_mask(mask); }
+    const std::uint8_t* mask_ptr() const { return ::batchlas::detail::mask_ptr(mask); }
     T* at_a(int o) const { return a + static_cast<std::ptrdiff_t>(o) * lda + o; }
     const T* at_b(int o) const { return b + static_cast<std::ptrdiff_t>(o) * ldb + o; }
 };
@@ -113,7 +118,7 @@ void mm(Queue& q, const MV<T>& X, const MV<T>& Y, const MV<T>& C, T alpha) {
 template <class T>
 void mirror(Queue& q, const Pass<T>& p, int at, int kb, Uplo uplo) {
     (void)sycl_sygst::sygst_mirror<T>(q, p.at_a(at), p.lda, p.sa, kb, p.cb, uplo, p.l.h.data(), p.nb,
-                                      std::ptrdiff_t(p.nb) * p.nb);
+                                      std::ptrdiff_t(p.nb) * p.nb, p.mask_ptr());
 }
 
 // The order-n block at offset o, nb at a time (dsygst / zhegst). A diagonal block wider than the kernel
@@ -126,7 +131,8 @@ void blocked_range(Queue& q, const Pass<T>& p, int o, int n, int nb, int itype, 
     auto diag = [&](int at, int kb, bool full) {
         if (kb <= sycl_sygst::kDiagMaxOrder) {
             (void)sycl_sygst::sygst_diag<T>(q, p.at_a(at), p.lda, p.sa, p.at_b(at), p.ldb, p.sb, kb, p.cb, itype, uplo,
-                                            full ? p.l.h.data() : nullptr, p.nb, std::ptrdiff_t(p.nb) * p.nb);
+                                            full ? p.l.h.data() : nullptr, p.nb, std::ptrdiff_t(p.nb) * p.nb,
+                                            p.mask_ptr());
             return;
         }
         blocked_range<B, T>(q, p, at, kb, std::max(sycl_sygst::kDiagMaxOrder, kb / 4), itype, uplo);
@@ -195,13 +201,16 @@ template <Backend B, class T>
 Event blocked(Queue& q, const MV<T>& A, const MV<T>& Bf, int nb, int itype, Uplo uplo, Span<std::byte> ws) {
     const int n = A.rows(), batch = A.batch_size();
     const int chunk = blocked_chunk<T>(q, n, nb, batch);
+    const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("sygst", A, Bf);
     BumpAllocator pool(ws);
     const auto l = blocked_layout<T>(q, pool, n, nb, itype, blocked_part(chunk, batch));
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;  // the last part takes the remainder
+        const Span<const std::uint8_t> m = mask.empty() ? mask : mask.subspan(std::size_t(b0), std::size_t(cb));
         const Pass<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(),
                         Bf.data_ptr() + static_cast<std::ptrdiff_t>(b0) * Bf.stride(),
-                        A.ld(), Bf.ld(), A.stride(), Bf.stride(), cb, n, nb, l};
+                        A.ld(), Bf.ld(), A.stride(), Bf.stride(), cb, n, nb, l,
+                        m, ::batchlas::detail::mask_view_is_broadcast(Bf, batch) ? Span<const std::uint8_t>{} : m};
         blocked_range<B, T>(q, p, 0, n, nb, itype, uplo);
     }
     return q.get_event();

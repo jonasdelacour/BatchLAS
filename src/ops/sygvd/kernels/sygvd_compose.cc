@@ -12,6 +12,7 @@
 #include <batchlas/util/mempool.hh>
 
 #include <src/ops/sygvd/sygvd_native.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <algorithm>
@@ -32,6 +33,17 @@ struct ComposeLayout {
     Span<T*> prod_ptr;
     Span<std::byte> child;
 };
+
+// The call's mask on A and on B (unless B is broadcast), whichever carried it: every child, and every
+// workspace query, sees the masked operands.
+template <class T>
+Args<T> masked_args(const Args<T>& a) {
+    const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("sygvd", a.A, a.B);
+    Args<T> m = a;
+    m.A = a.A.with_batch_mask(mask);
+    if (!::batchlas::detail::mask_view_is_broadcast(a.B, a.A.batch_size())) m.B = a.B.with_batch_mask(mask);
+    return m;
+}
 
 template <Backend B, class T>
 std::size_t child_bytes(Queue& q, const Args<T>& a) {
@@ -56,11 +68,14 @@ ComposeLayout<T> compose_layout(Queue& q, BumpAllocator& pool, const Args<T>& a)
 
 template <Backend B, class T>
 std::size_t compose_workspace(Queue& q, const Args<T>& a) {
-    return workspace_bytes([&](BumpAllocator& p) { return compose_layout<B, T>(q, p, a); });
+    const Args<T> m = masked_args(a);
+    return workspace_bytes([&](BumpAllocator& p) { return compose_layout<B, T>(q, p, m); });
 }
 
 template <Backend B, class T>
-Event compose(Queue& q, const Args<T>& a, Span<std::byte> ws, Span<int32_t> info) {
+Event compose(Queue& q, const Args<T>& a_in, Span<std::byte> ws, Span<int32_t> info) {
+    const Args<T> a = masked_args(a_in);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(a.A.batch_mask());
     BumpAllocator pool(ws);
     const auto l = compose_layout<B, T>(q, pool, a);
     const bool lower = a.uplo == Uplo::Lower;
@@ -68,7 +83,8 @@ Event compose(Queue& q, const Args<T>& a, Span<std::byte> ws, Span<int32_t> info
     if (!a.factored) {
         (void)::batchlas::potrf<B, T>(q, a.B, a.uplo, l.child, l.finfo);
         // A failed item would carry a partial (possibly NaN) factor into every later child.
-        (void)sycl_sygvd::sygvd_identity_failed<T>(q, a.B, a.uplo, Span<const int32_t>(l.finfo.data(), l.finfo.size()));
+        (void)sycl_sygvd::sygvd_identity_failed<T>(q, a.B, a.uplo, Span<const int32_t>(l.finfo.data(), l.finfo.size()),
+                                                   mask);
     }
     (void)::batchlas::sygst<B, T>(q, a.A, a.B, a.itype, a.uplo, l.child);
     Event ev = ::batchlas::syev<B, T>(q, a.A, a.w, a.jobz, a.uplo, l.child, info);
@@ -77,14 +93,15 @@ Event compose(Queue& q, const Args<T>& a, Span<std::byte> ws, Span<int32_t> info
             ev = ::batchlas::trsm<B, T>(q, a.B, a.A, one, Side::Left, a.uplo, lower ? kH<T> : Transpose::NoTrans, Diag::NonUnit);
         } else {  // x = L y (Lower) or U^H y (Upper), formed out of place then copied back
             const int n = a.A.rows(), batch = a.A.batch_size();
-            const MV<T> P(l.prod.data(), n, n, n, n * n, batch, l.prod_ptr.data());
+            const MV<T> P =
+                MV<T>(l.prod.data(), n, n, n, n * n, batch, l.prod_ptr.data()).with_batch_mask(a.A.batch_mask());
             (void)::batchlas::trmm<B, T>(q, a.B, a.A, P, one, Side::Left, a.uplo, lower ? Transpose::NoTrans : kH<T>, Diag::NonUnit);
             ev = MV<T>::copy(q, a.A, P);
         }
     }
     if (!a.factored && info.size() >= static_cast<std::size_t>(a.A.batch_size()))
         ev = sycl_sygvd::sygvd_merge_info(q, a.A.rows(), Span<const int32_t>(l.finfo.data(), l.finfo.size()),
-                                          Span<int32_t>(info.data(), static_cast<std::size_t>(a.A.batch_size())));
+                                          Span<int32_t>(info.data(), static_cast<std::size_t>(a.A.batch_size())), mask);
     return ev;
 }
 

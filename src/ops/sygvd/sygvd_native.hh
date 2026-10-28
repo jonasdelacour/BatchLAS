@@ -11,13 +11,15 @@
 
 namespace batchlas::sycl_sygvd {
 
+// Both skip item b where a non-null mask has mask[b] == 0 (potrf_info[b] is then never written).
 // Where potrf_info[b] != 0, B's uplo triangle := the identity's (a partial factor may hold NaN).
 template <typename T>
 BATCHLAS_INTERNAL_API Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
-                                                  Span<const int32_t> potrf_info);
+                                                  Span<const int32_t> potrf_info, const std::uint8_t* mask);
 
 // info[b] := n + potrf_info[b] where potrf_info[b] != 0 (LAPACK's ?sygvd convention), else unchanged.
-BATCHLAS_INTERNAL_API Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info);
+BATCHLAS_INTERNAL_API Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info,
+                                             const std::uint8_t* mask);
 
 }  // namespace batchlas::sycl_sygvd
 

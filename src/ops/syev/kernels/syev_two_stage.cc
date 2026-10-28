@@ -69,6 +69,8 @@ Event syev_two_stage_part(Queue& ctx,
                           Span<int32_t> info) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.entry");
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
+    // The workspace views are rebuilt from raw pointers, so they take the part's mask back on.
+    const Span<const std::uint8_t> mask_span = ::batchlas::detail::call_mask("syev_two_stage", a_in);
 
     if (!ctx.in_order()) {
         throw batchlas::invalid_argument("syev_two_stage: requires an in-order Queue");
@@ -107,21 +109,16 @@ Event syev_two_stage_part(Queue& ctx,
                                     static_cast<std::size_t>(kd + 1) *
                                         static_cast<std::size_t>(n) *
                                         static_cast<std::size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> ab_view(ab_span.data(),
-                                               kd + 1,
-                                               n,
-                                               kd + 1,
-                                               static_cast<int64_t>(kd + 1) * static_cast<int64_t>(n),
-                                               batch);
+    const MatrixView<T, MatrixFormat::Dense> ab_view =
+        MatrixView<T, MatrixFormat::Dense>(ab_span.data(), kd + 1, n, kd + 1,
+                                           static_cast<int64_t>(kd + 1) * static_cast<int64_t>(n), batch)
+            .with_batch_mask(mask_span);
 
     auto tau_sy2sb_span = pool.allocate<T>(ctx,
                                            static_cast<std::size_t>(tau_sy2sb_n) *
                                                static_cast<std::size_t>(batch));
-    VectorView<T> tau_sy2sb_view(tau_sy2sb_span,
-                                 tau_sy2sb_n,
-                                 batch,
-                                 1,
-                                 tau_sy2sb_n);
+    const VectorView<T> tau_sy2sb_view =
+        VectorView<T>(tau_sy2sb_span, tau_sy2sb_n, batch, 1, tau_sy2sb_n).with_batch_mask(mask_span);
 
     Span<T> phase_span;
     VectorView<T> phase_view;
@@ -129,7 +126,7 @@ Event syev_two_stage_part(Queue& ctx,
         phase_span = pool.allocate<T>(ctx,
                                       static_cast<std::size_t>(n) *
                                           static_cast<std::size_t>(batch));
-        phase_view = VectorView<T>(phase_span, n, batch, 1, n);
+        phase_view = VectorView<T>(phase_span, n, batch, 1, n).with_batch_mask(mask_span);
     }
 
     {
@@ -156,13 +153,11 @@ Event syev_two_stage_part(Queue& ctx,
                                            static_cast<std::size_t>(std::max(0, n - 1)) *
                                                static_cast<std::size_t>(batch));
 
-    VectorView<Real> d_view(d_span, n, batch, 1, n);
-    VectorView<Real> e_view(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-    VectorView<T> tau_sb2st_view(tau_sb2st_span,
-                                 std::max(0, n - 1),
-                                 batch,
-                                 1,
-                                 std::max(0, n - 1));
+    const VectorView<Real> d_view = VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
+    const VectorView<Real> e_view =
+        VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
+    const VectorView<T> tau_sb2st_view =
+        VectorView<T>(tau_sb2st_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
 
     // Stage 2. BOTH modes use the Householder chase: the Givens chase is ~5x slower
     // on this GPU (occupancy, not arithmetic), so values mode also allocates the
@@ -223,10 +218,11 @@ Event syev_two_stage_part(Queue& ctx,
                                            static_cast<std::size_t>(batch));
         v_sb2st_view = MatrixView<T, MatrixFormat::Dense>(
             v_sb2st_span.data(), kd, nr, kd,
-            static_cast<int64_t>(kd) * static_cast<int64_t>(nr), batch);
-        tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr);
+            static_cast<int64_t>(kd) * static_cast<int64_t>(nr), batch).with_batch_mask(mask_span);
+        tau_sb2st_hh_view = VectorView<T>(tau_sb2st_hh_span, nr, batch, 1, nr).with_batch_mask(mask_span);
         ab_tri_view = MatrixView<T, MatrixFormat::Dense>(
-            ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch);
+            ab_tri_span.data(), 2, n, 2, static_cast<int64_t>(2) * static_cast<int64_t>(n), batch)
+            .with_batch_mask(mask_span);
 
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st_hh");
         const size_t ws_bytes = detail::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
@@ -244,7 +240,7 @@ Event syev_two_stage_part(Queue& ctx,
     (void)tau_sb2st_view;
     (void)sb2st_block_size;
 
-    VectorView<Real> evals_view(eigenvalues.data(), n, batch, 1, n);
+    const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
 
     if (!want_eigvecs) {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stebz_evals");
@@ -252,7 +248,7 @@ Event syev_two_stage_part(Queue& ctx,
         // indistinguishable afterwards). Report 0 rather than leave the span unwritten:
         // the caller cannot tell an unwritten span from a conservative one.
         // evidence: docs/perf/syev.md#syev-open-debt-stebz-reports-no-convergence-status
-        detail::info_clear(ctx, info, batch);
+        detail::info_clear(ctx, info, batch, mask_span);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
         StebzParams<Real> bp;
         bp.range = EigenRangeType::Index;
@@ -280,12 +276,10 @@ Event syev_two_stage_part(Queue& ctx,
                                            static_cast<std::size_t>(n) *
                                                static_cast<std::size_t>(n) *
                                                static_cast<std::size_t>(batch));
-    MatrixView<Real, MatrixFormat::Dense> z_real_view(z_real_span.data(),
-                                                      n,
-                                                      n,
-                                                      n,
-                                                      static_cast<int64_t>(n) * static_cast<int64_t>(n),
-                                                      batch);
+    const MatrixView<Real, MatrixFormat::Dense> z_real_view =
+        MatrixView<Real, MatrixFormat::Dense>(z_real_span.data(), n, n, n,
+                                              static_cast<int64_t>(n) * static_cast<int64_t>(n), batch)
+            .with_batch_mask(mask_span);
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stedc_eigvecs");
@@ -315,12 +309,10 @@ Event syev_two_stage_part(Queue& ctx,
                                    static_cast<std::size_t>(n) *
                                        static_cast<std::size_t>(n) *
                                        static_cast<std::size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> z_view(z_span.data(),
-                                              n,
-                                              n,
-                                              n,
-                                              static_cast<int64_t>(n) * static_cast<int64_t>(n),
-                                              batch);
+    const MatrixView<T, MatrixFormat::Dense> z_view =
+        MatrixView<T, MatrixFormat::Dense>(z_span.data(), n, n, n,
+                                           static_cast<int64_t>(n) * static_cast<int64_t>(n), batch)
+            .with_batch_mask(mask_span);
     lift_eigvecs_with_phase<T>(ctx, z_real_view, phase_view, z_view);
 
     // Z := Q2 Z
@@ -573,7 +565,8 @@ Event syev_two_stage(Queue& ctx,
                      const Span<std::byte>& ws,
                      StedcParams<typename base_type<T>::type> stedc_params,
                      Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_two_stage", B, a_in);
+    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_two_stage", B, a_in);  // mask: lift after sytrd_sy2sb, stedc, stebz, ormqr_blocked
+    const Span<const std::uint8_t> mask_span = ::batchlas::detail::call_mask("syev_two_stage", a_in);
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());
@@ -595,6 +588,7 @@ Event syev_two_stage(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> part(sub.data_ptr(), n, n, sub.ld(), sub.stride(), cb, ptrs);
         if (!sub.active_rows().empty() || !sub.active_cols().empty())
             part = part.with_active_dims(sub.active_rows(), sub.active_cols());
+        if (!mask_span.empty()) part = part.with_batch_mask(mask_span.subspan(b0, cb));
         (void)syev_two_stage_part<B, T>(
             ctx, part, eigenvalues.subspan(static_cast<std::size_t>(b0) * n, static_cast<std::size_t>(cb) * n), jobz,
             uplo, ws.subspan(0, part_bytes), stedc_params,
