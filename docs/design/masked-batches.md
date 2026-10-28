@@ -268,6 +268,15 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   gone (#209); restoring it stays green on Metal, and a source scan in the test now holds it. Each
   family's guard defeated alone turned red only its own cases and the composites over it, always
   as "inactive item written"; bdsqr's non-neutral fold flag turned red only its fold case.
+- **Cholesky lift pass** (`tests/potrf_mask_tests.cc`; sm_89, every scalar, 2026-10-28): potrf
+  `blocked`, posv `cta` and `blocked`, potrs `fused` (I1 in `potrs_fused_launch`) and `trsm`, and
+  potri `blocked` run a masked batch, the chunked drivers at forced part sizes (part edges, a wholly
+  inactive part). The composites' children are pinned `native` in both runs, because the unmasked
+  reference may otherwise route a child to the vendor. posv re-attaches the call mask to A and B, so
+  a mask on B alone still covers A and `info`. Each break was red only on its own cases: the potrs
+  fused guard (potrs `fused`, posv `cta`), potrf blocked's fixup guard (potrf `blocked`, plus the posv
+  shapes whose potrf child is `blocked`), potri blocked's sub-view masks (potri `blocked`), potrs'
+  trsm views (potrs `trsm`, posv `blocked`), and posv's re-attach (the B-only posv cases).
 
 ## Rejected alternatives {#masked-batches-rejected}
 

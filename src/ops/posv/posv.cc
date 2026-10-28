@@ -43,8 +43,7 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView
 template <typename T>
 bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& B) {
-    // tiny honours a batch mask; cta and blocked run their children on the masked views.
-    const bool masked = detail::any_batch_mask(A, B);
+    // tiny honours a batch mask; cta and blocked run their children (potrf, the solve) on the masked views.
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     const bool native = d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 && A.batch_size() >= 1;
@@ -53,28 +52,29 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
             return native && n <= sycl_posv::posv_tiny_max_n<T>() && nrhs <= sycl_posv::kPosvTinyMaxRhs &&
                    d.max_wg >= sycl_posv::kPosvTinyWgSize;
         },
-        // mask: lift after potrs_fused_dispatch (src/ops/getrs/kernels/getrs_fused.cc, W2b).
-        [&](Cta) { return native && !masked && ops::potrs::fused_fits<T>(d, n, nrhs); },
-        // mask: lift after trsm.
-        [&](Blocked) { return homogeneous && !masked; },
+        [&](Cta) { return native && ops::potrs::fused_fits<T>(d, n, nrhs); },
+        [&](Blocked) { return homogeneous; },
     }, c);
 }
 
 template <Backend B, typename T>
 Event launch(Queue& q, const PosvChoice& c, const MatrixView<T, MatrixFormat::Dense>& A,
              const MatrixView<T, MatrixFormat::Dense>& Bm, Uplo uplo, Span<std::byte> ws, Span<int32_t> info) {
+    // The children see one operand each first (potrf sees A alone): both views carry the call's mask.
+    const Span<const std::uint8_t> mask = detail::call_mask("posv", A, Bm);
+    const auto Am = A.with_batch_mask(mask), Bx = Bm.with_batch_mask(mask);
     return std::visit(overloaded{
         [&](Tiny) { return sycl_posv::posv_tiny_dispatch<T>(q, A, Bm, uplo, ws, info); },
         [&](Cta) {
             // The public potrf, then BOTH triangular solves in one kernel: two nrhs = 1 trsm
             // launches stream L twice at a fraction of the bandwidth one fused pass gets.
-            (void)potrf<B, T>(q, A, uplo, ws, info);
-            return ops::potrs::solve<B, T>(q, A, Bm, uplo, true);
+            (void)potrf<B, T>(q, Am, uplo, ws, info);
+            return ops::potrs::solve<B, T>(q, Am, Bx, uplo, true);
         },
         [&](Blocked) {
             // No split: the solve takes no workspace, so potrf owns the whole span.
-            (void)potrf<B, T>(q, A, uplo, ws, info);
-            return ops::potrs::solve<B, T>(q, A, Bm, uplo, false);
+            (void)potrf<B, T>(q, Am, uplo, ws, info);
+            return ops::potrs::solve<B, T>(q, Am, Bx, uplo, false);
         },
     }, c);
 }

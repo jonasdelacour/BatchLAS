@@ -628,7 +628,7 @@ template <typename T, int NR, bool Lower>
 Event potrs_fused_launch(Queue& ctx,
                          const T* A, int lda, int strideA,
                          T* B, int ldb, int strideB,
-                         int n, int nrhs, int batch, int wg, int nb) {
+                         int n, int nrhs, int batch, int wg, int nb, const std::uint8_t* mask) {
     using DM = DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -651,6 +651,7 @@ Event potrs_fused_launch(Queue& ctx,
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int tid = static_cast<int>(it.get_local_id(0));
                 const std::size_t b = it.get_group(0);
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
@@ -1030,14 +1031,15 @@ Event potrs_fused_dispatch(Queue& ctx,
     const int wg = getrs_fused_wg<T>(n, nrhs, max_wg, FusedBody::kPotrs,
                                      dev.cuda_compute_capability(), !impl::is_metal(impl::backend_of(*ctx)));
 
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("potrs_fused", A, B));
     #define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
         if (uplo == Uplo::Lower)                                                           \
             return potrs_fused_launch<T, NRV, true>(ctx, A.data_ptr(), A.ld(), A.stride(), \
                                                     B.data_ptr(), B.ld(), B.stride(),      \
-                                                    n, nrhs, batch, wg, nb);               \
+                                                    n, nrhs, batch, wg, nb, mask);         \
         return potrs_fused_launch<T, NRV, false>(ctx, A.data_ptr(), A.ld(), A.stride(),    \
                                                  B.data_ptr(), B.ld(), B.stride(),         \
-                                                 n, nrhs, batch, wg, nb);
+                                                 n, nrhs, batch, wg, nb, mask);
     if (nrhs <= 1) { BATCHLAS_POTRS_FUSED_ARM(1) }
     if (nrhs <= 2) { BATCHLAS_POTRS_FUSED_ARM(2) }
     if (nrhs <= 4) { BATCHLAS_POTRS_FUSED_ARM(4) }
