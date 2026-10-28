@@ -493,14 +493,9 @@ std::vector<Entry<T>> direct_entries() {
         gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
     });
     add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
-    add("syevx", [=](P& p) { syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z)); });
-    add("syevx(m)", [=](P& p) {
-        syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z));
-    });
-    add("syevx_direct", [=](P& p) {
-        syevx_direct<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z),
-                                                SyevxParams<T>());
-    });
+    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
+    // Filtered refuse it on the host backend (its gemm is the host BLAS) and with the default Chol2
+    // ortho on a GPU; with another ortho on a GPU they honour it (syevx_mask_tests).
     add("syevx_direct_subset", [=](P& p) {
         syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
                                                        p.mat(p.z), SyevxParams<T>());
