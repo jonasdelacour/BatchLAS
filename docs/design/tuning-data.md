@@ -1,10 +1,9 @@
 # Tuning data layout {#design_tuning_data}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current · checked 2026-10-29
 
-Two files per (op, device), one source of truth, one vocabulary. This is the only normative page
-for tables, ledgers, tiers, staleness and generation; the engine that writes the ledgers is
-@ref design_tiered_tuning.
+The only normative page for tables, ledgers, tiers, staleness and generation: two files per
+(op, device), one source of truth. The engine that writes the ledgers is @ref design_tiered_tuning.
 
 | File | Role | Written by | Stored |
 | --- | --- | --- | --- |
@@ -14,10 +13,10 @@ for tables, ledgers, tiers, staleness and generation; the engine that writes the
 The key and candidate vocabulary lives only in `src/ops/<op>/choice.hh`. The tuner copies it into
 each run line of the ledger; nothing else spells it.
 
-**Shipped set (2026-10-21):** 39 tables and 39 ledgers. sm_120: 19 tables of `deep` rows, plus
-`transcribed` rows where no deep row lies near (beyond the 2048 dimension cap, for example) and a
-few `custom` rows (gemv, posv, trmm). sm_89: 19 untimed tables, potrf `converted`, the other 18
-`transcribed`. cpu: `spmm.cpu.txt`, `transcribed`.
+**Shipped set (2026-10-29):** 59 tables. sm_120: 29 tables of `deep` rows, plus `transcribed` rows
+where no deep row lies near (beyond the 2048 dimension cap, for example). sm_89: 29 tables, 20 of
+them untimed (`transcribed`, potrf `converted`), 9 with measured `deep`, `preview` or `custom`
+rows. cpu: `spmm.cpu.txt`, `transcribed`.
 
 ## The ledger file {#tuning-data-ledger-file}
 
@@ -34,16 +33,11 @@ One JSONL file per (op, device). Every line carries `"dtype"`, except `rehash`. 
 - `cell`: one measurement of one cell (`run_id`, `key`, `tier`, `round`, `date`, `ranked`, `cands`, per-candidate
   `h/s/r/m/lo/hi/n`, and `v<i>: 0` for a candidate timed but never verified in that cell: outside the
   lean race's tie set, already verified in its size decade; absent = verified, as in every older
-  ledger; table generation keeps it in the row), plus the cell's wall seconds by phase, each written only when measured:
-  `ph_setup` (Problem, fill, workspace probe), `ph_warm` (untimed and warm rounds), `ph_timed` (wall, resets included),
-  `ph_verify`, `ph_ld` (the ld audit's second run), `ph_guard`, `ph_ipc` (worker round trip less the
-  worker's phases), `ph_spawn` (fresh child start and exit less its phases), `ph_start` (a worker
-  start: guard, spawn, CUDA init, clock warm-up), `ph_mode` (`worker`, `fresh`, `fallback`) and
-  `ph_arms` (the arms raced now; a partial re-race's record also holds its stored arms), and NVML clock
-  metadata: `clk_n` samples (one per timed run), `clk_capped` of them with reason 0x4 (SW power cap),
-  `clk_mhz` (mean SM clock), `throttled: 1` when more than 25% were capped, `throttle_reraces`.
-  Every try and child of the cell is summed. A retract copy and an untimed record carry none.
-  Table generation ignores them.
+  ledger; table generation keeps it in the row). Diagnostics that table generation ignores: wall
+  seconds by phase (`ph_setup`, `ph_warm`, `ph_timed`, `ph_verify`, `ph_ld`, `ph_guard`, `ph_ipc`,
+  `ph_spawn`, `ph_start`, plus `ph_mode` and `ph_arms`), summed over every try and child, and NVML
+  clock metadata (`clk_n`, `clk_capped` with reason 0x4, `clk_mhz`, `throttled: 1` when more than 25%
+  were capped, `throttle_reraces`).
 - `audit`: one fresh-process audit (the carve-out check): `key`, `verdict`, `fresh_ms`, `warm_ms`,
   `audit_s` (its wall seconds). ld audit verdicts are cell statuses, not audit lines.
 - `rehash`: `{"kind":"rehash","family":F,"from":<stored hash>,"to":<hash now>,"at":<commit>,"proof":...,"why":...}`
@@ -122,45 +116,26 @@ file stales the records of every family that hashes it.
 A `rehash` line is the only way a stored hash is reinterpreted: readers (C++ and Python) treat a
 candidate hash `from` of family `F` as `to`. Its `proof` says why that is sound:
 
-- **`normalized`** (the migration): written per (family, stored hash) only after checking from
-  git, at every commit that produced the hash (the run line's `batchlas`), that (1) the v1 hash
-  (the same manifest over raw files) of `F`'s sources at that commit equals the stored hash, and
-  (2) `F`'s source list at that commit equals today's and each file is equal to today's modulo
-  comments and whitespace.
-- **`sample:<run id>`** (a real kernel edit): a run measured with today's kernels agrees with the
-  old records. `scripts/sweep_to_table.py --rehash-sample RUN_ID --op OP --device DEV [--family F...]`
-  compares every cell of that run with the best record usable under the old hashes. A cell agrees
-  when the winners match, or when the old winner is within the 3% tie band of the sample's winner
-  in the sample's own times. A disagreeing cell is settled once a deep record measured with
-  today's kernels holds it (it then outranks the old record by date). If every cell agrees or is
-  settled, one line per stale family is appended (`"why": "<n> cells agree, <m> re-measured at
-  deep"`, `"at"`: HEAD); otherwise nothing is written and the unsettled cells are printed as
-  `--remeasure-keys` lines, to be re-measured at deep with
-  `batchlas_tune <op> --tier deep --remeasure-keys FILE --only-named`.
-- **`moved:<base commit>`** (a file move): `F`'s source list at the base commit maps onto HEAD's
-  pairwise, in list order: each HEAD path is its base path under a git rename (or unchanged), with
-  the same basename, and the two files are equal after the hash's normalization once every
-  include is replaced by the repo path it resolves to (`"x"`: its own directory, then the repo
-  root, then `include/`; `<x>`: the repo root, then `include/`), mapped through the renames. An
-  include that now resolves to another file, a content edit or a changed list length gives no
-  proof; so does any include form this does not model (`__has_include`, `#include_next`, a macro
-  or commented include, an include inside a raw string). `scripts/sweep_to_table.py --rehash-moved BASE [--op OP]
-  [--device DEV]` (default: every ledger) writes one line per (family, stored hash) whose hash, after
-  the earlier `rehash` lines, is `F`'s hash at `BASE` and differs from today's (`"from"`: the stored
-  hash, `"at"`: HEAD, `"why"`: `"<k> files moved, equal modulo comments, whitespace and include
-  paths"`). It refuses uncommitted changes to the hashed files and writes nothing on a second run.
+- **`normalized`**: the v1 (raw-file) migration; `F`'s files at the producing commit equal today's
+  modulo comments and whitespace.
+- **`sample:<run id>`** (a real kernel edit): `sweep_to_table.py --rehash-sample RUN_ID --op OP
+  --device DEV [--family F...]` compares every cell of a run measured with today's kernels against the
+  best record under the old hashes. A cell agrees when the winners match or the old winner is within
+  the 3% tie band; a disagreeing cell is settled by a deep record with today's kernels. All settled:
+  one line per stale family is appended; otherwise nothing is written and the unsettled cells are
+  printed for `batchlas_tune <op> --tier deep --remeasure-keys FILE --only-named`.
+- **`moved:<base commit>`** (a file move): `sweep_to_table.py --rehash-moved BASE [--op OP]
+  [--device DEV]` proves each HEAD path is its base path under a git rename with the same basename,
+  equal after normalization once includes are resolved to repo paths. A content edit, a changed list
+  length, an include that now resolves elsewhere, or an include form it does not model
+  (`__has_include`, `#include_next`, macro includes) gives no proof. It refuses uncommitted changes
+  to the hashed files and is idempotent.
 
-A sample is stratified: it covers every combination of dtype and exact keys the old records hold,
-and the range of every log key. `--rehash-sample` refuses a sample of fewer than 64 cells or one
-that misses an exact-key combination.
-`scripts/sweep_to_table.py --emit-sample FILE --op OP --device DEV [--cells N]` writes such a
-sample from the ledger: per dtype and exact-key combination of the measured records, the cells at
-the min, median and max of every log key, then cells spread evenly over the rest up to `N`
-(default 64); it exits 1 when the ledger holds fewer than 64 such cells. The tuner records a sample
-as tier `custom`: `batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE` measures
-exactly the named cells, every candidate, with no lattice and no refinement. A named cell above
-`--cap-gib` is still skipped (`skip:cap`): raise the cap, or its exact-key combination can read as
-missing.
+A sample must be stratified: every dtype and exact-key combination of the old records and the range
+of every log key, at least 64 cells. `sweep_to_table.py --emit-sample FILE --op OP --device DEV
+[--cells N]` writes one; `batchlas_tune <op> --tier custom --dtype ... --remeasure-keys FILE`
+measures exactly those cells (a cell above `--cap-gib` is still skipped, which can leave an exact-key
+combination missing).
 
 `-dirty` runs are never rehashed. Records that no proof covers stay stale, and a stale family
 must be re-measured.
@@ -207,53 +182,16 @@ scripts/sweep_to_table.py --rehash-moved BASE                                # "
 - **Freshness** in `--check` is judged with the hashes in the table header. The check therefore
   proves that the table equals the function of the ledger, whatever the sources say today.
 - **Stale kernels** (header hashes against `tools/tune/<op>_spec.cc`'s kernel-sources block) are
-  a warning. A kernel edit does not fail CI; it makes the table stale until the op is retuned, and a
-  stale table stays in use; there is no configure-time check. `sweep_to_table.py --check` and
-  `.github/ci/check_tuned_tables.py` print the same warnings from one function,
-  `sweep_to_table.stale_kernel_warnings`, which compares the op-level `kernels=` and every
-  `family_kernels=` hash (kernel-deps included). A table with only converted/prior/transcribed rows
-  (every sm_89 table and `spmm.cpu.txt`) is never reported stale, although its header names hashes.
+  a warning, never a CI failure or a configure-time check: a stale table stays in use until the op is
+  retuned. `sweep_to_table.py --check` and `.github/ci/check_tuned_tables.py` print the same warnings
+  from `sweep_to_table.stale_kernel_warnings` ("Kernel hashes" above).
 - **CI** (`.github/workflows/ci.yml`, "Tuned tables equal their ledgers") fetches only the
   ledger LFS objects, cached by their pointers' oids, and runs `--check` and `--self-test`.
 
-The library side is tested in C++ (`tests/tuned_tables_tests.cc`, suite `TunedTables`):
-
-| Test | Checks |
-| --- | --- |
-| `EmbeddedSetIsExactlyTunedDirByNameAndBytes` | the embedded set equals `tuned/`, by name and bytes |
-| `EveryEmbeddedTableIsKeyedByDtypeThenChoiceKeysAndNamesOnlyCandidates` | `# keys:` is `dtype:exact` then the op's `choice.hh` keys; every spelling is a candidate of its dtype |
-| `RankedTimesFollowTheTieRule`, `TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck` | timed rows obey the 3% tie order; untimed rows only the spelling check |
-| `EveryOpShipsATableForEveryDtypeOnEveryShippedDevice` | every op has every dtype on sm_89 and sm_120 (real only for symm, syrk, syr2k); cpu ships spmm only |
-| `Sm120TablesAreDeepLedgerTablesNamingTheirLedger` | every sm_120 table's `source=` names its ledger and every dtype has timed rows |
-| `<Op>TranscribedTablesHoldExactlyTheChoiceGrid` (posv sm_89, trsm, gemm, gemv) | the transcribed rows cover exactly the `choice.hh` grid |
-
-## Provenance of the migrated records {#tuning-data-migration}
-
-The layout replaced per-dtype tables and per-run ledger directories in merge `8fa73fd0`
-(2026-10-11). The old files are in its first parent, `707fa9b8`. A one-off
-`scripts/migrate_tuning_data.py` (not in the tree) wrote the ledgers:
-
-| Source | Became |
-| --- | --- |
-| sm_120 deep run: 183 run files | the 19 sm_120 ledgers, every line in file-name-then-line order, `dtype` added: 146,544 lines |
-| sm_120 rows tagged `# transcribed` | `transcribed` cells under run `transcribed-<sha>`, the sha of the table they came from (`aad906cb^`) |
-| sm_89 and cpu transcribed tables | `transcribed` cells; run lines carry the table's keys, the sm_120 run's candidates, `batchlas` = the transcribed sha |
-| sm_89 potrf converted rows | `converted` cells (the one row's `# noisy` mark dropped) |
-| v1 hashes | 59 `rehash` lines (`proof: normalized`), every family of 18 ops |
-
-- gemv's rehash was refused: its records predate real edits to `src/ops/gemv/gemv.cc` and
-  `src/sycl/device_scalar.hh`. Its full re-run `20261009T042647-threadripper02-422873` is `-dirty`;
-  gemv was re-measured at deep on 2026-10-11 (run `20261011T204301-threadripper02-39013`).
-- Check at migration: each regenerated table, restricted to one dtype, had exactly the old
-  per-dtype table's rows (keys, entries, times, tier tags), gemv sm_120 excepted.
-- Deleted: the per-dtype tables, the per-run ledger directories, `tuned/transcribed/*.csv`, the
-  potrf sweeps under `benchmarks/results/routing/` (`sm120_potrf_sweep{,_edges}.jsonl` with their
-  campaign files, `sm89_potrf_archive.jsonl`), and the converter and raw-tuner inputs of
-  `sweep_to_table.py` with its Python `OpSpec`.
-- Kept as cited data, no table generated from them: `routing/sm120_posv_sweep.jsonl`
-  (`docs/perf/potrf.md`, `docs/perf/blackwell.md`), `routing/sm120_potrf_phase2_gate.csv`
-  (`tune_tests`), and the raw trsm tuner output `benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`
-  (machine, build and grid in `benchmarks/results/tuning/README.md`).
+The library side is tested by `tests/tuned_tables_tests.cc` (suite `TunedTables`): the embedded set
+equals `tuned/` byte for byte, keys and spellings match `choice.hh`, timed rows obey the 3% tie
+order, every op ships every dtype on sm_89 and sm_120, and the posv, trsm, gemm, gemv, geqrf and
+orgqr tables cover exactly the `choice.hh` grid.
 
 ## License
 
