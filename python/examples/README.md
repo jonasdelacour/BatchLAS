@@ -139,10 +139,6 @@ or `bl.linalg`). Unlike the top-level functions:
 These are library defects; the authoritative list, with causes, is
 @ref design_known_defects. The notebooks call them out where they come up.
 
-- **The Hermitian drivers read the unreferenced triangle** (known defect 14). With only one
-  triangle filled, `syev_cta` with `uplo="upper"`, `syev_blocked`/`syev_two_stage` with `"lower"` at
-  some sizes, and `gesvd` with a Hermitian `uplo` can return wrong values. Pass the full symmetric
-  matrix, or use `syev_jacobi_cta`.
 - **`lanczos` returns a spectrum about three times too wide** (open, cause not located). Use
   `syevx` or the dense solvers for the values.
 - **`stedc` without eigenvectors.** The recursive driver may merge from unset leaf vectors under
