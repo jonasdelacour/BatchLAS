@@ -3,7 +3,7 @@
 > **Status:** current · the always-loaded digest of @ref dev_agent_guide, imported by `.claude/CLAUDE.md` into every session and subagent.
 
 The full guide (`docs/developer/agent-guide.md`) is normative; each rule names its section (§N).
-Read one section, never the whole guide or a whole 70-200 KB docs page:
+Read one section, never the whole guide or a whole docs page (several are 40-60 KB):
 
 ```bash
 python3 scripts/agent/doc_section.py agent-guide §10          # one section of the guide
@@ -92,8 +92,8 @@ Every subagent and workflow `agent()` call runs on a tier (`.claude/agents/`); t
 
 ## Core: keeping context small
 
-- Source by range (`grep -n`, then `Read` offset/limit; `docs/perf/gemm.md` and
-  `tests/gemm_candidates_tests.cc` are ~200 KB). Check plots from their data (screenshots <= 1000
+- Source by range (`grep -n`, then `Read` offset/limit; `tests/gemm_candidates_tests.cc` is
+  ~180 KB). Check plots from their data (screenshots <= 1000
   px). Cap output (`| tail -n 40`, `grep -c`, `ps -eo pid,etime,comm`); never a full journal or log.
 - Hand log trawls and diff reviews to a subagent; digest with `scripts/agent/wf_dump.py` and
   `conflicts.py`. Persist long evidence to `$CLAUDE_JOB_DIR/tmp` and quote the path.
