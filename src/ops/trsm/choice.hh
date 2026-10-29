@@ -28,7 +28,7 @@ inline constexpr std::array<std::string_view, 5> key_names{  ///< q: B.cols (Lef
     "side:exact", "trans:exact", "order:log:2", "q:log", "batch:log"};  // ConjTrans is T; no uplo/diag key; work ~ order^2 q batch
 
 /// The tuner's grid; the transcriber (tuned/README.md) spells the same grid.
-/// evidence: docs/design/flat-kernel-selection.md#phase-3-grids
+/// `evidence: docs/design/flat-kernel-selection.md#phase-3-grids`
 inline constexpr std::array<int, 18> grid_order{1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                                                 768, 1024};
 inline constexpr std::array<int, 12> grid_q{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096};
