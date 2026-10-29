@@ -658,7 +658,8 @@ function drawPanels() {
     }
     return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(facetLabel(cK, ct) + " " + facetLabel(rK, rt))}">${h}</svg>`;
   };
-  const defs = `<svg width="0" height="0" style="position:absolute"><defs><pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v4" stroke="var(--surface)" stroke-width="1.3"/></pattern></defs></svg>`;
+  // Inline size: `.map svg` would stretch it into a 150 px band that eats the map's top rows in Safari.
+  const defs = `<svg width="0" height="0" style="position:absolute;width:0;height:0;pointer-events:none"><defs><pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0v4" stroke="var(--surface)" stroke-width="1.3"/></pattern></defs></svg>`;
   let html = defs + `<div class="facets" style="grid-template-columns:${rK.length ? "max-content " : ""}repeat(${cT.length}, minmax(${single ? 0 : 120}px, ${single ? "1fr" : "260px"}))">`;
   if (cK.length) { if (rK.length) html += `<div></div>`; cT.forEach(t => html += `<div class="fh">${esc(facetLabel(cK, t))}</div>`); }
   rT.forEach((rt, ri) => {
