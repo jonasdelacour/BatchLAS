@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
-// gesvd and its stages honour a batch mask (W4a) on tests/masked_contract.hh: an inactive item's A,
-// singular values, U, V^H, info, d, e and taus are bit-for-bit untouched, an active one equals the
-// unmasked call on the same pin. Device-only masks, complex data, padded ld and stride, gaps in the
-// per-item vectors. gesvd pinned jacobi (packed partitions: holes inside a sub-group), blocked over
-// bdsqr (BATCHLAS_GESVD_BIDIAG=bdsqr; bdsdc keeps refusing until stedc honours it) and NETLIB's
-// host loop (I4); gebrd's three kernels, bdsqr (its failure fold), ormbr 'P' and 'Q' directly.
+// gesvd and its stages honour a batch mask (W4a, lift 2) on tests/masked_contract.hh: an inactive
+// item's A, singular values, U, V^H, info, d, e and taus are bit-for-bit untouched, an active one
+// equals the unmasked call on the same pin. Device-only masks, complex data, padded ld and stride,
+// gaps in the per-item vectors. gesvd pinned jacobi (packed partitions: holes inside a sub-group),
+// blocked over each bidiagonal solver (BATCHLAS_GESVD_BIDIAG = bdsdc, normal, bdsqr), cta, the
+// Hermitian blocked and cta, and NETLIB's host loop (I4); gebrd's three kernels, bdsqr (its failure
+// fold), bdsdc, ormbr 'P' and 'Q' directly. On a vendor backend the composites compare their active
+// items with the all-active masked call: an unmasked child may take the vendor.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
 #include <gtest/gtest.h>
 
@@ -33,6 +35,7 @@
 #include <optional>
 #include <variant>
 #include <string>
+#include <tuple>
 #include <vector>
 
 using namespace batchlas;
@@ -40,7 +43,6 @@ using namespace batchlas;
 namespace {
 
 namespace mc = masked_contract;
-using GesvdPin = select::ScopedPin<ops::gesvd::GesvdChoice>;
 
 // A well-spread value in [-1, 1] per (item, element, salt): distinct singular values in every item.
 inline double spread(std::size_t item, std::size_t e, int salt) {
@@ -77,12 +79,30 @@ struct Shape {
     int wg_items = 0;        ///< items sharing a packed sub-group: the hole patterns
     int chunk_items = 0;     ///< the chunk-edge patterns
     bool identical = false;  ///< every item the same input (the saturating case)
+    std::optional<Uplo> herm{};  ///< the Hermitian gesvd on this triangle (square)
 };
 
 std::string label(const Shape& s) {
     auto job = [](SvdVectors j) { return j == SvdVectors::All ? "A" : j == SvdVectors::Thin ? "S" : "N"; };
+    const std::string h = !s.herm ? "" : *s.herm == Uplo::Lower ? " herm L" : " herm U";
     return s.spelling + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " " + job(s.jobu) + job(s.jobvh) +
-           " batch " + std::to_string(s.batch);
+           " batch " + std::to_string(s.batch) + h;
+}
+
+// Each item's n x n block made Hermitian (real diagonal), from its upper triangle.
+template <typename T>
+void make_hermitian(Matrix<T>& A, int batch) {
+    const std::int64_t n = A.rows(), ld = A.ld(), stride = A.stride();
+    for (int b = 0; b < batch; ++b) {
+        T* p = A.data_ptr() + b * stride;
+        for (std::int64_t j = 0; j < n; ++j) {
+            p[j + j * ld] = T(std::real(p[j + j * ld]));
+            for (std::int64_t i = 0; i < j; ++i) {
+                if constexpr (std::is_same_v<T, typename base_type<T>::type>) p[j + i * ld] = p[i + j * ld];
+                else p[j + i * ld] = std::conj(p[i + j * ld]);
+            }
+        }
+    }
 }
 
 template <typename T, Backend B>
@@ -104,26 +124,32 @@ struct GesvdProblem {
                                      rows_or_1(shape.jobvh, shape.n), shape.batch)),
           S(std::size_t(k) * shape.batch), info(std::size_t(shape.batch)) {}
 
-    mc::Case make_case() {
+    mc::Case make_case(bool masked_reference) {
         mc::Case c;
         c.batch = s.batch;
         c.wg_items = s.wg_items;
         c.chunk_items = s.chunk_items;
         c.identical_items = s.identical;
+        c.masked_reference = masked_reference;
         c.prepare = [this] {
             fill(A.data_ptr(), std::size_t(A.stride()) * s.batch, std::size_t(A.stride()), 3, s.identical);
+            if (s.herm) make_hermitian(A, s.batch);
             poison_all(U.data_ptr(), std::size_t(U.stride()) * s.batch);
             poison_all(Vh.data_ptr(), std::size_t(Vh.stride()) * s.batch);
             poison_all(S.data(), S.size());
             std::fill(info.begin(), info.end(), -77);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte> ws) {
-            (void)gesvd<B, T>(q, A.view().with_batch_mask(mask), S.to_span(), U.view().with_batch_mask(mask),
-                        Vh.view().with_batch_mask(mask), s.jobu, s.jobvh, ws, info.to_span());
+            const auto a = A.view().with_batch_mask(mask), u = U.view().with_batch_mask(mask),
+                       vh = Vh.view().with_batch_mask(mask);
+            if (s.herm) (void)gesvd<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm, ws, info.to_span());
+            else (void)gesvd<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, ws, info.to_span());
         };
         c.buffer_size = [this](Span<const std::uint8_t> mask) {
-            return gesvd_buffer_size<B, T>(q, A.view().with_batch_mask(mask), S.to_span(), U.view().with_batch_mask(mask),
-                                           Vh.view().with_batch_mask(mask), s.jobu, s.jobvh);
+            const auto a = A.view().with_batch_mask(mask), u = U.view().with_batch_mask(mask),
+                       vh = Vh.view().with_batch_mask(mask);
+            return s.herm ? gesvd_buffer_size<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh, *s.herm)
+                          : gesvd_buffer_size<B, T>(q, a, S.to_span(), u, vh, s.jobu, s.jobvh);
         };
         c.outputs = [this] {
             return std::vector<mc::Output>{mc::Output::matrix("A", A.view()), mc::Output::matrix("U", U.view()),
@@ -165,6 +191,8 @@ struct GebrdProblem {
         mc::Case c;
         c.batch = batch;
         c.identical_items = identical;
+        // Blocked's unmasked gemm may take the vendor, which a masked one refuses.
+        c.masked_reference = kernel == Kernel::Blocked && (B == Backend::CUDA || B == Backend::ROCM);
         c.wg_items = kernel == Kernel::Cta ? 32 / (n <= 4 ? 4 : n <= 8 ? 8 : n <= 16 ? 16 : 32) : 0;
         c.prepare = [this] {
             fill(A.data_ptr(), std::size_t(A.stride()) * batch, std::size_t(A.stride()), 5, identical);
@@ -249,6 +277,61 @@ struct BdsqrProblem {
     }
 };
 
+// bdsdc on an upper bidiagonal (d, e): it writes s and, with vectors, the n x n U and V^H.
+template <typename Real, Backend B>
+struct BdsdcProblem {
+    Queue& q;
+    int n, batch;
+    bool vectors;
+    Matrix<Real> U, Vh;
+    UnifiedVector<Real> d, e, S;
+    UnifiedVector<int32_t> info;
+
+    BdsdcProblem(Queue& queue, int order, int b, bool vecs)
+        : q(queue), n(order), batch(b), vectors(vecs), U(test_support::padded<Real>(order, order, b)),
+          Vh(test_support::padded<Real>(order, order, b)), d(std::size_t(order + 2) * b),
+          e(std::size_t(order + 1) * b), S(std::size_t(order) * b), info(std::size_t(b)) {}
+
+    VectorView<Real> dv(Span<const std::uint8_t> mk) { return VectorView<Real>(d.data(), n, batch, 1, n + 2).with_batch_mask(mk); }
+    VectorView<Real> ev(Span<const std::uint8_t> mk) {
+        return VectorView<Real>(e.data(), n - 1, batch, 1, n + 1).with_batch_mask(mk);
+    }
+
+    mc::Case make_case() {
+        mc::Case c;
+        c.batch = batch;
+        c.prepare = [this] {
+            fill(d.data(), d.size(), std::size_t(n + 2), 14, false);
+            fill(e.data(), e.size(), std::size_t(n + 1), 15, false);
+            poison_all(U.data_ptr(), std::size_t(U.stride()) * batch);
+            poison_all(Vh.data_ptr(), std::size_t(Vh.stride()) * batch);
+            poison_all(S.data(), S.size());
+            std::fill(info.begin(), info.end(), -77);
+        };
+        c.call = [this](Span<const std::uint8_t> mk, Span<std::byte> ws) {
+            if (vectors)
+                (void)bdsdc<B, Real>(q, dv(mk), ev(mk), S.to_span(), ws, U.view().with_batch_mask(mk),
+                                     Vh.view().with_batch_mask(mk), true, info.to_span());
+            else
+                (void)bdsdc<B, Real>(q, dv(mk), ev(mk), S.to_span(), ws, true, info.to_span());
+        };
+        c.buffer_size = [this](Span<const std::uint8_t> mk) {
+            return bdsdc_buffer_size<B, Real>(q, dv(mk), ev(mk), S.to_span(), vectors);
+        };
+        c.outputs = [this] {
+            std::vector<mc::Output> o{strided("d", d.data(), n, n + 2), strided("e", e.data(), n - 1, n + 1),
+                                      mc::Output::span("s", std::span<const Real>(S.data(), S.size()), n),
+                                      mc::Output::span("info", std::span<const int32_t>(info.data(), info.size()), 1)};
+            if (vectors) {
+                o.push_back(mc::Output::matrix("U", U.view()));
+                o.push_back(mc::Output::matrix("Vh", Vh.view()));
+            }
+            return o;
+        };
+        return c;
+    }
+};
+
 // ormbr: A holds gebrd-shaped reflectors (|tau| <= 1/8), C is the operand. 'Q' is Left, order
 // a.rows(); 'P' is Right, order a.cols(). tau is packed by batch (ormbr's contract).
 template <typename T, Backend B>
@@ -274,6 +357,8 @@ struct OrmbrProblem {
     mc::Case make_case() {
         mc::Case c;
         c.batch = batch;
+        // Several blocks: the WY apply's unmasked gemm may take the vendor (refused when masked).
+        c.masked_reference = block < ntau() && (B == Backend::CUDA || B == Backend::ROCM);
         c.wg_items = am == an && am <= 32 ? 32 / (am <= 4 ? 4 : am <= 8 ? 8 : am <= 16 ? 16 : 32) : 0;
         c.prepare = [this] {
             fill(A.data_ptr(), std::size_t(A.stride()) * batch, std::size_t(A.stride()), 11, false);
@@ -310,13 +395,15 @@ protected:
         const char* ops[] = {"gemm", "gemv", "trmm", "trsm", "syrk", "herk"};
         for (std::size_t i = 0; i < pins.size(); ++i) pins[i].emplace(ops[i], "native");
     }
+    static constexpr bool vendor() { return B == Backend::CUDA || B == Backend::ROCM; }
 
     void check(const Shape& s) {
         SCOPED_TRACE(label(s));
         ChildPins pins;
         pin_children(pins);
         GesvdProblem<T, B> p(*this->ctx, s);
-        mc::check<ops::gesvd::GesvdChoice>(*this->ctx, "gesvd", s.spelling, p.make_case());
+        const bool composite = s.spelling == "blocked" || s.spelling == "cta";
+        mc::check<ops::gesvd::GesvdChoice>(*this->ctx, "gesvd", s.spelling, p.make_case(composite && vendor()));
     }
     void check_gebrd(typename GebrdProblem<T, B>::Kernel kind, int m, int n, int batch, bool identical = false) {
         SCOPED_TRACE("gebrd " + std::to_string(int(kind)) + " " + std::to_string(m) + "x" + std::to_string(n) +
@@ -365,48 +452,71 @@ TYPED_TEST(GesvdMask, SaturatingJacobiIsBitIdentical) {
     this->check({"jacobi", 29, 17, 1024, SvdVectors::All, SvdVectors::All, 1, 0, true});
 }
 
-// blocked over bdsqr: gebrd, bdsqr and both ormbr back-transforms skip an inactive item, per part
-// of the L2 chunk loop too.
-TYPED_TEST(GesvdMask, BlockedOverBdsqrLeavesInactiveItemsUntouched) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::B;
+// blocked over each bidiagonal solver: gebrd, bdsdc (stedc), the normal equations' tridiagonal
+// solve or bdsqr, and both ormbr back-transforms skip an inactive item, per part of the L2 chunk
+// loop too (the chunk applies to real types; complex runs one part).
+TYPED_TEST(GesvdMask, BlockedOverEachBidiagSolverLeavesInactiveItemsUntouched) {
     if (!this->device()) GTEST_SKIP() << "blocked is a device family";
-    const ScopedEnvVar bdsqr("BATCHLAS_GESVD_BIDIAG", "bdsqr");
-    const SvdVectors A = SvdVectors::All, N = SvdVectors::None;
-    std::vector<Shape> shapes{{"blocked", 12, 12, 24, A, A, 0, 8}, {"blocked", 20, 9, 12, N, N},
-                              {"blocked", 20, 9, 12, N, A}, {"blocked", 9, 20, 12, A, N}};
-    if (sycl_gesvd::gesvd_blocked_honours_mask<B, T>(20, 9, true, true)) {
-        shapes.push_back({"blocked", 20, 9, 12, A, A});
-        shapes.push_back({"blocked", 9, 20, 12, A, A});
-    }
-    for (const Shape& s : shapes) {
-        ASSERT_TRUE((sycl_gesvd::gesvd_blocked_honours_mask<B, T>(s.m, s.n, s.jobu != N, s.jobvh != N))) << label(s);
-        this->check(s);
+    const SvdVectors A = SvdVectors::All, S = SvdVectors::Thin, N = SvdVectors::None;
+    for (const char* solver : {"bdsdc", "normal", "bdsqr"}) {
+        SCOPED_TRACE(std::string("BATCHLAS_GESVD_BIDIAG=") + solver);
+        const ScopedEnvVar env("BATCHLAS_GESVD_BIDIAG", solver);
+        for (const Shape& s : {Shape{"blocked", 12, 12, 24, A, A, 0, 8}, Shape{"blocked", 20, 9, 24, A, A, 0, 8},
+                               Shape{"blocked", 9, 20, 24, A, A, 0, 8}, Shape{"blocked", 20, 9, 12, N, N},
+                               Shape{"blocked", 20, 9, 12, N, A}, Shape{"blocked", 9, 20, 12, A, N},
+                               Shape{"blocked", 20, 9, 12, S, A}, Shape{"blocked", 40, 40, 24, A, A, 0, 8}})
+            this->check(s);
     }
 }
 
-// Where blocked reaches a child that ignores the mask (bdsdc's stedc by default), a strict pin
-// refuses the masked call and writes nothing.
-TYPED_TEST(GesvdMask, BlockedRefusesWhereAChildIgnoresTheMask) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::B;
-    if (!this->device()) GTEST_SKIP() << "blocked is a device family";
-    Queue& q = *this->ctx;
-    for (const char* solver : {"bdsdc", "bdsqr"}) {
-        const ScopedEnvVar env("BATCHLAS_GESVD_BIDIAG", solver);
-        const Shape s{"blocked", 20, 9, 8};
-        if (sycl_gesvd::gesvd_blocked_honours_mask<B, T>(s.m, s.n, true, true)) continue;
-        SCOPED_TRACE(solver);
-        GesvdProblem<T, B> p(q, s);
-        const mc::Case c = p.make_case();
-        const mc::DeviceMask mask(q, mc::patterns(s.batch)[2].bytes);
-        const GesvdPin pin("gesvd", "blocked", select::StrictPin{});
-        UnifiedVector<std::byte> ws(std::size_t(1) << 22);
-        c.prepare();
-        q.wait();
-        const auto before = mc::detail::snapshot(c.outputs(), s.batch);
-        EXPECT_THROW((c.call(mask.span(), {ws.data(), ws.size()}), q.wait()), batchlas::invalid_argument);
-        EXPECT_TRUE(mc::detail::snapshot(c.outputs(), s.batch) == before) << "the refused blocked pin wrote an output";
+// cta (real general, max(m, n) <= 32, never thin): the normal-equations solve on one sub-group
+// per matrix, holes inside a packed work-group.
+TYPED_TEST(GesvdMask, CtaLeavesInactiveItemsUntouched) {
+    if (!this->device() || !this->sg32()) GTEST_SKIP() << "cta is a device family";
+    if constexpr (TestFixture::kComplex) {
+        GTEST_SKIP() << "cta's general path is real-only (complex runs only Hermitian)";
+    } else {
+        const SvdVectors A = SvdVectors::All, N = SvdVectors::None;
+        for (const Shape& s : {Shape{"cta", 7, 7, 40, A, A}, Shape{"cta", 13, 13, 24, A, A}, Shape{"cta", 20, 9, 24, A, A},
+                               Shape{"cta", 9, 20, 24, A, A}, Shape{"cta", 32, 32, 12, A, A}, Shape{"cta", 20, 9, 24, N, N},
+                               Shape{"cta", 20, 9, 24, A, N}, Shape{"cta", 9, 20, 24, N, A}}) {
+            Shape t = s;
+            t.wg_items = TestFixture::jacobi_items(s.m, s.n);
+            this->check(t);
+        }
+    }
+}
+
+// The Hermitian gesvd on blocked (syev_blocked) and cta (syev_cta), both triangles, complex too.
+TYPED_TEST(GesvdMask, HermitianLeavesInactiveItemsUntouched) {
+    if (!this->device()) GTEST_SKIP() << "blocked and cta are device families";
+    const SvdVectors A = SvdVectors::All, N = SvdVectors::None;
+    for (const Uplo u : {Uplo::Lower, Uplo::Upper}) {
+        std::vector<Shape> shapes{{"blocked", 12, 12, 24, A, A, 0, 8}, {"blocked", 12, 12, 24, N, N, 0, 8},
+                                  {"blocked", 12, 12, 24, A, N, 0, 8}, {"blocked", 45, 45, 24, A, A, 0, 8}};
+        if (this->sg32())
+            for (const auto& [n, jobu, jobvh] : {std::tuple{7, A, A}, std::tuple{13, N, N}, std::tuple{13, A, N},
+                                                 std::tuple{32, A, A}})
+                shapes.push_back({"cta", n, n, 24, jobu, jobvh, TestFixture::jacobi_items(n, n)});
+        for (Shape& s : shapes) {
+            s.herm = u;
+            this->check(s);
+        }
+    }
+}
+
+// bdsdc directly: values only and with vectors, through stedc on the 2n Golub-Kahan tridiagonal.
+TYPED_TEST(GesvdMask, BdsdcLeavesInactiveItemsUntouched) {
+    using Real = typename TestFixture::Real;
+    if constexpr (TestFixture::kComplex) {
+        GTEST_SKIP() << "bdsdc is real-only";
+    } else {
+        for (const bool vectors : {false, true})
+            for (const int n : {1, 6, 11, 40}) {
+                SCOPED_TRACE("bdsdc n " + std::to_string(n) + (vectors ? " vectors" : " values"));
+                BdsdcProblem<Real, TestFixture::B> p(*this->ctx, n, 12, vectors);
+                mc::check(*this->ctx, p.make_case());
+            }
     }
 }
 

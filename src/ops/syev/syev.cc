@@ -48,9 +48,8 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 // sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
 // TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
 // runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
-// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200). A batch mask runs on CtaFused,
-// Jacobi and the NETLIB vendor (the device vendors cannot skip an item); Cta, Blocked and TwoStage
-// keep refusing it until their children honour it.
+// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200). A batch mask runs on every native
+// family and the NETLIB vendor; the device vendors cannot skip an item.
 template <Backend B, typename T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
@@ -61,11 +60,11 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const bool cta_steqr = small && B != Backend::ROCM;
     const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
-        [&](Cta) { return cta_steqr && !masked; },  // mask: lift after steqr (W3a)
+        [&](Cta) { return cta_steqr; },
         [&](CtaFused) { return cta_steqr; },
         [&](Jacobi) { return small; },
-        [&](Blocked) { return large && !masked; },     // mask: lift after stedc, stebz (W3a)
-        [&](TwoStage) { return large && !masked; },    // mask: lift after stedc, stebz (W3a)
+        [&](Blocked) { return large; },
+        [&](TwoStage) { return large; },
         [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB); },
     }, c);
 }

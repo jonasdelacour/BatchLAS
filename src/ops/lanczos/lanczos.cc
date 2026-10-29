@@ -45,9 +45,7 @@ namespace batchlas {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
                 const LanczosParams<T>& params) {
-        // The plumbing below carries the mask (scratch views, both kernels, ortho, gemm/spmm);
-        // steqr and the trailing sort still ignore it. mask: lift after steqr, sort (W3a)
-        detail::refuse_batch_mask("lanczos", A, V);
+        // Every child honours the mask: the scratch views, both kernels, ortho, gemm/spmm, steqr and sort.
         const auto mask = detail::call_mask("lanczos", A, V);
         const std::uint8_t* mk = detail::mask_ptr(mask);
         const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
@@ -213,7 +211,10 @@ namespace batchlas {
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
             auto sort_workspace = pool.allocate<std::byte>(ctx, sort_buffer_size(ctx, W, V, jobz));
-            (void)sort(ctx, W, V, jobz, params.sort_order, sort_workspace);
+            // The call's mask, whichever operand brought it: V may be unmasked or, without vectors, a dummy.
+            const bool vecs = jobz == JobType::EigenVectors && !mask.empty();
+            (void)sort(ctx, VectorView<real_t>(W.data(), n, batch_size, 1, n).with_batch_mask(mask),
+                       vecs ? V.with_batch_mask(mask) : V, jobz, params.sort_order, sort_workspace);
         }
 
         return ctx.get_event();
@@ -228,7 +229,6 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
         const LanczosParams<T>& params
     ) {
-        detail::refuse_batch_mask("lanczos", A, V);  // mask: lift after steqr, sort (W3a)
         auto n = A.rows();
         auto batch_size = A.batch_size();
         auto padded_vector_view = MatrixView(V.data_ptr(), n, 2, n, (n+1)*n, batch_size);

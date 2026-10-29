@@ -169,12 +169,12 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
     return parse_syevx_algorithm(v);
 }
 
-// DirectSubset refuses a mask until stebz, stein and sytrd_sy2sb honour it: a masked call reaches it
-// only when asked for it by name (and throws there), while Auto walks on to Direct.
-template <typename T, MatrixFormat MFormat>
+// The host backend's DirectSubset refuses a mask (its gemm is the host BLAS): a masked call reaches it
+// there only by name (and throws before any write), while Auto walks on to Direct.
+template <Backend B, typename T, MatrixFormat MFormat>
 bool syevx_subset_route_allowed(Span<const std::uint8_t> mask, const SyevxParams<T>& params) {
     return syevx_direct_subset_supported<T, MFormat>() &&
-           (mask.empty() || params.method == SyevxAlgorithm::DirectSubset);
+           (mask.empty() || B != Backend::NETLIB || params.method == SyevxAlgorithm::DirectSubset);
 }
 
 const char* syevx_select_name(SyevxSelect select) {
@@ -372,7 +372,7 @@ Event syevx(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_subset_route_allowed<T, MFormat>(mask, params), jobz,
+                                              syevx_subset_route_allowed<B, T, MFormat>(mask, params), jobz,
                                               A.batch_size(), params.select);
     // `info` (converged?) is not `m` (how many); each arm clears and fills info.
     if (chosen == SyevxAlgorithm::Direct) {
@@ -441,7 +441,7 @@ size_t syevx_buffer_size(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_subset_route_allowed<T, MFormat>(mask, params), jobz,
+                                              syevx_subset_route_allowed<B, T, MFormat>(mask, params), jobz,
                                               A.batch_size(), params.select);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);

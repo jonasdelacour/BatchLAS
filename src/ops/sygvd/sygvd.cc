@@ -40,10 +40,11 @@ select::Key key_of(const Args<T>& a) {
 template <Backend B, class T>
 bool can_run(const SygvdChoice& c, const select::Device& d, const Args<T>& a) {
     const bool homogeneous = !a.A.is_heterogeneous() && !a.B.is_heterogeneous() && a.A.rows() >= 1;
-    // The NETLIB vendor honours a batch mask (cuSOLVER cannot skip an item); Compose keeps refusing it.
+    // Compose honours a batch mask on a device, the NETLIB vendor on the host (where compose's trsm
+    // and trmm are the host BLAS, which refuses after sygst has written A); cuSOLVER cannot skip an item.
     const bool masked = batchlas::detail::any_batch_mask(a.A, a.B);
     return std::visit(overloaded{
-        [&](Compose) { return homogeneous && !masked; },  // mask: lift after potrf (W2a), syev
+        [&](Compose) { return homogeneous && (!masked || B != Backend::NETLIB); },
         [&](Vendor) {
             return vendor_linked<B> && d.has_vendor && homogeneous && !a.factored && (!masked || B == Backend::NETLIB);
         },

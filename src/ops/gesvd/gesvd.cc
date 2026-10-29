@@ -68,8 +68,8 @@ bool packed(const MV<T>& M) {
 // Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
 // runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
-// Masked: Jacobi and NETLIB's host loop skip an inactive item, and Blocked's general path wherever
-// every child it reaches does (gesvd_blocked_honours_mask); a strided vendor call cannot.
+// Masked: every native family and NETLIB's host loop skip an inactive item (Blocked wherever every
+// child it reaches does, gesvd_blocked_honours_mask); a strided vendor call cannot.
 template <Backend B, typename T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const MV<T>& Vh,
              const Job& j) {
@@ -90,13 +90,11 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
         },
         [&](Cta) {
             const bool form = j.herm ? square : kReal;
-            // mask: lift after steqr_cta (W3a); Hermitian: syev_cta
-            return native && !masked && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
+            return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) {
-            // mask: lift after stedc (W3a); Hermitian: syev_blocked
-            const bool mask_ok = !masked || (!j.herm && sycl_gesvd::gesvd_blocked_honours_mask<B, T>(
-                                                            m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None));
+            const bool mask_ok = !masked || sycl_gesvd::gesvd_blocked_honours_mask<B, T>(
+                                                m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None);
             return native && mask_ok && (!j.herm || square);
         },
         [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB) && vendor_binds; },

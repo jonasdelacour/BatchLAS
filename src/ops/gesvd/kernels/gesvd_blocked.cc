@@ -1526,8 +1526,6 @@ Event gesvd_blocked(Queue& ctx,
                     Uplo hermitian_uplo,
                     const Span<std::byte>& ws,
                     Span<int32_t> info) {
-    // mask: lift after syev_blocked (sytrd_blocked, stedc, stebz, ormqr_blocked)
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_blocked", B, a_in, u_out, vh_out);
     const auto a = with_call_mask(a_in, ::batchlas::detail::call_mask("gesvd_blocked", a_in, u_out, vh_out), true);
     return gesvd_native_hermitian_impl<B, T>(ctx,
                                              a,
@@ -1601,7 +1599,6 @@ Event gesvd_cta(Queue& ctx,
                 SvdVectors jobvh,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);  // mask: lift after steqr_cta (W3a)
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     // Its normal-equations branch is real-only; complex general is the blocked family's.
     if constexpr (detail::is_complex<T>::value) throw batchlas::unsupported("gesvd_cta: complex general input");
@@ -1646,7 +1643,6 @@ Event gesvd_cta(Queue& ctx,
                 Uplo hermitian_uplo,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::gesvd, "gesvd_cta", B, a_in, u_out, vh_out);  // mask: lift after syev_cta (steqr)
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");

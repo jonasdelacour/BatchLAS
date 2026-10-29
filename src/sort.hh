@@ -251,7 +251,9 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
         throw batchlas::invalid_argument("sort: invalid batch layout for eigenvalues span");
     }
     const auto n = n_total / batch_size;
-    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)), V, jobz, order, workspace);
+    // W adopts V's mask: a view rebuilt from a raw pointer starts unmasked.
+    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)).with_batch_mask(V.batch_mask()),
+                V, jobz, order, workspace);
 }
 
 

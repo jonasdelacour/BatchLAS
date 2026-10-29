@@ -374,7 +374,6 @@ Event bdsdc(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("bdsdc", d, e, u, vh);  // mask: lift after stedc (W3a)
     const auto mask_span = ::batchlas::detail::call_mask("bdsdc", d, e, u, vh);
     const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
     if constexpr (detail::is_complex<T>::value) {

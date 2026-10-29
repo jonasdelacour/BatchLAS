@@ -98,10 +98,12 @@ protected:
             : q(q_), n(n_), batch(batch_), jobz(j), uplo(u), same(same_), A(ts::padded<T>(n_, n_, batch_)),
               w(std::size_t(n_) * batch_), info(std::size_t(batch_)) {}
 
-        mc::Case make_case(int wg_items) {
+        mc::Case make_case(int wg_items, int chunk_items = 0, bool masked_reference = false) {
             mc::Case c;
             c.batch = batch;
             c.wg_items = wg_items;
+            c.chunk_items = chunk_items;
+            c.masked_reference = masked_reference;
             c.identical_items = same;
             c.prepare = [this] {
                 fill_items(A.data_ptr(), std::size_t(A.stride()), batch, 3, same);
@@ -125,12 +127,20 @@ protected:
         }
     };
 
-    void check(const std::string& spelling, int n, int batch, JobType jobz, Uplo uplo, int wg_items, bool same = false) {
+    void check(const std::string& spelling, int n, int batch, JobType jobz, Uplo uplo, int wg_items, bool same = false,
+               int chunk_items = 0) {
         SCOPED_TRACE(spelling + " n " + std::to_string(n) + " batch " + std::to_string(batch) +
                      (jobz == JobType::EigenVectors ? " V " : " N ") + ts::uplo_name(uplo));
         Problem p(*this->ctx, n, batch, jobz, uplo, same);
-        mc::check<ops::syev::SyevChoice>(*this->ctx, "syev", spelling, p.make_case(wg_items));
+        // A composite's children and Auto route on their own; on a vendor backend the unmasked
+        // reference may take the vendor, so active items are compared with the all-active masked call.
+        const bool composite = spelling == "cta" || spelling == "blocked" || spelling == "two_stage";
+        const mc::Case c = p.make_case(wg_items, chunk_items, (composite || spelling.empty()) && vendor());
+        if (spelling.empty()) mc::check(*this->ctx, c);  // Auto: whichever family the masked view routes to
+        else mc::check<ops::syev::SyevChoice>(*this->ctx, "syev", spelling, c);
     }
+
+    static constexpr bool vendor() { return B == Backend::CUDA || B == Backend::ROCM; }
 };
 
 TYPED_TEST_SUITE(SyevMask, Types);
@@ -451,6 +461,92 @@ TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
                 }
             };
         }
+        mc::check(q, c);
+    }
+}
+
+// The composites (lift 2): cta over sytrd_cta, steqr_cta and ormqx_cta; blocked over sytrd_blocked,
+// stedc, stebz and ormqr_blocked; two_stage over sy2sb, sb2st, stedc and the back-transforms. Both
+// jobz and triangles, and the part patterns (part edges off, one part wholly inactive).
+TYPED_TEST(SyevMask, CompositesLeaveInactiveItemsUntouched) {
+    if (!this->gpu()) GTEST_SKIP() << "the composites are GPU families";
+    for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
+        for (const Uplo u : {Uplo::Lower, Uplo::Upper}) {
+            for (const int n : {3, 13, 32}) this->check("cta", n, 24, j, u, items_per_subgroup(n), false, 8);
+            for (const auto* f : {"blocked", "two_stage"})
+                for (const int n : {45, 70}) this->check(f, n, 24, j, u, 0, false, 8);
+        }
+}
+
+// The SCC call, syev(A.with_batch_mask(m)) on Auto: every size class routes to a family that honours
+// the mask (the vendor refuses it), small, blocked and two-stage sizes alike.
+TYPED_TEST(SyevMask, AutoLeavesInactiveItemsUntouched) {
+    const int big = this->gpu() ? 600 : 70;
+    for (const int n : {7, 32, 45, big})
+        for (const JobType j : {JobType::EigenVectors, JobType::NoEigenVectors})
+            this->check("", n, n > 100 ? 6 : 24, j, Uplo::Lower, this->gpu() ? items_per_subgroup(std::min(n, 32)) : 0);
+}
+
+// syfn over syev and syrk/herk, and syfn_from_eigen over syrk/herk alone: F and info written only for
+// active items, A and V read only. Unpinned: syfn has no selection of its own.
+TYPED_TEST(SyevMask, SyfnLeavesInactiveItemsUntouched) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    constexpr Backend B = TestFixture::B;
+    if (!this->gpu()) GTEST_SKIP() << "the host backend's syrk is its BLAS, which refuses a mask";
+    Queue& q = *this->ctx;
+    for (const int n : {7, 45}) {
+        SCOPED_TRACE("syfn n " + std::to_string(n));
+        const int batch = 12;
+        Matrix<T> A = ts::padded<T>(n, n, batch), F = ts::padded<T>(n, n, batch);
+        UnifiedVector<int32_t> info((std::size_t(batch)));
+        mc::Case c;
+        c.batch = batch;
+        c.masked_reference = TestFixture::vendor();
+        c.prepare = [&] {
+            fill_items(A.data_ptr(), std::size_t(A.stride()), batch, 5, false);
+            std::fill_n(F.data_ptr(), std::size_t(F.stride()) * batch, ts::poison<T>());
+            std::fill_n(info.data(), info.size(), int32_t(-77));
+        };
+        c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
+            syfn<B, T>(q, A.view().with_batch_mask(m), F.view(), SyfnFunction<R>::exp(), Uplo::Lower, ws, info.to_span());
+        };
+        c.buffer_size = [&](Span<const std::uint8_t> m) {
+            return syfn_buffer_size<B, T>(q, A.view().with_batch_mask(m), F.view(), SyfnFunction<R>::exp(), Uplo::Lower);
+        };
+        c.outputs = [&] {
+            return std::vector<mc::Output>{mc::Output::matrix("F", F.view()), mc::Output::matrix("A", A.view()),
+                                           mc::Output::span<int32_t>("info", {info.data(), info.size()}, 1)};
+        };
+        mc::check(q, c);
+    }
+    {
+        SCOPED_TRACE("syfn_from_eigen");
+        const int n = 11, m = 6, batch = 14;
+        Matrix<T> V = ts::padded<T>(n, m, batch), F = ts::padded<T>(n, n, batch);
+        UnifiedVector<R> w(std::size_t(m) * batch);
+        UnifiedVector<int32_t> info((std::size_t(batch)));
+        mc::Case c;
+        c.batch = batch;
+        c.masked_reference = TestFixture::vendor();  // herk may take the vendor unmasked
+        c.prepare = [&] {
+            fill_items(V.data_ptr(), std::size_t(V.stride()), batch, 6, false);
+            for (std::size_t i = 0; i < w.size(); ++i) w[i] = R(int(i % 7) - 3) / R(4);
+            std::fill_n(F.data_ptr(), std::size_t(F.stride()) * batch, ts::poison<T>());
+            std::fill_n(info.data(), info.size(), int32_t(-77));
+        };
+        c.call = [&](Span<const std::uint8_t> mk, Span<std::byte> ws) {
+            syfn_from_eigen<B, T>(q, V.view().with_batch_mask(mk), w.to_span(), F.view(), SyfnFunction<R>::exp(), ws,
+                                  info.to_span());
+        };
+        c.buffer_size = [&](Span<const std::uint8_t> mk) {
+            return syfn_from_eigen_buffer_size<B, T>(q, V.view().with_batch_mask(mk), w.to_span(), F.view(),
+                                                     SyfnFunction<R>::exp());
+        };
+        c.outputs = [&] {
+            return std::vector<mc::Output>{mc::Output::matrix("F", F.view()), mc::Output::matrix("V", V.view()),
+                                           mc::Output::span<int32_t>("info", {info.data(), info.size()}, 1)};
+        };
         mc::check(q, c);
     }
 }
