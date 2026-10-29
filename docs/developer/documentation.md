@@ -1,28 +1,25 @@
 # Documentation conventions {#documentation_conventions}
 
-> **Status:** current · governs the whole `docs/` tree · introduced 2026-09-30 with the Doxygen site.
+> **Status:** current · governs the whole `docs/` tree.
 
-How the site is built, where each kind of material lives, the anchor contract between code
-comments and pages, how to write API documentation, and how to record results.
-
-The site is the project's database of results, rationale and design decisions. Every routing
-window, rejected kernel and measured ratio that the code relies on is written here, and the code
-points at it.
+How the site is built, where material lives, the anchor contract between code comments and pages,
+and how to write API documentation and record results. The code points at the site for every
+routing window, rejected kernel and measured ratio it relies on.
 
 ## Style
 
-- Reference-book style: say what a thing is, how to use it, and the numbers that matter.
-- Open with the H1 and one status line, then a one-to-three sentence summary.
-- Short paragraphs (3 sentences at most), bullets and tables over prose, present tense, active
-  voice, no "we".
-- No narrative history ("used to", "phase 3", "we tried"). State the current fact. A deleted
-  feature someone may look for gets one sentence.
-- Keep one sentence of "why" only where a reader needs it to avoid breaking a threshold,
-  invariant or trap. Say each fact once and link to it.
-- Collapse rejected alternatives into a `| Alternative | Result | Verdict |` table, numbers kept.
-- Use `> **Note:**` or `> **Warning:**` blockquotes for genuine traps only.
-- Preserve information when you migrate or distil: every measured number, conclusion, open debt
-  and trap. Mark a partly stale claim as stale rather than deleting it.
+- Reference-book style: what a thing is, how to use it, the numbers that matter. Open with the H1,
+  one status line, then a one-to-three sentence summary.
+- Short paragraphs, bullets and tables, present tense, active voice, no "we", no narrative history.
+  A deleted feature someone may look for gets one sentence.
+- One sentence of "why" only where a reader needs it to avoid breaking a threshold, invariant or
+  trap. Say each fact once and link to it.
+- Keep only the numbers that back a shipped decision (threshold, window, constant, design choice):
+  the winner and the bracketing loser on each edge, with machine, date and raw-data path. Git
+  history keeps the rest. Rejected alternatives: one `| Alternative | Result | Verdict |` row each.
+- A cited heading stays (it may shrink to a sentence) or gets its old slug pinned; see
+  [Anchors are the contract](#anchors-are-the-contract). Delete stale claims you cannot confirm.
+- `> **Note:**` / `> **Warning:**` blockquotes for genuine traps only.
 
 ## Building the site
 
@@ -32,117 +29,75 @@ DOXYGEN=/path/to/doxygen sh scripts/build_docs.sh /tmp/site
 BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh   # warnings are errors, as in CI
 ```
 
-`scripts/build_docs.sh` is the only build path. It checks the Doxygen version, generates the
-database pages (`docs/tools/gen_db_pages.py`, see [Adding results](#adding-results)), runs
-`doxygen docs/Doxyfile` from the repository root, then `docs/tools/gen_site_assets.py` (the
-navigation tree and the search index, see Theme) and `docs/tools/check_doc_anchors.py` against
-the XML output. Warnings go to `<out>/doxygen-warnings.log`. It needs no SYCL tree or
-compiler.
+`scripts/build_docs.sh` is the only build path: it generates the database pages
+(`docs/tools/gen_db_pages.py`), runs `doxygen docs/Doxyfile` from the repository root, then
+`docs/tools/gen_site_assets.py` (navigation tree, search index, cache-busting `?v=` hashes) and
+`docs/tools/check_doc_anchors.py` against the XML. Warnings go to `<out>/doxygen-warnings.log`.
+No SYCL tree is needed.
 
 | Entry point | What it does |
 | --- | --- |
-| `sh scripts/build_docs.sh [out]` | The build. Default out dir `build/docs`. |
-| `-DBATCHLAS_BUILD_DOCS=ON`, target `batchlas_docs` | CMake wrapper (`cmake/BatchLASDocs.cmake`) that calls the script with `DOXYGEN` set to the doxygen CMake found, into `<build>/docs`. `cmake --install` installs `html/` under the doc dir when built. |
-| `sh .github/ci/run_local_checks.sh` | Runs `gen_db_pages.py --self-test`, then the build into `build/docs` when Doxygen 1.18+ is on `PATH` (or in `DOXYGEN`); prints a skip line otherwise. |
-| CI job `docs` | Installs the pinned Doxygen, runs the script with `BATCHLAS_DOCS_STRICT=1`, uploads `build/docs/html` as the `docs-html` artifact. `docs-deploy` publishes to GitHub Pages on a push to `main`. See [the CI page](../ci.md). |
+| `-DBATCHLAS_BUILD_DOCS=ON`, target `batchlas_docs` | `cmake/BatchLASDocs.cmake` calls the script into `<build>/docs`; `cmake --install` installs `html/`. |
+| `sh .github/ci/run_local_checks.sh` | `gen_db_pages.py --self-test`, then the build when Doxygen 1.18+ is on `PATH` or in `DOXYGEN`. |
+| CI job `docs` | Pinned Doxygen, `BATCHLAS_DOCS_STRICT=1`, uploads `docs-html`; `docs-deploy` publishes to Pages on push to `main` ([CI](../ci.md)). |
 
-**Doxygen is pinned to 1.18.0.** The script refuses older versions; CI installs the official
-release tarball and checks its sha256 against `ci.yml`. The Doxyfile uses
-`MARKDOWN_ID_STYLE = GITHUB`, the anchor contract below was verified on 1.18, and
-`docs/theme/header.html` is the 1.18 default header plus the theme's scripts. Distribution
-packages (Ubuntu 22.04 ships 1.9.1) are too old.
-
-**Theme.** [doxygen-awesome-css](https://github.com/jothepro/doxygen-awesome-css) 2.5.0 is
-vendored under `docs/theme/doxygen-awesome/` with its MIT `LICENSE`, which must stay beside it.
-On top of it the site follows Material for MkDocs, with Doxygen's own tree view, outline
-panel and search turned off (`GENERATE_TREEVIEW`, `PAGE_OUTLINE_PANEL`, `SEARCHENGINE` = `NO`):
-
-| Piece | Where |
-| --- | --- |
-| Top bar (brand, theme toggle, search field, repository) | `#titlearea` in `docs/theme/header.html` |
-| Layout, colours, light/dark tokens | `docs/theme/batchlas.css` |
-| Section tabs (the top-level `@subpage` pages), the current section's page list (the whole tree only in the phone drawer), "Table of contents" (the page's own headings), search panel (API hits show the signature) | `docs/theme/bl-site.js` |
-| Navigation tree (`bl-nav.js`) and full-text index (`bl-search.js`, one record per section of every page, group and class; members carry their prototype) | generated by `docs/tools/gen_site_assets.py` from `xml/` after Doxygen runs |
-| API page shape: description, then the full member documentation (functions first), then any class or sub-group list; no summary lists of functions, enums or variables (`ALWAYS_DETAILED_SEC = YES` keeps brief-only members) | `docs/theme/DoxygenLayout.xml`, `docs/Doxyfile` |
-| Prototypes as code blocks (one parameter per line, links kept) | `prettyPrototypes()` in `docs/theme/bl-site.js` |
-
-The navigation follows the `@subpage` tree from the main page, plus the API group tree, so a
-page appears in it only if some section page lists it with `@subpage`. `gen_site_assets.py`
-also appends `?v=<content hash>` to the theme's CSS/JS URLs in every page, so a redeploy is
-never hidden behind a browser's cached stylesheet.
-
-**Bumping either.**
-
-- Doxygen: change `DOXYGEN_VERSION` and `DOXYGEN_SHA256` in `.github/workflows/ci.yml` (hash the
-  release's `linux.bin.tar.gz` yourself), build locally with `BATCHLAS_DOCS_STRICT=1`, and re-run
-  `python3 docs/tools/check_doc_anchors.py --xml <out>/xml`, because heading-id rules change
-  between versions. Regenerate the header with `doxygen -w html header.html footer.html style.css`
-  and re-apply the `doxygen-awesome-*.js` and `bl-*.js` script lines and the `#titlearea` markup.
-- Theme: replace the files in `docs/theme/doxygen-awesome/` (including `LICENSE`) from the
-  release, update the version in the first line of `docs/theme/header.html`, and compare the
-  theme's recommended header against ours.
+- **Doxygen is pinned to 1.18.0** (`DOXYGEN_VERSION`/`DOXYGEN_SHA256` in `.github/workflows/ci.yml`);
+  the script refuses older versions. To bump: change both, build with `BATCHLAS_DOCS_STRICT=1`,
+  re-run `check_doc_anchors.py --xml <out>/xml` (heading-id rules change between versions), and
+  regenerate `docs/theme/header.html` with `doxygen -w html`, re-applying the `bl-*.js` and
+  `doxygen-awesome-*.js` script lines and the `#titlearea` markup.
+- **Theme:** doxygen-awesome-css 2.5.0 vendored in `docs/theme/doxygen-awesome/` (its `LICENSE`
+  stays beside it), plus `docs/theme/batchlas.css`, `bl-site.js`, `DoxygenLayout.xml`. Doxygen's
+  tree view, outline panel and search are off.
+- A page appears in the navigation only if some section page lists it with `@subpage`.
 
 ## Where things go
 
 | Material | Location | Label prefix |
 | --- | --- | --- |
-| Measurements, grids, A/B results, rejected alternatives, bracketing evidence for a routing window | `docs/perf/<op>.md` (evidence pages) | `perf_<op>` |
-| Design decisions, API design records, "why this architecture", known defects | `docs/design/<topic>.md` | `design_<topic>` |
+| Measurements, A/B results, rejected alternatives, bracketing evidence for a routing window | `docs/perf/<op>.md` | `perf_<op>` |
+| Design decisions, API design records, known defects | `docs/design/<topic>.md` | `design_<topic>` |
 | Mathematics and derivations | `docs/algorithms/<topic>.md` | `algo_<topic>` |
 | User guides | `docs/guide/<topic>.md` | `guide_<topic>` |
-| Process and tooling (CI, this page, profiling workflows) | `docs/developer/<topic>.md` | `dev_<topic>` |
-| Raw result files (CSV, logs) | `benchmarks/results/` in Git LFS | none; catalogued by the Results database page |
-| API contract (what a function does, its parameters, preconditions) | Doxygen comments in `include/batchlas/` | `@ingroup` |
+| Process and tooling | `docs/developer/<topic>.md` | `dev_<topic>` |
+| Raw result files (CSV, logs) | `benchmarks/results/` in Git LFS | catalogued by the Results database page |
+| API contract | Doxygen comments in `include/batchlas/` | `@ingroup` |
 | Invariants, deliberate oddities, traps | a short code comment plus an evidence pointer | none |
 
-- **Markdown lives under `docs/`.** Exceptions: a directory `README.md` (never one at the root),
-  `.claude/CLAUDE.md` (only imports the [agent core rules](agent-core.md)) and files under `.github/`
-  (the project README is `.github/README.md`). `.github/ci/check_markdown_locations.py` enforces
-  this. No plan files at the root: write the plan's conclusions into the page for its area and
-  keep task lists out of the tree.
-- **A code comment carries only** an invariant, a "looks wrong but is deliberate" note or a trap,
-  plus `evidence: docs/<path>.md#<anchor>`. The per-file density ceiling (18%,
-  `.github/ci/check_comment_density.py`) keeps lab-notebook material out of the source.
-- **A new page** starts with `# Title {#label}` (snake_case label, prefix from the table) and a
-  one-line status; see [Page template](#page-template).
-- **Math** uses `\f$ ... \f$` inline and `\f[ ... \f]` for display. `$...$` is not rendered.
-- **Links**: relative Markdown links (`[the LU page](../perf/lu.md#<anchor>)`) or `@ref <label>`.
-  A broken link is a warning, and CI fails on warnings.
+- **Markdown lives under `docs/`.** Exceptions: a directory `README.md` (never at the root),
+  `.claude/` (`.claude/CLAUDE.md` only imports the [agent core rules](agent-core.md)) and `.github/`
+  (the project README is `.github/README.md`). `.github/ci/check_markdown_locations.py` enforces it.
+  No plan files: write conclusions into the area's page, keep task lists out of the tree.
+- **A code comment carries only** an invariant, a deliberate oddity or a trap, plus
+  `evidence: docs/<path>.md#<anchor>`; the 18% per-file ceiling (`check_comment_density.py`) keeps
+  lab notes out of the source.
+- **Math:** `\f$ ... \f$` inline, `\f[ ... \f]` display; `$...$` is not rendered.
+- **Links:** relative Markdown links or `@ref <label>`. A broken link is a warning; CI fails on warnings.
 
 ## Anchors are the contract
 
-Several hundred comments (447 pointers on 2026-09-30) in `src/`, `include/`, `tests/`,
-`benchmarks/` and the CMake files cite a heading with `evidence: docs/<page>.md#<anchor>`. The
-anchor is the GitHub slug of the heading text (lower case, punctuation dropped, spaces to
-hyphens), so a heading's wording is an interface.
+Hundreds of comments in `src/`, `include/`, `tests/`, `benchmarks/` and CMake cite
+`evidence: docs/<page>.md#<anchor>`, where the anchor is the GitHub slug of the heading, so a
+heading's wording is an interface.
 
-- **Shortening a cited heading.** Pin the old slug as an explicit id:
-  `## Shorter title {#exact-old-slug}`. The heading may move or shrink to a sentence, but not be
-  deleted while anything else cites it.
-- **Distinctive text.** `.github/ci/check_evidence_anchors.py` (CI job `comment-density`)
-  resolves every pointer against the named page and requires every cited slug to be unique across
-  all of `docs/`. Doxygen numbers a repeated heading site-wide (the second `Results` becomes
-  `results-1`), GitHub per page. Write `syevx: the bisection crossover`, not `Results`.
-- **No leading numbers.** Doxygen gives `## 11. Foo` an `autotoc_md`-prefixed id, so its GitHub
-  slug is not live on the site (the known-defects page uses `## Defect 11: ...`).
-- **End-to-end check.** `docs/tools/check_doc_anchors.py`, run by `build_docs.sh`, looks up each
-  cited anchor in Doxygen's XML for the generated section id.
-- **Before rewording or deleting a section** read the generated Evidence index
-  (`@ref evidence_index`), which maps each cited section to every file and line that depends on
-  it. When you rename a cited heading, update every pointer in the same change.
+- **Shortening a cited heading:** pin the old slug, `## Shorter title {#exact-old-slug}`. It may
+  shrink to a sentence, but not be deleted while cited. Update every pointer in the same change.
+- **Distinctive text:** `.github/ci/check_evidence_anchors.py` resolves every pointer and requires
+  each cited slug to be unique across `docs/` (Doxygen numbers repeats site-wide). Write
+  `syevx: the bisection crossover`, not `Results`.
+- **No leading numbers:** Doxygen gives `## 11. Foo` an `autotoc_md` id, so its slug is not live on
+  the site (known-defects uses `## Defect 11: ...`).
+- `check_doc_anchors.py` (run by `build_docs.sh`) checks each cited anchor in Doxygen's XML. Before
+  rewording or deleting a section, read the generated Evidence index (`@ref evidence_index`).
 
 ## Writing API documentation
 
-API documentation lives in the public headers (`include/batchlas/`, `include/batchlas.hh`) and
-states the **contract**: what the function computes, each parameter, the return value,
-preconditions, what it throws, and complexity or workspace needs that matter to a caller.
-Implementation rationale belongs on a design or evidence page, linked with `@see` or an evidence
-pointer.
+Public headers (`include/batchlas/`, `include/batchlas.hh`) state the **contract**: what the
+function computes, each parameter, the return value, preconditions, what it throws, and workspace
+needs. Rationale goes to a design or evidence page, linked with `@see` or an evidence pointer.
 
 ```cpp
 /// @brief One-line summary ending with a full stop.
-///
-/// Optional longer description of the contract.
 /// @param queue  queue the kernels are enqueued on
 /// @param a      batch of n x n matrices; overwritten with the factor
 /// @return       event of the last enqueued kernel
@@ -151,114 +106,73 @@ pointer.
 /// @ingroup api_factorizations
 ```
 
-- `/** ... */` and `/*! ... */` are equivalent. `JAVADOC_AUTOBRIEF` is on, so the first sentence
-  is the brief. Use `///<` for a trailing member comment.
-- The Doxyfile defines the aliases `@invariant`, `@trap` and `@evidence{label}`.
-- Every public entity belongs to a group, defined in `docs/pages/api_groups.dox`: `%api_core`,
-  `%api_matrix`, `%api_enums`, `%api_options`, `%api_blas2`, `%api_blas3`, `%api_factorizations`,
-  `%api_qr`, `%api_eigen`, `%api_tridiag`, `%api_svd`, `%api_sparse`, `%api_extra`, `%api_linalg`,
-  `%api_dispatch`, `%api_workspace`, `%api_errors`, `%api_config`, `%api_device_blas`,
-  `%api_internal_helpers`, all nested under `%api_reference`. Each of these may have a
-  `%<group>_lowlevel` child (helpers, argument checks, workspace queries). `%api_selection` and its
-  child `%api_selection_ops` document the uninstalled selection code in `src/select/` and
-  `src/ops/` (see [Documenting an op's choices](#documenting-an-ops-choices)).
-- Add `@ingroup <id>` to the declaration, or wrap a run of declarations in `@addtogroup <id>`
-  ... `@{` ... `@}`. Add a new group to `api_groups.dox`, not in a header.
-
-**Comment-density exemption.** In the public headers, comment-only lines of a Doxygen doc comment
-(`///`, `//!`, a block opened by `/**` or `/*!`) count in neither numerator nor denominator of the
-18% ceiling (`check_comment_density.py --all` reports them as `doc`).
-
-- A `/***` banner, an empty `/**/` and a `////` rule are ordinary comments; a line mixing a doc
-  comment and a plain one counts.
-- The same doc comments in `src/`, `tests/` or `benchmarks/` count normally, because Doxygen does
-  not publish those.
-- The exemption covers the contract only. Rationale, measurements and history written with `///`
-  are still rationale and review rejects them; move them to `docs/` and leave a pointer.
+- `JAVADOC_AUTOBRIEF` is on (first sentence is the brief); `///<` for trailing member comments.
+  Aliases: `@invariant`, `@trap`, `@evidence{label}`.
+- Every public entity belongs to a group from `docs/pages/api_groups.dox` (all under
+  `%api_reference`, each optionally with a `%<group>_lowlevel` child; `%api_selection` /
+  `%api_selection_ops` cover `src/select/` and `src/ops/`). Use `@ingroup <id>` or
+  `@addtogroup <id>` ... `@{` ... `@}`; add new groups in `api_groups.dox`, not a header.
+- **Comment-density exemption:** in the public headers only, doc-comment lines (`///`, `//!`,
+  `/**`, `/*!` blocks) count in neither side of the 18% ceiling (`check_comment_density.py --all`
+  reports them as `doc`). `/***` banners, `////` rules and mixed lines count. Rationale written
+  with `///` is still rationale: move it to `docs/`.
 
 ### Documenting an op's choices
 
-`src/ops/<op>/choice.hh` is the op's selection vocabulary (see @ref api_selection and
-@ref design_flat_selection). It is on the site (the Doxyfile lists `src/ops` in `INPUT`;
-`FILE_PATTERNS` matches no `.cc`) but lives in `src/`, so its doc comments count toward the 18%
-ceiling. Trailing `///<` comments are scored as code, so the pattern below documents the whole
-vocabulary in about four comment lines. A new op copies it and needs no page edits: the
-`%api_selection_ops` group lists whatever files add themselves to it.
+`src/ops/<op>/choice.hh` (see @ref api_selection, @ref design_flat_selection) is on the site but in
+`src/`, so its doc comments count toward the 18% ceiling. Trailing `///<` comments score as code,
+so this pattern documents a vocabulary in about four comment lines; a new op copies it with no
+page edits.
 
-1. **File block, two lines.** `/// @file`, then
-   `/// @brief <op>: <family>, <family>, .... evidence: docs/perf/<page>.md @ingroup %api_selection_ops`.
-   The brief names the families in candidate order, the evidence pointer names the op's
-   `docs/perf/` page. Keep the line within 120 columns; drop the anchor before dropping the group.
-2. **Field-less family**: one trailing `///<` on its `struct X : select::NoFields<"x"> {};` line:
-   the driver it runs, then its `can_run` limits beyond the op's common native term (`n <= 32`,
-   `Lower only`, `needs the solver library`).
-3. **Family with fields** (gemm's `reg`/`wide`, potrf's `lpanel`): a preceding `///` block giving
-   the driver, what each field means and its legal values. A trailing `///<` on `struct X {`
-   documents the first member, not the struct. A field declared alone gets its own `///<`; on a
-   multi-name declaration (`int m, n, k;`) only the last name gets it, so describe them in the
-   struct block.
-4. **The choice variant**: a trailing `///<` with the common native term (`GPU, sub-group 32,
-   square, no NETLIB`) or, for an op with no vendor family, that a `vendor` pin warns and runs
-   Auto.
-5. **`candidates<T>()`**: `template <typename T>  /// Every compiled choice, in tie-break order (§6.3).`
-   A `///` after code on the `template` line attaches to the function and counts as code. A
-   preceding `///` line (potrf, geqrf, gemm) is equivalent for Doxygen and costs one comment line.
-6. **`spec`, `last_resort`, `key_names`, `grid_*`**: a trailing `///<` (on the first or last line
-   of a multi-line initialiser) or a short preceding `///` block where the file has budget. Key
-   comments say what each key measures and why its `:log` weight is what it is (work
-   \f$\sim n^3\f$ means weight 3); grid comments say which old thresholds the grid straddles.
-7. **Section numbers** `§x.y` and rule ids `R1`-`R8` refer to
-   `docs/design/flat-kernel-selection.md`. Cite a section by number with a page-only pointer,
-   `evidence: docs/design/flat-kernel-selection.md (§5.4)`: numbered headings get `autotoc_md`
-   ids on the site, so a `#54-...` anchor is not live. Cite any other anchor in a plain comment,
-   or in backticks inside a `///` comment: Doxygen reads `#anchor` in a doc comment as a link
-   request and warns, while the checker's pattern stops at the backtick, so a backticked pointer
-   is still checked.
-8. **Helpers next to the vocabulary** (`can_run.hh`, `vendor.hh`, sizing helpers such as
-   `geqrf.hh`) get the same two-line file block, or a function doc ending in
-   `@ingroup %api_selection_ops`.
-9. **`<op>.cc` is not on the site.** Its comments stay plain: a 2-4 line header (the op, R1, which
-   family runs which driver), `// Correctness only (R3)` above `can_run` naming what each clause
-   guards, `// Exactly the chosen family's need (R5)` above the workspace visitor, and invariants
-   at the line they guard. Measurements and history go to the op's `docs/perf/` page.
+1. **File block:** `/// @file`, then `/// @brief <op>: <family>, .... evidence: docs/perf/<page>.md @ingroup %api_selection_ops`
+   (families in candidate order, within 120 columns; drop the anchor before the group).
+2. **Field-less family:** one trailing `///<` on `struct X : select::NoFields<"x"> {};`: the
+   driver, then `can_run` limits beyond the op's common native term.
+3. **Family with fields:** a preceding `///` block (driver, each field and its legal values). A
+   trailing `///<` on `struct X {` documents the first member; on `int m, n, k;` only the last name.
+4. **Choice variant:** a trailing `///<` with the common native term, or that a `vendor` pin warns
+   and runs Auto when the op has no vendor family.
+5. **`candidates<T>()`:** `template <typename T>  /// Every compiled choice, in tie-break order (§6.3).`
+6. **`spec`, `last_resort`, `key_names`, `grid_*`:** a trailing `///<` or a short `///` block; keys
+   say what they measure and why the `:log` weight is what it is, grids which thresholds they straddle.
+7. **`§x.y` and `R1`-`R8`** refer to `docs/design/flat-kernel-selection.md`; cite by number with a
+   page-only pointer, `evidence: docs/design/flat-kernel-selection.md (§5.4)`. Backtick any other
+   `#anchor` inside a `///` comment (Doxygen reads it as a link; the checker still sees it).
+8. **Helpers** (`can_run.hh`, `vendor.hh`, sizing headers) get the same file block or a function
+   doc ending in `@ingroup %api_selection_ops`.
+9. **`<op>.cc` is not on the site:** a 2-4 line header, `// Correctness only (R3)` above
+   `can_run`, `// Exactly the chosen family's need (R5)` above the workspace visitor, invariants at
+   the line they guard.
 
 ## Adding results
 
-1. **Raw data** goes in `benchmarks/results/` (Git LFS). Run `git lfs install` once per machine
-   before committing, or the file is committed raw and `.github/ci/check_lfs_pointers.py` fails
-   CI. Name it `<campaign>_<op>_<dtype>[_<machine>].csv`; the generator reads op, type and machine
-   from the name. The known machine tokens are `rtx4090` and `sm120` (threadripper02); another machine needs its token added
-   to `MACHINES` in `docs/tools/gen_db_pages.py`, or its row claims the primary box.
-2. **The evidence section** that uses the data records, next to the numbers: the machine (GPU and
-   SM, host if it matters), the date, the command or harness with its flags (batch, warm-up,
-   iterations, pinned route) and the raw file path. A ratio without machine and date cannot be
-   re-checked when the vendor library moves. Follow the measurement rules on @ref perf_evidence.
-3. **The Results database** page (`@ref results_database`) is generated on every build from
-   `benchmarks/results/`: one row per file with campaign, op, type and machine (from the name),
-   the date and commit that added it, whether this checkout holds the data or only the LFS
-   pointer, and which `docs/` pages mention the file by name. `—` in the last column means no page
-   distils the grid yet.
+1. **Raw data** goes in `benchmarks/results/` (Git LFS; `git lfs install` once per machine, or
+   `.github/ci/check_lfs_pointers.py` fails CI). Name it `<campaign>_<op>_<dtype>[_<machine>].csv`.
+   Machine tokens are `rtx4090` and `sm120` (threadripper02); add new ones to `MACHINES` in
+   `docs/tools/gen_db_pages.py`, or the row claims the primary box.
+2. **The evidence section** records, next to the numbers, the machine, the date, the command with
+   its flags (batch, warm-up, iterations, pinned route) and the raw file path. See @ref perf_evidence.
+3. **The Results database** (`@ref results_database`) is generated from `benchmarks/results/` on
+   every build; `—` in its pages column means no page distils the file yet.
 4. Older raw evidence is at the tag `perf-evidence/vendor-independence`
-   (`git show perf-evidence/vendor-independence:experiments/<path>`); pages cite those paths as
-   archive paths.
+   (`git show perf-evidence/vendor-independence:experiments/<path>`).
 
 ## Page template
 
 ````md
 # <op or topic>: <what the page is about> {#perf_<op>}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured <dates as recorded in the source>
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · measured <dates>
 
-<One to three sentences: what the page gives the reader and the conclusion needed first.>
+<One to three sentences: the conclusion needed first.>
 
 ## <op>: the shipped predicate
 
-<Quote the predicate with file:line. Read the predicate, not the prose.>
+<Quote the predicate with file:line.>
 
 ## <op>: <distinctive name of the window or decision>
 
-<Numbers, with the bracketing non-winner on each edge. Raw data:
-benchmarks/results/<file>.csv. Command: <exact command>.>
+<Winner and bracketing loser on each edge. Raw data: benchmarks/results/<file>.csv. Command: <exact command>.>
 
 ## <op>: rejected alternatives
 
@@ -266,11 +180,8 @@ benchmarks/results/<file>.csv. Command: <exact command>.>
 | --- | --- | --- |
 
 ## <op>: open debts
-
-<What is still owed and what would settle it.>
 ````
 
-- Status line: `current` or `historical, superseded by @ref <label>.`, then machine (measurement
-  pages only) and date, separated by `·`.
-- For a design, algorithm, guide or developer page use the matching label prefix from
-  [Where things go](#where-things-go) and drop the machine and measured parts.
+Status line: `current` or `historical, superseded by @ref <label>.`, then machine (measurement pages
+only) and date, separated by `·`. Other page kinds use their prefix from
+[Where things go](#where-things-go) and drop the machine.
