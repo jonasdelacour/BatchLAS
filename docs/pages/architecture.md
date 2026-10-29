@@ -12,8 +12,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | @subpage design_tiered_tuning "Tiered tuning" | The tuning engine behind the tables: tiers, racing, ledgers, workers. |
 | @subpage design_tuning_data "Tuning data layout" | The two files per (op, device): the ledger, the generated table, kernel hashes and the CI check. |
 | @subpage dev_extending "Extending BatchLAS" | Adding an op or entry point: `src/ops/<op>/`, tables, tuner spec, tests. |
-| @subpage design_vendor_independence "Vendor independence" | The vendor seam, the vendor-free build, the coverage instrument; the replaced RouteTable layer as history. |
-| @subpage design_vendor_free_status "Vendor-free status" | Current state of the vendor-free build. |
+| @subpage design_vendor_independence "Vendor independence" | The vendor seam, the vendor-free build and its current state, the coverage instrument. |
 
 ## Core model and API
 

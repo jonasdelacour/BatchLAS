@@ -100,8 +100,6 @@ runs it against the index before the commit. The fix is `git lfs install`, then
 
 - [../design/vendor-independence.md](../design/vendor-independence.md): how dispatch works and how to
   add an op to it.
-- [../design/vendor-free-status.md](../design/vendor-free-status.md): what the vendor-free build does
-  and does not do.
 - [../design/known-defects.md](../design/known-defects.md): located, unfixed defects, with line numbers.
 
 ## perf index: all evidence pages

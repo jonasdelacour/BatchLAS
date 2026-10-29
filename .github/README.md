@@ -28,7 +28,7 @@ every measurement behind a routing decision).
 | `ROCM` | AMD GPUs: rocBLAS/rocSOLVER/rocSPARSE | code paths exist; syntax-checked only, not built or run |
 
 A vendor-free build (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) runs native kernels only; its gaps are in
-[vendor-free status](../docs/design/vendor-free-status.md).
+[vendor independence](../docs/design/vendor-independence.md#vendor-free-status).
 
 ## Supported operations
 
