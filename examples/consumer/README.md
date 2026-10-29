@@ -49,10 +49,9 @@ later, in code that does not mention BatchLAS.
 Reading the output early returns the buffer's old contents (usually the zeros it was initialised
 with). That is a silently wrong answer, not a crash. `main.cc` marks the line this depends on.
 
-Pointers passed to a `MatrixView` must be device-accessible (USM). A `std::vector<float>` compiles,
-and the entry points that take their backend from the `Queue` throw `std::invalid_argument` naming
-the argument. A CPU backend reads host memory without complaint, so run the check on the device you
-ship on. The owning `Matrix` allocates USM shared memory, so host-side fills are fine.
+Pointers passed to a `MatrixView` must be device-accessible (USM); a host pointer throws
+`batchlas::invalid_argument` on a GPU but passes on a CPU device, so test on the device you ship
+on. The owning `Matrix` allocates USM shared memory, so host-side fills are fine.
 
 **3. `LD_LIBRARY_PATH` must cover the SYCL runtime.**
 
@@ -74,20 +73,13 @@ Dense matrices are column-major and batched by stride. Element `(i, j)` of batch
 view.data_ptr()[b * view.stride() + j * view.ld() + i]
 ```
 
-`ld()` is at least `rows`, and `stride()` at least `ld() * cols`. `Matrix(rows, cols, batch)` packs
-`ld() == rows` and `stride() == rows * cols`. A matrix built over someone else's buffer can have
-larger values; `main.cc` reads both layouts through one `at()` helper.
+`Matrix(rows, cols, batch)` packs `ld() == rows` and `stride() == rows * cols`; a view over another
+buffer can have larger values (@ref design_matrix_model).
 
 ## The decoy headers
 
-`decoy_include/` holds three files: `blas/enums.hh`, `util/workspace.hh` and
-`internal/ormqr_blocked.hh`. Each is a bare `#error` with its own sentinel, and none is meant to
-compile. They stand in for consumer headers that use the top-level names a library could claim.
-
-The target's own include directories are searched before those propagated by imported targets
-(`-isystem`, searched last). An unprefixed `#include <util/workspace.hh>` in a BatchLAS header would
-therefore pick up the consumer's file, and the probe fails.
-
-`consumer_test.sh` builds the example again with `-DBATCHLAS_CONSUMER_DECOY=ON` and fails on anything
-but a clean build. A `BATCHLAS_DECOY_*_SHADOWED` sentinel is a regression. The script also checks
-that nothing is installed at `<prefix>/include/{blas,util,internal}`.
+Each file in `decoy_include/` is a bare `#error` named like a top-level header a library could
+claim (`blas/enums.hh`, `util/workspace.hh`, `internal/ormqr_blocked.hh`). The consumer's own
+include directories are searched before the imported `-isystem` ones, so an unprefixed include in a
+BatchLAS header would pick one up. `consumer_test.sh` rebuilds with `-DBATCHLAS_CONSUMER_DECOY=ON`
+and also checks nothing is installed at `<prefix>/include/{blas,util,internal}`.

@@ -578,7 +578,7 @@ def test_elementwise_out_parameter_is_written():
 # numpy.linalg.eigvalsh, which is exactly the "run a full solve on the host,
 # sort ascending, then select in plain code" oracle -- trivially correct, which
 # is what makes it worth trusting.
-# evidence: docs/design/syevx-range-selection.md#syevx-range-the-host-reference-oracle
+# evidence: docs/design/syevx.md#syevx-range-the-host-reference-oracle
 # ---------------------------------------------------------------------------
 
 

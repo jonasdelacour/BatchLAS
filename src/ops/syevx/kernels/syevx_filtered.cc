@@ -95,7 +95,7 @@ Event syevx_filtered(Queue& ctx,
     if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_filtered: A must be square");
     if (k < 1 || k > n) throw batchlas::invalid_argument("syevx_filtered: invalid neigs");
     // A high-pass filter cannot answer an interior range; this is a public entry point.
-    // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
+    // evidence: docs/design/syevx.md#syevx-range-throw-do-not-degrade
     if (params.select != SyevxSelect::Extremal) {
         throw batchlas::invalid_argument(
             "syevx_filtered: only SyevxSelect::Extremal is supported; the Chebyshev filter is a "
