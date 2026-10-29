@@ -107,7 +107,6 @@ textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resi
       <div><label class="fl" for="dbudget">Refinement budget [h]</label><input class="field num" id="dbudget" type="number" min="0" step="0.5" placeholder="none"></div>
       <div><label class="fl" for="dwait">Wait for a busy GPU [min]</label><input class="field num" id="dwait" type="number" min="0" value="60"></div>
     </div>
-    <label class="fl"><input type="checkbox" id="dexcl"> Exclusive GPUs <span class="muted">— also refuse a GPU that only holds another user's idle context</span></label>
     <div class="lbl">Cells to measure again <span class="hint">one <span class="mono">&lt;op&gt; &lt;dtype&gt; &lt;name=v,...&gt;</span> per line (<span class="mono">--remeasure-keys</span>); tier custom measures only these</span></div>
     <textarea class="field" id="dkeys" placeholder="potrf float uplo=L,n=64,batch=128"></textarea>
     <label class="fl" id="ddirtyl" hidden><input type="checkbox" id="ddirty"> Allow a dirty tree <span class="muted">— this checkout has uncommitted changes to tracked files; the run is stamped <span class="mono">-dirty</span> and never reaches <span class="mono">tuned/</span></span></label>
@@ -826,7 +825,7 @@ function buildDrawer() {
   $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip on" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
   for (const id of ["dtypes", "dgpus"]) $(id).onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
   $("dall").onclick = () => { const bs = [...$("dops").querySelectorAll("input")], on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
-  for (const id of ["dtier", "dops", "dexcl", "ddirty"]) $(id).onchange = estimate;
+  for (const id of ["dtier", "dops", "ddirty"]) $(id).onchange = estimate;
   for (const id of ["dmax", "dbudget", "dwait", "dkeys"]) $(id).oninput = estimate;
   $("dledger").textContent = meta.ledger;
   $("ddirtyl").hidden = !meta.dirty;
@@ -839,7 +838,7 @@ function fillDrawer(q) {
   $("dtypes").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (q.dtypes || []).includes(b.dataset.t)));
   $("dgpus").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", (q.devices || []).includes(+b.dataset.g)));
   $("dmax").value = q.max_dim || ""; $("dbudget").value = q.budget_h || ""; $("dwait").value = q.guard_wait_s ? Math.round(q.guard_wait_s / 60) : "";
-  $("dexcl").checked = q.allow_idle_foreign === false; $("dname").value = "";
+  $("dname").value = "";
   $("dkeys").value = q.remeasure_keys || ""; $("ddirty").checked = !!q.allow_dirty;
 }
 function runBody() {
@@ -848,7 +847,7 @@ function runBody() {
     dtypes: [...$("dtypes").querySelectorAll(".chip.on")].map(b => b.dataset.t), devices: [...$("dgpus").querySelectorAll(".chip.on")].map(b => +b.dataset.g),
     device_key: meta.gpus.length ? null : device,
     max_dim: +$("dmax").value || null, budget_h: +$("dbudget").value || null, guard_wait_s: $("dwait").value === "" ? null : 60 * +$("dwait").value,
-    allow_idle_foreign: !$("dexcl").checked, allow_dirty: meta.dirty && $("ddirty").checked, remeasure_keys: $("dkeys").value.trim(),
+    allow_dirty: meta.dirty && $("ddirty").checked, remeasure_keys: $("dkeys").value.trim(),
     name: $("dname").value.trim() };
 }
 let estSeq = 0, estTimer = null;
