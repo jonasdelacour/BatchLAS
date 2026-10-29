@@ -34,8 +34,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 
 | Page | What you find there |
 | --- | --- |
-| @subpage design_syevx "syevx: algorithm survey" | Selected-eigenpair solvers considered, verdicts. |
-| @subpage design_syevx_range "syevx: range selection" | The range API and its hard cases. |
+| @subpage design_syevx "syevx: algorithm survey" | Selected-eigenpair solvers, routing, verdicts and the range API. |
 | @subpage design_gesvd "gesvd: design" | One-sided Jacobi, the bidiagonal pipeline, kernel design rules. |
 | @subpage design_syev_align "syev_align: eigenvector continuity" | Procrustes alignment of degenerate levels; the cluster rule and why it has no absolute floor. |
 

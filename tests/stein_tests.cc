@@ -209,7 +209,7 @@ struct CountsFixture {
 // eigenvectors; it does not. Measured on this test: with the counts bound
 // removed from BOTH phases, (a) reports zero failures and (b) reports 639.
 // Keep (b); it is what makes this test fail when the bound regresses.
-// evidence: docs/design/syevx-range-selection.md#syevx-range-the-stein-poisoned-tail-test
+// evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
 TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
     using Real = TypeParam;
     CountsFixture<Real> f;

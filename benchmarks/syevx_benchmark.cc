@@ -412,7 +412,7 @@ static void BM_SYEVX_SparseGap(minibench::State& state) {
 // So the crossover thresholds measured for extremal ranges were carried over to
 // Index and Value ranges without re-measurement. This benchmark is the one
 // point that CHECKS that argument instead of trusting it.
-// evidence: docs/design/syevx-range-selection.md#syevx-range-why-the-thresholds-carry-over-unchanged
+// evidence: docs/design/syevx.md#syevx-range-why-the-thresholds-carry-over-unchanged
 //
 // state.range(3) is the position: 0 = bottom of the spectrum, 1 = middle,
 // 2 = top. The block WIDTH is identical in all three, so any difference in the

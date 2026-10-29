@@ -411,7 +411,7 @@ namespace batchlas {
     /// @note Deliberately not `EigenRangeType`, whose natural default `All` means
     ///       "every eigenvalue"; that type stays the tridiagonal-layer vocabulary.
     /// @see @ref design_syevx_range
-    // evidence: docs/design/syevx-range-selection.md#syevx-range-syevxselect-rather-than-eigenrangetype
+    // evidence: docs/design/syevx.md#syevx-range-syevxselect-rather-than-eigenrangetype
     enum class SyevxSelect {
         Extremal,  ///< `neigs` eigenpairs from one end; SyevxParams::find_largest picks the end.
         Index,     ///< SyevxParams::il .. iu inclusive, 0-based in the ascending spectrum.

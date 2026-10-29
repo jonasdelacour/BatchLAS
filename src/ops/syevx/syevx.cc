@@ -205,7 +205,7 @@ SyevxResolvedRange syevx_resolve_range(int64_t n,
             rr.value_range = false;
             // Clamped into [0, n-1], not merely translated: syevx_direct indexes
             // lam[il .. il+max_count-1] with no bound of its own.
-            // evidence: docs/design/syevx-range-selection.md#syevx-range-normalization-and-validation
+            // evidence: docs/design/syevx.md#syevx-range-normalization-and-validation
             const int64_t lo = std::max<int64_t>(il, 0);
             const int64_t hi = std::min<int64_t>((iu < 0) ? (nn - 1) : iu, nn - 1);
             if (hi < lo) {
@@ -250,7 +250,7 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
 
     // Only Direct and DirectSubset answer Index/Value ranges; LOBPCG and Filtered
     // would silently return an extreme instead, so this throws rather than degrades.
-    // evidence: docs/design/syevx-range-selection.md#syevx-range-throw-do-not-degrade
+    // evidence: docs/design/syevx.md#syevx-range-throw-do-not-degrade
     if (!extremal) {
         if (!dense) {
             throw batchlas::invalid_argument(
@@ -310,7 +310,7 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     // Batch-parallel reduction starves at small batch, hence the n * batch term.
     // k and spectrum position are deliberately absent.
     // evidence: docs/perf/syevx.md#syevx-directsubset-batch-crossover-with-eigenvectors
-    // evidence: docs/design/syevx-range-selection.md#syevx-range-why-the-thresholds-carry-over-unchanged
+    // evidence: docs/design/syevx.md#syevx-range-why-the-thresholds-carry-over-unchanged
     if (subset_supported && n >= kSyevxSubsetMinN &&
         n * batch_size >= kSyevxSubsetMinWork) {
         return SyevxAlgorithm::DirectSubset;

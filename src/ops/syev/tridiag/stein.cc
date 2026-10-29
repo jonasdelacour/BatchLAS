@@ -299,7 +299,7 @@ Event stein(Queue& ctx,
                 // starts a new cluster. Stopping at kb, not k, is a COST bound (a
                 // stale tail forms one bogus cluster); phase 1's kb bound is the
                 // one that protects correctness.
-                // evidence: docs/design/syevx-range-selection.md#syevx-range-steins-per-item-count-bound
+                // evidence: docs/design/syevx.md#syevx-range-steins-per-item-count-bound
                 int64_t cluster_start = 0;
                 for (int64_t j = 0; j < kb; ++j) {
                     if (j > 0 && (w(j, bid) - w(j - 1, bid)) > gap_tol) {

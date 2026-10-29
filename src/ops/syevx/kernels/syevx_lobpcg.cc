@@ -215,7 +215,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         using float_type = typename base_type<T>::type;
 
         // LOBPCG converges to an extreme and cannot honour il/iu; public entry point.
-        // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
+        // evidence: docs/design/syevx.md#syevx-range-throw-do-not-degrade
         if (params.select != SyevxSelect::Extremal) {
             throw batchlas::invalid_argument(
                 "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
