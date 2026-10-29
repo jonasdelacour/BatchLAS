@@ -1,65 +1,46 @@
 # ortho {#perf_ortho}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA backend, saturating batches unless a section says
-> otherwise.
+> **Status:** current · RTX 4090 (sm_89), CUDA backend, saturating batches.
 
-`ortho` (`src/ops/ortho/ortho.cc`) orthogonalizes blocks of vectors for `syevx_lobpcg`,
-`syevx_filtered` and `lanczos`, with `k` in the tens. The Cholesky family (`Cholesky`, `Chol2`,
-`ShiftChol3`) forms the Gram matrix \f$C = A^H A\f$ with `syrk` for real types at small `k`, and
-with GEMM otherwise. The level-3 side of this decision is on
+`ortho` (`src/ops/ortho/ortho.cc`) orthogonalizes `k`-vector blocks (k in the tens) for
+`syevx_lobpcg`, `syevx_filtered` and `lanczos`. The Cholesky family forms \f$C = A^H A\f$ with `syrk`
+for real types at small `k`, else GEMM; absolute times are on
 [the level-3 page](level3.md#syrk-for-the-ortho-gram-matrix).
 
 ## ortho: the Gram matrix through syrk, per precision
 
-`syrk` computes \f$C = A^H A\f$ at half the arithmetic of a GEMM. The table records the alternatives
-that were measured.
-
-| Alternative | Result | Verdict |
-| --- | --- | --- |
-| `syrk` as a host loop over `cublasXsyrk` (no batched kernel) | 96x slower than GEMM in float; 115 ms against 0.9 ms GEMM in double | rejected |
-| `syrk` through `syrk_gram_tiles` (batched Gram tile kernel) | 0.96x to 1.62x over GEMM, by `k` and precision (table below) | taken for `k <= 64` (float) and `k <= 128` (double) |
-| `herk` through the Gram tile kernel (complex) | compute bound; GEMM plus Hermitian fold wins at every Gram shape | rejected; complex keeps GEMM |
-
-**`k`.** The single-tile Gram kernel covers `k <= 128`, but the useful limit differs by precision.
-End-to-end speed-up of `syrk` over GEMM, with `m = 1024`, batch 512, `Chol2`:
+`gram_max_k` is 64 for float and 128 for double (`ortho.cc:175`). End-to-end `syrk` over GEMM,
+`m = 1024`, batch 512, `Chol2` (no recorded date or raw file):
 
 | k | float | double |
 |---|---|---|
 | 32 | 1.62x | 1.02x |
 | 64 | 1.12x | 1.20x |
-| 128 | **0.96x** (loss) | 1.34x |
+| 128 | **0.96x** | 1.34x |
 
-Float at `k = 128` is a wash: the SGEMM it replaces is already at both the compute and the
-bandwidth roof. FP64 runs at 1/64 rate on this part, so double is compute bound and the halved
-arithmetic lands in full. Hence `gram_max_k` is 64 for float and 128 for double. Above those
-limits, double and complex stay on the host loop, which loses to GEMM by 2x at `k = 256`. Absolute
-times are on [the level-3 page](level3.md#syrk-for-the-ortho-gram-matrix).
+Float SGEMM at `k = 128` is already at the roof; FP64 at 1/64 rate is compute bound, so halved
+arithmetic lands in full.
 
-Invariants that the code keeps next to the call:
+| Alternative | Result | Verdict |
+| --- | --- | --- |
+| host loop over `cublasXsyrk` | 96x slower than GEMM (float); 115 ms vs 0.9 ms (double) | rejected |
+| complex `herk` via the Gram tile kernel | GEMM + Hermitian fold wins at every shape | complex keeps GEMM |
 
-- `syrk` writes only the lower triangle. `potrf` and `trsm` default to `Uplo::Lower`, and
-  `ShiftChol3`'s shift kernel reads only the diagonal.
-- `svqb_alg` keeps its GEMM. It scales the whole `k x k` matrix before `syev`, so a one-triangle `C`
-  would multiply uninitialised workspace.
-- The gate is that `syrk` reaches the Gram tile kernel on this route (`select::level3_tile_substitution_enabled`,
-  `src/select/vendor.hh:105`; `gram_via_syrk`, `src/ops/ortho/ortho.cc:173-177`), not "this is NVIDIA".
-- `BATCHLAS_ORTHO_GRAM=gemm` pins GEMM, so the substitution can be measured from one binary.
+- `syrk` writes only the lower triangle; `potrf`/`trsm` default to `Uplo::Lower` and `ShiftChol3`
+  reads only the diagonal.
+- `svqb_alg` keeps GEMM: it scales the full `k x k` matrix before `syev`.
+- The gate is `select::level3_tile_substitution_enabled` (`src/select/vendor.hh:105`), not "this is
+  NVIDIA". `BATCHLAS_ORTHO_GRAM=gemm` pins GEMM for A/B from one binary.
 
 ## ortho: host devices force Householder
 
-On a non-GPU device, `ortho` replaces the requested algorithm with `OrthoAlgorithm::Householder`
-(`ortho_force_householder`). The test is on the device, not on `Backend::NETLIB`.
-
-The rule is evaluated in the op and in all three size queries, and they must agree. Sizing for
-`Chol2` and running `Householder` would overrun the `BumpAllocator` carved for `tau`, `geqrf_ws` and
-`orgqr_ws`.
-
-Any `ortho`-dependent A/B on the NETLIB/CPU build therefore measures Householder, whatever it asks
-for. The LOBPCG soft-locking A/B hit exactly this (see [soft locking](syevx.md#lobpcg-soft-locking-by-column-masking)).
+On a non-GPU device `ortho_force_householder` replaces the requested algorithm with Householder (a
+device test, not `Backend::NETLIB`). The op and all three size queries apply it, and must agree, or
+`Chol2` sizing would overrun the `tau`/`geqrf_ws`/`orgqr_ws` carve. Any `ortho`-dependent CPU A/B
+therefore measures Householder (see [soft locking](syevx.md#lobpcg-soft-locking-by-column-masking)).
 
 ## ortho: open debts
 
-- **The transposed CGS arm** is fixed ([known defect 1](../design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory),
-  WP8; `src/ops/ortho/ortho.cc:228-231`) but has no timing on this page.
-- The per-precision table has no recorded date or raw file. A re-measure should record both (see
-  @ref documentation_conventions).
+- The transposed CGS arm ([known defect 1](../design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
+  is fixed but untimed.
+- The per-precision table needs a dated re-measure with a raw file (@ref documentation_conventions).
