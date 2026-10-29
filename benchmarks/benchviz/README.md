@@ -127,7 +127,7 @@ python3 benchmarks/benchviz tune --tier custom --ops potrf --dtype float --devic
 
 `tune` flags: `--tier {preview,calibrate,coarse,deep,custom}` (required), `--ops`, `--dtype`,
 `--devices`, `--device-key`, `--remeasure-keys`, `--allow-dirty`, `--max-dim` (2048), `--budget`
-[h], `--guard-wait` (3600 s), `--exclusive`, `--ledger`, `--name`, `--build-dir`, `--plan`.
+[h], `--guard-wait` (3600 s), `--ledger`, `--name`, `--build-dir`, `--plan`.
 `serve` flags: `--host`, `--port` (8765), `--read-only`, `--token`, `--ledger`, `--tuned`,
 `--build-dir`.
 

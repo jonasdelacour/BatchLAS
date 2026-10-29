@@ -595,8 +595,6 @@ def run_argv(binary: Path, req: dict, ledger: Path, keys_file: Path | None = Non
         argv += ["--max-dim", str(int(req["max_dim"]))]
     if req.get("budget_h"):
         argv += ["--budget", str(float(req["budget_h"]))]
-    if req.get("allow_idle_foreign", True):
-        argv += ["--allow-idle-foreign"]
     if req.get("allow_dirty"):
         argv += ["--allow-dirty"]
     if req.get("guard_wait_s"):

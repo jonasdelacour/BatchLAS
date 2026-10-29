@@ -360,7 +360,7 @@ def cmd_tune(a):
     req = {"ops": ops if a.ops == "all" else _csv_list(a.ops, ops),
            "dtypes": _csv_list(a.dtype, t.DTYPES), "tier": a.tier,
            "devices": [int(g) for g in a.devices.split(",") if g.strip()], "device_key": a.device_key,
-           "max_dim": a.max_dim, "budget_h": a.budget, "allow_idle_foreign": not a.exclusive,
+           "max_dim": a.max_dim, "budget_h": a.budget,
            "allow_dirty": a.allow_dirty, "guard_wait_s": a.guard_wait,
            "remeasure_keys": Path(a.remeasure_keys).read_text() if a.remeasure_keys else ""}
     try:
@@ -464,7 +464,6 @@ def main():
     tu.add_argument("--max-dim", type=int, default=2048, help="largest matrix dimension measured (default 2048)")
     tu.add_argument("--budget", type=float, help="cap refinement time [h]")
     tu.add_argument("--guard-wait", type=int, default=3600, help="seconds to wait for a busy GPU (default 3600)")
-    tu.add_argument("--exclusive", action="store_true", help="refuse GPUs holding idle foreign contexts too")
     tu.add_argument("--ledger", default=str(DEFAULT_LEDGER))
     tu.add_argument("--name", help="run name; default <tier>-<timestamp>")
     tu.add_argument("--build-dir", action="append")
