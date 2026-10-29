@@ -8,437 +8,117 @@ disable-model-invocation: false
 
 # NVIDIA Kernel Profiling
 
-Use this skill when you are developing, validating, or tuning NVIDIA kernels and need to determine what is actually limiting performance. Start with Nsight Systems to find where time goes at the application level, then switch to Nsight Compute only for one or two specific kernels.
-
-## When To Use
-
-- You are bringing up a new CUDA kernel and need a fast measurement loop.
-- You are comparing two kernel variants and need defensible performance evidence.
-- A CUDA or BatchLAS benchmark is slower than expected.
-- You need to separate kernel time from launch overhead, synchronization, allocations, or memory copies.
-- You need launch statistics, occupancy, warp stall reasons, source-level hotspots, or memory hierarchy throughput metrics for a specific kernel.
-- You are profiling BatchLAS benchmarks such as `stedc_benchmark`, `steqr_benchmark`, `syev_*`, or `sytrd_*`, or a custom driver program that isolates a kernel under development.
+Find where time goes with `nsys`, then explain one or two hot kernels with `ncu`. Measurement rules
+(saturation, warm-up, A/B reps) are agent-guide §10; kernel design facts and measured dead ends are §11
+(`python3 scripts/agent/doc_section.py agent-guide §11`). To map a source file to a benchmark or emit
+ready-made commands, use the `batchlas-function-profiling` skill.
 
 ## Rules
 
-1. Use `nsys` before `ncu`.
-2. For benchmarks in this repo, include `--warmup=5`.
-3. Always create the output directory before using `-o` or `--export`, for example `output/profiling/`.
-4. Start with one small representative case, not the full benchmark sweep.
-5. After the first `ncu` attempt, filter to a specific kernel. Do not keep profiling startup kernels.
-6. If `ncu` perturbs the workload or the process aborts after disconnect, keep the generated `.ncu-rep` if it exists and inspect it with `ncu --import` instead of immediately retrying.
-7. When tuning a new kernel, prefer a dedicated microbenchmark or driver that launches the kernel repeatedly with stable inputs.
-8. Change one performance variable at a time: launch geometry, data layout, algorithmic structure, memory strategy, or synchronization.
-9. Use the same problem size and same profiler command when comparing kernel variants.
-10. Collect advanced `ncu` sections only after the hotspot kernel is known and the baseline `basic` pass has been inspected.
-11. Treat warp stall reasons as secondary evidence unless scheduler issue efficiency is weak or eligible warps are low.
+1. `nsys` before `ncu`; `ncu` on a filtered kernel only, never startup kernels.
+2. Benchmarks here: `--backend=CUDA` (also for SYCL kernels), `--warmup=5`, and for profiler runs
+   `--min_iters=1 --max_iters=1 --min_time=0`. Positional integer args after the options pick one case.
+3. `mkdir -p output/profiling` before `-o`/`--export`.
+4. One representative case, same command and size for every variant; change one variable at a time
+   (launch geometry, layout, algorithm, memory strategy, synchronisation).
+5. Record a baseline outside the profiler first: exact command, runtime, size, backend, type, route pins.
+6. If `ncu` aborts after disconnect but wrote a `.ncu-rep`, analyse it with `ncu --import`; do not rerun.
+7. Advanced `ncu` sections only after the `basic` pass is read; warp stalls are secondary evidence unless
+   eligible warps or issue efficiency are low.
+8. Keep a change only when the wall-clock result and the profiler evidence agree.
 
-## Procedure
-
-### 1. Build A Stable Measurement Target
-
-Before profiling, make sure the target is suitable for performance work:
-
-- Use a dedicated benchmark, microbenchmark, or driver program if possible.
-- Keep setup and teardown outside the timed region when you can.
-- Reuse allocations across iterations if the question is kernel speed rather than end-to-end overhead.
-- Pick one representative problem size that is large enough to exercise the kernel but small enough to rerun quickly.
-- If you are comparing variants, make sure both variants use the same inputs, same warmup, and same iteration controls.
-
-### 2. Confirm Prerequisites
-
-- Check `which nsys`, `which ncu`, and `nvidia-smi`.
-- Ensure the benchmark or driver binary exists.
-- Pick a single command line that is representative and quick to rerun.
-
-### 3. Capture A Fast Baseline Outside The Profiler
-
-Run the target normally first and record:
-
-- exact command
-- average runtime or throughput
-- problem size
-- backend and datatype
-- any launch parameters under test
-
-Do this before introducing profiler overhead. The point is to preserve a clean baseline for later comparison.
-
-### 4. Run Low-Overhead Nsight Systems Triage
-
-Use a minimal trace first:
+## 1. Nsight Systems triage
 
 ```bash
 mkdir -p output/profiling
-nsys profile \
-  --trace=cuda,nvtx,osrt \
-  --sample=none \
-  --cpuctxsw=none \
-  --stats=true \
-  --force-overwrite=true \
-  -o output/profiling/<run_name> \
-  <command>
+nsys profile --trace=cuda,nvtx,osrt --sample=none --cpuctxsw=none --stats=true \
+  --force-overwrite=true -o output/profiling/<run> \
+  build/benchmarks/<target> --backend=CUDA --type=float --warmup=5 \
+  --min_iters=1 --max_iters=1 --min_time=0 <args...>
+nsys stats --report cuda_gpu_kern_sum,cuda_api_sum,cuda_gpu_mem_time_sum,cuda_gpu_mem_size_sum \
+  output/profiling/<run>.nsys-rep
 ```
 
-For `stedc_benchmark` in this repo:
-
-```bash
-nsys profile \
-  --trace=cuda,nvtx,osrt \
-  --sample=none \
-  --cpuctxsw=none \
-  --stats=true \
-  --force-overwrite=true \
-  -o output/profiling/stedc_nsys \
-  build/benchmarks/stedc_benchmark \
-  --backend=CUDA \
-  --type=float \
-  --warmup=5 \
-  --min_iters=1 \
-  --max_iters=1 \
-  256 256 16 0 32 1
-```
-
-Focus on these `nsys` reports:
-
-- `cuda_gpu_kern_sum`: top kernels by total GPU time
-- `cuda_api_sum`: expensive API, sync, or allocation calls
-- `cuda_gpu_mem_time_sum`: memcpy and memset time
-- `cuda_gpu_mem_size_sum`: transfer volume
-
-### 5. Decide What Is Actually Dominating
-
-- If GPU kernels dominate, move to `ncu`.
-- If `cuEventSynchronize`, launches, allocations, or memcopies dominate, fix orchestration first.
-- If several short kernels dominate, look for fusion, batching, or launch overhead.
-- If one kernel dominates, target that kernel directly in `ncu`.
-- If the target includes significant initialization noise, tighten the benchmark or use a narrower driver before collecting more metrics.
-
-### 6. Run Nsight Compute On One Specific Kernel
-
-Start with the `basic` set and a kernel filter:
-
-```bash
-ncu \
-  --set basic \
-  --kernel-name-base demangled \
-  --kernel-name regex:<kernel_regex> \
-  --launch-count 1 \
-  --target-processes all \
-  --force-overwrite \
-  --export output/profiling/<run_name> \
-  <command>
-```
-
-For the STEDC fused merge kernel observed locally:
-
-```bash
-ncu \
-  --set basic \
-  --kernel-name-base demangled \
-  --kernel-name regex:StedcFusedCtaMerge \
-  --launch-count 1 \
-  --target-processes all \
-  --force-overwrite \
-  --export output/profiling/stedc_ncu_merge \
-  build/benchmarks/stedc_benchmark \
-  --backend=CUDA \
-  --type=float \
-  --warmup=5 \
-  --min_iters=1 \
-  --max_iters=1 \
-  256 256 16 0 32 1
-```
-
-If the first `ncu` run captures a startup kernel instead of the real hotspot, rerun with a tighter `--kernel-name` filter or with launch skipping.
-
-### 7. Import Saved Nsight Compute Reports Instead Of Reprofiling
-
-```bash
-ncu --import output/profiling/<run_name>.ncu-rep --page details
-```
-
-For quick summaries, add `--print-summary per-kernel`, or pipe through `head` if the output is long.
-
-### 8. Interpret The First-Pass Metrics
-
-Prioritize these metrics:
-
-- `Duration`
-- `Compute (SM) Throughput`
-- `Memory Throughput`
-- `DRAM Throughput`
-- `Registers Per Thread`
-- `Block Size` and `Grid Size`
-- `Theoretical Occupancy`
-- `Achieved Occupancy`
-- `Waves Per SM`
-- `Compute and Memory throughput breakdowns`
-
-Common interpretations:
-
-- Low achieved occupancy and low memory throughput: the kernel is underfilled, too serialized, or not exposing enough parallel work.
-- High memory throughput with low compute throughput: likely memory-bound.
-- High registers per thread plus low occupancy: register pressure is limiting residency.
-- Tiny grid or very low waves per SM: launch geometry is too small to saturate the GPU.
-- Many replay passes: the metric set is expensive; narrow the sections or profile fewer kernels.
-- Good occupancy but poor issue efficiency: look at scheduler and warp-state sections before changing block size.
-- Good SM throughput but poor wall-clock speed: investigate memory hierarchy pressure, barriers, or poor access patterns.
-
-Development-focused follow-up questions:
-
-- Is the kernel too small, or is the mapping from work to threads poor?
-- Is the kernel spending time waiting on dependent work from earlier kernels?
-- Is register pressure caused by real algorithmic needs, or by avoidable temporaries and inlining?
-- Would a different tile size, block size, or batching strategy increase waves per SM?
-- Is end-to-end time dominated by the kernel itself, or by staging data for the kernel?
-
-### 9. Run Advanced Nsight Compute Diagnosis When Basic Metrics Are Not Enough
-
-If the `basic` set shows that the kernel is still the bottleneck but does not explain why, collect a small targeted section set instead of immediately using `--set full`.
-
-Recommended focused sections:
-
-- `SchedulerStats`: active, eligible, and issued warps per scheduler
-- `WarpStateStats`: aggregate warp stall state breakdown
-- `SourceCounters`: source-level metrics, sampled warp stall reasons, memory traffic by instruction
-- `MemoryWorkloadAnalysis` or `MemoryWorkloadAnalysis_Tables`: L1/TEX, L2, DRAM, and shared-memory tables
-- `ComputeWorkloadAnalysis`: pipeline utilization and IPC
-- `InstructionStats`: instruction mix when pipe balance is suspect
-- `SpeedOfLight`: top-level compute and memory throughput breakdowns
-- `PmSampling` or `PmSampling_WarpStates`: timeline-like sampling when behavior changes across kernel lifetime
-
-Example advanced command for a single known kernel:
-
-```bash
-ncu \
-  --section SchedulerStats \
-  --section WarpStateStats \
-  --section SourceCounters \
-  --section MemoryWorkloadAnalysis_Tables \
-  --section ComputeWorkloadAnalysis \
-  --section SpeedOfLight \
-  --kernel-name-base demangled \
-  --kernel-name regex:<kernel_regex> \
-  --launch-count 1 \
-  --target-processes all \
-  --force-overwrite \
-  --export output/profiling/<run_name>_advanced \
-  <command>
-```
-
-If this is too heavy or unstable, split it into two passes:
-
-- scheduler plus source analysis
-- memory hierarchy analysis
-
-### 10. Read Warp Stall Reasons Correctly
-
-Use `SchedulerStats`, `WarpStateStats`, and `SourceCounters` together.
-
-Prioritize these patterns:
-
-- Low eligible warps or many skipped issue slots: latency hiding is failing.
-- High `smsp__pcsamp_warps_issue_stalled_long_scoreboard`: warps are waiting on L1TEX-backed operations, usually global/local/texture data.
-- High `smsp__pcsamp_warps_issue_stalled_short_scoreboard`: often shared-memory dependencies, special math, or short-latency MIO dependencies.
-- High `smsp__pcsamp_warps_issue_stalled_lg_throttle`: too many local or global memory operations are in flight, often from redundant traffic or spills.
-- High `smsp__pcsamp_warps_issue_stalled_mio_throttle`: MIO pressure, often shared-memory traffic, dynamic branches, or special math saturation.
-- High `smsp__pcsamp_warps_issue_stalled_math_pipe_throttle`: one math pipeline is oversubscribed; inspect instruction mix and pipe balance.
-- High `smsp__pcsamp_warps_issue_stalled_barrier` or `membar`: synchronization is expensive; inspect work imbalance before the barrier.
-- High `smsp__pcsamp_warps_issue_stalled_no_instructions`: instruction fetch or tiny-grid effects; inspect code size, divergence, and total waves.
-
-Do not treat the top stall reason as the fix by itself. First ask whether the scheduler had enough eligible warps to issue consistently. If issue efficiency is already high, stall sampling may be descriptive rather than actionable.
-
-### 11. Attribute Bottlenecks To Source Lines And Instructions
-
-Use `SourceCounters` when you need to identify which instructions or source lines generate the most stalls or memory traffic.
-
-Look for these source-level signals:
-
-- `smsp__pcsamp_sample_count`: where warp sampling is concentrated
-- sampled warp stall reasons by program counter from the `smsp__pcsamp_warps_issue_stalled_*` metrics
-- `memory_l1_tag_requests_global`: global-memory pressure by instruction
-- `memory_l2_theoretical_sectors_global` and `_ideal`: whether a global access pattern is generating excess sectors
-- `memory_l1_wavefronts_shared` and `_ideal`: whether shared-memory instructions need excess wavefronts
-- `derived__memory_l1_conflicts_shared_nway`: shared-memory bank-conflict severity
-- `derived__local_spilling_requests` and `derived__local_spilling_requests_pct`: local-memory pressure from register spills
-- `sass__inst_executed_register_spilling*`: executed spill loads and stores
-
-Use this to answer questions like:
-
-- Which exact load or store line is driving long scoreboard stalls?
-- Which shared-memory instruction is causing bank conflicts or short scoreboard stalls?
-- Which instruction stream is creating spill traffic?
-- Which branch site or synchronization point dominates sampled stalls?
-
-### 12. Diagnose Access Patterns And Memory Hierarchy Limits
-
-Use `MemoryWorkloadAnalysis` or `MemoryWorkloadAnalysis_Tables` when the kernel appears memory-bound or warp stalls implicate L1TEX, L2, shared memory, or DRAM.
-
-Focus on these table columns and interpretations:
-
-- L1/TEX `Sectors/Req`: high values indicate poor coalescing or scattered access patterns.
-- L1/TEX `Hit Rate`: low values increase downstream L2 traffic and latency.
-- L1/TEX `% Peak to L2`: high write, atomic, or reduction pressure leaving L1.
-- L1/TEX `% Peak to SM`: high return-path pressure, often from scattered reads.
-- Shared `Wavefronts` and `Bank Conflicts`: excess wavefronts and bank conflicts indicate inefficient shared-memory layout.
-- L2 `Hit Rate`: low values imply more DRAM traffic and longer latency.
-- L2 `Throughput` and `% Peak`: whether L2 itself is saturated.
-- DRAM `Throughput` and `% Peak`: whether off-chip bandwidth is the real limiter.
-- `SpeedOfLight` throughput breakdowns: whether memory or compute units are nearer their sustained peak.
-
-Common interpretations:
-
-- High long scoreboard plus poor L1/L2 hit rates: improve locality or reduce demand before changing math structure.
-- High DRAM throughput with modest SM throughput: likely bandwidth-bound.
-- High shared-memory bank conflicts plus short scoreboard or MIO throttle: redesign shared-memory layout, access width, or indexing.
-- High `Sectors/Req` with low arithmetic intensity: improve coalescing before trying occupancy tweaks.
-
-### 13. Use Timeline Sampling For Phase Changes
-
-If a kernel has distinct phases, tail effects, or changing behavior over time, use `PmSampling` or `PmSampling_WarpStates`.
-
-Use this when:
-
-- one phase is bandwidth-bound and another is latency-bound
-- occupancy or throughput collapses near the end of the kernel
-- you need to separate startup, steady-state, and tail behavior
-
-This is especially useful for kernels with reductions, merges, or irregular control flow where aggregate counters hide phase changes.
-
-### 14. Iterate Like A Kernel Tuning Loop
-
-After the first `ncu` pass:
-
-1. Form one concrete hypothesis.
-2. Change one thing in code or launch parameters.
-3. Rebuild and rerun the same command.
-4. Compare baseline runtime, `nsys` hotspot share, and the key `ncu` metrics.
-5. Keep the change only if the profiler evidence and wall-clock result agree.
-
-Typical changes worth testing:
-
-- block size or CTA shape
-- grid decomposition
-- shared memory use
-- register pressure reduction
-- fewer synchronizations
-- fused kernels or batched work
-- improved memory coalescing or reduced traffic
-
-### 15. Escalate Only When Needed
-
-- Use `--section LaunchStats,Occupancy` for launch-shape and occupancy questions.
-- Use `--section SchedulerStats,WarpStateStats,SourceCounters` for warp-stall and source-line diagnosis.
-- Use `--section MemoryWorkloadAnalysis_Tables` for L1, L2, DRAM, and shared-memory throughput and access-pattern questions.
-- Use `--section SpeedOfLight,ComputeWorkloadAnalysis,InstructionStats` for pipe balance and compute saturation questions.
-- Use `--section PmSampling` or `--section PmSampling_WarpStates` when the bottleneck changes over the kernel lifetime.
-- Use `--set full` only for a very small filtered case.
-- Use `--page raw --csv` when the result needs machine-readable parsing.
-- If you need a more detailed memory or pipeline picture, add specific sections rather than jumping straight to a huge report.
-- Consider `--cache-control none` only when you need to study warmed-cache behavior inside a larger workflow; otherwise keep the default for reproducibility.
-- If a new kernel is still unclear, add or improve NVTX ranges around the phase that launches it so later profiling can isolate the right region faster.
-
-## Profiling SYCL-Generated CUDA Kernels
-
-BatchLAS compiles SYCL device code through DPC++ targeting CUDA (`dpcpp-cuda`). The SYCL runtime translates `sycl::queue::submit` into CUDA driver API calls at runtime. This creates several profiling challenges.
-
-### ncu Cannot Profile Binaries Linked Against Debug SYCL Runtimes
-
-If the SYCL runtime (`libsycl.so`) is a debug build (common when building DPC++ from source), it contains assertion call sites. ncu's kernel replay mechanism interferes with the SYCL runtime's internal state, causing assertions like `NDR.LocalSize[0] == 0` at `commands.cpp` to fire and abort the process. Attempted workarounds that **do not work**:
-
-- `--replay-mode application` — still triggers assertions
-- Collecting only a single section (`--section SpeedOfLight`) — still triggers
-- `LD_PRELOAD` with an assert-suppression library — bypasses assertions but then `std::system_error: Unknown error 265` is thrown from the runtime
-
-**The only reliable workaround** is to profile a standalone CUDA-only driver that links directly against the CUDA kernel code you want to study, bypassing the SYCL runtime entirely. See the next section.
-
-### Standalone CUDA Profiling Driver Approach
-
-If the kernel under study is implemented in a CUDA translation unit, create a minimal standalone `.cu` driver for that kernel instead of profiling the full SYCL-linked binary:
-
-1. Include only the current CUDA kernel declarations used by the implementation under test.
-2. Set up CUDA allocations and any launch descriptor or configuration object required by that implementation.
-3. Call the CUDA launch entry point directly.
-4. Build with nvcc only, without linking DPC++ or the SYCL runtime.
-
-The exact sources and headers depend on the current implementation you are profiling. Prefer keeping the driver local to the profiling task so it stays aligned with the code under test.
-
-### Profiling SYCL Kernels With nsys
-
-nsys **can** capture SYCL kernel GPU activity, but requires `--cuda-event-trace=true` to get CUPTI kernel data. Without this flag, nsys only captures CUDA API calls (launch timestamps, sync calls) but misses the GPU-side kernel execution details.
-
-```bash
-nsys profile \
-  --trace=cuda \
-  --cuda-event-trace=true \
-  --sample=none \
-  --cpuctxsw=none \
-  --stats=true \
-  --force-overwrite=true \
-  --export=sqlite \
-  -o output/profiling/sycl_kernel_nsys \
-  build/benchmarks/<benchmark> --backend=CUDA --warmup=5 ...
-```
-
-**Important**: BatchLAS SYCL GEMM benchmarks use `--backend=CUDA`, not `--backend=SYCL`. The SYCL codepath is triggered via the DPC++ CUDA backend, which shows up as CUDA API calls in the profiler.
-
-### Extracting SYCL Kernel Metrics From nsys SQLite
-
-After exporting to SQLite, query the `CUPTI_ACTIVITY_KIND_KERNEL` table for SYCL kernel launch parameters:
-
-```bash
-nsys export --type=sqlite -o output/profiling/sycl_kernel.sqlite output/profiling/sycl_kernel_nsys.nsys-rep
-```
+- Kernels dominate: go to `ncu` on the top one.
+- `cuEventSynchronize`, launches, allocations or copies dominate: fix orchestration first.
+- Many short kernels: look for fusion, batching or launch overhead.
+- Initialisation noise: tighten the case or write a narrower driver before collecting more metrics.
+
+SYCL kernels: add `--cuda-event-trace=true` to get GPU-side kernel records, and `--export=sqlite` to
+read launch parameters (registers, grid/block, shared and local memory, duration; no throughput or
+stalls):
 
 ```sql
-SELECT
-  s.value AS kernelName,
-  k.registersPerThread,
-  k.gridX, k.gridY, k.gridZ,
-  k.blockX, k.blockY, k.blockZ,
-  k.staticSharedMemory,
-  k.dynamicSharedMemory,
-  k.localMemoryPerThread,
-  (k.end - k.start) AS duration_ns
-FROM CUPTI_ACTIVITY_KIND_KERNEL AS k
-JOIN StringIds AS s ON k.demangledName = s.id
-WHERE s.value LIKE '%GemmRegisterTiled%'
-ORDER BY duration_ns DESC
-LIMIT 5;
+SELECT s.value AS kernel, k.registersPerThread, k.gridX, k.gridY, k.gridZ, k.blockX, k.blockY, k.blockZ,
+       k.staticSharedMemory, k.dynamicSharedMemory, k.localMemoryPerThread, (k.end - k.start) AS ns
+FROM CUPTI_ACTIVITY_KIND_KERNEL AS k JOIN StringIds AS s ON k.demangledName = s.id
+WHERE s.value LIKE '%GemmRegisterTiled%' ORDER BY ns DESC LIMIT 5;
 ```
 
-This provides: registers per thread, grid/block dimensions, shared memory, local memory (spills), and wall-clock duration. It does **not** provide throughput, IPC, bank conflicts, or warp stall reasons — those require ncu.
+## 2. Nsight Compute on one kernel
 
-### Known Limitations
+```bash
+ncu --set basic --kernel-name-base demangled --kernel-name regex:<kernel_regex> \
+  --launch-count 1 --target-processes all --force-overwrite \
+  --export output/profiling/<run> <command>
+ncu --import output/profiling/<run>.ncu-rep --page details --print-summary per-kernel
+```
 
-- **No ncu for SYCL binaries** with debug `libsycl.so`. The only path is the standalone driver workaround above.
-- **SYCL fatbins are LLVM bitcode**, not CUDA fatbins. The `.fatbin` artifacts in the build directory are tiny stubs; real device code is JIT-compiled from `.cc-sycl-nvptx64-nvidia-cuda-sm_89.o` bitcode at runtime. You cannot load SYCL device code into a CUDA driver API wrapper for ncu profiling.
-- **nsys CUPTI data is limited** compared to ncu: you get launch parameters and duration but no throughput, occupancy, IPC, stall reasons, or access pattern analysis.
+If it caught the wrong launch, tighten `--kernel-name` or skip launches (`--launch-skip N`).
+`--page raw --csv` gives machine-readable output.
 
-## BatchLAS Notes
+Read first: Duration, SM / Memory / DRAM throughput, registers per thread, block and grid size,
+theoretical vs achieved occupancy, waves per SM.
 
-- Benchmarks accept positional integer args after options.
-- For new kernel development, a custom driver or benchmark target is acceptable and often preferable to a large end-to-end benchmark.
-- `stedc_benchmark` locally accepted `256 256 16 0 32 1` for:
-  - `n`
-  - `batch`
-  - `recursion_threshold`
-  - `merge_variant`
-  - `threads_per_root`
-  - `wg_multiplier`
-- Representative STEDC findings from this workspace are in [local STEDC notes](./references/batchlas-stedc.md).
+| Signal | Likely meaning |
+| --- | --- |
+| Low achieved occupancy and low memory throughput | too little parallel work or a poor work-to-thread mapping |
+| Tiny grid, waves per SM << 1 | launch geometry cannot fill the GPU |
+| High registers per thread and low occupancy | register pressure limits residency (gate: §11) |
+| High memory, low compute throughput | memory-bound |
+| Good occupancy, poor issue efficiency | read scheduler and warp-state sections before changing block size |
+| Good SM throughput, poor wall clock | memory hierarchy pressure, barriers or access pattern |
+| Many replay passes | metric set too expensive; narrow sections or kernels |
 
-## Output Checklist
+## 3. Escalate with targeted sections
 
-When reporting findings, include:
+Add `--section` sets to the command above instead of `--set full` (only on a tiny filtered case):
 
-1. The exact command used.
-2. Whether the target is an end-to-end benchmark, microbenchmark, or custom kernel driver.
-2. The top kernels from `nsys`.
-3. Whether time is dominated by kernels, API or sync overhead, or copies.
-4. The top `ncu` kernel metrics and what they imply.
-5. The dominant scheduler or warp-stall signals, if collected.
-6. The source lines or instruction classes most associated with stalls, memory traffic, spills, or bank conflicts, if collected.
-7. The key L1, L2, DRAM, and shared-memory findings, including whether access patterns look coalesced.
-8. One or two concrete optimization directions.
-9. The next experiment you would run to validate the leading hypothesis.
+| Question | Sections |
+| --- | --- |
+| Launch shape, occupancy | `LaunchStats`, `Occupancy` |
+| Warp stalls, source lines | `SchedulerStats`, `WarpStateStats`, `SourceCounters` |
+| L1/L2/DRAM/shared traffic, coalescing | `MemoryWorkloadAnalysis_Tables` |
+| Pipe balance, compute saturation | `SpeedOfLight`, `ComputeWorkloadAnalysis`, `InstructionStats` |
+| Behaviour changing over the kernel lifetime | `PmSampling`, `PmSampling_WarpStates` |
+
+Split into two passes (scheduler+source, memory) if one is too heavy. Keep the default cache control
+unless you study warmed-cache behaviour. How to read stall reasons, source counters and memory tables:
+[references/ncu-metrics.md](./references/ncu-metrics.md).
+
+## 4. Tuning loop
+
+One hypothesis, one change (block or CTA shape, grid decomposition, shared memory, register pressure,
+fewer barriers, fusion, coalescing), rebuild with `scripts/b`, rerun the same command, compare baseline
+runtime, `nsys` hotspot share and the key `ncu` metrics. Add NVTX ranges if a phase is hard to isolate.
+
+## SYCL traps
+
+- `ncu` replay against a debug-built `libsycl.so` trips runtime assertions (`NDR.LocalSize[0] == 0` in
+  `commands.cpp`) and aborts; `--replay-mode application`, single sections and assert-suppressing
+  `LD_PRELOAD` do not help. Use a release runtime, the nsys SQLite route above, or a standalone
+  nvcc driver that reimplements the kernel without the SYCL runtime.
+- Device code is AOT-compiled to an sm_89 cubin at the shared-library device link. Register and spill
+  counts: `scripts/register_probe.sh`; PTX: the `ptx-codegen-comparison` skill.
+
+## BatchLAS notes
+
+- Prefer an existing benchmark or a dedicated driver that reuses allocations and keeps setup out of the
+  timed region over a full end-to-end sweep.
+- STEDC recipe and argument layout: [references/batchlas-stedc.md](./references/batchlas-stedc.md).
+
+## Report
+
+Command; target kind (benchmark, microbenchmark, driver); top `nsys` kernels and whether kernels, API/sync
+or copies dominate; key `ncu` metrics and their meaning; stall, source-line and memory findings if
+collected; one or two optimisation directions and the next experiment that tests the lead hypothesis.

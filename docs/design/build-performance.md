@@ -5,7 +5,8 @@
 
 The build is SYCL device-link-bound: the shared library is the device-link unit, so one changed
 object redoes `sycl-post-link`, ptxas and CPU AOT for its whole `.so`, and `-j` cannot shorten
-that. Working rules (`-j8`, ccache, GPU-only trees, measured dead ends): @ref dev_agent_guide §7.
+that. Working rules (`-j8`, ccache, GPU-only trees): @ref dev_agent_guide §7; measured dead ends
+are the §11 table.
 
 ## build performance: split components and the monolithic library {#build-performance-split-components-and-the-monolithic-library}
 

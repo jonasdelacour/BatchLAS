@@ -1,62 +1,37 @@
 # Performance regression evaluation {#perf_regression}
 
-Lightweight evaluation tools: a CUDA FP32 perf-regression runner and an STEQR accuracy sampler.
+A CUDA FP32 perf-regression runner and an STEQR accuracy sampler.
 
 ## Perf regression (CUDA FP32)
 
 `evaluation/perf_eval.py` runs the cases in `evaluation/perf_cases.json` (`stedc_benchmark` with
-the merge variant as its fourth argument, `StedcMergeVariant` 0 = `Baseline` and 1 = `Fused`, plus
-`steqr_benchmark` and the CTA benchmarks), records a JSON baseline, and compares later runs against it.
+the merge variant as its fourth argument, 0 = `Baseline`, 1 = `Fused`; `steqr_benchmark`; the CTA
+benchmarks), records a JSON baseline and compares later runs against it. Needs the benchmarks built
+and the CUDA backend enabled.
 
-**Prerequisites:** the benchmarks are built (`build/benchmarks/stedc_benchmark` and
-`build/benchmarks/steqr_benchmark` exist) and the CUDA backend is enabled.
-
-| Task | Command |
-|---|---|
-| Record baseline | `python3 evaluation/perf_eval.py --record` |
-| Check for regressions | `python3 evaluation/perf_eval.py --check` |
-
-- The baseline is written to `evaluation/baselines/perf_cuda_fp32.json`. It snapshots the GPU
-  model, driver, CUDA toolkit and NVHPC version into `meta.environment`.
-- `--check` fails if any metric regresses by more than 5 %, or if the CUDA/NVHPC environment
-  differs from the baseline metadata.
-
-### Options
+```sh
+python3 evaluation/perf_eval.py --record   # write evaluation/baselines/perf_cuda_fp32.json
+python3 evaluation/perf_eval.py --check    # fail on > 5% regression or a changed GPU/driver/CUDA/NVHPC
+```
 
 | Option | Effect |
 |---|---|
-| `--tolerance 0.10` | Regression tolerance (default 5 %) |
-| `--build-dir <path>` | Build directory to use |
-| `--cases evaluation/perf_cases.json` | Override the cases (raw positional minibench args) |
-| `--trace evaluation/trace.json` | Emit a Chrome trace |
-| `--allow-env-mismatch` | Ignore toolchain/hardware mismatch |
-| `--kernel-trace-dir evaluation/trace/kernels` | Kernel-level traces (see below) |
-
-### Kernel-level traces
-
-SYCL event profiling produces a kernel/command-level Chrome trace. Use the runner's option, or set
-the variables on any executable that uses `Queue`:
-
-```sh
-BATCHLAS_KERNEL_TRACE=1
-BATCHLAS_KERNEL_TRACE_PATH=path/to/kernels.trace.json
-```
-
-Default cases are in `evaluation/perf_cases.json`.
+| `--tolerance 0.05` | regression tolerance |
+| `--build-dir`, `--cases`, `--baseline` | build tree (default `build`), case file (raw positional minibench args), baseline path |
+| `--backend CUDA`, `--type float` | minibench filters |
+| `--warmup 2`, `--min-time 200`, `--min-iters 5`, `--max-iters 100` | minibench timing |
+| `--trace <file>` | Chrome trace of the run |
+| `--kernel-trace-dir <dir>` | kernel-level traces (`BATCHLAS_KERNEL_TRACE=1`, `BATCHLAS_KERNEL_TRACE_PATH=<file>` do the same on any `Queue` user) |
+| `--allow-env-mismatch` | ignore a toolchain/hardware mismatch |
 
 ## Accuracy evaluation (STEQR)
 
-`steqr_accuracy` samples random tridiagonal matrices, compares STEQR and STEQR_CTA eigenvalues
-against a NETLIB double reference, and writes one CSV row per matrix. Plot a heatmap of
-log10(relative error) against log10(condition number).
-
-Build it with the benchmarks (target `steqr_accuracy`). Example, CUDA float, STEQR_CTA:
+`steqr_accuracy` (benchmarks target) samples random tridiagonal matrices, compares STEQR or
+STEQR_CTA eigenvalues with a NETLIB double reference (the host backend must be enabled), and writes
+one CSV row per matrix. Complex types map to their real part; pass float or double.
 
 ```sh
 ./build/benchmarks/steqr_accuracy --impl=steqr_cta --backend=CUDA --type=float --n=32 \
     --samples=20000 --batch=256 --log10-cond-min=0 --log10-cond-max=12 \
     --output=output/accuracy/steqr_accuracy.csv
 ```
-
-- The reference solve always uses NETLIB double, so the host backend must be enabled.
-- Complex types map to their real component for STEQR accuracy; use float or double explicitly.
