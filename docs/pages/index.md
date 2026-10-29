@@ -27,27 +27,7 @@ ctx.wait();                                   // nothing is readable before this
 Every entry point enqueues and returns an Event. Matrices are column-major in device-accessible
 (USM) memory. Use one Queue per thread. The full contract is in @ref guide_cpp_api.
 
-## Operations
-
-| Family | Operations |
-| --- | --- |
-| Batched BLAS | gemm, gemv, symm, syrk, syr2k, trmm, trsm, hemm, herk, her2k |
-| Factorizations and solves | potrf, posv, getrf, getrs, getri, gesv, inv, geqrf, orgqr, ormqr |
-| Eigenvalues and SVD | syev, syevx (selected range), lanczos, ritz_values, gesvd (one-sided Jacobi and blocked) |
-| Tridiagonal and bidiagonal | sytrd, steqr, stedc, stebz, stein, tridiagonal_solver, gebrd, bdsqr, bdsdc |
-| Sparse | spmm (CSR), ILU(k) |
-| Utilities | ortho, norms, condition numbers, transpose, matrix generators, the `linalg::` layer |
-| Python | pybind11 package with NumPy and SciPy interop (@ref python_examples) |
-
-## Backends
-
-| Backend | Device | Notes |
-| --- | --- | --- |
-| CUDA | NVIDIA GPU | native kernels plus cuBLAS, cuSOLVER, cuSPARSE; tuned on sm_89 and sm_120 |
-| SYCL | Apple GPU through AdaptiveCpp Metal | native kernels only; float and complex<float> |
-| NETLIB | CPU | host LAPACKE and CBLAS plus native kernels |
-
-DPC++ and AdaptiveCpp 25.10 build the same tree (@ref guide_build).
+Supported operations, backends and install: the @ref md__8github_2README "project README".
 
 ## Performance against cuSOLVER
 

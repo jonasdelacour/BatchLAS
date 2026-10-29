@@ -91,23 +91,10 @@ Matrices are column-major in device-accessible (USM) memory.
 
 ## Tune
 
-Each op chooses its kernel from `tuned/<op>.<device>.txt`. A GPU without tables borrows
-the nearest device's and warns once, so retune on new hardware:
-
-```bash
-cmake --preset benchmarks && cmake --build --preset benchmarks --target batchlas_tune
-B=build-benchmarks/tools/tune/batchlas_tune
-$B --list                                                   # ops, candidates, grids
-$B all --tier preview --dtype float,double --devices 0 --plan   # cells and time estimate, no GPU
-$B all --tier coarse  --dtype float,double --devices 0 --out tuned
-```
-
-- `BATCHLAS_TUNED_DIR=<dir>` loads tables from another directory without a rebuild;
-  `BATCHLAS_SELECT_TRACE=1` prints every choice and its runner-up.
-- `BATCHLAS_<OP>_ROUTE=<choice>` pins one op's kernel (e.g. `BATCHLAS_GEMM_ROUTE=vendor`).
-- Tiers, ledger and flags: [batchlas_tune](../tools/tune/README.md); table format:
-  [tuned/](../tuned/README.md); the n-dependent constants in `tuning_params.hh`:
-  [tuning constants](../docs/perf/tuning.md).
+Each op chooses its kernel from `tuned/<op>.<device>.txt`. A GPU without tables borrows the
+nearest device's and warns once, so retune new hardware with
+[batchlas_tune](../tools/tune/README.md). `BATCHLAS_<OP>_ROUTE=<choice>` pins one op's kernel
+(e.g. `BATCHLAS_GEMM_ROUTE=vendor`); `BATCHLAS_SELECT_TRACE=1` prints every choice.
 
 ## License
 

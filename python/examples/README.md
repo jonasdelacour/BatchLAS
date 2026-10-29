@@ -59,14 +59,7 @@ picks, but some routines are GPU-only (see Device requirements below).
 | 11 | `11_generators_and_utilities.ipynb` | Constructors, conditioned random generators, `norm`, `cond`, `transpose`, `lascl` |
 | 12 | `12_choosing_a_variant.ipynb` | Batching speed-up, throughput scaling, picking a `syev` variant, CPU vs GPU |
 
-Together they exercise most of `batchlas.__all__`; `ILUKPreconditioner` appears only as the handle
-type `iluk_factorize` returns. Routines a notebook does not cover are checked against NumPy in
-`python/tests/`.
-
-`_common.py` holds shared helpers (device selection, reporting, reference constructions). It is not
-part of the library API.
-
-Timings and device names in notebook 12 come from an RTX 4090 and will differ on your hardware.
+`_common.py` holds shared helpers, not library API. Notebook 12's timings are from an RTX 4090.
 
 ## Conventions
 
@@ -96,11 +89,8 @@ Checked against NumPy/SciPy in `python/tests/` instead.
 - **Per-item status.** `return_info=True` on `potrf`, `gesv`, `posv`, `getri`, `gesvd`, `syev` and
   `syevx` appends an int32 `info` array, one entry per item: `0` is success, `i > 0` as LAPACK.
 - **Thin SVD.** `gesvd(a, compute_vectors="thin")`: `u` is `m x k`, `vh` is `k x n`, `k = min(m, n)`.
-- **Exceptions.** `BatchLASException` is the base. `InvalidArgumentError` is also a `ValueError`,
-  `OutOfRangeError` an `IndexError`, `BatchLASError` a `RuntimeError`. Under `BatchLASError`:
-  `UnsupportedError` (with `NoRouteError`: nothing in this build serves the call, attributes `op`,
-  `backend`, `dtype`), `DeviceError`, `WorkspaceError`, `ConvergenceError`, `InternalError`,
-  `ApiMisuseError`.
+- **Exceptions.** `BatchLASException` is the base; the classes and their builtin bases are in
+  [Python exception classes](../../docs/design/error-model.md#error-model-python-exception-classes).
 - **Routes.** `set_route(op, spelling)` pins `BATCHLAS_<OP>_ROUTE` for this process (`None`
   unpins), `route(op, spelling)` is the context-manager form, `route_pin(op)` reads the pin, and
   `reload_settings()` re-reads every `BATCHLAS_*` variable changed after the first call.
@@ -159,9 +149,6 @@ These are library defects; the authoritative list, with causes, is
   `NoEigenVectors` (unverified candidate). The bindings always request vectors internally and
   discard them.
 - **Unpreconditioned `syevx` on hard problems.** Can stagnate. Notebook 09 shows the fix.
-
-No longer issues: `ortho`'s Householder workspace overlap and transposed arm (defect 1), and
-`tridiagonal_solver` convergence; earlier versions of this list flagged them.
 
 ## Device requirements
 
