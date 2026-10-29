@@ -464,8 +464,9 @@ TYPED_TEST(SyevxMask, LanczosLeavesInactiveItemsUntouched) {
                     c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
                     c.prepare = [&] {
                         fill_hermitian(A, n, batch, false);
-                        std::fill_n(V.data_ptr(), std::size_t(V.stride()) * batch, ts::poison<T>());
-                        std::fill_n(w.data(), w.size(), ts::poison<R>());
+                        // Distinct, unsorted poison: a sort that ignored the mask would move its bytes.
+                        for (std::size_t i = 0; i < std::size_t(V.stride()) * batch; ++i) V.data_ptr()[i] = T(1000 + i % 97);
+                        for (std::size_t i = 0; i < w.size(); ++i) w[i] = R(1000 + (i * 7) % 23);
                     };
                     c.call = [&](Span<const std::uint8_t> m, Span<std::byte> ws) {
                         (void)lanczos<B, T, MatrixFormat::Dense>(q, A.view().with_batch_mask(m), w.to_span(), ws, j, v_of(m), lp);

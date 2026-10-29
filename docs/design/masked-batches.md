@@ -1,6 +1,6 @@
 # Masked batches {#design_masked_batches}
 
-> **Status:** current · the batch mask as a view property; W0 (foundation) of its migration, 2026-10-28. Replaces the compaction design of the closed #207 (`syev_masked`, `sygvd_masked`), which never reached main. Guard cost prototyped on sm_89 only.
+> **Status:** current · the batch mask as a view property; every op family honours it except the vendors, which refuse it permanently (W0 to the final lift pass, 2026-10-28). Replaces the compaction design of the closed #207 (`syev_masked`, `sygvd_masked`), which never reached main. Guard cost prototyped on sm_89 only.
 
 An SCC loop solves one eigenproblem per molecule per iteration, and the molecules converge at
 different iterations: a C300 isomer set takes 36 to 75 iterations (median 56). The caller wants to
@@ -79,9 +79,9 @@ their wave, not in W0.
 
 Placement traps: jacobi checks after its first work-group barrier; split-k's slice and reduce
 kernels skip by item (`z / s`), not by z; holes inside a sub-group are safe on NVPTX and untested on
-SPIR-V and AMDGCN, where today's tails only ever drop trailing partitions. `gebrd_cta` and
-`ormqx_cta` already return per partition before a barrier (undefined when the batch is not a
-multiple of the partitions per work-group); both move to I2 in their waves.
+SPIR-V and AMDGCN, where today's tails only ever drop trailing partitions. `ormqx_cta`
+returned per partition before a barrier (undefined when the batch is not a multiple of the
+partitions per work-group) until W2c moved it to I2; #209 had already removed `gebrd_cta`'s.
 
 ## Refusal policy {#masked-batches-refusal-policy}
 
@@ -132,18 +132,18 @@ migrates. The only shared file is the kernel hash pin map, regenerated with
 
 | Wave | Content |
 | --- | --- |
-| W0 | the view mask, `call_mask`, the utilities, masked `info_clear`; a refusal in every family; the cross-op tests and `tests/masked_contract.hh` |
-| W1a | gemm (every native family, split-k, `small`, the k = 0 path, the heterogeneous loop), gemv |
-| W1b | trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k, the level-3 batch helpers, spmm |
-| W2a | potrf (tiny, cta, lpanel, blocked), potrs, posv, potri, lascl |
-| W2b | getrf, laswp, getrs, gesv, getri, inv |
-| W2c | geqrf, larft, orgqr, ormqr, `ormqx_cta` (fixes its partition return) |
-| W3a | steqr, stedc (per-level expanded mask, neutral `n_reduced`), stebz, stein |
-| W3b | sytrd (cta, blocked, sy2sb, sb2st), every syev family, syev_align, syfn |
-| W3c | sygst, sygvd |
-| W4a | gesvd (gebrd including the `gebrd_cta` fix, bdsqr, bdsdc, ormbr, gesvdj) |
-| W4b | sytrf, sytrs, sysv |
-| W4c | ortho, lanczos, syevx, norm, cond, iluk, ritz_values |
+| W0 (done) | the view mask, `call_mask`, the utilities, masked `info_clear`; a refusal in every family; the cross-op tests and `tests/masked_contract.hh` |
+| W1a (done) | gemm (every native family, split-k, `small`, the k = 0 path, the heterogeneous loop), gemv |
+| W1b (done) | trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k, the level-3 batch helpers, spmm |
+| W2a (done) | potrf (tiny, cta, lpanel, blocked), potrs, posv, potri, lascl |
+| W2b (done) | getrf, laswp, getrs, gesv, getri, inv |
+| W2c (done) | geqrf, larft, orgqr, ormqr, `ormqx_cta` (fixes its partition return) |
+| W3a (done) | steqr, stedc (per-level expanded mask, neutral `n_reduced`), stebz, stein |
+| W3b (done) | sytrd (cta, blocked, sy2sb, sb2st), every syev family, syev_align, syfn |
+| W3c (done) | sygst, sygvd |
+| W4a (done) | gesvd (gebrd including the `gebrd_cta` fix, bdsqr, bdsdc, ormbr, gesvdj) |
+| W4b (done) | sytrf, sytrs, sysv |
+| W4c (done) | ortho, lanczos, syevx, norm, cond, iluk, ritz_values |
 
 Order: W0, W1a, W1b, then W2a, W2b and W2c, then W3a, W3b, W3c, then W4a, W4b and W4c. The SCC path
 (syev and sygvd masked) is W0, W1a, W1b, W2a, W2c, W3a, W3b, W3c. A composite keeps refusing until
@@ -304,6 +304,29 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   Metal only); steqr wg's sweep (every NETLIB steqr case, Metal n = 40, stedc on the CPU queue);
   steqr_legacy's (NETLIB stedc only); stedc's in-place diagonal edit (the recursive cases); the
   per-level expanded mask (the level cases, through `info`).
+- **Final lift pass, the composites** (`tests/syev_mask_tests.cc`, `sygvd_mask_tests.cc`,
+  `gesvd_mask_tests.cc`, `syevx_mask_tests.cc`; sm_89 every scalar, NETLIB every scalar, 2026-10-29):
+  syev `cta`, `blocked` and `two_stage`, so `syev(A.with_batch_mask(m))` on Auto at every size
+  class; syfn and syfn_from_eigen; sygvd `compose` and sygvd_factored; gesvd `blocked` over bdsdc,
+  normal and bdsqr, `cta`, and the Hermitian `blocked` and `cta`; bdsdc; lanczos; syevx
+  `DirectSubset`. On CUDA these cases compare active items with the all-active masked call
+  (`masked_reference`), because the unmasked reference routes children such as gemm or herk to the
+  vendor. `sort`'s Span overload rebuilt W unmasked (the drop hazard); it now adopts V's mask, and
+  lanczos passes both views masked. On the host backend, sygvd `compose`, syfn and
+  DirectSubset reached the host BLAS only after writing A or `info`, so they now refuse up front
+  there. Breaking one guard at a time turned red only its own cases and the composites over it,
+  always as "inactive item written":
+  - syev blocked's final copy (real `blocked`, Auto at blocked sizes, sygvd `compose` at n = 45
+    and 70, Hermitian gesvd);
+  - syfn's info kernel (syfn and syfn_from_eigen, `info`); sygvd's info merge (`compose` at
+    n = 7 and 32, `info`); DirectSubset's count kernel (its cases, `m`, W and `info`); these three in one build, on
+    disjoint paths;
+  - bdsdc's extraction (bdsdc direct on both backends, and `blocked` over bdsdc: `s`, U, Vh);
+  - lanczos's sort without the mask on W (lanczos, W). It stayed green until the case poisoned W
+    and V with distinct unsorted values: a uniform poison sorts to the same bytes.
+  Three breaks stayed green and cannot write an output: a guard over scratch only (blocked's phase
+  kernel), a view whose children adopt another operand's mask, and bdsdc's repair, which runs only
+  for a degenerate singular value.
 
 ## Rejected alternatives {#masked-batches-rejected}
 
