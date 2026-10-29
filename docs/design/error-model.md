@@ -82,11 +82,6 @@ Rule four (every class carries `BATCHLAS_API`) is in
 - `gesv` and `posv` (`src/ops/gesv/gesv.cc`, `src/ops/posv/posv.cc`) throw `internal_error` for an
   empty problem or a heterogeneous batch before selection runs, so a pin cannot change it. By
   meaning these are `invalid_argument` or `unsupported`.
-- `api_misuse` is for a valid argument used at the wrong time or from the wrong thread.
-- `tools/tune` and `benchmarks/` throw the same classes: a bad flag, ledger, sweep or input file is
-  `invalid_argument`, an OS I/O failure is `error`, a getrf breakdown in generated input is
-  `convergence_error`, a dirty `--repo` tree is `api_misuse`, a build without a GPU backend is
-  `unsupported`.
 
 ## error model: Python exception classes {#error-model-python-exception-classes}
 
@@ -114,5 +109,3 @@ and `getri` (factorisation) and by `syev`, `syevx`, `gesvd`, `steqr` and `stedc`
 
 - Gap: a leaf `steqr` under `stedc` is not reported through `stedc`'s `info`.
 - Gap: `stein` has no convergence test.
-- Not re-audited: whether the `stedc` merge arms, `steqr_wg`, `syev_jacobi_cta` and `gesvdj_cta`
-  now write status. They once returned wrong answers without raising.

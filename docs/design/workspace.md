@@ -1,6 +1,6 @@
 # Workspace {#design_workspace}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current
 
 Per-call scratch comes from an arena owned by each `Queue`, borrowed through `WorkspaceLease`. Sizing
 uses `BumpAllocator::measuring()` and `required_bytes()`, which replay the solve's allocation sequence.

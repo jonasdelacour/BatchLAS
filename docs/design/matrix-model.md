@@ -1,6 +1,6 @@
 # Matrix model {#design_matrix_model}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current
 
 Entry points take a `MatrixView`: a pointer, shape, leading dimension and batch stride over memory
 the caller owns. `Matrix` owns memory and is a `MatrixView` of it. `KernelMatrixView` is the struct a
@@ -53,10 +53,8 @@ The `ld < rows` check catches an argument-order trap. The batch is the third arg
 `Matrix(rows, cols, batch)` but the sixth of `MatrixView(data, rows, cols, ld, stride, batch)`, so
 `MatrixView<float> V(p, n, n, batch)` means `ld = batch` and throws when `batch < n`.
 
-Unchecked on purpose: null data and zero extents (shape-only views are passed to about 37
-`*_buffer_size` queries), and `stride >= ld * cols`. The recorded violators of the last were the
-transposed CGS view in `ortho` (fixed, [known defect 1](known-defects.md)) and a sizing dummy in
-`syevx_lobpcg`; whether the check can now be added is open.
+Unchecked on purpose: null data and zero extents (shape-only views go to the `*_buffer_size`
+queries), and `stride >= ld * cols` (a sizing dummy in `syevx_lobpcg` violates it).
 
 `rows_`, `cols_` and `batch_size_` must default-initialise to zero. The USM check reads them to decide
 whether a null pointer is legal.
@@ -148,7 +146,3 @@ process. `Span`'s advice calls default the queue and swallow errors.
 - `fill_triangular_random` and `fill_tridiag_toeplitz` address items as packed \f$n \times n\f$, ignoring `ld`
   and `stride`. `fill_triangular_random` seeds by position, so every item gets the same matrix.
 - `fill_random` writes all of `data()`, padding included, so on a sub-block view it writes neighbours.
-
-`fill_diagonal(ctx, Span|VectorView, k)` sizes the diagonal as
-\f$\max(0, \min(\mathtt{rows} - r_0, \mathtt{cols} - c_0))\f$ since 2026-10-12, so the former
-short-view debt on wide views and \f$|k|\f$ at an edge is closed.
