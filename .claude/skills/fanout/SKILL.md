@@ -5,8 +5,6 @@ description: Brief, launch and integrate parallel subagents or a Workflow on Bat
 
 # Fan work out to subagents or a workflow
 
-Past fan-outs lost 94-147 minutes per agent to a base that did not link. The usual further costs were hand-edited generated files, fixes broadcast before they ran, and parents reading 35-50k-character reports whole.
-
 ## Before launching anything
 - **Pre-flight the base.**
   - Run `scripts/agent/gpu_health.sh`. If it fails, tell the user now; do not start "compile-only" work.

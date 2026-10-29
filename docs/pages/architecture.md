@@ -12,8 +12,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | @subpage design_tiered_tuning "Tiered tuning" | The tuning engine behind the tables: tiers, racing, ledgers, workers. |
 | @subpage design_tuning_data "Tuning data layout" | The two files per (op, device): the ledger, the generated table, kernel hashes and the CI check. |
 | @subpage dev_extending "Extending BatchLAS" | Adding an op or entry point: `src/ops/<op>/`, tables, tuner spec, tests. |
-| @subpage design_vendor_independence "Vendor independence" | The vendor seam, the vendor-free build, the coverage instrument; the replaced RouteTable layer as history. |
-| @subpage design_vendor_free_status "Vendor-free status" | Current state of the vendor-free build. |
+| @subpage design_vendor_independence "Vendor independence" | The vendor seam, the vendor-free build and its current state, the coverage instrument. |
 
 ## Core model and API
 
@@ -34,8 +33,7 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 
 | Page | What you find there |
 | --- | --- |
-| @subpage design_syevx "syevx: algorithm survey" | Selected-eigenpair solvers considered, verdicts. |
-| @subpage design_syevx_range "syevx: range selection" | The range API and its hard cases. |
+| @subpage design_syevx "syevx: algorithm survey" | Selected-eigenpair solvers, routing, verdicts and the range API. |
 | @subpage design_gesvd "gesvd: design" | One-sided Jacobi, the bidiagonal pipeline, kernel design rules. |
 | @subpage design_syev_align "syev_align: eigenvector continuity" | Procrustes alignment of degenerate levels; the cluster rule and why it has no absolute floor. |
 
@@ -52,5 +50,4 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | Page | What you find there |
 | --- | --- |
 | @subpage design_known_defects "Known defects" | Located-but-unfixed defects. |
-| @subpage design_flat_selection_phase3_plan "Flat selection, phase 3 plan (history)" | Execution plan for posv, trsm and gemm. |
-| @subpage design_small_n_plan "Small-n factorization campaign (history)" | Campaign plan and comment-density burn-down; kept for its evidence and cited anchors. |
+| @subpage design_small_n_plan "Small-n factorizations" | Design rules, decisions and open debts of the small-n native factorizations; the comment-density waiver block. |

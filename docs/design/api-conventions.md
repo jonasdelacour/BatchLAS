@@ -1,11 +1,9 @@
 # API conventions {#design_api_conventions}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current
 
-The rules behind the shape of the entry points in `include/batchlas/blas/`: the two spellings,
-the dispatch overload, owning arguments, argument checks, workspace and `info` arguments.
-The user-facing rules are in [the C++ API guide](../cpp-api.md); exception classes in
-@ref design_error_model.
+Why the entry points in `include/batchlas/blas/` look the way they do. User-facing rules:
+[the C++ API guide](../cpp-api.md); exception classes: @ref design_error_model.
 
 ## api conventions: the backend is bound to the Queue by with_backend
 
@@ -207,21 +205,10 @@ Auto with the same tables and settings: a retune, `BATCHLAS_TUNED_DIR` or a diff
 change the route, and a different route gives different rounding. Nothing is promised across
 devices, builds, compilers or vendor-library versions.
 
-- **Tested:** `SyevTest.PinnedRouteIsBitwiseRepeatable` (`tests/syev_tests.cc`) pins `cta`
-  (n = 17), `blocked` (n = 32) and `two_stage` (n = 40) at batch 64; its heavy-tier half
-  `PinnedRouteIsBitwiseRepeatableAtSaturatingBatch` pins `cta` (n = 32, batch 1024), `blocked` and
-  `two_stage` (n = 400, batch 64). Both cover both `uplo`, both jobz and four dtypes, and compare
-  the eigenvalues and the whole matrix buffer with `memcmp`. The vendor family is not covered: its
-  repeatability is the vendor library's.
-- **Breaks (2026-10-25, sm_89):** a 1-ulp change to `W[0]` on every second `two_stage` call fails
-  exactly the `two_stage` cases (n = 40 and 400, both `uplo`, both jobz, four dtypes) on the
-  eigenvalue comparison; a perturbed `A(0,0)` on every second `blocked` call fails exactly the
-  `blocked` cases (n = 32 and 400) on the buffer comparison; `cta` stays green under both. A 1-ulp
-  change to the last item's last eigenvalue on every second `cta` call fails exactly the `cta`
-  cases (n = 17 at batch 64 and n = 32 at batch 1024, both `uplo`, both jobz, four dtypes) on the
-  eigenvalue comparison, with `blocked` and `two_stage` green. These breaks perturb the result
-  after the kernel; no kernel race was injected, so the saturating case shows the comparison
-  reaches item 1023, not that it would see a particular race.
+- **Tested:** `SyevTest.PinnedRouteIsBitwiseRepeatable` and its heavy-tier
+  `...AtSaturatingBatch` (`tests/syev_tests.cc`) pin `cta`, `blocked` and `two_stage` (batch 64
+  and 1024), both `uplo`, both jobz, four dtypes, and `memcmp` the eigenvalues and the buffer. A
+  1-ulp perturbation per route fails exactly that route's cases. The vendor family is not covered.
 - **Why it holds for syev:** its kernels use no floating-point atomics; the only atomics are
   integer (the `info` `fetch_max` and the grid-barrier word in `latrd_lower_panel.cc`), and every
   reduction has a fixed order for a given work-group size, which the route and device fix.

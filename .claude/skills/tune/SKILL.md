@@ -5,7 +5,7 @@ description: Run, monitor or debug a batchlas_tune / benchviz tuning campaign, A
 
 # Tuning campaigns
 
-The authoritative reference is `tools/tune/README.md` (flags, tiers, ledgers). This skill covers the operational traps that cost past sessions hours.
+The authoritative reference is `tools/tune/README.md` (flags, tiers, ledgers). This skill covers the operational traps.
 
 ## Before starting
 1. Run `scripts/agent/gpu_health.sh`. A FAIL stops GPU work: tell the user.
@@ -18,7 +18,7 @@ The authoritative reference is `tools/tune/README.md` (flags, tiers, ledgers). T
 
 ## Running
 - Launch with `run_in_background` and `--progress-fd 3 3>events.jsonl`.
-- Then, also in the background, run `scripts/agent/wait_for.sh --pid <tuner pid> --log events.jsonl --stall-min 20`. Exit 3 means no event for 20 minutes: a stuck cell. Inspect it with `tune_procs.sh` and the run log, and tell the user. Do not wait for the user to ask for status; one hung cell went unnoticed for 5.5 h.
+- Then, also in the background, run `scripts/agent/wait_for.sh --pid <tuner pid> --log events.jsonl --stall-min 20`. Exit 3 means no event for 20 minutes: a stuck cell. Inspect it with `tune_procs.sh` and the run log, and tell the user. Report status unprompted.
 - Keep `--cell-timeout` (default 1800 s) unless a cell is known to be long.
 
 ## A/B of a tuning constant

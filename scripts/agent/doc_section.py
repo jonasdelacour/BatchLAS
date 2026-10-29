@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-"""Read one section of a docs page instead of the whole page (docs/perf/gemm.md is 200 KB).
+"""Read one section of a docs page instead of the whole page (several pages are 40-60 KB).
 
     python3 scripts/agent/doc_section.py PAGE [--depth N]     # outline: line, size, anchor, heading
     python3 scripts/agent/doc_section.py PAGE SEL [SEL...]    # print those sections

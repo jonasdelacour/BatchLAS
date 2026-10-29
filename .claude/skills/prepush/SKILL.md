@@ -5,8 +5,6 @@ description: Everything to do before pushing a BatchLAS branch or opening/updati
 
 # Before push
 
-Every post-push CI failure in PRs #191-#195 was something this sequence finds locally.
-
 1. **Gate** (when C++, CMake, tests or tables changed).
    - Run `scripts/gate.sh --only full` with `run_in_background`; it takes about 40 min and holds the box-wide build lock.
    - Add `--only vf`, or nothing (both trees), when routing, vendor wrappers or `can_run` changed.
@@ -20,14 +18,7 @@ Every post-push CI failure in PRs #191-#195 was something this sequence finds lo
    - LFS ledgers, the kernel-hash pins, the strict docs build with CI's pinned Doxygen (installed to `~/.local/opt` once), and every `run_local_checks.sh` gate.
    - The **scope review**.
    - `--only docs|checks|scope|pins` reruns one part.
-4. **Show the user the scope review.** Paste every `REVIEW` line into your report, before pushing when any of these is flagged:
-   - raw results data
-   - large or binary files
-   - new headers
-   - a loosened tolerance
-   - a ledger entry added or removed
-
-   Each of these has drawn an objection before.
+4. **Show the user the scope review.** Paste every `REVIEW` line into your report; before pushing, ask when it flags raw results data, large or binary files, new headers, a loosened tolerance, or an added or removed ledger entry.
 5. **Push and open the PR.**
    - Write the body to a file, then `gh pr create --draft --body-file F`. Edit it later with `scripts/agent/pr_edit.sh`.
    - Then run `scripts/agent/ci_failures.sh <pr>` in the background until it stops returning 2 (pending). Report the verdict, and fix failures before the user finds them.

@@ -1,6 +1,6 @@
 # Device-side group BLAS {#design_device_group_blas}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current
 
 Function templates in `namespace batchlas::device` (`#include <batchlas/blas/device.hh>`) that run
 **inside** a SYCL kernel. A work-item group computes **one** operation on **one** matrix or vector.
@@ -9,14 +9,9 @@ synchronises. The API reference is the @ref api_device_blas group.
 
 ## Device group BLAS: what is provided
 
-- Level 1: `fill`, `copy`, `copyc`, `scal`, `axpy`, `hadamard` (n-ary functor), `dotu`, `dotc`.
-- Level 2: `gemv`, `ger` / `geru` / `gerc`, `trmv`, `symv`, `hemv`.
-- Level 3: `gemm`, `trmm`, `symm`, `syrk`, `herk`, `syr2k`, `her2k`.
-
-Not provided: `hemm`, triangular solves, banded and packed formats. Two differences from reference BLAS:
-
-* `trmv` is out of place: \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$. `x` and `y` may alias.
-* `trmm` takes `beta` and a separate output, and `B` and `C` may alias. Aliasing disables the fast paths.
+Levels 1-3 except `hemm`, triangular solves, banded and packed formats (list: @ref api_device_blas).
+`trmv` is out of place (\f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$, `x` and `y` may
+alias); `trmm` takes `beta` and a separate output, and aliasing `B` and `C` disables the fast paths.
 
 ## Device group BLAS: calling conventions
 
@@ -106,19 +101,13 @@ with one tile-group.
 
 ## Device group BLAS: where it is used
 
-- Library: `src/ops/syev/sytrd/latrd_lower_panel.cc`, `src/ops/syev/sytrd/sytrd_blocked.cc`,
-  `src/kernels/common/larft_wy.hh` (and through it `src/ops/ormqr/kernels/ormqr_blocked.cc`),
-  `src/ops/ormqr/kernels/ormqr_cta.cc`, `src/math-helpers.hh`. Several CTA kernels include
-  `device/detail/group_blas_common.hh` for its executor helpers only.
-- Tests: `tests/device_blas_tests.cc`. Benchmarks: `benchmarks/device_blas_level{2,3}_benchmark.cc`.
-
-The device group BLAS is outside the host-side selection layer ([flat kernel selection](flat-kernel-selection.md)).
-An in-kernel call is never looked up in a table or pinned by `BATCHLAS_<OP>_ROUTE`. Its choices are fixed in the header.
+Callers: `src/ops/syev/sytrd/`, `src/kernels/common/larft_wy.hh`, `src/ops/ormqr/`; tests
+`tests/device_blas_tests.cc`. An in-kernel call is outside [flat kernel selection](flat-kernel-selection.md):
+never in a table, never pinned by `BATCHLAS_<OP>_ROUTE`.
 
 ## Device group BLAS: open debts
 
 - No evidence page measures these kernels. The fast-path gates (256 work-items, minimum extents, `float` only) are design constants.
-- No triangular solve and no `hemm`.
 - The 3-D tile-group race in `gemm`, `symm` and `trmm` ([above](#device-group-blas-the-3-d-launch-generic-fallback)).
   A test that settles it: per op, an `nd_item<3>` launch of at least 2 x 2 tile-groups, `beta != 0`, no
   workspace, compared against the host reference.

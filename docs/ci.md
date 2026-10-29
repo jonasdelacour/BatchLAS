@@ -2,119 +2,53 @@
 
 > **Status:** current · self-hosted runner: RTX 4090 (sm_89), CUDA 13.2, Ubuntu 22.04
 
-Static checks run on GitHub-hosted runners. The GPU jobs run on one self-hosted workstation, and
-they are the only jobs that install or execute anything. They run only when the repository
-variable `GPU_RUNNER` is `true` (Settings → Secrets and variables → Actions → Variables); unset,
-they are skipped. One hosted job, `acpp-compile`, compiles
-every target with AdaptiveCpp. CI gates one configuration (CUDA DPC++ on `sm_89`) and no other row
-of the [Tested platforms](guide/build.md#tested-platforms) table.
-`.github/workflows/ci.yml` is the authority on what runs.
-
-## What CI covers and what it does not
-
-| Covered | Where | Notes |
-| --- | --- | --- |
-| CMake lists parse; `CMakePresets.json` validates | hosted | `cmake --list-presets`; no configure |
-| Exported package has no host paths (source mode) | hosted | Sees only literal paths in the list files |
-| Public headers do not include `src/`; no unprefixed `<blas/…>`, `<util/…>`, `<internal/…>`; no type in the consumer's global namespace | hosted | Text scans; no build sees the last one |
-| No C++ source over the 18% comment-density ceiling | hosted | `check_comment_density.py`. Doxygen doc comments in `include/batchlas/` are exempt; see [Writing API documentation](developer/documentation.md#writing-api-documentation) |
-| Every `evidence:` pointer resolves; cited slugs are unique across `docs/` | hosted | `check_evidence_anchors.py` |
-| No Markdown outside `docs/`; no raw content under an LFS path | hosted | `check_markdown_locations.py`, `check_lfs_pointers.py` |
-| Docs site builds with zero Doxygen warnings; published on push to `main` | hosted | `docs` and `docs-deploy`; see [The docs jobs](#the-docs-jobs) |
-| Every `tuned/<op>.<device>.txt` equals its ledger, byte for byte | hosted | `tuned-tables-ledgers`: `sweep_to_table.py --self-test` and `--check`, fetching only the ledger LFS objects ([generation and the check](design/tuning-data.md#tuning-data-generation-and-check)) |
-| Stale tables reported | hosted | `tuned-tables`: `check_tuned_tables.py --self-test`, then the staleness report; warning only, never fails |
-| Configure and compile every target with AdaptiveCpp 25.10, generic target, CUDA off | hosted | `acpp-compile`: catches DPC++-only spellings; no CUDA-backend code, nothing runs. See [The acpp-compile job](#the-acpp-compile-job) |
-| Configure with real CUDA DPC++ | GPU, per PR | `-DBATCHLAS_ENABLE_CUDA=ON`, then grep for `Using SYCL targets: … nvidia_gpu_sm_89` |
-| Compile every component library and test binary | GPU, per PR | `cmake --build --preset dev-tests` |
-| Run the suite on a GPU | GPU, per PR | `ctest --preset dev-tests -LE slow`: every test but the `slow` suites and `consumer_package_tests` (`ctest -N` counts them). The only place wrong numbers, launch failures and device aborts are caught |
-| Package in package mode | GPU, per PR | `cmake --install` to a temp prefix, then `run_local_checks.sh <prefix>` |
-| Four slow suites; packaging end to end | GPU, nightly | Full `ctest`, with `consumer_package_tests` under `--require` |
-| Vendor-free build configures, compiles, links | GPU, nightly | Report-only (`continue-on-error`); not green, no ledger |
-
-Not covered: AMD/ROCm; CPU-only DPC++ and `icpx` builds (see
-[Why there is no hosted compile job](#why-there-is-no-hosted-compile-job)); macOS and Windows;
-Python bindings and benchmarks (both off in `dev-tests`, so a benchmark that stops compiling
-passes); performance (nothing is timed); other NVIDIA architectures, CUDA versions and DPC++
-builds; multi-GPU behaviour; flakiness (one run, one verdict); and anything a skipped test would
-have covered ([A green run that tested nothing](#a-green-run-that-tested-nothing)).
-
-The gate is a single self-hosted workstation. If it is off, wedged or busy with a human's build,
-every pull request queues behind it.
+Static checks and the AdaptiveCpp compile jobs run on GitHub-hosted runners. The GPU jobs run on one
+self-hosted workstation, only when the repository variable `GPU_RUNNER` is `true`. CI gates one
+configuration (CUDA DPC++ on `sm_89`), no other row of
+[Tested platforms](guide/build.md#tested-platforms). `.github/workflows/ci.yml` is the authority.
 
 ## The jobs
 
-| Job | Runs on | Trigger | Does |
+Triggers: push to `main`, pull requests, `workflow_dispatch` (input `run_nightly`), cron `17 3 * * *`.
+
+| Job | Runs on | When | Does |
 | --- | --- | --- | --- |
-| Static checks (`cmake-lint`, `exported-package`, `public-headers`, `comment-density`, `lfs-pointers`) | `ubuntu-latest` | every trigger | Scripts under `.github/ci/`; all run locally with `.github/ci/run_local_checks.sh`. `comment-density` also runs `check_evidence_anchors.py`, `compare_failures.py --self-test` and `check_markdown_locations.py`, each after its `--self-test` |
-| `gpu-build-test` | `[self-hosted, linux, x64, cuda]` | push to `main`, non-fork PRs; `vars.GPU_RUNNER == 'true'` | Configure, assert the CUDA target, build, `ctest -LE slow`, `compare_failures.py`, install and check the export. Timeout 180 min |
-| `gpu-nightly-full` | same | 03:17 UTC, `workflow_dispatch` with `run_nightly`; `vars.GPU_RUNNER == 'true'` | Full `ctest`, then a vendor-free configure, build and ctest that reports without gating. Timeout 360 min |
-| `acpp-compile` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 (cached), then configures BatchLAS with it and compiles library, tests and benchmarks. Timeout 90 min |
-| `acpp-cuda-consumer` | `ubuntu-24.04` | every trigger | Builds AdaptiveCpp 25.10 with its CUDA backend against CUDA 12.8 (cached), then a vendor-free BatchLAS for `cuda:sm_89`, installs it and builds `examples/consumer` as C++23 against the prefix. Nothing runs. Timeout 120 min |
-| `tuned-tables` | `ubuntu-latest` | every trigger | `check_tuned_tables.py --self-test`, then the stale-table report (never fails) |
-| `tuned-tables-ledgers` | `ubuntu-latest` | every trigger | Fetches the ledger LFS objects (cached by their pointers' oids), then `sweep_to_table.py --self-test` and `--check` |
-| `docs` | `ubuntu-latest` | every trigger | Builds the site (below) |
-| `docs-deploy` | `ubuntu-latest` | push to `main`, after `docs` | Publishes the Pages artifact |
+| `cmake-lint` | `ubuntu-latest` | always | `check_cmake_syntax.py`; `cmake --list-presets=all` (no configure) |
+| `exported-package` | `ubuntu-latest` | always | `check_exported_package.py --source`: no host paths in the export |
+| `public-headers` | `ubuntu-latest` | always | `check_public_headers.py` (no `src/` includes), `check_no_unprefixed_includes.py`, `check_no_global_names.py` |
+| `comment-density` | `ubuntu-latest` | always | `check_comment_density.py` (18% per file), `check_evidence_anchors.py`, `compare_failures.py --self-test`, `check_markdown_locations.py`, each after its `--self-test` |
+| `lfs-pointers` | `ubuntu-latest` | always | `check_lfs_pointers.py`: no raw content under an LFS path |
+| `tuned-tables` | `ubuntu-latest` | always | `check_tuned_tables.py --self-test`, then the stale-table report (warning only) |
+| `tuned-tables-ledgers` | `ubuntu-latest` | always | Fetches ledger LFS objects, `sweep_to_table.py --self-test` and `--check` ([generation and the check](design/tuning-data.md#tuning-data-generation-and-check)) |
+| `docs` | `ubuntu-latest` | always | `gen_db_pages.py --self-test`, pinned Doxygen 1.18.0, `BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh build/docs` (fails on any warning or dead cited anchor); uploads `docs-html` |
+| `docs-deploy` | `ubuntu-latest` | push to `main` | Publishes the Pages artifact; fails until an admin sets Settings → Pages → Source to "GitHub Actions" |
+| `acpp-compile` | `ubuntu-24.04` | always | AdaptiveCpp 25.10 generic target, CUDA off; compiles every target. 90 min |
+| `acpp-cuda-consumer` | `ubuntu-24.04` | always | Vendor-free BatchLAS for `cuda:sm_89` via acpp, installed, consumed as C++23. Nothing runs. 120 min |
+| `gpu-build-test` | `[self-hosted, linux, x64, cuda]` | push, non-fork PR | Configure with `-DBATCHLAS_ENABLE_CUDA=ON`, assert `nvidia_gpu_sm_89`, `cmake --build --preset dev-tests`, `ctest -LE slow`, `compare_failures.py --min-tests 95`, `cmake --install` + `run_local_checks.sh <prefix>`. 180 min |
+| `gpu-nightly-full` | same | cron, `run_nightly` | Full `ctest`, `compare_failures.py --min-tests 100 --require consumer_package_tests`; then a vendor-free build + `ctest -LE slow` with `continue-on-error` (reports, no ledger). 360 min |
 
-### The docs jobs
+Both GPU jobs share concurrency group `batchlas-gpu-runner` (`cancel-in-progress: false`) and refuse
+fork PRs (the runner executes PR content as the box's user). Doxygen version bumps:
+[Building the site](developer/documentation.md#building-the-site).
 
-- **`docs`** runs `docs/tools/gen_db_pages.py --self-test`, downloads Doxygen 1.18.0 (sha256 pinned
-  in `ci.yml`), installs Graphviz, then runs `BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh
-  build/docs`. Strict mode fails on any Doxygen warning. `docs/tools/check_doc_anchors.py` fails on a
-  cited anchor that is not a live section id. Uploads `docs-html` (14 days). The checkout fetches
-  full history (`fetch-depth: 0`) because the Results database dates each file by its adding commit.
-- **`docs-deploy`** uses `actions/deploy-pages`. `pages: write` and `id-token: write` go to this job
-  alone, and it runs no repository code.
-
-> **Note:** a repository admin must enable GitHub Pages once (Settings → Pages → Source: "GitHub
-> Actions"). Until then `docs-deploy` fails and `docs` stays green. To bump Doxygen, see
-> [Building the site](developer/documentation.md#building-the-site).
+**Not covered:** AMD/ROCm; CPU-only DPC++/`icpx` builds (no host-only mode exists; reasoning at the
+foot of `ci.yml`); macOS, Windows; Python bindings and benchmarks under DPC++; performance; other
+NVIDIA architectures and CUDA versions; multi-GPU; flakiness; anything a skipped test would cover.
 
 ### The acpp-compile job
 
-See [Two SYCL implementations](design/sycl-implementations.md). `--acpp-targets=generic`
-compiles device code to target-independent IR and JIT-compiles it at first launch, so a hosted
-runner with no GPU and no CUDA toolkit compiles every TU. There is no device link.
+See [Two SYCL implementations](design/sycl-implementations.md). `--acpp-targets=generic` needs no GPU
+or CUDA toolkit and has no device link; it catches DPC++-only spellings.
 
 | Step | What |
 | --- | --- |
-| Toolchain | `clang-20 llvm-20-dev libclang-20-dev libomp-20-dev` from the Ubuntu 24.04 archive (20.1.2, the package the threadripper02 install uses), netlib `liblapacke-dev liblapack-dev libblas-dev`, `ccache` |
-| AdaptiveCpp | `.github/ci/build_adaptivecpp.sh`: tag `v25.10.0`, which must resolve to `9f842c70`; generic compiler and OpenMP runtime only, every GPU backend off. `actions/cache` keyed on tag, commit, `llvm-20-dev` version and the script's hash. 14 MB install |
-| BatchLAS | `.github/ci/acpp_compile.sh`: the `acpp-tests` preset with `CMAKE_CXX_COMPILER=<install>/bin/acpp`, `Release`, `-Werror=unknown-attributes`, `BATCHLAS_ENABLE_CUDA=OFF`, benchmarks on. Fails unless configure printed `Using AdaptiveCpp targets: generic`, `Using AdaptiveCpp for SYCL:` and `Found LAPACKE:`. Builds `all` |
-| Completeness | `.github/ci/check_built_tests.py`: every registered ctest executable must exist (all but the three tests that run `cmake -P`, `python3` or a shell script) |
-| ccache | `~/.ccache-acpp` in `actions/cache`, per commit, restored from the newest earlier entry |
+| Toolchain | Ubuntu 24.04 `clang-20 llvm-20-dev libclang-20-dev libomp-20-dev`, netlib `liblapacke-dev liblapack-dev libblas-dev`, `ccache` |
+| AdaptiveCpp | `.github/ci/build_adaptivecpp.sh`: tag `v25.10.0` (must resolve to `9f842c70`), OpenMP + generic only; cached on tag, commit, `llvm-20-dev` version, script hash |
+| BatchLAS | `.github/ci/acpp_compile.sh`: preset `acpp-tests`, `Release`, `-Werror=unknown-attributes`, `BATCHLAS_ENABLE_CUDA=OFF`, benchmarks on; asserts `Using AdaptiveCpp targets: generic`, `Using AdaptiveCpp for SYCL:`, `Found LAPACKE:`; builds `all` |
+| Completeness | `.github/ci/check_built_tests.py`: every registered ctest executable exists |
 
-Measured on threadripper02 with the same scripts and a clean environment:
-
-| | Result |
-| --- | --- |
-| AdaptiveCpp build | 58 s wall at `-j4` |
-| BatchLAS, cold | 269 TUs, 2,614 CPU-seconds, 133 s wall at `-j32`; max RSS 1.5 GB per TU |
-| BatchLAS, warm ccache in a second tree | 269 of 269 hits, 6 s wall; cache 45 MB |
-
-Deliberate breaks, each in the scratch copy the job compiles:
-
-| Break | Result |
-| --- | --- |
-| `q.get_backend()` in `src/ops/gemm/gemm.cc` | red: `no member named 'get_backend' in 'hipsycl::sycl::queue'` |
-| `sycl::backend::ext_oneapi_cuda` in `tests/util_span_tests.cc` | red: `no member named 'ext_oneapi_cuda'` |
-| `q.ext_oneapi_submit_barrier()` in `benchmarks/gemm_benchmark.cc` | red |
-| raw `[[intel::max_work_group_size]]` or `[[sycl::reqd_sub_group_size(32)]]` in `src/ops/getrf/getrf.cc` | red only through `-Werror=unknown-attributes` (`acpp_compile.sh`); acpp alone warns |
-| `q.get_backend()` in `src/backends/cublas.cc` | **green**: not compiled with CUDA off |
-
-**Not covered (CUDA off).** `src/backends/cublas.cc`, `cusolver.cc`, `cusparse.cc`, `tools/tune` and
-`tune_race_gpu_tests` are not built, and every `#if BATCHLAS_HAS_CUDA_BACKEND` block in the other
-TUs is skipped. That includes the acpp branch of `impl::run_native`, which only vendor TUs
-instantiate. Closing it needs a CUDA toolkit with cuBLAS, cuSOLVER and cuSPARSE on the runner
-and an acpp configure path that accepts
-`BATCHLAS_ENABLE_CUDA=ON` without a device: generic code has no architecture to detect.
-
-CPU-only guards this job keeps compiling: `tests/{gesvdj_cta,bdsqr,bdsdc}_tests.cc` compile to
-zero tests without `BATCHLAS_HAS_CUDA_BACKEND`, `stein_tests.cc` and `stebz_tests.cc` without a GPU
-backend; the CUDA gemm seam in `trsm_tests.cc`, `factor_bench` and `iluk_convergence_stats` are
-guarded; `tools/tune` and `tune_race_gpu_tests` are built only with a GPU backend
-(`BATCHLAS_BUILD_TUNE_TOOL`).
-
-Run it locally:
+Blind spot: with CUDA off, `src/backends/{cublas,cusolver,cusparse}.cc`, `tools/tune`,
+`tune_race_gpu_tests` and every `#if BATCHLAS_HAS_CUDA_BACKEND` block are not compiled.
 
 ```bash
 .github/ci/build_adaptivecpp.sh "$HOME/acpp-ci"          # or reuse an existing 25.10 install
@@ -123,359 +57,129 @@ JOBS=32 .github/ci/acpp_compile.sh "$HOME/acpp-ci" build/acpp-ci
 
 ### The acpp-cuda-consumer job {#ci_acpp_cuda_consumer_job}
 
-The fullerenes toolchain, `acpp -std=c++23 --acpp-targets=cuda:sm_89` (multipass CUDA), as an
-outside project. [Multipass CUDA](design/sycl-implementations.md#sycl-impl-cuda-aot) needs a
-CUDA 12.x toolkit: acpp 25.10's clang rejects CUDA 13 headers.
-
-| Step | What |
-| --- | --- |
-| Toolchain | as `acpp-compile`, plus `cuda-nvcc cuda-cudart-dev cuda-driver-dev cuda-cccl libcurand-dev libcublas-dev libcusolver-dev libcusparse-dev` 12.8 from NVIDIA's apt network repo (12.8 is the newest CUDA LLVM 20 knows; its clang still warns "only partially supported"). The CUDA device family is built only when the toolkit has cuBLAS, vendor-free too, and the math libraries must be present for the vendor-free check to mean anything |
-| AdaptiveCpp | `ACPP_CUDA_PATH=/usr/local/cuda-12.8 build_adaptivecpp.sh`: also the CUDA runtime backend (linked against the toolkit's `libcuda` stub); cached on tag, commit, LLVM and CUDA package versions |
-| BatchLAS | `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, `BATCHLAS_ACPP_CUDA_PATH`, `BATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `Release`, target `batchlas_components`, installed to a temp prefix. The configure log must name `cuda:sm_89` and the 12.8 toolkit, and `backend_config.h` must read `BATCHLAS_HAS_CUDA_BACKEND 1` and 0 for `CUBLAS`, `CUSOLVER`, `CUSPARSE`, `LAPACKE`, `CBLAS` |
-| Vendor-free check | `readelf -d` of every installed `libbatchlas*.so`: no LAPACKE, CBLAS, BLAS or CUDA math library in `NEEDED` (P0.3: no LAPACKE/CBLAS link when vendor BLAS is off) |
-| Consumer | `examples/consumer` with `CMAKE_CXX_STANDARD=23`, `CMAKE_CXX_EXTENSIONS=OFF`; the verbose build log must show `-std=c++23` and `--acpp-targets=cuda:sm_89` |
-
-Not yet run on GitHub; `actionlint` 1.7.7 passes the workflow (`.github/actionlint.yaml` declares the
-self-hosted `cuda` label). The local equivalent (the 4090 box, AdaptiveCpp `develop` 94ab0d58 on
-LLVM 20 + CUDA 12.8, `cuda:sm_89`) is in [multipass CUDA](design/sycl-implementations.md#sycl-impl-cuda-aot).
-
-### Required properties of the GPU jobs
-
-- **No fork pull requests.** The runner executes PR content as this user, with this `$HOME`, ccache
-  and both GPUs. The `if:` on both jobs restricts them to branches in this repository.
-  `pull_request_target` is not a fix: same execution, more secrets.
-- **One harness on the box at a time.** Both jobs share the `batchlas-gpu-runner` group with
-  `cancel-in-progress: false`, so a half-finished build is queued behind, not discarded. The group
-  cannot arbitrate a human's own build or `ctest` on the same machine; see
-  [OOM kill during ctest](#oom-kill-during-ctest).
+`acpp -std=c++23 --acpp-targets=cuda:sm_89` as an outside project, against CUDA 12.8 from NVIDIA's apt
+repo (acpp 25.10's clang rejects CUDA 13; see
+[multipass CUDA](design/sycl-implementations.md#sycl-impl-cuda-aot)). AdaptiveCpp is built with
+`ACPP_CUDA_PATH`; BatchLAS with `BATCHLAS_ACPP_TARGETS=cuda:sm_89`, `BATCHLAS_ENABLE_VENDOR_BLAS=OFF`,
+target `batchlas_components`. Asserts: `backend_config.h` has `BATCHLAS_HAS_CUDA_BACKEND 1` and 0 for
+`CUBLAS`, `CUSOLVER`, `CUSPARSE`, `LAPACKE`, `CBLAS`; `readelf -d` of every installed `libbatchlas*.so`
+`NEEDED`s no LAPACKE, CBLAS, BLAS or CUDA math library; the `examples/consumer` verbose build shows
+`-std=c++23` and `--acpp-targets=cuda:sm_89`.
 
 ## Standing up the self-hosted runner
 
-> **Warning:** no runner has been installed and observed working end to end (`~/actions-runner`
-> does not exist; `gh` is absent). The prerequisites are measured; the assembly is not. Expect to
-> iterate once on the first run.
+> **Warning:** no runner has yet been observed working end to end. Expect to iterate on the first run.
 
-### Registration token
-
-`config.sh` needs a registration token (not a personal access token; not stored on this machine).
-Get it from **GitHub → the repository → Settings → Actions → Runners → New self-hosted runner**. It
-is valid for one hour. The page prints the release version and download URL to use in the commands below.
-
-### Install
+Get a one-hour registration token, the version and the URL from Settings → Actions → Runners → New
+self-hosted runner.
 
 ```bash
 mkdir -p ~/actions-runner && cd ~/actions-runner
-
-# Version and URL: copy from Settings -> Actions -> Runners -> New self-hosted runner.
 curl -o actions-runner-linux-x64.tar.gz -L \
   https://github.com/actions/runner/releases/download/v<VERSION>/actions-runner-linux-x64-<VERSION>.tar.gz
 tar xzf ./actions-runner-linux-x64.tar.gz
-
-./config.sh \
-  --url https://github.com/jonasdelacour/BatchLAS \
-  --token <REGISTRATION_TOKEN_FROM_THE_SETTINGS_PAGE> \
-  --name batchlas-4090 \
-  --labels self-hosted,linux,x64,cuda \
-  --work _work \
-  --unattended --replace
+./config.sh --url https://github.com/jonasdelacour/BatchLAS --token <REGISTRATION_TOKEN> \
+  --name batchlas-4090 --labels self-hosted,linux,x64,cuda --work _work --unattended --replace
+sudo ./svc.sh install jonaslacour     # as jonaslacour, not root: HOME must be /home/jonaslacour for ccache
+sudo ./svc.sh start && sudo ./svc.sh status
 ```
 
-`config.sh` adds `self-hosted`, `Linux` and `X64` itself; `cuda` is the distinguishing label. Label
-matching in `runs-on:` is case-insensitive.
-
-Install the service rather than using `./run.sh`. An interactive `run.sh` inherits the login-shell
-environment that makes the project build, so it works while the service does not.
-
-```bash
-sudo ./svc.sh install jonaslacour     # run AS jonaslacour, not as root
-sudo ./svc.sh start
-sudo ./svc.sh status
-```
-
-`loginctl show-user jonaslacour` reports `Linger=no`, so a `systemd --user` unit would not survive
-logout; the service must be a system service. A service running as `root`, or as a user whose
-`HOME` is not `/home/jonaslacour`, loses all ccache sharing
-([ccache is cold, or silently useless](#ccache-is-cold-or-silently-useless)).
+Use the system service, not `./run.sh` (inherits the login shell, so it hides the environment trap)
+and not a `systemd --user` unit (`Linger=no`).
 
 ## The environment trap
 
-A systemd service inherits none of `~/.bashrc`. It gets `/etc/environment`: the stock `PATH`, no
-`/opt/dpcpp-cuda`, no CUDA, no `LD_LIBRARY_PATH`. No `/etc/profile.d` script or `ld.so.conf.d` entry
-supplies them.
+The service gets `/etc/environment` only: no `/opt/dpcpp-cuda`, no CUDA, no `LD_LIBRARY_PATH`. Under
+`BATCHLAS_ENABLE_CUDA=AUTO` that configures and passes `ctest` as a CPU-only build, so `ci.yml` records
+the toolchain (`clang++ --version`, `sycl-ls`, `nvidia-smi -L`), pins `-DBATCHLAS_ENABLE_CUDA=ON` and
+greps the configure log for `nvidia_gpu_sm_89`. Keep all three.
 
-- With `LD_LIBRARY_PATH` unset, a bare `sycl-ls` exits 127 (`libsycl.so.9: cannot open shared
-  object file`). Configure does not depend on it: `batchlas_run_sycl_ls`
-  (`cmake/BatchLASDetectSYCL.cmake`) runs the compiler's own `sycl-ls` once with `<prefix>/lib`
-  prepended, and falls back to `nvidia-smi` when the toolchain ships the CUDA UR adapter.
-- Built and installed binaries carry the SYCL runtime directory as `RUNPATH`.
-- Detection failures are `message(STATUS)` or `message(WARNING)`, never `FATAL_ERROR`, under
-  `BATCHLAS_ENABLE_CUDA=AUTO`.
+| Variable | Value |
+| --- | --- |
+| `PATH` | prepend `/opt/dpcpp-cuda/bin`, `/usr/local/cuda-13.2/bin` |
+| `LD_LIBRARY_PATH` | `/opt/dpcpp-cuda/lib` (mandatory), `/usr/local/cuda-13.2/lib64`, `/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8`, `/usr/lib/x86_64-linux-gnu` |
+| `CUDA_PATH` | `/usr/local/cuda-13.2` |
+| `HOME` | `/home/jonaslacour` (from the service user) |
 
-Under `AUTO`, a runner whose compiler has no CUDA adapter, or whose `sycl-ls` and `nvidia-smi` both fail, configures, compiles,
-installs and passes `ctest` on a CPU-only library that never emitted NVPTX. This is the pitfall in
-the TL;DR of [the agent guide](developer/agent-guide.md); the workflow pins `ON` and greps the
-target (see Verify below).
+Must not be set: `LIBRARY_PATH` (drags the HPC SDK `libgomp` into links), `BATCHLAS_TEST_BACKEND` /
+`BATCHLAS_TEST_FLOAT_TYPE` (a typo skips every test green), `OPENBLAS_CORETYPE` (set per test).
 
-### What must be set
-
-| Variable | Value | Why |
-| --- | --- | --- |
-| `PATH` | prepend `/opt/dpcpp-cuda/bin`, `/usr/local/cuda-13.2/bin` | `cmake/BatchLASCompilerBootstrap.cmake` finds `sycl-ls` first, then the compiler beside it |
-| `LD_LIBRARY_PATH` | `/opt/dpcpp-cuda/lib` (mandatory), `/usr/local/cuda-13.2/lib64`, `/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8`, `/usr/lib/x86_64-linux-gnu` | The toolchain step's bare `sycl-ls` needs the first entry; built binaries carry it as `RUNPATH` |
-| `CUDA_PATH` | `/usr/local/cuda-13.2` | Searched by `FindCUDAToolkit` before the HPC SDK fallback; becomes the driver's `--cuda-path` |
-| `HOME` | `/home/jonaslacour` | ccache is looked up in `$HOME/.local/bin`. Set by the service user, not the workflow |
-
-Must not be set:
-
-- **`LIBRARY_PATH`.** `~/.bashrc` exports `LIBRARY_PATH=$LD_LIBRARY_PATH` after adding the HPC SDK's
-  `compilers/lib`, which drags that SDK's `libgomp` into every link. The workflow lists the four
-  directories explicitly and leaves `LIBRARY_PATH` unset.
-- **`BATCHLAS_TEST_BACKEND` / `BATCHLAS_TEST_FLOAT_TYPE`.** A typo produces a green, vacuous run;
-  see [A green run that tested nothing](#a-green-run-that-tested-nothing).
-- **`OPENBLAS_CORETYPE`.** `tests/CMakeLists.txt` sets it per test, and the configure-time dgemm
-  health check runs with `--unset=OPENBLAS_CORETYPE`; a global value defeats that probe. Source
-  `build-dev-tests/batchlas-env.sh` only for a CI step that launches a binary outside `ctest`.
-
-### Where to put it
-
-- **The workflow `env:` block** (on both GPU jobs) is the version-controlled, authoritative copy.
-- **`~/actions-runner/.env`** holds the same `PATH` and `LD_LIBRARY_PATH` for steps that run before a
-  job's `env:` applies (`actions/checkout`, artifact upload). It is read at service start, so restart
-  the service after editing.
-
-### Verify
-
-```bash
-sycl-ls        # must list an entry beginning [cuda:gpu]
-```
-
-A failure here is silent, so `ci.yml` asserts it three ways (keep all three):
-
-1. A "Record the toolchain" step runs `clang++ --version`, `cmake --version`, `sycl-ls` and
-   `nvidia-smi -L` before building.
-2. Configure uses `-DBATCHLAS_ENABLE_CUDA=ON`, not the preset's inherited `AUTO`. `ON` aborts with
-   `FATAL_ERROR` naming the missing `[cuda:gpu]` entry.
-3. The configure log is grepped for `Using SYCL targets: … nvidia_gpu_sm_89`. `spir64_x86_64` means a
-   CPU-only build.
+The workflow `env:` block of both GPU jobs is authoritative; `~/actions-runner/.env` repeats `PATH`
+and `LD_LIBRARY_PATH` for pre-`env:` steps and is read at service start. Verify with `sycl-ls`: it
+must list a `[cuda:gpu]` entry.
 
 ## The known-failures workflow
 
-`main` is not green. `tests/known-failures.txt` lists seven gtest cases:
-
-| ctest test | gtest case |
-| --- | --- |
-| `lanczos_tests` | `LanczosTestBase.LanczosTest` |
-| `lanczos_tests` | `LanczosTestBase.ToeplitzEigenpairs` |
-| `lanczos_tests` | `LanczosStride.ClosedFormSpectrum` |
-| `steqr_tests` (slow) | `SteqrTest/0.StressExtremeMagnitudesN32` (float, `Backend::NETLIB`) |
-| `steqr_tests` (slow) | `SteqrTest/1.StressExtremeMagnitudesN32` (double, `Backend::NETLIB`) |
-| `gesvd_tests` (slow) | `GesvdTest/2.CtaProviderCoversAllJobCombinations` (float, `Backend::CUDA`) |
-| `gesvd_tests` (slow) | `GesvdTest/3.CtaProviderCoversAllJobCombinations` (double, `Backend::CUDA`; seen on sm_120 only) |
-
-The lanczos cases are [the open spectrum defect](design/known-defects.md#lanczos-returns-a-spectrum-about-three-times-too-wide),
-the gesvd cases [defect 18](design/known-defects.md#defect-18-gesvd_cta-left-vectors-lose-orthogonality-as-eps-times-kappa-squared).
-
-The gate is not `ctest`'s exit code. **`tests/known-failures.txt`** is the ledger: expected
-failures, one per line, each with a comment saying why. It is a debt ledger, not an allowlist.
-**`.github/ci/compare_failures.py`** judges the run's machine-readable reports against it.
-
-### Running it by hand
-
-The script needs both report layers: per-case gtest XML (the only view inside a binary) and ctest's
-JUnit (the only place `consumer_package_tests`, a bash script with no gtest XML, and never-built
-executables appear).
+`main` is not green. The gate is not `ctest`'s exit code: `.github/ci/compare_failures.py` judges the
+gtest XML and ctest JUnit against the ledger `tests/known-failures.txt` (expected failures, one per
+line, each with a `#` reason; a debt ledger, not an allowlist).
 
 ```bash
 mkdir -p build-dev-tests/gtest-xml
 GTEST_OUTPUT=xml:build-dev-tests/gtest-xml/ \
-    ctest --preset dev-tests --output-junit ctest.xml
-python3 .github/ci/compare_failures.py \
-    --junit ctest.xml \
+    ctest --preset dev-tests --output-junit ctest.xml      # trailing slash: one XML per executable
+python3 .github/ci/compare_failures.py --junit ctest.xml \
     --gtest-dir build-dev-tests/gtest-xml \
-    --require consumer_package_tests \
-    --expected-tests-from build-dev-tests
+    --require consumer_package_tests --expected-tests-from build-dev-tests
 ```
 
-- The trailing slash on `GTEST_OUTPUT` is required: it selects directory mode, one XML per executable.
-- `N` is a fixed count, recorded once from `ctest --preset dev-tests -N` ("Total Tests") on a
-  known-good full configure of `main`, never from the tree under test. Taking it from the same tree
-  makes the guard self-referential: a configure that registers fewer tests (smoke set, CPU tests
-  off, a dropped `add_test`) then still passes. CI's own counts are in
-  `.github/workflows/ci.yml` (its `--expected-tests` arguments) and cover different trees.
-- `--known` defaults to `tests/known-failures.txt`. An AdaptiveCpp tree has its own self-contained
-  ledger, `tests/known-failures-acpp.txt`, chosen by `--sycl-impl ACPP` or by `--build-dir <tree>`
-  (read from the cached `BATCHLAS_SYCL_IMPL_RESOLVED`). `run_local_checks.sh` passes it when
-  `BATCHLAS_BUILD_DIR` is set. An AdaptiveCpp Metal tree uses a third,
-  `tests/known-failures-acpp-metal.txt`, chosen when the cache (or `--gpu-family`, or the
-  environment) has `BATCHLAS_GPU_FAMILY_RESOLVED=METAL`. An AdaptiveCpp multipass CUDA tree
-  (`BATCHLAS_ACPP_TARGETS=cuda:sm_XX`, read from the cache or passed as `--acpp-targets`) uses a
-  fourth, `tests/known-failures-acpp-cuda.txt`. The per-host supplement
-  (`tests/known-failures-host-<host>.txt`) is read on DPC++ trees only: its entries pin DPC++
-  type_params and name whole binaries, which on an acpp tree would excuse unrelated crashes.
-- `--expected-tests-from <tree>` compares the junit count with what `ctest --test-dir <tree> -N`
-  registers. After `ctest -LE slow`, pass `--label-exclude slow` so the count is filtered the same way.
-  It catches a run that stopped early, not a configure that registered fewer tests: the count shrinks
-  with the tree.
-- `--min-tests N` is the checked-in floor for that case: CI passes 95 after `-LE slow` and 100 on the
-  full run (threadripper02's full-target tree registers 99 and 104). Raise it when tests are added.
-- Use `--require consumer_package_tests` on a full run only: `ctest -LE slow` does not run it.
+| Flag | Meaning |
+| --- | --- |
+| `--known` | Ledger; default by tree: `known-failures.txt` (DPC++), `-acpp.txt` (`--sycl-impl ACPP`), `-acpp-metal.txt` (`--gpu-family METAL`), `-acpp-cuda.txt` (`--acpp-targets cuda:sm_XX`); `--build-dir <tree>` reads these from the cache |
+| `--host-ledger` | Per-host supplement `tests/known-failures-host-<host>.txt`; DPC++ trees only |
+| `--expected-tests-from <tree>` | JUnit count must equal `ctest -N` of the tree (catches a truncated run); add `--label-exclude slow` after `-LE slow` |
+| `--min-tests N` | Fixed floor from a known-good full configure of `main`, never the tree under test. CI: 95 (`-LE slow`), 100 (full) |
+| `--require <test>` | Anything but a real pass is an error; full runs only (`consumer_package_tests` is `slow`) |
 
-### Both directions fail the gate
+Exit 1 on `NEW FAILURES` (failed, not listed) and on `NEWLY PASSING` (listed, passed: delete the line
+in the same commit as the fix). Also reported: `SKIPPED` (no case executed), `LISTED BUT NOT IN THIS
+REPORT` (did not run), `[COARSE: …]` (matched at ctest level only).
 
-- **Unexpected failure** (failed, not in the ledger): exit 1, under `NEW FAILURES`.
-- **Newly passing listed case**: exit 1, under `NEWLY PASSING`. Fix it by deleting the ledger line in
-  the same commit as the fix. A warning in a green run would be invisible, since the GPU job uploads
-  its report only on failure.
-
-Other report sections: `SKIPPED` (binaries in which no case executed, a vacuous run);
-`LISTED BUT NOT IN THIS REPORT` (ledger entries the run never reached); `[COARSE: …]` (an entry
-matched only at ctest-test level, so the specific case is unverified).
-
-### Adding and removing entries
-
-Fix the bug if you can. Otherwise, add a line keyed `<ctest-test>::<Suite>.<Case>`, for example
-`lanczos_tests::LanczosTestBase.LanczosTest`, with the reason in a `#` comment. For a typed test, pin
-the type: `steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32;type_param=<spelling>`. Run the suite
-once; the script prints the observed spelling. A typed entry without the pin warns, and a mismatched
-pin is a hard error.
-
-On `NEWLY PASSING`, confirm it is a real fix (`LISTED BUT NOT IN THIS REPORT` means the case did not
-run), delete the line in the same commit, and if the case is gone (renamed, deleted, not
-instantiated), say so in the commit message.
-
-### Baseline caveats
-
-- **Typed-test indices depend on the build configuration.** `SteqrTest/0` and `/1` are float and
-  double `NETLIB` under `dev-tests`. Under `dev-gpu-tests` (`BATCHLAS_CPU_TARGET=none`) the host block
-  vanishes and `SteqrTest/0` becomes a different test. The `;type_param=` pin guards against this.
-- **`lanczos_tests` compiles to zero tests without a GPU backend.** Its file sits in one
-  `#if BATCHLAS_HAS_GPU_BACKEND` with no `#else`. The target links and reports Passed with `tests="0"`,
-  and its three ledger entries land in `LISTED BUT NOT IN THIS REPORT`.
+Entries are `<ctest-test>::<Suite>.<Case>`; pin typed tests with `;type_param=<spelling>` (the script
+prints the observed spelling; a mismatched pin is an error). Typed-test indices shift with the
+configuration (`SteqrTest/0` differs under `BATCHLAS_CPU_TARGET=none`), and `lanczos_tests` compiles to
+zero tests without a GPU backend, so its entries land in `LISTED BUT NOT IN THIS REPORT`.
 
 ## Running all of it locally
 
-Static checks take seconds and need no toolchain:
-
 ```bash
-.github/ci/run_local_checks.sh                 # exactly what the hosted jobs run
-.github/ci/run_local_checks.sh /tmp/inst       # ...plus the real installed package
+.github/ci/run_local_checks.sh                 # exactly what the hosted static jobs run
+.github/ci/run_local_checks.sh /tmp/inst       # ...plus the package installed with cmake --install
+BATCHLAS_BUILD_DIR=build .github/ci/run_local_checks.sh   # picks the tree's ledger
 ```
 
-The wrapper builds the docs into `build/docs` when Doxygen 1.18+ is on `PATH` (not strict; set
-`BATCHLAS_DOCS_STRICT=1` to match the `docs` job). Run `cmake --install build-dev-tests --prefix /tmp/inst`
-first and pass the prefix to check the package before pushing anything that touches the install rules.
+It builds the docs when Doxygen 1.18+ is on `PATH` (`DOXYGEN=` to override; `BATCHLAS_DOCS_STRICT=1`
+to match the `docs` job).
 
-Full gate, as the nightly runs it (the preset sets `execution.jobs=1`; do not add `-j`):
+Full gate as the nightly runs it (the preset sets `execution.jobs=1`; do not add `-j`):
 
 ```bash
 cmake --preset dev-tests -DBATCHLAS_ENABLE_CUDA=ON
-cmake --build --preset dev-tests            # tens of minutes
+cmake --build --preset dev-tests
 ctest --preset dev-tests
 ```
 
-Locally, `scripts/gate.sh` (on the 4090 box `CUDA_VISIBLE_DEVICES=0 scripts/gate.sh`) does the
-same on persistent trees and adds the vendor-free tree:
-`build-gate` (preset `dev-tests`, full ctest, `compare_failures.py` against the ledger) and
-`build-gate-vf` (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `-LE slow`, no ledger, so it reports names).
-Both set `BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF`, so every executable relinks against the `.so` it
-tests; the gate holds the box-wide build lock through ctest. Its ctest runs with
-`ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` when that is unset and `sycl-ls` lists a `native_cpu`
-device, so CPU queues do not land on `native_cpu`. First run on the 4090 box: 67 min;
-later runs rebuild incrementally. Its reports: `build-gate/gate/compare.txt` and
-`build-gate/gate-summary.txt`.
+`scripts/gate.sh` (`CUDA_VISIBLE_DEVICES=0` on the 4090 box) does this on persistent trees:
+`build-gate` (full ctest, `compare_failures.py`; report `build-gate/gate/compare.txt`) and
+`build-gate-vf` (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `-LE slow`, no ledger), summary in
+`build-gate/gate-summary.txt`. It sets `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` when unset and
+`sycl-ls` lists `native_cpu`. Serial on the 4090 box (2026-10): `-LE 'slow|heavy'` 416 s, full 1287 s.
 
-`ctest -N` counts the tests. Serial on the 4090 box (2026-10): the quick tier `ctest -LE 'slow|heavy'`
-416 s, the full suite 1287 s. `ctest -LE slow` (what PR CI runs) includes the `<name>_heavy` case
-tiers. Do not run the full suite on every edit; `tests/README.md` has the scoping table.
-`scripts/ctest_gpus.sh` was validated only on threadripper02; CI and local full gates stay serial.
-
-Two scopes are wrong for a pre-push gate: `ctest -LE slow` excludes the four `slow` suites and
-`consumer_package_tests`; `ctest -LE 'slow|heavy'` also drops the saturating-batch race guards;
-`BATCHLAS_TEST_TARGET_SET=smoke` (the `fast-dev` preset) runs only the smoke binaries, with none of
-the ledger's failures. It is an edit-loop tool only.
-
-## Why there is no hosted compile job
-
-This section is about DPC++. The AdaptiveCpp build has one:
-[The acpp-compile job](#the-acpp-compile-job).
-
-`BATCHLAS_CPU_TARGET=none` does not disable the device pass; it only skips appending
-`native_cpu` / `spir64_x86_64` to the SYCL target list. `-fsycl` is unconditional, so on a GPU-less
-runner the driver falls back to its default `spir64` device pass (verified with `clang++ -fsycl -###`
-and the `__CLANG_OFFLOAD_BUNDLE` sections in the object). There is no host-only mode.
-
-A hosted job would pay several GB of oneAPI apt and a device pass over 95 TUs, to build a CPU-only
-library that cannot catch a CUDA-backend compile error. It becomes worthwhile with a second
-self-hosted machine or a prebuilt toolchain container with a warm ccache. Reasoning: the comment at
-the foot of `ci.yml`.
+Not a pre-push gate: `-LE slow` (no slow suites, no `consumer_package_tests`), `-LE 'slow|heavy'` (also
+no saturating-batch race guards), `BATCHLAS_TEST_TARGET_SET=smoke`. Scoping table: `tests/README.md`.
 
 ## Troubleshooting
 
-### The runner shows offline
-
-```bash
-sudo ~/actions-runner/svc.sh status
-sudo journalctl -u 'actions.runner.*' -n 100 --no-pager
-```
-
-- **Symptom:** runner offline.
-- **Cause, most common first:** a reboot with the unit not enabled; the registration removed from
-  Settings → Actions → Runners; a self-update that could not reach GitHub.
-- **Fix:** start the unit, or re-run `config.sh` with a fresh token and `--replace`.
-
-- **Symptom:** a workflow stuck for hours. A job for `[self-hosted, linux, x64, cuda]` with no online
-  runner waits, then times out after six hours. The same happens when another job holds the
-  `batchlas-gpu-runner` group.
-- **Fix:** check the Actions tab before assuming the service is dead.
-
-### ccache is cold, or silently useless
-
-- **Symptom:** the first build after a fresh clone or toolchain change takes tens of minutes (95
-  library and test TUs). The 180-minute timeout is expected; do not kill it. The cache never warms.
-- **Cause:** without `CCACHE_BASEDIR` and `CCACHE_NOHASHDIR=1`, ccache hashes absolute paths, and each
-  runner ref lives at a different path. A bare `CMAKE_CXX_COMPILER_LAUNCHER=ccache` got 3/196 hits, with
-  no error. Settings in `~/.config/ccache` are not read by the job either.
-- **Fix:** use the generated `<builddir>/batchlas-ccache` wrapper (`cmake/BatchLASCcache.cmake`). It
-  exports `CCACHE_DEPEND=1`, `CCACHE_MAXSIZE=20G`, `CCACHE_SLOPPINESS`, `CCACHE_BASEDIR` and
-  `CCACHE_NOHASHDIR=1`. Run ccache outside it and it sees the 5.0 G default and can evict. With the
-  wrapper a second tree hit 187/196; the misses are TUs with an absolute path in a `-D`.
-- Links are never cached. About 213 s of a 214 s all-hits rebuild is device linking, and `-j` does
-  not shorten it. The nightly vendor-free build shares no entries (different vendor macros), so it is
-  cold by construction.
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Runner offline | Unit not enabled after reboot; registration removed; failed self-update | `sudo ~/actions-runner/svc.sh status`, `journalctl -u 'actions.runner.*' -n 100`; restart or re-run `config.sh --replace` |
+| Workflow stuck for hours | No online runner, or the `batchlas-gpu-runner` group is held | Check the Actions tab; times out at 6 h |
+| ccache never warms | Bare `ccache` launcher hashes absolute paths | Use `<builddir>/batchlas-ccache` (`cmake/BatchLASCcache.cmake`). Links are never cached; the nightly vendor-free tree is cold by construction |
+| Green, but packaging untested | `consumer_package_tests` skips with code 77 | `--require consumer_package_tests` (nightly), or run the full `ctest` |
+| Green, zero assertions | `GTEST_SKIP()` in `BatchLASTest::SetUp` (bad `BATCHLAS_TEST_BACKEND`/`_FLOAT_TYPE`) | Read `SKIPPED` in the `compare_failures.py` report, not the exit code |
 
 ### OOM kill during ctest
 
-- **Symptom:** `ctest` dies mid-run with no test failure, or a test reports "Child aborted".
-  `dmesg -T | grep -i 'killed process'` names the victim.
-- **Cause:** concurrency. The machine has 125 GB and zero swap, so memory pressure is a kill, not a
-  slowdown. Both recorded kills had a build or a second `ctest` running.
-- **Fix:** stop everything else on the box (interactive builds, a second `ctest`, benchmarks). Keep
-  `ctest` serial; do not add `-j`. In `GTEST_OUTPUT` directory mode the XML is named after the
-  executable, so a route-pinned rerun and its unpinned twin collide. Alone, every suite fits
-  (`steqr_tests`, the largest, takes 12 s).
-
-### A green run that skipped consumer_package_tests
-
-- **Symptom:** green run, but packaging was not tested.
-- **Cause:** ctest exits 0 for a skipped test. `consumer_package_tests` has `SKIP_RETURN_CODE 77`, and
-  `examples/consumer_test.sh` has eight exit-77 paths. The dangerous one is "no usable device", reached
-  after a successful install, configure, build and launch.
-- **Fix:** the nightly passes `--require consumer_package_tests`, so anything but a real pass is an
-  error. Do not add `--require` to the per-PR job; it never reaches the test. To check packaging on a
-  branch, run the nightly by hand (`workflow_dispatch` with `run_nightly`) or the full `ctest` locally.
-
-In ctest JUnit, only `status="run"` with no child is executed-and-passed. Skips are `status="notrun"`
-with a `<skipped>` child, which includes never-built binaries. The root summary attributes are unreliable.
-
-### A green run that tested nothing
-
-- **Symptom:** all tests green, zero assertions executed.
-- **Cause:** `BatchLASTest::SetUp` in `test_utils.hh` calls `GTEST_SKIP()` when `should_run_backend` or
-  `should_run_float_type` rejects an instantiation. A skip does not fail, so a binary with every case
-  skipped exits 0. An unrecognised `BATCHLAS_TEST_BACKEND` skips everything, so one typo in a CI
-  variable turns every test green.
-- **Defences:** CI sets neither `BATCHLAS_TEST_BACKEND` nor `BATCHLAS_TEST_FLOAT_TYPE`, and their
-  absence from `env:` is a gate. `compare_failures.py` names such binaries under `SKIPPED`, read that
-  section rather than the exit code. A never-built executable is still registered, so it is not a
-  count problem: its `notrun` testcase is classified `FAILED`. The
-  assertions in [The environment trap](#the-environment-trap) catch a CPU-only build.
+`ctest` dies with no test failure or "Child aborted"; `dmesg -T | grep -i 'killed process'` names the
+victim. The box has 125 GB and no swap, and both recorded kills had a build or a second `ctest`
+running. Stop everything else and keep `ctest` serial.

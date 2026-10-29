@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// trsm for the tuner (flat-kernel-selection-phase3-plan.md §1.2, §3): a strongly diagonally
+// trsm for the tuner (flat-kernel-selection.md#phase-3-trsm, #phase-3-grids): a strongly diagonally
 // dominant triangular A (other triangle poisoned with a large finite value), random B, alpha with
 // an imaginary part, and the componentwise backward error of op(A) X = alpha B (Left) or
 // X op(A) = alpha B (Right) through MatrixView::gemm_backward_error (docs/design/verification.md). trans=T times

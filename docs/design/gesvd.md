@@ -1,330 +1,184 @@
 # gesvd design {#design_gesvd}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current · checked 2026-10-29
 
-Batched SVD has four families, chosen per shape by `tuned/gesvd.<device>.txt`: one-sided Jacobi
-(`gesvdj_cta`, \f$\max(m,n) \le 64\f$; complex\<double\> with vectors to 32), the normal-equations
-`cta` path (\f$\le 32\f$), the bidiagonal `blocked` path (`gebrd`, then `bdsdc` on the batched
-`stedc`, then `ormbr`), and the vendor. Complex general input takes `blocked`: `gebrd` follows
-LAPACK `zlabrd`/`zgebd2` with a real-beta `zlarfg`, so the bidiagonal is real and the real `bdsdc`
-solves it; its real vectors are widened into U and \f$V^H\f$ before the complex `unmbr`
-back-transforms (rows hold \f$\bar u\f$, as `unmbr 'P'` expects). This page gives the design rules,
-the Jacobi kernel's local-memory and scaling rules, and the traps. Measurements are in
-@ref perf_gesvd "the GESVD performance page".
+Batched SVD has four families, ranked per shape by `tuned/gesvd.<device>.txt`: one-sided Jacobi
+(`jacobi`, \f$\max(m,n) \le 64\f$, lower where local memory is short), the normal-equations `cta`
+path (\f$\le 32\f$), the bidiagonal `blocked` path (`gebrd`, `bdsdc` on the batched `stedc`,
+`ormbr`), and the vendor. Complex general input takes `blocked`: `gebrd` uses a real-beta
+`zlarfg`, so the bidiagonal is real and the real `bdsdc` solves it; its vectors are widened before
+the complex `unmbr`. Measurements: @ref perf_gesvd "the GESVD performance page".
 
 | Piece | Source |
 |---|---|
 | entry point, `can_run`, workspace, launch | `src/ops/gesvd/gesvd.cc` |
-| families `jacobi`, `cta`, `blocked`, `vendor`; keys `herm`, `vec`, `m`, `n` | `src/ops/gesvd/choice.hh` |
-| Jacobi and CTA ceilings (`gesvd_jacobi_max_dim`, `kGesvdCtaMaxDim`) | `src/ops/gesvd/gesvd_native.hh` |
+| families and table keys (`herm`, `vec`, `m`, `n`) | `src/ops/gesvd/choice.hh` |
+| ceilings (`gesvd_jacobi_max_dim`, `kGesvdCtaMaxDim`, `kGesvdVendorCudaMaxDim`) | `src/ops/gesvd/gesvd_native.hh` |
 | one-sided Jacobi kernel | `src/ops/gesvd/kernels/gesvdj_cta.cc` |
 | `cta` and `blocked` drivers | `src/ops/gesvd/kernels/gesvd_blocked.cc` |
 | sub-ops | `src/ops/gesvd/{gebrd,bdsdc,bdsqr,ormbr}/` |
-| `GesvdjParams` | `include/batchlas/blas/extensions.hh:1734` |
+| `GesvdjParams` (`max_sweeps` 30, `tol_multiplier` 1) | `include/batchlas/blas/extensions.hh` |
 
 ## gesvd design: why one-sided Jacobi
 
-The accuracy target is cuSOLVER `gesvdjBatched`, which gives relative accuracy (Demmel–Veselić):
+The accuracy target is cuSOLVER `gesvdjBatched`: relative accuracy
+\f$|\delta\sigma_i|/\sigma_i \le O(\varepsilon)\,\kappa(A_c)\f$ with \f$A_c\f$ column-equilibrated
+(Demmel–Veselić 1992). Paths through the tridiagonal of \f$B^T B\f$ square \f$\kappa\f$
+([defect A](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa)).
 
-\f[ \frac{|\delta\sigma_i|}{\sigma_i} \le O(\varepsilon)\,\kappa(A_c), \f]
-
-where \f$A_c\f$ is the column-equilibrated matrix. Paths that form the tridiagonal of
-\f$B^T B\f$ take \f$\sigma = \sqrt{\lambda}\f$ and square the condition number (see
-[the normal-equations defect](../perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa)).
-
-Hestenes one-sided Jacobi applies 2x2 rotations to column pairs of A until the columns are
-orthogonal. Then \f$\sigma_i = \|A_i\|\f$, \f$U_i = A_i / \sigma_i\f$, and V is the accumulated
-rotation. Each pair's Gram is recomputed from the current columns, so the test is relative:
-
-\f[ |a_{pq}| > \mathrm{tol}\cdot\sqrt{|a_{pp}|\,|a_{qq}|}, \qquad \mathrm{tol} = t\cdot n\cdot\varepsilon \f]
-
-An absolute test \f$|a_{pq}| \le \mathrm{tol}\cdot\max|a_{kl}|\f$ loses this accuracy (LAWN 169,
-Remark 2.2).
-
-Why Jacobi here:
-
-- **No back-transform.** U and V come out of the iteration.
-- **One kernel.** The `cta` family needs five or more launches with global round trips.
-- **Dial.** `max_sweeps` (default 30) and `tol_multiplier` (default 1) in `GesvdjParams`.
-- **Reuse.** `gesvdj_cta` is `syev_jacobi_cta` without its Phase 2 (the \f$A \leftarrow U^H A\f$
-  update), plus a Gram phase, column norms and an SVD epilogue.
-
-The kernel keeps the relative stopping test and skips converged pairs from LAPACK `xGESVJ`. It
-does not use column equilibration ([scaling](#gesvdj_cta-global-power-of-two-scaling)) or de Rijk
-ordering ([evidence](../perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected)).
-
-References: Hestenes (1958); Demmel & Veselić, SIAM J. Matrix Anal. Appl. 13(4) (1992); Drmač &
-Veselić, LAWN 169/170; Golub & Van Loan, Alg. 8.5.1.
+Hestenes one-sided Jacobi rotates column pairs until the columns are orthogonal; then
+\f$\sigma_i = \|A_i\|\f$, \f$U_i = A_i/\sigma_i\f$, and V is the accumulated rotation. The
+rotation test is relative, on the Gram of the current columns:
+\f$|a_{pq}| > t\,n\,\varepsilon\sqrt{|a_{pp}|\,|a_{qq}|}\f$. An absolute test against
+\f$\max|a_{kl}|\f$ loses the accuracy (LAWN 169, Remark 2.2). Jacobi also needs no back-transform
+and runs as one kernel, where `cta` needs five or more launches. `gesvdj_cta` is
+`syev_jacobi_cta` without its \f$A \leftarrow U^H A\f$ update, plus a Gram phase and an SVD
+epilogue. It skips converged pairs as `xGESVJ` does, and uses neither column equilibration
+([scaling](#gesvdj_cta-global-power-of-two-scaling)) nor de Rijk ordering
+([rejected](../perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected)).
 
 ## gesvd design: why bdsdc goes through Golub-Kahan
 
-`bdsdc` is not a port of LAPACK `dlasd*`. For B upper bidiagonal with diagonal d and
-superdiagonal e,
-
-\f[ T = \begin{pmatrix} 0 & B^T \\ B & 0 \end{pmatrix} \f]
-
-has eigenvalues \f$\pm\sigma_i\f$. Under the perfect-shuffle permutation it is a symmetric
-tridiagonal matrix of order 2n with zero diagonal and off-diagonal
-\f$(d_0, e_0, d_1, e_1, \dots, d_{n-1})\f$, which the batched `stedc` solves. Nothing is squared.
-A native bidiagonal divide and conquer would be about 2000 lines of new device code. Solving the
-doubled problem with `stedc` is about 1000x faster than the sequential `bdsqr`
+`bdsdc` is not a port of `dlasd*`. For upper bidiagonal B the matrix
+\f$T = \begin{pmatrix} 0 & B^T \\ B & 0 \end{pmatrix}\f$ has eigenvalues \f$\pm\sigma_i\f$; under
+the perfect shuffle it is a zero-diagonal tridiagonal of order 2n with off-diagonal
+\f$(d_0, e_0, d_1, \dots, d_{n-1})\f$, which the batched `stedc` solves without squaring anything.
+That reuses existing device code instead of ~2000 lines of bidiagonal divide and conquer, and is
+about 1000x faster than the sequential `bdsqr`
 ([table](../perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver)).
 
-**Extraction is exact.** For \f$\sigma \ne 0\f$ the \f$+\sigma\f$ eigenvector is \f$(v; u)/\sqrt{2}\f$
-interleaved, so even and odd rows give v and u. The only residue is a possible sign flip on u
-when the \f$\pm\sigma\f$ vectors mix by more than 45°. It costs at most \f$2\sigma\f$ in the
-residual, and only when \f$\sigma \approx \varepsilon\|B\|\f$.
-
-**Null space.** Repeated zero singular values, or a \f$\pm\sigma\f$ pair too close to resolve, make
-eigenvectors collapse onto the same (v, u). `bdsdc_repair_degenerate` rebuilds each column with
-\f$\sigma_i < 500\,\varepsilon\,\sigma_{\max}\f$ by Gram–Schmidt against the final columns. Any
-orthonormal completion satisfies \f$B = U S V^T\f$ to within \f$2\sigma\f$. The threshold has no
-factor of n. The rejected criteria are in the
-[perf page](../perf/gesvd.md#gesvd-bdsdc-null-space-repair-criteria-that-failed).
-
-`bdsdc` writes the vectors it computes, so \f$U^T U = I\f$ is a property of the method.
-`tests/bdsdc_tests.cc` checks it on graded spectra, a hostile gebrd-like generator, rank
-deficiency of multiplicity 1-5, and the all-zero matrix.
-
-`BATCHLAS_GESVD_BIDIAG` picks the `blocked` path's bidiagonal solver
-(`gesvd_bidiag_solver`, `src/ops/gesvd/kernels/gesvd_blocked.cc:57-65`):
-
-| Value | Solver | Note |
-|---|---|---|
-| unset, `bdsdc`, anything else | `bdsdc` | default |
-| `bdsqr` | one thread per matrix, zero-shift QR | keeps relative accuracy for tiny \f$\sigma\f$ at 300-400x the cost |
-| `normal` | tridiagonal of \f$B^T B\f$ | squares \f$\kappa\f$; overridden for a thin tall U (`:80-82`) |
+- **Extraction is exact:** the \f$+\sigma\f$ eigenvector is \f$(v; u)/\sqrt{2}\f$ interleaved. A
+  sign flip on u when the \f$\pm\sigma\f$ vectors mix costs at most \f$2\sigma\f$ in the residual.
+- **Null space:** repeated zero or unresolvable \f$\sigma\f$ collapse eigenvectors.
+  `bdsdc_repair_degenerate` rebuilds every column with \f$\sigma_i < 500\,\varepsilon\,\sigma_{\max}\f$
+  by Gram–Schmidt (no factor of n;
+  [rejected criteria](../perf/gesvd.md#gesvd-bdsdc-null-space-repair-criteria-that-failed)).
+  `tests/bdsdc_tests.cc` covers graded spectra, rank deficiency 1-5 and the zero matrix.
+- `BATCHLAS_GESVD_BIDIAG` (`gesvd_bidiag_solver()`): unset or unknown is `bdsdc`; `bdsqr` keeps
+  relative accuracy for tiny \f$\sigma\f$ at 300-400x the cost; `normal` squares \f$\kappa\f$ and is
+  overridden by a direct solve when U is thin and tall.
 
 ## gesvdj_cta: the lane-equals-row mapping decision
 
-Each round has n/2 disjoint pairs, and each needs three length-m dot products before its rotation
-is known. Three mappings were compared at m = n = 32, P = 32, float, with vectors. These counts are
-projected, not measured. `syev_jacobi_cta` is 266.
-
-| design | per round | vs syev |
-|---|---|---|
-| lane = row, reduce-scatter Gram (chosen) | ~181 | 0.68 |
-| lane = column | ~251-264 | 0.94-1.00 |
-| Gram-resident (\f$G = A^H A\f$ kept by congruence) | 334 + refresh | 1.26-1.39 |
-
-Lane = row wins because both operands of a rotation sit in one lane, so no partner shuffles are
-needed. Converged pairs are free: the skip `if (sk == 0) continue;` is warp-uniform, which lane =
-column would not be. Lane r alone reads and writes row r of A and V, so the update has no
-cross-lane hazard.
-
-The Gram-resident design is rejected. Congruence updates give normwise error
-\f$\sim\varepsilon\sigma_{\max}^2\f$ rather than columnwise error, so the relative threshold
-degrades to an absolute test. It also needs 51,200 B per `complex<double>` problem, above the
-49,152 B the design assumed.
+Lane r owns row r of A and V, so both operands of a rotation sit in one lane: no partner
+shuffles, no cross-lane hazard in the update, and the converged-pair skip (`if (sk == 0)
+continue;`) is warp-uniform. Keeping
+\f$G = A^H A\f$ resident by congruence was rejected: its error is normwise
+(\f$\varepsilon\sigma_{\max}^2\f$), which turns the relative test into an absolute one.
 
 ## gesvdj_cta: local-memory budget formula
 
-\f$P\f$ is the partition width (lanes, at most 32, the sub-group width). \f$C\f$ is the tile capacity.
-For every rung up to 32, \f$P = C\f$. The 64 rung is \f$(P, C) = (32, 64)\f$, with `kRPL = C/P` rows
-per lane. The rung is keyed on \f$\max(m,n)\f$: 4, 8, 16, 32, then (32, 64).
+Partition width \f$P = \min(C, 32)\f$ lanes; tile capacity C is keyed on \f$\max(m,n)\f$: 4, 8, 16,
+32, 64 (the 64 rung has 2 rows per lane). `gesvdj_slm_bytes<T>(C, want_vectors)` in
+`gesvd_native.hh` is the formula: per problem, A (and V) as \f$(C+1) \times C\f$ tiles, column
+norms, rotation cosines and sines (plus a phase for complex), an inverse permutation; per work-group,
+an `int16` pair table. `gesvd_jacobi_max_dim` returns the widest C whose smallest work-group fits
+the device budget, and both `can_run` and the kernel read it. On the RTX 4090 (101,376 B)
+`complex<double>` with vectors needs 138,816 B at C = 64 and is capped at 32.
 
-```cpp
-LD            = C + 1;                   // odd
-kTileElems    = LD * C;                  // 1056 at C=32
-kRotSlots     = C / 2;                   // 16 at C=32
-kPairSlots    = (C - 1) * kRotSlots;     // 496 at C=32
-bytes_per_prob = (1 + ComputeV) * kTileElems * sizeof(T)      // A (+ V)
-               + C             * sizeof(Real)                 // Nrm_local
-               + 2 * kRotSlots * sizeof(Real)                 // Rcs_local (vec<Real,2>)
-               + (complex ? kRotSlots * sizeof(T) : 0)        // Rd_local, the phase
-               + C             * sizeof(int16_t);             // Inv_local
-wg_fixed       = kPairSlots * sizeof(int16_t);                // pair table, 992 B at C=32
-```
-
-Bytes per problem with V resident, plus the work-group pair table:
-
-| T | C = 32 | C = 64 (per problem + table) |
-|---|---|---|
-| float | 8,768 (+992) | 33,920 + 4,032 = 37,952 |
-| double | 17,472 (+992) | 67,712 + 4,032 = 71,744 |
-| complex\<float\> | 17,344 (+992) | 67,712 + 4,032 = 71,744 |
-| complex\<double\> | 34,624 (+992) | 134,784 + 4,032 = 138,816 |
-
-The RTX 4090 reports 101,376 B of local memory. `complex<double>` with vectors therefore does not
-launch at C=64 and is capped at 32. `gesvd_jacobi_max_dim<T>(want_vectors, budget)`
-(`src/ops/gesvd/gesvd_native.hh:30`) returns the widest C whose smallest work-group fits the
-device's local-memory budget; `can_run` (`src/ops/gesvd/gesvd.cc:84`) and the kernel guard
-`gesvdj_cta_max_dim` (`gesvdj_cta.cc:802`) both read it, so a device with less local memory gets
-a lower cap. Other types drop to 1-2 work-groups per SM, against 10 at C=32. Occupancy, not the
-cap, is the binding limit.
-
-- The pair table is `int16` `p | (q << 8)`, with `static_assert(C <= 64)`. The packing breaks at
-  \f$C \ge 128\f$.
-- **U is never held in local memory.** A + V matches syev's occupancy. Holding A, U and V would
-  cost about 20%.
-- **LD is odd.** Hot accesses are conflict-free for any LD. The V^H writeback reads
-  `V_local[r + c_i*LD]` with \f$c_i\f$ a permutation, which needs \f$\gcd(LD, 32) = 1\f$. LD = 32
-  serialises 32 ways.
-- **Clamp per work-group** against `local_mem_size - wg_fixed`, as a multiple of `32/P`, and against
-  `max_work_group_size`. The `syev_jacobi_cta` clamp under-counts by `32/P`.
-- **Default `cta_wg_size_multiplier = 1`.** At n=32, batch=16384, float: 7.67 ms with 1 problem per
-  work-group, 8.85 ms with 2, 9.01 ms with 4.
-- `complex<double>` with vectors runs at about 2 warps per SM. This was accepted, not engineered
-  around.
+- The pair table packs `p | (q << 8)` (`static_assert(C <= 64)`); it breaks at \f$C \ge 128\f$.
+- U is never held in local memory (A + V matches syev's occupancy).
+- LD = C + 1 is odd: the \f$V^H\f$ writeback reads `V_local[r + c_i*LD]` with \f$c_i\f$ a
+  permutation, and LD = 32 serialises 32 ways.
+- Default `cta_wg_size_multiplier = 1`: at n = 32, batch 16384, float, 1 problem per work-group
+  took 7.67 ms, 2 took 8.85 ms.
 
 ## gesvdj_cta: the reduce-scatter G3 trap
 
-The Gram phase computes `kGramChunk = P/2` dot products per chunk and scatters them so that pair k
-lands in lanes 2k and 2k+1. **Scattering V values over L lanes** takes \f$\log_2 V\f$ scatter steps
-plus \f$\log_2(L/V)\f$ all-reduce steps. At P=32, V=16 that is 4 + 1, not 5 + 0:
-
-```cpp
-for (step = 0; step < 4; ++step) {        // masks 16, 8, 4, 2
-    mask = kGramChunk >> step; hi = lane & mask; half = mask / 2;
-    for (j = 0; j < half; ++j) {
-        own  = hi ? g[j + half] : g[j];
-        send = hi ? g[j]        : g[j + half];
-        g[j] = own + permute_group_by_xor(part, send, mask);
-    }
-}
-g[0] = g[0] + permute_group_by_xor(part, g[0], 1);   // the final ALL-REDUCE
-```
-
-Written as five halving steps, `half` is 0 at the fifth step, the loop never runs, and each dot
-product sums only 16 of the 32 rows. `max(1, half)` reads a stale `g[1]`. The exact-norm reduction
-(32 values over 32 lanes) is 5 + 0 and correct.
-
-The cost is 16 shuffles for all sixteen dot products, against 80 for independent butterflies. The
-tree sum's error is \f$\sim\log_2(m)\,\varepsilon\f$, against \f$\mathrm{tol} = n\varepsilon\f$.
-A lane-sequential sum would give \f$\sim m\varepsilon\f$, which causes threshold churn.
-
-At C=64 a round runs as two chunks of 16 pairs. The chunks touch disjoint columns, and the live
-register set is 80 T rather than 160. The exact-norm reduction stays 32 lanes wide, over C/P passes.
+The Gram phase scatters V = P/2 dot products over L = P lanes (pair k to lanes 2k, 2k+1). That is
+\f$\log_2 V\f$ scatter steps plus \f$\log_2(L/V)\f$ all-reduce steps: 4 + 1 at P = 32, not five
+halving steps. Written as five halvings, the fifth has `half == 0`, the loop never runs, and each
+dot product sums 16 of 32 rows (`max(1, half)` reads a stale `g[1]`). The exact-norm reduction
+(32 values over 32 lanes) is 5 + 0. The tree sum keeps the error at \f$\log_2(m)\,\varepsilon\f$; a
+lane-sequential sum (\f$m\varepsilon\f$) churns the threshold. At C = 64 a round is two chunks of
+16 pairs on disjoint columns.
 
 ## gesvdj_cta: global power-of-two scaling
 
-Per-column equilibration is wrong as an algorithm step. Scaling columns by D computes the SVD of
-\f$AD\f$, and \f$D^{-1}W\f$ is not orthogonal, so the result does not factor A. \f$\kappa(A_c)\f$ is an
-analysis quantity only.
-
-The kernel applies one global power-of-two rescale centred on the geometric mean of the column
-norms:
-
-\f[ \beta = 2^{-e}, \qquad e = \operatorname{round}\!\Big(\tfrac14\big(\log_2 \max_c\|A_c\|^2 + \log_2 \min_{c,\ \|A_c\| > 0}\|A_c\|^2\big)\Big). \f]
-
-A power of two keeps the round trip exact. For float, geometric centring tolerates a column-norm
-ratio of \f$1.69\times10^{38}\f$, against \f$9.2\times10^{18}\f$ for centring on the maximum. An all-zero
-input keeps \f$\beta = 1\f$. The column-norm epilogue uses a scaled sum of squares. Without it, an
-underflowing norm gives \f$\sigma = 0\f$ and fabricates a U column.
-
-> **Note:** the \f$\max\f$/\f$\min\f$ reductions read `Nrm_local` only for the first 32 columns
-> (`gesvdj_cta.cc:354`). On the C=64 rung, columns 32..63 do not affect \f$\beta\f$. Correctness
-> holds, but the overflow headroom covers only those 32 columns. Read from the code, not measured;
-> listed as an [unverified candidate](known-defects.md#unverified-candidates).
+Per-column equilibration computes the SVD of \f$AD\f$, which does not factor A. The kernel applies
+one power-of-two rescale \f$\beta = 2^{-e}\f$ centred on the geometric mean,
+\f$e = \operatorname{round}(\tfrac14(\log_2 \max_c\|A_c\|^2 + \log_2 \min_{\|A_c\|>0}\|A_c\|^2))\f$:
+exact round trip, and for float a tolerated column-norm ratio of \f$1.7\times10^{38}\f$ against
+\f$9.2\times10^{18}\f$ when centred on the maximum. Zero input keeps \f$\beta = 1\f$. The norm
+epilogue uses a scaled sum of squares; otherwise an underflowing norm gives \f$\sigma = 0\f$ and a
+fabricated U column. Only the first P = 32 columns feed the max/min, so on the C = 64 rung
+columns 32..63 get no overflow headroom (read from code;
+[unverified candidate](known-defects.md#unverified-candidates)).
 
 ## gesvdj_cta: sweep, convergence and extraction rules
 
-- **Threshold:** `tol = tol_multiplier * CC * eps`, `tau_big = 1/sqrt(eps)`. Rotation formulas
-  match `syev_jacobi_cta`.
-- **A rotation with s == 0 is inactive.** Otherwise the rotation count never reaches 0, and every
-  problem runs all `max_sweeps`: a 30x slowdown.
-- **Norm recurrence** between recomputations. Both sides are clamped at zero. Clamping one side let
-  the other go negative, `sqrt` gave NaN, and an out-of-bounds local access followed at
-  \f$\kappa \ge 10^4\f$.
-- **Exact norms** are recomputed at the start of every sweep. Termination requires **two consecutive**
-  zero-rotation sweeps (`zero_sweeps >= 2`), and `info` tests exactly that predicate.
-- **Singular values come from A**: \f$\sigma_i\f$ is a final exact column norm times \f$1/\beta\f$. Reading it from
-  `Nrm_local` reintroduces the normal-equations defect.
-- **Sort descending** with a parallel rank sort that breaks ties on index. Do not also reverse
-  indices.
-- **Two writebacks, opposite lane roles.** U: lane is the output row. V^H: lane is the output row
-  and reads `V_local[r + c_i*LD]`. In the transposed orientation the Thin bound applies to `lane`,
-  not the inner loop. Truncating the inner loop gives a wrongly shaped factor with plausible
-  numbers.
+- `tol = tol_multiplier * CC * eps`, `tau_big = 1/sqrt(eps)`; rotation formulas match
+  `syev_jacobi_cta`. A rotation with s == 0 is inactive, or every problem runs all sweeps (30x).
+- The norm recurrence clamps both sides at zero (one side let the other go negative: NaN, then an
+  out-of-bounds access at \f$\kappa \ge 10^4\f$). Exact norms are recomputed every sweep.
+- Termination needs two consecutive zero-rotation sweeps; `info` tests exactly that predicate.
+- \f$\sigma_i\f$ is a final exact column norm times \f$1/\beta\f$; reading `Nrm_local` reintroduces
+  the normal-equations defect.
+- Sort descending with a rank sort that breaks ties on index; do not also reverse.
+- In the \f$V^H\f$ writeback the lane is the output row, so the Thin bound applies to `lane`, not to
+  the inner loop (truncating the loop gives a wrongly shaped factor with plausible numbers).
 
 ## gesvdj_cta: rank deficiency, Thin and m < n
 
-The zero threshold is relative to \f$\sigma_{\max}\f$ only:
-\f$\mathrm{tol}_0 = \mathtt{zero\_sigma\_multiplier}\cdot\varepsilon\cdot\sigma_{\max}\f$. The
-absolute form \f$\varepsilon\max(1, \sigma_{\max})\f$ declares every \f$\sigma\f$ zero when
-\f$\sigma_{\max} = 10^{-10}\f$.
-
-**Completion.** Columns CC..RR-1 of a full U, and any column below \f$\mathrm{tol}_0\f$, are filled
-in-kernel by two passes of classical Gram–Schmidt against the accepted columns. The trial cursor
-runs across output columns and accepts above \f$1/(2 \cdot RR)\f$. A per-column restart leaves the
-last columns unfilled, because a canonical vector's residual is about \f$d/RR\f$ when d dimensions
-remain. The branch is gated on a warp-uniform predicate.
-
-**Thin** (`SvdVectors::Thin`) sets `left_cols = CC` and skips completion. A numerically deficient
-column is still repaired.
-
-**m < n** solves \f$A^H\f$, transposed at load time. Solving \f$A^T\f$ instead gives
-\f$\overline{V'} S U'^T\f$, whose conjugations are invisible in real arithmetic and wrong for complex.
+The zero threshold is \f$\mathtt{zero\_sigma\_multiplier}\cdot\varepsilon\cdot\sigma_{\max}\f$;
+\f$\varepsilon\max(1, \sigma_{\max})\f$ zeroes everything at \f$\sigma_{\max} = 10^{-10}\f$. Columns
+CC..RR-1 of a full U, and columns below the threshold, are completed in-kernel by two passes of
+classical Gram–Schmidt with a trial cursor across output columns (accept above \f$1/(2 RR)\f$; a
+per-column restart leaves the last columns unfilled). `SvdVectors::Thin` skips completion but
+still repairs deficient columns. m < n solves \f$A^H\f$ transposed at load; \f$A^T\f$ would be wrong
+for complex.
 
 ## gesvdj_cta: traps and dead ends
 
-- **Build group.** `gesvd/kernels/gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES`
-  (`src/ops/CMakeLists.txt:88`), the one library configured `NO_CPU_TARGETS`. Moving it gives the
-  32-lane kernel a CPU AOT image with no error.
-- **`GesvdjParams` is its own struct.** Reusing `JacobiParams` would bring its ascending
-  `sort_order` default, which invites a silent reversal.
-- **Explicit instantiations** each need a `template ...;` line spelled with `BATCHLAS_UNPAREN fp`.
-  A missing one is an undefined symbol at final link.
-- **Register pressure.** `ap + aq + g` is 48 live T at C=32 and 80 at C=64. Check `-Xcuda-ptxas -v`
-  before trusting a timing.
-- **Compile-time indices only** into `pk`, `qk`, `g`, `ap`, `aq`. A runtime index spills the array.
-- **Pair-table stride** is the compile-time `kRotSlots`, not `pairs_per_round`. They differ when
-  CC < P. The fill ends in a barrier, so it must precede the `prob_id >= nb` early return.
-- **`[[sycl::reqd_sub_group_size(32)]]` is required.** The butterflies are wrong at any other width.
-- **Off CUDA, correctness rests on sub-group lockstep.** `group_barrier` on a `SubGroupPartition`
-  is a no-op off NVPTX. The ROCm and NETLIB arms are the least tested.
-- **Do not fully unroll the round loop** to keep V in registers. The code would be about 6k
-  instructions against a 32 KB Ada I-cache.
-- **Round-robin partner** is unused: under lane = row every lane needs all pairs.
-- **A is destroyed**, per the gesvd contract. Benchmarks wrap it in `bench::pristine`.
+- `gesvdj_cta.cc` must stay in `EXTENSIONS_CTA_SOURCES` (`src/ops/CMakeLists.txt`, configured
+  `NO_CPU_TARGETS`); elsewhere it silently gets a CPU AOT image.
+- `GesvdjParams` is its own struct: `JacobiParams`' ascending `sort_order` default invites a silent
+  reversal.
+- Live registers are `ap + aq + g`, 48 T at C = 32 and 80 at C = 64; check `-Xcuda-ptxas -v`. Index
+  `pk`, `qk`, `g`, `ap`, `aq` only at compile time, or the array spills.
+- The pair-table stride is `kRotSlots`, not `pairs_per_round` (they differ when CC < P), and its fill
+  ends in a barrier, so it precedes the `prob_id >= nb` early return.
+- `[[sycl::reqd_sub_group_size(32)]]` is required. Off NVPTX, `group_barrier` on a
+  `SubGroupPartition` is a no-op and correctness rests on sub-group lockstep.
+- Do not fully unroll the round loop (about 6k instructions against a 32 KB I-cache).
+- A is destroyed; benchmarks wrap it in `bench::pristine`.
 
 ## gesvd design: why SvdVectors::Thin exists
 
-`SvdVectors` (`include/batchlas/blas/enums.hh`) follows LAPACK `jobu`/`jobvt`: `None`, `All`
-('A') and `Thin` ('S'). For tall-skinny input All is unusable. A 10000 x 32 problem needs a
-10000 x 10000 U, 400 MB per matrix in float.
-
-For \f$k = \min(m, n)\f$, a thin U equals the full U when \f$m \le n\f$, and a thin \f$V^H\f$ equals the
-full one when \f$m \ge n\f$. Entry points canonicalise Thin to All when the shapes coincide
-(`canonical_jobu` / `canonical_jobvh`).
-
-> **Warning:** a `*_buffer_size` and its run path must canonicalise identically, or the workspace
-> is sized for a different computation.
-
-LAPACK 'O' is absent. If added, append an enumerator so existing ordinals stay stable.
+`SvdVectors` follows LAPACK `jobu`/`jobvt`: `None`, `All` ('A'), `Thin` ('S'). For tall-skinny input
+All is unusable (a 10000 x 32 float problem needs a 400 MB U). Thin equals All for U when
+\f$m \le n\f$ and for \f$V^H\f$ when \f$m \ge n\f$; entry points canonicalise with `canonical_jobu` /
+`canonical_jobvh`, and a `*_buffer_size` must canonicalise exactly as its run path does. LAPACK 'O'
+is absent; if added, append the enumerator so ordinals stay stable.
 
 ## gesvd design: vendor binding and dispatch
 
-- **The header declares `backend::gesvd_vendor` only** (`include/batchlas/blas/functions/gesvd.hh:220`).
-  Each backend TU (`src/backends/cusolver.cc:417`, `rocsolver.cc:420`, `netlib_lapack.cc:878`)
-  defines and instantiates it for its own `Backend`. A throwing definition in the header would
-  collide with `cusolver.cc`.
-- **One branch per family, checked by the compiler.** `launch` and `workspace` in
-  `src/ops/gesvd/gesvd.cc` are `std::visit`s over `GesvdChoice`.
-- **`can_run` (`gesvd.cc:71-93`) is correctness only.** Every family needs a homogeneous batch.
+- `include/batchlas/blas/functions/gesvd.hh` declares `backend::gesvd_vendor` only; each backend TU
+  (`cusolver.cc`, `rocsolver.cc`, `netlib_lapack.cc`) defines it. A header definition would collide.
+- `launch` and `workspace` in `gesvd.cc` are `std::visit`s over `GesvdChoice`.
+- `can_run` (correctness only) requires a homogeneous, unmasked batch and, for natives, a GPU.
   `jacobi`: not Hermitian, sub-group 32, \f$\max(m,n) \le\f$ `gesvd_jacobi_max_dim`. `cta`:
-  sub-group 32, \f$\max(m,n) \le 32\f$, not thin; real general or square Hermitian. `blocked`: real
-  general or square Hermitian Lower. `vendor`: the solver library.
-- **A pin that `can_run` refuses throws.** `BATCHLAS_GESVD_ROUTE=jacobi` on a 128x128 real matrix
-  raises `batchlas::invalid_argument` (`src/select/select.hh`). Only `native` and `vendor` fall back.
-- **Order lives in the tables.** Jacobi is ahead of CTA on accuracy evidence
-  ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)). The order is
-  the rows of `tuned/gesvd.<device>.txt` (sm_89 transcribed, sm_120 deep-measured). Jacobi stays
-  admissible to 64, so a pin still reaches the 33..64 band
+  sub-group 32, \f$\max(m,n) \le 32\f$, not thin, real general or square Hermitian. `blocked`: general
+  or square Hermitian. `vendor`: on CUDA \f$\max(m,n) \le 32\f$, packed, not thin, vectors or square;
+  never on ROCm.
+- A pin `can_run` refuses throws (`BATCHLAS_GESVD_ROUTE=jacobi` at 128x128); only `native` and
+  `vendor` fall back to auto.
+- Order lives in the tables; Jacobi ranks ahead of `cta` on accuracy
+  ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)) and stays
+  admissible to 64 so a pin reaches 33..64
   ([evidence](../perf/gesvd.md#gesvd-what-routes-today)). Where a table ranks `cta` first for real
-  general input with vectors, [known defect 18](known-defects.md#defect-18-gesvd_cta-left-vectors-lose-orthogonality-as-eps-times-kappa-squared)
+  input with vectors,
+  [known defect 18](known-defects.md#defect-18-gesvd_cta-left-vectors-lose-orthogonality-as-eps-times-kappa-squared)
   applies.
 
 ## gesvd design: test and benchmark traps
 
-- Register a test binary in both `TEST_TARGETS` and `BATCHLAS_TEST_LABELS_eig` in
-  `tests/CMakeLists.txt`. A missing label drops it from `ctest -L eig` without an error.
-- Fill test matrices with the plain `Matrix<T,F>(n, n, batch)` constructor when the host writes to
-  them afterwards. `Matrix::Zeros` and `Matrix::Diagonal` race with those writes.
-- A test through `gesvd` must pin or assert the route taken (`BATCHLAS_GESVD_ROUTE`, a
-  `select::ScopedPin`), on an observable only that path produces. For example,
-  \f$\|U^H U - I\|\f$ at \f$\kappa = 10^5\f$.
-- Check results with `EXPECT_VERIFY` (`Check::factorization`, `Check::orthogonality_rotations`,
-  `Check::values`; @ref design_verification), not a local residual helper.
-- minibench positional arguments replace the whole sweep. `state.range(i)` returns 0 when missing,
-  so pass all four (`32 16384 1 1`).
+- A test binary needs both `TEST_TARGETS` and `BATCHLAS_TEST_LABELS_eig` in `tests/CMakeLists.txt`,
+  or `ctest -L eig` drops it silently.
+- Fill host-written test matrices with `Matrix<T,F>(n, n, batch)`; `Matrix::Zeros` and
+  `Matrix::Diagonal` race with the host writes.
+- Pin or assert the route (`BATCHLAS_GESVD_ROUTE`, `select::ScopedPin`) on an observable only that
+  path produces, e.g. \f$\|U^H U - I\|\f$ at \f$\kappa = 10^5\f$, and check with `EXPECT_VERIFY`
+  (@ref design_verification).
+- minibench positional arguments replace the whole sweep and missing ones read as 0: pass all four
+  (`32 16384 1 1`).

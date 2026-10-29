@@ -3,7 +3,7 @@
 #
 # WHY THIS SHAPE. Device code here is AOT-compiled to an sm_89 cubin by ptxas at the
 # SHARED-LIBRARY DEVICE LINK, not per translation unit, so `-Xcuda-ptxas -v` on a compile
-# is reported "argument unused" and produces nothing. docs/perf/trsm.md section 8 step 2
+# is reported "argument unused" and produces nothing. docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
 # makes register residency a hard gate before any other code is written; this is the
 # recipe that actually satisfies it.
 #

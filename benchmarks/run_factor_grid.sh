@@ -87,7 +87,7 @@ printf 'op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,
 # coverage on. The coverage instrument writes $BATCHLAS_COVERAGE_OUT.<pid> from
 # atexit, one file per process, and the `reached,` rows are what the run actually
 # selected -- fields 10 and 11 are chosen_origin and chosen_algo. `linked` rows
-# are NOT evidence that a route ran (docs/design/vendor-free-status.md).
+# are NOT evidence that a route ran (docs/design/vendor-independence.md#vendor-free-status).
 readback_route() {
     local m="$1" n="$2" nrhs="$3" batch="$4" arm="$5"
     local base="$TMPD/cov_${arm}"

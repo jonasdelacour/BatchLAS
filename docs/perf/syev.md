@@ -1,791 +1,366 @@
 # SYEV {#perf_syev}
 
-> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · checked 2026-10-06
+> **Status:** current · RTX 4090 (sm_89), CUDA 13.2 · checked 2026-10-29
 
-Routing, tuning constants and measurements for the dense symmetric/Hermitian eigensolver `syev`:
-which provider `Auto` picks per scalar type, `n` and `jobz`, and the evidence behind each rule.
-The measurements date from 2026-08-03 to 2026-08-08. Machine: device 1 only, cuSOLVER 12.2.0.1,
-driver 595.84, unless a table says otherwise. Times are µs per matrix unless a table says ms.
+Routing, tuning constants and the measurements behind them for the dense symmetric/Hermitian eigensolver
+`syev`. Unless a line says otherwise: device 1, cuSOLVER 12.2.0.1, 2026-08-03..08, µs per matrix.
 
 [TOC]
 
 ## syev: what ships today
 
-The families live in `src/ops/syev/choice.hh`: `cta`, `cta_fused` and `jacobi` (the three n ≤ 32
-sub-group solvers), `blocked`, `two_stage` and `vendor`. `select::choose` takes the first runnable
-entry of the nearest row of `tuned/syev.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on
-`jobz`, `n` and `batch`. `can_run` is correctness only: the native families need a non-NETLIB GPU
-backend and a square A with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group. Every
-family, `vendor` included, needs a homogeneous batch (`syev.cc:51-67`).
-Uplo is not a key, because Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
-
-> **Note:** the sm_89 syev table is `transcribed` at `424a45bc`: it replays the previous router's order per
-> grid cell, identical across batch, and the rule table below reads its rows. The sm_120 table is deep-measured
-> (1226 rows, plus 260 `transcribed` rows where the lattice measured nothing near), and batch matters there
-> (`tuned/README.md`, [flat kernel selection](../design/flat-kernel-selection.md)).
+The families live in `src/ops/syev/choice.hh`: `cta`, `cta_fused` and `jacobi` (the n ≤ 32 sub-group
+solvers), `blocked`, `two_stage` and `vendor`. `select::choose` takes the first runnable entry of the
+nearest row of `tuned/syev.<arch>.txt` (`sm_89`, `sm_120`), keyed on dtype, `jobz`, `n` and `batch`.
+`can_run` (`src/ops/syev/syev.cc`) is correctness only: native families need a non-NETLIB GPU backend, a
+homogeneous unmasked batch and square A with n ≥ 1; the small three also need n ≤ 32 (`kSmallMaxN`) and a
+32-wide sub-group, and `cta`/`cta_fused` are refused on ROCm (steqr_cta gives wrong eigenvalues on gfx1200).
+Uplo is not a key: Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
+The sm_89 table is `transcribed` (identical across batch); sm_120 is deep-measured and batch matters there.
 
 | decision | where | rule |
 |---|---|---|
 | eigenvectors, n > 32 | `jobz=V` rows | float: blocked to 448, two-stage 449..1024, vendor above. double: blocked to 448, then vendor. complex<float>: blocked to 512, then vendor. complex<double>: blocked to 256, then vendor |
 | eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
-| vendor-free, double and complex<double>, n > 448 | the same rows, `vendor` skipped | `jobz=V`: blocked; `jobz=N`: two-stage (sm_89). See [the vendor-free double band](#syev-vendor-free-double-band) |
-| blocked / two-stage batch parts | `syev_blocked_chunk`, `syev_two_stage_chunk` (the drivers) | each driver chunks its batch; a chunk whose workspace passes `Device::scratch_budget` is cut to parts that fit it |
-| n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
-| n ≤ 32 vendor handover | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
-| backend scope | `can_run` | any non-NETLIB GPU backend; the n ≤ 32 three also need a sub-group of 32; `Cta` and `CtaFused` not on ROCm (steqr_cta gives wrong eigenvalues on gfx1200). ROCm and Apple GPUs have no table and borrow the nearest sm table with a warning (untested on ROCm) |
-| values-only blocked solve | `syev_blocked.stebz_evals` | `stebz` bisection off the tridiagonal, no `stedc` |
-| complex panel width | `sytrd_block_size_default<T>`, `src/ops/syev/kernels/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
-| complex trailing update | `rank2k_trailing_update_supported`, `src/ops/syev/sytrd/sytrd_blocked.cc` | float (CUDA or SYCL backend) and complex<float> (CUDA with cuBLAS) use the rank-2k path (`level3_tile_substitution_enabled`). double, complex<double> and other backends keep the GEMM pair |
-| sb2st back-transform | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/ops/syev/sytrd/sytrd_sb2st_hh.cc` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
-| block sizes | `ORMQR_BLOCK_SIZE_*`, `SYTRD_BLOCK_SIZE_*`, `include/batchlas/tuning_params.hh` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (buckets n ≤ 64/128/256/512/else) |
-| sy2sb WY width | `SY2SB_ORMQR_NB_LARGE = 32` | n ≤ 512 bucket only |
-| stedc | `STEDC_*`, `tuning_params.hh` | leaf threshold 32, merge variant 2 (FusedCta), threads-per-root 8, wg multiplier 8 |
-| stedc leaf cap | `plan_stedc_levels`, `src/ops/syev/stedc/stedc_levels_plan.hh` | leaf ≤ threshold, a hard cap |
-| two-stage band width | `choose_two_stage_kd`, `src/kernels/common/two_stage_common.hh` | kd = 32 |
+| n ≤ 32 | both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta`, except `jobz=V` n = 25..32 `vendor` first |
+| vendor-free, n > 448 | `vendor` skipped | [the vendor-free double band](#syev-vendor-free-double-band) |
+| batch parts | `syev_blocked_chunk`, `syev_two_stage_chunk` | [L2 chunking](#syev-l2-batch-chunking) and the scratch-budget cap |
+| values-only blocked | `syev_blocked.stebz_evals` | `stebz` bisection off the tridiagonal, no `stedc` |
+| complex panel width | `sytrd_block_size_default<T>` (`syev_blocked.cc`) | 32 for complex at 256 < n ≤ 512 |
+| complex trailing update | `rank2k_trailing_update_supported` (`sytrd_blocked.cc`) | float and complex<float> (CUDA + cuBLAS) use rank-2k; double, complex<double> keep the GEMM pair |
+| sb2st back-transform | `sb2st_back_tile_for` / `_subs_for` (`sytrd_sb2st_hh.cc`) | complex<float> n = 512: tile 2, subs 4; else the heuristic |
+| block sizes | `tuning_params.hh` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (n ≤ 64/128/256/512/else); `SY2SB_ORMQR_NB_LARGE = 32` |
+| stedc | `STEDC_*`, `plan_stedc_levels` | leaf threshold 32 (a hard cap), merge variant 2 (FusedCta), threads-per-root 8, wg multiplier 8 |
+| two-stage band width | `choose_two_stage_kd` | kd = 32 |
 
-**Pinning a family.** `BATCHLAS_SYEV_ROUTE=<family>` (case-folded; also `native`, `vendor`, `auto`)
-or a `select::ScopedPin`. A pin that `can_run` refuses, or an unknown word, throws
-`invalid_argument`. The retired `BATCHLAS_SYEV_PROVIDER`, `BATCHLAS_SYEV_SMALL_KERNEL` and
-`BATCHLAS_SYEV_CTA_MAX_N` are no longer read.
-
+**Pinning.** `BATCHLAS_SYEV_ROUTE=<family>` (also `native`, `vendor`, `auto`) or `select::ScopedPin`; a pin
+`can_run` refuses, or an unknown word, throws. `BATCHLAS_SYEV_PROVIDER`, `_SMALL_KERNEL` and `_CTA_MAX_N` are
+retired and not read.
 
 ## syev: eigenvector routing at saturation
 
-The rule is keyed on `n` alone, never on batch: a tiny-batch caller pays launch overhead whatever is picked,
-and tuning for that regime costs saturated throughput. Auto dispatched to the winner at every shape of the
-grids below (Auto/expected 1.000 ± 0.002, idle GPU).
-
-### syev: the 2026-08-04 saturated float grid
-
-Float, eigenvectors, median of 3, build `12963a8`; batch is the largest at which all three providers fit. µs per
-matrix.
-
-| n | batch | blocked | vendor | two_stage | winner |
-|---|---|---|---|---|---|
-| 64 | 16384 | **1.64** | 2.02 | 2.21 | blocked 1.23× |
-| 320 | 1302 | **74.53** | 215.23 | 111.20 | blocked 1.49× |
-| 512 | 508 | 384.27 | 504.69 | **380.02** | two_stage 1.01× |
-| 1024 | 254 | 4089.02 | 2706.84 | **2441.93** | two_stage 1.11× |
-| 2048 | 64 | 33842.6 | **15019.1** | 24782.3 | vendor 1.65× |
-
-Also n = 128, 256 (blocked, 1.18× and 1.01×) and 640, 768 (two_stage, 1.15× and 1.19×). The batch-keyed rule this
-replaced was wrong at five of nine sizes (1.11×–1.23×). For n ≤ 32 at batch 2048, `cta`/Jacobi (n = 16) and
-`cta`/fused (n = 32) beat every non-CTA provider by 2.8×–3.0×. Caveats: n = 2048 was measured at batch 64 (below
-the 128 SMs, memory-limited), so that boundary rests on the weakest row; the grid is float only.
+The 2026-08-04 float grid (`12963a8`, median of 3, largest batch all providers fit) set the shape: blocked
+wins to n = 256 (n = 64: 1.23× over vendor), two-stage at 512..1024 (n = 1024: 2441.9 against vendor 2706.8),
+vendor at 2048 (1.65×, but measured at batch 64, unsaturated: the weakest boundary). The per-type numbers
+below (2026-08-07, median of 5, blocked at its best `nb`) placed the crossovers.
 
 ### syev: the blocked-over-cuSOLVER headline measurement
 
-Quoted on the documentation front page. 2026-08-07, float, eigenvectors, median of 5, default `nb`, fills the 320..512 gap. µs per
-matrix.
+Quoted on the front page. Float, eigenvectors:
 
 | n | batch | blocked | two_stage | vendor | winner |
 |---|---|---|---|---|---|
 | 320 | 819 | **67.84** | 113.39 | 203.00 | blocked (3.0× over vendor) |
-| 448 | 585 | **195.27** | 262.79 | 400.59 | blocked (2.1× over vendor) |
+| 448 | 585 | **195.27** | 262.79 | 400.59 | blocked (2.1×) |
 | 512 | 512 | 326.71 | 332.55 | 504.40 | tie |
-| 768 | 192 | 1241.90 | **1172.90** | 1348.30 | two_stage |
 | 1024 | 128 | 3296.80 | 2614.70 | 2552.10 | tie (vendor/two-stage) |
 
-(n = 384: blocked 120.99, two_stage 179.18, vendor 309.10.) The float crossover is 448, not 320 (the former rule
-lost 1.35×–1.48× at n = 384 and 448). Two-stage wins by at most 1.06× for float in eigenvector mode, so the
-449..1024 band is neutral and was kept.
+The float crossover is 448; two-stage wins 449..1024 by at most 1.06×, a neutral band kept as is.
+Per type (blocked / vendor): complex<float> wins to 448, crosses at 512 (686.19 / 706.96), vendor at 640
+(1.07×). double: blocked at 384 (771 / 875), tie at 448, vendor from 512. complex<double>: blocked at 256
+(650 / 723), vendor from 288 (1131 / 975). Two-stage never wins complex eigenvectors.
 
-### syev: per-type eigenvector crossovers
+> **Warning:** the complex<double> boundary is an FP64-1:64 artifact (the native panel pays far more than
+> cuSOLVER) and 288..512 is a dead heat inside the 1.10× band. Re-measure on a data-center GPU.
 
-Same method, 2026-08-07; blocked at its own best `nb` (see
-[the complex panel width](#syev-complex-panel-width-in-the-256-to-512-bucket)). Two-stage is never the complex
-winner in eigenvector mode. µs per matrix (blocked / vendor):
-
-- **complex<float>:** blocked wins n = 64..448 (1.08×–2.59×; 128 a tie), e.g. n = 192: 30.60 / 79.41. n = 512:
-  686.19 / 706.96 (1.03×, the crossover). n = 640: 1357.40 / 1267.80 (vendor 1.07×); n = 1024: 5236.90 / 4047.90
-  (vendor 1.29×).
-- **double:** blocked at n = 384 (771.15 / 874.97), tie at 448 (1193.00 / 1199.80), vendor from 512 (1662.80 /
-  1617.90).
-- **complex<double>:** blocked at n = 128..256 (n = 256: 649.59 / 723.36), vendor from 288 (1131.00 / 974.79).
-
-Full grids: `benchmarks/results/syev_retune_phaseA.jsonl`.
-
-> **Warning:** the complex<double> boundary (256) is the most hardware-specific number on this page. The card
-> runs FP64 at 1/64 rate, which penalises the native panel far more than cuSOLVER. Re-measure on a data-center
-> GPU before trusting it. After the Annex G fix, complex<double> at n = 288..512 is a dead heat inside the
-> 1.10× neutral band, so the boundary stays at 256.
-
-**Annex G fix (`e4186908`).** Clang emitted the C99 Annex G complex multiply inside the panel symv (an `isnan`
-branch plus `__mulsc3`). Writing that multiply-add in real arithmetic made the panel kernel 1.22×–1.29× faster
-(real types unchanged: `mac` routes them to a plain multiply-add). At n = 512, batch 512 the complex/float cost
-ratio is 2.44–2.93 for blocked and two-stage against 1.38–1.41 for cuSOLVER; the rest of the gap is
-`sytrd_blocked.panel_only` (68% of the complex solve), see
-[the open panel symv](#syev-open-debt-the-single-read-panel-symv). Old Auto to new Auto (`73eb5510`), n = 320..1024:
-complex<float> 1.18×–1.69×, complex<double> 1.22×–2.88×, double 1.00×–1.97×, float 1.00×–1.50×; no cell regresses.
+The complex panel symv no longer emits the C99 Annex G multiply (`__mulsc3` plus an `isnan` branch;
+`e4186908`, 1.22×–1.29× on the panel). The remaining complex gap is the panel itself,
+see [the open panel symv](#syev-open-debt-the-single-read-panel-symv).
 
 ### syev: eigenvalues-only routing
 
-Float, 2026-08-04, same method (`syev_benchmark` gained a `jobz` argument for this; before that the mode had no
-vendor arm). µs per matrix.
-
-| n | batch | blocked | vendor | two_stage | winner |
-|---|---|---|---|---|---|
-| 64 | 16384 | **1.06** | 1.12 | 1.14 | blocked 1.06× |
-| 320 | 2604 | **48.16** | 200.94 | 50.35 | blocked 1.05× |
-| 512 | 1017 | 298.30 | 458.95 | **158.72** | two_stage 1.88× |
-| 1024 | 254 | 3537.41 | 2494.44 | **908.32** | two_stage 2.75× |
-| 2048 | 64 | 29547.70 | 13908.80 | **10804.10** | two_stage 1.29× |
-
-Blocked wins n = 64..320, two-stage 512..2048 (n = 128, 256, 640, 768 not shown). With no eigenvectors to apply,
-two-stage never pays for \f$Q_2\f$. It is also the complex winner above n = 320 (1.30× over cuSOLVER at
-n ≥ 768), so there is no per-type split here.
-
-These figures predate the `stebz` change ([WP1](#syev-stebz-values-only-in-the-blocked-solver-wp1)), which made
-blocked 1.36×–1.87× faster up to n = 320; the 320 | 512 boundary has not been re-derived
-(see [open debts](#syev-open-debts-and-unmeasured-items)). The rule replaced `syev_prefer_two_stage_values`,
-whose `batch >= 256` term sent n = 1024 at batch 254 to the vendor (2.75× loss): a batch floor reopens that hole.
-At batch 1 the vendor wins by 12.5× at n = 1024 (batch starvation of both reductions).
+Float, 2026-08-04: blocked wins n = 64..320 (n = 320: 48.16 against two-stage 50.35), two-stage from 512
+(n = 1024: 908 against vendor 2494, 2.75×), and two-stage is also the complex winner above 320, so no per-type
+split. These predate [WP1](#syev-stebz-values-only-in-the-blocked-solver-wp1), which made blocked up to 1.87×
+faster at n ≤ 320; the 320 | 512 boundary is not re-derived. Do not add a batch floor: the old `batch >= 256`
+term sent n = 1024 at batch 254 to the vendor (2.75× loss).
 
 ### syev: the Upper-to-Lower mirror for Lower-only providers
 
-The Lower-only blocked and two-stage pipelines get Upper input by mirroring the upper triangle into the lower one
-(\f$O(n^2)\f$ before an \f$O(n^3)\f$ solve). Float, 2026-08-04, median of 3, n = 128..1024, both modes: Auto (Upper)
-beats vendor (Upper) at every shape (n = 320 vectors 2.95×, n = 1024 values 3.39×, n = 256 vectors 1.02×) and
-Upper/Lower is 1.003×–1.020×. A native Upper reduction could recover at most that 0.3%–2.0%, so it was rejected.
-
-`mirror_upper_to_lower` (`src/ops/syev/uplo_mirror.hh`, `kernels/uplo_mirror.cc`) writes \f$A_{ji} := \overline{A_{ij}}\f$ in place
-(`syev` overwrites A); the diagonal is left alone and a complex diagonal's imaginary part is not forced to zero, as
-the Lower path already assumes. The header is declaration-only with explicit instantiations in `uplo_mirror.cc`
-(a SYCL kernel name needs one definition: inline in both `syev_blocked.cc` and `syev_two_stage.cc` gave "definition
-with same mangled name"). The obvious test is vacuous because `Matrix::Random(..., symmetric=true)` makes Upper and
-Lower interchangeable: the fixture poisons the strictly-lower triangle after taking the reference from the upper
-one and asserts a Lower-read solve differs by more than 1.0 ("fixture is vacuous" otherwise). Two cases in
-`tests/syev_blocked_tests.cc` cover all four types, one per call site.
+Blocked and two-stage are Lower-only and take Upper by mirroring (\f$O(n^2)\f$ before an \f$O(n^3)\f$ solve).
+Upper/Lower measured 1.003×–1.020× (float, n = 128..1024, both modes), so a native Upper reduction was rejected.
+`mirror_upper_to_lower` (`src/ops/syev/uplo_mirror.hh`, `kernels/uplo_mirror.cc`) writes
+\f$A_{ji} := \overline{A_{ij}}\f$ in place; it leaves the diagonal alone and does not zero a complex diagonal's
+imaginary part, as the Lower path assumes. The header is declaration-only, with explicit instantiations in the
+`.cc`, because a SYCL kernel name needs one definition. Testing trap: `Matrix::Random(..., symmetric=true)` makes
+Upper and Lower interchangeable, so the fixture in `tests/syev_blocked_tests.cc` poisons the strictly-lower
+triangle and asserts a Lower-read solve differs ("fixture is vacuous" otherwise).
 
 ## syev: small-n kernel choice
 
-The CTA-family kernels `syev_cta`, `syev_cta_fused`, `syev_jacobi_cta` are the families `cta`, `cta_fused`,
-`jacobi` (`BATCHLAS_SYEV_ROUTE=cta|cta_fused|jacobi`). The measurements below used the retired
-`BATCHLAS_SYEV_SMALL_KERNEL` knob.
-
 ### syev: the 2026-08-03 small-n bake-off
 
-Build `7911847`. Median of 5 process-level repeats with IQR, each cell at its knee batch, best over
-`cta_wg_size_multiplier`. A margin below 1.10× or with overlapping IQRs is *neutral*. Key results on the CSV
-`name` column (each binary registers two benchmarks). µs per matrix.
+Build `7911847`, median of 5 process repeats at each cell's knee batch; a margin below 1.10× is neutral.
 
-| type | n | mode | winner | µs | runner-up | ratio | vs cuSOLVER |
-|---|---|---|---|---|---|---|---|
-| double | 4 | vectors | jacobi | 0.01072 | cta_fused | 3.05× | 15.17× |
-| double | 32 | vectors | jacobi | 3.31753 | vendor | 1.37× | 1.37× |
-| float | 8 | vectors | jacobi | 0.00478 | cta_fused | 1.37× | 8.42× |
-| float | 16 | vectors | cta_fused | 0.02933 | jacobi | 1.22× | 4.10× |
-| float | 16 | values | cta_fused | 0.02740 | jacobi | 1.10× (*neutral*) | - |
-| float | 32 | vectors | cta_fused | 0.28426 | tridiag_ref | 1.11× | 1.79× |
-
-Double (n = 4, 8, 16, 32, both modes): Jacobi wins every cell, 1.37×–3.59×. Full grid:
-`benchmarks/results/syev_retune_phaseA.jsonl`. `syev_cta`, where Auto sent every n ≤ 32, won no cell. The rule is
-the float and double n ≤ 32 rows of `tuned/syev.sm_89.txt`: double Jacobi everywhere; float Jacobi to n = 8, `cta_fused`
-above. The float rule rests on the vector cells; n = 9..15 was not swept. A later A/B found fused with its tuned
-multiplier beats Jacobi from n = 7; the 8 | 9 boundary stays for Jacobi's relative accuracy on graded input (4.5e-07
-against 2.7e+28 for `syev_cta`, quoted from the uncommitted Jacobi plan, see
-[the Jacobi design](#syev-the-jacobi-kernel-design-and-its-accuracy-argument)).
-
-> **Warning:** FP64 at 1/64 rate inflates Jacobi's margin over the tridiagonalising paths. The float column
-> predicts a 1:2 FP64 datacenter GPU better; gate the double rule on measured FP64 throughput there. See
-> [the small-n steqr routing](steqr.md#small-n-syev-routing-measured-not-shipped).
-
-### syev: complex small-n kernels
-
-complex<float>, eigenvectors, 2026-08-07, median of 3 at each cell's saturating batch (µs per matrix):
-
-| n | batch | cta | cta_fused | jacobi | vendor | winner |
+| type | n | mode | winner | runner-up | ratio | vs cuSOLVER |
 |---|---|---|---|---|---|---|
-| 8 | 32768 | 0.0132190 | 0.0105830 | 0.0143920 | 0.044342 | fused 1.25× |
-| 9 | 29127 | 0.0213110 | 0.0281870 | 0.0544510 | 0.079653 | cta |
-| 32 | 8192 | 0.3825800 | 0.5948600 | 2.4824000 | 0.470900 | cta |
+| double | 4 | vectors | jacobi | cta_fused | 3.05× | 15.17× |
+| double | 32 | vectors | jacobi | vendor | 1.37× | 1.37× |
+| float | 8 | vectors | jacobi | cta_fused | 1.37× | 8.42× |
+| float | 16 | vectors | cta_fused | jacobi | 1.22× | 4.10× |
+| float | 32 | vectors | cta_fused | tridiag_ref | 1.11× | 1.79× |
 
-(n = 4 jacobi/fused; n = 5..7 fused 1.21×–1.39×; n = 12, 20, 24 cta; n = 16 tie.) `syev_cta` is right for complex
-from n ≥ 9; Jacobi is 4×–6× off the pace at n ≥ 20, so the float rule would be wrong here. For complex<double>,
-fused leads `cta` by only 1.03×–1.08× at n = 4..16 (neutral), so that range is not split.
+Jacobi wins every double cell (1.37×–3.59×); `syev_cta` won none. Fused with its tuned multiplier beats Jacobi
+for float from n = 7, but the 8 | 9 boundary stays for Jacobi's relative accuracy on graded input (4.5e-07
+against 2.7e+28 for `syev_cta`). FP64 at 1/64 inflates Jacobi's double margin; re-gate on a 1:2 FP64 GPU
+([steqr small-n](steqr.md#small-n-syev-routing-measured-not-shipped)).
 
-### syev: the complex double vendor handover
-
-The complex<double> `jobz=V` rows of `tuned/syev.sm_89.txt` put `vendor` first for n = 25..32. 2026-08-07,
-median of 3, µs per matrix (cta / cta_fused / vendor): n = 20 3.0015 / 3.4597 / 3.1085 (cta); n = 24 4.0806 /
-4.6301 / 3.8184 (tie); n = 26 5.4993 / 5.3048 / 4.4835 (vendor 1.23×); n = 32 8.0253 / 7.4929 / 5.6531 (vendor
-1.42×). An FP64-rate artifact and machine-specific. complex<float> does not cross over (`cta` beats the vendor
-1.23× at n = 32), so the rule is deliberately not "all complex".
+Complex (2026-08-07, vectors): complex<float> fused wins n ≤ 8 (n = 8: 1.25×), `cta` from 9 (n = 32: 0.383
+against fused 0.595, Jacobi 2.48, vendor 0.471), so the float rule is wrong for complex. complex<double>: fused
+leads `cta` by only 1.03×–1.08× (not split); the vendor wins `jobz=V` from n = 26 (1.23×) to 32 (1.42×), an FP64
+artifact; complex<float> never crosses (`cta` 1.23× over vendor at 32).
 
 ### syev: the fused CTA kernel design
 
-`syev_cta` runs three launches (`sytrd_cta`, `steqr_cta`, `ormqx_cta`) plus two pack kernels and a copy on the
-eigenvector path, each stage round-tripping global memory. `syev_cta_fused` keeps one problem resident in one
-sub-group partition from load to store (one read of A, one write, against about seven round trips) with the same
-device code (`sytrd_cta_device.hh`, `steqr_cta_device.hh`), so a head-to-head measures fusion alone.
-
-- The reduction always runs the Upper path (a Lower input is symmetrised during the tile load). Eigenvalues are
-  sorted by rank (each lane writes to its rank slot, ties by index), so no sort kernel.
-- Hermitian input reduces to a real tridiagonal by the diagonal unitary similarity \f$T' = S^H T S\f$,
-  \f$S_0 = 1\f$, \f$S_{i+1} = S_i\,\bar e_i / |e_i|\f$ (every lane replays the recurrence; S is reapplied before
-  the back-transform). It keeps two tiles and applies reflectors afterwards as `ormqx_cta(QL, Left, NoTrans)`.
-- Real input follows LAPACK DSYEV: `DORGTR` generates Q explicitly and `DSTEQR` is seeded with it; reflector store
-  and rotation accumulator share one tile, and lane c owns column c in registers (no cross-lane reduction).
-- The shared tile has leading dimension P + 1: with P = 32 every lane of a column read hits one bank.
+`syev_cta` runs `sytrd_cta`, `steqr_cta`, `ormqx_cta` plus pack kernels, each round-tripping global memory;
+`syev_cta_fused` keeps one problem in one sub-group partition from load to store with the same device code
+(`sytrd_cta_device.hh`, `steqr_cta_device.hh`). The reduction always runs Upper (Lower input is symmetrised on
+load); eigenvalues are placed by rank, so no sort kernel. Hermitian input becomes real tridiagonal by
+\f$T' = S^H T S\f$, \f$S_{i+1} = S_i\,\bar e_i / |e_i|\f$, reapplied before `ormqx_cta(QL, Left, NoTrans)`.
+Real input follows DSYEV (explicit Q seeds `steqr`; lane c owns column c). The tile ld is P + 1 (bank conflicts).
 
 ### syev: the Jacobi kernel design and its accuracy argument
 
-`syev_jacobi_cta` is partition-resident cyclic two-sided Jacobi: one `SubGroupPartition<P>` owns one problem, A and
-(optionally) Z stay in local memory, one launch per decomposition.
-
-- **Threshold.** A rotation is applied only when \f$|a_{pq}| > \mathrm{tol}\cdot\sqrt{|a_{pp}|\,|a_{qq}|}\f$
-  (Demmel and Veselić; LAWN 169 Remark 2.2), so eigenvalue error follows the condition number of the
-  column-equilibrated matrix and graded input keeps small relative error. The absolute test
-  \f$|a_{pq}| \le \mathrm{tol}\cdot\max|a_{kl}|\f$ would forfeit this. The bound is proved for symmetric positive
-  definite input; indefinite matrices are handled correctly without it.
-- **Schedule.** Round-robin pairing over an index space padded to even size, equivalent to cyclic-by-rows (Hari and
-  Begović Kovač, ETNA 46, 2017, Thm 2.11).
-- **Measured choices.** Local leading dimension P + 1; rotation pair (c, s) as one `vec<Real, 2>`; round-robin pairs
-  precomputed once per work-group in packed 16-bit slots (inline cost three integer modulos per pair per lane per
-  phase); `rot_count == 0` is the converged bit.
-
-Results: [the 2026-08-03 bake-off](#syev-the-2026-08-03-small-n-bake-off).
+`syev_jacobi_cta` is cyclic two-sided Jacobi, one `SubGroupPartition<P>` per problem, A and Z in local memory.
+It rotates only when \f$|a_{pq}| > \mathrm{tol}\cdot\sqrt{|a_{pp}|\,|a_{qq}|}\f$ (Demmel and Veselić; LAWN 169),
+so graded input keeps small relative error (proved for SPD; indefinite input is still correct); an absolute test
+would forfeit that. Round-robin pairing over an even-padded index space is cyclic-by-rows (Hari and Begović
+Kovač, ETNA 46, 2017); pairs are precomputed in packed 16-bit slots, and `rot_count == 0` is the converged bit.
 
 ### syev: the LOBPCG projected-solve knob
 
-*Historical; retired 2026-10-05.* `BATCHLAS_SYEV_CTA_MAX_N` (0..32, default 32 = off) sent small eigenvector
-solves above the threshold to the vendor, motivated by n = 30, batch 8, float: `cta` 229.6 µs against cuSOLVER
-103.7 (2.21×); nsys put 29.4% of LOBPCG GPU time (about 16% end to end) in that projected Rayleigh–Ritz solve.
-Through LOBPCG, eigenvectors, n = 256, µs/matrix, value 32 (off) / 16 / 8 / 0: batch 8 15563 / 14211 / 13746 /
-13551; batch 64 1998.6 / 1890.4 / 1948.0 / 1945.9 (1.10×–1.15× and 1.03×–1.06×). It shipped **off** because
-moving the projected solve off CTA flips a near-tie in `ILUKTests.SyevxInstrumentationAndPreconditioner` (asserts
-`lose_count == 0`; at threshold 16 one case crosses to ratio 1.25 at an already-converged point, 4.2e-06).
-**Open owner decision:** tolerate a tie on an already-converged case, or pin that test's projected-solve provider.
+Retired 2026-10-05. `BATCHLAS_SYEV_CTA_MAX_N` sent LOBPCG's projected Rayleigh–Ritz solves to the vendor
+(1.03×–1.15× on LOBPCG n = 256) but shipped off, because it flips a near-tie in
+`ILUKTests.SyevxInstrumentationAndPreconditioner` (`lose_count == 0`). Reviving it needs an owner decision:
+tolerate that tie or pin the test's provider.
 
 ## syev: tuning constants and the shadowed header
 
 ### syev: the shadowed tuning header
 
-The committed `include/batchlas/tuning_params.hh` is the only copy; CMake generates none
-(`cmake/BatchLASPackaging.cmake:82-83`). A generated copy in the build tree was shadowed by it on every build,
-which hid a retune (2026-08-03: `ormqr_block_size_for_n(512) = 16`, `sytrd_block_size_for_n(512) = 24`; the
-generated header said 128 and 64), so it was removed.
-
-> **Warning:** a retune takes effect only when its constants are ported by hand into the committed header (the
-> 2026-08-07 retune, `924b3a59`, did).
-
-Every accessor is overridable through `BATCHLAS_TUNE_*`; overrides are read on every call and feed
-`*_buffer_size` as well as the solve, so they must not change between a buffer-size query and its call.
-
-### syev: the ORMQR regression hypothesis, refuted
-
-Hypothesis: shadowing pinned ORMQR at 16 where a generated header said 128, explaining why BatchLAS stopped beating
-cuSOLVER at n = 32..512. Refuted: (1) ORMQR has been 16 in every bucket since the header was created (`7363746`,
-2026-03-02); what moved was SYTRD (`91341c1`, unmeasured). (2) A/B at n = 512, eigenvectors, batch 128, median of 5
-interleaved rounds: ORMQR = 128 gave 452.32 µs/matrix (IQR 450.73–454.91) against 301.95 (IQR 300.79–303.75) unset,
-**1.50× slower**. (3) 16 was the measured optimum wherever the knob mattered. No baseline exists to restore: git
-history holds no artifact of BatchLAS beating cuSOLVER at n = 32..512, so nothing may calibrate against that claim.
-The values came from a standalone `ormqr_blocked` microbenchmark whose n ≤ 64 search offered only block sizes 4–16
-(16 was the ceiling), and the generator's `_derive_param_buckets` keeps the parameters of whichever case had the
-lower absolute time, not the best block size per case.
+The committed `include/batchlas/tuning_params.hh` is the only copy; CMake generates none. A generated build-tree
+copy used to be shadowed by it and hid a retune, so it was removed. A retune takes effect only once ported by
+hand into the committed header. Every accessor reads `BATCHLAS_TUNE_*` on every call, buffer-size queries
+included, so never change one between a query and its call.
 
 ### syev: the 2026-08-03 block-size sweep in the syev context
 
-*Superseded by the 2026-08-07 retune.* First measurement of `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE` and
-`BATCHLAS_TUNE_SYTRD_BLOCK_SIZE` through `syev`: blocked provider, float, knee batch capped at 512 by the
-[workspace limit](#syev-workspace-footprint-limits-usable-batch). ORMQR 16 was optimal at n = 32..128 (n = 128:
-7.446 µs against 8.142 with ORMQR 32 and 22.805 with ORMQR 128); at n = 256 and 512 ORMQR 32 won by only 1.016× and 1.059×
-(neutral). SYTRD matched the committed 8/8/16/24 at n = 64/128/256/512 (n = 512: 24 gives 339.9, 8 gives 380.8).
-Double agreed at n ≤ 128 and preferred SYTRD 16 at n = 512 (1.05×–1.07×, neutral). ORMQR = 128 cost 2.1× at n = 64
-and 3.1× at n = 128. Gap: n = 256 missing in both modes and precisions (`syev_blocked` exceeded the 3 GB
-per-invocation abort even at batch 476). Raw: `benchmarks/results/syev_retune_phaseB_float.jsonl`.
+Superseded by the 2026-08-07 retune; still the only syev-context SYTRD point at n = 512: blocked, float, SYTRD
+24 gave 339.9 against 380.8 at 8 (the shipped LARGE value is 8, see
+[remaining items](#syev-remaining-unmeasured-items)). ORMQR 16 was optimal at n = 32..128; 128 cost 2.1×–3.1×.
+Raw: `benchmarks/results/syev_retune_phaseB_float.jsonl`.
 
 ### syev: the 2026-08-07 constant retune
 
-Commit `924b3a59` retuned on a trimmed space and A/B'd each group end to end at the consumers. CUDA/float, µs per
-matrix, before to after: syev n=64 b=4096 1.0798 to 0.9938 (1.087×); syev n=512 b=512 166.95 to 151.01 (1.106×);
-gesvd n=128 b=1024 9.2465 to 8.0684 (1.146×); gesvd n=256 b=512 1.032×; gesvd n=512 b=256 1.030×. Everything else
-was within 1%.
+`924b3a59`, A/B'd end to end at the consumers, CUDA/float: syev n=64 b=4096 1.087×, n=512 b=512 1.106×;
+gesvd n=128 b=1024 1.146×; everything else within 1%.
 
-- **ORMQR 16 everywhere to 16/16/24/48/56.** `gebrd` has its own `GEBRD_BLOCK_SIZE_*` (flat curve against ORMQR's
-  steep one, 2.16× between 16 and 56). MEDIUM is neutral (within 0.7%).
-- **SYTRD 8/8/16/24/32 to 8/8/16/8/48.** The LARGE bucket (256 < n ≤ 512) went to 8 although the 2026-08-03 sweep
-  had 24 as the float optimum at n = 512; whether the trimmed retune measured n = 512 is not recorded (**open**).
-  Complex overrides this bucket at the consumer (see
-  [the complex panel width](#syev-complex-panel-width-in-the-256-to-512-bucket)).
-- **`SY2SB_ORMQR_NB_LARGE = 32`.** The shape gate in `sytrd_sy2sb.cc` fires only at n ≥ 1024 and batch ≥ 32, so
-  n = 512 got no WY hint. Worth 1.103× at batch 512 and 1.117× at batch 1024. With the gate active it shadows
-  `ORMQR_BLOCK_SIZE_*` on syev's hot path: changing the ORMQR constant leaves the kernel trace identical.
-- **stedc threads-per-root 8 and wg multiplier 8, set from syev,** overrule stedc's own bench (wgm 2–4, tpr 4–8),
-  which cost syev 2.7% at n = 256; 8/8 wins up to 7.6% at n = 64 and is within noise at n ≥ 512.
-- **`SB2ST_BACK_*` deliberately stay 0:** the heuristic picks the winner within 0.6% (n=512 b=512 0.050644 against
-  tuned (8,8) 0.050706; n=1024 b=256 0.20701 against (8,16) 0.20575).
+- ORMQR to 16/16/24/48/56 (`gebrd` has its own `GEBRD_BLOCK_SIZE_*`). SYTRD to 8/8/16/8/48; whether n = 512 was
+  measured for LARGE = 8 is not recorded.
+- `SY2SB_ORMQR_NB_LARGE = 32`: the `sytrd_sy2sb.cc` shape gate fires only at n ≥ 1024 and batch ≥ 32; the hint is
+  worth 1.10×–1.12× at n = 512. It shadows `ORMQR_BLOCK_SIZE_*` on syev's hot path.
+- stedc threads-per-root 8, wg multiplier 8, set from syev: stedc's own winners cost syev 2.7% at n = 256.
+- `SB2ST_BACK_*` stay 0: the heuristic is within 0.6% of the tuned pair, and any pair outside tile {1,2,4,8} ×
+  subs {4,8,16} silently falls through to the slower tiled kernel.
 
-Tuning is float-only and the header is regenerated from a float-only bench, so per-type corrections live at the
-consumer where the next retune cannot overwrite them.
+Tuning is float-only, so per-type corrections live at the consumer, where a retune cannot overwrite them.
 
 ### syev: complex panel width in the 256 to 512 bucket
 
-`sytrd_block_size_default<T>` (`src/ops/syev/kernels/syev_blocked.cc`) returns 32 for complex at 256 < n ≤ 512. The
-harness value 8 costs complex 1.16×–1.20×: a complex panel column moves twice the bytes and does four times the
-flops per element, so it needs a wider panel to amortise the O(n) barrier-and-reduction chain of
-`latrd_lower_panel`. complex<float>, eigenvectors, blocked, µs/matrix, median of 5, device 1, 2026-08-07:
+The harness SYTRD value 8 costs complex 1.16×–1.20×: a complex panel column moves twice the bytes and four times
+the flops, so it needs a wider panel to amortise `latrd_lower_panel`'s barrier chain. complex<float>, vectors,
+blocked, median of 5, 2026-08-07:
 
-| n / batch | nb=8 | nb=16 | nb=24 | nb=32 | nb=48 | nb=64 |
-| --- | --- | --- | --- | --- | --- | --- |
-| 320 / 819 | 197.25 | 173.24 | **166.27** | 168.55 | 175.92 | 190.95 |
-| 512 / 512 | 942.68 | 838.73 | 815.30 | **802.74** | 811.89 | 827.70 |
+| n / batch | nb=8 | nb=16 | nb=24 | nb=32 | nb=48 |
+| --- | --- | --- | --- | --- | --- |
+| 320 / 819 | 197.25 | 173.24 | **166.27** | 168.55 | 175.92 |
+| 512 / 512 | 942.68 | 838.73 | 815.30 | **802.74** | 811.89 |
 
-(n = 384 and 448 also have nb = 32 optimal.) `nb = 32` is optimal or within 1.5% at every n in the bucket. Float at
-n = 512 spreads only 1.04× across nb 8–48 (inside the 1.10× neutral band), so float keeps the harness value. The
-override lives at the consumer, not in `tuning_params.hh`, because that header's constants come from a float-only
-bench. Other complex buckets: n ≤ 128 prefers 8; 128 < n ≤ 256 prefers 16 (n = 192: 33.83 against 36.09 at 8);
-n > 512 is within 1.03× of the committed 48 at nb = 32.
+nb = 32 is within 1.5% of optimal across the bucket; float spreads only 1.04×, so it keeps the harness value.
 
 ### syev: the two-stage band width kd
 
-The prediction that removing the split-WY penalty (`f7f3c57`, `nb = kd`) would move the eigenvector optimum to
-kd = 96–128 (MAGMA; Gates, Tomov and Dongarra 2018) is **disproved**. Total ms, eigenvectors, median of 3,
-2026-08-04:
+kd = 32 is optimal at every n ≥ 256 in eigenvector mode, disproving the MAGMA prediction of 96–128 after
+`f7f3c57`. Total ms, vectors, median of 3, 2026-08-04:
 
 | n / batch | kd=16 | kd=32 | kd=64 | kd=128 | blocked |
 |---|---|---|---|---|---|
 | 256 / 1024 | 69.5 | **61.3** | 65.7 | 75.7 | **40.9** |
-| 512 / 512 | 217.7 | **194.2** | 236.1 | - | **191.4** |
 | 1024 / 128 | 445.3 | **369.9** | 433.2 | 715.3 | 475.5 |
 
-kd = 32 is optimal at every n ≥ 256 (kd = 48 and 96 are worse throughout); wide kd wins only at n = 128 (kd = 128: 16.9 against 22.0 at kd = 32; blocked 14.6), where two-stage loses to
-blocked anyway. The nb hint helps narrow bands (1.02×–1.06× for kd ≤ 64) and hurts kd = 128
-(0.93×) because LARFT work is \f$O(m k\,n_b)\f$ (see
-[sytrd: the dense-to-band block-width hint](sytrd.md#sytrd-the-dense-to-band-ormqr-block-width-hint)).
-
-**"Two-stage wins at n ≥ 1024" is shape-dependent.** At n = 2048 / batch 32 (kd = 32: 1066 ms; kd = 128: 1943), legacy `latrd` gave blocked 1235.1
-against two-stage 1066 (two-stage 1.16×); grid `latrd` (the default; 1.41× over legacy) gives blocked **875.8**
-(blocked 1.22×). At n = 1024 / batch 128 the batch saturates the 128 SMs and two-stage wins 1.29× either way.
-
-**Mode.** Both modes reduce at a real band width and share `choose_two_stage_kd` (the Householder chase retains
-\f$Q_2\f$; see
-[sytrd: the Householder chase against the Givens chase](sytrd.md#sytrd-the-householder-chase-against-the-givens-chase)).
-The literature puts the eigenvector optimum higher (96/128 on GPU); this table does not reproduce it.
+Wide kd wins only at n = 128, where blocked wins anyway. Both modes share `choose_two_stage_kd` (see
+[sytrd: the Householder chase](sytrd.md#sytrd-the-householder-chase-against-the-givens-chase) and
+[the dense-to-band hint](sytrd.md#sytrd-the-dense-to-band-ormqr-block-width-hint)). "Two-stage wins at
+n ≥ 1024" is shape-dependent: at n = 2048 / batch 32, grid `latrd` makes blocked 1.22× faster than two-stage.
 
 ### syev: latrd grid gate confirmed in eigenvector mode
 
-`latrd_grid_min_n = 768` was derived in eigenvalues-only mode and applies in both. legacy/grid ratio in
-eigenvector mode (> 1 means grid wins), batch 1 / 8 / 64: n = 512 1.012 / 1.018 / 0.956; n = 768 **1.379** /
-**1.375** / 1.090; n = 1024 **1.843** / **1.781** / -; n = 256 0.734 / 0.734 / 0.788 (n = 384: 0.881–0.894). The
-crossover is the same in both modes, so the constant is not split. The win shrinks with batch: once the batch
-alone saturates the SMs there is no starvation left to absorb.
+`latrd_grid_min_n = 768` (derived in values mode) holds in vector mode too. legacy/grid at batch 1 / 8 / 64:
+n = 512 1.012 / 1.018 / 0.956; n = 768 1.379 / 1.375 / 1.090; n = 256 0.734 / 0.734 / 0.788. Same crossover, so
+the constant is not split; the win shrinks once the batch saturates the SMs.
 
 ## syev: the 2026-08-08 implementation plan, measured
 
-The plan turned a profile of float and complex<float> `syev` at saturating batch into work packages with an
-end-to-end accept gate (a kernel win is not a solver win: a 2.16× kernel win became an 11% `gesvd` loss). Rig:
-`build-cuda` (sm_89, RelWithDebInfo), device 1, one process, idle GPU, `--warmup=2 --min_iters=5`; positional
-arguments `n batch nb fuse jobz uplo`. Rig validation at n = 512, batch 512, two-stage, eigenvectors: float 334.28
-against the research profile's 332.5, cfloat 971.17 against 972.4; differences under about 1% are noise. Accuracy
-runs planned for WP1, WP3, WP8 are not recorded.
-
-| WP | item | gate | measured | verdict |
-|---|---|---|---|---|
-| WP0 | harness unblockers | cfloat rows appear | rows appear | passed |
-| WP1 | A2: `stebz` values-only | ≥ 1.20× float n=256 | **1.44×** | passed |
-| WP4 | A3: per-type tile/subs | ≥ 1.10× cfloat, float unchanged | **1.139×**, float unchanged | passed |
-| WP3 | A1: `her2k` trailing update | ≥ 1.05× cfloat | 1.043× | marginal miss, kept |
-| WP2 | B3: `cta-large-n` | ≥ 1.15× vs blocked | **0.012× (85× slower)** | rejected |
+Work packages from a profile at saturating batch, each with an end-to-end accept gate (device 1,
+`--warmup=2 --min_iters=5`). WP1, WP4 and WP3 shipped (WP3 missed its 1.05× gate at 1.043×); WP2 was rejected
+([rejected ideas](#syev-rejected-ideas)); WP5 and WP6 are [open](#syev-open-debts-and-unmeasured-items).
+Accuracy runs for WP1 and WP3 are not recorded.
 
 ### syev: harness unblockers (WP0)
 
-`sb2st_hh_benchmark` registered only `float`, so `--type=cfloat` silently produced zero rows (fixed; n = 512, batch
-512, kd = 32: CHASE float 56.578, cfloat 267.70 ms, 4.73×; BACK 99.095 / 317.03, 3.20×).
-`BATCHLAS_LATRD_GRID_GROUPS` cannot force the grid `latrd` path: it is clamped to `MAX_COMPUTE_UNITS / batch`, so at
-batch ≥ 128 no value reaches the grid kernel. `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` bypasses the cap but is
-deadlock-capable: the software grid barrier hangs, without failing, when the launch exceeds residency (it looks
-like slow JIT; run under a timeout). It was added and **never exercised**.
+`BATCHLAS_LATRD_GRID_GROUPS` cannot force the grid `latrd` path at batch ≥ 128: it is clamped to
+`MAX_COMPUTE_UNITS / batch`. `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` bypasses the cap but can deadlock (the software
+grid barrier hangs silently past residency; run under a timeout) and has never been exercised.
 
 ### syev: stebz values-only in the blocked solver (WP1)
 
-In values mode the blocked solver ran a full eigenvector divide-and-conquer and discarded Z (28.3% of the float
-solve at n = 256, batch 1024). `stebz` bisection (indices 0..n-1, ascending) now runs straight off the real
-tridiagonal, as two-stage already did (`f28a3fcd`). Values only, `provider=blocked`, batch 1024, µs per matrix
-(before to after): float n = 64 1.1614 to 0.62228 (**1.87×**), n = 256 20.774 to 14.476 (**1.44×**), n = 320 42.804
-to 31.438 (1.36×); cfloat n = 64 1.5055 to 1.0465 (1.44×), n = 256 47.218 to 38.250 (1.23×), n = 320 101.45 to
-87.666 (1.16×). The arithmetic bound was 1.39× against a gate of 1.20×. `stedc` runs in real arithmetic, so it is
-28.3% of the float solve but about 12% of the cfloat solve at n = 256, hence float gains more. Values mode also
-stops allocating eigenvector-only workspace (n = 256, batch 1024, cfloat: `z_span` 268 MB, `zc_span` 537 MB, plus
-the stedc workspace).
+Values mode ran a full eigenvector divide-and-conquer and discarded Z; `stebz` bisection now runs off the real
+tridiagonal (`f28a3fcd`), and the eigenvector workspace is no longer allocated. Batch 1024, before to after:
+float n = 64 1.87×, n = 256 1.44×, n = 320 1.36×; cfloat 1.44× / 1.23× / 1.16× (stedc is real arithmetic, a
+smaller share of the complex solve).
 
 ### syev: per-type sb2st back-transform geometry (WP4)
 
-`provider=two_stage`, eigenvectors, n = 512, batch 512, µs per matrix: cfloat shipped constants 971.17, forced
-tile=2 subs=4 852.77 (1.139× faster), per-type code **852.46**; float shipped 334.28, forced tile=2 subs=4 384.30
-(**1.15× slower**), per-type code 331.25 (unchanged). A global flip trades a 1.14× complex win for a 1.15× float
-loss; the per-type selection (`8c24626f`) keeps the complex win and leaves float at its optimum. The complex
-back-transform runs at SM throughput 35.3% and occupancy 49.8% (float 93.7% and 82.8%). Only n = 512 was measured,
-so the rule is `n == 512` exactly. The instantiated set is tile ∈ {1,2,4,8} × subs ∈ {4,8,16}; any other pair
-silently falls through to the slower tiled kernel. WP4 and WP6 are not additive: measure any complex stage-2
-estimate against 852, not 971.
+Two-stage, vectors, n = 512, batch 512: forced tile 2 / subs 4 is 1.139× faster for cfloat (971.17 to 852.77)
+and 1.15× slower for float (334.28 to 384.30), so the rule is per type (`8c24626f`) and `n == 512` exactly, the
+only size measured. Measure any complex stage-2 change against 852, not 971.
 
 ### syev: her2k trailing update for complex float (WP3)
 
-For complex, `sytrd_blocked`'s trailing update issued two full \f$n_2 \times n_2\f$ GEMMs where float issues one
-triangle-only `syr2k`. `her2k` does half the arithmetic (\f$\alpha A B^H\f$ and \f$\bar\alpha B A^H\f$ are
-conjugate transposes) via one batched GEMM into scratch plus a Hermitian fold (`405b4120`). Primitive,
-\f$n_2\f$ = 480, batch 512, cfloat, k = 32: her2k 3.3010 ms against the GEMM pair 4.3866 (1.33×; 1.32× at k = 16,
-24), nearly independent of k, so a larger `nb` will not grow the win. End to end, `provider=blocked`, eigenvectors,
-n = 256, batch 1024: cfloat 66.628 to **63.899 (1.043×)**; float unchanged. The gate was 1.05×; the miss was
-predicted and the change kept (real 1.04× at no runtime cost; it forced a single-definition route prediction in
-`expansion_budget.hh`). The gate should read 1.04×, not "met".
+For complex, `sytrd_blocked`'s trailing update issued two full GEMMs where float issues one `syr2k`. `her2k`
+(one batched GEMM into scratch plus a Hermitian fold, `405b4120`) is 1.33× on the primitive (\f$n_2\f$ = 480,
+batch 512) and 1.043× end to end (cfloat, blocked, n = 256, batch 1024); float unchanged.
 
-- **Fallback.** Forcing the host loop (then `BATCHLAS_EXPAND_ROUTE=loop`, now `BATCHLAS_HER2K_ROUTE=vendor`) at \f$n_2\f$ = 480, k = 32, batch 512 gave
-  5.3924 ms, 1.23× slower than the GEMM pair. The 7.8× warned about in the `sytrd_blocked.cc` comment was measured
-  in double.
-- **Fit guard.** When the expansion does not fit, `her2k_vendor` silently drops to a per-item host loop. Budget
-  `GLOBAL_MEM_SIZE / 4` (`triangular_expand.hh`), about 6 GB here; scratch is
-  \f$n_2^2\cdot\text{batch}\cdot\text{sizeof}(T)\f$ (n = 512 / batch 512: 944 MB; 2048 / 64: 2.08 GB).
-  `BATCHLAS_EXPAND_MAX_BYTES=1` proves the guard works. complex<double> is not admitted (unmeasured).
-
-### syev: cta-large-n rejected (WP2)
-
-The unmerged `cta-large-n` branch lifted the CTA eigensolver above n = 32 (local-memory limits n = 128 float, 64
-cfloat). Tests passed but it had no performance measurement. Forced `provider=cta` against `blocked`, float,
-eigenvectors, batch 256: n = 33 150.17 against 1.7715 µs (**85× slower**); n = 64 760.68 against 3.6021 (**211×
-slower**). At batch 2048 an n = 33..128 sweep finished no iteration in ten minutes while holding 24 GB. A
-CTA-resident solve saves about 15 launches but runs an unblocked level-2 algorithm in one work-group per matrix
-against a blocked level-3 pipeline. Reverted (`14bad498`; it survives on `worktree-wf_3b4af334-426-9`). The branch
-also rewrote the live n ≤ 32 CTA kernels and the sub-group partition (`src/kernels/common/sg_partition/`), never measured; if wanted
-it returns as its own change with n ≤ 32 numbers.
-
-> **Note:** benchmark through the forced provider. Under flat selection the cap is `kSmallMaxN = 32` in the small
-> families' `can_run` (`src/ops/syev/syev.cc`). A measured dead end in
-> [the agent guide](../developer/agent-guide.md).
+- The host-loop fallback (`BATCHLAS_HER2K_ROUTE=vendor`) is 1.23× slower than the GEMM pair at that shape.
+- When the expansion does not fit `GLOBAL_MEM_SIZE / 4` (`src/expansion_budget.hh`), `her2k_vendor` silently drops
+  to a per-item host loop; scratch is \f$n_2^2\cdot\text{batch}\cdot\text{sizeof}(T)\f$.
+  `BATCHLAS_EXPAND_MAX_BYTES=1` forces it. complex<double> is not admitted (unmeasured).
 
 ## syev: the stedc merge-variant and leaf-cliff regression
 
-Measured 2026-08-05. PR 55 (`0bb92fb`, the STEDC level-driver rework) cost `syev` 1.05×–3.25× at every size (the
-unchanged vendor column reproduced the grid, so the deltas are code). Float, eigenvectors, baseline / after PR 55 /
-fixed, µs per matrix: n = 64 1.64 / 2.25 / 1.70; n = 320 74.53 / 242.43 (**3.25×**) / 70.96; n = 640 727.48 / 1095.9
-(**1.51×**) / 714.99; n = 1024 2441.93 / 2559.1 / 2394.7. Fixed is within 0.96×–1.05× of baseline at all eight
-measured sizes (the four not quoted: n = 128 1.01×, 256 1.03×, 512 1.02×, 768 1.02×).
+PR 55 (`0bb92fb`) cost syev 1.05×–3.25× (float vectors n = 320: 74.53 to 242.43); the fix restored all eight
+sizes to within 0.96×–1.05× (2026-08-05). Two defects, both now guarded:
 
-**Defect A: the merge variant was flipped the wrong way.** `3072ea6` moved `STEDC_MERGE_VARIANT_*` from FusedCta (2)
-to Fused (1), claiming FusedCta was numerically wrong and 2–12% slower; neither reproduced. With variant 2 all 16
-CUDA `stedc_tests` pass in both precisions, plus `syev_tests` 8/8, `syev_blocked_tests` 44/44 and
-`syev_two_stage_tests` 20/20; the NaN was a symptom of the deadlock fixed in `4bde59a`. FusedCta is 11–35% faster on
-`stedc` on both drivers (n = 64: Levels+Fused 0.672, Levels+FusedCta 0.499; n = 512: 24.744 against 22.228).
-
-> **Warning:** `FusedCtaConditionedHeavyDeflation` asserts only finite-and-sorted, never accuracy. Strengthen it
-> before trusting variant 2 on unmeasured hardware. Current merge constants are on the
-> [stedc page](stedc.md#stedc-current-tuning-values).
-
-**Defect B: the level planner chose a leaf past the STEQR cliff.** `plan_stedc_levels` searched leaves in
-[threshold/2, threshold·2], tie-breaking toward the leaf nearest the threshold; at n = 320 and 640 it chose leaf 40
-over 20. `steqr` takes the fast `steqr_cta` path only for n ≤ the sub-group width and falls back to `steqr_wg`
-above it. `steqr` alone, batch 10416, eigenvectors: n = 32 0.262 µs, n = 36 **3.761**, n = 40 4.870, n = 64 36.78. A
-12.5% width increase costs 14×: a code-path cliff, not scaling. At n = 320 thresholds 16..24 chose leaf 20 (stedc
-12.5–13.1) while threshold 32 chose leaf 40 (**168.4**; 649.7 at threshold 64). `STEDC_RECURSION_THRESHOLD = 32` is
-the sub-group width, an invariant. The fix caps the leaf at the threshold (`hi = threshold`, `stedc_levels_plan.hh`);
-the level driver is then faster at these sizes (10.8 against 11.1 Recursive at n = 320). It escaped review because
-`stedc_benchmark` registered only n ∈ {64, 128, 256} (320 and 640 now are), and the plan shape is asserted directly
-in the host-only `StedcLevelPlan.*` tests, since a bad leaf still gives correct eigenvalues.
-
-## syev: workspace footprint limits usable batch
-
-**Open defect, measured 2026-08-03.** `syev_cta`, n = 32, eigenvectors, peak device memory by batch: 512 445 MiB;
-1024 2237 MiB (0.320 µs/matrix); 4096 7505 MiB (0.192); 16384 **24083 MiB** (whole card; 0.592, regresses). That is
-about 1.5–2.2 MiB of workspace per 32×32 matrix at batch 1024–16384 (1.8 MiB at 4096; roughly 380–560× the
-4 KB of data), growing about linearly with batch above 512.
-Eigenvalues-only is unaffected (about 343 MiB at batch 16384). `syev_blocked` has the same problem: eigenvalues-only
-at batch 16384 (n = 32), 15258 (64), 3814 (128) and 953 (256) each exceeded 3 GB (predates WP1, not re-measured).
-Usable batch is capped near 4096 for n = 32 with vectors on a 24 GB card, below saturation; it caused a real OOM on a
-shared machine, binds every small-n eigenvector solve, is uninvestigated, and makes n = 2048 unsaturable.
-
-Past the knee extra batch buys little (n = 8, float, `syev_cta`): batch 65536 gives 0.0075321 µs/matrix in 487 MiB;
-batch 1048576 gives 0.0071809 (4.7% better) in 24083 MiB (the run that caused the OOM). Saturation therefore means
-the knee, where a 4× batch step buys less than 5%. The bake-off driver enforces about 1.5 GB estimated footprint, a
-3 GB hard abort per invocation and a 120 s timeout, and reports a cell that does not reach its knee within them.
+- **Merge variant.** `STEDC_MERGE_VARIANT_*` had been flipped from FusedCta (2) to Fused (1) on a claim that 2
+  was wrong and slower; neither reproduced (the NaN was the deadlock fixed in `4bde59a`). FusedCta is 11–35%
+  faster on `stedc`. Open: `FusedCtaConditionedHeavyDeflation` asserts only finite-and-sorted, never accuracy;
+  strengthen it before trusting variant 2 on new hardware ([stedc tuning](stedc.md#stedc-current-tuning-values)).
+- **Leaf cliff.** `plan_stedc_levels` searched leaves in [threshold/2, 2·threshold] and chose leaf 40 at
+  n = 320. `steqr` takes `steqr_cta` only for n ≤ the sub-group width: alone, n = 32 is 0.262 µs, n = 36 3.761
+  (14× for 12.5% more width). The leaf is now capped at the threshold (`hi = threshold`), and 32 is the
+  sub-group width, an invariant. `StedcLevelPlan.*` asserts the plan shape directly, because a bad leaf still
+  gives correct eigenvalues.
 
 ## syev: L2 batch chunking {#syev-l2-batch-chunking}
 
-> **Status:** current · RTX 4090 (sm_89, 128 SMs, 72 MB L2), CUDA 13.2 · measured 2026-10-23
+`syev_cta` and `syev_blocked` run the batch in parts of `tuning::blocked_chunk_items` items, an item counted as
+three n × n matrices, not the part workspace (the cta workspace is 435 KB per item at float n = 16, mostly
+`steqr_wg`'s rotation store the CTA path never uses; sizing by it made parts 10× slower). `cta_fused` is one
+kernel and not chunked. Every part is also capped at `max_groups_yz / 2` items (`select::grid_capped_chunk`,
+[defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
 
-`syev_cta` and `syev_blocked` run the batch in parts of `tuning::blocked_chunk_items` items, an item
-counted as three n x n matrices (A, Z and the reflector pack or stedc merge matrix), not the part
-workspace: the cta workspace is 435 KB per item at float n=16 (mostly `steqr_wg`'s rotation store, which
-the CTA path never uses), and sizing by it shrank parts to 188 items and ran about 10x slower. Eigenvalues
-offset by `b0*n`, info by `b0`; workspace for one part (`chunk + batch % chunk`); `syev_cta` waits between
-parts on an out-of-order queue. `cta_fused` is one kernel and is not chunked. Every part is also capped at
-`max_groups_yz / 2` items (`select::grid_capped_chunk`; [defect 21](../design/known-defects.md#defect-21-range-rounded-past-the-grid)).
+**Rule:** `SYEV_CTA_L2_CHUNK_PERCENT = 150`, `SYEV_BLOCKED_L2_CHUNK_PERCENT = 0` (only the grid cap splits).
+Cold A/B, 2026-10-23, pinned route, time relative to `off` (no chunking, before the grid cap):
 
-**Rule:** `SYEV_CTA_L2_CHUNK_PERCENT` = 150, `SYEV_BLOCKED_L2_CHUNK_PERCENT` = 0 (no L2 chunking; the
-grid cap still splits a batch past 32767).
+| route | type | n | batch | 75 % | 150 % |
+|---|---|---:|---:|---:|---:|
+| cta | float | 16 | 16384 | 0.910 | 0.911 |
+| cta | float | 16 | 65536 | 0.825 | 1.026 |
+| cta | cfloat | 16 | 131072 | 1.037 | 0.963 |
+| blocked | float | 128 | 1024 | 1.069 | 1.056 |
+| blocked | float | 256 | 2048 | 1.674 | 1.209 |
+| blocked | cfloat | 128 | 16384 | 1.330 | 1.116 |
 
-Cold A/B, pinned route, ns per item, median of 2 retained alternating process passes x 5-7 reps (pass 0
-dropped), `off` = `BATCHLAS_TUNE_L2_CHUNK_ITEMS=100000000` before the grid cap existed:
-
-| route | type | n | batch | off | 75 % | 150 % |
-|---|---|---:|---:|---:|---:|---:|
-| cta | float | 8 | 262144 | 9.3 | 0.789 | 1.001 |
-| cta | float | 16 | 16384 | 31.8 | 0.910 | 0.911 |
-| cta | float | 16 | 65536 | 35.3 | 0.825 | 1.026 |
-| cta | float | 32 | 16384 | 174.0 | 0.931 | 0.972 |
-| cta | cfloat | 16 | 32768 | 60.7 | 1.046 | 1.000 |
-| cta | cfloat | 16 | 131072 | 62.3 | 1.037 | 0.963 |
-| blocked | float | 64 | 8192 | 1553 | 1.021 | 0.912 |
-| blocked | float | 128 | 4096 | 7021 | 1.052 | 0.919 |
-| blocked | float | 128 | 1024 | 6442 | 1.069 | 1.056 |
-| blocked | float | 256 | 2048 | 30232 | 1.674 | 1.209 |
-| blocked | cfloat | 128 | 16384 | 10854 | 1.330 | 1.116 |
-
-- The cta gains past batch 32767 now come from the grid cap, which splits those batches into parts of at
-  most 16384 whatever the percent (re-measured: float n=16 b65536 and b131072 0.999 against the capped
-  baseline; cfloat n=16 b131072 1.029 at 100 %, the reason for 150 %).
-- Blocked loses at every percent at n=256 (75 % is 1.67x: parts of 128-256 items under-fill sytrd and
-  stedc) and for cfloat; percents 25-100 coincide at n=256 because the CU-multiple floor sets the part.
-- Re-measured with the shipped rule against `off`: cta float n=16 b16384 1.001 (one pass at 150 %; the
-  sweep's 0.911 there was baseline noise, so read single-pass cells in the table with ~10% doubt), cfloat
-  n=16 b131072 0.999, blocked float n=256 b2048 1.000.
-- stedc is not chunked. syev two_stage is split only by `BATCHLAS_TUNE_L2_CHUNK_ITEMS` and the scratch-budget
-  cap ([vendor-free band](#syev-vendor-free-double-band)); neither is measured.
-- `steqr_buffer_size` reserves the `steqr_wg` rotation store on the CTA path (open, separate).
+The cta gains past batch 32767 now come from the grid cap; re-measured against the capped baseline, the shipped
+rule is 0.999–1.001 (the 0.911 was single-pass noise). Blocked loses at every percent (n = 256 parts under-fill
+sytrd and stedc). stedc and two-stage have no L2 rule. Open: `steqr_buffer_size` reserves the `steqr_wg`
+rotation store on the CTA path.
 
 ## syev: the vendor-free double band, n = 449 to 1600 {#syev-vendor-free-double-band}
 
-> **Status:** current · RTX 4090 (sm_89), DPC++ CUDA, vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) · checked 2026-10-25 · correctness only, nothing timed
+Vendor-free (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), checked 2026-10-25, correctness only, nothing timed. The
+fullerene workloads are double: C120 is n = 480 at batch about 1819, C300 n = 1200 at batch about 76.
 
-The fullerene workloads are double: C120 is n = 480 at batch about 1819, C300 is n = 1200 at batch
-about 76. With the vendor library, double `jobz=V` above 448 goes to cuSOLVER (rule table above). This
-section records what a build without it does there, for double and complex<double>.
+**Routes.** No table or `can_run` change was needed: every row in the band lists native families after
+`vendor`, so `select::choose` takes the next entry (sm_89: `blocked` for `jobz=V`, `two_stage` for `jobz=N`;
+sm_120: whatever the deep row ranks next), never the last resort. The CPU (NETLIB) queue has no route and throws
+`NoRouteError` by design.
 
-**Routes.** Nothing had to change in the tables or in `can_run`. Every sm_89 and sm_120 row in the band
-lists the native families after `vendor`: double and complex<double> `jobz=V` rows read
-`vendor | blocked | two_stage`, the `jobz=N` rows `two_stage | vendor | blocked`. The deep sm_120 rows
-reorder some cells (complex<double> `jobz=N` n = 449: `blocked | vendor | two_stage`). Vendor-free,
-`vendor` cannot run, so `select::choose` takes the next entry of the same row: on sm_89 `blocked` for
-eigenvectors and `two_stage` for eigenvalues only, on sm_120 whichever native family the deep row ranks
-first. It never reaches the last resort. `can_run` admits both families at any n ≥ 1 and any batch ≥ 1 on a GPU backend
-(`syev.cc`, `can_run`), with either uplo, because Upper is mirrored into Lower first.
+**Workspace at the fullerene batch.** Blocked once sized its workspace for the whole batch: 22831 MiB at C120,
+which with A does not fit 24 GB (the test passed only because managed memory oversubscribes). Each driver now
+chunks its own batch and sizes workspace for one part: its own rule first, then `budget_capped_chunk`
+(`src/ops/syev/kernels/chunk_budget.hh`) when the largest part passes `Device::scratch_budget`
+(min(`MAX_MEM_ALLOC_SIZE`, `GLOBAL_MEM_SIZE` / 4), 6 GB on the 4090). The cap sizes candidates with the driver's
+own part layout, bisects for the most items per part, then returns the fewest near-even parts sized to fit (C120
+blocked: 454, 454, 454, 457). The buffer-size query and the launch share the chunk function. C300 fits as one
+call; on sm_120 so does C120, so the test seam `ops::syev::detail::ScopedChunkBudget` forces the cap.
 
-| band, vendor-free | `jobz=V` | `jobz=N` |
-|---|---|---|
-| double, 449 ≤ n ≤ 1600 (sm_89) | `blocked` (sytrd_blocked + stedc + ormqr_blocked) | `two_stage` (sy2sb + sb2st + stebz/stedc) |
-| complex<double>, 449 ≤ n ≤ 1600 (sm_89) | `blocked` | `two_stage` |
-| the CPU (NETLIB queue) | no route: `NoRouteError` by design | no route |
+A `batch_range` view has no pointer array, but `two_stage`'s panel `geqrf` reads one on the vendor, so a split
+two-stage call reserves one array (largest part's length) after the part workspace.
 
-The library build is unchanged: `vendor` first for `jobz=V`, `two_stage` first for `jobz=N`.
+**Tests** (`tests/syev_tests.cc`, `DoubleBand*`, `BatchPartsUnderAScratchBudget`,
+`NativeFamiliesFitTheScratchBudgetAtFullereneShapes`, `VendorFreeCpuHasNoRoute`): graded Hermitian input,
+condition 10⁶, mostly padded ld/stride with a poisoned unnamed triangle; the saturating cases are heavy-tier.
 
-**The defect this track fixed: workspace at the fullerene batch.** `blocked` and `two_stage` sized their
-workspace for the whole batch. `SYEV_BLOCKED_L2_CHUNK_PERCENT` is 0, so the
-[L2 chunking](#syev-l2-batch-chunking) never splits a blocked batch below the grid cap. For double
-eigenvectors that is 5.6 to 7.1 n² elements per item. Reported by `syev_buffer_size` under Auto,
-vendor-free (`SyevTest.DoubleBandSaturatingFullereneShapes`, before the fix):
-
-| shape | route | workspace |
-|---|---|---:|
-| n = 480, batch 1819 (C120) | blocked | 22831 MiB |
-| n = 1200, batch 76 (C300) | blocked | 4679 MiB |
-
-The C120 workspace plus A (3.35 GB) does not fit a 24 GB card. The test still passed, because its
-`UnifiedVector` is managed memory and the driver oversubscribes. A device allocation of that size fails.
-
-Since the fix, each driver chunks its own batch, as geqrf, ormqr, orgqr, gesvd, potrf, getrf and
-`syev_cta` do, and sizes its workspace for one chunk. The chunk is the driver's rule below the budget,
-then capped (`budget_capped_chunk`, `src/ops/syev/kernels/chunk_budget.hh`) when its largest part (a
-full chunk plus the remainder) passes `Device::scratch_budget`. That budget is the library's per-call
-lease of min(`MAX_MEM_ALLOC_SIZE`, `GLOBAL_MEM_SIZE` / 4), 6 GB on the 4090. The cap sizes candidates
-with the driver's own part layout (`syev_blocked_part_buffer_size`, `syev_two_stage_part_buffer_size`),
-not a slope: a bisection finds the most items one part holds, then the fewest near-even parts whose
-largest part holds no more and is sized to fit. Only a chunk sized to fit is returned (the size is not
-monotone in the items everywhere: the remainder, and children that chunk). C120 double `jobz=V`
-`blocked` on the 4090: at most 479 items fit, so 4 parts of 454, 454, 454 and 457.
-
-- `syev_blocked`: the L2 rule and the grid cap as before (`SYEV_BLOCKED_L2_CHUNK_PERCENT` = 0: one part
-  below 32768 items), then the budget cap.
-- `syev_two_stage`: no L2 rule was measured, so below the budget only `BATCHLAS_TUNE_L2_CHUNK_ITEMS`
-  splits it. One part is the original call on the caller's view, unchanged.
-
-The buffer-size query and the launch call the same chunk function, so they agree. Below the budget
-the chunk is the one the rule gave before the cap existed. Eigenvalues are offset by `b0 n`, and a
-per-item `info` by `b0`. The vendor and the n ≤ 32 families are not split. C300 fits the budget and
-runs as one call. On a device whose budget exceeds about 22.3 GiB (sm_120, 96 GB) C120 also runs as one
-call, so the test seam `ops::syev::detail::ScopedChunkBudget` (next to the drivers) replaces the budget
-to force the cap on any device.
-
-**Pointer arrays.** A `batch_range` view has no pointer array. `syev_blocked`'s children never read one:
-its loop always passed such views, and in the full tree `ChunksKeepEigenpairsPerItem` (parts 7, 7 and 9
-of a view without a pointer array) passes with every child gemm on the vendor. `two_stage`'s does: in the
-full tree `sytrd_sy2sb`'s panel `geqrf` routes to the vendor (`cublas<t>geqrfBatched`, double n = 64:
-`geqrf double form=sq n=32 -> vendor`), which reads the view's array, and the parts threw `data_ptrs target
-is null`. So when `two_stage` splits the batch, the driver gives the parts one pointer array of the
-largest part's length, after the part workspace (`syev_two_stage_chunk_bytes`). The vendor wrapper
-refills it from each part's base before the call. One part keeps the caller's view and array.
-
-**Tests** (`tests/syev_tests.cc`). Every input is a graded Hermitian matrix, `fill_graded_hermitian` with
-condition 10⁶. The band grid, the pins and the part-loop case store it through `fill_poisoned`: ld = n + 3,
-batch stride ld n + 5, and a −9e3 (complex: −9e3 + 7e3i) poison in the triangle `uplo` does not name.
-`DoubleBandSaturatingBatchIsBitIdentical` pads ld and stride but does not poison;
-`DoubleBandSaturatingFullereneShapes` uses natural storage (ld = n, stride n²) and no poison. Checks go
-through `EXPECT_VERIFY`: values, eigen residual and orthogonality.
-
-- `DoubleBandAutoIsServedByARow` (quick tier): Auto at n = 449 L V, 480 U V and 1200 U N. Vendor-free,
-  the trace must name `blocked` or `two_stage` and never `last resort`.
-- `DoubleBandPinnedNativeFamilies` (quick tier): `blocked` and `two_stage` pinned at n = 449, both uplo,
-  both jobz.
-- `DoubleBandEveryOrderUploAndJobz` (heavy tier, pattern `*DoubleBandEvery*`): Auto at n = 449, 480,
-  1024, 1200 and 1600, with both uplo and both jobz, plus both families pinned at n = 1200.
-- `DoubleBandSaturatingBatchIsBitIdentical` (heavy tier): 128 copies of one n = 480 item through each
-  pinned family, both jobz, Upper. W and V of every item are bit-identical to item 0, and item 0
-  verifies.
-- `DoubleBandSaturatingFullereneShapes` (heavy tier, double only): the C120 and C300 shapes under Auto,
-  `jobz=V`. A native route's workspace must fit `scratch_budget`. The first and last items verify. It
-  records `workspace_MiB_n<order>` in the gtest XML.
-- `BatchPartsUnderAScratchBudget` (quick tier, every scalar type): batch 7 at n = 64 is split two ways,
-  by `BATCHLAS_TUNE_L2_CHUNK_ITEMS` = 2 and by a `ScopedChunkBudget` of 3.5 items' workspace (below the
-  whole batch's). Either way the parts are 2, 2 and 3, a middle part included. Each family pinned, both
-  uplo and jobz, a per-item `info` span poisoned with −1, and every item verified. `syev_buffer_size` must
-  equal the 3-item size (plus `two_stage`'s pointer array), and under the budget fit it.
-- `NativeFamiliesFitTheScratchBudgetAtFullereneShapes` (quick tier, every scalar type, sizes only): each
-  family pinned at C120 and C300, both jobz. The size must fit `scratch_budget`. Where the uncapped size
-  (the seam lifted to `SIZE_MAX`) passes it, the cap must have cut it. On the 4090 that is C120.
-- `VendorFreeCpuHasNoRoute` (vendor-free NETLIB only): `syev` and `syev_buffer_size` on the CPU queue
-  throw `NoRouteError`, for both jobz.
-
-Each runs vendor-free and in the full-target tree. In the full-target tree the NETLIB instantiation of
-the first test checks that n = 449 takes LAPACKE. Every other NETLIB case skips, because the CPU fill and
-the LAPACKE solve at these orders cost minutes. Vendor-free, NETLIB skips every case but
-`VendorFreeCpuHasNoRoute`.
-
-**Still to time** (on a quiet GPU, not done here): vendor-free `blocked` against `two_stage` for
-`jobz=V` at n = 480..1600, at batch ≥ 128 and at the fullerene batches; and the cost of the parts
-at C120 against one oversubscribed call.
+**Still to time:** vendor-free `blocked` against `two_stage` for `jobz=V` at n = 480..1600, batch ≥ 128 and the
+fullerene batches, and the parts at C120 against one oversubscribed call.
 
 ## syev: open debts and unmeasured items
 
+**Workspace footprint (open defect).** `syev_cta` n = 32 with vectors needs 1.5–2.2 MiB per matrix (about 500×
+the data): batch 4096 takes 7.5 GB, 16384 the whole card (and regresses). Eigenvalues-only is unaffected. It
+caps usable batch near 4096 on 24 GB, caused a real OOM on the shared box, and is uninvestigated.
+
 ### syev: open debt, the single-read panel symv
 
-**Plan WP5 (B1), open.** The "open 2.7×" in [the agent guide](../developer/agent-guide.md). The `latrd` panel is
-35–71% of every blocked solve. Counters on `LatrdLowerPanel` (ib = 32, j₀ = 0), as a multiple of ideal traffic for
-float n=256 b=1024 / float n=512 b=256 / cfloat n=512 b=256: DRAM 0.14× / 1.13× / 1.43×; L2 1.95× / **2.34×** /
-**2.50×**; L1TEX **11.9×** / **12.2×** / **15.8×**; SM throughput 52.7% / **10.8%** / **10.7%**. `ncu` on
-`LatrdLowerPanelKernelLegacy<float, 256, 0>`, n = 512, batch 256 (2026-08-08): L1TEX 52,499 MB, SM 10.84%,
-occupancy 33.19%, 11.444 ms; grid (256,1,1), one work-group per matrix.
-
-**Mechanism.** Thread *r* reads \f$A(r,c)\f$ on its row walk and thread *c* reads the same element as \f$A(c,r)\f$
-on its column walk (2.3× L2); on the column walk consecutive lanes are `lda` apart (12–16× L1). The DRAM floor at
-n = 512 caps the gain at **2.7×**. The kernel reaches only about 330 GB/s of roughly 1000 GB/s, so it is latency- or
-occupancy-bound.
-
-**Design constraint.** The symv sits inside the per-reflector loop of one work-group per matrix, with `v_local[n]`
-and `wcol_local[n]` in local memory; reflectors are sequentially dependent, so a MAGMA-style multi-block symv is not
-a drop-in. Proposed: stage 32×32 off-diagonal tiles with a coalesced load, then compute
-\f$y_R \mathrel{+}= A_{RC} v_C\f$ and \f$y_C \mathrel{+}= A_{RC}^H v_R\f$ from that one copy (a cfloat tile is 8 KB;
-n = 512 cfloat needs 16 KB, still ≥ 2 blocks per SM). An earlier "one sub-group per column" attempt changed the
-access pattern without reducing reads. Predicted end-to-end gain at 2.7× on the panel: cfloat n=512 vectors 1.82×,
-float n=256 vectors 1.29×, float n=256 values 1.50× (1.56×, 1.22×, 1.36× at 2.0×).
-**Gate:** ≥ 1.6× on the panel kernel at n = 512, with `ncu` showing L1TEX falling from about 12× toward 2× and L2
-from 2.3× toward 1×.
+Plan WP5, open (the agent guide's "open 2.7×"). The `latrd` panel is 35–71% of every blocked solve; at n = 512,
+batch 256 it moves 2.3× ideal L2 and 12–16× L1TEX traffic at 10.8% SM throughput, because each element is read
+twice (row walk and column walk, lanes `lda` apart). Proposed: stage 32×32 tiles once and form
+\f$y_R \mathrel{+}= A_{RC} v_C\f$ and \f$y_C \mathrel{+}= A_{RC}^H v_R\f$ from that copy (reflectors are sequential,
+so a MAGMA multi-block symv is no drop-in). The DRAM floor caps it at 2.7× (cfloat n = 512 end to end 1.82×).
+**Gate:** ≥ 1.6× on the panel at n = 512, `ncu` L1TEX falling toward 2×.
 
 ### syev: open debt, complex stage-2 occupancy
 
-**Plan WP6 (B2), open.** At n = 512, batch 512 the float back-transform is saturated (SM 93.7%, occupancy 82.8%)
-and the complex one is not (35.3% / 49.8%); the chase runs 45.0% / 65.5% float and 29.8% / 45.1% complex. Halved
-occupancy is a register-pressure signature, so the 3.90× complex cost is not the price of complex arithmetic.
-
-- Type-aware retiling of `unmqr_hb2st_wave`, measured against the post-WP4 852, not 971.
-- The chase runs at 4.85× float, above the roughly 4× arithmetic ratio. `__mulsc3` is present in
-  `libbatchlas_extensions_sytrd.so`; confirm it is on the chase's hot path (`nm -C ... | grep mulsc3`, then
-  disassemble), then write out the hot loop only.
-
-Prize: reaching the roughly 2.2× complex/float ratio the panel reached would cut the two stage-2 kernels from
-1353 ms to 704 ms, about 1.49× on the complex two-stage solve (about 650 µs/matrix against 973.8), ahead of
-blocked (698) and the vendor (707) at n = 512. Any routing change waits for the measurement.
+Plan WP6, open. At n = 512, batch 512 the float back-transform is saturated (SM 93.7%, occupancy 82.8%) and the
+complex one is not (35.3% / 49.8%); the chase runs 4.85× float against a 4× arithmetic ratio. Halved occupancy
+signals register pressure. Next: retile `unmqr_hb2st_wave` per type (against 852), and check whether `__mulsc3`
+is on the chase's hot path. Reaching a 2.2× complex/float ratio would be about 1.49× on the complex two-stage
+solve, ahead of blocked and vendor at n = 512; routing waits for the measurement.
 
 ### syev: open debt, stebz reports no convergence status
 
-The values-mode paths of `syev_blocked` and `syev_two_stage` solve the tridiagonal with `stebz` bisection, which
-records no status: its three exits (tolerance met, budget exhausted, midpoint stopped advancing) look alike, so both
-tiers clear `info` to 0 for every item. `stebz` needs a convergence flag. The secular solver's budget-exhaustion arm
-also uses a literal the tuning parameter does not reach (see [stedc: open debts](stedc.md#stedc-open-debts)).
+The values-mode paths of `syev_blocked` and `syev_two_stage` use `stebz`, whose three exits (tolerance met,
+budget exhausted, midpoint stalled) look alike, so both clear `info` to 0 for every item. `stebz` needs a
+convergence flag (see also [stedc: open debts](stedc.md#stedc-open-debts)).
 
 ### syev: remaining unmeasured items
 
-- **n = 2048 eigenvector row** (unsaturated at batch 64; WP1 freed 2·n²·batch of values-mode scratch), the
-  **values-mode 320 | 512 boundary**, and **one routing sweep per type and mode after WP5** (WP1, WP5, WP6 each move
-  a boundary in `syev.hh`; PR 65's defect class was a float-measured constant applied to every type).
-- **SYTRD LARGE = 8 against the syev-context optimum of 24** at n = 512 (see
-  [the 2026-08-07 retune](#syev-the-2026-08-07-constant-retune)); check with `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
-- **XLARGE bucket in double:** SYTRD 16 beat 24 (1.066×/1.048×) and ORMQR 32 beat 16 (1.053×), measured before
-  `924b3a59` moved the bucket to 48/56; not re-measured.
-- **Grid residency cap (A5):** unlikely to pay (no starvation at batch ≥ 128).
-- **Profile `stedc` internally (B4), port the grid barrier:** stedc is 20.7% of the float eigenvector solve at
-  n = 256; profile at batch 1 first.
-- **Routing-audit benchmark (`BM_SYEV_RoutingAudit`):** not built; the sm_89 syev table stays an untimed transcription
-  (sm_120 is deep-measured by `tools/tune/`).
-- Grid-resident whole solve at batch 1 (speculative; the vendor leads by up to 15.3×); values-mode n ≤ 32 vendor
-  comparison; rocSOLVER (nothing measured).
+- The n = 2048 eigenvector row (unsaturated), the values-mode 320 | 512 boundary, and one routing sweep per type
+  and mode after WP5.
+- SYTRD LARGE = 8 against the syev-context 24 at n = 512; check with `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
+- double XLARGE: SYTRD 16 and ORMQR 32 beat the old values (1.05×–1.07×) before `924b3a59`; not re-measured.
+- Profile `stedc` internally (20.7% of the float vector solve at n = 256).
+- The sm_89 table is an untimed transcription; rocSOLVER is unmeasured.
 
 ## syev: rejected ideas
 
-| idea | why rejected | evidence |
+| idea | result | verdict |
 |---|---|---|
-| restore ORMQR = 128 | 1.50× slower at n = 512; 2.1× and 3.1× slower at n = 64, 128 | [refutation](#syev-the-ormqr-regression-hypothesis-refuted) |
-| lift the CTA eigensolver above n = 32 (B3) | 85–211× slower than blocked | [WP2](#syev-cta-large-n-rejected-wp2) |
-| global sb2st tile=2/subs=4 | costs float 1.15× | [WP4](#syev-per-type-sb2st-back-transform-geometry-wp4) |
-| wide two-stage kd (96–128) | kd = 32 still optimal at n ≥ 256 | [kd sweep](#syev-the-two-stage-band-width-kd) |
-| freeze `SB2ST_BACK_*`; adopt stedc's own tpr/wgm | heuristic within 0.6%; stedc's winners cost syev 2.7% at n = 256 | [retune](#syev-the-2026-08-07-constant-retune) |
-| native Upper reductions | recover at most the mirror's 0.3–2.0% | [Upper](#syev-the-upper-to-lower-mirror-for-lower-only-providers) |
-| the float small-n rule applied to complex | Jacobi 4–6× off the pace at n ≥ 20 | [complex small n](#syev-complex-small-n-kernels) |
-| a batch floor on the values-only rule | sent n = 1024 at batch 254 to the vendor, 2.75× | [values routing](#syev-eigenvalues-only-routing) |
-| split `latrd_grid_min_n` per mode | same crossover in both modes | [latrd gate](#syev-latrd-grid-gate-confirmed-in-eigenvector-mode) |
-| block Jacobi as a speed path (C1/WP8) | 2–11× slower; accuracy-only opt-in. At 1.65–2.1 TFLOP/s (about 3.5% of ~47 TFLOP/s SGEMM) a ~10× flop premium needs 17–21 TFLOP/s to break even | [agent guide](../developer/agent-guide.md) |
-| C5 spectral divide and conquer; C6 real embedding of the Hermitian problem | cluster parallelism does not apply at saturating batch; 2× flops and memory | plan, not measured |
+| ORMQR = 128 (the "shadowed header" regression theory) | 1.50× slower at n = 512, 2.1×–3.1× at n = 64..128; 16 has always shipped | refuted |
+| `cta` above n = 32 (WP2, reverted `14bad498`) | 85× (n = 33) to 211× (n = 64) slower than blocked | rejected |
+| block Jacobi as a speed path | 2–11× slower; accuracy-only | rejected |
 
 ## syev: measurement traps
 
-- **Contention inflates the vendor arm too.** n = 768 at batch 32 and 64 looked like a 3.6× blocked win; two
-  processes had overlapped and the vendor ran 6885 µs/matrix against 1110 alone. Use physical floors as a check:
-  Upper is Lower plus a mirror pass, so Upper/Lower ≥ 1 (an early 0.647× was two processes sharing the device).
-- **JIT.** Discard the first run of a fresh process; JIT once fabricated a 3.7× loss.
-- **`--name` is a substring filter** and corrupted the original eigenvector grid; key on the CSV `name` column.
-  `BATCHLAS_SYEV_ROUTE` throws on an unknown word (the retired `_PROVIDER` silently degraded `TWOSTAGE` to Auto).
-- **Incremental builds across a widely-included struct change.** Reverting WP2 removed a `DeviceCaps` member; build
-  and tests passed but `two_stage` segfaulted at n ≥ 256 in `~DeviceCaps` (mixed layouts) and a 6% anomaly came from
-  the same build. A clean rebuild fixed both.
-- **An unsampled regime invalidates a table:** the batch ladder that stopped at 1024, "two-stage wins at n ≥ 1024"
-  before grid-`latrd`, the never-measured 320 boundary, the power-of-two-only stedc sweep. Decide routing at
-  saturation, and accept changes end to end (stedc's bench was overruled by syev; a 2.16× kernel win became an 11%
-  `gesvd` loss).
-- **`BATCHLAS_TUNE_*` feeds buffer-size queries too.** Flip it between runs, never between a query and its call.
+- Contention inflates the vendor arm too (an overlapped run faked a 3.6× blocked win); check Upper/Lower ≥ 1.
+- Rebuild clean after changing a widely-included struct: a stale `DeviceCaps` layout segfaulted `two_stage`.
 
 ## syev: raw data and provenance
 
-| data | where |
-|---|---|
-| small-n bake-off (phase A), both precisions (973 measurements) | `benchmarks/results/syev_retune_phaseA.jsonl` (Git LFS) |
-| syev-context block-size sweep (phase B), float | `benchmarks/results/syev_retune_phaseB_float.jsonl` (Git LFS) |
-| driver for both, with its resource caps | a one-off driver, removed |
-| builds | `7911847` (bake-off), `12963a8` (grids), `0bb92fb` (stedc regression), preset `cuda` (`build-cuda`; then `build/presets/cuda`) |
-| commits | `80737301` plan, `afc8ae35` baselines, `c42e5ce9`, `8c24626f` WP4, `405b4120` WP3, `f28a3fcd` WP1, `af8768b0` / `be327f5b` results (PR 68); `73eb5510` per-type routing (PR 65); `924b3a59` constant retune |
-
-Phase B is complete except n = 256; only the float file is committed (double phase-B figures appear only on this
-page). Run `git lfs pull` to fetch the data (see
-[the raw-data rules](README.md#new-raw-data-lives-in-benchmarksresults-in-git-lfs)).
-
-Reproduce one shape (positional `n batch nb fuse jobz uplo`; `nb = 0` means the shipped default):
-
-```
-CUDA_VISIBLE_DEVICES=1 BATCHLAS_SYEV_ROUTE=blocked \
-  ./build/benchmarks/syev_benchmark --backend=CUDA --type=float,cfloat \
-  --warmup=2 --min_iters=5 64,128,192,256,320 1024 0 0 0 0
-
-BATCHLAS_SYEV_ROUTE=blocked|two_stage|vendor|cta|cta_fused|jacobi
-BATCHLAS_LATRD_IMPL=legacy|grid          BATCHLAS_LATRD_GRID_MIN_N=<n>
-BATCHLAS_SB2ST_BACK_TILE_W=<1,2,4,8>     BATCHLAS_SB2ST_BACK_SUBS=<4,8,16>
-BATCHLAS_EXPAND_MAX_BYTES=<bytes>        # force the her2k host-loop fallback
-BATCHLAS_TUNE_ORMQR_BLOCK_SIZE=<n>       BATCHLAS_TUNE_SYTRD_BLOCK_SIZE=<n>
-```
-
-Kernel attribution that sees cuBLAS: `nsys profile -t cuda -s none`, then `nsys stats --report cuda_gpu_kern_sum`.
-`BATCHLAS_KERNEL_TRACE` does not see cuBLAS. Counters on the panel kernel:
-
-```
-ncu -k regex:LatrdLowerPanel -c 2 --metrics dram__bytes_read.sum,lts__t_bytes.sum,\
-l1tex__t_bytes.sum,sm__throughput.avg.pct_of_peak_sustained_elapsed,\
-sm__warps_active.avg.pct_of_peak_sustained_active --csv \
-    build/benchmarks/latrd_lower_panel_benchmark --backend=CUDA --type=float 512 256 32 0 0
-```
-
+Git LFS ([rules](README.md#new-raw-data-lives-in-benchmarksresults-in-git-lfs)):
+`benchmarks/results/syev_retune_phaseA.jsonl` (small-n and per-type grids), `syev_retune_phaseB_float.jsonl`
+(block-size sweep). Commits: `73eb5510` per-type routing, `924b3a59` retune, `f28a3fcd` / `8c24626f` /
+`405b4120` WP1 / WP4 / WP3. Positional arguments of `syev_benchmark` are `n batch nb fuse jobz uplo` (nb 0 =
+default); pin with `BATCHLAS_SYEV_ROUTE`. `BATCHLAS_KERNEL_TRACE` does not see cuBLAS; use
+`nsys profile -t cuda -s none` and `nsys stats --report cuda_gpu_kern_sum`.

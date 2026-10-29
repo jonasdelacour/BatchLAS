@@ -1481,7 +1481,7 @@ def syevx_range(
     short of ``n``, and ``n`` is a worst case that costs
     ``O(n^2 * batch)`` of eigenvector storage plus a much larger ``stein``
     scratch. Pass an estimate you believe, then check ``result.truncated``.
-    evidence: docs/design/syevx-range-selection.md#syevx-range-stein-workspace-scaling
+    evidence: docs/design/syevx.md#syevx-range-stein-workspace-scaling
 
     ``abstol`` and ``order`` default to ``None`` meaning "leave whatever
     ``options`` says", so passing an ``SyevxOptions`` that sets them still works.

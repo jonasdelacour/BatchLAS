@@ -46,7 +46,7 @@ inline MatrixView<T, MatrixFormat::Dense> packed_copy_view(T* data,
 // Number of eigenvalues <= x in an ASCENDING array (upper_bound, not lower_bound).
 // The `<=` must not become `<`: it is stebz's Sturm-count predicate, which is what
 // makes Direct and DirectSubset agree on m (up to one at a rounding boundary).
-// evidence: docs/design/syevx-range-selection.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
+// evidence: docs/design/syevx.md#syevx-range-direct-and-directsubset-may-disagree-on-m-by-one
 template <typename R>
 inline int64_t count_le(const R* asc, int64_t n, R x) {
     int64_t lo = 0;
@@ -209,7 +209,7 @@ Event syevx_direct(Queue& ctx,
                         }
                         // Columns [write, dst_cols) are EXACTLY zero, as on the
                         // DirectSubset path; unused W slots are deliberately untouched.
-                        // evidence: docs/design/syevx-range-selection.md#syevx-range-the-m-output-and-what-neigs-means
+                        // evidence: docs/design/syevx.md#syevx-range-the-m-output-and-what-neigs-means
                         for (int64_t linear = tid; linear < n * (dst_cols - write);
                              linear += local_size) {
                             const int64_t row = linear % n;
