@@ -1,0 +1,119 @@
+# op=trmm device=apple_m5_max batchlas=0a3e4070 kernels=67050cfd family_kernels=triangular:c1960cd0,expand:f3bec1d3,vendor:f8fb8bb1 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/trmm.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:116,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact side:exact order:log:2 q:log batch:log
+dtype=float side=L order=1 q=1 batch=1 | triangular 0.1903 | expand 0.1862 # preview
+dtype=float side=L order=1 q=1 batch=64 | triangular 0.2220 | expand 0.2386 # preview
+dtype=float side=L order=1 q=1 batch=4096 | expand 0.3295 | triangular 0.6726 # preview
+dtype=float side=L order=1 q=1 batch=131072 | expand 0.5354 | triangular 3.722 # preview
+dtype=float side=L order=1 q=128 batch=1 | triangular 0.2030 | expand 0.2103 # preview
+dtype=float side=L order=1 q=128 batch=64 | triangular 0.3077 | expand 0.3460 # preview
+dtype=float side=L order=1 q=128 batch=4096 | expand 0.5797 | triangular 0.8555 # preview
+dtype=float side=L order=1 q=128 batch=131072 | expand 1.967 | triangular 3.775 # preview
+dtype=float side=L order=32 q=1 batch=1 | triangular 0.1926 | expand 0.2329 # preview
+dtype=float side=L order=32 q=1 batch=64 | triangular 0.2030 | expand 0.2341 # preview
+dtype=float side=L order=32 q=1 batch=4096 | triangular 0.4050 | expand 0.3976 # preview
+dtype=float side=L order=32 q=1 batch=131072 | expand 5.924 | triangular 6.558 # preview
+dtype=float side=L order=32 q=128 batch=1 | expand 0.1980 | triangular 0.2115 # preview
+dtype=float side=L order=32 q=128 batch=64 | triangular 0.3300 | expand 0.5089 # preview
+dtype=float side=L order=32 q=128 batch=4096 | triangular 0.7039 | expand 1.196 # preview
+dtype=float side=L order=128 q=1 batch=1 | triangular 0.2215 | expand 0.2280 # preview
+dtype=float side=L order=128 q=1 batch=64 | triangular 0.2430 | expand 0.2536 # preview
+dtype=float side=L order=128 q=1 batch=4096 | triangular 2.347 | expand 3.504 # preview
+dtype=float side=L order=128 q=128 batch=1 | triangular 0.2050 | expand 0.2970 # preview
+dtype=float side=L order=128 q=128 batch=64 | triangular 0.2671 | expand 0.4669 # preview
+dtype=float side=L order=128 q=128 batch=4096 | triangular 2.937 | expand 12.35 # preview
+dtype=float side=L order=512 q=1 batch=1 | expand 0.2602 | triangular 0.2827 # preview
+dtype=float side=L order=512 q=1 batch=64 | triangular 0.8316 | expand 1.269 # preview
+dtype=float side=L order=512 q=128 batch=1 | triangular 0.7088 | expand 1.807 # preview
+dtype=float side=L order=512 q=128 batch=64 | triangular 0.8307 | expand 3.182 # preview
+dtype=float side=L order=2048 q=1 batch=1 | triangular 0.7640 | expand 0.8352 # preview
+dtype=float side=L order=2048 q=1 batch=64 | triangular 6.519 | expand 13.26 # preview
+dtype=float side=L order=2048 q=128 batch=1 | triangular 0.8207 | expand 1.492 # preview
+dtype=float side=L order=2048 q=128 batch=64 | triangular 6.971 | expand 47.89 # preview
+dtype=float side=R order=1 q=1 batch=1 | expand 0.2680 # preview
+dtype=float side=R order=1 q=1 batch=64 | expand 0.4803 # preview
+dtype=float side=R order=1 q=1 batch=4096 | expand 0.3370 # preview
+dtype=float side=R order=1 q=1 batch=131072 | expand 0.4989 # preview
+dtype=float side=R order=1 q=128 batch=1 | expand 0.3539 # preview
+dtype=float side=R order=1 q=128 batch=64 | expand 0.4803 # preview
+dtype=float side=R order=1 q=128 batch=4096 | expand 0.5681 # preview
+dtype=float side=R order=1 q=128 batch=131072 | expand 2.593 # preview
+dtype=float side=R order=32 q=1 batch=1 | expand 0.2416 # preview
+dtype=float side=R order=32 q=1 batch=64 | expand 0.2389 # preview
+dtype=float side=R order=32 q=1 batch=4096 | expand 0.4213 # preview
+dtype=float side=R order=32 q=1 batch=131072 | expand 6.805 # preview
+dtype=float side=R order=32 q=128 batch=1 | expand 0.3758 # preview
+dtype=float side=R order=32 q=128 batch=64 | expand 0.4606 # preview
+dtype=float side=R order=32 q=128 batch=4096 | expand 1.211 # preview
+dtype=float side=R order=128 q=1 batch=1 | expand 0.2782 # preview
+dtype=float side=R order=128 q=1 batch=64 | expand 0.2449 # preview
+dtype=float side=R order=128 q=1 batch=4096 | expand 2.297 # preview
+dtype=float side=R order=128 q=128 batch=1 | expand 0.8562 # preview
+dtype=float side=R order=128 q=128 batch=64 | expand 1.440 # preview
+dtype=float side=R order=128 q=128 batch=4096 | expand 12.27 # preview
+dtype=float side=R order=512 q=1 batch=1 | expand 0.5321 # preview
+dtype=float side=R order=512 q=1 batch=64 | expand 3.056 # preview
+dtype=float side=R order=512 q=128 batch=1 | expand 0.9492 # preview
+dtype=float side=R order=512 q=128 batch=64 | expand 3.275 # preview
+dtype=float side=R order=2048 q=1 batch=1 | expand 1.222 # preview
+dtype=float side=R order=2048 q=1 batch=64 | expand 8.754 # preview
+dtype=float side=R order=2048 q=128 batch=1 | expand 1.521 # preview
+dtype=float side=R order=2048 q=128 batch=64 | expand 48.57 # preview
+dtype=cfloat side=L order=1 q=1 batch=1 | triangular 0.2130 | expand 0.2167 # preview
+dtype=cfloat side=L order=1 q=1 batch=64 | triangular 0.1945 | expand 0.2113 # preview
+dtype=cfloat side=L order=1 q=1 batch=4096 | expand 0.2197 | triangular 0.8538 # preview
+dtype=cfloat side=L order=1 q=1 batch=131072 | expand 0.4760 | triangular 4.484 # preview
+dtype=cfloat side=L order=1 q=128 batch=1 | triangular 0.2010 | expand 0.2260 # preview
+dtype=cfloat side=L order=1 q=128 batch=64 | triangular 0.1949 | expand 0.2614 # preview
+dtype=cfloat side=L order=1 q=128 batch=4096 | triangular 0.5124 | expand 1.834 # preview
+dtype=cfloat side=L order=1 q=128 batch=131072 | triangular 8.264 | expand 51.62 # preview
+dtype=cfloat side=L order=32 q=1 batch=1 | triangular 0.2080 | expand 0.2230 # preview
+dtype=cfloat side=L order=32 q=1 batch=64 | triangular 0.2178 | expand 0.2260 # preview
+dtype=cfloat side=L order=32 q=1 batch=4096 | triangular 0.6515 | expand 1.121 # preview
+dtype=cfloat side=L order=32 q=1 batch=131072 | triangular 14.32 | expand 29.44 # preview
+dtype=cfloat side=L order=32 q=128 batch=1 | expand 0.2222 | triangular 0.2302 # preview
+dtype=cfloat side=L order=32 q=128 batch=64 | triangular 0.4085 | expand 0.5291 # preview
+dtype=cfloat side=L order=32 q=128 batch=4096 | triangular 1.224 | expand 3.393 # preview
+dtype=cfloat side=L order=128 q=1 batch=1 | expand 0.3020 | triangular 0.3411 # preview
+dtype=cfloat side=L order=128 q=1 batch=64 | expand 0.5400 | triangular 0.7258 # preview
+dtype=cfloat side=L order=128 q=1 batch=4096 | expand 18.22 | triangular 19.49 # preview
+dtype=cfloat side=L order=128 q=128 batch=1 | expand 0.2870 | triangular 0.3447 # preview
+dtype=cfloat side=L order=128 q=128 batch=64 | triangular 0.9010 | expand 1.222 # preview
+dtype=cfloat side=L order=128 q=128 batch=4096 | triangular 19.58 | expand 35.36 # preview
+dtype=cfloat side=L order=512 q=1 batch=1 | expand 0.4602 | triangular 0.6976 # preview
+dtype=cfloat side=L order=512 q=1 batch=64 | triangular 4.698 | expand 4.999 # preview
+dtype=cfloat side=L order=512 q=128 batch=1 | expand 0.5945 | triangular 0.8818 # preview
+dtype=cfloat side=L order=512 q=128 batch=64 | triangular 4.697 | expand 9.207 # preview
+dtype=cfloat side=L order=2048 q=1 batch=1 | expand 1.236 | triangular 2.049 # preview
+dtype=cfloat side=L order=2048 q=1 batch=64 | triangular 55.48 | expand 73.31 # preview
+dtype=cfloat side=L order=2048 q=128 batch=1 | triangular 2.158 | expand 2.424 # preview
+dtype=cfloat side=L order=2048 q=128 batch=64 | triangular 56.35 | expand 138.8 # preview
+dtype=cfloat side=R order=1 q=1 batch=1 | expand 0.3048 # preview
+dtype=cfloat side=R order=1 q=1 batch=64 | expand 0.2297 # preview
+dtype=cfloat side=R order=1 q=1 batch=4096 | expand 0.2386 # preview
+dtype=cfloat side=R order=1 q=1 batch=131072 | expand 0.4797 # preview
+dtype=cfloat side=R order=1 q=128 batch=1 | expand 0.7503 # preview
+dtype=cfloat side=R order=1 q=128 batch=64 | expand 0.5121 # preview
+dtype=cfloat side=R order=1 q=128 batch=4096 | expand 1.772 # preview
+dtype=cfloat side=R order=1 q=128 batch=131072 | expand 48.79 # preview
+dtype=cfloat side=R order=32 q=1 batch=1 | expand 0.2281 # preview
+dtype=cfloat side=R order=32 q=1 batch=64 | expand 0.2350 # preview
+dtype=cfloat side=R order=32 q=1 batch=4096 | expand 1.227 # preview
+dtype=cfloat side=R order=32 q=1 batch=131072 | expand 31.70 # preview
+dtype=cfloat side=R order=32 q=128 batch=1 | expand 0.9399 # preview
+dtype=cfloat side=R order=32 q=128 batch=64 | expand 1.043 # preview
+dtype=cfloat side=R order=32 q=128 batch=4096 | expand 3.355 # preview
+dtype=cfloat side=R order=128 q=1 batch=1 | expand 0.2787 # preview
+dtype=cfloat side=R order=128 q=1 batch=64 | expand 0.5185 # preview
+dtype=cfloat side=R order=128 q=1 batch=4096 | expand 17.75 # preview
+dtype=cfloat side=R order=128 q=128 batch=1 | expand 1.341 # preview
+dtype=cfloat side=R order=128 q=128 batch=64 | expand 3.685 # preview
+dtype=cfloat side=R order=128 q=128 batch=4096 | expand 34.87 # preview
+dtype=cfloat side=R order=512 q=1 batch=1 | expand 0.9402 # preview
+dtype=cfloat side=R order=512 q=1 batch=64 | expand 5.552 # preview
+dtype=cfloat side=R order=512 q=128 batch=1 | expand 0.5213 # preview
+dtype=cfloat side=R order=512 q=128 batch=64 | expand 9.219 # preview
+dtype=cfloat side=R order=2048 q=1 batch=1 | expand 2.946 # preview
+dtype=cfloat side=R order=2048 q=1 batch=64 | expand 71.70 # preview
+dtype=cfloat side=R order=2048 q=128 batch=1 | expand 2.456 # preview
+dtype=cfloat side=R order=2048 q=128 batch=64 | expand 142.9 # preview

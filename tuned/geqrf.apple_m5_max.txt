@@ -1,0 +1,83 @@
+# op=geqrf device=apple_m5_max batchlas=0a3e4070 kernels=78928296 family_kernels=tiny:f9225e00,cta:c2a83759,blocked:1d0f4e72,vendor:56f09e26 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/geqrf.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:80,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact form:exact n:log:3 aspect:log
+dtype=float form=sq n=1 aspect=1 | tiny 0.1812 | blocked 0.1980 | cta 0.2261 # preview
+dtype=float form=sq n=10 aspect=1 | tiny 0.4229 | cta 0.8370 | blocked 0.9003 # preview
+dtype=float form=sq n=14 aspect=1 | tiny 0.8099 | blocked 2.598 | cta 2.645 # preview
+dtype=float form=sq n=32 aspect=1 | cta 9.929 | blocked 9.880 # preview
+dtype=float form=tall n=1 aspect=2 | cta 0.2493 | blocked 0.2480 # preview
+dtype=float form=tall n=2 aspect=7 | cta 0.3222 | blocked 0.3284 # preview
+dtype=float form=tall n=3 aspect=4 | cta 0.9002 | blocked 0.9062 # preview
+dtype=float form=tall n=5 aspect=64 | cta 3.281 | blocked 3.287 # preview
+dtype=float form=tall n=6 aspect=12 | cta 2.346 | blocked 2.385 # preview
+dtype=float form=tall n=6 aspect=256 | blocked 1.967 # preview
+dtype=float form=tall n=8 aspect=1 | blocked 1.190 | cta 2.450 # preview
+dtype=float form=tall n=11 aspect=3 | cta 5.298 | blocked 5.261 # preview
+dtype=float form=tall n=12 aspect=64 | blocked 2.969 # preview
+dtype=float form=tall n=16 aspect=2 | cta 1.792 | blocked 1.798 # preview
+dtype=float form=tall n=17 aspect=5 | cta 6.625 | blocked 6.480 # preview
+dtype=float form=tall n=20 aspect=3 | cta 6.216 | blocked 6.258 # preview
+dtype=float form=tall n=21 aspect=4 | cta 7.480 | blocked 7.492 # preview
+dtype=float form=tall n=21 aspect=8 | blocked 10.08 # preview
+dtype=float form=tall n=22 aspect=5 | cta 8.940 | blocked 8.937 # preview
+dtype=float form=tall n=24 aspect=3 | cta 8.360 | blocked 8.389 # preview
+dtype=float form=tall n=24 aspect=12 | blocked 14.99 # preview
+dtype=float form=tall n=28 aspect=3 | cta 11.31 | blocked 11.09 # preview
+dtype=float form=tall n=31 aspect=1 | cta 10.56 | blocked 10.52 # preview
+dtype=float form=tall n=32 aspect=4 | blocked 15.88 # preview
+dtype=float form=tall n=32 aspect=8 | blocked 13.13 # preview
+dtype=float form=tall n=33 aspect=12 | blocked 31.28 # preview
+dtype=float form=tall n=40 aspect=5 | blocked 36.16 # preview
+dtype=float form=tall n=47 aspect=4 | blocked 18.78 # preview
+dtype=float form=tall n=47 aspect=8 | blocked 16.67 # preview
+dtype=float form=tall n=48 aspect=5 | blocked 21.80 # preview
+dtype=float form=tall n=49 aspect=2 | blocked 30.70 # preview
+dtype=float form=tall n=75 aspect=5 | blocked 35.12 # preview
+dtype=float form=tall n=76 aspect=8 | blocked 25.60 # preview
+dtype=float form=tall n=97 aspect=5 | blocked 38.01 # preview
+dtype=float form=tall n=160 aspect=4 | blocked 32.57 # preview
+dtype=float form=tall n=192 aspect=5 | blocked 28.40 # preview
+dtype=float form=tall n=224 aspect=1 | blocked 29.99 # preview
+dtype=float form=tall n=288 aspect=3 | blocked 48.29 # preview
+dtype=float form=tall n=384 aspect=4 | blocked 40.92 # preview
+dtype=float form=tall n=768 aspect=2 | blocked 66.29 # preview
+dtype=cfloat form=sq n=1 aspect=1 | tiny 0.1751 | cta 0.2125 | blocked 0.2287 # preview
+dtype=cfloat form=sq n=10 aspect=1 | cta 1.029 | blocked 1.049 # preview
+dtype=cfloat form=sq n=14 aspect=1 | cta 1.640 | blocked 1.637 # preview
+dtype=cfloat form=sq n=32 aspect=1 | cta 13.89 | blocked 13.90 # preview
+dtype=cfloat form=tall n=1 aspect=2 | cta 0.2639 | blocked 0.2630 # preview
+dtype=cfloat form=tall n=2 aspect=7 | cta 0.5411 | blocked 0.5366 # preview
+dtype=cfloat form=tall n=3 aspect=4 | cta 0.5489 | blocked 0.5499 # preview
+dtype=cfloat form=tall n=5 aspect=64 | blocked 2.930 # preview
+dtype=cfloat form=tall n=6 aspect=12 | cta 2.331 | blocked 2.323 # preview
+dtype=cfloat form=tall n=6 aspect=256 | blocked 2.516 # preview
+dtype=cfloat form=tall n=8 aspect=1 | cta 1.395 | blocked 1.397 # preview
+dtype=cfloat form=tall n=11 aspect=3 | cta 3.870 | blocked 3.874 # preview
+dtype=cfloat form=tall n=12 aspect=64 | blocked 3.451 # preview
+dtype=cfloat form=tall n=16 aspect=2 | cta 5.877 | blocked 5.867 # preview
+dtype=cfloat form=tall n=17 aspect=5 | blocked 7.751 # preview
+dtype=cfloat form=tall n=20 aspect=3 | cta 8.625 | blocked 8.631 # preview
+dtype=cfloat form=tall n=21 aspect=4 | blocked 10.10 # preview
+dtype=cfloat form=tall n=21 aspect=8 | blocked 6.891 # preview
+dtype=cfloat form=tall n=22 aspect=5 | blocked 7.007 # preview
+dtype=cfloat form=tall n=24 aspect=3 | blocked 11.49 # preview
+dtype=cfloat form=tall n=24 aspect=12 | blocked 6.365 # preview
+dtype=cfloat form=tall n=28 aspect=3 | blocked 7.410 # preview
+dtype=cfloat form=tall n=31 aspect=1 | blocked 14.44 # preview
+dtype=cfloat form=tall n=32 aspect=4 | blocked 10.98 # preview
+dtype=cfloat form=tall n=32 aspect=8 | blocked 8.056 # preview
+dtype=cfloat form=tall n=33 aspect=12 | blocked 30.85 # preview
+dtype=cfloat form=tall n=40 aspect=5 | blocked 37.09 # preview
+dtype=cfloat form=tall n=47 aspect=4 | blocked 18.95 # preview
+dtype=cfloat form=tall n=47 aspect=8 | blocked 16.34 # preview
+dtype=cfloat form=tall n=48 aspect=5 | blocked 22.04 # preview
+dtype=cfloat form=tall n=49 aspect=2 | blocked 29.76 # preview
+dtype=cfloat form=tall n=75 aspect=5 | blocked 38.11 # preview
+dtype=cfloat form=tall n=76 aspect=8 | blocked 30.17 # preview
+dtype=cfloat form=tall n=97 aspect=5 | blocked 39.10 # preview
+dtype=cfloat form=tall n=160 aspect=4 | blocked 41.40 # preview
+dtype=cfloat form=tall n=192 aspect=5 | blocked 41.49 # preview
+dtype=cfloat form=tall n=224 aspect=1 | blocked 36.25 # preview
+dtype=cfloat form=tall n=288 aspect=3 | blocked 68.35 # preview
+dtype=cfloat form=tall n=384 aspect=4 | blocked 64.92 # preview
+dtype=cfloat form=tall n=768 aspect=2 | blocked 116.0 # preview

@@ -1,0 +1,75 @@
+# op=sysv device=apple_m5_max batchlas=0a3e4070 kernels=367e96f4 family_kernels=cta:5a53164e,compose:b258d6f0 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/sysv.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:72,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact n:log:3 nrhs:log batch:log
+dtype=float n=1 nrhs=1 batch=8 | cta 0.1724 | compose 0.1999 # preview
+dtype=float n=1 nrhs=1 batch=512 | cta 0.2232 | compose 0.2767 # preview
+dtype=float n=1 nrhs=1 batch=4096 | cta 0.2299 | compose 0.2506 # preview
+dtype=float n=1 nrhs=16 batch=8 | cta 0.1494 | compose 0.2235 # preview
+dtype=float n=1 nrhs=16 batch=512 | cta 0.2127 # preview
+dtype=float n=1 nrhs=16 batch=4096 | cta 0.6598 # preview
+dtype=float n=1 nrhs=64 batch=8 | cta 0.2057 # preview
+dtype=float n=1 nrhs=64 batch=512 | cta 0.2432 # preview
+dtype=float n=1 nrhs=64 batch=4096 | cta 0.9549 # preview
+dtype=float n=4 nrhs=1 batch=8 | cta 0.1750 # preview
+dtype=float n=4 nrhs=1 batch=512 | cta 0.3055 # preview
+dtype=float n=4 nrhs=1 batch=4096 | cta 0.8424 # preview
+dtype=float n=4 nrhs=16 batch=8 | cta 0.1808 # preview
+dtype=float n=4 nrhs=16 batch=512 | cta 0.1909 # preview
+dtype=float n=4 nrhs=16 batch=4096 | cta 0.2920 # preview
+dtype=float n=4 nrhs=64 batch=8 | cta 0.3390 # preview
+dtype=float n=4 nrhs=64 batch=512 | cta 0.3880 # preview
+dtype=float n=4 nrhs=64 batch=4096 | cta 0.6225 # preview
+dtype=float n=12 nrhs=1 batch=8 | cta 0.1698 # preview
+dtype=float n=12 nrhs=1 batch=512 | cta 0.4836 # preview
+dtype=float n=12 nrhs=1 batch=4096 | cta 1.113 # preview
+dtype=float n=12 nrhs=16 batch=8 | cta 0.2950 # preview
+dtype=float n=12 nrhs=16 batch=512 | cta 0.6398 # preview
+dtype=float n=12 nrhs=16 batch=4096 | cta 1.166 # preview
+dtype=float n=12 nrhs=64 batch=8 | cta 0.2802 # preview
+dtype=float n=12 nrhs=64 batch=512 | cta 0.9938 # preview
+dtype=float n=12 nrhs=64 batch=4096 | cta 1.654 # preview
+dtype=float n=24 nrhs=1 batch=8 | cta 0.3064 # preview
+dtype=float n=24 nrhs=1 batch=512 | cta 0.7772 # preview
+dtype=float n=24 nrhs=1 batch=4096 | cta 1.185 # preview
+dtype=float n=24 nrhs=16 batch=8 | cta 0.3129 # preview
+dtype=float n=24 nrhs=16 batch=512 | cta 1.077 # preview
+dtype=float n=24 nrhs=16 batch=4096 | cta 2.307 # preview
+dtype=float n=24 nrhs=64 batch=8 | cta 0.4302 # preview
+dtype=float n=24 nrhs=64 batch=512 | cta 1.743 # preview
+dtype=float n=24 nrhs=64 batch=4096 | cta 2.365 # preview
+dtype=cfloat n=1 nrhs=1 batch=8 | cta 0.2097 | compose 0.2395 # preview
+dtype=cfloat n=1 nrhs=1 batch=512 | cta 0.1900 | compose 0.2280 # preview
+dtype=cfloat n=1 nrhs=1 batch=4096 | cta 0.2236 | compose 0.2471 # preview
+dtype=cfloat n=1 nrhs=16 batch=8 | cta 0.2147 # preview
+dtype=cfloat n=1 nrhs=16 batch=512 | cta 0.2796 # preview
+dtype=cfloat n=1 nrhs=16 batch=4096 | cta 0.2605 | compose 0.4012 # preview
+dtype=cfloat n=1 nrhs=64 batch=8 | compose 0.2513 | cta 0.8149 # preview
+dtype=cfloat n=1 nrhs=64 batch=512 | compose 0.4123 | cta 0.9193 # preview
+dtype=cfloat n=1 nrhs=64 batch=4096 | compose 1.299 | cta 1.501 # preview
+dtype=cfloat n=4 nrhs=1 batch=8 | cta 0.7076 # preview
+dtype=cfloat n=4 nrhs=1 batch=512 | cta 0.2915 # preview
+dtype=cfloat n=4 nrhs=1 batch=4096 | cta 0.2993 # preview
+dtype=cfloat n=4 nrhs=16 batch=8 | cta 0.3038 # preview
+dtype=cfloat n=4 nrhs=16 batch=512 | cta 0.2886 # preview
+dtype=cfloat n=4 nrhs=16 batch=4096 | cta 0.4797 | compose 0.4724 # preview
+dtype=cfloat n=4 nrhs=64 batch=8 | cta 0.3034 # preview
+dtype=cfloat n=4 nrhs=64 batch=512 | compose 0.3478 | cta 0.8538 # preview
+dtype=cfloat n=4 nrhs=64 batch=4096 | compose 0.8499 | cta 3.028 # preview
+dtype=cfloat n=12 nrhs=1 batch=8 | cta 0.9052 # preview
+dtype=cfloat n=12 nrhs=1 batch=512 | cta 0.4515 # preview
+dtype=cfloat n=12 nrhs=1 batch=4096 | cta 0.6412 # preview
+dtype=cfloat n=12 nrhs=16 batch=8 | cta 0.4089 # preview
+dtype=cfloat n=12 nrhs=16 batch=512 | cta 1.221 # preview
+dtype=cfloat n=12 nrhs=16 batch=4096 | cta 0.9792 # preview
+dtype=cfloat n=12 nrhs=64 batch=8 | cta 0.2668 # preview
+dtype=cfloat n=12 nrhs=64 batch=512 | cta 2.007 # preview
+dtype=cfloat n=12 nrhs=64 batch=4096 | cta 2.220 # preview
+dtype=cfloat n=24 nrhs=1 batch=8 | cta 0.2159 # preview
+dtype=cfloat n=24 nrhs=1 batch=512 | cta 1.379 # preview
+dtype=cfloat n=24 nrhs=1 batch=4096 | cta 1.037 # preview
+dtype=cfloat n=24 nrhs=16 batch=8 | cta 0.2420 # preview
+dtype=cfloat n=24 nrhs=16 batch=512 | cta 1.141 # preview
+dtype=cfloat n=24 nrhs=16 batch=4096 | cta 2.998 # preview
+dtype=cfloat n=24 nrhs=64 batch=8 | cta 0.3329 # preview
+dtype=cfloat n=24 nrhs=64 batch=512 | cta 3.083 # preview
+dtype=cfloat n=24 nrhs=64 batch=4096 | cta 3.694 # preview

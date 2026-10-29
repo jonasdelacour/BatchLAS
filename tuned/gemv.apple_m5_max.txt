@@ -1,0 +1,179 @@
+# op=gemv device=apple_m5_max batchlas=0a3e4070 kernels=06bccadb family_kernels=cta:f843c03d,direct:f843c03d,vendor:f843c03d date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/gemv.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:176,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact trans:exact out:log red:log batch:log
+dtype=float trans=N out=1 red=1 batch=8 | direct 0.1846 # preview
+dtype=float trans=N out=1 red=1 batch=512 | direct 0.1767 # preview
+dtype=float trans=N out=1 red=1 batch=4096 | direct 0.1725 # preview
+dtype=float trans=N out=1 red=32 batch=8 | direct 0.1572 # preview
+dtype=float trans=N out=1 red=32 batch=512 | direct 0.1480 # preview
+dtype=float trans=N out=1 red=32 batch=4096 | direct 0.1946 # preview
+dtype=float trans=N out=1 red=64 batch=8 | direct 0.1812 # preview
+dtype=float trans=N out=1 red=64 batch=512 | direct 0.2007 # preview
+dtype=float trans=N out=1 red=64 batch=4096 | direct 0.2567 # preview
+dtype=float trans=N out=1 red=352 batch=8 | direct 0.2078 # preview
+dtype=float trans=N out=1 red=352 batch=512 | direct 0.1711 # preview
+dtype=float trans=N out=1 red=352 batch=4096 | direct 0.2201 # preview
+dtype=float trans=N out=1 red=1024 batch=8 | direct 0.1520 # preview
+dtype=float trans=N out=1 red=1024 batch=512 | direct 0.1904 # preview
+dtype=float trans=N out=1 red=1024 batch=4096 | direct 0.2413 # preview
+dtype=float trans=N out=64 red=1 batch=8 | direct 0.2004 # preview
+dtype=float trans=N out=64 red=1 batch=512 | direct 0.2521 # preview
+dtype=float trans=N out=64 red=1 batch=4096 | direct 0.1525 # preview
+dtype=float trans=N out=64 red=32 batch=8 | direct 0.1485 # preview
+dtype=float trans=N out=64 red=32 batch=512 | direct 0.1730 # preview
+dtype=float trans=N out=64 red=32 batch=4096 | direct 0.2768 # preview
+dtype=float trans=N out=64 red=64 batch=8 | direct 0.1782 # preview
+dtype=float trans=N out=64 red=64 batch=512 | direct 0.2248 # preview
+dtype=float trans=N out=64 red=64 batch=4096 | direct 0.3587 # preview
+dtype=float trans=N out=64 red=352 batch=8 | direct 0.2918 # preview
+dtype=float trans=N out=64 red=352 batch=512 | direct 0.2877 # preview
+dtype=float trans=N out=64 red=352 batch=4096 | direct 1.116 # preview
+dtype=float trans=N out=64 red=1024 batch=8 | direct 0.4499 # preview
+dtype=float trans=N out=64 red=1024 batch=512 | direct 0.5487 # preview
+dtype=float trans=N out=64 red=1024 batch=4096 | direct 2.735 # preview
+dtype=float trans=N out=256 red=1 batch=8 | direct 0.1981 # preview
+dtype=float trans=N out=256 red=1 batch=512 | direct 0.2242 # preview
+dtype=float trans=N out=256 red=1 batch=4096 | direct 0.2126 # preview
+dtype=float trans=N out=256 red=32 batch=8 | direct 0.2026 # preview
+dtype=float trans=N out=256 red=32 batch=512 | direct 0.2389 # preview
+dtype=float trans=N out=256 red=32 batch=4096 | direct 0.5242 # preview
+dtype=float trans=N out=256 red=64 batch=8 | direct 0.1870 # preview
+dtype=float trans=N out=256 red=64 batch=512 | direct 0.2463 # preview
+dtype=float trans=N out=256 red=64 batch=4096 | direct 0.8115 # preview
+dtype=float trans=N out=256 red=352 batch=8 | direct 0.2941 # preview
+dtype=float trans=N out=256 red=352 batch=512 | direct 0.7240 # preview
+dtype=float trans=N out=256 red=352 batch=4096 | direct 3.708 # preview
+dtype=float trans=N out=256 red=1024 batch=8 | direct 0.4676 # preview
+dtype=float trans=N out=256 red=1024 batch=512 | direct 1.672 # preview
+dtype=float trans=T out=1 red=1 batch=8 | cta 0.1995 | direct 0.2312 # preview
+dtype=float trans=T out=1 red=1 batch=512 | cta 0.1768 | direct 0.1788 # preview
+dtype=float trans=T out=1 red=1 batch=4096 | direct 0.1691 | cta 0.1848 # preview
+dtype=float trans=T out=1 red=32 batch=8 | direct 0.1479 | cta 0.1754 # preview
+dtype=float trans=T out=1 red=32 batch=512 | direct 0.1529 | cta 0.1880 # preview
+dtype=float trans=T out=1 red=32 batch=4096 | direct 0.1642 | cta 0.1653 # preview
+dtype=float trans=T out=1 red=64 batch=8 | cta 0.1624 | direct 0.1715 # preview
+dtype=float trans=T out=1 red=64 batch=512 | cta 0.2018 | direct 0.2343 # preview
+dtype=float trans=T out=1 red=64 batch=4096 | direct 0.1820 | cta 0.2112 # preview
+dtype=float trans=T out=1 red=352 batch=8 | cta 0.1671 | direct 0.2202 # preview
+dtype=float trans=T out=1 red=352 batch=512 | cta 0.1775 | direct 0.2213 # preview
+dtype=float trans=T out=1 red=352 batch=4096 | cta 0.2121 | direct 0.2100 # preview
+dtype=float trans=T out=1 red=1024 batch=8 | cta 0.1757 | direct 0.2613 # preview
+dtype=float trans=T out=1 red=1024 batch=512 | cta 0.2001 | direct 0.2475 # preview
+dtype=float trans=T out=1 red=1024 batch=4096 | cta 0.2533 | direct 0.2960 # preview
+dtype=float trans=T out=64 red=1 batch=8 | cta 0.2943 | direct 0.2890 # preview
+dtype=float trans=T out=64 red=1 batch=512 | cta 0.1727 | direct 0.1705 # preview
+dtype=float trans=T out=64 red=1 batch=4096 | direct 0.1979 | cta 0.2405 # preview
+dtype=float trans=T out=64 red=32 batch=8 | cta 0.1957 | direct 0.2005 # preview
+dtype=float trans=T out=64 red=32 batch=512 | cta 0.2005 | direct 0.1967 # preview
+dtype=float trans=T out=64 red=32 batch=4096 | direct 0.2925 | cta 0.3330 # preview
+dtype=float trans=T out=64 red=64 batch=8 | cta 0.1699 | direct 0.1710 # preview
+dtype=float trans=T out=64 red=64 batch=512 | direct 0.1751 | cta 0.2337 # preview
+dtype=float trans=T out=64 red=64 batch=4096 | direct 0.4013 | cta 0.7838 # preview
+dtype=float trans=T out=64 red=352 batch=8 | cta 0.1665 | direct 0.1820 # preview
+dtype=float trans=T out=64 red=352 batch=512 | cta 0.3016 | direct 0.3156 # preview
+dtype=float trans=T out=64 red=352 batch=4096 | cta 1.069 | direct 1.323 # preview
+dtype=float trans=T out=64 red=1024 batch=8 | cta 0.1881 | direct 0.2422 # preview
+dtype=float trans=T out=64 red=1024 batch=512 | cta 0.4912 | direct 0.6011 # preview
+dtype=float trans=T out=64 red=1024 batch=4096 | cta 2.698 | direct 3.394 # preview
+dtype=float trans=T out=256 red=1 batch=8 | cta 0.2420 | direct 0.2442 # preview
+dtype=float trans=T out=256 red=1 batch=512 | direct 0.2005 | cta 0.2737 # preview
+dtype=float trans=T out=256 red=1 batch=4096 | direct 0.2263 | cta 0.4139 # preview
+dtype=float trans=T out=256 red=32 batch=8 | cta 0.1689 | direct 0.1780 # preview
+dtype=float trans=T out=256 red=32 batch=512 | direct 0.2143 | cta 0.2582 # preview
+dtype=float trans=T out=256 red=32 batch=4096 | direct 0.6547 | cta 0.8058 # preview
+dtype=float trans=T out=256 red=64 batch=8 | cta 0.1976 | direct 0.2001 # preview
+dtype=float trans=T out=256 red=64 batch=512 | direct 0.2657 | cta 0.3852 # preview
+dtype=float trans=T out=256 red=64 batch=4096 | direct 1.084 | cta 2.265 # preview
+dtype=float trans=T out=256 red=352 batch=8 | cta 0.1830 | direct 0.2167 # preview
+dtype=float trans=T out=256 red=352 batch=512 | cta 0.6272 | direct 0.7954 # preview
+dtype=float trans=T out=256 red=352 batch=4096 | cta 3.583 | direct 4.608 # preview
+dtype=float trans=T out=256 red=1024 batch=8 | cta 0.2161 | direct 0.2791 # preview
+dtype=float trans=T out=256 red=1024 batch=512 | cta 1.432 | direct 1.793 # preview
+dtype=cfloat trans=N out=1 red=1 batch=8 | direct 0.1960 # preview
+dtype=cfloat trans=N out=1 red=1 batch=512 | direct 0.1977 # preview
+dtype=cfloat trans=N out=1 red=1 batch=4096 | direct 0.2079 # preview
+dtype=cfloat trans=N out=1 red=32 batch=8 | direct 0.1923 # preview
+dtype=cfloat trans=N out=1 red=32 batch=512 | direct 0.1815 # preview
+dtype=cfloat trans=N out=1 red=32 batch=4096 | direct 0.1705 # preview
+dtype=cfloat trans=N out=1 red=64 batch=8 | direct 0.1681 # preview
+dtype=cfloat trans=N out=1 red=64 batch=512 | direct 0.1658 # preview
+dtype=cfloat trans=N out=1 red=64 batch=4096 | direct 0.1996 # preview
+dtype=cfloat trans=N out=1 red=352 batch=8 | direct 0.1942 # preview
+dtype=cfloat trans=N out=1 red=352 batch=512 | direct 0.2067 # preview
+dtype=cfloat trans=N out=1 red=352 batch=4096 | direct 0.2272 # preview
+dtype=cfloat trans=N out=1 red=1024 batch=8 | direct 0.1698 # preview
+dtype=cfloat trans=N out=1 red=1024 batch=512 | direct 0.1867 # preview
+dtype=cfloat trans=N out=1 red=1024 batch=4096 | direct 0.3225 # preview
+dtype=cfloat trans=N out=64 red=1 batch=8 | direct 0.1950 # preview
+dtype=cfloat trans=N out=64 red=1 batch=512 | direct 0.1686 # preview
+dtype=cfloat trans=N out=64 red=1 batch=4096 | direct 0.2144 # preview
+dtype=cfloat trans=N out=64 red=32 batch=8 | direct 0.1801 # preview
+dtype=cfloat trans=N out=64 red=32 batch=512 | direct 0.1892 # preview
+dtype=cfloat trans=N out=64 red=32 batch=4096 | direct 0.3320 # preview
+dtype=cfloat trans=N out=64 red=64 batch=8 | direct 0.1855 # preview
+dtype=cfloat trans=N out=64 red=64 batch=512 | direct 0.2177 # preview
+dtype=cfloat trans=N out=64 red=64 batch=4096 | direct 0.5271 # preview
+dtype=cfloat trans=N out=64 red=352 batch=8 | direct 0.2677 # preview
+dtype=cfloat trans=N out=64 red=352 batch=512 | direct 0.3899 # preview
+dtype=cfloat trans=N out=64 red=352 batch=4096 | direct 1.982 # preview
+dtype=cfloat trans=N out=64 red=1024 batch=8 | direct 0.4751 # preview
+dtype=cfloat trans=N out=64 red=1024 batch=512 | direct 0.8256 # preview
+dtype=cfloat trans=N out=64 red=1024 batch=4096 | direct 5.292 # preview
+dtype=cfloat trans=N out=256 red=1 batch=8 | direct 0.1620 # preview
+dtype=cfloat trans=N out=256 red=1 batch=512 | direct 0.1980 # preview
+dtype=cfloat trans=N out=256 red=1 batch=4096 | direct 0.1880 # preview
+dtype=cfloat trans=N out=256 red=32 batch=8 | direct 0.2075 # preview
+dtype=cfloat trans=N out=256 red=32 batch=512 | direct 0.2825 # preview
+dtype=cfloat trans=N out=256 red=32 batch=4096 | direct 0.8720 # preview
+dtype=cfloat trans=N out=256 red=64 batch=8 | direct 0.1855 # preview
+dtype=cfloat trans=N out=256 red=64 batch=512 | direct 0.3668 # preview
+dtype=cfloat trans=N out=256 red=64 batch=4096 | direct 1.487 # preview
+dtype=cfloat trans=N out=256 red=352 batch=8 | direct 0.2811 # preview
+dtype=cfloat trans=N out=256 red=352 batch=512 | direct 1.094 # preview
+dtype=cfloat trans=N out=256 red=352 batch=4096 | direct 7.071 # preview
+dtype=cfloat trans=N out=256 red=1024 batch=8 | direct 0.4905 # preview
+dtype=cfloat trans=N out=256 red=1024 batch=512 | direct 2.714 # preview
+dtype=cfloat trans=T out=1 red=1 batch=8 | cta 0.2098 | direct 0.2058 # preview
+dtype=cfloat trans=T out=1 red=1 batch=512 | direct 0.1664 | cta 0.1987 # preview
+dtype=cfloat trans=T out=1 red=1 batch=4096 | cta 0.1983 | direct 0.2015 # preview
+dtype=cfloat trans=T out=1 red=32 batch=8 | cta 0.1749 | direct 0.2037 # preview
+dtype=cfloat trans=T out=1 red=32 batch=512 | cta 0.1969 | direct 0.2071 # preview
+dtype=cfloat trans=T out=1 red=32 batch=4096 | cta 0.1737 | direct 0.1739 # preview
+dtype=cfloat trans=T out=1 red=64 batch=8 | cta 0.1805 | direct 0.2041 # preview
+dtype=cfloat trans=T out=1 red=64 batch=512 | cta 0.1925 | direct 0.2206 # preview
+dtype=cfloat trans=T out=1 red=64 batch=4096 | cta 0.2061 | direct 0.2155 # preview
+dtype=cfloat trans=T out=1 red=352 batch=8 | cta 0.1894 | direct 0.2046 # preview
+dtype=cfloat trans=T out=1 red=352 batch=512 | cta 0.1815 | direct 0.1955 # preview
+dtype=cfloat trans=T out=1 red=352 batch=4096 | cta 0.2224 | direct 0.2780 # preview
+dtype=cfloat trans=T out=1 red=1024 batch=8 | cta 0.1768 | direct 0.2841 # preview
+dtype=cfloat trans=T out=1 red=1024 batch=512 | cta 0.2150 | direct 0.2802 # preview
+dtype=cfloat trans=T out=1 red=1024 batch=4096 | cta 0.3218 | direct 0.3782 # preview
+dtype=cfloat trans=T out=64 red=1 batch=8 | cta 0.1794 | direct 0.1772 # preview
+dtype=cfloat trans=T out=64 red=1 batch=512 | cta 0.2004 | direct 0.1959 # preview
+dtype=cfloat trans=T out=64 red=1 batch=4096 | direct 0.1838 | cta 0.2662 # preview
+dtype=cfloat trans=T out=64 red=32 batch=8 | cta 0.1698 | direct 0.1856 # preview
+dtype=cfloat trans=T out=64 red=32 batch=512 | direct 0.1940 | cta 0.2456 # preview
+dtype=cfloat trans=T out=64 red=32 batch=4096 | direct 0.4044 | cta 0.7282 # preview
+dtype=cfloat trans=T out=64 red=64 batch=8 | cta 0.1923 | direct 0.1875 # preview
+dtype=cfloat trans=T out=64 red=64 batch=512 | direct 0.2433 | cta 0.2601 # preview
+dtype=cfloat trans=T out=64 red=64 batch=4096 | direct 0.5974 | cta 0.7934 # preview
+dtype=cfloat trans=T out=64 red=352 batch=8 | cta 0.1821 | direct 0.2001 # preview
+dtype=cfloat trans=T out=64 red=352 batch=512 | cta 0.4228 | direct 0.4895 # preview
+dtype=cfloat trans=T out=64 red=352 batch=4096 | cta 1.934 | direct 2.447 # preview
+dtype=cfloat trans=T out=64 red=1024 batch=8 | cta 0.1859 | direct 0.2817 # preview
+dtype=cfloat trans=T out=64 red=1024 batch=512 | cta 0.8418 | direct 1.053 # preview
+dtype=cfloat trans=T out=64 red=1024 batch=4096 | cta 5.140 | direct 6.645 # preview
+dtype=cfloat trans=T out=256 red=1 batch=8 | direct 0.2084 | cta 0.2157 # preview
+dtype=cfloat trans=T out=256 red=1 batch=512 | direct 0.1896 | cta 0.2200 # preview
+dtype=cfloat trans=T out=256 red=1 batch=4096 | direct 0.2330 | cta 0.4363 # preview
+dtype=cfloat trans=T out=256 red=32 batch=8 | cta 0.1548 | direct 0.2005 # preview
+dtype=cfloat trans=T out=256 red=32 batch=512 | direct 0.2994 | cta 0.4148 # preview
+dtype=cfloat trans=T out=256 red=32 batch=4096 | direct 1.061 | cta 2.238 # preview
+dtype=cfloat trans=T out=256 red=64 batch=8 | cta 0.1829 | direct 0.2064 # preview
+dtype=cfloat trans=T out=256 red=64 batch=512 | direct 0.3911 | cta 0.4173 # preview
+dtype=cfloat trans=T out=256 red=64 batch=4096 | direct 1.789 | cta 2.416 # preview
+dtype=cfloat trans=T out=256 red=352 batch=8 | cta 0.1882 | direct 0.2429 # preview
+dtype=cfloat trans=T out=256 red=352 batch=512 | cta 1.078 | direct 1.325 # preview
+dtype=cfloat trans=T out=256 red=352 batch=4096 | cta 7.180 | direct 9.245 # preview
+dtype=cfloat trans=T out=256 red=1024 batch=8 | cta 0.2107 | direct 0.3126 # preview
+dtype=cfloat trans=T out=256 red=1024 batch=512 | cta 2.656 | direct 3.459 # preview

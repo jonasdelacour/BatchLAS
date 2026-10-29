@@ -1,0 +1,85 @@
+# op=getrf device=apple_m5_max batchlas=0a3e4070 kernels=e4fc0e39 family_kernels=tiny:0b5832d2,cta:4edac00c,blocked:365c20cd,vendor:4edac00c date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/getrf.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:82,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact n:log:3 batch:log
+dtype=float n=1 batch=8 | cta 0.1777 | blocked 0.1767 | tiny 0.1980 # preview
+dtype=float n=1 batch=512 | tiny 0.2313 | cta 0.2484 | blocked 0.2441 # preview
+dtype=float n=1 batch=4096 | tiny 0.2019 | cta 0.2010 | blocked 0.2163 # preview
+dtype=float n=3 batch=8 | cta 0.1878 | tiny 0.1975 | blocked 0.2017 # preview
+dtype=float n=3 batch=512 | tiny 0.2050 | blocked 0.2131 | cta 0.2178 # preview
+dtype=float n=3 batch=4096 | tiny 0.2264 | cta 0.3453 | blocked 0.3685 # preview
+dtype=float n=5 batch=8 | tiny 0.2023 | cta 0.2005 | blocked 0.2021 # preview
+dtype=float n=5 batch=512 | tiny 0.2834 | cta 0.2915 | blocked 0.3099 # preview
+dtype=float n=5 batch=4096 | tiny 0.2192 | blocked 0.2878 | cta 0.2910 # preview
+dtype=float n=7 batch=8 | cta 0.2045 | tiny 0.2046 | blocked 0.2164 # preview
+dtype=float n=7 batch=512 | tiny 0.2836 | cta 0.3145 | blocked 0.3207 # preview
+dtype=float n=7 batch=4096 | tiny 0.2100 | cta 0.3397 | blocked 0.3754 # preview
+dtype=float n=9 batch=8 | tiny 0.2053 | cta 0.2002 | blocked 0.2270 # preview
+dtype=float n=9 batch=512 | tiny 0.3106 | cta 0.3161 | blocked 0.3395 # preview
+dtype=float n=9 batch=4096 | tiny 0.3078 | cta 0.3651 | blocked 0.4134 # preview
+dtype=float n=16 batch=8 | cta 0.2161 | tiny 0.2533 | blocked 0.2587 # preview
+dtype=float n=16 batch=512 | cta 0.2914 | tiny 0.3138 | blocked 0.3375 # preview
+dtype=float n=16 batch=4096 | tiny 0.4333 | cta 0.5151 | blocked 0.6065 # preview
+dtype=float n=24 batch=8 | cta 0.2283 | blocked 0.3037 | tiny 0.3581 # preview
+dtype=float n=24 batch=512 | blocked 0.4022 | cta 0.5198 | tiny 0.6576 # preview
+dtype=float n=24 batch=4096 | blocked 0.9693 | cta 1.776 | tiny 2.879 # preview
+dtype=float n=32 batch=8 | cta 0.2453 | blocked 0.3667 | tiny 0.6415 # preview
+dtype=float n=32 batch=512 | blocked 0.4080 | cta 0.4390 | tiny 1.931 # preview
+dtype=float n=32 batch=4096 | blocked 0.8539 | cta 1.608 | tiny 10.02 # preview
+dtype=float n=48 batch=8 | blocked 0.6177 # preview
+dtype=float n=48 batch=512 | blocked 2.252 # preview
+dtype=float n=48 batch=4096 | blocked 2.549 # preview
+dtype=float n=96 batch=8 | blocked 1.038 # preview
+dtype=float n=96 batch=512 | blocked 5.892 # preview
+dtype=float n=96 batch=4096 | blocked 17.35 # preview
+dtype=float n=192 batch=8 | blocked 1.846 # preview
+dtype=float n=192 batch=512 | blocked 8.992 # preview
+dtype=float n=192 batch=4096 | blocked 55.81 # preview
+dtype=float n=256 batch=8 | blocked 2.404 # preview
+dtype=float n=256 batch=512 | blocked 16.20 # preview
+dtype=float n=256 batch=4096 | blocked 116.0 # preview
+dtype=float n=511 batch=8 | blocked 4.800 # preview
+dtype=float n=511 batch=512 | blocked 103.5 # preview
+dtype=float n=768 batch=8 | blocked 8.666 # preview
+dtype=float n=768 batch=512 | blocked 285.5 # preview
+dtype=float n=1024 batch=8 | blocked 15.88 # preview
+dtype=float n=1024 batch=512 | blocked 591.0 # preview
+dtype=cfloat n=1 batch=8 | tiny 0.1824 | blocked 0.1872 | cta 0.2012 # preview
+dtype=cfloat n=1 batch=512 | tiny 0.2444 | cta 0.2454 | blocked 0.2384 # preview
+dtype=cfloat n=1 batch=4096 | tiny 0.2221 | cta 0.2415 | blocked 0.2572 # preview
+dtype=cfloat n=3 batch=8 | tiny 0.2012 | cta 0.1995 | blocked 0.2082 # preview
+dtype=cfloat n=3 batch=512 | tiny 0.2412 | cta 0.2560 | blocked 0.2583 # preview
+dtype=cfloat n=3 batch=4096 | tiny 0.2065 | cta 0.2650 | blocked 0.3283 # preview
+dtype=cfloat n=5 batch=8 | tiny 0.1915 | cta 0.2012 | blocked 0.2117 # preview
+dtype=cfloat n=5 batch=512 | tiny 0.2540 | cta 0.2565 | blocked 0.2801 # preview
+dtype=cfloat n=5 batch=4096 | tiny 0.2265 | cta 0.3227 | blocked 0.4510 # preview
+dtype=cfloat n=7 batch=8 | tiny 0.1924 | cta 0.2076 | blocked 0.2527 # preview
+dtype=cfloat n=7 batch=512 | tiny 0.3287 | cta 0.3255 | blocked 0.4125 # preview
+dtype=cfloat n=7 batch=4096 | tiny 0.4219 | cta 0.6059 | blocked 1.095 # preview
+dtype=cfloat n=9 batch=8 | cta 0.2436 | tiny 0.3079 | blocked 0.3528 # preview
+dtype=cfloat n=9 batch=512 | cta 0.3215 | tiny 0.3518 | blocked 0.3724 # preview
+dtype=cfloat n=9 batch=4096 | tiny 0.3589 | cta 0.3583 | blocked 0.6478 # preview
+dtype=cfloat n=16 batch=8 | cta 0.2247 | tiny 0.3002 | blocked 0.3390 # preview
+dtype=cfloat n=16 batch=512 | cta 0.4262 | tiny 0.7595 | blocked 0.7920 # preview
+dtype=cfloat n=16 batch=4096 | cta 0.4680 | tiny 0.6417 | blocked 0.8642 # preview
+dtype=cfloat n=24 batch=8 | cta 0.2351 | blocked 0.4880 | tiny 0.7212 # preview
+dtype=cfloat n=24 batch=512 | cta 0.3768 | blocked 0.4918 | tiny 1.533 # preview
+dtype=cfloat n=24 batch=4096 | blocked 1.142 | cta 1.233 | tiny 9.425 # preview
+dtype=cfloat n=32 batch=8 | blocked 0.5192 | tiny 0.9945 # preview
+dtype=cfloat n=32 batch=512 | blocked 0.5633 | tiny 4.846 # preview
+dtype=cfloat n=32 batch=4096 | blocked 1.532 | tiny 27.18 # preview
+dtype=cfloat n=48 batch=8 | blocked 0.8494 # preview
+dtype=cfloat n=48 batch=512 | blocked 1.760 # preview
+dtype=cfloat n=48 batch=4096 | blocked 8.333 # preview
+dtype=cfloat n=96 batch=8 | blocked 1.739 # preview
+dtype=cfloat n=96 batch=512 | blocked 3.203 # preview
+dtype=cfloat n=96 batch=4096 | blocked 20.56 # preview
+dtype=cfloat n=192 batch=8 | blocked 2.900 # preview
+dtype=cfloat n=192 batch=512 | blocked 18.68 # preview
+dtype=cfloat n=192 batch=4096 | blocked 139.5 # preview
+dtype=cfloat n=256 batch=8 | blocked 3.935 # preview
+dtype=cfloat n=256 batch=512 | blocked 36.64 # preview
+dtype=cfloat n=256 batch=4096 | blocked 278.8 # preview
+dtype=cfloat n=511 batch=8 | blocked 7.845 # preview
+dtype=cfloat n=511 batch=512 | blocked 235.9 # preview
+dtype=cfloat n=768 batch=8 | blocked 15.36 # preview
+dtype=cfloat n=1024 batch=8 | blocked 26.91 # preview

@@ -1,0 +1,177 @@
+# op=syev device=apple_m5_max batchlas=0a3e4070 kernels=595cba65 family_kernels=cta:010154ec,cta_fused:2784756e,jacobi:210aeaa8,blocked:27eb9693,two_stage:9f66c332,vendor:e2d0623d date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/syev.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:174,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact jobz:exact n:log:3 batch:log
+dtype=float jobz=N n=1 batch=128 | cta_fused 0.1791 | jacobi 0.1958 | blocked 0.2285 | two_stage 0.2569 | cta 0.3024 # preview
+dtype=float jobz=N n=1 batch=2048 | jacobi 0.1845 | cta_fused 0.2026 | blocked 0.2487 | two_stage 0.3346 | cta 0.3517 # preview
+dtype=float jobz=N n=1 batch=32768 | jacobi 0.2178 | cta_fused 0.2296 | blocked 0.6590 | cta 0.9289 | two_stage 1.507 # preview
+dtype=float jobz=N n=3 batch=128 | jacobi 0.1769 | cta_fused 0.2165 | blocked 0.2427 | cta 0.2923 | two_stage 0.7348 # preview
+dtype=float jobz=N n=3 batch=2048 | jacobi 0.1872 | cta_fused 0.2080 | blocked 0.2583 | cta 0.3612 | two_stage 1.133 # preview
+dtype=float jobz=N n=3 batch=32768 | jacobi 0.3462 | cta_fused 0.3670 | cta 0.9400 | blocked 2.692 | two_stage 18.14 # preview
+dtype=float jobz=N n=6 batch=128 | cta_fused 0.2029 | jacobi 0.2005 | blocked 0.2208 | cta 0.3189 | two_stage 0.7876 # preview
+dtype=float jobz=N n=6 batch=2048 | cta_fused 0.2055 | jacobi 0.2331 | blocked 0.2874 | cta 0.3972 | two_stage 1.240 # preview
+dtype=float jobz=N n=6 batch=32768 | cta_fused 0.5607 | jacobi 0.5653 | cta 1.011 | blocked 1.501 | two_stage 8.142 # preview
+dtype=float jobz=N n=9 batch=128 | cta_fused 0.2187 | blocked 0.2372 | jacobi 0.2819 | cta 0.3178 | two_stage 0.7408 # preview
+dtype=float jobz=N n=9 batch=2048 | cta_fused 0.3055 | jacobi 0.3821 | blocked 0.3880 | cta 0.4382 | two_stage 1.516 # preview
+dtype=float jobz=N n=9 batch=32768 | cta_fused 1.487 | cta 2.057 | jacobi 2.161 | blocked 2.210 | two_stage 10.69 # preview
+dtype=float jobz=N n=16 batch=128 | cta_fused 0.2658 | blocked 0.2813 | cta 0.3602 | jacobi 0.4733 | two_stage 0.8227 # preview
+dtype=float jobz=N n=16 batch=2048 | cta_fused 0.4253 | blocked 0.4917 | cta 0.5801 | jacobi 0.7740 | two_stage 1.809 # preview
+dtype=float jobz=N n=16 batch=32768 | cta_fused 3.301 | blocked 3.928 | cta 4.366 | jacobi 6.426 | two_stage 16.97 # preview
+dtype=float jobz=N n=24 batch=128 | cta_fused 0.3096 | blocked 0.3157 | cta 0.4308 | two_stage 0.8611 | jacobi 0.8730 # preview
+dtype=float jobz=N n=24 batch=2048 | blocked 0.7800 | cta_fused 0.9280 | cta 1.174 | two_stage 2.360 | jacobi 2.551 # preview
+dtype=float jobz=N n=24 batch=32768 | blocked 7.667 | cta_fused 11.32 | cta 13.62 | two_stage 26.71 | jacobi 31.03 # preview
+dtype=float jobz=N n=28 batch=128 | cta_fused 0.3444 | blocked 0.3615 | cta 0.4401 | two_stage 0.8991 | jacobi 1.053 # preview
+dtype=float jobz=N n=28 batch=2048 | blocked 0.8652 | cta_fused 1.179 | cta 1.433 | two_stage 2.687 | jacobi 3.440 # preview
+dtype=float jobz=N n=28 batch=32768 | blocked 9.196 | cta_fused 14.60 | cta 18.11 | two_stage 31.80 | jacobi 42.93 # preview
+dtype=float jobz=N n=33 batch=128 | blocked 0.6650 | two_stage 0.9417 # preview
+dtype=float jobz=N n=33 batch=2048 | blocked 2.573 | two_stage 3.655 # preview
+dtype=float jobz=N n=33 batch=32768 | blocked 33.59 | two_stage 45.19 # preview
+dtype=float jobz=N n=48 batch=128 | blocked 0.9716 | two_stage 1.482 # preview
+dtype=float jobz=N n=48 batch=2048 | blocked 3.928 | two_stage 7.548 # preview
+dtype=float jobz=N n=48 batch=32768 | blocked 55.32 | two_stage 106.9 # preview
+dtype=float jobz=N n=96 batch=128 | blocked 1.929 | two_stage 4.193 # preview
+dtype=float jobz=N n=96 batch=2048 | blocked 13.43 | two_stage 38.30 # preview
+dtype=float jobz=N n=96 batch=32768 | blocked 215.7 | two_stage 583.1 # preview
+dtype=float jobz=N n=192 batch=128 | blocked 5.649 | two_stage 13.68 # preview
+dtype=float jobz=N n=192 batch=2048 | blocked 65.73 | two_stage 176.8 # preview
+dtype=float jobz=N n=257 batch=128 | blocked 9.601 | two_stage 23.45 # preview
+dtype=float jobz=N n=257 batch=2048 | blocked 119.2 | two_stage 292.4 # preview
+dtype=float jobz=N n=321 batch=128 | blocked 15.20 | two_stage 34.81 # preview
+dtype=float jobz=N n=321 batch=2048 | blocked 214.6 | two_stage 488.2 # preview
+dtype=float jobz=N n=448 batch=128 | blocked 34.19 | two_stage 75.82 # preview
+dtype=float jobz=N n=448 batch=2048 | blocked 542.3 | two_stage 1172 # preview
+dtype=float jobz=N n=512 batch=128 | blocked 51.59 | two_stage 102.5 # preview
+dtype=float jobz=N n=512 batch=2048 | blocked 781.9 | two_stage 1622 # preview
+dtype=float jobz=N n=640 batch=128 | blocked 112.2 | two_stage 174.9 # preview
+dtype=float jobz=N n=1024 batch=128 | blocked 493.8 | two_stage 540.5 # preview
+dtype=float jobz=N n=1536 batch=128 | two_stage 1399 | blocked 1789 # preview
+dtype=float jobz=V n=1 batch=128 | cta_fused 0.1750 | jacobi 0.1864 | blocked 0.3555 | cta 0.3925 | two_stage 0.4162 # preview
+dtype=float jobz=V n=1 batch=2048 | cta_fused 0.1938 | jacobi 0.1963 | cta 0.3928 | blocked 0.4023 | two_stage 0.4670 # preview
+dtype=float jobz=V n=1 batch=32768 | cta_fused 0.1797 | jacobi 0.1924 | blocked 0.4591 | cta 0.5073 | two_stage 0.6657 # preview
+dtype=float jobz=V n=3 batch=128 | cta_fused 0.2091 | jacobi 0.2093 | cta 0.4543 | blocked 0.5783 | two_stage 1.638 # preview
+dtype=float jobz=V n=3 batch=2048 | jacobi 0.1903 | cta_fused 0.2258 | cta 0.4319 | blocked 0.5552 | two_stage 1.276 # preview
+dtype=float jobz=V n=3 batch=32768 | jacobi 0.2536 | cta_fused 0.2988 | cta 0.7883 | blocked 1.095 | two_stage 6.093 # preview
+dtype=float jobz=V n=6 batch=128 | cta_fused 0.2212 | jacobi 0.2327 | cta 0.4199 | blocked 0.5282 | two_stage 0.9294 # preview
+dtype=float jobz=V n=6 batch=2048 | cta_fused 0.2325 | jacobi 0.2381 | cta 0.4655 | blocked 0.6141 | two_stage 4.033 # preview
+dtype=float jobz=V n=6 batch=32768 | jacobi 0.5762 | cta_fused 0.6583 | cta 1.327 | blocked 2.604 | two_stage 8.427 # preview
+dtype=float jobz=V n=9 batch=128 | cta_fused 0.2546 | jacobi 0.2818 | cta 0.4479 | blocked 0.5399 | two_stage 1.084 # preview
+dtype=float jobz=V n=9 batch=2048 | cta_fused 0.3401 | jacobi 0.3668 | cta 0.5352 | blocked 0.7876 | two_stage 1.648 # preview
+dtype=float jobz=V n=9 batch=32768 | cta_fused 2.082 | jacobi 2.380 | cta 2.781 | blocked 4.229 | two_stage 12.04 # preview
+dtype=float jobz=V n=16 batch=128 | cta_fused 0.2731 | cta 0.4575 | jacobi 0.4930 | blocked 0.6950 | two_stage 1.024 # preview
+dtype=float jobz=V n=16 batch=2048 | cta_fused 0.5147 | cta 0.7820 | jacobi 0.8417 | blocked 1.459 | two_stage 2.236 # preview
+dtype=float jobz=V n=24 batch=128 | cta 0.5260 | cta_fused 0.8260 | jacobi 0.8928 | blocked 0.9588 | two_stage 1.107 # preview
+dtype=float jobz=V n=24 batch=2048 | cta 1.609 | blocked 2.616 | two_stage 3.412 | jacobi 4.337 | cta_fused 5.076 # preview
+dtype=float jobz=V n=28 batch=128 | cta 0.6067 | cta_fused 0.9657 | blocked 0.9946 | jacobi 1.147 | two_stage 1.190 # preview
+dtype=float jobz=V n=28 batch=2048 | cta 1.916 | blocked 3.104 | two_stage 4.155 | jacobi 5.680 | cta_fused 6.071 # preview
+dtype=float jobz=V n=33 batch=128 | blocked 1.405 | two_stage 1.507 # preview
+dtype=float jobz=V n=33 batch=2048 | blocked 5.944 | two_stage 6.169 # preview
+dtype=float jobz=V n=33 batch=32768 | blocked 82.24 | two_stage 84.98 # preview
+dtype=float jobz=V n=48 batch=128 | blocked 1.912 | two_stage 2.128 # preview
+dtype=float jobz=V n=48 batch=2048 | blocked 9.487 | two_stage 12.67 # preview
+dtype=float jobz=V n=48 batch=32768 | blocked 137.5 | two_stage 182.7 # preview
+dtype=float jobz=V n=96 batch=128 | blocked 5.121 | two_stage 7.568 # preview
+dtype=float jobz=V n=96 batch=2048 | blocked 35.27 | two_stage 64.18 # preview
+dtype=float jobz=V n=96 batch=32768 | blocked 554.5 | two_stage 988.8 # preview
+dtype=float jobz=V n=128 batch=32768 | blocked 976.7 | two_stage 1864 # preview
+dtype=float jobz=V n=192 batch=128 | blocked 15.09 | two_stage 26.44 # preview
+dtype=float jobz=V n=192 batch=2048 | blocked 180.0 | two_stage 334.3 # preview
+dtype=float jobz=V n=257 batch=128 | blocked 38.77 | two_stage 60.13 # preview
+dtype=float jobz=V n=257 batch=2048 | blocked 521.3 | two_stage 843.4 # preview
+dtype=float jobz=V n=321 batch=128 | blocked 55.84 | two_stage 99.39 # preview
+dtype=float jobz=V n=321 batch=2048 | blocked 784.1 | two_stage 1408 # preview
+dtype=float jobz=V n=448 batch=128 | blocked 105.5 | two_stage 198.2 # preview
+dtype=float jobz=V n=448 batch=2048 | blocked 1614 | two_stage 3091 # preview
+dtype=float jobz=V n=512 batch=128 | blocked 130.7 | two_stage 252.1 # preview
+dtype=float jobz=V n=512 batch=2048 | blocked 2001 | two_stage 3858 # preview
+dtype=float jobz=V n=640 batch=128 | blocked 262.4 | two_stage 454.9 # preview
+dtype=float jobz=V n=1024 batch=128 | blocked 971.3 | two_stage 2042 # preview
+dtype=float jobz=V n=1536 batch=128 | blocked 3105 | two_stage 6451 # preview
+dtype=cfloat jobz=N n=1 batch=8 | cta_fused 0.2032 | jacobi 0.2088 | blocked 0.2574 | two_stage 0.2854 | cta 0.2955 # preview
+dtype=cfloat jobz=N n=1 batch=512 | cta_fused 0.2959 | jacobi 0.2908 | blocked 0.3922 | two_stage 0.5624 | cta 0.6845 # preview
+dtype=cfloat jobz=N n=1 batch=4096 | cta_fused 0.1864 | jacobi 0.2019 | blocked 0.2502 | cta 0.2818 | two_stage 0.2821 # preview
+dtype=cfloat jobz=N n=3 batch=8 | cta_fused 0.2205 | jacobi 0.2176 | blocked 0.2450 | cta 0.3636 | two_stage 0.7568 # preview
+dtype=cfloat jobz=N n=3 batch=512 | cta_fused 0.2237 | jacobi 0.2227 | blocked 0.2482 | cta 0.3488 | two_stage 1.575 # preview
+dtype=cfloat jobz=N n=3 batch=4096 | cta_fused 0.2427 | jacobi 0.2417 | blocked 0.4169 | cta 0.4415 | two_stage 4.249 # preview
+dtype=cfloat jobz=N n=6 batch=8 | cta_fused 0.2402 | jacobi 0.2646 | blocked 0.2945 | cta 0.3794 | two_stage 0.7557 # preview
+dtype=cfloat jobz=N n=6 batch=512 | cta_fused 0.2459 | jacobi 0.2797 | blocked 0.3024 | cta 0.4299 | two_stage 2.281 # preview
+dtype=cfloat jobz=N n=6 batch=4096 | cta_fused 0.2854 | jacobi 0.3355 | blocked 0.4121 | cta 0.4218 | two_stage 3.567 # preview
+dtype=cfloat jobz=N n=9 batch=8 | cta_fused 0.2637 | blocked 0.3117 | jacobi 0.3585 | cta 0.3870 | two_stage 0.8249 # preview
+dtype=cfloat jobz=N n=9 batch=512 | cta_fused 0.2183 | blocked 0.3017 | cta 0.3677 | jacobi 0.3721 | two_stage 3.026 # preview
+dtype=cfloat jobz=N n=9 batch=4096 | cta_fused 0.4540 | blocked 0.5804 | cta 0.6252 | jacobi 0.9226 | two_stage 5.963 # preview
+dtype=cfloat jobz=N n=16 batch=8 | cta_fused 0.2997 | blocked 0.3556 | cta 0.4496 | two_stage 0.8780 | jacobi 2.928 # preview
+dtype=cfloat jobz=N n=16 batch=512 | cta_fused 0.3294 | blocked 0.3988 | cta 0.4985 | jacobi 0.9267 | two_stage 1.753 # preview
+dtype=cfloat jobz=N n=16 batch=4096 | cta_fused 0.7752 | blocked 0.9232 | cta 1.045 | jacobi 2.830 | two_stage 6.375 # preview
+dtype=cfloat jobz=N n=24 batch=8 | cta_fused 0.3710 | blocked 0.4384 | cta 0.4990 | two_stage 0.9835 | jacobi 4.446 # preview
+dtype=cfloat jobz=N n=24 batch=512 | blocked 0.5330 | cta_fused 0.5556 | cta 0.7314 | two_stage 1.950 | jacobi 7.020 # preview
+dtype=cfloat jobz=N n=24 batch=4096 | blocked 1.946 | cta_fused 2.620 | cta 2.727 | two_stage 9.578 | jacobi 14.95 # preview
+dtype=cfloat jobz=N n=28 batch=8 | cta_fused 0.3957 | blocked 0.4582 | cta 0.5425 | two_stage 1.042 | jacobi 5.224 # preview
+dtype=cfloat jobz=N n=28 batch=512 | blocked 0.5667 | cta_fused 0.6605 | cta 0.8903 | two_stage 1.993 | jacobi 5.139 # preview
+dtype=cfloat jobz=N n=28 batch=4096 | blocked 2.352 | cta_fused 3.297 | cta 3.455 | two_stage 10.97 | jacobi 20.92 # preview
+dtype=cfloat jobz=N n=33 batch=8 | blocked 1.056 | two_stage 1.049 # preview
+dtype=cfloat jobz=N n=33 batch=512 | blocked 1.793 | two_stage 3.534 # preview
+dtype=cfloat jobz=N n=33 batch=4096 | blocked 7.377 | two_stage 13.46 # preview
+dtype=cfloat jobz=N n=48 batch=8 | blocked 1.424 | two_stage 1.885 # preview
+dtype=cfloat jobz=N n=48 batch=512 | blocked 2.089 | two_stage 5.173 # preview
+dtype=cfloat jobz=N n=48 batch=4096 | blocked 11.89 | two_stage 33.29 # preview
+dtype=cfloat jobz=N n=96 batch=8 | blocked 2.559 | two_stage 5.248 # preview
+dtype=cfloat jobz=N n=96 batch=512 | blocked 6.160 | two_stage 21.41 # preview
+dtype=cfloat jobz=N n=96 batch=4096 | blocked 41.45 | two_stage 157.7 # preview
+dtype=cfloat jobz=N n=192 batch=8 | blocked 6.355 | two_stage 14.62 # preview
+dtype=cfloat jobz=N n=192 batch=512 | blocked 34.23 | two_stage 87.74 # preview
+dtype=cfloat jobz=N n=192 batch=4096 | blocked 254.6 | two_stage 694.0 # preview
+dtype=cfloat jobz=N n=257 batch=8 | blocked 13.67 | two_stage 24.25 # preview
+dtype=cfloat jobz=N n=257 batch=512 | blocked 97.66 | two_stage 180.6 # preview
+dtype=cfloat jobz=N n=321 batch=8 | blocked 19.54 | two_stage 35.87 # preview
+dtype=cfloat jobz=N n=321 batch=512 | blocked 173.5 | two_stage 298.7 # preview
+dtype=cfloat jobz=N n=448 batch=8 | blocked 32.77 | two_stage 64.12 # preview
+dtype=cfloat jobz=N n=448 batch=512 | blocked 385.6 | two_stage 616.6 # preview
+dtype=cfloat jobz=N n=512 batch=8 | blocked 41.59 | two_stage 80.37 # preview
+dtype=cfloat jobz=N n=512 batch=512 | blocked 568.9 | two_stage 833.6 # preview
+dtype=cfloat jobz=N n=640 batch=8 | blocked 81.54 | two_stage 125.2 # preview
+dtype=cfloat jobz=N n=640 batch=512 | blocked 1238 | two_stage 1502 # preview
+dtype=cfloat jobz=N n=1024 batch=8 | blocked 245.4 | two_stage 322.0 # preview
+dtype=cfloat jobz=N n=1536 batch=8 | blocked 716.5 | two_stage 766.3 # preview
+dtype=cfloat jobz=V n=1 batch=8 | cta_fused 0.1795 | jacobi 0.2028 | blocked 0.3928 | two_stage 0.3948 | cta 0.4520 # preview
+dtype=cfloat jobz=V n=1 batch=512 | cta_fused 0.1998 | jacobi 0.1977 | blocked 0.4839 | two_stage 0.5319 | cta 0.5707 # preview
+dtype=cfloat jobz=V n=1 batch=4096 | cta_fused 0.2083 | jacobi 0.2070 | blocked 0.3723 | two_stage 0.4520 | cta 0.4528 # preview
+dtype=cfloat jobz=V n=3 batch=8 | jacobi 0.1968 | cta_fused 0.2377 | cta 0.5015 | blocked 0.5379 | two_stage 1.202 # preview
+dtype=cfloat jobz=V n=3 batch=512 | jacobi 0.2255 | cta_fused 0.2381 | cta 0.4835 | blocked 0.5968 | two_stage 1.854 # preview
+dtype=cfloat jobz=V n=3 batch=4096 | cta_fused 0.2309 | jacobi 0.2270 | cta 0.5001 | blocked 0.5872 | two_stage 2.011 # preview
+dtype=cfloat jobz=V n=6 batch=8 | cta_fused 0.2641 | jacobi 0.4851 | cta 0.6325 | blocked 0.7968 | two_stage 1.266 # preview
+dtype=cfloat jobz=V n=6 batch=512 | cta_fused 0.2348 | jacobi 0.2509 | cta 0.5000 | blocked 0.5865 | two_stage 1.185 # preview
+dtype=cfloat jobz=V n=6 batch=4096 | cta_fused 0.3189 | jacobi 0.3627 | cta 0.5982 | blocked 0.7655 | two_stage 3.187 # preview
+dtype=cfloat jobz=V n=9 batch=8 | cta_fused 0.2977 | jacobi 0.4034 | cta 0.5430 | blocked 0.6070 | two_stage 0.9696 # preview
+dtype=cfloat jobz=V n=9 batch=512 | cta_fused 0.2907 | jacobi 0.3979 | cta 0.5626 | blocked 0.6085 | two_stage 1.328 # preview
+dtype=cfloat jobz=V n=9 batch=4096 | cta_fused 0.7333 | cta 0.9043 | blocked 1.245 | jacobi 1.413 | two_stage 4.367 # preview
+dtype=cfloat jobz=V n=16 batch=8 | cta_fused 0.3515 | cta 0.6071 | blocked 0.7901 | jacobi 1.005 | two_stage 1.057 # preview
+dtype=cfloat jobz=V n=16 batch=512 | cta_fused 0.3606 | cta 0.6603 | blocked 0.9523 | jacobi 0.9871 | two_stage 1.715 # preview
+dtype=cfloat jobz=V n=16 batch=4096 | cta_fused 1.193 | cta 1.556 | blocked 3.132 | jacobi 4.441 | two_stage 7.081 # preview
+dtype=cfloat jobz=V n=24 batch=8 | cta_fused 0.6292 | cta 0.8836 | blocked 1.058 | two_stage 1.158 | jacobi 1.789 # preview
+dtype=cfloat jobz=V n=24 batch=512 | cta 1.268 | cta_fused 1.436 | blocked 1.558 | two_stage 2.264 | jacobi 5.003 # preview
+dtype=cfloat jobz=V n=24 batch=4096 | cta 6.016 | blocked 7.344 | cta_fused 9.281 | two_stage 11.69 | jacobi 29.88 # preview
+dtype=cfloat jobz=V n=28 batch=8 | cta_fused 0.7303 | cta 1.010 | blocked 1.223 | two_stage 1.250 | jacobi 2.469 # preview
+dtype=cfloat jobz=V n=28 batch=512 | cta 1.440 | cta_fused 1.634 | blocked 1.857 | two_stage 2.619 | jacobi 6.758 # preview
+dtype=cfloat jobz=V n=28 batch=4096 | cta 7.285 | blocked 9.768 | cta_fused 10.57 | two_stage 14.34 | jacobi 46.45 # preview
+dtype=cfloat jobz=V n=33 batch=8 | two_stage 1.580 | blocked 1.797 # preview
+dtype=cfloat jobz=V n=33 batch=512 | blocked 2.861 | two_stage 3.327 # preview
+dtype=cfloat jobz=V n=33 batch=4096 | blocked 18.07 | two_stage 19.57 # preview
+dtype=cfloat jobz=V n=48 batch=8 | blocked 2.440 | two_stage 2.415 # preview
+dtype=cfloat jobz=V n=48 batch=512 | blocked 4.645 | two_stage 7.321 # preview
+dtype=cfloat jobz=V n=48 batch=4096 | blocked 28.97 | two_stage 47.66 # preview
+dtype=cfloat jobz=V n=96 batch=8 | blocked 4.375 | two_stage 6.701 # preview
+dtype=cfloat jobz=V n=96 batch=512 | blocked 16.80 | two_stage 32.89 # preview
+dtype=cfloat jobz=V n=96 batch=4096 | blocked 126.4 | two_stage 252.3 # preview
+dtype=cfloat jobz=V n=192 batch=8 | blocked 12.37 | two_stage 20.63 # preview
+dtype=cfloat jobz=V n=192 batch=512 | blocked 96.82 | two_stage 172.3 # preview
+dtype=cfloat jobz=V n=192 batch=4096 | blocked 752.2 | two_stage 1359 # preview
+dtype=cfloat jobz=V n=257 batch=8 | blocked 30.09 | two_stage 40.49 # preview
+dtype=cfloat jobz=V n=257 batch=512 | blocked 286.3 | two_stage 433.4 # preview
+dtype=cfloat jobz=V n=321 batch=8 | blocked 40.75 | two_stage 58.60 # preview
+dtype=cfloat jobz=V n=321 batch=512 | blocked 459.8 | two_stage 749.6 # preview
+dtype=cfloat jobz=V n=448 batch=8 | blocked 66.10 | two_stage 103.0 # preview
+dtype=cfloat jobz=V n=448 batch=512 | blocked 970.2 | two_stage 1698 # preview
+dtype=cfloat jobz=V n=512 batch=8 | blocked 82.15 | two_stage 134.0 # preview
+dtype=cfloat jobz=V n=512 batch=512 | blocked 1322 | two_stage 2525 # preview
+dtype=cfloat jobz=V n=640 batch=8 | blocked 146.0 | two_stage 209.5 # preview
+dtype=cfloat jobz=V n=640 batch=512 | blocked 2496 | two_stage 4288 # preview
+dtype=cfloat jobz=V n=1024 batch=8 | blocked 388.5 | two_stage 594.7 # preview
+dtype=cfloat jobz=V n=1536 batch=8 | blocked 1069 | two_stage 1433 # preview
