@@ -22,7 +22,7 @@ class SygvdMergeInfoKernel;
 
 template <typename T>
 Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo,
-                            Span<const int32_t> potrf_info) {
+                            Span<const int32_t> potrf_info, const std::uint8_t* mask) {
     using D = typename sycl_device::DevMap<T>::type;
     using R = typename base_type<T>::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -37,6 +37,7 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for<SygvdIdentityFailedKernel<T>>(sycl::range<2>(batch, elems), [=](sycl::item<2> it) {
             const std::size_t b = it.get_id(0);
+            if (mask && !mask[b]) return;  // I3
             if (fail[b] == 0) return;
             const std::size_t e = it.get_id(1);
             const int r = static_cast<int>(e % static_cast<std::size_t>(n));
@@ -49,11 +50,13 @@ Event sygvd_identity_failed(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     return ctx.get_event();
 }
 
-Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info) {
+Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<int32_t> info,
+                       const std::uint8_t* mask) {
     const int32_t* const fail = potrf_info.data();
     int32_t* const out = info.data();
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for<SygvdMergeInfoKernel>(sycl::range<1>(info.size()), [=](sycl::item<1> it) {
+            if (mask && !mask[it.get_id(0)]) return;  // I3
             const int32_t f = fail[it.get_id(0)];
             if (f != 0) out[it.get_id(0)] = n + f;
         });
@@ -61,8 +64,9 @@ Event sygvd_merge_info(Queue& ctx, int n, Span<const int32_t> potrf_info, Span<i
     return ctx.get_event();
 }
 
-#define BATCHLAS_SYGVD_INSTANTIATE(T) \
-    template Event sygvd_identity_failed<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<const int32_t>);
+#define BATCHLAS_SYGVD_INSTANTIATE(T)                                                                          \
+    template Event sygvd_identity_failed<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo,                \
+                                            Span<const int32_t>, const std::uint8_t*);
 
 BATCHLAS_SYGVD_INSTANTIATE(float)
 BATCHLAS_SYGVD_INSTANTIATE(double)

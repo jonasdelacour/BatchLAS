@@ -19,6 +19,7 @@
 #include <complex>
 #include <cstddef>
 #include <string>
+#include <utility>
 #include <variant>
 
 namespace batchlas {
@@ -37,10 +38,10 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // Correctness only (R3): false means the driver would throw. Tiny's clauses are the argument
 // checks of gesv_tiny_dispatch, plus a NETLIB refusal: the GPU kernel packs 1-based
 // int32 pivots into the int64 span's low half where netlib writes true int64. No family takes a
-// heterogeneous batch.
+// heterogeneous batch. Both families honour a batch mask: Tiny skips an inactive item, and
+// Blocked's children (getrf, getrs) honour it or refuse it themselves.
 template <Backend Bk, typename T>
 bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
-    if (detail::any_batch_mask(A, B)) return false;  // no family honours a batch mask yet
     const int64_t n = A.rows(), nrhs = B.cols();
     const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
@@ -94,13 +95,23 @@ void throw_if_unservable(const MV<T>& A, const MV<T>& Bm, const char* who) {
                                    " is an empty problem, which no gesv kernel serves.");
 }
 
+// Both operands carry the call's mask whichever brought it: Blocked's getrf sees A alone.
+template <typename T>
+std::pair<MV<T>, MV<T>> adopt_mask(const MV<T>& A, const MV<T>& B, const char* who) {
+    const auto mask = detail::call_mask(who, A, B);
+    if (mask.empty() || A.batch_size() != B.batch_size()) return {A, B};
+    return {A.with_batch_mask(mask), B.with_batch_mask(mask)};
+}
+
 }  // namespace ops::gesv
 
 template <Backend Back, typename T>
-Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const MatrixView<T, MatrixFormat::Dense>& B_,
            Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
-    gesv_validate_params<T>(A, B);
-    (void)detail::call_mask("gesv", A, B);
+    gesv_validate_params<T>(A_, B_);
+    const auto views = ops::gesv::adopt_mask<T>(A_, B_, "gesv");
+    const auto& A = views.first;
+    const auto& B = views.second;
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     ops::gesv::throw_if_unservable<T>(A, B, "gesv");
@@ -114,10 +125,12 @@ Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
 }
 
 template <Backend Back, typename T>
-size_t gesv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B) {
-    gesv_validate_params<T>(A, B);
-    (void)detail::call_mask("gesv_buffer_size", A, B);
+size_t gesv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_,
+                        const MatrixView<T, MatrixFormat::Dense>& B_) {
+    gesv_validate_params<T>(A_, B_);
+    const auto views = ops::gesv::adopt_mask<T>(A_, B_, "gesv_buffer_size");
+    const auto& A = views.first;
+    const auto& B = views.second;
     if (A.batch_size() == 0) return 0;
     ops::gesv::throw_if_unservable<T>(A, B, "gesv_buffer_size");
     const auto c = select::pick<Back, T>(

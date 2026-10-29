@@ -211,7 +211,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 const SyevxParams<T>& params,
                 Span<int32_t> info
         ) {
-        ::batchlas::detail::refuse_batch_mask("syevx_lobpcg", A, V);
+        const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_lobpcg", A, V);
+        const std::uint8_t* mk = ::batchlas::detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;
         using float_type = typename base_type<T>::type;
 
         // LOBPCG converges to an extreme and cannot honour il/iu; public entry point.
@@ -222,6 +224,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 "extreme of the spectrum by construction. Use syevx_direct or "
                 "syevx_direct_subset for an index or value range");
         }
+        // Before any write: the parts whose children refuse a masked view.
+        ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_lobpcg", mask, params, /*lobpcg=*/true);
 
         const bool trace_enabled = batchlas::settings().diagnostics.syevx_trace;
         auto trace = [&](const char* msg) {
@@ -293,23 +297,24 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         // the tolerance on the *current* iterate. Consumed on-device only.
         auto col_converged = pool.allocate<int32_t>(ctx, neigs * batch_size);
 
-        auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        // Every workspace view carries the call's mask, so each child skips the same items.
+        auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
         auto X = S({0,n}, {0,block_vectors});                       //First block of S
         auto P = S({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S
         auto R = S({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of S
         auto XP = S({0,n}, {0,2 * block_vectors});                  //First two blocks of S
 
-        auto AS =   MatrixView(ASdata.data(), n, block_vectors*3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto AS =   MatrixView(ASdata.data(), n, block_vectors*3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
         auto AX =   AS({0,n}, {0,block_vectors});                       //First block of AS
         auto AP =   AS({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS
         auto AR =   AS({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS
 
-        auto StAS_base = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto StAS_base = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
         // XtAX is the top-left (block_vectors x block_vectors) corner of StAS_base's
         // backing buffer. IMPORTANT: keep StAS_base's ld/stride so batches do not overlap.
         auto XtAX = StAS_base({0, block_vectors}, {0, block_vectors});
-        auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
+        auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
 
         auto X_new =  S_new({0,n}, {0,block_vectors});                       //First block of S_new
         auto P_new = S_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of S_new
@@ -326,7 +331,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 n,
                 n * static_cast<int64_t>(neigs),
                 batch_size,
-                pool.allocate<T*>(ctx, batch_size).data());
+                pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
         }
 
         // Built either from the caller's factor or, when asked, from one formed here
@@ -355,7 +360,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             n,
             n * block_vectors,
             batch_size,
-            pool.allocate<T*>(ctx, batch_size).data());
+            pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
 
         // diag(A), extracted once (a per-row search for CSR). Kept as T rather than
         // float_type so the Hermitian complex case needs no special storage; the shift
@@ -367,7 +372,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             jacobi_usable = pool.allocate<int32_t>(ctx, batch_size);
         }
 
-        auto AS_new = MatrixView(Stempdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
+        auto AS_new = MatrixView(Stempdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data()).with_batch_mask(mask);
         auto AX_new = AS_new({0,n}, {0,block_vectors});                       //First block of AS_new
         auto AP_new = AS_new({0,n}, {block_vectors, 2 * block_vectors});      //Middle block of AS_new
         auto AR_new = AS_new({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS_new
@@ -378,8 +383,9 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         }
 
         // The opt-in names the vendor solver; Backend::SYCL has none, so there it is ignored, not a throw.
+        // A vendor syev refuses a masked view, so a masked call keeps the native one.
         const bool prefer_vendor_projected_syev =
-            (B != Backend::NETLIB) && (B != Backend::SYCL) && projected_vendor_opted_in();
+            (B != Backend::NETLIB) && (B != Backend::SYCL) && projected_vendor_opted_in() && mask.empty();
 
         // syev picks its provider from the matrix shape, so workspace demand is NOT
         // monotone in the problem size: the 2*block_vectors restart problem can demand
@@ -450,6 +456,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
                         const int bid = int(item.get_group_linear_id());
+                        if (masked && !mk[bid]) return;  // I1, before the group reductions
                         const int64_t tid = int64_t(item.get_local_linear_id());
                         const int64_t local_size = int64_t(item.get_local_range(0));
                         sycl::group<1> cta = item.get_group();
@@ -504,6 +511,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     sycl::range<1>(static_cast<size_t>(batch_size * nn * kk)), [=](sycl::id<1> tid) {
                         const int64_t local = static_cast<int64_t>(tid[0]);
                         const int b = static_cast<int>(local / (nn * kk));
+                        if (masked && !mk[b]) return;  // I3
                         const int64_t rem = local - static_cast<int64_t>(b) * nn * kk;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
@@ -636,6 +644,12 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     sycl::group<1> cta = item.get_group();
                     const auto local_size = item.get_local_range(0);
                     auto bid = item.get_group_linear_id();
+                    // I1, before the first barrier. "Converged" is the neutral flag: the host
+                    // loop then stops on the active items alone.
+                    if (masked && !mk[bid]) {
+                        if (tid == 0) flags[bid] = 1;
+                        return;
+                    }
                     auto blockR = Span(Rdata + block_vectors*n*3*bid, block_vectors*n);
                     auto blockX = Span(Xdata + block_vectors*n*3*bid, block_vectors*n);
                     auto blockAX = Span(AXdata + block_vectors*n*3*bid, block_vectors*n);
@@ -877,6 +891,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const auto bid = item.get_group_linear_id();
                             const auto local_size = item.get_local_range(0);
                             sycl::group<1> cta = item.get_group();
+                            if (masked && !mk[bid]) return;  // I1
                             auto* block = Rdata + int64_t(bid) * R_stride;
 
                             for (int64_t j = int64_t(tid); j < nblk; j += int64_t(local_size))
@@ -959,6 +974,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             // the batch stride is applied here. Unshifted diag(A)^{-1}
                             // needs a positive definite diagonal; where it is not, leave
                             // the residual alone rather than apply an indefinite operator.
+                            if (masked && !mk[bid]) return;  // I1 (no barrier in this kernel)
                             if (!shifted && usable_ptr[bid] == 0) return;
                             T* blockR = Rdata + bid * block_vectors * n * 3;
                             const T* blockD = diag_ptr + bid * n;
@@ -1008,6 +1024,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const auto tid = item.get_local_linear_id();
                             const auto bid = item.get_group_linear_id();
                             const auto local_size = item.get_local_range(0);
+                            if (masked && !mk[bid]) return;  // I1
                             auto* block = Rdata + int64_t(bid) * R_stride;
                             for (size_t j = 0; j < nlock; ++j) {
                                 if (col_conv[bid * nlock + j] == 0) continue;
@@ -1029,6 +1046,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         auto tid = item.get_local_linear_id();
                         auto bid = item.get_group_linear_id();
                         auto cta = item.get_group();
+                        if (masked && !mk[bid]) return;  // I1
                         auto block_src = Span(Sdata + (bid * 3 + 2) * n * block_vectors, n * block_vectors);
                         auto block_dst = Span(Sdata + (bid * 3 + 1) * n * block_vectors, n * block_vectors);
                         for(int i = tid; i < n*block_vectors; i+=cta.get_local_range(0)){
@@ -1084,6 +1102,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const auto bid = item.get_group_linear_id();
                             const auto local_size = item.get_local_range(0);
                             sycl::group<1> cta = item.get_group();
+                            if (masked && !mk[bid]) return;  // I1, before the group reductions
                             auto* mat = StAS_ptr + int64_t(bid) * StAS_stride;
                             const auto* basis = Sdata + int64_t(bid) * S_stride;
                             float_type acc = 0;
@@ -1164,10 +1183,10 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         if (want_eigenvectors){
             if (completed_iterations > 0) {
                 // X_best is already largest-first; the snapshot applied the permutation.
-                (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X_best);
+                (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}).with_batch_mask(mask), X_best);
             } else if (!params.find_largest) {
                 (void)MatrixView<T, MatrixFormat::Dense>::copy(
-                    ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, static_cast<int64_t>(neigs)}));
+                    ctx, V({0,n}, {0,int64_t(neigs)}).with_batch_mask(mask), X({0, n}, {0, static_cast<int64_t>(neigs)}));
             } else {
                 // params.iterations == 0: the loop never ran, so no snapshot exists and X
                 // is still ascending. The wanted block is its *last* neigs columns,
@@ -1189,6 +1208,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             const int64_t tid = int64_t(item.get_local_linear_id());
                             const int64_t bid = int64_t(item.get_group_linear_id());
                             const int64_t local_size = int64_t(item.get_local_range(0));
+                            if (masked && !mk[bid]) return;  // I1
                             auto* src = Xptr + bid * X_stride;
                             auto* dst = Vptr + bid * V_stride;
                             for (int64_t i = tid; i < nn * ncols; i += local_size) {
@@ -1248,7 +1268,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
         // are read AFTER the loop (fresh only where the residual drain ran).
         // converged_flags is a pool draw, so unlike syevx_filtered no wait is needed.
         detail::info_from_flags(ctx, info, converged_flags.data(),
-                                static_cast<int64_t>(batch_size), /*one_means_converged=*/true);
+                                static_cast<int64_t>(batch_size), /*one_means_converged=*/true, mask);
         return ctx.get_event();
     }
 
@@ -1267,12 +1287,16 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 "syevx_lobpcg_buffer_size: only SyevxSelect::Extremal is supported; see "
                 "syevx_lobpcg");
         }
+        // Sized for the masked families: only the mask's presence matters, never its contents.
+        const auto mask = ::batchlas::detail::call_mask("syevx_lobpcg_buffer_size", A, V);
+        ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_lobpcg_buffer_size", mask, params,
+                                                              /*lobpcg=*/true);
         auto block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
             auto batch_size = A.batch_size();
             auto n = A.rows();
             size_t work_size = 0;
-            auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
-            auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr);
+            auto Xview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr).with_batch_mask(mask);
+            auto AXview = MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors, n, n * block_vectors, batch_size, nullptr).with_batch_mask(mask);
 
             {
                 // Match runtime: XtAX is a (block_vectors x block_vectors) view into the
@@ -1281,7 +1305,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     static_cast<int>(block_vectors), static_cast<int>(block_vectors),
                     static_cast<int>(block_vectors * 3),
                     static_cast<int>(3 * 3 * block_vectors * block_vectors),
-                    static_cast<int>(batch_size), nullptr);
+                    static_cast<int>(batch_size), nullptr).with_batch_mask(mask);
                 // Nvecs = 2*block_vectors on restart iterations and 3*block_vectors
                 // otherwise, always viewed with the backing buffer's ld. Both must be
                 // sized: syev picks its provider from the shape, so workspace demand is
@@ -1292,7 +1316,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         static_cast<int>(nvecs), static_cast<int>(nvecs),
                         static_cast<int>(block_vectors * 3),
                         static_cast<int>(3 * 3 * block_vectors * block_vectors),
-                        static_cast<int>(batch_size), nullptr);
+                        static_cast<int>(batch_size), nullptr).with_batch_mask(mask);
                 };
                 auto StAS_restart_dummy = projected_dummy(block_vectors * 2);
                 auto StAS_base_dummy = projected_dummy(block_vectors * 3);
@@ -1303,7 +1327,7 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
 
                 // The opt-in names the vendor solver; Backend::SYCL has none, so it is ignored there.
-                if constexpr (B != Backend::NETLIB && B != Backend::SYCL) if (projected_vendor_opted_in()) {
+                if constexpr (B != Backend::NETLIB && B != Backend::SYCL) if (projected_vendor_opted_in() && mask.empty()) {
                     const size_t ws_xtax_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_restart_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     const size_t ws_stas_vendor = ops::syev::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
@@ -1320,8 +1344,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
             // under-allocates by a factor that grows with the batch.
             work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(
                                                                                     ortho_buffer_size<B>(ctx, Xview, Transpose::NoTrans, params.algorithm),
-                                                                                    std::max(ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
-                                                                                    ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
+                                                                                    std::max(ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr).with_batch_mask(mask), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
+                                                                                    ortho_buffer_size<B>(ctx, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr).with_batch_mask(mask), MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3, batch_size, nullptr).with_batch_mask(mask), Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
             if constexpr (MFormat == MatrixFormat::CSR) {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }

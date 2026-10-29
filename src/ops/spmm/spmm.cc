@@ -73,8 +73,8 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 template <Backend B, typename T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Direct honours a batch mask; no vendor call can skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     return std::visit(overloaded{
         [&](Direct) {
             if constexpr (MF != MatrixFormat::CSR) {
@@ -89,7 +89,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
         [&](Vendor) {
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
-            return d.has_vendor && !Bm.is_heterogeneous() && !C.is_heterogeneous() &&
+            return d.has_vendor && !masked && !Bm.is_heterogeneous() && !C.is_heterogeneous() &&
                    !(B == Backend::NETLIB && !nn) &&
                    !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1);
         },

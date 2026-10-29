@@ -9,6 +9,7 @@
 
 #include <src/sycl/device_scalar.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -35,7 +36,7 @@ template <typename T> class GetriPermKernel;
 // larger buffer, so a stride*batch fill would corrupt padding or a neighbour.
 template <typename T>
 Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
-                          int n, int batch) {
+                          int n, int batch, const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -48,6 +49,7 @@ Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
             sycl::range<2>(static_cast<std::size_t>(batch), elems),
             [=](sycl::item<2> it) {
                 const int b = static_cast<int>(it.get_id(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const std::size_t e = it.get_id(1);
                 const int r = static_cast<int>(e % static_cast<std::size_t>(n));
                 const int c = static_cast<int>(e / static_cast<std::size_t>(n));
@@ -67,7 +69,7 @@ Event getri_perm_launch(Queue& ctx,
                         int n, int batch,
                         const int* piv, int piv_stride,
                         int32_t* info_ptr, bool want_info,
-                        int wg) {
+                        int wg, const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
@@ -85,6 +87,7 @@ Event getri_perm_launch(Queue& ctx,
                 const int b = static_cast<int>(it.get_group_linear_id());
                 const int tid = static_cast<int>(it.get_local_linear_id());
                 const int lwg = static_cast<int>(it.get_local_range(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
 
                 if (tid == 0) slot[0] = std::numeric_limits<int>::max();
                 sycl::group_barrier(it.get_group());
@@ -222,14 +225,16 @@ Event getri_blocked_dispatch(Queue& ctx,
     while (wg < n && wg < 256) wg <<= 1;
     while (wg > max_wg && wg > 32) wg >>= 1;
 
-    (void)getri_zero_c_launch<T>(ctx, C.data_ptr(), C.ld(), C.stride(), n, batch);
+    // Inactive items keep C and info untouched; the solves take the masked A and C.
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("getri_blocked", A, C));
+    (void)getri_zero_c_launch<T>(ctx, C.data_ptr(), C.ld(), C.stride(), n, batch, mask);
     // In-order queues give the ordering for free; an out-of-order one does not.
     if (!ctx.in_order()) ctx.wait();
 
     (void)getri_perm_launch<T>(ctx, A.data_ptr(), A.ld(), A.stride(),
                                C.data_ptr(), C.ld(), C.stride(),
                                n, batch, piv_i32.data(), /*piv_stride=*/n,
-                               want_info ? info_out.data() : nullptr, want_info, wg);
+                               want_info ? info_out.data() : nullptr, want_info, wg, mask);
     if (!ctx.in_order()) ctx.wait();
 
     // C := L^-1 C, then C := U^-1 C. alpha comes THIRD in the public trsm.

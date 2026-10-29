@@ -18,6 +18,7 @@
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <src/ops/syev/sytrd/sytrd_sb2st_hh.hh>
@@ -149,6 +150,8 @@ Event sytrd_sb2st_hh(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(ab_in.cols());
     const int32_t batch = static_cast<int32_t>(ab_in.batch_size());
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(
+        batchlas::detail::call_mask("sytrd_sb2st_hh", ab_in, ab_tri_out, d_out, e_out, v_out, tau_out));
     if (n <= 0 || batch <= 0) return ctx.get_event();
 
     const int32_t kd_i = std::max<int32_t>(0, kd);
@@ -182,7 +185,7 @@ Event sytrd_sb2st_hh(Queue& ctx,
                 const auto wg = it.get_group();
                 const int32_t b = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t lid = static_cast<int32_t>(it.get_local_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 T* AB = abw_ptr + static_cast<size_t>(b) * static_cast<size_t>(ldw) *
                                       static_cast<size_t>(n);
@@ -478,6 +481,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
     static_assert(S >= 1);
 
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("unmqr_hb2st", v_in, tau_in, z_io));
     const int32_t ncols = static_cast<int32_t>(z_io.cols());
     const int32_t col_chunks = (ncols + C - 1) / C;
     const int32_t num_wg = batch * col_chunks;
@@ -503,7 +507,7 @@ Event unmqr_hb2st_wave(Queue& ctx,
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
@@ -589,6 +593,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
     static_assert(C >= 1 && C <= 32 && (kSg % C) == 0);
 
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("unmqr_hb2st", v_in, tau_in, z_io));
     const int32_t ncols = static_cast<int32_t>(z_io.cols());
     const int32_t col_chunks = (ncols + C - 1) / C;
     const int32_t num_wg = batch * col_chunks;
@@ -611,7 +616,7 @@ Event unmqr_hb2st_tiled(Queue& ctx,
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 const int32_t c0 = chunk * C;
                 auto Z = Zv.batch_item(b);
@@ -721,6 +726,7 @@ Event unmqr_hb2st(Queue& ctx,
     }
     const int32_t nrefl = static_cast<int32_t>(starts.size());
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("unmqr_hb2st", v_in, tau_in, z_io));
     const int32_t ncols = static_cast<int32_t>(z_io.cols());
     if (nrefl <= 0 || batch <= 0 || ncols <= 0 || n <= 0) return ctx.get_event();
 
@@ -849,7 +855,7 @@ streaming:
 
                 const int32_t b = wg_id / col_chunks;
                 const int32_t chunk = wg_id - b * col_chunks;
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1
 
                 const int32_t c0 = chunk * kBackCols;
                 const int32_t c1 = sycl::min(c0 + kBackCols, ncols);

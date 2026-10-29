@@ -85,7 +85,7 @@ Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     const select::Key key = ops::geqrf::key_of<T>(A);
     return select::run<Back, T>(
         ops::geqrf::spec, ctx, key, ops::geqrf::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::geqrf::can_run<T>(c, d, A); }, shape, key,
+        [&](const auto& c, const auto& d) { return ops::geqrf::can_run<Back, T>(c, d, A); }, shape, key,
         [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
@@ -96,7 +96,7 @@ size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::geqrf::spec, ctx, ops::geqrf::key_of<T>(A), ops::geqrf::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::geqrf::can_run<T>(k, d, A); });
+        [&](const auto& k, const auto& d) { return ops::geqrf::can_run<Back, T>(k, d, A); });
     return ops::geqrf::workspace<Back, T>(ctx, c, A, tau);
 }
 

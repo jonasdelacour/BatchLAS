@@ -169,7 +169,10 @@ Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const
     const int64_t n = V.rows(), m = V.cols(), batch = V.batch_size();
     BumpAllocator pool(workspace);
     const Workspace<T> ws = carve<T>(ctx.device(), pool, n, m, batch);
-    const MV<T> Mv(ws.m.data(), int(m), int(m), int(m), int(m * m), int(batch));
+    // The workspace views are rebuilt from raw pointers, so they take the call's mask back on.
+    const Span<const std::uint8_t> mask_span = detail::call_mask("syev_align", V_old, V);
+    const std::uint8_t* mask = detail::mask_ptr(mask_span);
+    const MV<T> Mv = MV<T>(ws.m.data(), int(m), int(m), int(m), int(m * m), int(batch)).with_batch_mask(mask_span);
     constexpr Transpose herm = complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
     gemm<B, T>(ctx, V_old, V, Mv, T(1), T(0), herm, Transpose::NoTrans);
 
@@ -181,6 +184,7 @@ Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const
     const Real* lam = eigenvalues.data();
     ctx->parallel_for<ClusterRotationKernel<B, T>>(sycl::range<1>(size_t(m * batch)), [=](sycl::id<1> id) {
         const int64_t b = int64_t(id[0]) / m, j = int64_t(id[0]) % m;
+        if (mask != nullptr && mask[b] == 0) return;  // I3
         const Real* l = lam + b * m;
         const Real thr = tol * sycl::fmax(sycl::fabs(l[0]), sycl::fabs(l[m - 1]));
         if (j > 0 && l[j] - l[j - 1] <= thr) return;
@@ -194,13 +198,14 @@ Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const
                             int(e - j));
     });
 
-    const MV<T> Vc(ws.vcopy.data(), int(n), int(m), int(n), int(n * m), int(batch));
+    const MV<T> Vc = MV<T>(ws.vcopy.data(), int(n), int(m), int(n), int(n * m), int(batch)).with_batch_mask(mask_span);
     MV<T>::copy(ctx, Vc, V);
     T* Vp = V.data_ptr();
     const int64_t ldv = V.ld(), sv = V.stride();
     ctx->parallel_for<ClusterApplyKernel<B, T>>(sycl::range<1>(size_t(n * m * batch)), [=](sycl::id<1> id) {
         const int64_t lin = int64_t(id[0]);
         const int64_t b = lin / (n * m), e = lin % (n * m);
+        if (mask != nullptr && mask[b] == 0) return;  // I3
         const int64_t i = e % n, j = e / n;
         const int64_t s = Sp[b * m + j], t = Ep[b * m + j];
         const T* vc = Wp + b * n * m;
@@ -218,7 +223,7 @@ template <Backend B, typename T>
 Event syev_align(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V_old,
                  Span<typename base_type<T>::type> eigenvalues, const MatrixView<T, MatrixFormat::Dense>& V,
                  typename base_type<T>::type tol, Span<std::byte> workspace) {
-    detail::refuse_batch_mask("syev_align", V_old, V);
+    (void)detail::call_mask("syev_align", V_old, V);
     syev_align_validate_params<T>(V_old, eigenvalues, V);
     if (!(tol >= 0)) throw batchlas::invalid_argument("syev_align: tol must be >= 0, got " + std::to_string(tol));
     if (V.batch_size() == 0 || V.cols() == 0) return ctx.create_event_after_external_work();
@@ -231,7 +236,7 @@ template <Backend B, typename T>
 size_t syev_align_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& V_old,
                               Span<typename base_type<T>::type> eigenvalues,
                               const MatrixView<T, MatrixFormat::Dense>& V) {
-    detail::refuse_batch_mask("syev_align", V_old, V);
+    (void)detail::call_mask("syev_align", V_old, V);
     syev_align_validate_params<T>(V_old, eigenvalues, V);
     if (V.batch_size() == 0 || V.cols() == 0) return 0;
     BumpAllocator pool = BumpAllocator::measuring();

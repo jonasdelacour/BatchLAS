@@ -41,6 +41,25 @@ set(TEST_TARGETS
     linalg_layer_tests
     gemm_tests
     gemm_mask_tests
+    iluk_mask_tests
+    getrf_mask_tests
+    getrs_mask_tests
+    syev_mask_tests
+    sygvd_mask_tests
+    geqrf_mask_tests
+    ormqr_mask_tests
+    trsm_mask_tests
+    level3_mask_tests
+    spmm_mask_tests
+    sytrf_mask_tests
+    potrf_mask_tests
+    gesvd_mask_tests
+    norm_mask_tests
+    ortho_mask_tests
+    syevx_mask_tests
+    steqr_mask_tests
+    stedc_mask_tests
+    tridiag_mask_tests
     syevx_tests
     syevx_range_tests
     lanczos_tests
@@ -194,19 +213,20 @@ set(BATCHLAS_TEST_LABELS_util
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests verify_tests tune_race_gpu_tests)
 set(BATCHLAS_TEST_LABELS_blas
-    device_blas_tests gemm_tests gemm_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
+    device_blas_tests gemm_tests gemm_mask_tests getrf_mask_tests getrs_mask_tests geqrf_mask_tests ormqr_mask_tests trsm_mask_tests level3_mask_tests potrf_mask_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests hermitian_candidates_tests
     syrk_tests syr2k_tests symm_candidates_tests symm_mirror_tests syrk_candidates_tests syr2k_candidates_tests
     trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
     gesv_tests posv_tests potri_tests potrs_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
-    transpose_tests norm_tests cond_tests inverse_tests
-    sytrf_tests)
+    transpose_tests norm_tests cond_tests inverse_tests norm_mask_tests
+    sytrf_tests sytrf_mask_tests)
 set(BATCHLAS_TEST_LABELS_ortho
-    ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
+    ortho_tests ortho_mask_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
     orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
+    steqr_mask_tests stedc_mask_tests tridiag_mask_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
     sytrd_cta_tests sytrd_blocked_tests)
 set(BATCHLAS_TEST_LABELS_eig
@@ -214,9 +234,9 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
     gesvd_candidates_tests syev_candidates_tests
-    syev_align_tests syfn_tests sygvd_tests)
+    syev_align_tests syfn_tests sygvd_tests syev_mask_tests sygvd_mask_tests gesvd_mask_tests syevx_mask_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests spmm_tests spmm_candidates_tests)
+    iluk_tests spmm_tests spmm_candidates_tests spmm_mask_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #
@@ -270,16 +290,19 @@ string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERN
 # entry that selects no case (a stale line, or cases compiled out in this configuration)
 # reports SKIPPED rather than a silent pass.
 set(BATCHLAS_HEAVY_TESTS
-    gemm_candidates_tests gemm_mask_tests gemm_tests gemv_candidates_tests geqrf_candidates_tests
+    gemm_candidates_tests gemm_mask_tests gemm_tests gemv_candidates_tests level3_mask_tests spmm_mask_tests trsm_mask_tests geqrf_candidates_tests geqrf_mask_tests potrf_mask_tests
     gesv_candidates_tests gesvd_candidates_tests getrf_candidates_tests
     getri_candidates_tests getrs_candidates_tests hermitian_candidates_tests matrix_tests
-    orgqr_candidates_tests ormqr_candidates_tests posv_candidates_tests
+    orgqr_candidates_tests ormqr_candidates_tests ormqr_mask_tests gesvd_mask_tests posv_candidates_tests
     potrf_candidates_tests potrf_tests potri_tests potrs_tests spmm_candidates_tests spmm_tests syev_blocked_tests
     syev_candidates_tests syev_cta_tests symm_candidates_tests syr2k_candidates_tests
     syrk_candidates_tests trmm_candidates_tests trsm_candidates_tests trsm_tests
     tune_race_gpu_tests verify_tests geqrf_tests getrf_tests gesvd_tests ormqr_blocked_tests
     syev_tests sygvd_tests)
-list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -439,6 +462,14 @@ function(batchlas_add_test_target test_name)
     if(test_name STREQUAL "getrf_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_GETRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/getrf/kernels/getrf_tiny.cc")
+    endif()
+    if(test_name STREQUAL "gesvd_mask_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
+    endif()
+    if(test_name STREQUAL "ormqr_mask_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_ORMQR_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/ormqr/kernels/ormqr_cta.cc")
     endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE

@@ -38,15 +38,18 @@ select::Key key_of(const MV<T>& A) {
 // orgqr_blocked_dispatch's own checks (one identity and one apply serve the whole batch, and
 // Q's columns live in C^m, so n <= m); its tau-length check is an argument error, left to the
 // driver. The vendor runs each item at the top-level (m, n): no heterogeneous batch.
-template <typename T>
+template <Backend B, typename T>
 bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
-    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
+    const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
+        // Masked: the identity and copy-back kernels skip an inactive item, and the apply is the
+        // routed ormqr (Left, NoTrans).
         [&](Blocked) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
+        // NETLIB's host loop skips an inactive item; a strided vendor call cannot.
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && (!masked || B == Backend::NETLIB); },
     }, c);
 }
 
@@ -55,7 +58,7 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
 template <Backend B, typename T>
 Event apply_q(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
               Span<std::byte> ows, int32_t obs) {
-    return ormqr<B, T>(c, oa, oc, os, ot, otau, ows, obs);
+    return ::batchlas::ormqr<B, T>(c, oa, oc, os, ot, otau, ows, obs);
 }
 template <Backend B, typename T>
 std::size_t apply_q_size(Queue& c, const MV<T>& oa, const MV<T>& oc, Side os, Transpose ot, Span<T> otau,
@@ -107,7 +110,7 @@ Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau
     trace_key.emplace_back("batch", A.batch_size());
     return select::run<Back, T>(
         ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
-        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<T>(c, d, A); }, shape, trace_key,
+        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<Back, T>(c, d, A); }, shape, trace_key,
         [&](const auto& c) { return ops::orgqr::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
@@ -118,7 +121,7 @@ size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     if (A.batch_size() == 0) return 0;
     const auto c = select::pick<Back, T>(
         ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
-        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<T>(k, d, A); });
+        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<Back, T>(k, d, A); });
     return ops::orgqr::workspace<Back, T>(ctx, c, A, tau);
 }
 

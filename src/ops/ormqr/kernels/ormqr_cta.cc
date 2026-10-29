@@ -80,7 +80,7 @@ inline T group_sum(const Group& g, T v) {
 
 } // namespace detail
 
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
 class OrmQxCTAKernel;
 
 // Apply one Householder reflector H = I - tau * v * v^H to C.
@@ -110,12 +110,15 @@ inline void apply_reflector_small(const Partition& part,
     // tau_eff = tau for H, conj(tau) for H^H
     const T tau_eff = conj_trans ? batchlas::device::detail::conj(tau) : tau;
 
-    if (tau_eff == T(0) || len <= 0) return;
+    // A predicate, never a return: tau is per item, so a return here is per partition, and the
+    // barrier below would be reached by only part of the sub-group (a dead or inactive partition
+    // carries tau = 0). The skipped work is the same, so a live item's result is unchanged.
+    const bool apply = !(tau_eff == T(0) || len <= 0);
 
-    auto v_view = VectorView<T>(const_cast<T*>(V_local), len);
+    auto v_view = VectorView<T>(const_cast<T*>(V_local), apply ? len : 0);
 
     if (left) {
-        if (lane < n) {
+        if (apply && lane < n) {
             T dot = T(0);
             for (int32_t r = 0; r < len; ++r) {
                 const T v_r = V_local[r];
@@ -124,6 +127,7 @@ inline void apply_reflector_small(const Partition& part,
             Work_local[lane] = tau_eff * dot;
         }
         group_barrier(part);
+        if (!apply) return;
 
         auto gamma_view = VectorView<T>(Work_local, n);
         auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset, len, n, P_i, P_i * n);
@@ -133,7 +137,7 @@ inline void apply_reflector_small(const Partition& part,
             batchlas::device::ger(part, v_view, gamma_view, c_sub, T(-1));
         }
     } else {
-        if (lane < n) {
+        if (apply && lane < n) {
             T dot = T(0);
             for (int32_t c = 0; c < len; ++c) {
                 dot += C_local[lane + (offset + c) * P_i] * V_local[c];
@@ -141,6 +145,7 @@ inline void apply_reflector_small(const Partition& part,
             Work_local[lane] = tau_eff * dot;
         }
         group_barrier(part);
+        if (!apply) return;
 
         auto gamma_view = VectorView<T>(Work_local, n);
         auto c_sub = KernelMatrixView<T, MatrixFormat::Dense>(C_local + offset * P_i, n, len, P_i, P_i * n);
@@ -148,14 +153,17 @@ inline void apply_reflector_small(const Partition& part,
     }
 }
 
-template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
-inline void ormqx_cta_impl(Queue& ctx,
-                           MatrixView<T, MatrixFormat::Dense>& a,
-                           VectorView<T>& tau,
-                           MatrixView<T, MatrixFormat::Dense>& c,
-                           int32_t n,
-                           int32_t k,
-                           size_t cta_wg_size_multiplier) {
+// Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
+// it was (the runtime fold measured 1.4% on float n = 32 Left at batch 4096).
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj, bool Masked>
+inline void ormqx_cta_impl_m(Queue& ctx,
+                             MatrixView<T, MatrixFormat::Dense>& a,
+                             VectorView<T>& tau,
+                             MatrixView<T, MatrixFormat::Dense>& c,
+                             int32_t n,
+                             int32_t k,
+                             size_t cta_wg_size_multiplier,
+                             const std::uint8_t* mask) {
     const auto batch_size = a.batch_size();
 
     if (n < 0 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n || c.rows() != n || c.cols() != n) {
@@ -227,7 +235,7 @@ inline void ormqx_cta_impl(Queue& ctx,
                 ((static_cast<std::size_t>(c.stride()) * sizeof(T)) % 16u) == 0 &&
                 (reinterpret_cast<std::uintptr_t>(c.data_ptr()) % 16u) == 0;
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(cgh,
+            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                 const auto sg = it.get_sub_group();
@@ -242,8 +250,12 @@ inline void ormqx_cta_impl(Queue& ctx,
                 const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 // NO EARLY RETURN in a packed kernel: a dead partition (tail of the
-                // batch) applies tau = 0 reflectors to nothing and stores nothing.
-                const bool live = prob_id < static_cast<int32_t>(batch_size);
+                // batch, or an inactive item: I2) applies tau = 0 reflectors to nothing and
+                // stores nothing.
+                const bool live = [&] {
+                    if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
+                    else return prob_id < static_cast<int32_t>(batch_size);
+                }();
                 const int32_t pid = live ? prob_id : 0;
 
                 auto A_prob = A_view.batch_item(pid);
@@ -384,7 +396,7 @@ BATCHLAS_UNROLL_FULL
             auto V_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
             auto Work_local = sycl::local_accessor<T, 1>(sycl::range<1>(probs_per_wg * P), cgh);
 
-            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj>>(cgh,
+            impl::parallel_for<OrmQxCTAKernel<T, P, QL, Left, TransposeOrConj, Masked>>(cgh,
                 sycl::nd_range<1>(global_size, wg_size),
                 [=](sycl::nd_item<1> it) {
                     const auto sg = it.get_sub_group();
@@ -398,9 +410,12 @@ BATCHLAS_UNROLL_FULL
 
                     const int32_t wg_id = static_cast<int32_t>(it.get_group().get_group_linear_id());
                     const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                    // NO EARLY RETURN, as in the LEFT kernel: a dead partition carries a
-                    // zero tile and tau = 0, and stores nothing.
-                    const bool live = prob_id < static_cast<int32_t>(batch_size);
+                    // NO EARLY RETURN, as in the LEFT kernel: a dead partition (a tail or an
+                    // inactive item) carries a zero tile and tau = 0, and stores nothing.
+                    const bool live = [&] {
+                        if constexpr (Masked) return prob_id < static_cast<int32_t>(batch_size) && mask[prob_id] != 0;
+                        else return prob_id < static_cast<int32_t>(batch_size);
+                    }();
                     const int32_t pid = live ? prob_id : 0;
                     const bool row_live = live && (lane < n);
 
@@ -502,6 +517,15 @@ BATCHLAS_UNROLL_FULL
     });
 }
 
+template <typename T, size_t P, bool QL, bool Left, bool TransposeOrConj>
+inline void ormqx_cta_impl(Queue& ctx, MatrixView<T, MatrixFormat::Dense>& a, VectorView<T>& tau,
+                           MatrixView<T, MatrixFormat::Dense>& c, int32_t n, int32_t k,
+                           size_t cta_wg_size_multiplier, const std::uint8_t* mask) {
+    if (mask != nullptr)
+        return ormqx_cta_impl_m<T, P, QL, Left, TransposeOrConj, true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
+    ormqx_cta_impl_m<T, P, QL, Left, TransposeOrConj, false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
+}
+
 // Public entrypoint.
 //
 // CTA-only small-n routine (n <= 32) to apply Q from a QR/QL factorization.
@@ -518,7 +542,9 @@ Event ormqx_cta(Queue& ctx,
                int32_t k,
                const Span<std::byte>& ws,
                size_t cta_wg_size_multiplier) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::ormqr, "ormqx_cta", B, a_in, tau_in, c_in);
+    // The packed kernels fold the mask into `live` (I2): an inactive item's C is untouched.
+    const std::uint8_t* const mask =
+        ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("ormqx_cta", a_in, tau_in, c_in));
     (void)ws;
 
     const bool left = (side == Side::Left);
@@ -551,29 +577,29 @@ Event ormqx_cta(Queue& ctx,
         if (ql) {
             if (left) {
                 if (transpose_or_conj) {
-                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 } else {
-                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/true, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 }
             } else {
                 if (transpose_or_conj) {
-                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/false, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/false, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 } else {
-                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/false, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/true, /*Left=*/false, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 }
             }
         } else {
             if (left) {
                 if (transpose_or_conj) {
-                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 } else {
-                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/true, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 }
             } else {
                 if (transpose_or_conj) {
-                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/false, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/false, /*TransposeOrConj=*/true>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 } else {
-                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/false, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier);
+                    ormqx_cta_impl<T, P, /*QL=*/false, /*Left=*/false, /*TransposeOrConj=*/false>(ctx, a, tau, c, n, k, cta_wg_size_multiplier, mask);
                 }
             }
         }

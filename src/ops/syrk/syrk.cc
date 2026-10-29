@@ -53,8 +53,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Shapes are validated before this runs.
 template <Backend B, typename T>
 bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, C)) return false;
+    // Gram and Triangular honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, C);
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
@@ -68,7 +68,7 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
             return native && d.max_wg >= kTriangularWg && d.slm_budget >= triangular_slm_bytes<T>() &&
                    triangular_groups(n, backend::detail::kTriangularTile) <= d.max_groups_yz;
         },
-        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous; },
+        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

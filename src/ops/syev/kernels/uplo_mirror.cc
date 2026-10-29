@@ -6,6 +6,7 @@
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <complex>
@@ -23,6 +24,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
     const int ld = static_cast<int>(a.ld());
     const int64_t stride = a.stride();
     T* ptr = a.data().data();
+    const std::uint8_t* mask = detail::mask_ptr(detail::call_mask("mirror_upper_to_lower", a));
 
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for<UploMirrorUpperToLowerKernel<B, T>>(
@@ -33,6 +35,7 @@ Event mirror_upper_to_lower(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>
                 const int b = static_cast<int>(idx[0]);
                 const int r = static_cast<int>(idx[1]);
                 const int c = static_cast<int>(idx[2]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 // Only strictly-upper source entries do work; each writes its mirror.
                 if (c <= r) return;
                 T* A = ptr + b * stride;

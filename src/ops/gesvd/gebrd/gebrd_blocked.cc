@@ -9,6 +9,7 @@
 #include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/select/vendor.hh>
 #include <src/util/batch_mask.hh>
 
 #include <algorithm>
@@ -74,7 +75,8 @@ template <typename T>
 Event gebrd_restore_bidiag_upper(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  const VectorView<typename base_type<T>::type>& d,
-                                 const VectorView<typename base_type<T>::type>& e) {
+                                 const VectorView<typename base_type<T>::type>& e,
+                                 const std::uint8_t* mask) {
     auto& a_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a);
     const int32_t k = static_cast<int32_t>(d.size());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
@@ -89,7 +91,7 @@ Event gebrd_restore_bidiag_upper(Queue& ctx,
             [=](sycl::id<2> idx) {
                 const int32_t b = static_cast<int32_t>(idx[0]);
                 const int32_t i = static_cast<int32_t>(idx[1]);
-                if (i >= k) return;
+                if (i >= k || (mask != nullptr && mask[b] == 0)) return;
 
                 A(i, i, b) = static_cast<T>(D(i, b));
                 if (i < k - 1) {
@@ -112,7 +114,8 @@ Event gebrd_blocked_impl(Queue& ctx,
                          const VectorView<T>& tauq_out,
                          const VectorView<T>& taup_out,
                          const Span<std::byte>& ws,
-                         int32_t block_size) {
+                         int32_t block_size,
+                         Span<const std::uint8_t> mask_span) {
     using Real = typename base_type<T>::type;
     using gebrd_detail::conj;
     constexpr bool kComplex = detail::is_complex<T>::value;
@@ -139,8 +142,10 @@ Event gebrd_blocked_impl(Queue& ctx,
     BumpAllocator pool(ws_mut);
 
     auto ws_layout = gebrd_blocked_layout<T>(ctx, pool, m, n, nb, batch);
-    MatrixView<T, MatrixFormat::Dense> x_mat = ws_layout.x;
-    MatrixView<T, MatrixFormat::Dense> y_mat = ws_layout.y;
+    // Rebuilt from raw pointers: re-attach the call's mask, so the trailing gemm sees one span.
+    MatrixView<T, MatrixFormat::Dense> x_mat = ws_layout.x.with_batch_mask(mask_span);
+    MatrixView<T, MatrixFormat::Dense> y_mat = ws_layout.y.with_batch_mask(mask_span);
+    const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
     const int32_t panel_wg = std::min<int32_t>(128, static_cast<int32_t>(ctx->get_device().get_info<sycl::info::device::max_work_group_size>()));
 
     for (int32_t j0 = 0; j0 < k_total; j0 += nb) {
@@ -166,7 +171,7 @@ Event gebrd_blocked_impl(Queue& ctx,
                                              sycl::range<1>(static_cast<size_t>(panel_wg))),
                            [=](sycl::nd_item<1> item) {
                 const int32_t b = static_cast<int32_t>(item.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: one work-group per item
 
                 const int32_t lid = static_cast<int32_t>(item.get_local_linear_id());
                 const int32_t local_size = static_cast<int32_t>(item.get_local_range(0));
@@ -374,7 +379,7 @@ Event gebrd_blocked_impl(Queue& ctx,
         }
     }
 
-    (void)gebrd_restore_bidiag_upper(ctx, a, d_out, e_out);
+    (void)gebrd_restore_bidiag_upper(ctx, a, d_out, e_out, mask);
     return ctx.get_event();
 }
 
@@ -389,8 +394,13 @@ Event gebrd_blocked(Queue& ctx,
                     const VectorView<T>& taup_out,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
-    ::batchlas::detail::refuse_batch_mask("gebrd_blocked", a_in, d_out, e_out, tauq_out, taup_out);
-    return gebrd_blocked_impl<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);
+    // NETLIB's gemm is its host BLAS, which cannot skip an item: refuse before the panel writes A.
+    if constexpr (!select::native_gpu_backend<B>)
+        ::batchlas::detail::refuse_batch_mask("gebrd_blocked", a_in, d_out, e_out, tauq_out, taup_out);
+    // A carries the call's mask whichever operand brought it, so the trailing gemm sees it.
+    const auto mask = ::batchlas::detail::call_mask("gebrd_blocked", a_in, d_out, e_out, tauq_out, taup_out);
+    auto a = mask.empty() || a_in.has_batch_mask() ? a_in : a_in.with_batch_mask(mask);
+    return gebrd_blocked_impl<B, T>(ctx, a, d_out, e_out, tauq_out, taup_out, ws, block_size, mask);
 }
 
 template <Backend B, typename T>

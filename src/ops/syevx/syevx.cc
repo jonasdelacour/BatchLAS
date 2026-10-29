@@ -169,6 +169,14 @@ SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
     return parse_syevx_algorithm(v);
 }
 
+// The host backend's DirectSubset refuses a mask (its gemm is the host BLAS): a masked call reaches it
+// there only by name (and throws before any write), while Auto walks on to Direct.
+template <Backend B, typename T, MatrixFormat MFormat>
+bool syevx_subset_route_allowed(Span<const std::uint8_t> mask, const SyevxParams<T>& params) {
+    return syevx_direct_subset_supported<T, MFormat>() &&
+           (mask.empty() || B != Backend::NETLIB || params.method == SyevxAlgorithm::DirectSubset);
+}
+
 const char* syevx_select_name(SyevxSelect select) {
     switch (select) {
         case SyevxSelect::Index: return "SyevxSelect::Index";
@@ -348,8 +356,8 @@ Event syevx(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& V,
             const SyevxParams<T>& params,
             Span<int32_t> info) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syevx", B, A, V);
-    (void)batchlas::detail::call_mask("syevx", A, V);
+    // Every arm honours the mask or refuses it before any write; the iterative arms are asked below.
+    const Span<const std::uint8_t> mask = batchlas::detail::call_mask("syevx", A, V);
     validate_syevx_preconditioner_params<T, MFormat>(params);
     // This overload can report a data-dependent count, so a Value range is legal.
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
@@ -364,7 +372,7 @@ Event syevx(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_direct_subset_supported<T, MFormat>(), jobz,
+                                              syevx_subset_route_allowed<B, T, MFormat>(mask, params), jobz,
                                               A.batch_size(), params.select);
     // `info` (converged?) is not `m` (how many); each arm clears and fills info.
     if (chosen == SyevxAlgorithm::Direct) {
@@ -374,16 +382,23 @@ Event syevx(Queue& ctx,
         return syevx_direct_subset<B, T, MFormat>(ctx, A, W, m, neigs, workspace,
                                                   jobz, V, params, info);
     }
+    // A refusing arm must throw before the m fill writes an active item.
+    batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx", mask, params,
+                                                        chosen == SyevxAlgorithm::LOBPCG);
     // LOBPCG/Filtered only see Extremal ranges, so m is static; filled here, and
     // BEFORE the solve so the returned Event covers it on the in-order queue.
     if (!m.empty()) {
         const int64_t batch_size = A.batch_size();
         const int32_t count = static_cast<int32_t>(std::max<int64_t>(rr.max_count, 0));
         int32_t* m_ptr = m.data();
+        const std::uint8_t* mk = batchlas::detail::mask_ptr(mask);
+        const bool masked = mk != nullptr;
         ctx->submit([&](sycl::handler& h) {
             h.parallel_for<SyevxFillCountsKernel<B, T, MFormat>>(
-                sycl::range<1>(static_cast<size_t>(batch_size)),
-                [=](sycl::id<1> idx) { m_ptr[idx[0]] = count; });
+                sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
+                    if (masked && !mk[idx[0]]) return;  // I3
+                    m_ptr[idx[0]] = count;
+                });
         });
     }
     if (chosen == SyevxAlgorithm::Filtered) {
@@ -416,8 +431,7 @@ size_t syevx_buffer_size(Queue& ctx,
                          JobType jobz,
                          const MatrixView<T, MatrixFormat::Dense>& V,
                          const SyevxParams<T>& params) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "syevx_buffer_size", B, A, V);
-    (void)batchlas::detail::call_mask("syevx_buffer_size", A, V);
+    const Span<const std::uint8_t> mask = batchlas::detail::call_mask("syevx_buffer_size", A, V);
     validate_syevx_preconditioner_params<T, MFormat>(params);
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
                                             /*value_range_reportable=*/true);
@@ -427,7 +441,7 @@ size_t syevx_buffer_size(Queue& ctx,
     const auto chosen = syevx_select_algorithm(MFormat, A.rows(),
                                               static_cast<size_t>(std::max<int64_t>(rr.max_count, 0)),
                                               params.method,
-                                              syevx_direct_subset_supported<T, MFormat>(), jobz,
+                                              syevx_subset_route_allowed<B, T, MFormat>(mask, params), jobz,
                                               A.batch_size(), params.select);
     if (chosen == SyevxAlgorithm::Direct) {
         return syevx_direct_buffer_size<B, T, MFormat>(ctx, A, W, neigs, jobz, V, params);

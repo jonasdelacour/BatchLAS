@@ -48,11 +48,13 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
 // sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
 // TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). Every family, the vendor included,
 // runs each item at the top-level order, so none takes a heterogeneous batch. Cta and CtaFused also
-// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200).
+// exclude ROCm, where steqr_cta gives wrong eigenvalues (gfx1200). A batch mask runs on every native
+// family and the NETLIB vendor; the device vendors cannot skip an item.
 template <Backend B, typename T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool homogeneous = !A.is_heterogeneous() && !batchlas::detail::any_batch_mask(A);  // no family reads the mask yet
+    const bool masked = batchlas::detail::any_batch_mask(A);
+    const bool homogeneous = !A.is_heterogeneous();
     const bool native = B != Backend::NETLIB && d.is_gpu && homogeneous && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
     const bool cta_steqr = small && B != Backend::ROCM;
@@ -63,7 +65,7 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
         [&](Jacobi) { return small; },
         [&](Blocked) { return large; },
         [&](TwoStage) { return large; },
-        [&](Vendor) { return d.has_vendor && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB); },
     }, c);
 }
 

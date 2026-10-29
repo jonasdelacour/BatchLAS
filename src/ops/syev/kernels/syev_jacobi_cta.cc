@@ -103,7 +103,8 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                  typename base_type<T>::type* w_ptr,
                                  int32_t n,
                                  JacobiParams<T> params,
-                                 int32_t* info) {
+                                 int32_t* info,
+                                 const std::uint8_t* mask) {
     using Real = typename base_type<T>::type;
 
     const auto batch_size = a.batch_size();
@@ -236,8 +237,9 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // NO EARLY RETURN: a dead partition sweeps a zero tile and stores nothing.
-                const bool live = prob_id < nb;
+                // NO EARLY RETURN: a dead partition, or an inactive item of the batch mask, sweeps a
+                // zero tile and stores nothing. The mask is read after the pair-table barrier.
+                const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
 
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
 
@@ -517,7 +519,7 @@ Event syev_jacobi_cta(Queue& ctx,
                       const Span<std::byte>& ws,
                       JacobiParams<T> params,
                       Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_jacobi_cta", B, a_in);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("syev_jacobi_cta", a_in));
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {
@@ -558,11 +560,11 @@ Event syev_jacobi_cta(Queue& ctx,
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            if (upper) syev_jacobi_cta_impl<T, P, true, true>(ctx, a, w_ptr, n, params, info_ptr);
-            else       syev_jacobi_cta_impl<T, P, true, false>(ctx, a, w_ptr, n, params, info_ptr);
+            if (upper) syev_jacobi_cta_impl<T, P, true, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            else       syev_jacobi_cta_impl<T, P, true, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
         } else {
-            if (upper) syev_jacobi_cta_impl<T, P, false, true>(ctx, a, w_ptr, n, params, info_ptr);
-            else       syev_jacobi_cta_impl<T, P, false, false>(ctx, a, w_ptr, n, params, info_ptr);
+            if (upper) syev_jacobi_cta_impl<T, P, false, true>(ctx, a, w_ptr, n, params, info_ptr, mask);
+            else       syev_jacobi_cta_impl<T, P, false, false>(ctx, a, w_ptr, n, params, info_ptr, mask);
         }
     };
 

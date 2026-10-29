@@ -230,97 +230,20 @@ std::vector<Entry<T>> gemm_entries() {
     };
 }
 
-// The routed ops: the public op entries, each refused by every family's can_run term.
-// gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
+// The level-3 ops and spmm, whose native families honour the mask (W1b). trsm writes B, the rest C.
 template <typename T, Backend B>
-std::vector<Entry<T>> routed_entries() {
+std::vector<Entry<T>> level3_entries() {
     using P = Pool<T>;
     const T one(1), half(0.5);
     const auto L = Uplo::Lower;
     const auto N = Transpose::NoTrans;
-    const auto all = SvdVectors::All;
     std::vector<Entry<T>> out = {
         {"trsm", true, [=](P& p) { trsm<B, T>(p.q, p.mat(p.a), p.mat(p.b), one, Side::Left, L, N, Diag::NonUnit); }},
         {"trmm", true,
          [=](P& p) { trmm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, Side::Left, L, N, Diag::NonUnit); }},
-        {"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }},
-        {"getrf", true, [=](P& p) { getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); }},
-        {"getrs", true,
-         [=](P& p) {
-             if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-             getrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws);
-         }},
-        {"getri", true,
-         [=](P& p) {
-             if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-             getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-         }},
-        {"geqrf", true, [=](P& p) { geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); }},
-        {"orgqr", true,
-         [=](P& p) {
-             if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-             orgqr<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-         }},
-        {"ormqr", true,
-         [=](P& p) {
-             if (!p.masked()) geqrf<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws);
-             ormqr<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
-         }},
-        {"syev", true, [=](P& p) { syev<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan()); }},
-        {"gesvd", true,
-         [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan()); }},
-        {"gesvd(hermitian)", true,
-         [=](P& p) { gesvd<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan()); }},
-        {"gesv", true, [=](P& p) { gesv<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.pspan(), p.ws, p.ispan()); }},
-        {"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }},
-        {"potri", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
-             potri<B, T>(p.q, p.mat(p.a), L, true, p.ws, p.ispan());
-         }},
-        {"potrs", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan());
-             potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L);
-         }},
         {"spmm", true,
          [=](P& p) { spmm<B, T, MatrixFormat::CSR>(p.q, p.csr(), p.mat(p.b), p.mat(p.c), one, half, N, N, p.ws); }},
-        {"sygst", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-             sygst<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws);
-         }},
-        {"sygvd", true,
-         [=](P& p) {
-             sygvd<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws, p.ispan());
-         }},
-        {"sygvd_factored", true,
-         [=](P& p) {
-             if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
-             sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                  p.ispan());
-         }},
-        {"sytrf", true, [=](P& p) { sytrf<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); }},
-        {"sytrs", true,
-         [=](P& p) {
-             if (!p.masked()) sytrf<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan());
-             sytrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws);
-         }},
-        {"sysv", true, [=](P& p) { sysv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), p.ws, p.ispan()); }},
     };
-    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there.
-    if constexpr (B == Backend::NETLIB)
-        for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
-    if constexpr (B != Backend::NETLIB) {  // blocked is a GPU family
-        out.push_back({"getri(pinned blocked)", true,
-                       [=](P& p) {
-                           // blocked writes P into C before its trsm: only getri's own C check stops a masked C.
-                           const select::ScopedPin<std::monostate> pin("getri", "blocked", select::StrictPin{});
-                           if (!p.masked()) getrf<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan());
-                           getri<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-                       },
-                       true});
-    }
     if constexpr (is_std_complex_v<T>) {
         out.push_back({"hemm", true,
                        [=](P& p) { hemm<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, Side::Left, L); }});
@@ -334,6 +257,91 @@ std::vector<Entry<T>> routed_entries() {
         out.push_back({"syr2k", true,
                        [=](P& p) { syr2k<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.mat(p.c), one, half, L, N); }});
     }
+    return out;
+}
+
+// The tridiagonal stages that honour the mask (W3a), each with the outputs it writes: name, item
+// stride and item length in bytes. tests/steqr_mask_tests.cc and tridiag_mask_tests.cc hold their
+// contracts; here every operand alone carries the mask as well.
+template <typename T>
+struct NativeEntry {
+    Entry<T> entry;
+    std::vector<std::tuple<std::string, std::size_t, std::size_t>> outputs;
+};
+
+template <typename T, Backend B>
+std::vector<NativeEntry<T>> tridiag_entries() {
+    std::vector<NativeEntry<T>> out;
+    if constexpr (!is_std_complex_v<T>) {
+        using P = Pool<T>;
+        const auto ev = JobType::EigenVectors;
+        const std::size_t mat = kStride * sizeof(T), vec = kVecStride * sizeof(T), one = sizeof(std::int32_t);
+        const std::tuple<std::string, std::size_t, std::size_t> Z{"Z", mat, mat}, w{"w", vec, kN * sizeof(T)},
+            info{"info", one, one}, m{"m", one, one};
+        const auto add = [&](const char* name, std::function<void(P&)> f, std::vector<std::tuple<std::string, std::size_t, std::size_t>> o) {
+            out.push_back({{name, false, std::move(f)}, std::move(o)});
+        };
+        add("steqr", [=](P& p) {
+            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
+        }, {Z, w, info});
+        add("steqr_cta", [=](P& p) {
+            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
+                            p.ispan());
+        }, {Z, w, info});
+        add("stedc", [=](P& p) {
+            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
+        }, {Z, w, info});
+        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); },
+            {w, m});
+        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); },
+            {Z});
+        add("stein(counts)", [=](P& p) {
+            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
+                        p.mat(p.z), p.ws);
+        }, {Z});
+        add("tridiagonal_solver", [=](P& p) {
+            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
+        }, {Z, {"w", kN * sizeof(T), kN * sizeof(T)}});
+    }
+    return out;
+}
+
+// The routed ops: the public op entries, each refused by every family's can_run term.
+// gemv honours the mask (W1a): gemv_candidates_tests' Masked* cases hold its contract.
+// sytrf, sytrs and sysv honour it (W4b): sytrf_mask_tests holds their contract.
+template <typename T, Backend B>
+std::vector<Entry<T>> routed_entries() {
+    using P = Pool<T>;
+    const T one(1), half(0.5);
+    const auto L = Uplo::Lower;
+    const auto N = Transpose::NoTrans;
+    std::vector<Entry<T>> out;
+    // The host backend's natives yield to its BLAS, which cannot skip an item: gemm refuses there,
+    // and so do the level-3 ops, whose natives are GPU families (spmm's direct runs there).
+    // potrf's natives are GPU kernels (W2a), so the host's LAPACK potrf refuses, and with it posv and
+    // potrs, whose children (potrf, trsm) refuse there. On a device all three honour the mask, and
+    // potri's cta runs on either backend (potrf_mask_tests holds the contracts).
+    if constexpr (B == Backend::NETLIB) {
+        for (auto& e : gemm_entries<T, B>()) out.push_back(std::move(e));
+        out.push_back({"potrf", true, [=](P& p) { potrf<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); }});
+        out.push_back({"posv", true, [=](P& p) { posv<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.ws, p.ispan()); }});
+        out.push_back({"potrs", true, [=](P& p) { potrs<B, T>(p.q, p.mat(p.a), p.mat(p.b), L); }});
+        for (auto& e : level3_entries<T, B>())
+            if (e.name != "spmm") out.push_back(std::move(e));
+    }
+    // getrf, getrs, gesv, getri and inv honour the mask (W2b, lift 1): tests/getrf_mask_tests.cc and
+    // tests/getrs_mask_tests.cc hold their contract. geqrf, orgqr and ormqr honour it (W2c, lift 1):
+    // tests/geqrf_mask_tests.cc and tests/ormqr_mask_tests.cc. sygst honours it in every family (W3c,
+    // lift 1): tests/sygvd_mask_tests.cc.
+    // gesvd and sygvd honour the mask in every family but the device vendors (lift 2: gesvd_mask_tests,
+    // sygvd_mask_tests). On the host backend sygvd_factored has only compose, whose back-transform
+    // (trsm, trmm) is its BLAS, which refuses.
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"sygvd_factored", true, [=](P& p) {
+                           if (!p.masked()) potrf<B, T>(p.q, p.mat(p.b), L, p.ws, p.ispan());
+                           sygvd_factored<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L,
+                                                p.ws, p.ispan());
+                       }});
     return out;
 }
 
@@ -379,26 +387,32 @@ std::vector<Entry<T>> vendor_entries() {
         }
     }
     if constexpr (sv::factorization_vendor_available<B>) {
-        add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
-        add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
-        add("ormqr_vendor", [=](P& p) {
-            backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
-        });
-        add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
-        add("getrs_vendor", [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
-        add("getri_vendor", [=](P& p) {
-            backend::getri_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
-        });
+        // NETLIB's LU and QR host loops honour the mask (W2b, W2c, idiom I4); a strided vendor call cannot.
+        if constexpr (B != Backend::NETLIB) {
+            add("geqrf_vendor", [=](P& p) { backend::geqrf_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("orgqr_vendor", [=](P& p) { backend::orgqr_vendor<B, T>(p.q, p.mat(p.a), p.tspan(), p.ws); });
+            add("ormqr_vendor", [=](P& p) {
+                backend::ormqr_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws);
+            });
+            add("getrf_vendor", [=](P& p) { backend::getrf_vendor<B, T>(p.q, p.mat(p.a), p.pspan(), p.ws, p.ispan()); });
+            add("getrs_vendor",
+                [=](P& p) { backend::getrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), N, p.pspan(), p.ws); });
+            add("getri_vendor", [=](P& p) {
+                backend::getri_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.pspan(), p.ws, p.ispan());
+            });
+        }
     }
     if constexpr (sv::solver_vendor_available<B>) {
         add("potrf_vendor", [=](P& p) { backend::potrf_vendor<B, T>(p.q, p.mat(p.a), L, p.ws, p.ispan()); });
-        add("syev_vendor", [=](P& p) {
-            backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
-        });
-        add("gesvd_vendor", [=](P& p) {
-            backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
-                                        SvdVectors::All, p.ws, p.ispan());
-        });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (syev_mask_tests)
+            add("syev_vendor", [=](P& p) {
+                backend::syev_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), JobType::EigenVectors, L, p.ws, p.ispan());
+            });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (gesvd_mask_tests)
+            add("gesvd_vendor", [=](P& p) {
+                backend::gesvd_vendor<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), SvdVectors::All,
+                                            SvdVectors::All, p.ws, p.ispan());
+            });
     }
     if constexpr (sv::sparse_vendor_available<B>) {
         add("spmm_vendor", [=](P& p) {
@@ -406,17 +420,14 @@ std::vector<Entry<T>> vendor_entries() {
         });
     }
     if constexpr ((B == Backend::CUDA && sv::kHasCudaVendor) || (B == Backend::NETLIB && sv::kHasNetlib)) {
-        add("sygvd_vendor", [=](P& p) {
-            backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
-                                        p.ispan());
-        });
-        add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
-    }
-    if constexpr (B == Backend::NETLIB && sv::kHasNetlib) {
-        add("sytrs_vendor", [=](P& p) {
-            backend::sytrs_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), L, p.pspan(), nullptr);
-        });
-        add("sygst_vendor", [=](P& p) { backend::sygst_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), 1, L, p.ws); });
+        if constexpr (B != Backend::NETLIB)  // LAPACKE's loop honours the mask (sygvd_mask_tests)
+            add("sygvd_vendor", [=](P& p) {
+                backend::sygvd_vendor<B, T>(p.q, p.mat(p.a), p.mat(p.b), p.wspan(), 1, JobType::EigenVectors, L, p.ws,
+                                            p.ispan());
+            });
+        // LAPACKE's sytrf and sytrs read the mask in their host loop (W4b); cuSOLVER's cannot skip.
+        if constexpr (B == Backend::CUDA)
+            add("sytrf_vendor", [=](P& p) { backend::sytrf_vendor<B, T>(p.q, p.mat(p.a), L, p.pspan(), p.ws, p.ispan()); });
     }
     return out;
 }
@@ -432,139 +443,76 @@ std::vector<Entry<T>> direct_entries() {
     const auto ev = JobType::EigenVectors;
     std::vector<Entry<T>> out;
     const auto add = [&](const char* name, std::function<void(P&)> f) { out.push_back({name, false, std::move(f)}); };
-    add("syev_cta", [=](P& p) { syev_cta<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_cta_fused", [=](P& p) { syev_cta_fused<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_jacobi_cta", [=](P& p) { syev_jacobi_cta<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_blocked", [=](P& p) { syev_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("syev_two_stage", [=](P& p) { syev_two_stage<B, T>(p.q, p.mat(p.a), p.wspan(), ev, L, p.ws); });
-    add("gesvd_blocked", [=](P& p) {
-        gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
-    });
-    add("gesvd_blocked(hermitian)", [=](P& p) {
-        gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
-    });
-    add("gesvd_cta", [=](P& p) {
-        gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
-    });
-    add("gesvd_cta(hermitian)", [=](P& p) {
-        gesvd_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, L, p.ws, p.ispan());
-    });
-    add("gesvdj_cta", [=](P& p) { gesvdj_cta<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws); });
-    add("ormqx_cta", [=](P& p) {
-        ormqx_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), Uplo::Lower, Side::Left, N, kN, p.ws);
-    });
-    add("ormqr_blocked", [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
-    add("sytrd_cta", [=](P& p) { sytrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws); });
-    add("sytrd_blocked", [=](P& p) {
-        sytrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.tq), p.vec(p.tp, kN - 1), p.vec(p.tau), L, p.ws);
-    });
-    add("sytrd_sy2sb", [=](P& p) { sytrd_sy2sb<B, T>(p.q, p.mat(p.a), p.mat(p.z, kKd + 1), p.vec(p.tau), L, kKd, p.ws); });
-    add("sytrd_sb2st", [=](P& p) {
-        sytrd_sb2st<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws, 0);
-    });
-    add("sytrd_band_reduction", [=](P& p) {
-        sytrd_band_reduction<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws,
-                                   int32_t(4));
-    });
-    add("sytrd_band_reduction(params)", [=](P& p) {
-        sytrd_band_reduction<B, T>(p.q, p.mat(p.z, kKd + 1), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tau), L, kKd, p.ws,
-                                   SytrdBandReductionParams{});
-    });
-    add("sytrd_band_reduction_single_step", [=](P& p) {
-        sytrd_band_reduction_single_step<B, T>(p.q, p.mat(p.z, kKd + 1), p.mat(p.v, kN - 1), L, kKd, p.ws,
-                                               SytrdBandReductionParams{});
-    });
-    add("latrd_lower_panel", [=](P& p) {
-        latrd_lower_panel<B, T>(p.q, p.mat(p.a), p.vec(p.tp, kN - 1), p.vec(p.tau), p.mat(p.z, kN, 2), 0, 2);
-    });
-    add("latrd_lower_panel(panel)", [=](P& p) {
-        latrd_lower_panel<B, T>(p.q, p.mat(p.a), p.vec(p.tp, kN - 1), p.vec(p.tau), p.mat(p.z, kN, 2));
-    });
-    add("gebrd_unblocked", [=](P& p) {
-        gebrd_unblocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp));
-    });
-    add("gebrd_cta",
-        [=](P& p) { gebrd_cta<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp)); });
-    add("gebrd_blocked", [=](P& p) {
-        gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
-    });
-    add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
-    add("syevx", [=](P& p) { syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z)); });
-    add("syevx(m)", [=](P& p) {
-        syevx<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z));
-    });
-    add("syevx_direct", [=](P& p) {
-        syevx_direct<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev, p.mat(p.z),
-                                                SyevxParams<T>());
-    });
-    add("syevx_direct_subset", [=](P& p) {
-        syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
-                                                       p.mat(p.z), SyevxParams<T>());
-    });
-    add("syevx_lobpcg", [=](P& p) {
-        syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
-    });
-    add("syevx_filtered", [=](P& p) {
-        syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
-    });
-    add("ritz_values", [=](P& p) {
-        ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
-    });
-    add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
-    add("ortho(M)", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); });
-    add("inv", [=](P& p) { inv<B, T>(p.q, p.mat(p.a), p.mat(p.c), p.ws); });
-    add("inv(owning)", [=](P& p) { (void)inv<B, T>(p.q, p.mat(p.a)); });
-    add("norm", [=](P& p) { norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.w)); });
-    add("norm(owning)", [=](P& p) { (void)norm<T, MatrixFormat::Dense>(p.q, p.mat(p.a)); });
-    add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
-    add("syfn_from_eigen", [=](P& p) {
-        syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
-    });
-    add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
-    add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
-    add("iluk_factorize(workspace)",
-        [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
-    add("iluk_apply", [=](P& p) {
-        // The factor comes from the unmasked matrix (a workspace of its own): only rhs and out are masked.
-        UnifiedVector<std::byte> fws(std::size_t(1) << 20);
-        const MatrixView<T, MatrixFormat::CSR> plain(p.vals.data(), p.ro.data(), p.ci.data(), kN, kN, NonZeros{kN},
-                                                     kVecStride, kN + 1, kBatch);
-        const auto M = iluk_factorize<B, T>(p.q, plain, Span<std::byte>(fws.data(), fws.size()), ILUKParams<T>(), nullptr);
-        p.q.wait();
-        iluk_apply<B, T>(p.q, M, p.mat(p.b), p.mat(p.c), p.ws);
-    });
+    // Every syev and gesvd family honours the mask on a device (lift 2: syev_mask_tests and
+    // gesvd_mask_tests); on the host backend their CTA leaves are not built, and gesvd_blocked's
+    // general path refuses (its gemm is the host BLAS).
+    if constexpr (B == Backend::NETLIB)
+        add("gesvd_blocked", [=](P& p) {
+            gesvd_blocked<B, T>(p.q, p.mat(p.a), p.wspan(), p.mat(p.b), p.mat(p.c), all, all, p.ws, p.ispan());
+        });
+    // ormqx_cta, ormqr_blocked, sytrd_blocked, sytrd_sy2sb and the band reduction honour the mask
+    // on a device (W2c, W3b, lift 1): tests/ormqr_mask_tests.cc and tests/syev_mask_tests.cc. On
+    // NETLIB ormqr_blocked's gemm children are the host BLAS, which refuses.
+    if constexpr (B == Backend::NETLIB)
+        add("ormqr_blocked",
+            [=](P& p) { ormqr_blocked<B, T>(p.q, p.mat(p.a), p.mat(p.c), Side::Left, N, p.tspan(), p.ws); });
+    // gebrd_blocked and ormbr honour the mask on a device (W4a); NETLIB's gemm children cannot.
+    if constexpr (B == Backend::NETLIB) {
+        add("gebrd_blocked", [=](P& p) {
+            gebrd_blocked<B, T>(p.q, p.mat(p.a), p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.tq), p.vec(p.tp), p.ws);
+        });
+        add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
+    }
+    // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
+    // Filtered refuse it on the host backend (its gemm is the host BLAS); on a GPU they honour it with
+    // every ortho, Chol2 included (syevx_mask_tests).
+    // DirectSubset (real only) honours it on a device (lift 2); on the host backend sy2sb's gemm refuses.
+    if constexpr (B == Backend::NETLIB && !is_std_complex_v<T>)
+        add("syevx_direct_subset", [=](P& p) {
+            syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
+                                                           p.mat(p.z), SyevxParams<T>());
+        });
+    if constexpr (B == Backend::NETLIB) {
+        add("syevx_lobpcg", [=](P& p) {
+            syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+        });
+        add("syevx_filtered", [=](P& p) {
+            syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+        });
+    }
+    // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
+    // hold their contract, ortho's Cholesky family included. On the host backend ritz_values and
+    // ortho(M) reach its BLAS gemm, which refuses.
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"ortho(M)", true,
+                       [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"ritz_values", true, [=](P& p) {
+                           ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);
+                       }});
+    // syfn honours the mask on a device (lift 2, syev_mask_tests); the host backend's syrk is its BLAS.
+    if constexpr (B == Backend::NETLIB) {
+        add("syfn", [=](P& p) { syfn<B, T>(p.q, p.mat(p.a), p.mat(p.c), SyfnFunction<R>::exp(), L, p.ws, p.ispan()); });
+        add("syfn_from_eigen", [=](P& p) {
+            syfn_from_eigen<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.c), SyfnFunction<R>::exp(), p.ws, p.ispan());
+        });
+    }
+    // syev_align honours the mask (W3b) where its gemm does; the host backend's gemm is its BLAS.
+    if constexpr (B == Backend::NETLIB)
+        add("syev_align", [=](P& p) { syev_align<B, T>(p.q, p.mat(p.z), p.wspan(), p.mat(p.v), R(1e-3), p.ws); });
+    // iluk_apply and iluk's device path honour the mask (W4c, tests/iluk_mask_tests.cc). This batch
+    // takes the host path, which only the host backend's CPU queue can read a device-only mask on.
+    if constexpr (B != Backend::NETLIB) {
+        add("iluk_factorize", [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr()); });
+        add("iluk_factorize(workspace)",
+            [=](P& p) { (void)iluk_factorize<B, T>(p.q, p.csr(), p.ws, ILUKParams<T>(), nullptr); });
+    }
     if constexpr (!is_std_complex_v<T>) {  // real-only: tridiagonal and bidiagonal stages, lanczos, lascl, cond
-        add("steqr", [=](P& p) {
-            steqr<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z), p.ispan());
-        });
-        add("steqr_cta", [=](P& p) {
-            steqr_cta<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, SteqrParams<T>(), p.mat(p.z),
-                            p.ispan());
-        });
-        add("stedc", [=](P& p) {
-            stedc<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), p.ws, ev, StedcParams<T>(), p.mat(p.z), p.ispan());
-        });
-        add("stebz", [=](P& p) { stebz<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), P::flat(p.m), p.ws); });
-        add("stein", [=](P& p) { stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, p.mat(p.z), p.ws); });
-        add("stein(counts)", [=](P& p) {
-            stein<B, T>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), p.vec(p.w), kN, Span<const std::int32_t>(p.counts.data(), kBatch),
-                        p.mat(p.z), p.ws);
-        });
-        add("bdsqr", [=](P& p) { bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-        add("bdsqr(vectors)", [=](P& p) {
-            bdsqr<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
-        });
-        add("bdsdc", [=](P& p) { bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, true, p.ispan()); });
-        add("bdsdc(vectors)", [=](P& p) {
-            bdsdc<B, R>(p.q, p.vec(p.d), p.vec(p.e, kN - 1), P::flat(p.s), p.ws, p.mat(p.b), p.mat(p.c), true, p.ispan());
-        });
-        add("cond", [=](P& p) { cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius, P::flat(p.tq), p.ws); });
-        add("cond(owning)", [=](P& p) { (void)cond<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), NormType::Frobenius); });
-        add("tridiagonal_solver", [=](P& p) {
-            tridiagonal_solver<B, T>(p.q, P::flat(p.tq), P::flat(p.tp), p.wspan(), p.ws, ev, p.mat(p.z), kN, kBatch);
-        });
-        add("lanczos", [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
-        add("lascl", [=](P& p) { lascl<MatrixFormat::Dense, T>(p.q, p.mat(p.a), T(1), T(2)); });
+        // bdsdc honours the mask on either backend, lanczos on a device (lift 2: gesvd_mask_tests,
+        // syevx_mask_tests); on the host backend lanczos's gemm is its BLAS.
+        if constexpr (B == Backend::NETLIB)
+            add("lanczos",
+                [=](P& p) { lanczos<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), p.ws, ev, p.mat(p.z)); });
     }
     return out;
 }
@@ -679,8 +627,7 @@ std::vector<Entry<T>> linalg_entries() {
         (void)linalg::svd<T>(p.q, p.mat(p.a), GesvdOptions{.jobu = SvdVectors::All, .jobvh = SvdVectors::None});
     });
     add("linalg::lu", [=](P& p) { (void)linalg::lu<T>(p.q, p.mat(p.a)); });
-    add("linalg::norm", [=](P& p) { (void)linalg::norm<T>(p.q, p.mat(p.a)); });
-    if constexpr (!is_std_complex_v<T>) add("linalg::cond", [=](P& p) { (void)linalg::cond<T>(p.q, p.mat(p.a)); });
+    // linalg::norm and linalg::cond forward to norm and cond, which honour the mask (W4c).
     return out;
 }
 
@@ -714,6 +661,8 @@ TYPED_TEST_SUITE(BatchMaskEntries, EntryTypes);
 TYPED_TEST(BatchMaskEntries, RoutedOpsRefuseADeviceOnlyMaskBeforeWriting) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
+    // Every routed op honours the mask on a device (lift 2): only the host backend's BLAS-bound ops refuse.
+    if (B != Backend::NETLIB) GTEST_SKIP() << "every routed op honours a mask on a device backend";
     Queue& q = *this->ctx;
     const masked_contract::DeviceMask mask(q, kAlternating);
     // Only a build without the backend's library may lack a route (herk has no native kernel).
@@ -764,6 +713,103 @@ TYPED_TEST(BatchMaskEntries, GemmRunsADeviceOnlyMaskNatively) {
     }
 }
 
+// The level-3 ops and spmm run a masked batch natively (spmm's direct on the host backend too),
+// pinned native, whichever operand carries the mask: the written operand's inactive items bit-identical, its active
+// ones the unmasked call's, every other operand unwritten.
+TYPED_TEST(BatchMaskEntries, Level3RunsADeviceOnlyMaskNatively) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& e : level3_entries<T, B>()) {
+        if (B == Backend::NETLIB && e.name != "spmm") continue;
+        SCOPED_TRACE(e.name);
+        // Native pins (gemm's for the families over it): Auto may give the unmasked call the vendor.
+        const select::ScopedPin<std::monostate> pin(e.name, "native", select::StrictPin{});
+        const select::ScopedPin<std::monostate> gemm_pin("gemm", "native", select::StrictPin{});
+        const std::string written = e.name == "trsm" ? "B" : "C";
+        Pool<T> plain(q, {}, this->ws());
+        e.call(plain);
+        q.wait();
+        const auto want = plain.snapshot();
+        for (int only = -1; only < plain.views; ++only) {  // trsm, syrk and herk take two views
+            SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+            Pool<T> p(q, mask.span(), this->ws(), only);
+            const auto before = p.snapshot();
+            ASSERT_NO_THROW({
+                e.call(p);
+                q.wait();
+            });
+            const auto after = p.snapshot();
+            for (std::size_t i = 0; i < before.size(); ++i) {
+                const std::string name = std::get<0>(p.buffers()[i]);
+                if (name != written) {
+                    EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << name;
+                    continue;
+                }
+                for (int b = 0; b < kBatch; ++b) {
+                    const std::size_t off = std::size_t(b) * kStride * sizeof(T), len = kStride * sizeof(T);
+                    const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
+                    EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
+                        << name << " item " << b
+                        << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
+                }
+            }
+        }
+    }
+}
+
+// The W3a tridiagonal stages run a masked batch natively on every backend, whichever operand
+// carries the mask: an output's inactive items (0, 2) bit-identical, its active ones the unmasked
+// call's, every other operand unwritten.
+TYPED_TEST(BatchMaskEntries, TridiagonalStagesRunADeviceOnlyMaskNatively) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (is_std_complex_v<T>) GTEST_SKIP() << "real-only stages";
+    Queue& q = *this->ctx;
+    const masked_contract::DeviceMask mask(q, kAlternating);
+    for (const auto& [e, outs] : tridiag_entries<T, B>()) {
+        SCOPED_TRACE(e.name);
+        Pool<T> plain(q, {}, this->ws());
+        e.call(plain);
+        q.wait();
+        const auto want = plain.snapshot();
+        std::vector<std::pair<int, std::string>> used;
+        {
+            Pool<T> probe(q, mask.span(), this->ws(), -1);
+            probe.used = &used;
+            e.call(probe);
+            q.wait();
+        }
+        std::vector<int> onlys{-1};
+        for (const auto& u : used) onlys.push_back(u.first);
+        for (const int only : onlys) {
+            SCOPED_TRACE("operand " + std::to_string(only) + " masked (-1: every one)");
+            Pool<T> p(q, mask.span(), this->ws(), only);
+            const auto before = p.snapshot();
+            ASSERT_NO_THROW({
+                e.call(p);
+                q.wait();
+            });
+            const auto after = p.snapshot();
+            for (std::size_t i = 0; i < before.size(); ++i) {
+                const std::string name = std::get<0>(p.buffers()[i]);
+                const auto o = std::find_if(outs.begin(), outs.end(), [&](const auto& t) { return std::get<0>(t) == name; });
+                if (o == outs.end()) {
+                    EXPECT_TRUE(after[i] == before[i]) << "wrote operand " << name;
+                    continue;
+                }
+                for (int b = 0; b < kBatch; ++b) {
+                    const std::size_t off = std::size_t(b) * std::get<1>(*o), len = std::get<2>(*o);
+                    const auto& ref = kAlternating[std::size_t(b)] ? want[i] : before[i];
+                    EXPECT_EQ(std::memcmp(after[i].data() + off, ref.data() + off, len), 0)
+                        << name << " item " << b << (kAlternating[std::size_t(b)] ? " differs from the unmasked call" : " was written");
+                }
+            }
+        }
+    }
+}
+
 TYPED_TEST(BatchMaskEntries, VendorEntriesRefuseADeviceOnlyMask) {
     using T = typename TestFixture::ScalarType;
     constexpr Backend B = TestFixture::BackendType;
@@ -794,8 +840,9 @@ TYPED_TEST(BatchMaskEntries, LinalgWrappersRefuseADeviceOnlyMask) {
     for (const auto& e : linalg_entries<T>()) check_refuses<T>(q, e, mask.span(), this->ws());
 }
 
-// The syev capability queries answer from can_run, so a masked view is one no family supports.
-TYPED_TEST(BatchMaskEntries, SyevSupportQueriesAnswerNoForAMaskedView) {
+// The syev capability queries answer from can_run, and every native family honours the mask (lift
+// 2): a masked view gets the unmasked view's answers.
+TYPED_TEST(BatchMaskEntries, SyevSupportQueriesIgnoreTheMask) {
     using T = typename TestFixture::ScalarType;
     namespace sd = ops::syev::detail;
     constexpr Backend B = TestFixture::BackendType;
@@ -808,9 +855,10 @@ TYPED_TEST(BatchMaskEntries, SyevSupportQueriesAnswerNoForAMaskedView) {
                 sd::syev_supports_two_stage<T>(q, A, Uplo::Lower))
         << "no family supports the unmasked view, so the masked answers prove nothing";
     Pool<T> p(q, mask.span(), this->ws());
-    EXPECT_FALSE(sd::syev_supports_cta<T>(q, p.mat(p.a)));
-    EXPECT_FALSE(sd::syev_supports_blocked<T>(q, p.mat(p.a), Uplo::Lower));
-    EXPECT_FALSE(sd::syev_supports_two_stage<T>(q, p.mat(p.a), Uplo::Lower));
+    EXPECT_EQ(sd::syev_supports_cta<T>(q, p.mat(p.a)), sd::syev_supports_cta<T>(q, A));
+    EXPECT_EQ(sd::syev_supports_blocked<T>(q, p.mat(p.a), Uplo::Lower), sd::syev_supports_blocked<T>(q, A, Uplo::Lower));
+    EXPECT_EQ(sd::syev_supports_two_stage<T>(q, p.mat(p.a), Uplo::Lower),
+              sd::syev_supports_two_stage<T>(q, A, Uplo::Lower));
 }
 
 // astype copies the mask on the host with no Queue: shared USM copies, a device-only or a foreign

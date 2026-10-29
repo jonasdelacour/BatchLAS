@@ -23,6 +23,7 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
         auto temp_mem = sycl::local_accessor<T, 1>(sycl::range<1>(n), h);
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (!data.active(bid)) return;  // I1: before the barrier, uniform per work-group
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
             for (int i = tid; i < n; i += bdim) temp_mem[i] = data(indices(i, bid), bid);
@@ -74,6 +75,7 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
                 int rem = index % (cols * n);
                 int col = rem / n;
                 int row = rem % n;
+                if (!dst_view.active(batch_id)) continue;  // I3
                 dst_view(row, col, batch_id) = src_view(row, indices(col, batch_id), batch_id);
             }
         });
@@ -103,6 +105,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto cta = item.get_group();
             auto bid = item.get_group_linear_id();
+            if (!data_view.active(bid)) return;  // I1
             auto bdim = item.get_local_range()[0];
             auto tid = item.get_local_linear_id();
             K* batch_indices = indices.batch_item(bid).data_ptr();
@@ -163,6 +166,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
 
         batchlas::impl::parallel_for(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (!data.active(bid)) return;  // I1: an inactive item's order is never read
             auto tid = item.get_local_linear_id();
             auto bdim = item.get_local_range()[0];
             auto cta = item.get_group();
@@ -218,13 +222,19 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
     return ctx.get_event();
 }
 
+// permute() needs unit increments. A solver that sorts last calls this before its first launch:
+// a throw with its passes still in flight frees the caller's buffers under them.
 template <typename T>
-Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
-    // permute() needs unit increments; refuse before anything is enqueued.
+void require_sortable(const VectorView<T>& eigs) {
     if (eigs.inc() != 1) {
         throw batchlas::invalid_argument("sort: eigenvalues must have unit increment (inc=1), got inc=" +
                                          std::to_string(eigs.inc()));
     }
+}
+
+template <typename T>
+Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
+    require_sortable(eigs);  // before anything is enqueued
     auto pool = BumpAllocator(workspace);
     const VectorView<T>& eigs_unit = eigs;
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
@@ -247,7 +257,9 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
         throw batchlas::invalid_argument("sort: invalid batch layout for eigenvalues span");
     }
     const auto n = n_total / batch_size;
-    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)), V, jobz, order, workspace);
+    // W adopts V's mask: a view rebuilt from a raw pointer starts unmasked.
+    return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)).with_batch_mask(V.batch_mask()),
+                V, jobz, order, workspace);
 }
 
 

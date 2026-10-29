@@ -38,6 +38,7 @@
 #include <batchlas/backend_config.h>
 #include <src/util/template-instantiations.hh>
 #include <src/util/batch_mask.hh>
+#include <src/ops/syevx/syevx.hh>
 #include <batchlas/settings.hh>
 
 namespace batchlas {
@@ -84,7 +85,11 @@ Event syevx_filtered(Queue& ctx,
                      const MatrixView<T, MatrixFormat::Dense>& V,
                      const SyevxParams<T>& params,
                      Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("syevx_filtered", A, V);
+    const Span<const std::uint8_t> mask = ::batchlas::detail::call_mask("syevx_filtered", A, V);
+    const std::uint8_t* mk = ::batchlas::detail::mask_ptr(mask);
+    // Tested through a captured bool: a null pointer captured by a kernel has read non-null on
+    // AdaptiveCpp Metal (syevx_filtered's coefficient kernel skipped items of an unmasked call).
+    const bool masked = mk != nullptr;
     using Real = typename base_type<T>::type;
 
     const int64_t n = A.rows();
@@ -102,6 +107,8 @@ Event syevx_filtered(Queue& ctx,
             "high-pass and cannot express an interior interval. Use syevx_direct or "
             "syevx_direct_subset for an index or value range");
     }
+    // Before any write: the parts whose children refuse a masked view.
+    ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_filtered", mask, params, /*lobpcg=*/false);
 
     // Guard directions keep the filter's cut off the edge of the wanted block.
     int64_t m = k + static_cast<int64_t>(params.extra_directions);
@@ -133,24 +140,27 @@ Event syevx_filtered(Queue& ctx,
     auto yprev_span = pool.allocate<T>(ctx, block_elems);
     auto tmp_span   = pool.allocate<T>(ctx, block_elems);
 
-    // Batched BLAS needs a per-item pointer array alongside each view.
-    auto mk = [&](Span<T> s) {
+    // Batched BLAS needs a per-item pointer array alongside each view. Every workspace view
+    // carries the call's mask, so each child skips the same items.
+    auto block_view = [&](Span<T> s) {
         auto ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
         return MatrixView<T, MatrixFormat::Dense>(s.data(), n, m, n,
                                                   static_cast<int64_t>(n) * m, batch,
-                                                  ptrs.data());
+                                                  ptrs.data())
+            .with_batch_mask(mask);
     };
-    auto X = mk(x_span);
-    auto AX = mk(ax_span);
-    auto Y = mk(y_span);
-    auto Yprev = mk(yprev_span);
-    auto Tmp = mk(tmp_span);
+    auto X = block_view(x_span);
+    auto AX = block_view(ax_span);
+    auto Y = block_view(y_span);
+    auto Yprev = block_view(yprev_span);
+    auto Tmp = block_view(tmp_span);
 
     auto h_span = pool.allocate<T>(ctx, static_cast<size_t>(m) * m * batch);
     auto h_ptrs = pool.allocate<T*>(ctx, static_cast<size_t>(batch));
-    MatrixView<T, MatrixFormat::Dense> H(h_span.data(), m, m, m,
-                                         static_cast<int64_t>(m) * m, batch,
-                                         h_ptrs.data());
+    const auto H = MatrixView<T, MatrixFormat::Dense>(h_span.data(), m, m, m,
+                                                      static_cast<int64_t>(m) * m, batch,
+                                                      h_ptrs.data())
+                       .with_batch_mask(mask);
     auto theta_span = pool.allocate<Real>(ctx, static_cast<size_t>(m) * batch);
 
     // Per-batch filter scalars.
@@ -252,6 +262,7 @@ Event syevx_filtered(Queue& ctx,
                 [=](sycl::nd_item<1> item) {
                     const size_t gid = item.get_group_linear_id();
                     const int b = static_cast<int>(gid / rg);
+                    if (masked && !mk[b]) return;  // I1: the group is one item's, before the reduction
                     const size_t g = gid % rg;
                     const size_t lid = item.get_local_linear_id();
                     const int64_t i = static_cast<int64_t>(g * kBoundsWG + lid);
@@ -279,6 +290,7 @@ Event syevx_filtered(Queue& ctx,
                                   sycl::range{rwg}),
                 [=](sycl::nd_item<1> item) {
                     const int b = static_cast<int>(item.get_group_linear_id());
+                    if (masked && !mk[b]) return;  // I1
                     const size_t lid = item.get_local_linear_id();
                     const size_t lsz = item.get_local_range(0);
                     Real l = std::numeric_limits<Real>::max();
@@ -309,6 +321,7 @@ Event syevx_filtered(Queue& ctx,
                 sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int b = static_cast<int>(idx / (nn * mm));
+                    if (masked && !mk[b]) return;  // I3
                     const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                     const int r = static_cast<int>(rem % nn);
                     const int c = static_cast<int>(rem / nn);
@@ -366,6 +379,12 @@ Event syevx_filtered(Queue& ctx,
                         const int b = static_cast<int>(item.get_group_linear_id());
                         const int lid = static_cast<int>(item.get_local_linear_id());
                         const int lsz = static_cast<int>(item.get_local_range(0));
+                        // I1, before the reduction. "Converged" is the neutral flag: the host
+                        // loop then stops on the active items alone.
+                        if (masked && !mk[b]) {
+                            if (lid == 0) flag[b] = 1;
+                            return;
+                        }
                         int local_ok = 1;
                         for (int64_t j = lid; j < kk; j += lsz) {
                             const int64_t col = large ? (mm - 1 - j) : j;
@@ -420,6 +439,12 @@ Event syevx_filtered(Queue& ctx,
                 h.parallel_for<SyevxFilterIntervalKernel<B, T, MFormat>>(
                     sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                         const int b = static_cast<int>(tid[0]);
+                        // I3. The host folds these two over the batch (min, max): neutral values.
+                        if (masked && !mk[b]) {
+                            dcap_out[b] = 1 << 20;
+                            dneed_out[b] = auto_min;
+                            return;
+                        }
                         // `far` (where p = 1) must be the extreme *Ritz* value, not
                         // the Gershgorin bound: that underflows the block to zero -> NaN.
                         // evidence: docs/design/syevx.md#syevx-filtered-normalising-the-filter-and-capping-its-degree
@@ -525,6 +550,7 @@ Event syevx_filtered(Queue& ctx,
                     sycl::range<1>(static_cast<size_t>(batch * nn * mm)), [=](sycl::id<1> tid) {
                         const int64_t idx = static_cast<int64_t>(tid[0]);
                         const int b = static_cast<int>(idx / (nn * mm));
+                        if (masked && !mk[b]) return;  // I3
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
@@ -543,6 +569,7 @@ Event syevx_filtered(Queue& ctx,
             ctx->submit([&](sycl::handler& h) {
                 h.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                     const int b = static_cast<int>(tid[0]);
+                    if (masked && !mk[b]) return;  // I3
                     ca[b] = s1[b] / ee[b];
                     cb[b] = Real(0);
                 });
@@ -590,6 +617,7 @@ Event syevx_filtered(Queue& ctx,
                     h.parallel_for<SyevxFilterSigmaKernel<B, T, MFormat>>(
                         sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
                             const int b = static_cast<int>(tid[0]);
+                            if (masked && !mk[b]) return;  // I3
                             const Real snew = Real(1) / (Real(2) / s1[b] - sg[b]);
                             sn[b] = snew;
                             ca[b] = Real(2) * snew / ee[b];
@@ -625,6 +653,7 @@ Event syevx_filtered(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
                 [=](sycl::nd_item<1> item) {
                     const int b = static_cast<int>(item.get_group_linear_id());
+                    if (masked && !mk[b]) return;  // I1
                     const int lid = static_cast<int>(item.get_local_linear_id());
                     const int lsz = static_cast<int>(item.get_local_range(0));
                     for (int64_t j = lid; j < kk; j += lsz) {
@@ -651,7 +680,7 @@ Event syevx_filtered(Queue& ctx,
     //   * `converged` is a local UnifiedVector, not a pool draw, so the reading
     //     kernel must finish before its destructor runs -- hence the wait.
     if (detail::info_ptr(info, batch) != nullptr) {
-        detail::info_from_flags(ctx, info, converged.data(), batch, /*one_means_converged=*/true);
+        detail::info_from_flags(ctx, info, converged.data(), batch, /*one_means_converged=*/true, mask);
         ctx.wait();
     }
     return ctx.get_event();
@@ -668,7 +697,7 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     // Workspace lockstep: bounds_partial, converged and degree_cap are UnifiedVectors
     // outside the pool, so they have no term here; the degree allocates nothing.
     using Real = typename base_type<T>::type;
-    (void)W; (void)V; (void)jobz;
+    (void)W; (void)jobz;
 
     // Must reject exactly what the solver rejects.
     if (params.select != SyevxSelect::Extremal) {
@@ -677,6 +706,10 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
             "syevx_filtered");
     }
 
+    // Sized for the masked families: only the mask's presence matters, never its contents.
+    const auto mask = ::batchlas::detail::call_mask("syevx_filtered_buffer_size", A, V);
+    ::batchlas::detail::syevx_iterative_refuse_mask<B, T>(ctx, "syevx_filtered_buffer_size", mask, params,
+                                                          /*lobpcg=*/false);
     const int64_t n = A.rows();
     const int64_t batch = A.batch_size();
     const int64_t k = static_cast<int64_t>(neigs);
@@ -699,10 +732,10 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     }
 
     // Shapes must match the runtime views so the providers agree.
-    MatrixView<T, MatrixFormat::Dense> blk_dummy(nullptr, n, m, n,
-                                                 static_cast<int64_t>(n) * m, batch);
-    MatrixView<T, MatrixFormat::Dense> h_dummy(nullptr, m, m, m,
-                                               static_cast<int64_t>(m) * m, batch);
+    const auto blk_dummy =
+        MatrixView<T, MatrixFormat::Dense>(nullptr, n, m, n, static_cast<int64_t>(n) * m, batch).with_batch_mask(mask);
+    const auto h_dummy =
+        MatrixView<T, MatrixFormat::Dense>(nullptr, m, m, m, static_cast<int64_t>(m) * m, batch).with_batch_mask(mask);
     if constexpr (MFormat == MatrixFormat::CSR) {
         bytes += BumpAllocator::allocation_size<std::byte>(ctx,
             spmm_buffer_size<B>(ctx, A, blk_dummy, blk_dummy, T(1), T(0),

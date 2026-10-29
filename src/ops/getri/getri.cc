@@ -46,13 +46,16 @@ select::Key key_of(const MV<T>& A) {
 // rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, typename T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
-    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
+    // Masked: blocked and NETLIB's host loop skip an inactive item; the strided vendor calls cannot.
+    const bool masked = detail::any_batch_mask(A);
     return std::visit(overloaded{
         [&](Blocked) {
             return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
-        [&](Vendor) { return select::factorization_vendor_available<B> && !A.is_heterogeneous(); },
+        [&](Vendor) {
+            return select::factorization_vendor_available<B> && !A.is_heterogeneous() && (!masked || B == Backend::NETLIB);
+        },
     }, c);
 }
 
@@ -90,11 +93,14 @@ std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
 }  // namespace ops::getri
 
 template <Backend Back, typename T>
-Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
+Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A_, const MatrixView<T, MatrixFormat::Dense>& C_,
             Span<int64_t> pivots, Span<std::byte> workspace, Span<int32_t> info) {
-    getri_validate_params<T>(A, C);
-    (void)detail::call_mask("getri", A, C);
-    if (C.has_batch_mask()) throw batchlas::unsupported("getri: the output C carries a batch mask, which no getri family honours yet");
+    getri_validate_params<T>(A_, C_);
+    // Selection reads A alone, so A and C both carry the call's mask whichever operand brought it.
+    const auto mask = detail::call_mask("getri", A_, C_);
+    const bool adopt = !mask.empty() && A_.batch_size() == C_.batch_size();
+    const auto A = adopt ? A_.with_batch_mask(mask) : A_;
+    const auto C = adopt ? C_.with_batch_mask(mask) : C_;
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).

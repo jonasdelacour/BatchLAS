@@ -68,7 +68,7 @@ Event stebz(Queue& ctx,
             Span<int32_t> m,
             const Span<std::byte>& ws,
             StebzParams<T> params) {
-    ::batchlas::detail::refuse_batch_mask("stebz", d, e, w);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("stebz", d, e, w));
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
 
@@ -121,6 +121,7 @@ Event stebz(Queue& ctx,
             [=](sycl::nd_item<1> item) {
                 const int64_t tid = static_cast<int64_t>(item.get_local_linear_id());
                 const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
+                if (mask != nullptr && mask[bid] == 0) return;  // I1: before the first collective
                 const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
                 auto cta = item.get_group();
 

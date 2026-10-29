@@ -51,8 +51,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& C,
              Transpose transA) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, C)) return false;
+    // Gram, Triangular and Fold honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, C);
     const std::int64_t n = C.rows(), k = inner<T>(A, transA);
     const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
     const bool gpu = d.is_gpu && homogeneous && n >= 1 && C.batch_size() >= 1;
@@ -72,7 +72,7 @@ bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>
             return (select::native_gpu_backend<B> || B == Backend::ROCM) && gpu && d.max_wg >= kFoldWg &&
                    backend::detail::expansion_chunk<T>(q, int(n), 1, d.max_groups_yz) >= 1;
         },
-        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous; },
+        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

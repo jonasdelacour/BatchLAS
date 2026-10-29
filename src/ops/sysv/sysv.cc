@@ -36,10 +36,10 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 }
 
 // Correctness only (R3); Compose's children decide for themselves, except on a heterogeneous batch,
-// which no sytrf family serves.
+// which no sytrf family serves. Both honour a batch mask (Compose's children are routed on it).
 template <class T>
 bool can_run(const SysvChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& B) {
-    const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous() && !detail::any_batch_mask(A, B);
+    const bool homogeneous = !A.is_heterogeneous() && !B.is_heterogeneous();
     return std::visit(overloaded{
         [&](Cta) {
             return d.is_gpu && d.has_sg32 && homogeneous && d.max_wg >= sycl_sytrf::kSytrfCtaWg && A.rows() >= 1 &&

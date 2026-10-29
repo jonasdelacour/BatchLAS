@@ -127,6 +127,9 @@ Event syev_cta_part(Queue& ctx,
 
     // We overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
+    // The workspace views are rebuilt from raw pointers, so they take the part's mask back on.
+    const Span<const std::uint8_t> mask_span = ::batchlas::detail::call_mask("syev_cta", a_in);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(mask_span);
 
     // NOTE: the CTA SYTRD/SYEV Uplo::Lower path has a known correctness defect, so Lower
     // input is symmetrized (A_upper := conj(A_lower)) and runs the known-good Upper pipeline.
@@ -142,6 +145,7 @@ Event syev_cta_part(Queue& ctx,
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
                 const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                 const int32_t row = static_cast<int32_t>(rem % nn);
                 const int32_t col = static_cast<int32_t>(rem / nn);
@@ -202,21 +206,21 @@ Event syev_cta_part(Queue& ctx,
         auto aq_span = ws_alloc<T>(ctx, ws_mut, ws_off, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
         auto tau_q_span = ws_alloc<T>(ctx, ws_mut, ws_off, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
 
-        VectorView<T> d_c_view(d_c_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
-        VectorView<T> e_c_view(e_c_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1);
-        VectorView<T> tau_c_view(tau_c_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1);
+        const VectorView<T> d_c_view = VectorView<T>(d_c_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
+        const VectorView<T> e_c_view = VectorView<T>(e_c_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1).with_batch_mask(mask_span);
+        const VectorView<T> tau_c_view = VectorView<T>(tau_c_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1).with_batch_mask(mask_span);
 
-        VectorView<Real> d_view(d_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
-        VectorView<Real> e_view(e_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1);
+        const VectorView<Real> d_view = VectorView<Real>(d_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
+        const VectorView<Real> e_view = VectorView<Real>(e_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1).with_batch_mask(mask_span);
         VectorView<T> phase_view(phase_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
 
-        MatrixView<Real, MatrixFormat::Dense> z_view(z_span.data(), n, n, /*ld=*/n,
-                                                    /*stride=*/n * n, /*batch_size=*/batch);
-        MatrixView<T, MatrixFormat::Dense> zc_view(zc_span.data(), n, n, /*ld=*/n,
-                                                  /*stride=*/n * n, /*batch_size=*/batch);
-        MatrixView<T, MatrixFormat::Dense> aq_view(aq_span.data(), n, n, /*ld=*/n,
-                                                  /*stride=*/n * n, /*batch_size=*/batch);
-        VectorView<T> tau_q_view(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
+        const MatrixView<Real, MatrixFormat::Dense> z_view = MatrixView<Real, MatrixFormat::Dense>(
+            z_span.data(), n, n, /*ld=*/n, /*stride=*/n * n, /*batch_size=*/batch).with_batch_mask(mask_span);
+        const MatrixView<T, MatrixFormat::Dense> zc_view = MatrixView<T, MatrixFormat::Dense>(
+            zc_span.data(), n, n, /*ld=*/n, /*stride=*/n * n, /*batch_size=*/batch).with_batch_mask(mask_span);
+        const MatrixView<T, MatrixFormat::Dense> aq_view = MatrixView<T, MatrixFormat::Dense>(
+            aq_span.data(), n, n, /*ld=*/n, /*stride=*/n * n, /*batch_size=*/batch).with_batch_mask(mask_span);
+        const VectorView<T> tau_q_view = VectorView<T>(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
 
         // Reduce Hermitian A to Hermitian tridiagonal (d_c real-ish, e_c generally complex).
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
@@ -239,6 +243,7 @@ Event syev_cta_part(Queue& ctx,
 
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 // S(0) = 1
                 S(0, b) = T(1, Real(0));
 
@@ -275,8 +280,8 @@ Event syev_cta_part(Queue& ctx,
         steqr_params_local.cta_wg_size_multiplier = cta_wg_size_multiplier;
         steqr_params_local.cta_shift_strategy = steqr_params.cta_shift_strategy;
 
-        VectorView<Real> evals_view(eigenvalues.data(), /*size=*/n, /*batch_size=*/batch,
-                                    /*inc=*/1, /*stride=*/n);
+        const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), /*size=*/n, /*batch_size=*/batch,
+                                                             /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
 
         auto steqr_ws = ws_remaining(ws_mut, ws_off);
         // syev_cta owns no convergence criterion of its own: the whole of it is this
@@ -298,6 +303,7 @@ Event syev_cta_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                     const int32_t row = static_cast<int32_t>(rem % nn);
                     const int32_t col = static_cast<int32_t>(rem / nn);
@@ -320,6 +326,7 @@ Event syev_cta_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                     const int32_t row = static_cast<int32_t>(rem % nn);
                     const int32_t col = static_cast<int32_t>(rem / nn);
@@ -356,6 +363,7 @@ Event syev_cta_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / nn);
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
 
                     if (uplo_eff == Uplo::Lower) {
@@ -413,17 +421,17 @@ Event syev_cta_part(Queue& ctx,
     auto aq_span = ws_alloc<T>(ctx, ws_mut, ws_off, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
     auto tau_q_span = ws_alloc<T>(ctx, ws_mut, ws_off, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
 
-    VectorView<T> d_view(d_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
-    VectorView<T> e_view(e_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1);
-    VectorView<T> tau_view(tau_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1);
+    const VectorView<T> d_view = VectorView<T>(d_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
+    const VectorView<T> e_view = VectorView<T>(e_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1).with_batch_mask(mask_span);
+    const VectorView<T> tau_view = VectorView<T>(tau_span, /*size=*/n - 1, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n - 1).with_batch_mask(mask_span);
 
-    MatrixView<T, MatrixFormat::Dense> z_view(z_span.data(), n, n, /*ld=*/n,
-                                             /*stride=*/n * n, /*batch_size=*/batch);
+    const MatrixView<T, MatrixFormat::Dense> z_view = MatrixView<T, MatrixFormat::Dense>(
+        z_span.data(), n, n, /*ld=*/n, /*stride=*/n * n, /*batch_size=*/batch).with_batch_mask(mask_span);
 
-    MatrixView<T, MatrixFormat::Dense> aq_view(aq_span.data(), n, n, /*ld=*/n,
-                                              /*stride=*/n * n, /*batch_size=*/batch);
+    const MatrixView<T, MatrixFormat::Dense> aq_view = MatrixView<T, MatrixFormat::Dense>(
+        aq_span.data(), n, n, /*ld=*/n, /*stride=*/n * n, /*batch_size=*/batch).with_batch_mask(mask_span);
 
-    VectorView<T> tau_q_view(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
+    const VectorView<T> tau_q_view = VectorView<T>(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
 
     // Reduce A to tridiagonal: A overwritten with reflectors/tridiagonal.
     // Note: sytrd_cta's workspace is currently unused.
@@ -447,8 +455,8 @@ Event syev_cta_part(Queue& ctx,
         }
     }
 
-    VectorView<T> evals_view(reinterpret_cast<T*>(eigenvalues.data()), /*size=*/n, /*batch_size=*/batch,
-                             /*inc=*/1, /*stride=*/n);
+    const VectorView<T> evals_view = VectorView<T>(reinterpret_cast<T*>(eigenvalues.data()), /*size=*/n,
+                                                   /*batch_size=*/batch, /*inc=*/1, /*stride=*/n).with_batch_mask(mask_span);
 
     (void)steqr<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view, info);
     cta_debug_sync(ctx, "syev_cta: after steqr");
@@ -475,6 +483,7 @@ Event syev_cta_part(Queue& ctx,
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
                 const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                 const int32_t row = static_cast<int32_t>(rem % nn);
                 const int32_t col = static_cast<int32_t>(rem / nn);
@@ -702,7 +711,7 @@ Event syev_cta(Queue& ctx,
                SteqrParams<T> steqr_params,
                size_t cta_wg_size_multiplier,
                Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_cta", B, a_in);
+    (void)::batchlas::detail::call_mask("syev_cta", a_in);  // a_in.batch_range carries each part's slice
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());
     if (n < 1 || n > 32 || batch < 1 || a_in.rows() != a_in.cols())

@@ -1,6 +1,6 @@
 # Masked batches {#design_masked_batches}
 
-> **Status:** current · the batch mask as a view property; W0 (foundation) of its migration, 2026-10-28. Replaces the compaction design of the closed #207 (`syev_masked`, `sygvd_masked`), which never reached main. Guard cost prototyped on sm_89 only.
+> **Status:** current · the batch mask as a view property; every op family honours it except the vendors, which refuse it permanently (W0 to the final lift pass, 2026-10-28). Replaces the compaction design of the closed #207 (`syev_masked`, `sygvd_masked`), which never reached main. Guard cost prototyped on sm_89 only.
 
 An SCC loop solves one eigenproblem per molecule per iteration, and the molecules converge at
 different iterations: a C300 isomer set takes 36 to 75 iterations (median 56). The caller wants to
@@ -79,9 +79,9 @@ their wave, not in W0.
 
 Placement traps: jacobi checks after its first work-group barrier; split-k's slice and reduce
 kernels skip by item (`z / s`), not by z; holes inside a sub-group are safe on NVPTX and untested on
-SPIR-V and AMDGCN, where today's tails only ever drop trailing partitions. `gebrd_cta` and
-`ormqx_cta` already return per partition before a barrier (undefined when the batch is not a
-multiple of the partitions per work-group); both move to I2 in their waves.
+SPIR-V and AMDGCN, where today's tails only ever drop trailing partitions. `ormqx_cta`
+returned per partition before a barrier (undefined when the batch is not a multiple of the
+partitions per work-group) until W2c moved it to I2; #209 had already removed `gebrd_cta`'s.
 
 ## Refusal policy {#masked-batches-refusal-policy}
 
@@ -132,18 +132,18 @@ migrates. The only shared file is the kernel hash pin map, regenerated with
 
 | Wave | Content |
 | --- | --- |
-| W0 | the view mask, `call_mask`, the utilities, masked `info_clear`; a refusal in every family; the cross-op tests and `tests/masked_contract.hh` |
-| W1a | gemm (every native family, split-k, `small`, the k = 0 path, the heterogeneous loop), gemv |
-| W1b | trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k, the level-3 batch helpers, spmm |
-| W2a | potrf (tiny, cta, lpanel, blocked), potrs, posv, potri, lascl |
-| W2b | getrf, laswp, getrs, gesv, getri, inv |
-| W2c | geqrf, larft, orgqr, ormqr, `ormqx_cta` (fixes its partition return) |
-| W3a | steqr, stedc (per-level expanded mask, neutral `n_reduced`), stebz, stein |
-| W3b | sytrd (cta, blocked, sy2sb, sb2st), every syev family, syev_align, syfn |
-| W3c | sygst, sygvd |
-| W4a | gesvd (gebrd including the `gebrd_cta` fix, bdsqr, bdsdc, ormbr, gesvdj) |
-| W4b | sytrf, sytrs, sysv |
-| W4c | ortho, lanczos, syevx, norm, cond, iluk, ritz_values |
+| W0 (done) | the view mask, `call_mask`, the utilities, masked `info_clear`; a refusal in every family; the cross-op tests and `tests/masked_contract.hh` |
+| W1a (done) | gemm (every native family, split-k, `small`, the k = 0 path, the heterogeneous loop), gemv |
+| W1b (done) | trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k, the level-3 batch helpers, spmm |
+| W2a (done) | potrf (tiny, cta, lpanel, blocked), potrs, posv, potri, lascl |
+| W2b (done) | getrf, laswp, getrs, gesv, getri, inv |
+| W2c (done) | geqrf, larft, orgqr, ormqr, `ormqx_cta` (fixes its partition return) |
+| W3a (done) | steqr, stedc (per-level expanded mask, neutral `n_reduced`), stebz, stein |
+| W3b (done) | sytrd (cta, blocked, sy2sb, sb2st), every syev family, syev_align, syfn |
+| W3c (done) | sygst, sygvd |
+| W4a (done) | gesvd (gebrd including the `gebrd_cta` fix, bdsqr, bdsdc, ormbr, gesvdj) |
+| W4b (done) | sytrf, sytrs, sysv |
+| W4c (done) | ortho, lanczos, syevx, norm, cond, iluk, ritz_values |
 
 Order: W0, W1a, W1b, then W2a, W2b and W2c, then W3a, W3b, W3c, then W4a, W4b and W4c. The SCC path
 (syev and sygvd masked) is W0, W1a, W1b, W2a, W2c, W3a, W3b, W3c. A composite keeps refusing until
@@ -199,6 +199,147 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   kernel green); `small`'s `Masked` fold (the `small` pins, holes in packed work-groups included);
   the split-k reduce skip (every `splitk` pin); the grid chunk loop dropping the mask slice
   (`PastTheGrid` only). An all-active mask stayed green under every break.
+- **W4c, ortho, norm, cond, ritz_values, syevx, iluk** (`tests/norm_mask_tests.cc`,
+  `tests/ortho_mask_tests.cc`, `tests/syevx_mask_tests.cc`, `tests/iluk_mask_tests.cc`; acpp Metal
+  float and complex float, NETLIB every scalar, 2026-10-28): norm (every type), cond, ortho's CGS2,
+  SVQB, SVQB2 and (on a host device) Householder, ritz_values, syevx `Direct`, `LOBPCG` and `Filtered`, and iluk's
+  device factorisation and apply run a masked batch; a call whose child still refuses (potrf under
+  ortho's Cholesky family, the host BLAS gemm on NETLIB, getri `blocked` under cond on a GPU, ILU(k)
+  under LOBPCG) throws before writing. Filtered's batch filter degree is a cross-item host minimum,
+  and an ILU(k) pattern is the union over active items: both are checked within a bound. On
+  AdaptiveCpp a guard tests a captured bool, not the pointer: a captured null mask read as non-null
+  in a Metal kernel, and the JIT's specialisation on the pointer moved CGS2's rounding after a
+  projection (ortho(A, M) is checked by value there). Defeating one guard at a time turned red only
+  its own cases, on the patterns with an inactive item; ortho's transposed copy is the exception, a
+  round trip that rewrites an inactive item with its own bits. syevx `DirectSubset` and lanczos
+  carry the mask but refuse until stebz, stein, steqr, sort (W3a) and sytrd_sy2sb honour it.
+- **W2b, LU** (`tests/getrf_mask_tests.cc`, `tests/getrs_mask_tests.cc`; Apple M5 Max under
+  AdaptiveCpp, Metal float and complex float, NETLIB every scalar, 2026-10-28): getrf `tiny` (I2)
+  and `cta` (I1, packed sub-group tiles included), getrs `cta` (I1), gesv `tiny` (I2) and NETLIB's
+  getrf, getrs and getri host loops (I4) run a masked batch, as do gesv `blocked` and inv, whose
+  children honour it. The `blocked` families of getrf, getrs and getri carry the mask (per-part
+  slice, panel leaves, laswp and gather kernels) but refuse until trsm does. Defeating one guard at
+  a time turned red only its own pins and the composites over it: tiny's fold (its pins, the
+  packed holes, device Auto, and gesv `blocked`); cta's returns (its pins, and gesv `blocked` at
+  cta's ceiling); getrs `cta`'s NoTrans return (its NoTrans pins only); gesv `tiny`'s fold (its pins
+  only); each host loop's skip (its NETLIB pin and Auto, plus gesv `blocked` over getrf and getrs, inv over
+  getri); cta's `info_clear` reverted to a fill (the `info` sentinel only). An all-active mask
+  stayed green under every break.
+- **W3b and W3c, syev, sygst, sygvd** (`tests/syev_mask_tests.cc`, `tests/sygvd_mask_tests.cc`;
+  acpp Metal float and complex float, NETLIB every scalar, 2026-10-28): syev's `cta_fused` and
+  `jacobi` and the host backend's LAPACKE syev, sygst and sygvd honour the mask, pinned and
+  reached; sytrd_cta, sb2st (both chases and the kd 0 and 1 copies), sb2st_hh with its three
+  back-transforms, latrd's legacy and device panels and syev_align are checked unpinned. The
+  composites (syev `cta`, `blocked`, `two_stage`; sygst `blocked`, `two_sided`; sygvd `compose`;
+  syfn) carry the plumbing and keep refusing until their children land. With each family's guard
+  defeated, only the masked patterns that have an inactive item went red (`alternating`, `single`,
+  the work-group holes), always as "inactive item written". `none` and `all-active` stayed green,
+  and no active item differed. Latrd's grid panel cannot run on Metal or a host device and is
+  untested here.
+- **W2c, QR** (`tests/geqrf_mask_tests.cc`, `tests/ormqr_mask_tests.cc`; Apple M5 Max Metal float and
+  cfloat, NETLIB every scalar, 2026-10-28): geqrf's tiny, cta, blocked and NETLIB families, ormqx_cta,
+  NETLIB's ormqr and orgqr, and the blocked ormqr and orgqr wherever the Left update does not reach
+  trmm run a masked batch. Defeating one guard at a time turned red only its own cases: tiny's
+  `Masked` fold (the tiny shapes); cta's packed sub-group return (cta's packed shapes and blocked's
+  short trailing panels, which take that leaf); blocked's per-part slice (its 8-item-part shape);
+  ormqx_cta's `live` fold (every ormqx_cta form); orgqr's copy-back skip (the orgqr blocked shapes);
+  each NETLIB loop (its op's vendor cases). ormqx_cta's old per-partition return before a barrier
+  stayed green on Metal: that fix is held by review, not by a test.
+- **W1b, level 3, trsm and spmm** (`tests/trsm_mask_tests.cc`, `tests/level3_mask_tests.cc`,
+  `tests/spmm_mask_tests.cc`; sm_89, every scalar, 2026-10-28): every native family of trsm, trmm,
+  symm, hemm, syrk, herk, syr2k, her2k and spmm runs a masked batch and every vendor refuses. The
+  families over the public gemm (trsm `blocked`, `expand`, `fold`) pin gemm too, and the level-3
+  helpers adopt the call's mask onto B and C, since the gemm sees scratch in place of A. spmm's
+  gather is bit-identical; its scatter is checked by backward error. Defeating one guard at a time
+  turned red only its own cases: trsm `cta`'s I1 return (the `cta` and `blocked` pins, which solve
+  their diagonal blocks with `cta`); `sg_left`'s `Masked` fold (every `sg_left` bucket, holes in
+  packed sub-groups included); syrk's gram tile (syrk and herk `gram`); `fold_hermitian` (herk and
+  her2k `fold`, chunks included); the mirror body (symm and hemm `mirror` except double's tiled
+  body); spmm's gather (its NoTrans cases, the scatter green). Dropping the mask slice in
+  `level3::batch_range` turned red every family that launches through it, at every masked pattern.
+  The unmasked `sg_left` instances keep base's registers and stack on all 44 kernels.
+- **W4b, sytrf, sytrs, sysv** (`tests/sytrf_mask_tests.cc`; NETLIB every scalar, Metal float and
+  complex float, 2026-10-28): sytrf `cta`, `wg`, `blocked`, sytrs `cta`, `wg`, sysv `cta`, `compose`
+  and LAPACKE's sytrf and sytrs host loops run a masked batch; A, the packed ipiv, `info` and B of an
+  inactive item keep every byte, a singular item included. `blocked` slices the mask per part, on
+  its kernels and its gemm views (the chunk patterns at n = 45 and 170). sytrs `blocked` refuses
+  until trsm honours the mask; cuSOLVER's sytrf refuses permanently.
+- **W2a, Cholesky** (`tests/potrf_mask_tests.cc`; sm_89, every scalar, 2026-10-28): potrf `tiny`,
+  `cta` and `lpanel`, posv `tiny`, potri `cta` (either backend) and lascl run a masked batch, with
+  failing items in `info` and both triangles; the vendor and the composites over W1b or W2b children
+  (potrf and posv `blocked`, posv `cta`, potrs, potri `blocked`) refuse and write nothing. Dropping
+  one guard at a time turned red only its own cases: potrf `tiny`'s, posv `tiny`'s and potri `cta`'s
+  (their shapes, hole patterns only); `cta`'s two returns (its shapes in both scopes, and Auto, which
+  picks `cta` at n = 24); `lpanel`'s fold (its shapes). Dropping the vendor's `can_run` term left
+  `potrf_vendor`'s own entry refusal (NoRouteError): red on the strict vendor pin and Auto double,
+  nothing written. posv `tiny` and `lpanel` take `Masked` too: their runtime fold cost 4.3% and 4.2%
+  on complex float at batch 32768.
+- **W4a, gesvd** (`tests/gesvd_mask_tests.cc`; Apple M5 Max Metal float and cfloat, NETLIB every
+  scalar, 2026-10-28): gesvd's `jacobi` (I2, its tail return removed), NETLIB's host loop (I4) and
+  `blocked` over bdsqr without a trmm leg run a masked batch, as do gebrd's three kernels, bdsqr and
+  ormbr on a device. bdsdc, `blocked` over bdsdc, `cta` and the Hermitian forms carry the plumbing
+  and refuse until stedc, steqr and the syev composites land. gebrd_cta's early return was already
+  gone (#209); restoring it stays green on Metal, and a source scan in the test now holds it. Each
+  family's guard defeated alone turned red only its own cases and the composites over it, always
+  as "inactive item written"; bdsqr's non-neutral fold flag turned red only its fold case.
+- **Cholesky lift pass** (`tests/potrf_mask_tests.cc`; sm_89, every scalar, 2026-10-28): potrf
+  `blocked`, posv `cta` and `blocked`, potrs `fused` (I1 in `potrs_fused_launch`) and `trsm`, and
+  potri `blocked` run a masked batch, the chunked drivers at forced part sizes (part edges, a wholly
+  inactive part). The composites' children are pinned `native` in both runs, because the unmasked
+  reference may otherwise route a child to the vendor. posv re-attaches the call mask to A and B, so
+  a mask on B alone still covers A and `info`. Each break was red only on its own cases: the potrs
+  fused guard (potrs `fused`, posv `cta`), potrf blocked's fixup guard (potrf `blocked`, plus the posv
+  shapes whose potrf child is `blocked`), potri blocked's sub-view masks (potri `blocked`), potrs'
+  trsm views (potrs `trsm`, posv `blocked`), and posv's re-attach (the B-only posv cases).
+- **W3a, the tridiagonal stages** (`tests/steqr_mask_tests.cc`, `tridiag_mask_tests.cc`,
+  `stedc_mask_tests.cc`; Mac, acpp Metal float, the acpp CPU queue and NETLIB float and double,
+  2026-10-28): steqr (cta, wg, legacy), stebz, stein, tridiagonal_solver and stedc run a masked
+  batch natively. stedc's deflation maximum at n = 512 decided bit-identical: with only odd items
+  active the back-transform takes the narrow GEMM (16 columns) where the unmasked call takes the
+  full one (512), and Z kept its bits. The mask tests poison the workspace: zeroed, an inactive
+  item's working copy is an empty problem and a dropped steqr guard stores its Z back unchanged.
+  Defeating one guard per build turned red only its own paths: stebz, stein and
+  tridiagonal_solver (their `*EveryPattern` and saturating cases, plus their row in
+  `batch_mask_entries_tests`); steqr cta's `live` fold (the CTA cases and stedc's recursive leaves,
+  Metal only); steqr wg's sweep (every NETLIB steqr case, Metal n = 40, stedc on the CPU queue);
+  steqr_legacy's (NETLIB stedc only); stedc's in-place diagonal edit (the recursive cases); the
+  per-level expanded mask (the level cases, through `info`).
+- **CUDA verification of the union** (sm_89, every scalar, 2026-10-29): ortho's Cholesky, Chol2 and
+  ShiftChol3 (and syevx's iterative arms over them) run a masked batch. On CUDA an unmasked
+  reference routes children to the vendor, which a masked call refuses, so the composite cases pin
+  their children `native` for both runs. norm's One and Inf sums used shared-memory float atomics
+  off Metal, which made two unmasked calls differ in their bits; every backend now gives each sum
+  one owner. One break per build, each red only on its own cases and the composites over it:
+  sytrs `cta` (with sysv `compose`), sytrs `wg`, the shared sytrf/sysv `cta` launch, getrf tiny's
+  fold (holes inside a sub-group), syev `cta_fused`'s fold, getrf `blocked`'s sub-view re-attach
+  (with gesv `blocked`), getrs `blocked`'s gather (only once a case reached nrhs >= 16), getri
+  `blocked` (with inv), sytrd_blocked's own update (only once a case ran unfused) and sygst's diagonal
+  kernel. ormqr blocked's trmm leg and sygst's mirror write scratch only, so their breaks stay green.
+  A revert of gebrd_cta's and ormqx_cta's barrier fixes also stays green on sm_89 (exited lanes count
+  as arrived), so source scans hold both; compute-sanitizer cannot attach to a DPC++ process.
+- **Final lift pass, the composites** (`tests/syev_mask_tests.cc`, `sygvd_mask_tests.cc`,
+  `gesvd_mask_tests.cc`, `syevx_mask_tests.cc`; sm_89 every scalar, NETLIB every scalar, 2026-10-29):
+  syev `cta`, `blocked` and `two_stage`, so `syev(A.with_batch_mask(m))` on Auto at every size
+  class; syfn and syfn_from_eigen; sygvd `compose` and sygvd_factored; gesvd `blocked` over bdsdc,
+  normal and bdsqr, `cta`, and the Hermitian `blocked` and `cta`; bdsdc; lanczos; syevx
+  `DirectSubset`. On CUDA these cases compare active items with the all-active masked call
+  (`masked_reference`), because the unmasked reference routes children such as gemm or herk to the
+  vendor. `sort`'s Span overload rebuilt W unmasked (the drop hazard); it now adopts V's mask, and
+  lanczos passes both views masked. On the host backend, sygvd `compose`, syfn and
+  DirectSubset reached the host BLAS only after writing A or `info`, so they now refuse up front
+  there. Breaking one guard at a time turned red only its own cases and the composites over it,
+  always as "inactive item written":
+  - syev blocked's final copy (real `blocked`, Auto at blocked sizes, sygvd `compose` at n = 45
+    and 70, Hermitian gesvd);
+  - syfn's info kernel (syfn and syfn_from_eigen, `info`); sygvd's info merge (`compose` at
+    n = 7 and 32, `info`); DirectSubset's count kernel (its cases, `m`, W and `info`); these three in one build, on
+    disjoint paths;
+  - bdsdc's extraction (bdsdc direct on both backends, and `blocked` over bdsdc: `s`, U, Vh);
+  - lanczos's sort without the mask on W (lanczos, W). It stayed green until the case poisoned W
+    and V with distinct unsorted values: a uniform poison sorts to the same bytes.
+  Three breaks stayed green and cannot write an output: a guard over scratch only (blocked's phase
+  kernel), a view whose children adopt another operand's mask, and bdsdc's repair, which runs only
+  for a degenerate singular value.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

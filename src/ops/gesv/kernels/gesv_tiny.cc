@@ -20,6 +20,7 @@
 #include <src/kernels/common/tiny_device.hh>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
@@ -36,7 +37,7 @@
 namespace batchlas {
 
 // At namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N, int NR, int MinBlocks>
+template <typename T, int N, int NR, int MinBlocks, bool Masked>
 class GesvTinyKernel;
 
 namespace sycl_gesv {
@@ -80,7 +81,9 @@ constexpr int tiny_rhs_bucket(int nrhs) {
 // whose column bucket NC and local-memory pivot row this body shares. The published row
 // carries the pivot row of B after that of A, so forward substitution rides the same
 // barrier. evidence: docs/perf/lu.md#the-local-memory-broadcast
-template <typename D, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm>
+// Masked: the batch mask folds into `live`, a template so the unmasked instance is the kernel as
+// it was (the runtime fold measured 1.4-2.3% on float n = 32 and complex<float> n = 16, batch 8192).
+template <typename D, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm, bool Masked>
 struct GesvTinyBody {
     using R = gn::real_of<D>;
     using R4 = tn::tiny_r4<R>;
@@ -96,6 +99,7 @@ struct GesvTinyBody {
     std::ptrdiff_t ldap, ldbp, strap, strbp;
     int* piv_ptr;
     int32_t* info_ptr;
+    const std::uint8_t* mask;          // the batch mask, null when unmasked
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
     BATCHLAS_REQD_SG_SIZE(32) BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)
@@ -109,8 +113,10 @@ struct GesvTinyBody {
         const int prob_id = wg_id * kMpw + pidx;
 
         // CLAMP, DO NOT RETURN: tiny_device.hh's third invariant -- an
-        // early-exited lane still sits in the shuffle mask.
-        const bool live = (prob_id < batch);
+        // early-exited lane still sits in the shuffle mask. A masked-off item is dead the
+        // same way (I2): it solves an identity pad and stores nothing.
+        bool live = (prob_id < batch);
+        if constexpr (Masked) live = live && mask[prob_id] != 0;
         const int b = live ? prob_id : 0;
         const D* const srcA = ap + static_cast<std::ptrdiff_t>(b) * strap;
         const D* const srcB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
@@ -321,12 +327,12 @@ constexpr bool gesv_tiny_slm() {
     return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
 }
 
-template <typename T, int N, int NC, int NR, int MinBlocks>
+template <typename T, int N, int NC, int NR, int MinBlocks, bool Masked>
 Event gesv_tiny_launch_b(Queue& ctx,
                          T* a_ptr, int lda, int stride_a,
                          T* b_ptr, int ldb, int stride_b,
                          int n, int nrhs, int batch,
-                         int* piv_ptr, int32_t* info_ptr) {
+                         int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* costs an isnan branch and a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
@@ -340,7 +346,7 @@ Event gesv_tiny_launch_b(Queue& ctx,
         kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
     static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
     constexpr bool kSlm = gesv_tiny_slm<T, N>();
-    using Body = GesvTinyBody<D, N, NC, NR, kMpw, MinBlocks, kSlm>;
+    using Body = GesvTinyBody<D, N, NC, NR, kMpw, MinBlocks, kSlm, Masked>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
     const std::size_t slm_elems = kSlm ? std::size_t(2 * kMpw * Body::kRowV) : 1;
@@ -350,9 +356,9 @@ Event gesv_tiny_launch_b(Queue& ctx,
             reinterpret_cast<D*>(a_ptr), reinterpret_cast<D*>(b_ptr), n, nrhs, batch,
             static_cast<std::ptrdiff_t>(lda), static_cast<std::ptrdiff_t>(ldb),
             static_cast<std::ptrdiff_t>(stride_a), static_cast<std::ptrdiff_t>(stride_b),
-            piv_ptr, info_ptr,
+            piv_ptr, info_ptr, mask,
             sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
-        batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks>>(h,
+        batchlas::impl::parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
@@ -398,9 +404,13 @@ constexpr int gesv_tiny_min_blocks() {
 template <typename T, int N, int NC, int NR>
 Event gesv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
                           int stride_b, int n, int nrhs, int batch, int* piv_ptr,
-                          int32_t* info_ptr) {
-    return gesv_tiny_launch_b<T, N, NC, NR, gesv_tiny_min_blocks<T, N, NC, NR>()>(
-        ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n, nrhs, batch, piv_ptr, info_ptr);
+                          int32_t* info_ptr, const std::uint8_t* mask) {
+    constexpr int kMinBlocks = gesv_tiny_min_blocks<T, N, NC, NR>();
+    if (mask != nullptr)
+        return gesv_tiny_launch_b<T, N, NC, NR, kMinBlocks, true>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n,
+                                                                  nrhs, batch, piv_ptr, info_ptr, mask);
+    return gesv_tiny_launch_b<T, N, NC, NR, kMinBlocks, false>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n,
+                                                               nrhs, batch, piv_ptr, info_ptr, mask);
 }
 
 template <typename T, int N, int NR>
@@ -408,14 +418,14 @@ Event gesv_tiny_launch(Queue& ctx,
                        T* a_ptr, int lda, int stride_a,
                        T* b_ptr, int ldb, int stride_b,
                        int n, int nrhs, int batch,
-                       int* piv_ptr, int32_t* info_ptr) {
+                       int* piv_ptr, int32_t* info_ptr, const std::uint8_t* mask) {
     switch (gesv_nc_of(n, N)) {
 #define BATCHLAS_GESV_TINY_NC(NCC)                                                           \
         case NCC:                                                                            \
             if constexpr (NCC <= N && gesv_nc_legal<T, N>(NCC)) {                            \
                 return gesv_tiny_launch_nc<T, N, NCC, NR>(ctx, a_ptr, lda, stride_a, b_ptr,  \
                                                           ldb, stride_b, n, nrhs, batch,     \
-                                                          piv_ptr, info_ptr);                \
+                                                          piv_ptr, info_ptr, mask);          \
             }                                                                                \
             break;
         BATCHLAS_GESV_TINY_NC(8) BATCHLAS_GESV_TINY_NC(12) BATCHLAS_GESV_TINY_NC(16)
@@ -426,7 +436,7 @@ Event gesv_tiny_launch(Queue& ctx,
             break;
     }
     return gesv_tiny_launch_nc<T, N, N, NR>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b,
-                                            n, nrhs, batch, piv_ptr, info_ptr);
+                                            n, nrhs, batch, piv_ptr, info_ptr, mask);
 }
 
 Span<int32_t> gesv_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
@@ -522,6 +532,7 @@ Event gesv_tiny_dispatch(Queue& ctx,
                              : gesv_tiny_layout(ctx, pool, batch);
 
     auto piv_i32 = pivots.as_span<int>();
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("gesv_tiny", A, B));
 
     // A nested switch rather than a table: the <T, N, NR> cross-product is instantiated
     // implicitly from here, so a missing arm is a link error, not a silent fallback.
@@ -529,7 +540,7 @@ Event gesv_tiny_dispatch(Queue& ctx,
     if constexpr (tiny_cap<T>() >= (NN)) {                                             \
         return gesv_tiny_launch<T, NN, RR>(ctx, A.data_ptr(), A.ld(), A.stride(),       \
                                            B.data_ptr(), B.ld(), B.stride(), n, nrhs,   \
-                                           batch, piv_i32.data(), info.data());         \
+                                           batch, piv_i32.data(), info.data(), mask);   \
     }
 
     if (rbucket == 1) {

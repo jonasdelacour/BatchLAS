@@ -12,6 +12,7 @@
 #include <src/queue.hh>
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 #include <src/sycl/kernel_attrs.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -26,7 +27,7 @@
 namespace batchlas {
 
 // Kernel name tag; outside the anonymous namespace so it names no internal-linkage entity.
-template <typename T, int NB>
+template <typename T, int NB, bool Masked>
 class PotrfLpanelKernel;
 
 namespace sycl_potrf {
@@ -163,12 +164,15 @@ unsigned potrf_lpanel_debug_launch(Queue& ctx, int n, int batch, int min_blocks_
 
 namespace {
 
-template <typename T, int NB>
+// Masked: the batch mask folds into `live` (I2), a template so the unmasked instance is the kernel
+// as it was (the runtime fold cost 4.2% on complex<float> n = 48 at batch 32768). The body is
+// instantiated per Masked: shared by both kernels it stayed out of line (float NB = 16, 11% slower).
+template <typename T, int NB, bool Masked>
 Event potrf_lpanel_launch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
                           Span<int32_t> info,
                           const PotrfLpanelLaunch& p,
-                          int n, int batch) {
+                          int n, int batch, const std::uint8_t* mask) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
@@ -206,7 +210,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                            sizeof(sycl::vec<float, 4>)), h);
         sycl::local_accessor<int, 1> fail(sycl::range<1>(static_cast<std::size_t>(G)), h);
 
-        batchlas::impl::parallel_for<PotrfLpanelKernel<T, NB>>(h,
+        batchlas::impl::parallel_for<PotrfLpanelKernel<T, NB, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),
                               sycl::range<1>(wg_size)),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
@@ -219,8 +223,9 @@ Event potrf_lpanel_launch(Queue& ctx,
                 // NO EARLY RETURN, and no shortened `n` either: every barrier below is a
                 // work-group barrier, so a lane that leaves early -- or runs fewer panels --
                 // hangs the group. A dead slot runs the whole body against matrix 0 with
-                // its stores suppressed.
-                const bool live = (matrix_id < batch);
+                // its stores suppressed; an inactive item (I2) is a dead slot.
+                bool live = (matrix_id < batch);
+                if constexpr (Masked) live = live && mask[matrix_id] != 0;
 
                 D* sA = &panel[0] + static_cast<std::ptrdiff_t>(slot) * slda * NB;
                 D* sB = reinterpret_cast<D*>(&block[0]) +
@@ -232,7 +237,7 @@ Event potrf_lpanel_launch(Queue& ctx,
                 // every batch item but the first reads the wrong matrix.
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(live ? matrix_id : 0) * stride_a;
 
-                potrf_native::potrf_lpanel_body<D, R, NB>(it, tid, L, live, sA, slda, sB, fl,
+                potrf_native::potrf_lpanel_body<D, R, NB, Masked>(it, tid, L, live, sA, slda, sB, fl,
                                                           Ag, ldg, n);
 
                 // One writer per matrix; `fail` is published by B6 of the last panel.
@@ -318,12 +323,16 @@ Event potrf_lpanel_dispatch(Queue& ctx,
                              ? info_out
                              : potrf_lpanel_layout<T>(ctx, pool, batch);
 
+    const std::uint8_t* const mask = detail::mask_ptr(detail::call_mask("potrf", A));
     if constexpr (std::is_same_v<T, float>) {
         if (nb == 16) {
-            return potrf_lpanel_launch<T, 16>(ctx, A, info, p, n, batch);
+            return mask ? potrf_lpanel_launch<T, 16, true>(ctx, A, info, p, n, batch, mask)
+                        : potrf_lpanel_launch<T, 16, false>(ctx, A, info, p, n, batch, nullptr);
         }
     }
-    return potrf_lpanel_launch<T, PotrfLpanelConst<T>::NB>(ctx, A, info, p, n, batch);
+    constexpr int kNb = PotrfLpanelConst<T>::NB;
+    return mask ? potrf_lpanel_launch<T, kNb, true>(ctx, A, info, p, n, batch, mask)
+                : potrf_lpanel_launch<T, kNb, false>(ctx, A, info, p, n, batch, nullptr);
 }
 
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.

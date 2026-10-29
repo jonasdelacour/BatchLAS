@@ -42,8 +42,9 @@ inline bool blocked_nb_compiled(int nb) { return nb == 32 || nb == 64 || nb == 1
 // Blocked's children are GPU level-3 natives, and its diagonal kernel must fit the device's SLM.
 template <Backend B, class T>
 bool can_run(const SygstChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bf) {
-    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1 &&
-                             !batchlas::detail::any_batch_mask(A, Bf);  // no family reads the mask yet
+    const bool homogeneous = !A.is_heterogeneous() && !Bf.is_heterogeneous() && A.rows() >= 1;
+    // Every family honours a batch mask: Blocked and TwoSided through their native children, the
+    // vendor (NETLIB only) in its host loop.
     return std::visit(overloaded{
         [&](const Blocked& b) {
             const int kb = std::min(sycl_sygst::kDiagMaxOrder, A.rows());

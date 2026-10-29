@@ -13,6 +13,7 @@
 #include <src/util/template-instantiations.hh>
 #include <src/sort.hh>
 #include <src/kernels/common/info_span.hh>
+#include <src/util/batch_mask.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>
 
 namespace batchlas {
@@ -58,7 +59,8 @@ Event steqr_wg_impl(Queue& ctx,
                 auto ebid = e.batch_item(i);
                 auto ix = 0;
                 auto sub_problem_ix = 0;
-                while (ix < n - 1) {
+                // An inactive item lists no sub-problem, so no sweep or rotation touches it.
+                while (e.active(i) && ix < n - 1) {
                     auto start_ix = ix;
                     if (ebid(ix) != T(0)) {
                         for (ix = ix + 1; ix < n - 1; ++ix) {
@@ -288,6 +290,10 @@ Event steqr_wg(Queue& ctx,
                Span<int32_t> info) {
     const int64_t n = d_in.size();
     const int64_t batch_size = d_in.batch_size();
+    // The working copies are rebuilt from the pool, so they take the call's mask back on.
+    const auto mask = batchlas::detail::call_mask("steqr_wg", d_in, e_in, eigenvalues, eigvects);
+    const VectorView<T> evals = eigenvalues.with_batch_mask(mask);
+    if (params.sort) require_sortable(evals);
 
     if (jobz == JobType::EigenVectors) {
         if (eigvects.rows() != eigvects.cols()) {
@@ -297,13 +303,17 @@ Event steqr_wg(Queue& ctx,
             throw batchlas::invalid_argument("Eigenvector matrix has incompatible dimensions.");
         }
         if (!params.back_transform) {
-            (void)eigvects.fill_identity(ctx);
+            (void)eigvects.with_batch_mask(mask).fill_identity(ctx);
         }
     }
+    const MatrixView<T, MatrixFormat::Dense> Z =
+        jobz == JobType::EigenVectors ? eigvects.with_batch_mask(mask) : eigvects;
 
     auto pool = BumpAllocator(ws);
-    auto [d, e, givens_rotations, apply_order, deflation_indices, scratch] =
+    auto [d_ws, e_ws, givens_rotations, apply_order, deflation_indices, scratch] =
         steqr_wg_layout<T>(ctx, pool, n, batch_size, jobz, params);
+    const VectorView<T> d = d_ws.with_batch_mask(mask);
+    const VectorView<T> e = e_ws.with_batch_mask(mask);
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
 
@@ -315,7 +325,7 @@ Event steqr_wg(Queue& ctx,
                       d,
                       e,
                       jobz,
-                      eigvects,
+                      Z,
                       givens_rotations,
                       deflation_indices,
                       apply_order,
@@ -331,6 +341,7 @@ Event steqr_wg(Queue& ctx,
     if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
         ctx->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
+                if (!e.active(id[0])) return;  // I3
                 auto e_item = e.batch_item(id[0]);
                 int32_t unconverged = 0;
                 for (int64_t j = 0; j < n - 1; ++j) {
@@ -345,13 +356,14 @@ Event steqr_wg(Queue& ctx,
         batchlas::impl::parallel_for(cgh, sycl::nd_range(sycl::range(batch_size * n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
             auto intra = item.get_local_id(0);
-            eigenvalues(intra, bid) = d(intra, bid);
+            if (!evals.active(bid)) return;  // I1, no barrier
+            evals(intra, bid) = d(intra, bid);
         });
     });
 
     if (params.sort) {
         // The passes are finished, so their scratch is free for sort to take over.
-        (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, scratch);
+        (void)sort(ctx, evals, Z, jobz, params.sort_order, scratch);
     }
     return ctx.get_event();
 }

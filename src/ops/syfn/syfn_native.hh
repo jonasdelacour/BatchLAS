@@ -22,18 +22,20 @@ struct Core {
     Span<float_t<T>> g;  // m per item: the column scales
 };
 
+// Each launch skips item b where a non-null mask has mask[b] == 0.
 // info[b]: the out-of-domain count of W's item b, or n + syev_info[b] where that is nonzero.
 template <Backend B, class T>
 void launch_info(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnKind kind, Span<int32_t> info,
-                 Span<int32_t> syev_info);
+                 Span<int32_t> syev_info, const std::uint8_t* mask);
 
 // F := 0 (the m == 0 case).
 template <Backend B, class T>
-Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F);
+Event launch_zero(Queue& q, const MV<T>& V, const MV<T>& F, const std::uint8_t* mask);
 
 // ws.g := the column scales, ws.y := V diag(ws.g).
 template <Backend B, class T>
-void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws);
+void launch_scale(Queue& q, const MV<T>& V, Span<float_t<T>> W, SyfnFunction<float_t<T>> fn, const Core<T>& ws,
+                  const std::uint8_t* mask);
 
 }  // namespace ops::syfn
 }  // namespace batchlas

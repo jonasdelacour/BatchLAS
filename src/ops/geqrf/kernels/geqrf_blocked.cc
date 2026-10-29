@@ -10,6 +10,7 @@
 
 #include <src/queue.hh>
 #include <src/select/grid_chunk.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/template-instantiations.hh>
 
 #include <batchlas/util/mempool.hh>
@@ -235,12 +236,17 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
     const int ld = A.ld();
     const int stride = A.stride();
+    const auto mask = ::batchlas::detail::call_mask("geqrf_blocked", A);
 
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * chunk ? batch - b0 : chunk;   // the last part takes the remainder
         T* const a_ptr = A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * stride;
         T* const tau_ptr = tau.data() + static_cast<std::ptrdiff_t>(b0) * k;
         const auto Apart = A.batch_range(b0, cb);
+        // The part's mask slice: every view below is rebuilt from a raw pointer (the drop hazard),
+        // and the panel, pack and larft kernels take it as an argument.
+        const auto mpart = mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
+        const std::uint8_t* const mp_ptr = ::batchlas::detail::mask_ptr(mpart);
 
         // Out of order, the previous part's last panel may still be running.
         if (b0 > 0 && !ctx.in_order()) ctx.wait();
@@ -250,7 +256,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         auto sub = [&](int r0, int nr, int c0, int nc) {
             return MatrixView<T, MatrixFormat::Dense>(
                 a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-                nr, nc, ld, stride, cb, nullptr);
+                nr, nc, ld, stride, cb, nullptr).with_batch_mask(mpart);
         };
 
         for (int j0 = 0; j0 < k; j0 += nb) {
@@ -274,7 +280,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
             (void)geqrf_panel_factorize<T>(ctx,
                                            a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
                                            ld, stride, mp, ib, cb,
-                                           tau_ptr, k, j0, nullptr, leaf_here, nullptr);
+                                           tau_ptr, k, j0, nullptr, leaf_here, nullptr, mp_ptr);
 
             if (n2 <= 0) break;
 
@@ -288,32 +294,32 @@ Event geqrf_blocked_dispatch(Queue& ctx,
             const int ld_v = mp;
             const int stride_v = mp * ib;
 
-            MatrixView<T, MatrixFormat::Dense> Vblk(ws.v.data(), mp, ib, ld_v,
-                                                    stride_v, cb);
+            const auto Vblk = MatrixView<T, MatrixFormat::Dense>(ws.v.data(), mp, ib, ld_v,
+                                                                 stride_v, cb).with_batch_mask(mpart);
             (void)wy::pack_v_panel_batched<GeqrfWyTag, T>(
-                ctx, ws.v.data(), ld_v, stride_v, Apart, j0, ib, m);
+                ctx, ws.v.data(), ld_v, stride_v, Apart, j0, ib, m, mp_ptr);
 
             if (!ctx.in_order()) ctx.wait();
 
-            MatrixView<T, MatrixFormat::Dense> Tblk(ws.t.data(), ib, ib, nb,
-                                                    nb * nb, cb);
+            const auto Tblk = MatrixView<T, MatrixFormat::Dense>(ws.t.data(), ib, ib, nb,
+                                                                 nb * nb, cb).with_batch_mask(mpart);
             // Compile-time `false`: a runtime literal also instantiates the device-BLAS larft
             // for GeqrfWyTag, 32 entry functions that can never launch.
             (void)wy::larft_forward_columnwise_batched_t<GeqrfWyTag, T, false>(
                 ctx, ws.t.data(), nb, nb * nb,
                 ws.v.data(), ld_v, stride_v,
                 mp, ib,
-                tau_ptr, /*tau_stride=*/k, /*tau_offset=*/j0, cb);
+                tau_ptr, /*tau_stride=*/k, /*tau_offset=*/j0, cb, mp_ptr);
 
             if (!ctx.in_order()) ctx.wait();
 
             const auto A22 = sub(j0, mp, j2, n2);
             // Batch stride is the layout's nb * n2max, not this panel's nb * n2: the GEMMs agree
             // either way, so a wrong stride is silent, but only n2max matches what was reserved.
-            MatrixView<T, MatrixFormat::Dense> W1(ws.w1.data(), ib, n2, nb,
-                                                  nb * n2max, cb);
-            MatrixView<T, MatrixFormat::Dense> W2(ws.w2.data(), ib, n2, nb,
-                                                  nb * n2max, cb);
+            const auto W1 = MatrixView<T, MatrixFormat::Dense>(ws.w1.data(), ib, n2, nb,
+                                                               nb * n2max, cb).with_batch_mask(mpart);
+            const auto W2 = MatrixView<T, MatrixFormat::Dense>(ws.w2.data(), ib, n2, nb,
+                                                               nb * n2max, cb).with_batch_mask(mpart);
 
             (void)trailing_gemm(ctx, Vblk, A22, W1, T(1), T(0), kConjT<T>, Transpose::NoTrans,
                           ComputePrecision::Default);

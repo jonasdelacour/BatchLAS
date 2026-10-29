@@ -106,6 +106,9 @@ Event syev_blocked_part(Queue& ctx,
                    StedcParams<typename base_type<T>::type> stedc_params,
                    Span<int32_t> info) {
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
+    // The workspace views are rebuilt from raw pointers, so they take the part's mask back on.
+    const Span<const std::uint8_t> mask_span = ::batchlas::detail::call_mask("syev_blocked", a_in);
+    const std::uint8_t* mask = ::batchlas::detail::mask_ptr(mask_span);
 
     if (!ctx.in_order()) {
         throw batchlas::invalid_argument("syev_blocked: requires an in-order Queue");
@@ -142,16 +145,19 @@ Event syev_blocked_part(Queue& ctx,
         auto e_c_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
         auto tau_c_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
 
-        VectorView<T> d_c_view(d_c_span, n, batch, 1, n);
-        VectorView<T> e_c_view(e_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        VectorView<T> tau_c_view(tau_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
+        const VectorView<T> d_c_view = VectorView<T>(d_c_span, n, batch, 1, n).with_batch_mask(mask_span);
+        const VectorView<T> e_c_view =
+            VectorView<T>(e_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
+        const VectorView<T> tau_c_view =
+            VectorView<T>(tau_c_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
 
         // Real tridiagonal, consumed by STEDC in eigenvector mode and by STEBZ otherwise.
         auto d_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
         auto e_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
 
-        VectorView<Real> d_view(d_span, n, batch, 1, n);
-        VectorView<Real> e_view(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
+        const VectorView<Real> d_view = VectorView<Real>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
+        const VectorView<Real> e_view =
+            VectorView<Real>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
 
         // The phase chain S is read only by the eigenvector lift below; the Z
         // buffers only by STEDC and that same lift. Neither is allocated in values
@@ -194,6 +200,7 @@ Event syev_blocked_part(Queue& ctx,
 
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
 
                 // S(0) = 1
                 if (want_phase) {
@@ -222,7 +229,7 @@ Event syev_blocked_part(Queue& ctx,
             });
         });
 
-        VectorView<Real> evals_view(eigenvalues.data(), n, batch, 1, n);
+        const VectorView<Real> evals_view = VectorView<Real>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
 
         if (!want_vectors) {
             // Eigenvalues only: bisection straight off the tridiagonal, instead of an
@@ -246,7 +253,7 @@ Event syev_blocked_part(Queue& ctx,
             // See the real branch below: bisection has no status of its own, but
             // syev.hh's contract is that every tier clears `info`, and this is the
             // default values-mode path for 32 < n <= 320.
-            detail::info_clear(ctx, info, batch);
+            detail::info_clear(ctx, info, batch, mask_span);
             (void)stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
             return ctx.get_event();
@@ -256,8 +263,10 @@ Event syev_blocked_part(Queue& ctx,
         auto z_span = pool.allocate<Real>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
         auto zc_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
 
-        MatrixView<Real, MatrixFormat::Dense> z_view(z_span.data(), n, n, n, n * n, batch);
-        MatrixView<T, MatrixFormat::Dense> zc_view(zc_span.data(), n, n, n, n * n, batch);
+        const MatrixView<Real, MatrixFormat::Dense> z_view =
+            MatrixView<Real, MatrixFormat::Dense>(z_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
+        const MatrixView<T, MatrixFormat::Dense> zc_view =
+            MatrixView<T, MatrixFormat::Dense>(zc_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
 
         // Solve tridiagonal eigenproblem in real arithmetic.
         // NOTE: The current STEDC implementation relies on eigenvectors during
@@ -287,6 +296,7 @@ Event syev_blocked_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                     const int32_t row = static_cast<int32_t>(rem % nn);
                     const int32_t col = static_cast<int32_t>(rem / nn);
@@ -329,9 +339,11 @@ Event syev_blocked_part(Queue& ctx,
         auto e_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
         auto tau_span = pool.allocate<T>(ctx, static_cast<std::size_t>(std::max(0, n - 1)) * static_cast<std::size_t>(batch));
 
-        VectorView<T> d_view(d_span, n, batch, 1, n);
-        VectorView<T> e_view(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
-        VectorView<T> tau_view(tau_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1));
+        const VectorView<T> d_view = VectorView<T>(d_span, n, batch, 1, n).with_batch_mask(mask_span);
+        const VectorView<T> e_view =
+            VectorView<T>(e_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
+        const VectorView<T> tau_view =
+            VectorView<T>(tau_span, std::max(0, n - 1), batch, 1, std::max(0, n - 1)).with_batch_mask(mask_span);
 
         // S and Z are eigenvector-path only; see the complex branch. Z alone is
         // n^2*batch, and syev_blocked_buffer_size branches on jobz to match.
@@ -368,6 +380,7 @@ Event syev_blocked_part(Queue& ctx,
                 const int32_t nb = batch;
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                     const int32_t b = static_cast<int32_t>(tid[0]);
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     S(0, b) = T(1);
                     for (int32_t i = 0; i < nn - 1; ++i) {
                         const T ei = E(i, b);
@@ -379,7 +392,7 @@ Event syev_blocked_part(Queue& ctx,
             });
         }
 
-        VectorView<T> evals_view(eigenvalues.data(), n, batch, 1, n);
+        const VectorView<T> evals_view = VectorView<T>(eigenvalues.data(), n, batch, 1, n).with_batch_mask(mask_span);
 
         if (!want_vectors) {
             // Values mode: bisection instead of a discarded eigenvector D&C, as in the
@@ -402,14 +415,15 @@ Event syev_blocked_part(Queue& ctx,
             // DEFAULT path for 32 < n <= 320 in values mode, so leaving the span
             // untouched hands the caller whatever was in the buffer. Mirrors
             // syev_two_stage.cc:276.
-            detail::info_clear(ctx, info, batch);
+            detail::info_clear(ctx, info, batch, mask_span);
             (void)stebz<B, T>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
             return ctx.get_event();
         }
 
         auto z_span = pool.allocate<T>(ctx, static_cast<std::size_t>(n) * static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-        MatrixView<T, MatrixFormat::Dense> z_view(z_span.data(), n, n, n, n * n, batch);
+        const MatrixView<T, MatrixFormat::Dense> z_view =
+            MatrixView<T, MatrixFormat::Dense>(z_span.data(), n, n, n, n * n, batch).with_batch_mask(mask_span);
 
         const JobType internal_jobz = JobType::EigenVectors;
         {
@@ -429,6 +443,7 @@ Event syev_blocked_part(Queue& ctx,
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
                     const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
                     const int32_t row = static_cast<int32_t>(rem % nn);
                     const int32_t col = static_cast<int32_t>(rem / nn);
@@ -636,7 +651,7 @@ Event syev_blocked(Queue& ctx,
                    const Span<std::byte>& ws,
                    StedcParams<typename base_type<T>::type> stedc_params,
                    Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask<T>(Op::syev, "syev_blocked", B, a_in);
+    (void)::batchlas::detail::call_mask("syev_blocked", a_in);  // a_in.batch_range carries each part's slice
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
     const int n = static_cast<int>(a_in.rows());
     const int batch = static_cast<int>(a_in.batch_size());

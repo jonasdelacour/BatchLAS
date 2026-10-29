@@ -70,6 +70,7 @@ inline void build_phase_from_kd1_band(Queue& ctx,
         auto P = phase;
         cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
+            if (!AB.active(b)) return;  // I3: the band's batch mask
             P(0, b) = T(1);
             for (int32_t i = 0; i < n - 1; ++i) {
                 const T t = AB(1, i, b);
@@ -109,6 +110,7 @@ inline void apply_phase_rows(Queue& ctx,
             const int64_t rem = idx - static_cast<int64_t>(b) * n * m;
             const int32_t row = static_cast<int32_t>(rem % n);
             const int32_t col = static_cast<int32_t>(rem / n);
+            if (!Z.active(b)) return;  // I3
             Z(row, col, b) *= P(row, b);
         });
     });

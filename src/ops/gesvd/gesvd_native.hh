@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
-// The gesvd drivers' own shape ceilings, sycl-free, read by gesvd's can_run and the drivers.
+// The gesvd drivers' own shape ceilings and mask predicate, read by gesvd's can_run and the drivers.
+
+#include <batchlas/settings.hh>
+
+#include <src/ops/ormqr/wy_spelling.hh>
 
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <type_traits>
 
 namespace batchlas::sycl_gesvd {
@@ -36,5 +41,25 @@ constexpr std::int64_t gesvd_jacobi_max_dim(bool want_vectors, std::size_t slm_b
 // Largest max(m, n) of gesvd_cta (one sub-group per matrix) and of cuSOLVER's gesvdjBatched.
 inline constexpr std::int64_t kGesvdCtaMaxDim = 32;
 inline constexpr std::int64_t kGesvdVendorCudaMaxDim = 32;
+
+// The Blocked path's bidiagonal solver, BATCHLAS_GESVD_BIDIAG = bdsdc (default) | normal | bdsqr.
+// evidence: docs/perf/gesvd.md#gesvd-tier-3-bdsdc-as-the-bidiagonal-solver
+enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
+
+inline GesvdBidiagSolver gesvd_bidiag_solver() {
+    const char* v = batchlas::settings().selection.gesvd_bidiag.get();
+    if (v == nullptr) return GesvdBidiagSolver::Bdsdc;
+    const std::string s(v);
+    if (s == "bdsqr") return GesvdBidiagSolver::Bdsqr;
+    if (s == "normal") return GesvdBidiagSolver::NormalEquations;
+    return GesvdBidiagSolver::Bdsdc;
+}
+
+// gesvd_blocked's general path honours a mask wherever every child it reaches does: each bidiagonal
+// solver does, NETLIB's host gemm does not. Canonical jobs.
+template <Backend B, typename T>
+bool gesvd_blocked_honours_mask(std::int64_t, std::int64_t, bool, bool) {
+    return select::native_gpu_backend<B>;
+}
 
 }  // namespace batchlas::sycl_gesvd

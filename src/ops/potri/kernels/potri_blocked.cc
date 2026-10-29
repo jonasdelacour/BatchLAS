@@ -19,6 +19,7 @@
 
 #include <src/ops/potri/potri_native.hh>
 #include <src/util/template-instantiations.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <array>
@@ -79,11 +80,13 @@ struct Part {
     int ld, stride, batch;
     Ws<T>* ws;
     int n, wstride;
+    Span<const std::uint8_t> mask;  // the part's slice of the batch mask; every view carries it
     MV<T> sub(int r0, int nr, int c0, int nc, int role) const {
-        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * ld + r0, nr, nc, ld, stride, batch, ws->ptrs[role].data());
+        return MV<T>(a + static_cast<std::ptrdiff_t>(c0) * ld + r0, nr, nc, ld, stride, batch, ws->ptrs[role].data())
+            .with_batch_mask(mask);
     }
     MV<T> w(int nr, int nc, int role) const {
-        return MV<T>(ws->w.data(), nr, nc, nr, wstride, batch, ws->ptrs[role].data());
+        return MV<T>(ws->w.data(), nr, nc, nr, wstride, batch, ws->ptrs[role].data()).with_batch_mask(mask);
     }
 };
 
@@ -176,11 +179,15 @@ Event run(Queue& q, const MV<T>& A, Uplo uplo, int nb, bool full, Span<std::byte
     BumpAllocator pool(ws_span);
     Ws<T> ws = layout<T>(q, pool, n, nb, part_of(c, batch), batch);
     int32_t* const flags = info.empty() ? ws.flags.data() : info.data();
+    const Span<const std::uint8_t> mask = batchlas::detail::call_mask("potri", A);
     for (int b0 = 0, cb = 0; b0 < batch; b0 += cb) {
         cb = batch - b0 < 2 * c ? batch - b0 : c;
+        const Span<const std::uint8_t> part_mask =
+            mask.empty() ? mask : mask.subspan(static_cast<std::size_t>(b0), static_cast<std::size_t>(cb));
         // Never operator()(Slice, Slice): a 0 stride defaults to ld*cols on a sub-view.
-        const Part<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(), A.ld(), A.stride(), cb, &ws, n, n * nb};
-        const MV<T> Ap(p.a, n, n, p.ld, p.stride, cb, ws.ptrs[0].data());
+        const Part<T> p{A.data_ptr() + static_cast<std::ptrdiff_t>(b0) * A.stride(), A.ld(), A.stride(), cb, &ws, n, n * nb,
+                        part_mask};
+        const MV<T> Ap = MV<T>(p.a, n, n, p.ld, p.stride, cb, ws.ptrs[0].data()).with_batch_mask(part_mask);
         const sycl_potri::Stash<T> st{ws.slots.data(), flags + b0, n, 0};
         trtri<B, T>(q, Ap, p, uplo, nb, st);
         lauum<B, T>(q, p, uplo, nb, st);

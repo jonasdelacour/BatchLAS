@@ -43,7 +43,7 @@ int cta_ceiling(const select::Device& d) {
 // a CTA block (the whole matrix, or one nb x nb diagonal block) within the device's local memory.
 template <class T>
 bool can_run(const PotriChoice& c, const select::Device& d, const MV<T>& A) {
-    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
+    // cta honours a batch mask; blocked runs its children (trmm, syrk/herk) on the masked views.
     const bool homogeneous = !A.is_heterogeneous() && A.rows() >= 1 && A.batch_size() >= 1 && d.max_wg >= 1;
     const int n = A.rows();
     return std::visit(overloaded{

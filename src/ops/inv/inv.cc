@@ -29,10 +29,11 @@ namespace batchlas {
                                const MatrixView<T, MatrixFormat::Dense>& A) {
         auto data = pool.allocate<T>(ctx, A.data().size());
         auto ptrs = pool.allocate<T*>(ctx, A.batch_size());
+        // A raw-pointer view starts unmasked: Acopy re-attaches A's mask for getrf and getri.
         return {
             MatrixView<T, MatrixFormat::Dense>(data.data(),
                                                A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(),
-                                               ptrs.data()),
+                                               ptrs.data()).with_batch_mask(A.batch_mask()),
             pool.allocate<int64_t>(ctx, A.rows() * A.batch_size()),
             pool.allocate<std::byte>(ctx, getri_buffer_size<B>(ctx, A)),
             pool.allocate<std::byte>(ctx, getrf_buffer_size<B>(ctx, A)),
@@ -41,10 +42,14 @@ namespace batchlas {
 
     template <Backend B, typename T>
     Event inv(Queue& ctx,
-              const MatrixView<T, MatrixFormat::Dense>& A,
-              const MatrixView<T, MatrixFormat::Dense>& Ainv,
+              const MatrixView<T, MatrixFormat::Dense>& A_,
+              const MatrixView<T, MatrixFormat::Dense>& Ainv_,
               Span<std::byte> workspace) {
-        detail::refuse_batch_mask("inv", A, Ainv);
+        // Both operands carry the call's mask whichever brought it.
+        const auto mask = detail::call_mask("inv", A_, Ainv_);
+        const bool adopt = !mask.empty() && A_.batch_size() == Ainv_.batch_size();
+        const auto A = adopt ? A_.with_batch_mask(mask) : A_;
+        const auto Ainv = adopt ? Ainv_.with_batch_mask(mask) : Ainv_;
         BumpAllocator pool(workspace);
         auto ws = inv_layout<B, T>(ctx, pool, A);
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
@@ -58,14 +63,14 @@ namespace batchlas {
     template <Backend B, typename T>
     size_t inv_buffer_size(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A) {
-        detail::refuse_batch_mask("inv", A);
+        (void)detail::call_mask("inv_buffer_size", A);
         return workspace_bytes([&](BumpAllocator& pool) { return inv_layout<B, T>(ctx, pool, A); });
     }
 
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
                                        const MatrixView<T, MatrixFormat::Dense>& A) {
-        detail::refuse_batch_mask("inv", A);
+        (void)detail::call_mask("inv", A);
         Matrix<T, MatrixFormat::Dense> Aout(A.rows(), A.cols(), A.batch_size());
         // Arena-backed rather than a local UnifiedVector: this overload returns
         // without waiting, so a local would sycl::free the workspace while the

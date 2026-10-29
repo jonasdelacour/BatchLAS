@@ -108,11 +108,19 @@ template <Backend B, typename T> class StedcLevelLeafStatus;
 // Select the even- or odd-indexed half of a batched view. Both halves stay
 // affine (stride doubles), so a level can write straight into its parent's two
 // diagonal sub-blocks with strided-batched GEMMs.
+// Siblings 2q and 2q+1 are one batch item, so both halves take the parent level's mask.
 template <typename T>
-inline MatrixView<T, MatrixFormat::Dense> stedc_batch_parity(const MatrixView<T, MatrixFormat::Dense>& m, int parity) {
+inline MatrixView<T, MatrixFormat::Dense> stedc_batch_parity(const MatrixView<T, MatrixFormat::Dense>& m, int parity,
+                                                             Span<const std::uint8_t> half_mask) {
     return MatrixView<T, MatrixFormat::Dense>(m.data_ptr() + parity * m.stride(),
                                               m.rows(), m.cols(), m.ld(),
-                                              m.stride() * 2, m.batch_size() / 2);
+                                              m.stride() * 2, m.batch_size() / 2).with_batch_mask(half_mask);
+}
+
+// Attaches the call's mask to a view rebuilt from raw memory (the drop hazard); unmasked: unchanged.
+template <typename View>
+inline View stedc_masked(const View& v, Span<const std::uint8_t> mask) {
+    return mask.empty() || v.batch_size() == 0 ? v : v.with_batch_mask(mask);
 }
 
 template <Backend B, typename T>
@@ -137,22 +145,27 @@ void stedc_merge_step(Queue& ctx,
     const bool split_output = out_even.data_ptr() != nullptr;
     const int64_t n = eigenvalues.size();
     const auto batch_size = eigenvalues.batch_size();
+    // The node mask (the call's, or the level's expanded one), carried by every view below.
+    const Span<const std::uint8_t> mask = eigenvalues.batch_mask();
+    const auto Qp = stedc_masked(Qprime, mask);
+    const auto tQ = stedc_masked(temp_Q, mask);
 
     auto E1 = eigvects(Slice{0, m}, Slice(0, m));
     auto E2 = eigvects(Slice{m, SliceEnd()}, Slice(m, SliceEnd()));
 
     auto pool = BumpAllocator(ws);
-    auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
+    auto permutation = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
     // Persistent mapping from logical (current) column order -> physical column in `eigvects`.
     // We avoid physically permuting the eigenvector matrix until right before GEMM / function exit.
-    auto perm_map = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
-    auto v = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
+    auto perm_map = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
+    auto v = stedc_masked(VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size), mask);
 
     ctx -> submit([&](sycl::handler& h) {
         auto E1view = E1.kernel_view();
         auto E2view = E2.kernel_view();
         batchlas::impl::parallel_for<StedcComputeV<B, T>>(h, sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
+            if (!v.active(bid)) return;  // I1, no barrier
             auto bdim = item.get_local_range(0);
             auto tid = item.get_local_linear_id();
             // When rho = e(m-1) is negative, the rank-1 perturbation has the
@@ -180,7 +193,7 @@ void stedc_merge_step(Queue& ctx,
     (void)permute(ctx, eigenvalues, perm_map);
     (void)permute(ctx, v, perm_map);
 
-    auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
+    auto keep_indices = stedc_masked(VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size), mask);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
     //Deflation scheme
     ctx -> submit([&](sycl::handler& h) {
@@ -194,6 +207,11 @@ void stedc_merge_step(Queue& ctx,
         auto bdim = item.get_local_range(0);
         auto tid = item.get_local_linear_id();
         auto cta = item.get_group();
+        // I1, before any barrier. n_reduced = 0 is neutral: later kernels stop at it, dd_max ignores it.
+        if (!v.active(bid)) {
+            if (tid == 0) n_reduced[bid] = 0;
+            return;
+        }
 
         for (int k = tid; k < n; k += bdim){
             keep_indices(k, bid) = 0;
@@ -309,8 +327,8 @@ void stedc_merge_step(Queue& ctx,
     // This composes the current column map with the deflation permutation.
     (void)permute(ctx, perm_map, permutation);
 
-    auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
-    (void)Qprime.fill_identity(ctx);
+    auto temp_lambdas = stedc_masked(VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size), mask);
+    (void)Qp.fill_identity(ctx);
     if (effective_params.secular_solver == StedcSecularSolver::Legacy) {
         (void)secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0), info, info_nodes_per_item);
     } else if (effective_params.merge_variant == StedcMergeVariant::Fused
@@ -460,10 +478,11 @@ void stedc_merge_step(Queue& ctx,
         // fold-back, neither of which fits a split destination. The saving it
         // buys is small next to not having to materialise the block-diagonal
         // input in the first place, which is what splitting achieves.
-        (void)permuted_copy(ctx, Qprime, temp_Q, permutation);
-        (void)permuted_copy(ctx, eigvects, Qprime, perm_map);
+        (void)permuted_copy(ctx, Qp, tQ, permutation);
+        (void)permuted_copy(ctx, eigvects, Qp, perm_map);
+        const Span<const std::uint8_t> half_mask = out_even.batch_mask();
         for (int parity = 0; parity < 2; ++parity) {
-            (void)gemm<B>(ctx, stedc_batch_parity(Qprime, parity), stedc_batch_parity(temp_Q, parity),
+            (void)gemm<B>(ctx, stedc_batch_parity(Qp, parity, half_mask), stedc_batch_parity(tQ, parity, half_mask),
                     parity == 0 ? out_even : out_odd,
                     T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
         }
@@ -483,22 +502,22 @@ void stedc_merge_step(Queue& ctx,
     if (dd_max <= static_cast<int64_t>(stedc_deflation_gemm_max_kept_fraction * static_cast<double>(n))) {
         // A -> temp_Q. eigvects is free afterwards and is reused as the narrow
         // GEMM output, so this needs no extra workspace.
-        (void)permuted_copy(ctx, eigvects, temp_Q, perm_map);
+        (void)permuted_copy(ctx, eigvects, tQ, perm_map);
         auto product_head = eigvects(Slice{}, Slice{0, static_cast<int>(dd_max)});
         (void)gemm<B>(ctx,
-                temp_Q,
-                Qprime(Slice{}, Slice{0, static_cast<int>(dd_max)}),
+                tQ,
+                Qp(Slice{}, Slice{0, static_cast<int>(dd_max)}),
                 product_head,
                 GemmOptions<T>{});
         // Fold the multiplied head back over A so temp_Q holds the whole
         // product A*M; its tail columns are already correct.
-        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, temp_Q(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
-        (void)permuted_copy(ctx, temp_Q, eigvects, permutation);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, tQ(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
+        (void)permuted_copy(ctx, tQ, eigvects, permutation);
     } else {
         // Avoid full-matrix copy + permute by using out-of-place permuted_copy in scratch buffers.
-        (void)permuted_copy(ctx, Qprime, temp_Q, permutation);
-        (void)permuted_copy(ctx, eigvects, Qprime, perm_map);
-        (void)gemm<B>(ctx, Qprime, temp_Q, eigvects, GemmOptions<T>{});
+        (void)permuted_copy(ctx, Qp, tQ, permutation);
+        (void)permuted_copy(ctx, eigvects, Qp, perm_map);
+        (void)gemm<B>(ctx, Qp, tQ, eigvects, GemmOptions<T>{});
     }
 }
 
@@ -559,6 +578,7 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     ctx -> parallel_for<StedcModifyDiagonal<B, T>>(sycl::range(batch_size), [=](sycl::id<1> idx) {
         //Modify the two diagonal entries adjacent to the split
         auto ix = idx[0];
+        if (!d1.active(ix)) return;  // I3: d is the caller's, and edited in place
         rho[ix] = e(m - 1, ix);
         d1(m - 1, ix) -= std::abs(rho[ix]);
         d2(0, ix) -= std::abs(rho[ix]);
@@ -593,6 +613,14 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
 // The plan lives in stedc_levels_plan.hh so tests can assert on it without a device.
 // evidence: docs/perf/stedc.md#stedc-the-level-synchronous-driver
 // ---------------------------------------------------------------------------
+
+// Bytes of the expanded masks of levels 1..L; level l (2^l * bs sub-problems, node p of item
+// p >> l) starts at (2^l - 2) * bs. Level 0 is the call's own mask.
+inline size_t stedc_level_mask_count(int32_t L, size_t batch_size) {
+    return L > 0 ? ((size_t(2) << L) - 2) * batch_size : 0;
+}
+
+template <Backend B, typename T> class StedcLevelMask;
 
 // Total scratch the flattened driver needs, given a plan. `own_top` tells it
 // whether it has to allocate the top-level N x N eigenvector buffer itself
@@ -644,14 +672,16 @@ size_t stedc_levels_workspace(Queue& ctx, const StedcLevelPlan& plan, size_t bat
     // Per-leaf status array (indexed by leaf, not by item). UNCONDITIONAL, like potrf's:
     // a workspace sized without `info` must not be too small for a call made with it.
     bytes += BumpAllocator::allocation_size<int32_t>(ctx, leaf_batch);
+    // The expanded masks of levels 1..L, also UNCONDITIONAL: the size never follows the mask.
+    bytes += BumpAllocator::allocation_size<std::uint8_t>(ctx, stedc_level_mask_count(L, batch_size));
     bytes += BumpAllocator::allocation_size<std::byte>(
         ctx, steqr_buffer_size<T>(ctx, d_leaf, e_leaf, w_leaf, JobType::EigenVectors, leaf_params));
 
     return bytes;
 }
 
-// True when `eigvects` is a densely packed n x n x batch block we can also
-// reinterpret as the packed per-level block arrays of the deeper even levels.
+// True when `eigvects` is a densely packed n x n x batch block the root level can be
+// solved in place in. Deeper levels never use it: their packed arrays straddle items.
 template <typename T>
 inline bool stedc_top_matrix_is_packed(const MatrixView<T, MatrixFormat::Dense>& eigvects, int64_t n) {
     return eigvects.ld() == static_cast<int>(n)
@@ -681,17 +711,21 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     auto wl = pool.allocate<T>(ctx, N * bs);
     auto rho_all = pool.allocate<T>(ctx, ((size_t(1) << L) - 1) * bs);
 
-    Span<T> level_buf[2];
-    level_buf[0] = own_top ? pool.allocate<T>(ctx, static_cast<size_t>(N) * N * bs)
-                           : Span<T>(eigvects.data_ptr(), static_cast<size_t>(N) * N * bs);
+    Span<T> top_buf = own_top ? pool.allocate<T>(ctx, static_cast<size_t>(N) * N * bs)
+                              : Span<T>(eigvects.data_ptr(), static_cast<size_t>(N) * N * bs);
+    Span<T> odd_buf, qprime_buf, tempq_buf;
     if (L > 0) {
-        level_buf[1] = pool.allocate<T>(ctx, static_cast<size_t>(N) * (N / 2) * bs);
-    }
-    Span<T> qprime_buf, tempq_buf;
-    if (L > 0) {
+        odd_buf = pool.allocate<T>(ctx, static_cast<size_t>(N) * (N / 2) * bs);
         qprime_buf = pool.allocate<T>(ctx, static_cast<size_t>(N) * N * bs);
         tempq_buf = pool.allocate<T>(ctx, static_cast<size_t>(N) * N * bs);
     }
+    // Even levels >= 2 (<= N*N*bs/4) live in Qprime's upper half; a level-l merge uses its first
+    // N*N*bs/2^l. In the caller's matrix their blocks straddle items (an inactive item's output).
+    const auto level_data = [&](int32_t level) -> T* {
+        if (level == 0) return top_buf.data();
+        if (level & 1) return odd_buf.data();
+        return qprime_buf.data() + static_cast<size_t>(N) * N * bs / 2;
+    };
 
     size_t merge_bytes = 0;
     for (int32_t l = 0; l < L; ++l) {
@@ -702,6 +736,25 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     // Drawn unconditionally so the workspace size does not depend on whether the
     // caller asked for status; see stedc_levels_workspace.
     auto leaf_status = pool.allocate<int32_t>(ctx, static_cast<size_t>(size_t(1) << L) * static_cast<size_t>(bs));
+    auto level_masks = pool.allocate<std::uint8_t>(ctx, stedc_level_mask_count(L, static_cast<size_t>(bs)));
+    // The call's mask (d, e, w and eigvects carry it, see stedc_dispatch), expanded per level.
+    const Span<const std::uint8_t> mask = d.batch_mask();
+    const auto level_mask = [&](int32_t level) -> Span<const std::uint8_t> {
+        if (mask.empty() || level == 0) return mask;
+        const size_t k = size_t(1) << level;
+        return Span<const std::uint8_t>(level_masks.data() + (k - 2) * static_cast<size_t>(bs), k * static_cast<size_t>(bs));
+    };
+    if (!mask.empty() && L > 0) {
+        const std::uint8_t* src = mask.data();
+        std::uint8_t* dst = level_masks.data();
+        ctx->parallel_for<StedcLevelMask<B, T>>(sycl::range<1>(level_masks.size()), [=](sycl::id<1> idx) {
+            const int64_t g = static_cast<int64_t>(idx[0]);
+            int32_t l = 1;
+            while (g >= ((int64_t(2) << l) - 2) * bs) ++l;  // level l spans [(2^l-2)bs, (2^(l+1)-2)bs)
+            const int64_t p = g - ((int64_t(1) << l) - 2) * bs;
+            dst[g] = src[p >> l];
+        });
+    }
 
     T* dp_ptr = dp.data();
     T* ep_ptr = ep.data();
@@ -715,6 +768,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto scratch = sycl::local_accessor<T, 1>(sycl::range<1>(needs_pad ? n : 1), h);
         batchlas::impl::parallel_for<StedcLevelPad<B, T>>(h, sycl::nd_range<1>(bs * 128, 128), [=](sycl::nd_item<1> item) {
             const int bid = item.get_group_linear_id();
+            if (!d.active(bid)) return;  // I1, before the barrier
             const int tid = item.get_local_linear_id();
             const int bdim = item.get_local_range(0);
             auto cta = item.get_group();
@@ -751,6 +805,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         //    corrections are plain subtractions, so they compose in any order.
         ctx->parallel_for<StedcLevelSplit<B, T>>(sycl::range<1>(N * bs), [=](sycl::id<1> idx) {
             const int64_t g = idx[0];
+            if (!d.active(g / N)) return;  // I3
             const int64_t i = g % N;
             const int64_t base = g - i;
             T sub = T(0);
@@ -794,12 +849,13 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         const int64_t s = N >> level;
         const int64_t half = s >> 1;
         const int64_t P = (int64_t(1) << level) * bs;
-        auto Z = MatrixView<T>(level_buf[level & 1].data(), s, s, s, s * s, P);
+        auto Z = stedc_masked(MatrixView<T>(level_data(level), s, s, s, s * s, P), level_mask(level));
         ctx->submit([&](sycl::handler& h) {
             auto Zv = Z.kernel_view();
             h.parallel_for<StedcLevelZeroOffdiag<B, T>>(sycl::range<1>(half * half * 2 * P), [=](sycl::id<1> idx) {
                 const int64_t g = idx[0];
                 const int64_t p = g / (half * half * 2);
+                if (!Zv.active(p)) return;  // I3
                 const int64_t r = g - p * half * half * 2;
                 const int64_t corner = r / (half * half);   // 0: upper-right, 1: lower-left
                 const int64_t e = r - corner * half * half;
@@ -815,15 +871,15 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         const int64_t s = N >> level;
         const int64_t half = s >> 1;
         const int64_t P = (int64_t(1) << level) * bs;
-        auto Zp = MatrixView<T>(level_buf[level & 1].data(), s, s, s, s * s, P);
-        auto Zc = MatrixView<T>(level_buf[(level + 1) & 1].data(), child_n, child_n, child_n,
-                                child_n * child_n, 2 * P);
+        auto Zp = stedc_masked(MatrixView<T>(level_data(level), s, s, s, s * s, P), level_mask(level));
+        auto Zc = MatrixView<T>(level_data(level + 1), child_n, child_n, child_n, child_n * child_n, 2 * P);
         ctx->submit([&](sycl::handler& h) {
             auto parent = Zp.kernel_view();
             auto child = Zc.kernel_view();
             h.parallel_for<StedcLevelBlockDiag<B, T>>(sycl::range<1>(s * s * P), [=](sycl::id<1> idx) {
                 const int64_t g = idx[0];
                 const int64_t p = g / (s * s);
+                if (!parent.active(p)) return;  // I3
                 const int64_t r = g - p * s * s;
                 const int64_t col = r / s;
                 const int64_t row = r - col * s;
@@ -847,10 +903,11 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto leaf_params = params.leaf_steqr_params;
         leaf_params.sort = true;
         leaf_params.sort_order = SortOrder::Ascending;
-        auto d_leaf = VectorView<T>(dp_ptr, leaf, leaf_batch, 1, leaf);
-        auto e_leaf = VectorView<T>(ep_ptr, std::max<int64_t>(leaf, 2) - 1, leaf_batch, 1, leaf);
-        auto w_leaf = VectorView<T>(w_ptr, leaf, leaf_batch, 1, leaf);
-        auto z_leaf = MatrixView<T>(level_buf[L & 1].data(), leaf, leaf, leaf, leaf * leaf, leaf_batch);
+        const auto leaf_mask = level_mask(L);
+        auto d_leaf = stedc_masked(VectorView<T>(dp_ptr, leaf, leaf_batch, 1, leaf), leaf_mask);
+        auto e_leaf = stedc_masked(VectorView<T>(ep_ptr, std::max<int64_t>(leaf, 2) - 1, leaf_batch, 1, leaf), leaf_mask);
+        auto w_leaf = stedc_masked(VectorView<T>(w_ptr, leaf, leaf_batch, 1, leaf), leaf_mask);
+        auto z_leaf = stedc_masked(MatrixView<T>(level_data(L), leaf, leaf, leaf, leaf * leaf, leaf_batch), leaf_mask);
         auto leaf_ws = pool.remaining();
         // Always compute leaf eigenvectors: the merges consume them even when
         // the caller only wants eigenvalues.
@@ -870,9 +927,11 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
             int32_t* const out = detail::info_ptr(info, bs);
             const int32_t* const leaves_in = leaf_info.data();
             const int64_t leaves_per_item = leaf_batch / bs;
+            const std::uint8_t* const leaf_on = batchlas::detail::mask_ptr(leaf_mask);
             (void)ctx->parallel_for<StedcLevelLeafStatus<B, T>>(
                 sycl::range<1>(static_cast<size_t>(leaf_batch)), [=](sycl::id<1> idx) {
                     const int64_t j = static_cast<int64_t>(idx[0]);
+                    if (leaf_on && !leaf_on[j]) return;  // I3
                     detail::info_report(out, detail::info_item(j, leaves_per_item), leaves_in[j]);
                 });
         }
@@ -886,8 +945,8 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         const int64_t k = int64_t(1) << l;
         const int64_t P = k * bs;
 
-        auto Zp = MatrixView<T>(level_buf[l & 1].data(), s, s, s, s * s, P);
-        auto lambda = VectorView<T>(w_ptr, s, P, 1, s);
+        auto Zp = stedc_masked(MatrixView<T>(level_data(l), s, s, s, s * s, P), level_mask(l));
+        auto lambda = stedc_masked(VectorView<T>(w_ptr, s, P, 1, s), level_mask(l));
         auto rho_level = Span<T>(rho_all.data() + (k - 1) * bs, P);
         auto Qprime = MatrixView<T>(qprime_buf.data(), s, s, s, s * s, P);
         auto temp_Q = MatrixView<T>(tempq_buf.data(), s, s, s, s * s, P);
@@ -903,9 +962,9 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
             // Hand the result straight to the parent's diagonal sub-blocks.
             const int64_t sp = s * 2;   // parent node size
             zero_offdiagonal(l - 1);
-            T* pbase = level_buf[(l - 1) & 1].data();
-            auto out_even = MatrixView<T>(pbase, s, s, sp, sp * sp, P / 2);
-            auto out_odd = MatrixView<T>(pbase + s * (sp + 1), s, s, sp, sp * sp, P / 2);
+            T* pbase = level_data(l - 1);
+            auto out_even = stedc_masked(MatrixView<T>(pbase, s, s, sp, sp * sp, P / 2), level_mask(l - 1));
+            auto out_odd = stedc_masked(MatrixView<T>(pbase + s * (sp + 1), s, s, sp, sp * sp, P / 2), level_mask(l - 1));
             stedc_merge_step<B, T>(ctx, lambda, Zp, Qprime, temp_Q, rho_level, merge_ws, half, level_params,
                                    info_out, k,
                                    out_even, out_odd);
@@ -917,11 +976,12 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     ctx->parallel_for<StedcLevelUnpad<B, T>>(sycl::range<1>(n * bs), [=](sycl::id<1> idx) {
         const int64_t g = idx[0];
         const int64_t b = g / n;
+        if (!eigenvalues.active(b)) return;  // I3
         const int64_t i = g - b * n;
         eigenvalues(i, b) = w_ptr[b * N + i];
     });
     if (own_top && eigvects.data_ptr() != nullptr) {
-        auto top = MatrixView<T>(level_buf[0].data(), N, N, N, N * N, bs);
+        auto top = MatrixView<T>(top_buf.data(), N, N, N, N * N, bs);
         (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, top(Slice{0, n}, Slice{0, n}));
     }
     return ctx.get_event();
@@ -932,7 +992,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info)
 {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "stedc", B, d, e, eigenvalues, eigvects);
+    const auto mask = batchlas::detail::call_mask("stedc", d, e, eigenvalues, eigvects);
     if (d.size() != e.size() + 1) {
         throw batchlas::invalid_argument("The size of e must be one less than the size of d.");
     }
@@ -952,16 +1012,22 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
     // leaf and merge under this point only ever RAISES a status, which is what lets
     // the recursive driver's two half-solves and the level driver's L merges all
     // write the same slots. See src/kernels/common/info_span.hh.
-    detail::info_clear(ctx, info, d.batch_size());
+    detail::info_clear(ctx, info, d.batch_size(), mask);
     return stedc_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, info);
 }
 
 // Everything after the clear; see stedc_internal.hh for who calls this directly.
 template <Backend B, typename T>
-Event stedc_dispatch(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+Event stedc_dispatch(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues_in, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects_in,
             Span<int32_t> info)
 {
+    // Every operand takes the call's mask, so each driver below reads it off any view.
+    const auto mask = batchlas::detail::call_mask("stedc", d_in, e_in, eigenvalues_in, eigvects_in);
+    const auto d = stedc_masked(d_in, mask);
+    const auto e = stedc_masked(e_in, mask);
+    const auto eigenvalues = stedc_masked(eigenvalues_in, mask);
+    const auto eigvects = stedc_masked(eigvects_in, mask);
     if constexpr (B == Backend::NETLIB) {
         auto steqr_params = params.leaf_steqr_params;
         steqr_params.sort = true;
@@ -987,7 +1053,7 @@ Event stedc_dispatch(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
     (void)eigvects.fill_zeros(ctx);
     auto pool = BumpAllocator(ws);
     auto alloc_size = BumpAllocator::allocation_size<T>(ctx, n * n * d.batch_size());
-    auto temp_Q = MatrixView<T>(pool.allocate<T>(ctx, n * n * d.batch_size()).data(), n, n, n, n * n, d.batch_size());
+    auto temp_Q = stedc_masked(MatrixView<T>(pool.allocate<T>(ctx, n * n * d.batch_size()).data(), n, n, n, n * n, d.batch_size()), mask);
     return stedc_impl<B, T>(ctx, d, e, eigenvalues, ws.subspan(alloc_size), jobz, params, eigvects, temp_Q, info);
 
 }

@@ -20,7 +20,8 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
         (void)ctx; (void)n;
         return false;
     }
-    return n > 0 && n <= 32 && ctx.device().supports_sub_group_size(32);
+    // GPU only: the CTA kernels build without CPU targets (steqr_cta falls back alike).
+    return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
 } // namespace
@@ -52,12 +53,12 @@ Event steqr(Queue& ctx,
             SteqrParams<T> params,
             const MatrixView<T, MatrixFormat::Dense>& eigvects,
             Span<int32_t> info) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "steqr", B, d_in, e_in, eigenvalues, eigvects);
+    const auto mask = batchlas::detail::call_mask("steqr", d_in, e_in, eigenvalues, eigvects);
     // The one clear, here rather than in the tiers: neither steqr_cta nor steqr_wg
     // touches an item that converged, so without this the caller would read
     // whatever was in its span for the healthy items. Everything below only ever
     // raises a status -- see the accumulator rule in src/kernels/common/info_span.hh.
-    detail::info_clear(ctx, info, d_in.batch_size());
+    detail::info_clear(ctx, info, d_in.batch_size(), mask);
     return steqr_dispatch<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
 }
 

@@ -10,7 +10,9 @@
 #include <src/ops/getrf/getrf_cta_device.hh>
 
 #include <src/queue.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/resident_capacity.hh>
+#include <src/kernels/common/info_span.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
 
@@ -121,7 +123,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
                                   int m, int n, int batch,
                                   int* piv_ptr, int piv_stride, int piv_base,
                                   int32_t* info_ptr,
-                                  int wg, int G) {
+                                  int wg, int G, const std::uint8_t* mask) {
     // std::complex is re-typed HERE, at the pointer boundary, and never enters the
     // kernel body: its Annex-G operator* costs an isnan branch and a library call.
     using DM = sycl_device::DevMap<T>;
@@ -170,12 +172,14 @@ Event getrf_panel_resident_launch(Queue& ctx,
                     lwg = static_cast<int>(sg.get_local_linear_range());
                     // Sub-group-uniform, and this scope executes only sub-group
                     // barriers -- an early return under a work-group barrier hangs.
-                    if (b >= batch) return;
+                    // The mask test is the same sub-group's item, so uniform too.
+                    if (b >= batch || (mask != nullptr && mask[b] == 0)) return;
                 } else {
                     b = wg_id;             // G == 1 => num_wg == batch
                     slot = 0;
                     tid = static_cast<int>(it.get_local_linear_id());
                     lwg = static_cast<int>(it.get_local_range(0));
+                    if (mask != nullptr && mask[b] == 0) return;  // I1: before B0
                 }
 
                 D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
@@ -235,7 +239,7 @@ Event getrf_panel_global_launch(Queue& ctx,
                                 int m, int n, int batch,
                                 int* piv_ptr, int piv_stride, int piv_base,
                                 int32_t* info_ptr,
-                                int wg) {
+                                int wg, const std::uint8_t* mask) {
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     using R = typename DM::real;
@@ -255,6 +259,7 @@ Event getrf_panel_global_launch(Queue& ctx,
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the device body's barriers
                 gn::LuGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
                 // Always WorkGroup: the global leaf's panel is a full column block,
                 // far taller than one sub-group should serve alone.
@@ -345,7 +350,8 @@ Event getrf_panel_factorize(Queue& ctx,
                             int m, int n, int batch,
                             int* piv_ptr, int piv_stride, int piv_base,
                             int32_t* info_ptr,
-                            bool* used_resident_out) {
+                            bool* used_resident_out,
+                            const std::uint8_t* mask) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -360,7 +366,7 @@ Event getrf_panel_factorize(Queue& ctx,
     if (!resident) {
         return getrf_panel_global_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, piv_ptr,
                                             piv_stride, piv_base, info_ptr,
-                                            getrf_leaf_wg(m, n, max_wg));
+                                            getrf_leaf_wg(m, n, max_wg), mask);
     }
 
     // Packing is offered against the OCCUPANCY slice: G matrices share one work-group,
@@ -371,11 +377,11 @@ Event getrf_panel_factorize(Queue& ctx,
     if (p.packed) {
         return getrf_panel_resident_launch<T, gn::LuScope::SubGroup>(
             ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
-            info_ptr, p.wg, p.G);
+            info_ptr, p.wg, p.G, mask);
     }
     return getrf_panel_resident_launch<T, gn::LuScope::WorkGroup>(
         ctx, a_ptr, ld, stride, m, n, batch, piv_ptr, piv_stride, piv_base,
-        info_ptr, p.wg, 1);
+        info_ptr, p.wg, 1, mask);
 }
 
 // Test hook: low 16 bits G (matrices per work-group), high 16 the work-group width.
@@ -451,15 +457,18 @@ Event getrf_cta_dispatch(Queue& ctx,
 
     // The zero pre-pass is a read-after-write dependence, not a pure output:
     // getf2_panel_device READS info for first-failure-wins across panels, so on an
-    // out-of-order queue the unguarded version returned the caller's own poison.
-    ctx->fill(info.data(), int32_t(0), static_cast<std::size_t>(batch));
+    // out-of-order queue the unguarded version returned the caller's own poison. Masked,
+    // an inactive item's slot is left as it was, as are its matrix and pivots.
+    const auto mask = batchlas::detail::call_mask("getrf_cta", A);
+    batchlas::detail::info_clear(ctx, info, batch, mask);
     if (!ctx.in_order()) ctx.wait();
 
     auto piv_i32 = pivots.as_span<int>();
 
     bool resident = false;
     Event e = getrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
-                                       piv_i32.data(), mn, 0, info.data(), &resident);
+                                       piv_i32.data(), mn, 0, info.data(), &resident,
+                                       batchlas::detail::mask_ptr(mask));
     if (!resident) {
         // Unreachable: same budget and same arithmetic as the check above. Asserted
         // because a tier silently becoming the other is what a pinned test misses.
@@ -480,7 +489,7 @@ Event getrf_cta_dispatch(Queue& ctx,
     template std::size_t getrf_cta_buffer_size<T>(Queue&,                                     \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template Event getrf_panel_factorize<T>(Queue&, T*, int, int, int, int, int, int*, int,   \
-                                            int, int32_t*, bool*);                            \
+                                            int, int32_t*, bool*, const std::uint8_t*);       \
     template Event getrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,   \
                                          Span<int64_t>, Span<std::byte>, Span<int32_t>);
 

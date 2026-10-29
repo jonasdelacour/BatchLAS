@@ -49,8 +49,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
              Transpose transA) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Triangular honours a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const std::int64_t side = (n + backend::detail::kTriangularTile - 1) / backend::detail::kTriangularTile;
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
@@ -61,7 +61,7 @@ bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, cons
                    homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
                    side * (side + 1) / 2 <= d.max_groups_yz;
         },
-        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous; },
+        [&](Vendor) { return vendor_wired<B, T> && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

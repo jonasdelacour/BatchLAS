@@ -11,6 +11,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/util/template-instantiations.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <algorithm>
 #include <complex>
@@ -21,7 +22,7 @@
 
 // Outside the anonymous namespace: a kernel name may not name an internal-linkage entity.
 namespace batchlas {
-template <typename T, int N, int C> class GeqrfTinyKernel;
+template <typename T, int N, int C, bool Masked> class GeqrfTinyKernel;
 }
 
 namespace batchlas {
@@ -102,9 +103,11 @@ static_assert(geqrf_tiny_wg_bytes<std::complex<double>, 8>() < 47104,
 static_assert(geqrf_tiny_wg_bytes<double, 32>() < 47104,
               "tiny tile approaching the 48 KB launch hole");
 
-template <typename T, int N>
+// Masked: the mask folds into `live` (I2), a template so the unmasked kernel is unchanged (the fold
+// cost potrf tiny 2-4.5%). evidence: docs/design/masked-batches.md#masked-batches-kernel-contract
+template <typename T, int N, bool Masked>
 Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
-                        T* tau_ptr) {
+                        T* tau_ptr, const std::uint8_t* mask) {
     // Re-typed HERE: std::complex's Annex-G operator* is an isnan branch plus a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
@@ -129,7 +132,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
         sycl::local_accessor<D, 1> scratch(
             sycl::range<1>(static_cast<std::size_t>(M) * kPerMatrix), h);
 
-        batchlas::impl::parallel_for<GeqrfTinyKernel<T, N, C>>(h,
+        batchlas::impl::parallel_for<GeqrfTinyKernel<T, N, C, Masked>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(WG)),
                               sycl::range<1>(static_cast<std::size_t>(WG))),
@@ -144,7 +147,8 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 // sub-group-uniform, so at N < 32 a later group_barrier(sg) is undefined. A
                 // dead partition carries the identity and suppresses its store. Guarded by
                 // source text (GeqrfTinySource.KernelBodyHasNoEarlyReturn), not numerically.
-                const bool live = prob < batch;
+                bool live = prob < batch;
+                if constexpr (Masked) live = live && mask[prob] != 0;  // inactive: untouched A and tau
                 const bool row_live = live && lane < n;
                 const std::ptrdiff_t off =
                     live ? static_cast<std::ptrdiff_t>(prob) * stride : std::ptrdiff_t(0);
@@ -349,19 +353,24 @@ Event geqrf_tiny_dispatch(Queue& ctx,
     T* const tau_ptr = tau.data();
     const int ld = static_cast<int>(A.ld());
     const int stride = static_cast<int>(A.stride());
+    const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(::batchlas::detail::call_mask("geqrf_tiny", A));
+    const auto launch = [&]<int NB>(std::integral_constant<int, NB>) {
+        return mask ? geqrf_tiny_launch<T, NB, true>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, mask)
+                    : geqrf_tiny_launch<T, NB, false>(ctx, a_ptr, ld, stride, n, batch, tau_ptr, nullptr);
+    };
 
     // Explicit throw, never a silent leading-submatrix solve. The N = 32 arm sits under
     // `if constexpr` so a ceiling-16 type does not INSTANTIATE an unreachable kernel.
     const int bucket = tn::tiny_bucket_ge(n);
     if (bucket == 8) {
-        return geqrf_tiny_launch<T, 8>(ctx, a_ptr, ld, stride, n, batch, tau_ptr);
+        return launch(std::integral_constant<int, 8>{});
     }
     if (bucket == 16) {
-        return geqrf_tiny_launch<T, 16>(ctx, a_ptr, ld, stride, n, batch, tau_ptr);
+        return launch(std::integral_constant<int, 16>{});
     }
     if constexpr (geqrf_tiny_type_ceiling<T>() >= 32) {
         if (bucket == 32) {
-            return geqrf_tiny_launch<T, 32>(ctx, a_ptr, ld, stride, n, batch, tau_ptr);
+            return launch(std::integral_constant<int, 32>{});
         }
     }
     throw batchlas::unsupported(

@@ -16,6 +16,7 @@
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
 #include <src/select/select.hh>
+#include <src/util/batch_mask.hh>
 #include <src/util/kernel-trace.hh>
 
 #include <sycl/sycl.hpp>
@@ -30,11 +31,18 @@ namespace batchlas::ops::level3 {
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
 
-/// Items [first, first + count) of a homogeneous view: same extents, ld and stride.
+/// Items [first, first + count) of a homogeneous view: same extents, ld and stride, and the
+/// matching slice of its batch mask (MatrixView::batch_range), so a chunk's launch skips its holes.
 template <typename T>
 MV<T> batch_range(const MV<T>& v, int first, int count) {
-    return MV<T>(v.data_ptr() + static_cast<std::ptrdiff_t>(first) * v.stride(), v.rows(), v.cols(), v.ld(),
-                 v.stride(), count);
+    return v.batch_range(first, count);
+}
+
+/// `v` carrying the call's batch mask `m` (empty: `v` as it is), so a launch over scratch in place
+/// of the operand that brought the mask still hands it on. A broadcast operand stays unmasked.
+template <typename T>
+MV<T> adopt_mask(const MV<T>& v, Span<const std::uint8_t> m) {
+    return m.empty() || static_cast<std::size_t>(v.batch_size()) != m.size() ? v : v.with_batch_mask(m);
 }
 
 /// The grid-z item ceiling of one launch on this device, as an int.
@@ -74,6 +82,8 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
     const int ldp = P.ld();
     const std::size_t stride_c = static_cast<std::size_t>(C.stride());
     const std::size_t stride_p = static_cast<std::size_t>(P.stride());
+    // C's batch mask (P is scratch): an inactive item's C is untouched (I1, no barrier here).
+    const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("fold_hermitian", C));
 
     const auto shape = backend::detail::expand_group_shape(n);
     const sycl::range<3> global(static_cast<std::size_t>(batch),
@@ -86,6 +96,7 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
         const int j = static_cast<int>(item.get_global_id(1));
         if (i >= n || j >= n || (lower ? (i < j) : (i > j))) return;
         const int b = static_cast<int>(item.get_group(0));
+        if (mask != nullptr && mask[b] == 0) return;
         const std::size_t p_base = static_cast<std::size_t>(b) * stride_p;
         T value = src[p_base + static_cast<std::size_t>(j) * ldp + i];
         if constexpr (TwoSided) {
@@ -108,8 +119,10 @@ Event fold_hermitian(Queue& q, const MV<T>& C, const MV<T>& P, float_t<T> beta, 
 // The scratch is a lease on the queue's arena, not a Matrix: a managed allocation migrates on first
 // touch (an order of magnitude over the gemm at n=512 batch=512) and would be freed while enqueued.
 template <Backend B, typename T, bool Conjugate>
-Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, T beta, Side side,
+Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm_, const MV<T>& C_, T alpha, T beta, Side side,
                   Uplo uplo) {
+    const auto mask = batchlas::detail::call_mask(Conjugate ? "hemm" : "symm", A, Bm_, C_);
+    const MV<T> Bm = adopt_mask(Bm_, mask), C = adopt_mask(C_, mask);  // the gemm sees scratch, not A
     const int k = A.rows(), batch = A.batch_size();
     const int ld = backend::detail::expanded_ld<T>(k);
     const int chunk = backend::detail::expansion_chunk<T>(q, k, batch, grid_chunk<B>(q));
@@ -138,8 +151,11 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
 /// n x n product into scratch, then fold_hermitian. The gemm cannot target C: it would write both
 /// triangles. Chunked as expand_gemm; @pre expansion_chunk >= 1.
 template <Backend B, typename T, bool TwoSided>
-Event gemm_fold(Queue& q, const MV<T>& A, const MV<T>& Bop, const MV<T>& C, T alpha, float_t<T> beta, Uplo uplo,
+Event gemm_fold(Queue& q, const MV<T>& A_, const MV<T>& Bop_, const MV<T>& C_, T alpha, float_t<T> beta, Uplo uplo,
                 Transpose transA) {
+    // The gemm writes scratch and the fold sees C alone: each must carry the mask whoever brought it.
+    const auto mask = batchlas::detail::call_mask(TwoSided ? "her2k" : "herk", A_, Bop_, C_);
+    const MV<T> A = adopt_mask(A_, mask), Bop = adopt_mask(Bop_, mask), C = adopt_mask(C_, mask);
     const int n = C.rows(), batch = C.batch_size();
     const int ld = backend::detail::expanded_ld<T>(n);
     const int chunk = backend::detail::expansion_chunk<T>(q, n, batch, grid_chunk<B>(q));

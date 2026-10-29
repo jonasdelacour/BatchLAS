@@ -7,6 +7,7 @@
 
 #include <src/ops/getrs/getrs_native.hh>
 #include <src/kernels/common/lu_laswp.hh>
+#include <src/util/batch_mask.hh>
 
 #include <src/queue.hh>
 #include <src/util/template-instantiations.hh>
@@ -65,7 +66,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
                               T* base, int ld, int stride, int nrhs, int batch,
                               const int* piv, int piv_stride, int n,
                               bool forward,
-                              std::size_t slm_budget, int max_wg) {
+                              std::size_t slm_budget, int max_wg, const std::uint8_t* mask) {
     if (nrhs <= 0 || batch <= 0 || n <= 0) return true;
 
     using DM = sycl_device::DevMap<T>;
@@ -114,6 +115,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
                 const auto grp = it.get_group();
                 const int b = static_cast<int>(it.get_group(0));
                 const int lid = static_cast<int>(it.get_local_id(0));
+                if (mask != nullptr && mask[b] == 0) return;  // I1: before the first barrier
 
                 int* const idxs = &ints[0];
                 int* const ips = &ints[static_cast<std::size_t>(n)];
@@ -293,19 +295,21 @@ Event getrs_blocked_dispatch(Queue& ctx,
     const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const bool want_gather = getrs_perm_use_gather(perm_spelling(), nrhs);
+    // Both interchange kernels skip an inactive item; the solves take the masked A and B.
+    const std::uint8_t* const mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("getrs_blocked", A, B));
 
     auto apply_perm = [&](bool forward) -> Event {
         if (want_gather &&
             getrs_perm_gather_launch<T>(ctx, B.data_ptr(), B.ld(), B.stride(), nrhs,
                                         batch, piv_i32.data(), /*piv_stride=*/n, n,
-                                        forward, slm_budget, max_wg)) {
+                                        forward, slm_budget, max_wg, mask)) {
             return ctx.get_event();
         }
         // FALLBACK, not a throw: the gather refuses when a column of B plus the
         // two int arrays will not fit local memory; the walk is identical.
         return lu_native::lu_laswp_launch<GetrsLaswpTag, T>(
             ctx, B.data_ptr(), B.ld(), B.stride(), nrhs, batch,
-            piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, forward);
+            piv_i32.data(), /*piv_stride=*/n, /*k0=*/0, /*k1=*/n, forward, mask);
     };
 
     if (transA == Transpose::NoTrans) {

@@ -4,7 +4,7 @@
 // Fold a full GEMM product into the uplo triangle of C only:
 //     C(i, j) := product(i, j) + beta * C(i, j)   for (i, j) in the uplo triangle
 // The other half is the caller's and must come out unchanged; beta == 0 means C
-// is not read, so a poisoned C cannot produce NaN.
+// is not read, so a poisoned C cannot produce NaN. C's batch mask skips its inactive items (I3).
 // evidence: docs/perf/level3.md#level-3-generic-syrk-and-syr2k-fallbacks-fold-one-triangle
 
 #include <batchlas/blas/matrix.hh>
@@ -13,6 +13,8 @@
 #include <src/queue.hh>
 
 #include <sycl/sycl.hpp>
+
+#include <cstdint>
 
 namespace batchlas {
 namespace detail {
@@ -38,6 +40,7 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
     const size_t p_stride = static_cast<size_t>(product.stride());
     const bool upper = uplo == Uplo::Upper;
     const bool ignore_c = beta == T(0);
+    const std::uint8_t* const mask = C.batch_mask().empty() ? nullptr : C.batch_mask().data();
 
     auto [global_size, local_size] = compute_nd_range_sizes(
         total_elements, ctx.device(), KernelType::ELEMENTWISE);
@@ -47,6 +50,7 @@ Event fold_symmetric_product_into_triangle(Queue& ctx,
         if (flat_idx >= total_elements) return;
 
         const size_t b = flat_idx / (n * n);
+        if (mask != nullptr && mask[b] == 0) return;
         const size_t remainder = flat_idx % (n * n);
         const size_t i = remainder / n;  // row
         const size_t j = remainder % n;  // column

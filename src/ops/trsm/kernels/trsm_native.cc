@@ -13,6 +13,7 @@
 #include <src/util/resident_capacity.hh>
 #include <src/sycl/device_scalar.hh>
 #include <src/sycl/kernel_attrs.hh>
+#include <src/util/batch_mask.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -124,6 +125,7 @@ Event trsm_native_v1(Queue& ctx,
         const int ldb = static_cast<int>(B.ld());
         const int stride_a = static_cast<int>(A.stride());
         const int stride_b = static_cast<int>(B.stride());
+        const std::uint8_t* mask = batchlas::detail::mask_ptr(batchlas::detail::call_mask("trsm", A, B));
 
         const bool do_trans = can.do_trans;
         const bool do_conj = can.do_conj;
@@ -139,6 +141,8 @@ Event trsm_native_v1(Queue& ctx,
             [=](sycl::nd_item<1> it) {
                 const int wg_id = static_cast<int>(it.get_group_linear_id());
                 const int b = wg_id / groups;
+                // A work-group serves one item (I1): uniform, before the first barrier.
+                if (mask != nullptr && mask[b] == 0) return;
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const int u = (wg_id % groups) * wg + lane;
                 const bool live = (u < q);
@@ -380,11 +384,13 @@ Event trsm_native_blocked(Queue& ctx,
     const int sa = A.stride(), sb = B.stride();
     const int bs = A.batch_size();
 
-    auto sub = [](const MatrixView<T, MatrixFormat::Dense>& V,
-                  int r0, int nr, int c0, int nc, int ld, int stride, int batch) {
+    // Every block re-attaches the call's batch mask, which the raw-pointer view drops.
+    const auto mask = batchlas::detail::call_mask("trsm", A, B);
+    auto sub = [&mask](const MatrixView<T, MatrixFormat::Dense>& V,
+                       int r0, int nr, int c0, int nc, int ld, int stride, int batch) {
         return MatrixView<T, MatrixFormat::Dense>(
             V.data_ptr() + static_cast<std::ptrdiff_t>(c0) * ld + r0,
-            nr, nc, ld, stride, batch);
+            nr, nc, ld, stride, batch).with_batch_mask(mask);
     };
 
     // Canonical range [a, b) -> the stored row offset: [a,b) when fwd,

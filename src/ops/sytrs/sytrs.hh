@@ -35,11 +35,12 @@ select::Key key_of(const MV<T>& A, const MV<T>& Bm) {
     return {{"n", A.rows()}, {"nrhs", Bm.cols()}, {"batch", A.batch_size()}};
 }
 
-// Correctness only (R3): each clause is the argument check at the top of that driver.
+// Correctness only (R3): each clause is the argument check at the top of that driver. cta, wg and
+// LAPACKE's host loop honour a batch mask; blocked runs the public trsm on the masked part views.
 template <Backend B, class T>
 bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm) {
     const std::int64_t n = A.rows(), nrhs = Bm.cols();
-    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !detail::any_batch_mask(A, Bm);
+    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous();
     const bool native = B != Backend::NETLIB && d.is_gpu && d.has_sg32 && homogeneous && n >= 1 && nrhs >= 1 &&
                         A.batch_size() >= 1 && d.max_wg >= 32;
     return std::visit(overloaded{
@@ -47,7 +48,8 @@ bool can_run(const SytrsChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && n <= sycl_sytrf::kSytrsCtaMaxN &&
                    static_cast<std::int64_t>(sycl_sytrf::sytrs_cta_slm_bytes<T>(static_cast<int>(n))) <= d.slm_budget;
         },
-        [&](Blocked) { return native; },  // its trsm selects for itself; the public trsm has a last resort
+        // Its trsm selects for itself; the public trsm has a last resort.
+        [&](Blocked) { return native; },
         [&](Wg) { return native; },
         [&](Vendor) { return vendor_linked<B> && d.has_vendor && homogeneous; },
     }, c);

@@ -68,12 +68,15 @@ bool packed(const MV<T>& M) {
 // Hermitian triangle (syev_blocked mirrors Upper into Lower). Vendor is exactly what its binding
 // runs: cuSOLVER gesvdjBatched (m, n <= 32, packed A and U, no thin; a values-only non-square call
 // faults inside it, docs/perf/gesvd.md), nothing on ROCm, LAPACKE on the host. Every family runs each item at the top-level (m, n): no heterogeneous batch.
+// Masked: every native family and NETLIB's host loop skip an inactive item (Blocked wherever every
+// child it reaches does, gesvd_blocked_honours_mask); a strided vendor call cannot.
 template <Backend B, typename T>
 bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& U, const MV<T>& Vh,
              const Job& j) {
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     const std::int64_t m = A.rows(), n = A.cols(), md = std::max(m, n);
-    const bool homogeneous = !A.is_heterogeneous() && !detail::any_batch_mask(A, U, Vh);
+    const bool masked = detail::any_batch_mask(A, U, Vh);
+    const bool homogeneous = !A.is_heterogeneous();
     const bool native = d.is_gpu && homogeneous && m >= 1 && n >= 1 && A.batch_size() >= 1;
     const bool square = m == n;
     const bool vendor_binds = B == Backend::CUDA
@@ -89,8 +92,12 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             const bool form = j.herm ? square : kReal;
             return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
-        [&](Blocked) { return native && (!j.herm || square); },
-        [&](Vendor) { return d.has_vendor && homogeneous && vendor_binds; },
+        [&](Blocked) {
+            const bool mask_ok = !masked || sycl_gesvd::gesvd_blocked_honours_mask<B, T>(
+                                                m, n, j.jobu != SvdVectors::None, j.jobvh != SvdVectors::None);
+            return native && mask_ok && (!j.herm || square);
+        },
+        [&](Vendor) { return d.has_vendor && homogeneous && (!masked || B == Backend::NETLIB) && vendor_binds; },
     }, c);
 }
 

@@ -120,7 +120,8 @@ template <typename T>
 Event update_vw_lower_small_legacy(Queue& q,
                                    const MatrixView<T, MatrixFormat::Dense>& v2,
                                    const MatrixView<T, MatrixFormat::Dense>& w2,
-                                   const MatrixView<T, MatrixFormat::Dense>& a22) {
+                                   const MatrixView<T, MatrixFormat::Dense>& a22,
+                                   const std::uint8_t* mask) {
     const int n2 = a22.rows();
     const int ib = v2.cols();
     const int lda = a22.ld();
@@ -142,7 +143,7 @@ Event update_vw_lower_small_legacy(Queue& q,
                 const int lin = static_cast<int>(idx[1]);
                 const int r = lin % n2;
                 const int c = lin / n2;
-                if (r < c) return;
+                if (r < c || (mask != nullptr && mask[b] == 0)) return;  // I3
 
                 T* A = a_ptr + b * stride_a;
                 const T* V = v_ptr + b * stride_v;
@@ -178,7 +179,8 @@ template <typename T>
 Event update_vw_lower_small_device(Queue& q,
                                    const MatrixView<T, MatrixFormat::Dense>& v2,
                                    const MatrixView<T, MatrixFormat::Dense>& w2,
-                                   const MatrixView<T, MatrixFormat::Dense>& a22) {
+                                   const MatrixView<T, MatrixFormat::Dense>& a22,
+                                   const std::uint8_t* mask) {
     const int batch = a22.batch_size();
     const std::size_t local_size = sytrd_rank2k_local_size<T>(q);
     const auto launch = batchlas::device::make_group_launch_info(static_cast<int>(local_size));
@@ -203,7 +205,7 @@ Event update_vw_lower_small_device(Queue& q,
                               sycl::range<1>(local_size)),
             [=](sycl::nd_item<1> item) {
                 const int b = static_cast<int>(item.get_group(0));
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before her2k's barriers
 
                 const auto vb = v_view.batch_item(b);
                 const auto wb = w_view.batch_item(b);
@@ -228,7 +230,8 @@ Event sytrd_lower_local_small_legacy(Queue& q,
                                      const MatrixView<T, MatrixFormat::Dense>& a,
                                      const VectorView<T>& e,
                                      const VectorView<T>& tau,
-                                     int n) {
+                                     int n,
+                                     const std::uint8_t* mask) {
     constexpr int WG = 64;
     const int lda = a.ld();
     const int stride_a = a.stride();
@@ -247,7 +250,7 @@ Event sytrd_lower_local_small_legacy(Queue& q,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
@@ -395,7 +398,8 @@ Event sytrd_lower_local_small_device(Queue& q,
                                      const MatrixView<T, MatrixFormat::Dense>& a,
                                      const VectorView<T>& e,
                                      const VectorView<T>& tau,
-                                     int n) {
+                                     int n,
+                                     const std::uint8_t* mask) {
     constexpr int WG = 64;
     const int lda = a.ld();
     const int stride_a = a.stride();
@@ -430,7 +434,7 @@ Event sytrd_lower_local_small_device(Queue& q,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * WG), sycl::range<1>(WG)),
             [=](sycl::nd_item<1> it) {
                 const int b = static_cast<int>(it.get_group_linear_id());
-                if (b >= batch) return;
+                if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
                 const int lane = static_cast<int>(it.get_local_linear_id());
                 const sycl::group<1> g = it.get_group();
@@ -525,7 +529,8 @@ Event restore_tridiag_lower(Queue& q,
                             const MatrixView<T, MatrixFormat::Dense>& a,
                             const VectorView<T>& d,
                             const VectorView<T>& e,
-                            int n) {
+                            int n,
+                            const std::uint8_t* mask) {
     const int lda = a.ld();
     const int stride_a = a.stride();
     T* a_ptr = a.data_ptr();
@@ -541,6 +546,7 @@ Event restore_tridiag_lower(Queue& q,
             [=](sycl::id<2> idx) {
                 const int b = static_cast<int>(idx[0]);
                 const int i = static_cast<int>(idx[1]);
+                if (mask != nullptr && mask[b] == 0) return;  // I3
                 T* A  = a_ptr + b * stride_a;
                 T* Db = d_ptr + b * stride_d;
                 T* Eb = e_ptr + b * stride_e;
@@ -630,10 +636,16 @@ Event sytrd_blocked_impl(Queue& ctx,
                          const VectorView<T>& tau_out,
                          Uplo uplo,
                          const Span<std::byte>& ws,
-                         int32_t block_size) {
+                         int32_t block_size,
+                         Span<const std::uint8_t> mask) {
     const int n = a_in.rows();
     const int batch = a_in.batch_size();
     const int nb = resolved_nb_sytrd(block_size, NB);
+    const std::uint8_t* mask_p = batchlas::detail::mask_ptr(mask);
+    const MatrixView<T, MatrixFormat::Dense> A = a_in.with_batch_mask(mask);
+    const VectorView<T> D = d_out.with_batch_mask(mask);
+    const VectorView<T> E = e_out.with_batch_mask(mask);
+    const VectorView<T> TAU = tau_out.with_batch_mask(mask);
 
     if (uplo != Uplo::Lower) {
         throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
@@ -643,7 +655,7 @@ Event sytrd_blocked_impl(Queue& ctx,
 
     if (n <= 32) {
         if (ctx.device().supports_sub_group_size(32)) {
-            return sytrd_cta<B, T>(ctx, a_in, d_out, e_out, tau_out, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
+            return sytrd_cta<B, T>(ctx, A, D, E, TAU, uplo, Span<std::byte>(), /*cta_wg_size_multiplier=*/1);
         }
     }
 
@@ -675,25 +687,20 @@ Event sytrd_blocked_impl(Queue& ctx,
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.local_small");
                 if (is_legacy)
-                    (void)sytrd_lower_local_small_legacy<T>(ctx, a_in, e_out, tau_out, n);
+                    (void)sytrd_lower_local_small_legacy<T>(ctx, A, E, TAU, n, mask_p);
                 else
-                    (void)sytrd_lower_local_small_device<T>(ctx, a_in, e_out, tau_out, n);
+                    (void)sytrd_lower_local_small_device<T>(ctx, A, E, TAU, n, mask_p);
             }
             {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.restore_tridiag");
-                (void)restore_tridiag_lower<T>(ctx, a_in, d_out, e_out, n);
+                (void)restore_tridiag_lower<T>(ctx, A, D, E, n, mask_p);
             }
             return ctx.get_event();
         }
     }
 
-    MatrixView<T, MatrixFormat::Dense> A = a_in;
-    VectorView<T> D = d_out;
-    VectorView<T> E = e_out;
-    VectorView<T> TAU = tau_out;
-
     BumpAllocator pool(ws);
-    MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
+    const MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch).with_batch_mask(mask);
 
     const int k = n - 1;
     // TRI-STATE: forced on, forced off, and "let the tuned default decide" differ, so
@@ -751,9 +758,9 @@ Event sytrd_blocked_impl(Queue& ctx,
             if (n2 <= 128) {
                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_small");
                 if (is_legacy)
-                    (void)update_vw_lower_small_legacy<T>(ctx, V2, W2, A22);
+                    (void)update_vw_lower_small_legacy<T>(ctx, V2, W2, A22, mask_p);
                 else
-                    (void)update_vw_lower_small_device<T>(ctx, V2, W2, A22);
+                    (void)update_vw_lower_small_device<T>(ctx, V2, W2, A22, mask_p);
             } else {
                 bool rank2k_issued = false;
                 if constexpr (rank2k_trailing_update_supported) {
@@ -808,7 +815,7 @@ Event sytrd_blocked_impl(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.restore_tridiag");
-        (void)restore_tridiag_lower<T>(ctx, A, D, E, n);
+        (void)restore_tridiag_lower<T>(ctx, A, D, E, n, mask_p);
     }
 
     return ctx.get_event();
@@ -849,7 +856,7 @@ Event sytrd_blocked(Queue& ctx,
                     Uplo uplo,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
-    batchlas::detail::refuse_batch_mask<T>(Op::syev, "sytrd_blocked", B, a_in, d_out, e_out, tau_out);
+    const Span<const std::uint8_t> mask = batchlas::detail::call_mask("sytrd_blocked", a_in, d_out, e_out, tau_out);
     validate_sytrd_dims(a_in, d_out, e_out, tau_out);
 
     if (!ctx.in_order()) {
@@ -860,15 +867,15 @@ Event sytrd_blocked(Queue& ctx,
     const int nb = std::max<int>(1, block_size);
     switch (nb) {
         case 8:
-            return sytrd_blocked_impl<B, T, 8>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+            return sytrd_blocked_impl<B, T, 8>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size, mask);
         case 16:
-            return sytrd_blocked_impl<B, T, 16>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+            return sytrd_blocked_impl<B, T, 16>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size, mask);
         case 32:
-            return sytrd_blocked_impl<B, T, 32>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+            return sytrd_blocked_impl<B, T, 32>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size, mask);
         case 64:
-            return sytrd_blocked_impl<B, T, 64>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+            return sytrd_blocked_impl<B, T, 64>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size, mask);
         default:
-            return sytrd_blocked_impl<B, T, -1>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size);
+            return sytrd_blocked_impl<B, T, -1>(ctx, a_in, d_out, e_out, tau_out, uplo, ws, block_size, mask);
     }
 }
 

@@ -35,7 +35,8 @@ select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
 template <typename T>
 bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, MatrixFormat::Dense>& A,
              Uplo uplo) {
-    if (detail::any_batch_mask(A)) return false;  // no family honours a batch mask yet
+    // Every native family honours a batch mask; the vendor's batched call cannot skip an item.
+    const bool masked = detail::any_batch_mask(A);
     const int64_t n = A.rows();
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && n >= 1 && A.batch_size() >= 1;
@@ -56,7 +57,7 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
             return native && sycl_potrf::potrf_blocked_available<T>() &&
                    sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous(); },
+        [&](Vendor) { return d.has_vendor && !A.is_heterogeneous() && !masked; },
     }, c);
 }
 

@@ -99,7 +99,8 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                int32_t n,
                                int32_t batch,
                                bool sort_desc,
-                               Span<int32_t> fail_flags) {
+                               Span<int32_t> fail_flags,
+                               const std::uint8_t* mask) {
     const Real eps = std::numeric_limits<Real>::epsilon();
     const Real tolmul = sycl::fmax(Real(10), sycl::fmin(Real(100), sycl::pow(eps, Real(-0.125))));
     const Real tol = tolmul * eps;
@@ -121,6 +122,12 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
 
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nb)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
+            // I3. The host fold below reads every flag, so an inactive item writes the
+            // neutral "converged" and nothing else.
+            if (mask != nullptr && mask[b] == 0) {
+                fail[b] = 0;
+                return;
+            }
 
             Real* db = D.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(D.stride());
             Real* eb = (nn > 1) ? (E.data_ptr() + static_cast<size_t>(b) * static_cast<size_t>(E.stride())) : nullptr;
@@ -371,7 +378,7 @@ Event bdsqr(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("bdsqr", d, e, u, vh);
+    const auto mask = ::batchlas::detail::call_mask("bdsqr", d, e, u, vh);
     static_cast<void>(B);
 
     const int32_t n = static_cast<int32_t>(d.size());
@@ -418,10 +425,11 @@ Event bdsqr(Queue& ctx,
                                                      n,
                                                      batch,
                                                      sort_desc,
-                                                     fail_flags);
+                                                     fail_flags,
+                                                     ::batchlas::detail::mask_ptr(mask));
         // 0 already means converged here, so no polarity flip -- unlike
         // syevx_lobpcg / syevx_filtered, whose flags mean the opposite.
-        detail::info_from_flags(ctx, info, fail_flags.data(), batch, /*one_means_converged=*/false);
+        detail::info_from_flags(ctx, info, fail_flags.data(), batch, /*one_means_converged=*/false, mask);
         // The batch-wide throw is what a caller who asked for NO per-item status
         // still needs: without it a non-converged item is silent again. A caller who
         // supplied `info` gets the per-item answer instead of an exception that says

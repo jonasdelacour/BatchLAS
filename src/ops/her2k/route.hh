@@ -37,8 +37,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 template <Backend B, typename T>
 bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
-    // A masked call is refused by every family until its kernels honour the mask.
-    if (batchlas::detail::any_batch_mask(A, Bm, C)) return false;
+    // Triangular and Fold honour a batch mask; the vendor's per-item loop cannot skip an item.
+    const bool masked = batchlas::detail::any_batch_mask(A, Bm, C);
     const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(select::overloaded{
         [&](Triangular) {
@@ -53,7 +53,7 @@ bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T
                    d.max_wg >= kFoldWg && C.rows() >= 1 && C.batch_size() >= 1 &&
                    backend::detail::expansion_chunk<T>(q, C.rows(), 1, d.max_groups_yz) >= 1;
         },
-        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous; },
+        [&](Vendor) { return B != Backend::ROCM && d.has_vendor && homogeneous && !masked; },
     }, c);
 }
 

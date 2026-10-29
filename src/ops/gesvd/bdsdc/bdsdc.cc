@@ -94,7 +94,8 @@ void bdsdc_build_gk(Queue& ctx,
                     const VectorView<T>& e,
                     const BdsdcWorkspace<T>& ws,
                     int32_t n,
-                    int32_t batch) {
+                    int32_t batch,
+                    const std::uint8_t* mask) {
     ctx->submit([&](sycl::handler& h) {
         auto D = d;
         auto E = e;
@@ -106,6 +107,7 @@ void bdsdc_build_gk(Queue& ctx,
         h.parallel_for<BdsdcBuildGk<B, T>>(
             sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             for (int32_t i = 0; i < N; ++i) {
                 GD(i, b) = T(0);
             }
@@ -133,7 +135,8 @@ void bdsdc_extract_values(Queue& ctx,
                           Span<T> sigma,
                           int32_t n,
                           int32_t batch,
-                          bool sort_desc) {
+                          bool sort_desc,
+                          const std::uint8_t* mask) {
     ctx->submit([&](sycl::handler& h) {
         auto L = ws.lambda;
         T* out = sigma.data();
@@ -144,6 +147,7 @@ void bdsdc_extract_values(Queue& ctx,
             const int32_t lin = static_cast<int32_t>(tid[0]);
             const int32_t b = lin / nn;
             const int32_t i = lin - b * nn;
+            if (mask != nullptr && mask[b] == 0) return;  // I3
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
             const T lam = L(src, b);
             out[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(lam, T(0));
@@ -163,7 +167,8 @@ void bdsdc_extract_vectors(Queue& ctx,
                            int32_t batch,
                            bool want_u,
                            bool want_vh,
-                           bool sort_desc) {
+                           bool sort_desc,
+                           const std::uint8_t* mask) {
     constexpr int32_t kGroup = 64;
     auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u);
     auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh);
@@ -187,6 +192,7 @@ void bdsdc_extract_vectors(Queue& ctx,
             const int32_t grp = static_cast<int32_t>(it.get_group(0));
             const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
             const int32_t b = grp / nn;
+            if (mask != nullptr && mask[b] == 0) return;  // I1: one work-group per (item, column)
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
 
@@ -240,7 +246,8 @@ void bdsdc_repair_degenerate(Queue& ctx,
                              int32_t n,
                              int32_t batch,
                              bool want_u,
-                             bool want_vh) {
+                             bool want_vh,
+                             const std::uint8_t* mask) {
     constexpr int32_t kGroup = 64;
     auto& u_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(u);
     auto& vh_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(vh);
@@ -265,6 +272,7 @@ void bdsdc_repair_degenerate(Queue& ctx,
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
             const int32_t b = static_cast<int32_t>(it.get_group(0));
+            if (mask != nullptr && mask[b] == 0) return;  // I1
             const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
             auto grp = it.get_group();
             const T* sb = sig + static_cast<size_t>(b) * static_cast<size_t>(nn);
@@ -366,7 +374,8 @@ Event bdsdc(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& vh,
             bool sort_desc,
             Span<int32_t> info) {
-    ::batchlas::detail::refuse_batch_mask("bdsdc", d, e, u, vh);
+    const auto mask_span = ::batchlas::detail::call_mask("bdsdc", d, e, u, vh);
+    const std::uint8_t* const mask = ::batchlas::detail::mask_ptr(mask_span);
     if constexpr (detail::is_complex<T>::value) {
         throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {
@@ -389,8 +398,13 @@ Event bdsdc(Queue& ctx,
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
         BumpAllocator pool(ws_mut);
         auto layout = bdsdc_layout<B, T>(ctx, pool, n, batch, want_vectors);
+        // Rebuilt from raw pointers: stedc gets the call's mask on every view it is handed.
+        layout.gk_d = layout.gk_d.with_batch_mask(mask_span);
+        layout.gk_e = layout.gk_e.with_batch_mask(mask_span);
+        layout.lambda = layout.lambda.with_batch_mask(mask_span);
+        layout.Z = layout.Z.with_batch_mask(mask_span);
 
-        bdsdc_build_gk<B, T>(ctx, d, e, layout, n, batch);
+        bdsdc_build_gk<B, T>(ctx, d, e, layout, n, batch, mask);
 
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
@@ -409,13 +423,13 @@ Event bdsdc(Queue& ctx,
                     info);
 
         if (!want_vectors) {
-            bdsdc_extract_values<B, T>(ctx, layout, singular_values_out, n, batch, sort_desc);
+            bdsdc_extract_values<B, T>(ctx, layout, singular_values_out, n, batch, sort_desc, mask);
             return ctx.get_event();
         }
 
         bdsdc_extract_vectors<B, T>(ctx, layout, singular_values_out, u, vh,
-                                    n, batch, want_u, want_vh, sort_desc);
-        bdsdc_repair_degenerate<B, T>(ctx, u, vh, singular_values_out, n, batch, want_u, want_vh);
+                                    n, batch, want_u, want_vh, sort_desc, mask);
+        bdsdc_repair_degenerate<B, T>(ctx, u, vh, singular_values_out, n, batch, want_u, want_vh, mask);
         return ctx.get_event();
     }
 }
