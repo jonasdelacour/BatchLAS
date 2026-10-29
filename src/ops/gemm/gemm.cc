@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// gemm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.3): select::run takes
+// gemm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection.md#phase-3-gemm): select::run takes
 // the first entry of the nearest tuned/gemm.<device>.txt row that can_run() admits. A
 // heterogeneous batch never reaches choose(): it is split into homogeneous items first, and each item
 // makes its own choice.

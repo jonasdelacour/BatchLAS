@@ -859,7 +859,7 @@ jobs:
             --require consumer_package_tests
 
       - name: Vendor-free configure, build and ctest
-        # The configuration docs/design/vendor-free-status.md calls vendor-free:
+        # The configuration docs/design/vendor-independence.md#vendor-free-status calls vendor-free:
         # a CUDA device with every CUDA math library off. It configures,
         # compiles, links, loads and runs; it is NOT green, and it is not
         # expected to be. Many HOST-backend rows fail by design because the
@@ -868,7 +868,7 @@ jobs:
         #
         # continue-on-error is therefore load-bearing: this step reports, it
         # does not gate. IT HAS NO KNOWN-FAILURES LIST OF ITS OWN AND NONE IS
-        # INVENTED HERE. The last numbers in vendor-free-status.md are a pass
+        # INVENTED HERE. The last numbers in vendor-independence.md are a pass
         # COUNT from an older tree, not a per-case list, and a list guessed from
         # a count would mask real breakage. Until somebody records one from an
         # actual run on this tree, the value of this step is the log and the

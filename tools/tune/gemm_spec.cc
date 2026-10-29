@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// gemm for the tuner (flat-kernel-selection-phase3-plan.md §1.3, §3): random A, B and C0 in
+// gemm for the tuner (flat-kernel-selection.md#phase-3-gemm, #phase-3-grids): random A, B and C0 in
 // [-1, 1) (complex parts both), alpha with an imaginary part and beta = 1, so the epilogue reads C
 // (docs/developer/agent-guide.md §10: confirm a GEMM at beta = 1). layout=strided cells pad every ld by
 // max(1, --ld-pad) (an odd ld fails every aligned leg, as the parent-ld panel updates do);

@@ -68,7 +68,7 @@ CI on it. Fix with `git lfs install`, then `git add --renormalize benchmarks/res
 
 - [../design/vendor-independence.md](../design/vendor-independence.md): how dispatch works and how to
   add an op to it.
-- [../design/vendor-free-status.md](../design/vendor-free-status.md): what the vendor-free build does.
+- [../design/vendor-independence.md](../design/vendor-independence.md#vendor-free-status): what the vendor-free build does.
 - [../design/known-defects.md](../design/known-defects.md): located, unfixed defects.
 
 ## perf index: all evidence pages

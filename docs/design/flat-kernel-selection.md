@@ -1,12 +1,13 @@
 # Flat kernel selection {#design_flat_selection}
 
-> **Status:** current · checked 2026-10-21
+> **Status:** current · checked 2026-10-29
 
-Each op that reads `BATCHLAS_<OP>_ROUTE` (24 ops) chooses its kernel in one place: `select::choose()`
-in `src/select/`, called from the op's own file in `src/ops/<op>/`. A choice is a value from a
-`std::variant` of kernel families. `can_run` decides correctness; per-device tables rank the
-candidates for speed. Tables, ledgers and tiers: @ref design_tuning_data. The tuner engine:
-@ref design_tiered_tuning. The phase 3 plan (posv, trsm, gemm): @ref design_flat_selection_phase3_plan.
+Each op that reads `BATCHLAS_<OP>_ROUTE` (29 ops, one `src/ops/<op>/choice.hh` each) chooses its
+kernel in one place: `select::choose()` in `src/select/`, called from the op's own file. A choice is
+a value from a `std::variant` of kernel families; `can_run` decides correctness, per-device tables
+rank the candidates for speed. Every op's families, keys, grid and shipped tables: the generated
+@ref selection_tables page. Tables, ledgers and tiers: @ref design_tuning_data. The tuner engine:
+@ref design_tiered_tuning.
 
 ## 2. Selection rules
 
@@ -17,7 +18,7 @@ candidates for speed. Tables, ledgers and tiers: @ref design_tuning_data. The tu
 | R3 | `can_run` is correctness only. If it is false, the launch would throw or return a wrong answer. It never encodes "slower", and it agrees exactly with what the launch accepts (tested). |
 | R4 | Speed lives only in tables. The last-resort order is by generality, not speed. |
 | R5 | Sizing and running call the same `choose()`. `<op>_buffer_size` returns the chosen family's need. |
-| R6 | A bad pin throws `batchlas::invalid_argument` (a `std::invalid_argument`): an unknown spelling, a non-candidate, or a choice whose `can_run` is false for the shape. The class words `native` and `vendor` are the exception (§5.2). |
+| R6 | A bad pin throws `batchlas::invalid_argument`: an unknown spelling, a non-candidate, or a choice whose `can_run` is false for the shape. The class words `native` and `vendor` are the exception (§5.2). |
 | R7 | Every candidate can be pinned, and a test runs each one on shapes that straddle its limits. |
 | R8 | A device with no table borrows another device's table, warns once per op, and tags every trace line with the table it used. |
 
@@ -25,664 +26,352 @@ candidates for speed. Tables, ledgers and tiers: @ref design_tuning_data. The tu
 
 ### 4.1 Files
 
-| File | Holds |
-|---|---|
-| `src/ops/<op>/choice.hh` | family structs, `candidates<T>()`, `key_names`, the tuner grid, the `select::OpSpec` (op, vendor library group `select::Lib`, last-resort order) |
-| `src/ops/<op>/<op>.cc` | `key_of`, `can_run`, `launch`, `workspace`, the public entry points |
+`src/ops/<op>/choice.hh` holds the family structs, `candidates<T>()`, `key_names`, the tuner grid
+and the `select::OpSpec` (op, vendor library group, last-resort order). `src/ops/<op>/<op>.cc`
+holds `key_of`, `can_run`, `launch`, `workspace` and the public entry points.
 
 ### 4.3 The op file `<op>.cc`
 
-- The public entry point validates its arguments, then calls `select::run`, which picks, opens the
-  trace and coverage scope, and launches inside it. `<op>_buffer_size` calls `select::pick` and
-  returns the chosen family's need.
-- Field-less families derive from `select::NoFields<"name">`. For an op with no fields,
-  `select::all_of<Choice>()` lists the candidates in declaration order, which is also the tie order.
+- The entry point validates its arguments, then calls `select::run`, which picks, opens the trace
+  and coverage scope, and launches inside it. `<op>_buffer_size` calls `select::pick`.
+- Field-less families derive from `select::NoFields<"name">`; `select::all_of<Choice>()` lists them
+  in declaration order, which is also the tie order.
 - The vendor arm calls the backend only under `if constexpr (select::has_library<B>(spec.vendor))`;
   otherwise `select::no_vendor` throws `NoRouteError` and records the `miss` row.
 - Nested ops decide for themselves: a blocked driver calls the public `gemm`, `trsm`, `potrf`,
-  `getrf` or `ormqr`. No parent override forces a child choice; one is built only if a measurement
-  needs it.
-- Common native `can_run` terms: a GPU (`is_gpu`), sub-group 32 (`has_sg32`) where the kernel needs
-  it, a homogeneous batch, extents and batch of at least 1, and `batch <= max_groups_yz` for kernels
-  that put the batch in grid z.
-- A heterogeneous batch has no route: every vendor family refuses it too, because the vendor loops
-  run every item at the top-level extents (known-defects #12). gemm splits it into homogeneous items
-  before `select::run`; posv and gesv throw before `choose()`.
+  `getrf` or `ormqr`. No parent override forces a child choice.
+- A heterogeneous batch has no route: every vendor family refuses it too (known-defects #12). gemm
+  splits it into homogeneous items before `select::run`; posv and gesv throw before `choose()`.
 
 ## 5. The shared helper `src/select/select.hh`
 
-Everything in `src/select/` is generic over an op's choice type: device facts, spelling and pins,
-tables and lookup, trace and coverage (`select.hh`, `select.cc`, `vendor.hh`, `coverage.hh`).
+Everything in `src/select/` (`select.hh`, `select.cc`, `vendor.hh`, `coverage.hh`) is generic over
+an op's choice type: device facts, spelling and pins, tables and lookup, trace and coverage.
 
 ### 5.1 Device facts
 
-`select::Device` (`src/select/select.hh`) is built by `select::describe` and memoized per (device,
-backend, `has_vendor`):
-
-| Field | Meaning |
-|---|---|
-| `key` | table key: `sm_<cc>` (CUDA compute capability), `rocm`, `intel`, `apple_<chip>` (Metal, from the device name: `apple_m5_max`), `cpu` |
-| `family` | `sm`, `gfx` (`rocm` included), `intel`, `apple`, `cpu` |
-| `arch_number` | 120, 89, 90 (gfx90a), 5 (apple_m5_max), 0 for cpu |
-| `is_gpu`, `has_sg32` | device type; sub-group size 32 supported |
-| `has_vendor` | the op's library group (`OpSpec::vendor`) is compiled in for this backend |
-| `slm_budget`, `slm_per_item`, `slm_budget_for(wg)` | local memory less a 4 KiB reserve; Metal adds 8 B per work-item |
-| `max_wg` | `MAX_WORK_GROUP_SIZE` |
-| `max_groups_yz` | work-groups in SYCL dim 0/1 of a 2-D/3-D launch: 65535 (CUDA grid z/y), \f$2^{32}-1\f$ on Metal |
-| `scratch_budget` | one call's scratch lease: min(`MAX_MEM_ALLOC_SIZE`, `GLOBAL_MEM_SIZE` / 4) |
-
-ROCm has no `gcnArchName` query yet, so every AMD GPU is `rocm` and borrows like an unknown `gfx`
-(`device_from_key`, `src/select/select.cc`).
+`select::Device`, built by `select::describe` and memoized per (device, backend, `has_vendor`),
+carries the table key (`sm_<cc>`, `rocm`, `intel`, `apple_<chip>`, `cpu`), family, arch number,
+`is_gpu`, `has_sg32`, `has_vendor`, the local-memory budget, `max_wg`, `max_groups_yz` (65535 on
+CUDA) and `scratch_budget`; the field comments in `select.hh` are the reference. Every AMD GPU is
+`rocm` (no `gcnArchName` query yet).
 
 ### 5.2 Spelling and pins
 
-- **Spelling:** `family[:field=value]...`, for example `tiny`, `lpanel:panel=8`,
-  `reg:m=128:n=128:k=8:u=1`, `vendor`. The positional form `lpanel:8` is accepted as input. Input
-  is case-folded and trimmed.
-- **Pin values:** `auto`, `native` (the best runnable non-vendor entry of the nearest row), `vendor`,
-  or a spelling. `native` and `vendor` fall back to Auto with a one-time warning when nothing in
-  their class can run. Any other value that does not parse, is not a compiled candidate, or that
-  `can_run` refuses, throws.
-- **Removed spellings throw:** `native:cta`, `vendor:auto`, `batchlas_cta`, and gemm kernel names
-  such as `tiled16` or `128x128x8`. `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER` and
-  `BATCHLAS_GEMM_SYCL_KERNEL` are not read.
-- **Tests** pin with `select::ScopedPin`, a thread-local, nesting slot that wins over the
-  environment. `ScopedPin(op, word, StrictPin{})` (the tuner's arms) makes a class word that cannot
-  serve the shape throw instead of falling back.
-- **Snapshot:** the pin is read from the settings snapshot. A raw `setenv` mid-process is not seen
-  until `detail::reload_settings()` runs (`ScopedEnvVar` does this). See
-  [route pins are raw strings](environment.md#environment-route-pins-are-raw-strings).
+- **Spelling:** `family[:field=value]...` (`tiny`, `lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`,
+  `vendor`). The positional form `lpanel:8` is accepted; input is case-folded and trimmed.
+- **Pin values:** `auto`, `native` (the best runnable non-vendor entry of the nearest row),
+  `vendor`, or a spelling. `native` and `vendor` fall back to Auto with a one-time warning when
+  nothing in their class can run; any other bad value throws. Retired spellings (`native:cta`,
+  `vendor:auto`, `batchlas_cta`, gemm kernel names) throw, and the old `_VARIANT`/`_PROVIDER`
+  variables are not read.
+- **Tests** pin with `select::ScopedPin` (thread-local, nesting, wins over the environment).
+  `ScopedPin(op, word, StrictPin{})`, used by the tuner, makes a class word that cannot serve the
+  shape throw instead of falling back.
+- The pin is read from the settings snapshot: a raw `setenv` mid-process is not seen until
+  `detail::reload_settings()` ([route pins are raw strings](environment.md#environment-route-pins-are-raw-strings)).
 
 ### 5.4 Tables and provenance {#flat-selection-tables-and-provenance}
 
-Each table file is `tuned/<op>.<device>.txt`, generated from its ledger and embedded at build time;
-the loader splits it into one table per dtype, parsed once per (op, dtype). `BATCHLAS_TUNED_DIR=<dir>`
-replaces a built-in file with a file of the same name (the trace then shows `[override sm_120]`).
-Format, ledger, tiers, kernel hashes and the check: @ref design_tuning_data.
+Each table is `tuned/<op>.<device>.txt`, generated from its ledger and embedded at build time, split
+into one table per dtype and parsed once per (op, dtype). `BATCHLAS_TUNED_DIR=<dir>` replaces a
+built-in file of the same name (trace tag `[override sm_120]`). Format, ledger, tiers and kernel
+hashes: @ref design_tuning_data.
 
 ```
 # op=potrf device=sm_120 batchlas=<sha> kernels=<hash> family_kernels=<family>:<hash>,... date=<date>
-# source=ledger:benchmarks/results/tuning/ledger/potrf.sm_120.jsonl tiers=deep:1374,...
 # keys: dtype:exact uplo:exact n:log:3 batch:log
 dtype=float uplo=L n=64 batch=8192 | lpanel:panel=8 0.2258 | lpanel:panel=16 0.3238 | blocked 0.5222 | vendor 0.4373 | cta 0.5300 # deep
-dtype=float uplo=L n=512 batch=2048 | vendor 12.68 | blocked 13.76 | lpanel:panel=8 14.62 # deep
 ```
 
-- A row lists the candidates in the tuner's rank order: survivors by median, ties within 3% of the
-  best in candidate-list order; then arms eliminated in the race, by median; then candidates carried
-  over from an earlier record (`record_from_arms`, `tools/tune/schedule.cc`). Printed times
-  therefore need not ascend (row 1 above). Times are milliseconds per call for the whole batch; the
-  comment is the row's ledger tier.
-- An untimed row (`transcribed`, `prior`) has the form
-  `dtype=float uplo=L n=8 nrhs=1 batch=128 | tiny - | cta - # transcribed`; the header then needs a
-  `source=ledger:` (or, in a hand-made single table, `source=transcribed:<hex sha>`).
-- `kernels=` and `family_kernels=` are kernel hash v2 over the sources each spec lists between its
-  `kernel-sources-begin` and `kernel-sources-end` markers
-  ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)). A mismatch is a warning, never an
-  error; the table stays in use.
-- Every table entry must be a member of `candidates<T>()`. The loader checks this on first use, and
-  `tuned_tables_tests` checks every shipped table without a GPU.
+- A row lists candidates in the tuner's rank order (survivors by median with 3% ties in candidate
+  order, then race-eliminated arms, then carried-over ones), so printed times need not ascend. Times
+  are ms per call for the whole batch; the comment is the row's ledger tier.
+- An untimed row (`transcribed`, `prior`) prints `-` for each time.
+- A kernel-hash mismatch is a warning, never an error ([kernel hashes](tuning-data.md#tuning-data-kernel-hash)).
+- Every entry must be a member of `candidates<T>()`, checked on first use and by `tuned_tables_tests`.
 
-Row origins (ledger tiers, best first `deep`, `coarse`, `calibrate`, `preview`, `custom`,
-`converted`, `prior`, `transcribed`; @ref design_tuning_data):
-
-| Origin | Meaning | Shipped where (headers of `tuned/*.txt`, 2026-10-21) |
-|---|---|---|
-| measured (`deep`, `coarse`, `calibrate`, `preview`, `custom`) | `batchlas_tune` timings | every sm_120 table (deep; gemm float and cfloat re-measured 2026-10-21) |
-| converted | timings from earlier forced-route sweeps, on old kernels | potrf on sm_89 (241 rows) |
-| prior | a calibrate run's untimed copy of a borrowed table's nearest row | none shipped |
-| transcribed | the old router's preference order at each grid cell, untimed | every other sm_89 table, `spmm.cpu.txt`, sm_120 gemm double and cdouble, and sm_120 rows the deep lattice measured nothing near |
-
-Every op ships a table for every dtype it instantiates on sm_89 and sm_120 (39 files; inventory in
-@ref tuned_tables_readme), so neither device borrows. Retuning sm_89 is open (§11).
+Row origins: measured (`deep`, `coarse`, `calibrate`, `preview`, `custom`), `converted` (old
+forced-route sweeps; potrf sm_89), `prior` (none shipped) and `transcribed` (the old router's
+preference order, untimed). Every op ships sm_89 and sm_120 tables for every dtype it instantiates,
+so neither device borrows; per-table provenance is in @ref tuned_tables_readme.
 
 ### 5.5 How a call chooses: lookup, borrow order, last resort
 
 `select::choose()` tries, in order:
 
-1. A pin, from `select::ScopedPin` or `BATCHLAS_<OP>_ROUTE`. A bad pin throws.
+1. A pin (`ScopedPin` or `BATCHLAS_<OP>_ROUTE`). A bad pin throws.
 2. For each table in borrow order, the nearest row; the first entry whose `can_run` is true wins.
 3. The first runnable candidate in the op's last-resort order.
-4. Otherwise it throws `batchlas::unsupported` (a `std::runtime_error`); `select::pick` turns that
-   into `NoRouteError` plus a coverage `miss` row when the op's vendor library is absent and no
-   candidate can run. A defective built-in table throws `batchlas::internal_error`; a defective
-   `BATCHLAS_TUNED_DIR` table throws `batchlas::invalid_argument`.
+4. Otherwise `batchlas::unsupported`; `select::pick` turns that into `NoRouteError` plus a coverage
+   `miss` row. A defective built-in table throws `internal_error`, a defective `BATCHLAS_TUNED_DIR`
+   table `invalid_argument`.
 
-**Nearest row.** Exact keys (`name:exact`) must match, dropping exact keys from the right until some
-row matches. Among those rows the smallest weighted distance
-\f$\sum_i w_i\,|\log_2(\mathrm{row}_i/\mathrm{key}_i)|\f$ over the `:log` keys wins; the weight comes
-from `<name>:log:<w>` (default 1). Ties within 1e-9 go to the row with the smaller log keys, in
-`# keys:` order. gemm memoizes the scan per key.
+**Nearest row.** Exact keys must match, dropping exact keys from the right until some row matches.
+Among those rows the smallest \f$\sum_i w_i\,|\log_2(\mathrm{row}_i/\mathrm{key}_i)|\f$ over the
+`:log` keys wins (`<name>:log:<w>`, default weight 1); ties within 1e-9 go to the smaller log keys.
 
-**Borrowing (§5.5).** For a device key `d` (`tables_in_borrow_order`, `src/select/select.cc`):
-
-1. the table for `d`;
-2. other tables of the same family, nearest arch number at or below `d`, then nearest above;
-3. other families in the order `sm`, `gfx`, `intel`, `apple`, any other, `cpu`.
-
-A CPU device uses only its own table; without one it goes to the last resort silently. A device
-with its own table whose row has nothing runnable falls through to the next table without the borrow
-warning (trace tag `fallthrough from`). The first borrowed table prints one warning per op per process:
+**Borrowing** (`tables_in_borrow_order`, `src/select/select.cc`): the device's own table; then the
+same family, nearest arch at or below, then above; then families `sm`, `gfx`, `intel`, `apple`, any
+other, `cpu`. A CPU uses only its own table. An own table whose row has nothing runnable falls
+through without the warning (trace tag `fallthrough from`). The first borrowed table warns once per op:
 
 ```
 batchlas: potrf has no float table for sm_86; borrowing sm_89 (run tools/tune to tune this device)
 ```
 
-**Last resort.** `OpSpec::rules.last_resort` lists families in generality order; the remaining
-candidates follow in list order. Default `blocked`, then `vendor` (`kBlockedThenVendor`).
+**Last resort.** `OpSpec::rules.last_resort` lists families in generality order, the rest follow in
+list order; default `blocked`, then `vendor` (`kBlockedThenVendor`).
 
-**Trace and coverage.**
-
-- `BATCHLAS_SELECT_TRACE=1` prints one line per call on stderr: key fields, the chosen spelling, its
-  time, the runner-up (or `tied with` within 3%), and the table tag. Nested calls are indented.
-- Each call writes a coverage `reached` row. `chosen_algo` holds the spelling and `chosen_origin`
-  holds `native` or `vendor`. `scripts/route_diff.sh` diffs these rows.
-- `BATCHLAS_KERNEL_TRACE` is separate. Use it to see a derived leg (gemm's aligned or predicated
-  launch), which the coverage row does not record.
-
-```
-potrf float n=64 batch=8192 -> lpanel:panel=8  0.226 ms, next lpanel:panel=16 0.324 ms  [sm_120]
-potrf float n=512 batch=2048 -> vendor  12.68 ms, next blocked 13.76 ms  [sm_120]
-```
+**Trace and coverage.** `BATCHLAS_SELECT_TRACE=1` prints one line per call (key, choice, time,
+runner-up or `tied with`, table tag; nested calls indented). Each call writes a coverage `reached`
+row (`chosen_algo`, `chosen_origin`) that `scripts/route_diff.sh` diffs. A derived leg (gemm's
+aligned or predicated launch) shows only in `BATCHLAS_KERNEL_TRACE`.
 
 ## 6. The tuner `tools/tune/batchlas_tune`
 
-The normal workflow is tiered (`--tier preview|coarse|deep|calibrate`, the lean per-cell protocol):
-@ref design_tiered_tuning and @ref tune_tool_readme. §6.1-§6.3 below are the spec and the custom
-(two-pass) protocol, selected by any of `--reps`, `--warm`, `--passes`, `--remeasure`,
-`--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad`, `--raw`.
-
-```
-batchlas_tune <op> --tier deep --dtype float,cfloat --devices <gpu> --out tuned/
-batchlas_tune <op> --dtype float --devices <gpu> --raw /tmp/raw          # custom protocol
-```
+The normal workflow is tiered (`--tier preview|coarse|deep|calibrate`): @ref design_tiered_tuning
+and @ref tune_tool_readme. The custom two-pass protocol is selected by any of `--reps`, `--warm`,
+`--passes`, `--remeasure`, `--refine-ratio`, `--no-refine`, `--no-jit`, `--ld-pad`, `--raw`.
 
 ### 6.1 What it times
 
-Every entry of `candidates<T>()`, pinned with a strict `ScopedPin` and run through the public op.
-
-- **Inputs:** built per op by `tools/tune/<op>_spec.cc` (SPD matrices for potrf).
-- **Verification:** `batchlas::verify` on each arm (@ref design_verification). A failing candidate
-  is recorded `bad` and dropped from that cell.
-- **Skips:** a candidate whose `can_run` is false at a cell is recorded as skipped, not timed.
+Every entry of `candidates<T>()`, pinned with a strict `ScopedPin` through the public op, on inputs
+built by `tools/tune/<op>_spec.cc`. Each arm is checked with `batchlas::verify`
+(@ref design_verification); a failing one is recorded `bad` and dropped from the cell. A candidate
+whose `can_run` is false at a cell is recorded as skipped.
 
 ### 6.2 Grid and edge refinement
 
-- A coarse grid from `choice.hh` (`grid_*`). For potrf: 34 values of n from 1 to 1280, batch 128,
-  512, 2048, 8192, 32768, per `uplo`. Inputs are capped at 4 GiB (`--cap-gib`); tiered runs also
-  skip any matrix dimension above 2048 (`--max-dim`).
-- Custom protocol: where neighbouring n points have different winners, n is bisected at the
-  geometric midpoint until `hi/lo < 1.1`. Batch is not refined. Refined points become ordinary rows.
-  Tiered refinement: @ref design_tiered_tuning.
+The grid is `choice.hh`'s `grid_*`. Inputs are capped at 4 GiB (`--cap-gib`); tiered runs skip any
+dimension above 2048 (`--max-dim`). The custom protocol bisects n at the geometric midpoint where
+neighbours disagree until `hi/lo < 1.1` (batch is not refined).
 
 ### 6.3 Noise protocol
 
-Custom protocol:
-
-1. A throwaway JIT pass over every cell.
-2. Per cell, the candidates are interleaved with a 1.5 s warm-up each, then 16 timed reps with the
-   order rotated each rep. The median is taken.
-3. The grid is run twice, the second time in reverse candidate order. A cell's time is the mean of
-   its two pass medians. If the two medians differ by more than 10%, the cell is measured once more.
+Custom protocol: a throwaway JIT pass; per cell, candidates interleaved with 1.5 s warm-up each and
+16 rotated reps, median taken; the grid run twice, the second in reverse order, mean of the two
+medians, re-measured once if they differ by more than 10%.
 
 Both protocols:
 
-4. **Tie rule:** every candidate within 3% of the best is tied, and ties go to the `candidates<T>()`
-   order. Native candidates precede `vendor`, so near-ties go to the native kernel; this costs at most
-   3%. Example (`tune_tests`): blocked 14.10 ms vs vendor 13.74 ms tie, blocked wins. Moving
-   `Vendor{}` to the front reverses it.
-5. **Guard:** one measuring process per GPU, behind a flock. It refuses to run while a foreign
-   compute process is on the GPU or utilisation is above 5% (`--allow-idle-foreign` tolerates idle
-   contexts). `--devices` is required. The launcher is SYCL-free and holds no CUDA context.
+- **Tie rule:** within 3% of the best is a tie, and ties go to `candidates<T>()` order. Native
+  candidates precede `vendor`, so near-ties go native (costing at most 3%). Example
+  (`tune_tests`): blocked 14.10 ms vs vendor 13.74 ms tie, blocked wins.
+- **Guard:** one measuring process per GPU, behind a flock; it refuses a GPU holding any foreign
+  compute context. `--devices` is required; the launcher is SYCL-free and holds no CUDA context.
 
 ### 6.4 Output
 
-Cell records are appended to the ledger `benchmarks/results/tuning/ledger/<op>.<device>.jsonl`
-(Git LFS), from which `scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt` in the §5.4
-format (@ref design_tuning_data). `--gate` compares Auto against an old choice on the cells where
-they differ: FAIL when the new time is above `--gate-limit` (1.05) × the old in both passes. Exit
-code 1 on FAIL, 3 when a row is an error or no cell was gated.
+Cell records append to `benchmarks/results/tuning/ledger/<op>.<device>.jsonl` (Git LFS);
+`scripts/sweep_to_table.py` writes `tuned/<op>.<device>.txt`. `--gate` compares Auto against an old
+choice where they differ: FAIL when the new time exceeds `--gate-limit` (1.05) × the old in both
+passes; exit 1 on FAIL, 3 when a row errors or no cell was gated.
 
 ### 6.5 Staleness check
 
-One function, `sweep_to_table.stale_kernel_warnings`, used by `scripts/sweep_to_table.py --check`
-and `.github/ci/check_tuned_tables.py`: see [kernel hashes](tuning-data.md#tuning-data-kernel-hash).
-A table whose rows are all converted, prior or transcribed is never stale. A stale table is a
-warning, never an error. There is no configure-time check.
+`sweep_to_table.stale_kernel_warnings`, used by `sweep_to_table.py --check` and
+`.github/ci/check_tuned_tables.py`. A wholly untimed table is never stale; a stale table is a
+warning. There is no configure-time check.
 
 ## 8. Tests
 
-Each op has an `<op>_candidates_tests` suite (19, `tests/*_candidates_tests.cc`) built from the
-parts below. The rules for writing them are in @ref dev_agent_guide.
+Each op has an `<op>_candidates_tests` suite (20 files, `tests/*_candidates_tests.cc`); the writing
+rules are in @ref dev_agent_guide §8.
 
 ### 8.1 Every candidate, pinned
 
-Loop over `candidates<T>()` for every dtype, pin each with `ScopedPin`, run it on shapes that
-straddle its `can_run` limits in both directions, and check the result, info and the untouched
-triangle with `batchlas::verify`. Required inputs: non-natural `ld` and stride, complex data with a
-nonzero imaginary part, poison the kernel will accept, and a saturating batch (at least 1024
-identical items, bit-identical results) for shared-local-memory tiers.
+Every `candidates<T>()` entry for every dtype, pinned with `ScopedPin`, on shapes straddling its
+`can_run` limits both ways, checked with `batchlas::verify`, with non-natural `ld`/stride, complex
+data, accepted poison and a >= 1024-item bit-identical batch for local-memory tiers.
 
 ### 8.2 `can_run` equals launch
 
-For every candidate and straddling shape: where `can_run` is true the direct dispatch call does
-not throw, and where it is false the direct call refuses. This keeps R3 honest. 17 of the 19 suites
-have a `CanRunEqualsLaunch` test; `spmm_candidates_tests` and `syr2k_candidates_tests` do not.
+Where `can_run` is true the direct dispatch does not throw; where false it refuses (keeps R3 honest).
+`spmm`, `syr2k` and `hermitian` suites have no `CanRunEqualsLaunch` test.
 
 ### 8.3 Sizing
 
-Under each pin, run with a workspace of exactly `<op>_buffer_size(...)` bytes inside a poisoned
-arena and check that nothing is written past the end.
+Under each pin, a workspace of exactly `<op>_buffer_size(...)` bytes inside a poisoned arena; nothing
+is written past the end.
 
 ### 8.4 Table validity
 
-`tests/tuned_tables_tests.cc`, no GPU. Every embedded file is `<op>.<device>.txt` keyed
-`dtype:exact` plus the op's `choice.hh` keys; every per-dtype table parses and names only members of
-that dtype's `candidates<T>()`; every op ships every dtype on every shipped device; each table holds
-exactly its op's grid. Timed rows of a non-ledger table must ascend apart from ties (every shipped
-table is a ledger table, whose order is the race's). On the matching device, each row's first
-runnable candidate also passes `can_run` at that row's own key.
+`tests/tuned_tables_tests.cc`, no GPU: file names and keys match `choice.hh`, every entry is a
+candidate of its dtype, every op ships every dtype on every shipped device, each table holds its
+op's grid, and each row's first runnable candidate passes `can_run` at the row's own key.
 
 ### 8.5 Pins and borrowing
 
-No GPU (`tests/select_tests.cc`). An unknown pin throws, and so does a `can_run`-false pin. Every
-old alias throws (each op's should-throw test lists the removed spellings). With synthetic tables,
-the borrow order of §5.5 holds (Apple included), the warning prints once per op, a CPU without its
-own table takes the last resort silently, and an own table with nothing runnable falls through
-without the warning.
+`tests/select_tests.cc`, no GPU: unknown and `can_run`-false pins throw, every removed alias throws,
+and with synthetic tables the §5.5 borrow order, the once-per-op warning, the silent CPU last resort
+and the warning-free fallthrough hold.
 
 ## 10. Validation and gates
 
-Results of the migration gates (2026-10, on the tables of that time; not repeated on the current
-tables):
-
-| Check | Result |
-|---|---|
-| Failing test names, vendor and vendor-free trees | Matched the base for each migrated op. Each deliberate break of an op file turned a narrow, named set red. |
-| Off-grid data gate (random points, old router vs nearest row plus `can_run`) | 100% agreement for the phase-5 ops and the level-3 four, on sm_89 or sm_120. Dropping threshold rows fails the gate. Not run for gemm. |
-| Coverage of Auto calls, old vs new build | Same `reached` row as the old build, except the deliberate changes listed under each op. |
-| Live timing, potrf on sm_120 | 120 off-grid cells: 54 chose the same kernel. 33 changed and were timed in two reversed passes: 0 FAIL, worst 1.014× (cdouble n=44, batch 8192), the others 0.60 to 0.994×. The remaining 33 were not timed: 32 exceed 12 GiB, and \f$n^2\cdot\mathrm{batch} \ge 2^{31}\f$ aborts in `factor_bench` on any route. |
-| Live timing, potrf on sm_89 | Open. The sm_89 table is converted and has no current `lpanel` timings. |
+The 2026-10 migration gates passed on the tables of that time: failing names matched base in vendor
+and vendor-free trees, off-grid agreement with the old router was 100% for the phase-5 and level-3
+ops (gemm not run), and potrf on sm_120 had 0 FAIL over 33 timed changed cells (worst 1.014×).
 
 **Acceptance gate for a changed op:**
 
-1. Correctness: the op's `*_candidates_tests`, `tuned_tables_tests` and `select_tests` pass in the
-   vendor and vendor-free trees. Failing names are compared with `tests/known-failures.txt`.
+1. The op's `*_candidates_tests`, `tuned_tables_tests` and `select_tests` pass in the vendor and
+   vendor-free trees; failing names compared with `tests/known-failures.txt`.
 2. `scripts/sweep_to_table.py --check` passes.
-3. Live, at saturation (batch ≥ 128): the new choice is not more than 1.05× slower than the old
-   routing at off-grid points between grid values, interleaved in one process; a loss counts only if
-   it reproduces with the order reversed (`batchlas_tune --gate`).
-4. Readable: a reviewer finds the kernel for a given call by reading `<op>.cc` and its table.
+3. At saturation (batch ≥ 128) the new choice is not more than 1.05× slower than the old at off-grid
+   points, reproduced with the order reversed (`batchlas_tune --gate`).
+4. A reviewer finds the kernel for a call by reading `<op>.cc` and its table.
 
 ## 11. Open items
 
-- **Retune.** The transcribed rows (sm_89 everywhere, sm_120 gemm double and cdouble since FP64 is
-  not tuned on 1:64 parts, sm_120 gemv, `spmm.cpu.txt`, and sm_120 rows the deep lattice measured
-  nothing near) and the converted sm_89 potrf rows are to be replaced with tuner output. Until then,
-  transcribed rows encode the old router's choices, untimed.
-- **sm_89 live gate** for potrf and for the other ops with transcribed sm_89 tables.
-- **hemm, herk and her2k: done (2026-10-22).** They select from `tuned/<op>.<device>.txt` like the
-  other level-3 ops (§12.9). Their sm_89 and sm_120 tables are transcribed from the deleted
-  cuBLAS-backend rules, so vendor builds route as before; retuning them with `tools/tune` (specs
-  `hemm_spec.cc`, `herk_spec.cc`, `her2k_spec.cc`) is open. `BATCHLAS_EXPAND_ROUTE` is gone.
-- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch`
-  (`src/ops/potrf/kernels/potrf_blocked.cc:340`). `Blocked` has no fields: `nb` and `W` come from
-  `PotrfBlockedConst`, overridable by `BATCHLAS_POTRF_NB` and `BATCHLAS_POTRF_W`. `lpanel:panel=16`
-  is timed only in the sm_120 table (165 of the 189 float `uplo=L` rows, 21 ranking it first).
-- **Grid-z ceiling.** gemm (`direct`, `tiled`, `reg`, `wide`, `splitk`), syrk, syr2k, trmm, symm and
-  the hemm, herk and her2k natives chunk a batch past 65535 (`src/ops/level3/batched.hh`, gemm's
-  `launch`). Other ops that put the batch in dimension 0 of a 3-D range abort above 65535
-  work-groups; the phase-5 kernels were not audited for it. ormqr's blocked driver was reported to
-  hit it (known-defects #16), but that did not reproduce on sm_120.
+- **Retune.** 31 of the 59 shipped tables are wholly transcribed (most sm_89 tables, `spmm.cpu.txt`,
+  and on sm_120 hemm, herk, her2k, potri, potrs, sygst, sygvd, sysv, sytrf, sytrs); the sm_89 potrf
+  rows are converted. They encode the old router's choices, untimed.
+- **sm_89 live gate** for potrf and the transcribed sm_89 tables.
+- **potrf.** The blocked leaf is hard-wired to `potrf_cta_dispatch`; `nb` and `W` come from
+  `PotrfBlockedConst` (`BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W`), not fields.
+- **Grid-z ceiling.** gemm and the level-3 natives chunk a batch past 65535
+  (`src/ops/level3/batched.hh`, gemm's `launch`). Other ops that put the batch in grid z were not
+  audited; ormqr's report (known-defects #16) did not reproduce on sm_120.
 - **`select::level3_tile_substitution_enabled`** is conservative (a native GPU backend, and float or
-  CUDA with cuBLAS; `src/select/vendor.hh:105-106`). Widening it moves the vendor-free routes of
-  ortho and ormqr, so that is a separate change.
-
-Closed since 2026-10-06: gemm `direct` rebases each item in 64 bits
-(`src/ops/gemm/kernels/gemm_launch.hh:313-316`); the stale `options.hh` line numbers in the potrf
-header comment are gone.
-
-Known defects that affect routing are in [known defects](known-defects.md): #12 (heterogeneous
-batches on the vendor, closed by refusing them in every family's `can_run`) and #13 (the cuBLASLt
-segfault on complex double gemm, fixed with 16-byte aligned scalars).
+  CUDA with cuBLAS; `src/select/vendor.hh`). Widening it moves the vendor-free routes of ortho and
+  ormqr, so it is a separate change.
 
 ## 12. Per-op families
 
-Candidates and keys come from the op's `choice.hh`; `can_run` from `<op>.cc`. "Transcribed" patterns
-and row counts describe the sm_89 table (per dtype); sm_120 is deep-measured unless a line says
-otherwise. The generated @ref selection_tables page lists every op's families and shipped tables.
+Families, keys, grids and ranked-first ranges per table are on @ref selection_tables; the predicate
+in `<op>.cc` is the reference for `can_run`. This section keeps what neither says.
 
-### potrf (Lower and Upper)
+### potrf
 
-- **Families:** `tiny`, `cta`, `lpanel:panel=8`, `blocked`, `vendor`. Float also has
-  `lpanel:panel=16`. Float has 6 candidates, the other dtypes 5.
-- **Keys:** `uplo:exact n:log:3 batch:log` (work \f$\sim n^3\f$).
-- **`can_run`** (`src/ops/potrf/potrf.cc:35-58`): native needs a GPU, sub-group 32, a homogeneous
-  batch, `n >= 1` and `batch >= 1`.
-  - `tiny`: `n <= potrf_tiny_max_n<T>()` and `max_wg >= kPotrfTinyWgSize` (64).
-  - `cta`: `n <= potrf_cta_max_n_for_slm<T>(slm_budget)` (min blocks 4).
-  - `lpanel`: Lower only, `n <= potrf_lpanel_max_n_for_slm<T>(budget, max_wg, kMinBlocksPerSm, panel)`
-    (0 for a panel width `T` does not instantiate).
-  - `blocked`: Lower only, `potrf_blocked_available<T>()` and `cta_max_n_for_slm >= 1`.
-  - `vendor`: `has_vendor` and a homogeneous batch.
-- **Last resort:** `blocked`, then `vendor`, then the rest.
-- **Workspace:** `blocked` needs `potrf_blocked_buffer_size` alone; its gemm and trsm take none.
-- **Upper:** Upper calls use the Lower rows (the exact key is dropped) unless the table has Upper
-  rows. sm_120 has Upper rows (162 float, 627 in all).
-- **Data:** sm_89 is converted from the forced-route archive, which has no current-era `lpanel`
-  timings, so the sm_89 table never picks `lpanel`.
+`lpanel` and `blocked` are Lower only. Upper calls use the Lower rows (the exact key is dropped)
+unless the table has Upper rows; sm_120 has them. The converted sm_89 table has no current `lpanel`
+timings, so it never picks `lpanel`.
 
-### posv (Cholesky solve)
+### posv {#phase-3-posv}
 
-- **Families:** `tiny`, `cta`, `blocked`, all field-less. No vendor family: a `vendor` pin warns and
-  runs Auto.
-- **Keys:** `uplo:exact n:log:3 nrhs:log batch:log`.
-- **`can_run`:** `tiny` needs `n <= posv_tiny_max_n<T>()`, `nrhs <= kPosvTinyMaxRhs` and
-  `max_wg >= kPosvTinyWgSize`; `cta` needs `nrhs <= kGetrsFusedMaxRhs` and
-  `n·nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`; `blocked` a homogeneous batch. Empty problems
-  and heterogeneous batches throw `internal_error` before `choose()`.
-- **Last resort:** `blocked`.
-- **Data:** sm_89 transcribed: `tiny | cta | blocked` inside the old tiny window and `cta | blocked`
-  elsewhere.
+`tiny` is the fused factor-and-solve kernel; `cta` is the public `potrf` plus one fused solve
+(`ops::potrs::solve`), `blocked` the public `potrf` plus two public trsm. The children choose for
+themselves, so the tuner's `cta` and `blocked` times include them. No vendor family: a `vendor` pin
+warns and runs Auto. Empty problems and heterogeneous batches throw `internal_error` before
+`choose()`. The names `cta` and `blocked` are misnomers kept so benchviz and the scripts keep working.
 
-> **Note:** the `max_wg >= 64` term cannot fail on any device with `max_wg` of 64 or more, so no
-> test can turn it red on current hardware.
+### trsm {#phase-3-trsm}
 
-### trsm {#phase-33-trsm}
+`cta` and `sg_left` (Left only) are register-resident solvers for order ≤ 32; `blocked` solves
+32-wide diagonal blocks with `cta` and updates with the public gemm. `uplo` and `diag` are not keys:
+an sm_120 A/B over 56 cells changed no first choice. `A.batch_size() != B.batch_size()` throws
+`invalid_argument` in `trsm_validate_params`. Batch offsets in the complex vendor substitute are 64-bit.
 
-- **Families:** `cta`, `sg_left`, `blocked`, `vendor`, all field-less.
-- **Keys:** `side:exact trans:exact order:log:2 q:log batch:log`, with `q = side==Left ? B.cols : B.rows`
-  and ConjTrans folded to T. `uplo` and `diag` are not keys.
-- **`can_run`** (`src/ops/trsm/trsm.cc:46-62`): common terms are a GPU, homogeneous operands, and
-  order, q and batch of at least 1.
-  - `cta`: `order <= trsm_cta_max_n<T>()` (32) and `max_wg >= 32`.
-  - `sg_left`: Left only, sub-group 32, `order <= kTrsmSgLeftMaxN` (32) and `max_wg >= kTrsmSgLeftWgSize` (128).
-  - `blocked`: `trsm_blocked_available<T>()`, `trsm_cta_max_n >= 1` and `max_wg >= 32`.
-  - `vendor`: `has_vendor` and homogeneous operands.
-- **Last resort:** `blocked`, then `vendor`.
-- **Errors:** `A.batch_size() != B.batch_size()` throws `batchlas::invalid_argument` in `trsm_validate_params`.
-- **Data:** sm_89 transcribed: `cta | blocked | vendor` for order ≤ 32 (7,680 of 17,280 rows) and
-  `blocked | vendor` above (9,600 rows); no transcribed row names `sg_left`.
-- **`uplo` and `diag` (sm_120 A/B, 56 cells):** four combinations per cell, for float and cdouble.
-  The first entry is the same for all four in every cell; lower-ranked entries swap in two cells.
-  diag=U is clearly faster for cdouble, but no choice changes, so neither is a key. Add `diag:exact`
-  if a timed diag=U table is ever wanted.
-- **Indexing:** batch offsets in the complex vendor substitute are 64-bit. A 32-bit offset wrapped at
-  \f$2^{31}\f$ elements and faulted.
+### gemm {#phase-3-gemm}
 
-### gemm
+Families, forms and windows: [GEMM: what ships](../perf/gemm.md#gemm-what-ships). `layout=packed`
+means A, B and C contiguous with 16-byte-aligned bases. A heterogeneous batch is split into
+homogeneous items before selection. Natives need `is_gpu || !has_vendor` (a CPU with a host BLAS
+keeps the vendor) and a precision `native_serves_precision` accepts. The aligned or predicated leg,
+the transpose instantiation, the `small` bucket and TR/TC/stages are derived in the launcher, never a
+field or key. A pin on a form the configuration is not instantiated for is `can_run`-false and throws.
+On sm_89 (transcribed) nearest-row lookup differs from the old router on some off-grid shapes;
+accepted until the sm_89 retune.
 
-The full family, form and window reference is [the gemm page](../perf/gemm.md) ("GEMM: what ships").
+### posv, trsm and gemm grids {#phase-3-grids}
 
-- **Families:** `direct`, `tiled`, `small` (every scalar), `reg:m=..:n=..:k=..:u=..` (float only, 13
-  `reg_configs`), `wide:m=..:n=..:k=..` (9 `wide_configs`; `wide:m=128:n=128:k=8` complex<float>
-  only), `splitk:m=..:n=..:k=..:s=..` (six wide host tiles × s ∈ {2, 4, 8}, every scalar), `vendor`.
-  Candidates: float 43, double 30, complex<float> 31, complex<double> 30.
-- **Keys:** `ta:exact tb:exact layout:exact m:log n:log k:log batch:log`. ConjTrans folds to T for
-  real scalars. `layout=packed` when A, B and C are contiguous with 16-byte-aligned bases, otherwise
-  `strided`.
-- **Last resort:** `direct`, then `vendor`.
-- **Common term** (`src/ops/gemm/gemm.cc:119-122`): native needs `is_gpu || !has_vendor` (a CPU with a
-  host BLAS keeps the vendor), a precision the kernels serve (`native_serves_precision`: `Default`,
-  the matching `F32`/`F64`, and F16/BF16/TF32 on a single-precision type only without a vendor),
-  m, n, k, batch ≥ 1 and homogeneous operands.
-- **Forms:** `can_run` lists the instantiated (configuration, ta, tb) forms. A real Trans uses a wide
-  ConjTrans instantiation; a complex form must be instantiated exactly.
-
-  | Choice | Forms |
-  |---|---|
-  | `direct`, `tiled`, `small` | any (`small` needs max(m, n, k) ≤ 64, ≤ 32 for `complex<double>`) |
-  | `reg` 32·32·8, 64·64·8, 128·64·32 (u=4 and u=2), 128·128·8 | NN |
-  | `reg` 64·64·16, 128·32·16, 128·32·32 | NN, NT, TN, TT |
-  | `reg` 128·64·16 | NT, TN, TT |
-  | `reg` 32·128·16 | NN, TN, TT |
-  | `wide` 64·64·16 | NN, CN, NC |
-  | `wide` 128·32·16 | NC |
-  | `wide` 32·128·16 | CN |
-  | `wide` 32·32·16, 16·16·16 | NN |
-
-- **Terms:** no batch term: `direct`, `tiled`, `reg`, `wide` and `splitk` put the batch in CUDA grid
-  z (65535; split-k batch × s), and `launch` runs a larger batch as slices. `small` needs sub-group
-  32, except the float NN tiled leg for 33 to 56.
-- **Derived in the launcher, never a field, key or term:** the aligned or predicated leg, the
-  transpose instantiation, the `small` bucket, and TR, TC and the stages.
-- **Data:** sm_89: 38,826 transcribed rows. Float: `small` first on the 30 NN squares up to 48,
-  otherwise `vendor` then the old native kernel. Double: native everywhere (`tiled` 4,395 rows,
-  `direct` 102, `wide` 64·64·16 15). Complex: `vendor` first everywhere. sm_120: 22,203 deep rows
-  (float, cfloat, 2026-10-21) and 14,314 transcribed (double, cdouble, and lattice gaps).
-- **Known difference from the old router (sm_89):** between grid points, nearest-row lookup does not
-  reproduce the old predicates. On random off-grid shapes the first runnable native entry differs
-  from the old kernel for 6.7% of double shapes and 31.7% of float shapes. Fast-path divisibility
-  is not a key, so packed shapes that are not multiples of the tile take the predicated leg. Both
-  are accepted until the sm_89 retune.
+The grids in `choice.hh` are spelled again by the transcriber (`tuned/README.md`). trsm keys only
+side × trans (N/T), because the full side × uplo × trans × diag lattice was infeasible to time. gemm
+declares its grid per (ta, tb, layout): squares for every form and both layouts; panels and skinny
+shapes for the issued forms only, `packed` panels from m, n ≥ 128; large-k Gram and skinny shapes
+(not transcribed for sm_89). Real types use all four (ta, tb) pairs, complex types the issued ones.
 
 ### gemv {#phase-5-gemv}
 
-- **Families:** `cta` (bodies 3 and 5), `direct` (bodies 1, 2 and 4), `vendor`. The body split and the
-  segment width are derived; `BATCHLAS_GEMV_SEGT` steers the width.
-- **`can_run`:** A homogeneous, x and y with A's batch, `x.size() == red` and `y.size() == out`.
-  `cta` also needs a GPU, sub-group 32 and `trans != N` (`ops::gemv::device_allows`). `direct` has
-  no GPU gate. `vendor` needs `has_vendor` and a homogeneous A.
-- **Last resort:** `vendor`, then `direct`.
-- **Keys:** `trans:exact out:log red:log batch:log`. `out` and `red` are the lengths of y and x, and
-  they swap with `trans`. Grid: out 255|256, red 63|64 and 352|353, batch 319|320. 1,408 rows.
-- **sm_89 ranking:** `cta | vendor | direct` for complex double with T inside the old window (48
-  cells), `vendor | cta | direct` for the other T cells, and `vendor | direct` under N.
-- No gemv validator exists, so a non-conforming call goes to the vendor (known-defects #1).
+`cta` (bodies 3 and 5) needs a GPU, sub-group 32 and `trans != N`; `direct` (bodies 1, 2, 4) has no
+GPU gate. The body and segment width are derived (`BATCHLAS_GEMV_SEGT` steers the width). `out` and
+`red` are the lengths of y and x and swap with `trans`.
 
 ### geqrf {#phase-5-geqrf}
 
-- **Families:** `tiny` (m == n and `n <= geqrf_tiny_max_n_for_slm`), `cta` (`geqrf_cta_fits`),
-  `blocked` (`geqrf_blocked_available` and `geqrf_cta_max_elems_for_slm >= 1`), `vendor`. Native
-  needs a GPU, sub-group 32, a homogeneous batch and m ≥ n ≥ 1: no native family takes a wide shape.
-- **`can_run`:** in `src/ops/geqrf/can_run.hh`, so a host test can call it with a synthetic device.
-  `tiny` has no `max_wg` check.
-- **Keys:** `form:exact n:log:3 aspect:log`. `form` is sq, tall or wide, and `aspect` is max/min by
-  integer division. 636 rows. The grid straddles the tiny windows, the order floors (64, 76, 48, 256),
-  the tall clause and the CTA/blocked crossover (float 96, double 48).
-- **Workspace:** `geqrf_buffer_size` is the chosen family's need. Callers that size once for a
-  bounding panel use `geqrf_buffer_size_bound`, the maximum over every family this device can run.
+`can_run` lives in `src/ops/geqrf/can_run.hh` so a host test can call it with a synthetic device.
+`form` is sq, tall or wide; `aspect` is max/min by integer division. Callers that size once for a
+bounding panel use `geqrf_buffer_size_bound`, the maximum over every family the device can run.
 
 ### gesv {#phase-5-gesv}
 
-- **Families:** `tiny` (fused LU factor and solve) and `blocked` (public `getrf`, then public `getrs`).
-  No vendor family.
-- **`tiny` `can_run`:** backend not NETLIB, a GPU, sub-group 32, homogeneous A and B,
-  `n <= gesv_tiny_max_n<T>()` (32; cdouble 16), `nrhs <= 4` and `max_wg >= 64`.
-- **Keys:** `n:log:3 nrhs:log`. sm_89: float is `tiny`, then `blocked`, for n ≤ 32; cfloat is `tiny`
-  for n ≤ 16; everything else is `blocked`.
-- **Workspace:** `getrf_buffer_size + getrs_buffer_size`.
+`tiny` is the fused LU factor and solve; `blocked` is the public `getrf` then the public `getrs`
+(workspace `getrf_buffer_size + getrs_buffer_size`). No vendor family.
 
 ### getrf {#phase-5-getrf}
 
-- **Families:** `tiny` (n ≤ `getrf_tiny_max_n<T>()`, 32 or 16 for cdouble, and `max_wg >= 64`),
-  `cta` (n ≤ `getrf_cta_max_n_for_slm<T>(budget)`), `blocked` (the public gemm and trsm are injected,
-  and `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`), `vendor`. Native families need backend not
-  NETLIB, a GPU, sub-group 32 and a square A. The vendor on CUDA also needs a square A (cuBLAS
-  `getrfBatched` is square-only).
-- **Keys:** `n:log:3 batch:log`. The grid straddles the tiny windows (float 5..32, cfloat 5..7 and
-  9..24), the cdouble ceiling of 16, and the blocked floors (float 256, cfloat 512, or 256 at batch ≥ 256).
-- The panel leaf, the laswp mode, the blocking factor and the tiny bucket are derived in the driver.
+Natives need a square A; the CUDA vendor does too (cuBLAS `getrfBatched` is square-only). The panel
+leaf, laswp mode, blocking factor and tiny bucket are derived in the driver.
 
 ### getri {#phase-5-getri}
 
-- **Families:** `blocked` (P is written into C, then two public trsm calls) and `vendor` (cuBLAS
-  `getriBatched`, rocSOLVER, LAPACKE). Last resort: `vendor`, then `blocked`.
-- **`can_run`:** `blocked` needs a GPU, sub-group 32, backend not NETLIB, a square A, `n` and `batch`
-  at least 1, and a homogeneous batch. `vendor` is `factorization_vendor_available<B>` and a
-  homogeneous batch.
-- **Keys:** `n:log:3 batch:log`. `batch` is kept for a retune, though every sm_89 batch row has the
-  same ranking. sm_89 grid: 127|128 (float) and 255|256 (cfloat); double and cdouble are vendor at
-  every n.
-- Sizing reads the metadata only.
+`blocked` writes P into C and makes two public trsm calls; last resort is `vendor`, then `blocked`.
 
 ### getrs {#phase-5-getrs}
 
-- **Families:** `cta` (`max_wg >= 32`, `nrhs <= 8`, and `n·nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`),
-  `blocked` (two public trsm calls), `vendor`.
-- **Native `can_run`:** backend not NETLIB, a GPU, sub-group 32, a conforming pair (A square,
-  `B.rows == n`, equal batch), homogeneous operands, and n, nrhs and batch at least 1. A
-  non-conforming pair goes to the vendor.
-- **Keys:** `n:log:2 nrhs:log batch:log`. `transA` is not a key. Grid: n 31|32, nrhs 2|3, 4|5, 63|64,
-  127|128 and 8, batch 127|128. 2,160 rows.
+Natives need a conforming pair (A square, `B.rows == n`, equal batch); a non-conforming pair goes to
+the vendor. `transA` is not a key.
 
 ### orgqr {#phase-5-orgqr}
 
-- **Families:** `blocked` (the identity fill plus the public `ormqr`) and `vendor` (a per-item loop).
-  Last resort: `vendor`, then `blocked`. The vendor runs n > m and CPU queues; neither family takes a
-  heterogeneous batch.
-- **`can_run(blocked)`:** GPU, the driver compiled, homogeneous, m, n and batch ≥ 1, and `n <= m`.
-- **Keys:** `m:log n:log:2`, with no batch key. The only old threshold is 512, native iff
-  `rows <= 512 && cols <= 512`. The grid puts 512|513 on both axes, restricted to n ≤ m, for 153 rows.
-- `orgqr_buffer_size` had a latent defect, fixed by sizing through `choose()`. See
-  [the orgqr_buffer_size latent defect](../perf/qr.md#the-orgqr_buffer_size-latent-defect).
+`blocked` is the identity fill plus the public `ormqr` and needs `n <= m`; the vendor is a per-item
+loop and runs n > m and CPU queues. No batch key. Sizing goes through `choose()`, which fixed
+[the orgqr_buffer_size latent defect](../perf/qr.md#the-orgqr_buffer_size-latent-defect).
 
 ### ormqr {#phase-5-ormqr}
 
-- **Families:** `blocked` (larft and level-3 WY updates) and `vendor`. The WY width comes from a
-  positive `block_size_hint` clamped to [1, k], or else `tuning::ormqr_block_size_for_n`.
-- **`can_run`:** both refuse a heterogeneous batch; `blocked` needs a GPU, `vendor` needs `has_vendor`.
-- **Keys:** `side:exact trans:exact m:log k:log q:log batch:log`, where `m` is the order of Q,
-  `k = min(rows, cols)`, and `q` is the extent of C that Q does not act on. 540 rows.
-- Complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size` before
-  `choose()`. The vendor spells a real ConjTrans as Trans.
-- `blocked` has no batch term: the 65535 grid-z report (known-defects #16) did not reproduce on sm_120.
-  Its sub-gemm and sub-trmm natives run a batch past 65535 as slices.
+The WY width is a positive `block_size_hint` clamped to [1, k], else
+`tuning::ormqr_block_size_for_n`. Complex `Transpose::Trans` throws before `choose()`. `blocked` has
+no batch term (known-defects #16 did not reproduce on sm_120).
 
 ### spmm {#phase-5-spmm}
 
-- **Families:** `direct` (CSR, `spmm_native_csr`: gather for NoTrans A, scatter otherwise) and
-  `vendor` (cuSPARSE, rocSPARSE, netlib). Last resort: `vendor`, then `direct`.
-- **`can_run(direct)`:** CSR, the body for `transA` compiled, `one_spmm()`, homogeneous B and C, and
-  batch ≥ 1. No GPU gate: the NETLIB native queue relies on `direct`.
-- **`can_run(vendor)`:** `has_vendor`, homogeneous B and C, and two exclusions. On CUDA, complex with
-  `transB == ConjTrans` and nrhs 1 is excluded, because cuSPARSE leaves C unwritten. On NETLIB, any
-  transpose is excluded, because netlib throws. The former cdouble N/N one-column exclusion is
-  deleted (known-defects #13, #17).
-- **Keys:** `transA:exact transB:exact m:log nrhs:log batch:log`. No nnz key: the per-item nnz is in
-  device memory. 500 rows per table. A `cpu` table is transcribed, because a CPU never borrows.
-- cuSPARSE's default algorithm is not bit-reproducible, so the tests identify a pinned vendor by its
-  trace line.
+`direct` (CSR gather for NoTrans A, scatter otherwise) has no GPU gate: the NETLIB queue relies on
+it. The vendor refuses complex `transB == ConjTrans` with nrhs 1 on CUDA (cuSPARSE leaves C unwritten)
+and any non-N transpose on NETLIB. No nnz key (nnz is in device memory); a CPU never borrows, so
+`spmm.cpu.txt` ships. cuSPARSE is not bit-reproducible, so tests identify a pinned vendor by its trace.
 
 ### syev {#phase-5-syev}
 
-- **Families:** `cta` (`syev_cta`), `cta_fused`, `jacobi` (`syev_jacobi_cta`), `blocked`, `two_stage`
-  and `vendor`, in tie order.
-- **`can_run`** (`src/ops/syev/syev.cc:52-67`): native needs backend not NETLIB, a GPU, a homogeneous
-  batch, a square A and n ≥ 1. `cta`, `cta_fused` and `jacobi` also need n ≤ 32 and sub-group 32;
-  `cta` and `cta_fused` are not ROCm. `blocked` and `two_stage` need batch ≥ 1. A non-square A throws
-  `invalid_argument`.
-- **Keys:** `jobz:exact n:log:3 batch:log`. `uplo` is not a key, because the large-n drivers mirror
-  Upper into Lower. Grid: n 8|9, 24|25, 32|33, 256|257, 320|321, 448|449, 512|513, 1024|1025. 370 rows.
-- **sm_89 transcribed pattern, jobz=V:**
-  - float: `jacobi` for n ≤ 8, `cta_fused` for 9 to 32, `blocked` to 448, `two_stage` to 1024, then `vendor`;
-  - double: `jacobi`, `blocked` to 448, then `vendor`;
-  - cfloat: `cta_fused` for n ≤ 8, `cta` to 32, `blocked` to 512, then `vendor`;
-  - cdouble: `cta` to 24, `vendor` for 25 to 32, `blocked` to 256, then `vendor`.
-  - jobz=N goes to `two_stage` above 320 in every dtype.
-- ROCm has no syev table and borrows the sm tables (untested).
+`cta`, `cta_fused` and `jacobi` are the n ≤ 32 sub-group solvers (`cta` and `cta_fused` not on
+ROCm); `blocked` and `two_stage` take Upper by mirroring into Lower, so `uplo` is not a key. A
+non-square A throws `invalid_argument`. ROCm has no syev table and borrows the sm tables (untested).
 
 ### gesvd
 
-- **Families:** `jacobi` (`gesvdj_cta`), `cta`, `blocked`, `vendor`. The jobs are canonicalised once,
-  Thin to All where they coincide.
-- **`can_run`** (`src/ops/gesvd/gesvd.cc:71-93`): native needs a GPU, a homogeneous batch and
-  `m, n, batch >= 1`.
-  - `jacobi`: sub-group 32, not Hermitian, and `max(m, n) <= gesvd_jacobi_max_dim<T>(vectors, slm_budget)`
-    (64, halved until its local memory fits).
-  - `cta`: sub-group 32, `max(m, n) <= 32`, not thin, and `herm ? m == n : real T`.
-  - `blocked`: `herm ? m == n && Lower : real T`.
-  - `vendor`: `has_vendor` and a homogeneous batch. cuSOLVER refuses `max(m, n) > 32`, non-packed
-    batches and thin factors, so Auto reaches the vendor for those shapes only where no native family
-    runs.
-- **Keys:** `herm:exact vec:exact m:log:1.5 n:log:1.5`. Grid 32|33 and 64|65. 2,025 rows.
-- Known defects #14, #15 and #18.
+The jobs are canonicalised once (Thin to All where they coincide). cuSOLVER refuses
+`max(m, n) > 32`, non-packed batches and thin factors, so Auto reaches the vendor for those only where
+no native family runs. Known defects #14, #15 and #18.
 
 ### 12.9 Level-3 (symm, syrk, syr2k, trmm, hemm, herk, her2k) {#level-3-four-symm-syrk-syr2k-trmm}
 
-The seven level-3 ops use the same structure as the op files above, with `NoFields` families. The
-vendor family calls `backend::<op>_vendor` under `has_library<B>(spec.vendor)`, not the public entry,
-so there is no recursion. Dtype-limited kernels are instantiated only in `if constexpr` arms. Shared
-pieces (batch chunking, the mirrored expansion into gemm, the gemm-plus-fold) are in
-`src/ops/level3/batched.hh`.
+`NoFields` families. The vendor family calls `backend::<op>_vendor` under
+`has_library<B>(spec.vendor)`, not the public entry, so there is no recursion. Shared pieces are in
+`src/ops/level3/batched.hh`:
 
-| op | candidates | keys (rows per dtype, sm_89) | Auto (sm_89 transcription) | last resort |
-|---|---|---|---|---|
-| syrk | real and cfloat `gram, triangular, vendor`; cdouble `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` | n ≤ 128 `gram`; above, `triangular` when squareish or (n ≥ 257, k ≥ 8, batch·T(T+1)/2 ≥ 160, T = ceil(n/128)), else `vendor`; ConjTrans `vendor` first; double above 128 `vendor`; cfloat (complex-symmetric) `gram` at n ≤ 64, `triangular` to n = 768, from batch 4 | `triangular, gram, vendor` |
-| syr2k | real and cfloat `triangular, vendor`; cdouble `vendor` | `n:log:2 k:log batch:log` | float and cfloat batch ≥ 2 `triangular`; batch 1 `vendor`; double `vendor` | `triangular, vendor` |
-| symm | `expand, vendor` (all four dtypes; complex is complex-symmetric) | `form:exact m:log n:log batch:log` | float `expand` iff sq and (batch ≥ 4 or max(m, n) ≥ 256); double `vendor`; complex as hemm | `expand, vendor` |
-| trmm | `triangular, expand, vendor` (all four dtypes) | `side:exact order:log:2 q:log batch:log` (360) | Left `triangular`; Right `expand` | `expand, triangular, vendor` |
-| hemm | `expand, vendor` (cfloat, cdouble) | `m:log n:log batch:log` (2,025) | `expand` iff batch ≥ 4 or max(m, n) ≥ 256 | `expand, vendor` |
-| herk | cfloat `gram, triangular, fold, vendor`; cdouble `gram, fold, vendor` | `trans:exact n:log:2 k:log batch:log` (1,350) | `fold` iff batch ≥ 4 and n ≤ 768, else `vendor`; cfloat `triangular` first at 256 ≤ n ≤ 768 (not n = 256 with k ≥ 512) and at n ≤ 128, k ≤ 8, batch ≥ 1024 (measured, docs/perf/level3.md) | `fold, triangular, gram, vendor` |
-| her2k | cfloat `triangular, fold, vendor`; cdouble `fold, vendor` | `n:log:2 k:log batch:log` (490) | `fold` iff batch ≥ 2 or n ≥ 128, else `vendor`; cfloat `triangular` first at k ≤ 8 (n ≥ 256, or n ≥ 128 at batch ≥ 1024) and at n ≥ 1024 with k ≤ 64 | `fold, triangular, vendor` |
-
-Since 2026-10-22 syrk and syr2k `triangular` are templated over every scalar (complex<double> excluded:
-its accumulators fill the register file), and symm, syrk and syr2k take complex `T` as the
-complex-symmetric (unconjugated) update. The double rows still rank `vendor` first, so only a
-vendor-free build reaches double `triangular` by default.
-
-**Shared terms:**
-
-- Native families run on a native GPU backend (`select::native_gpu_backend<B>`: CUDA and SYCL; the
-  gemm-based `expand` and `fold` of symm, hemm, herk and her2k also on ROCm), on a GPU, with
-  homogeneous operands and extents and batch ≥ 1. The NETLIB host stays on the vendor.
-- The batch is the grid z dimension (65535 on CUDA; 65536 throws at launch), so every native launch
-  chunks the batch into sub-views of at most `Device::max_groups_yz` items: there is no batch term in
-  `can_run`.
-- The scratch families (symm, hemm and trmm `expand`; herk and her2k `fold`) also chunk to the
-  scratch budget (`expansion_chunk`: `BATCHLAS_EXPAND_MAX_BYTES`, a quarter of memory, 2^31
-  elements). They refuse only a shape whose single item does not fit.
+- Every native launch chunks the batch into sub-views of at most `Device::max_groups_yz` items, so
+  `can_run` has no batch term.
+- The scratch families (`expand`, `fold`) also chunk to the scratch budget (`expansion_chunk`,
+  `BATCHLAS_EXPAND_MAX_BYTES`) and refuse only a shape whose single item does not fit.
 - rocBLAS wraps no hemm, herk or her2k, so their vendor family refuses ROCm.
-- The vendor family needs `has_vendor` and refuses a heterogeneous operand on every backend.
-- syrk, syr2k, symm and trmm return a no-op event for an empty problem.
-- `form` (symm and syrk) is sq when `2·min ≥ max`; otherwise tall when `a > 2b`, else wide, with `a`
-  and `b` as in `form_of` (for symm, C's rows and columns).
-
-**Per op:**
-
-- **syrk.** `gram` is `syrk_gram_tiles`, every dtype, for n ≤ 128 (`syrk_gram_supported`); above
-  128 a pin throws, because the kernel would answer wrongly. It also needs `max_wg >= gram_threads(n)`
-  and `slm_budget >= gram_slm_bytes<T>(n)`. `triangular` serves every dtype but complex<double>, and
-  needs `max_wg >= kTriangularWg` (256), its SLM tiles and `T(T+1)/2 <= max_groups_yz` tiles. ConjTrans is passed as
-  Trans, and the `trans` key keeps real ConjTrans on the vendor.
-- **syr2k.** `triangular` serves every dtype but complex<double>, with the same `max_wg` and tile terms. The launch folds a
-  real ConjTrans to Trans, and the key has no `trans`, so it follows the Trans rows.
-- **symm.** `expand` is the mirrored expansion into a queue workspace lease, then the public gemm. It
-  needs `max_wg >= kExpandWg` (256) and one item's scratch to fit (`expansion_chunk >= 1`).
-  `BATCHLAS_EXPAND_MAX_BYTES` lowers the limit. On ROCm the `vendor` arm is `symmetrize_gemm`
-  (symmetrize plus the public gemm, real types only), because rocBLAS has no batched symm wrapper.
-- **hemm.** `expand` is symm's with the conjugating mirror (a real diagonal). Same terms.
-- **herk.** `gram` is syrk's tile kernel with `Conjugate = true` (n ≤ 128); `triangular` is syrk's
-  128-wide tile kernel with `Conjugate = true`, complex<float> only (complex<double>'s 64 accumulators
-  fill the register file); `fold` is one gemm of the whole n x n product into scratch and
-  `fold_hermitian` into the triangle.
-- **her2k.** `fold` is one gemm of alpha op(A) op(B)^H and a two-sided fold (the second term is the
-  product's conjugate transpose). `triangular` is syr2k's kernel with `Conjugate = true`, staging A
-  scaled by alpha (conj(alpha) for ConjTrans) so both products share the epilogue; complex<float>
-  only. `src/ops/her2k/route.hh` holds can_run so `sytrd_blocked` asks the same selection
+- symm, syrk and syr2k take complex `T` as the complex-symmetric (unconjugated) update; complex<double>
+  `triangular` is not built (its accumulators fill the register file).
+- `src/ops/her2k/route.hh` holds her2k's `can_run` so `sytrd_blocked` asks the same selection
   (`picks_batched_route`).
-- **trmm.** `triangular` is Side::Left only, with `max_wg >= 256` and `trmm_tile_groups <= max_groups_yz`
-  (row × column tiles in grid y). `expand` is the expansion plus the public gemm at beta 0, and it
-  needs `max_wg >= 256` and one item's scratch to fit. `BATCHLAS_TRMM_ROUTE=vendor` means the
-  `cublas?trmm` loop; the expansion is `expand`.
 
 ## 13. Design decisions
 
 | Topic | Chosen | Rejected |
 |---|---|---|
 | Source of speed | Measured or transcribed tables per (op, device), dtype a key | Hand-written device rules; first-call autotuning; a fitted cost model |
-| Choice type | `std::variant` of family structs with int fields | One type per compiled config; a flat struct with family and fields; an enum per kernel; virtual kernel objects |
-| Nested ops | Each op decides through the public function. A parent override only where a measurement needs one. | A parent that plans everything |
-| Unmeasured shapes | Nearest row by weighted log distance over the op's keys | Generated regions; power-of-two buckets |
-| Storage | One text format, embedded at build time, parsed by the same parser as pins. `BATCHLAS_TUNED_DIR` overrides. | Compiled C++ tables; runtime files only |
-| Untuned device | Borrow the same family's nearest arch, then the other families | Per-op fact rules; a conservative vendor default |
-| Row content | Every candidate in rank order, with times | A single winner |
-| Ties | Within 3% of the best is a tie, and ties go to candidate-list order | Keep the previous winner unless 5% better; best of N |
-| Staleness | Hash in the header, warning only | Rejecting stale tables; a version stamp only |
-| Workspace | Sized through the same `choose()` | An explicit plan object; the maximum over candidates |
-| Pins | Env var, plus RAII `ScopedPin` for tests | Path-scoped pins; env only |
-| Candidate list | A `constexpr` list in `choice.hh`, which is also the compiled set | Per-family ranges; a separate tuner config |
-| Golden routing snapshot test | Not built | A snapshot of every route compared in CI |
-| Tuner grid | A coarse log grid, plus refinement where neighbours disagree | A fixed grid only; recording real workloads |
-| CPU backend | Tuned like any device (`*.cpu.txt`); a CPU with a host BLAS keeps gemm on the vendor | Borrowing from a GPU |
-| Pilot op | potrf | gemm first; a smaller op first |
+| Choice type | `std::variant` of family structs with int fields | One type per config; a flat struct; an enum per kernel; virtual kernel objects |
+| Nested ops | Each op decides through the public function | A parent that plans everything |
+| Unmeasured shapes | Nearest row by weighted log distance | Generated regions; power-of-two buckets |
+| Storage | One text format, embedded at build time, `BATCHLAS_TUNED_DIR` overrides | Compiled C++ tables; runtime files only |
+| Untuned device | Borrow the same family's nearest arch, then other families | Per-op fact rules; a conservative vendor default |
+| Ties | Within 3% is a tie, ties go to candidate-list order | Keep the previous winner unless 5% better |
+| Staleness | Hash in the header, warning only | Rejecting stale tables |
+| Workspace | Sized through the same `choose()` | An explicit plan object; the max over candidates |
+| Candidate list | A `constexpr` list in `choice.hh`, also the compiled set | Per-family ranges; a separate tuner config |
+| CPU backend | Tuned like any device (`*.cpu.txt`) | Borrowing from a GPU |
