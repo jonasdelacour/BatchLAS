@@ -4,7 +4,7 @@
 
 The build is SYCL device-link-bound. The library shape sets the relink unit; the public headers set
 the per-TU front-end cost of consumer and test translation units, but cannot shorten the device
-link. Working rules (`-j8`, ccache, GPU-only trees, measured dead ends): `docs/developer/agent-guide.md` §7.
+link. Working rules (`-j8`, ccache, GPU-only trees, measured dead ends): `docs/developer/agent-guide.md` §7 (dead ends in the §11 table).
 
 ## build performance: split components and the monolithic library {#build-performance-split-components-and-the-monolithic-library}
 
