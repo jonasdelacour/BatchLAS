@@ -96,6 +96,8 @@ struct Problem {
         c.batch = s.batch;
         c.wg_items = 4;
         c.identical_items = s.identical;
+        // The merges' gemm children take the vendor unmasked and a native family masked.
+        c.masked_reference = B == Backend::CUDA || B == Backend::ROCM;
         c.prepare = [this] {
             fill();
             std::fill_n(w.data(), w.size(), test_support::poison<T>());

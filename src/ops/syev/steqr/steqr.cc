@@ -20,7 +20,8 @@ inline bool should_use_cta(const Queue& ctx, int64_t n) {
         (void)ctx; (void)n;
         return false;
     }
-    return n > 0 && n <= 32 && ctx.device().supports_sub_group_size(32);
+    // GPU only: the CTA kernels build without CPU targets (steqr_cta falls back alike).
+    return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
 }
 
 } // namespace

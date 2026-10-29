@@ -206,7 +206,9 @@ namespace batchlas {
             throw batchlas::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
         }
 
-        if (!ctx.device().supports_sub_group_size(32)) {
+        // The CTA kernels build without CPU targets (NO_CPU_TARGETS), and the Intel OpenCL CPU
+        // offers sub-group size 32, so only a GPU reaches the launch.
+        if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
             return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
         }
 
@@ -293,7 +295,7 @@ namespace batchlas {
         size += sort_buffer_size<T>(ctx, eigenvalues.data(),
                                     MatrixView<T, MatrixFormat::Dense>(nullptr, n, n, n, n * n, batch_size), jobz);
 
-        if (!ctx.device().supports_sub_group_size(32)) {
+        if (ctx.device().type != DeviceType::GPU || !ctx.device().supports_sub_group_size(32)) {
             const auto steqr_size = steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params);
             size = std::max<size_t>(size, steqr_size);
         }
