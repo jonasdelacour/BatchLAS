@@ -70,6 +70,7 @@ std::map<std::string, std::set<CellKey>> read_remeasure_keys(const std::string& 
 const std::map<std::string, std::vector<std::string>>& op_dependencies();
 const std::vector<std::string>& canonical_op_order();  // the order `all` starts from
 std::vector<std::string> all_ops(std::vector<std::string> registered);  // canonical order, unknown ones last
+const std::vector<std::string>& core_ops();  // `core`: the ops a quick preview of a machine covers
 // Stable topological sort: an op follows every dependency in the list; input order breaks ties.
 std::vector<std::string> op_order(std::vector<std::string> ops);
 

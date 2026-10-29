@@ -91,7 +91,7 @@ constexpr double kTie = 0.03;  // §6.3; scripts/sweep_to_table.py TIE
 
 struct Opts {
     std::string op;
-    std::vector<std::string> ops;  // the op argument: a comma list or "all"
+    std::vector<std::string> ops;  // the op argument: a comma list, "all" or "core"
     std::optional<Tier> tier;      // --tier; the protocol flags below make the run tier custom
     std::string custom_flag;       // the first protocol flag seen (custom tier, the two-pass path)
     double budget_h = 0, overhead_s = kChildOverheadS;
@@ -1266,9 +1266,10 @@ std::vector<double> ladder_classes(const Opts& o) {
 
 void usage() {
     std::puts(
-        "usage: batchlas_tune <op>[,<op>..|all] --tier preview|coarse|deep|calibrate --devices N[,M..] [options]   ledger + tables\n"
+        "usage: batchlas_tune <op>[,<op>..|all|core] --tier preview|coarse|deep|calibrate --devices N[,M..] [options]   ledger + tables\n"
         "       batchlas_tune <op>[,..] --tier T --plan [--devices N | --device-key sm_NN]   plan and estimate, no GPU\n"
         "       batchlas_tune --status | --import-raw RAW.jsonl | --list | --guard-probe\n"
+        "       (core = gemm,trsm,syrk,herk,potrf,getrf,geqrf,syev; --tier preview: round 0 only, a quick first table)\n"
         "       batchlas_tune <op> --devices N --gate (--old-csv F | --parent-bin B) --gate-csv OUT [options]\n"
         "tiered: --budget H --progress-fd N --ledger DIR --out DIR --cell-overhead-s 0.49 --no-worker --audit-fraction F\n"
         "        --remeasure-keys FILE (lines '<op> <dtype> <name=v,...>': measure those cells again in round 0)\n"
@@ -1468,6 +1469,8 @@ int main(int argc, char** argv) {
     if (o.op == "all") {
         for (const OpSpec* s : all_specs()) o.ops.push_back(s->op());
         o.ops = all_ops(o.ops);
+    } else if (o.op == "core") {
+        o.ops = core_ops();
     } else {
         o.ops = csv_list(o.op);
     }

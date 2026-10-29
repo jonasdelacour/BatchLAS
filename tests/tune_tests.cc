@@ -1114,6 +1114,10 @@ TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     EXPECT_EQ(params(Tier::coarse).refine_mode, RefineMode::geometric);
     EXPECT_EQ(params(Tier::deep).refine_margin, 0.0);
     EXPECT_EQ(params(Tier::preview).max_reps, 6);
+    EXPECT_TRUE(params(Tier::preview).round0_only);
+    EXPECT_EQ(params(Tier::preview).hash_stride, 12);
+    for (Tier t : {Tier::coarse, Tier::deep, Tier::calibrate})
+        EXPECT_TRUE(!params(t).round0_only && params(t).hash_stride == 0) << to_string(t);
     EXPECT_EQ(params(Tier::coarse).confidence, 0.90);
     EXPECT_TRUE(params(Tier::deep).alternate_reverse);
     EXPECT_FALSE(params(Tier::coarse).alternate_reverse);
@@ -1196,8 +1200,16 @@ TEST(TuneGrid, HashSubsampleNests) {
     const auto d = arg_set(tier_subsample(g, Tier::deep));
     EXPECT_EQ(d.size(), g.size());
     EXPECT_TRUE(std::includes(c.begin(), c.end(), u.begin(), u.end()));
-    EXPECT_NEAR(double(u.size()), 1504 / 2.0, 1504 / 2.0 * 0.1);
     EXPECT_EQ(c.size(), g.size());
+    // preview: hash % 12, inside the old preview's hash % 2, so its stored records stay round-0 cells.
+    std::set<std::string> every12, every2;
+    for (const CellKey& k : g) {
+        if (fnv1a64(key_arg(k)) % 12 == 0) every12.insert(key_arg(k));
+        if (fnv1a64(key_arg(k)) % 2 == 0) every2.insert(key_arg(k));
+    }
+    EXPECT_EQ(u, every12);
+    EXPECT_TRUE(std::includes(every2.begin(), every2.end(), u.begin(), u.end()));
+    EXPECT_NEAR(double(u.size()), 1504 / 12.0, 1504 / 12.0 * 0.25);
 }
 
 TEST(TuneGrid, AgreeingNeighboursAddNothing) {
@@ -2485,6 +2497,17 @@ TEST(TuneSchedule, AllTwentyTwoOpsFollowTheirDependencies) {
     EXPECT_EQ(all_ops({"zeta", "posv", "gemm", "alpha"}), (V{"gemm", "posv", "zeta", "alpha"}));
 }
 
+// `core`: the ops a quick preview of a machine covers (batchlas_tune core); a multi-op run skips the dtypes a
+// spec refuses (syrk real-only, herk complex-only), as `all` does.
+TEST(TuneSchedule, CoreIsTheEightOpsAQuickPreviewCovers) {
+    using V = std::vector<std::string>;
+    EXPECT_EQ(core_ops(), (V{"gemm", "trsm", "syrk", "herk", "potrf", "getrf", "geqrf", "syev"}));
+    const V& all = canonical_op_order();
+    for (const std::string& op : core_ops()) EXPECT_NE(std::find(all.begin(), all.end(), op), all.end()) << op;
+    const V ordered = op_order(core_ops());
+    EXPECT_TRUE(std::is_permutation(ordered.begin(), ordered.end(), core_ops().begin(), core_ops().end()));
+}
+
 TEST(TuneSchedule, BudgetBelowLatticeWarnsAndStillPlansTheLattice) {
     const std::vector<AxisSpec> axes{{"n", true, {"8", "16", "32", "64", "128", "256", "512"}}, {"batch", false, {"1024"}}};
     const auto lattice = tier_lattice(axes, Tier::preview);
@@ -2762,23 +2785,24 @@ std::vector<std::string> sorted(std::vector<std::string> v) {
 
 TEST(TuneTieredDriver, RoundsRefineToTheEdgeRecordAndSkipOnRerun) {
     TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);  // preview never refines
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
     FakeMeasurer m;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     ::close(fd);
-    // Lattice 1,4,16,64; index bisection 8; geometric 11, 9, 10 until the bracket is adjacent.
-    EXPECT_EQ(std::vector<std::string>(m.keys.begin(), m.keys.begin() + 4), (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
-    EXPECT_EQ(sorted(m.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}));
-    EXPECT_EQ(m.max_reps, params(Tier::preview).max_reps);
+    // Lattice 1..64; geometric 11, 9, 10 until the bracket 8|16 is adjacent.
+    const std::vector<std::string> lattice{"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64"};
+    EXPECT_EQ(std::vector<std::string>(m.keys.begin(), m.keys.begin() + 7), lattice);
+    EXPECT_EQ(sorted(m.keys), sorted({"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9", "n=10"}));
+    EXPECT_EQ(m.max_reps, params(Tier::coarse).max_reps);
     const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     ASSERT_EQ(l.runs.size(), 1u);
-    EXPECT_EQ(l.runs[0].tier, Tier::preview);
+    EXPECT_EQ(l.runs[0].tier, Tier::coarse);
     EXPECT_EQ(l.runs[0].keys, "n:log:3");
     EXPECT_EQ(l.runs[0].candidates, "a|b");
-    ASSERT_EQ(l.cells.size(), 8u);
+    ASSERT_EQ(l.cells.size(), 10u);
     for (const CellRecord& c : l.cells) {
         EXPECT_EQ(c.ranked.front(), key_int(c.key, "n") <= 10 ? "b" : "a") << key_arg(c.key);
         EXPECT_EQ(c.cands.size(), 2u);
@@ -2787,24 +2811,24 @@ TEST(TuneTieredDriver, RoundsRefineToTheEdgeRecordAndSkipOnRerun) {
     const std::string ev = read_file(events);
     // plan_job events (one per op and dtype) come first, then the run's plan; every event carries t.
     EXPECT_EQ(ev.rfind("{\"ev\": \"plan_job\", \"op\": \"fakeop\", \"dtype\": \"float\"", 0), 0u) << ev;
-    EXPECT_NE(ev.find("\n{\"ev\": \"plan\", \"cells\": 4"), std::string::npos) << ev;
+    EXPECT_NE(ev.find("\n{\"ev\": \"plan\", \"cells\": 7"), std::string::npos) << ev;
     EXPECT_NE(ev.find("{\"ev\": \"done\", \"t\": "), std::string::npos) << ev;
     for (std::size_t b = 0, e; (e = ev.find('\n', b)) != std::string::npos; b = e + 1)
         EXPECT_NE(ev.substr(b, e - b).find(", \"t\": "), std::string::npos) << ev.substr(b, e - b);
     std::size_t done = 0;
     for (std::size_t p = 0; (p = ev.find("\"cell_done\"", p)) != std::string::npos; ++p) ++done;
-    EXPECT_EQ(done, 8u);
+    EXPECT_EQ(done, 10u);
 
     FakeMeasurer again;
     o.progress_fd = -1;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &again), 0);
-    EXPECT_TRUE(again.keys.empty()) << "every cell is current at preview";
+    EXPECT_TRUE(again.keys.empty()) << "every cell is current at coarse";
 
-    FakeMeasurer coarse;
-    o.tier = Tier::coarse;
-    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &coarse), 0);
-    EXPECT_EQ(sorted(coarse.keys), sorted({"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9", "n=10"}))
-        << "preview records are no bracket ends for coarse: its midpoints are measured again";
+    FakeMeasurer deep;
+    o.tier = Tier::deep;
+    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &deep), 0);
+    EXPECT_EQ(sorted(deep.keys), sorted({"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9", "n=10"}))
+        << "coarse records are no bracket ends for deep: its midpoints are measured again";
 }
 
 TEST(TuneTieredDriver, BudgetStopsRefinementButNotTheLattice) {
@@ -2868,11 +2892,11 @@ TEST(TuneRemeasure, ReadsOpDtypeKeyLinesAndRefusesMalformedOnes) {
 
 TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPastTheBudget) {
     TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);  // preview never refines
     o.run_id = "20261009T000001-box-1";  // make_run_id() repeats within one second and pid
     FakeMeasurer first;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
-    ASSERT_EQ(sorted(first.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}));
+    ASSERT_EQ(sorted(first.keys), sorted({"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9", "n=10"}));
     const Ledger before = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     int round9 = -1;
     for (const CellRecord& c : before.cells)
@@ -2896,7 +2920,7 @@ TEST(TuneRemeasure, TieredRunMeasuresOnlyTheNamedCellsEvenRefinementMidpointsPas
         ASSERT_NE(it, best.end()) << k;
         EXPECT_EQ(it->second->run_id, after.runs[1].run_id) << k << ": the new record wins";
         EXPECT_EQ(it->second->round, round) << k;
-        EXPECT_EQ(it->second->tier, Tier::preview) << k;
+        EXPECT_EQ(it->second->tier, Tier::coarse) << k;
     }
 
     o.budget_h = 0;  // no budget: the converged ledger plans no refinement either
@@ -3050,7 +3074,7 @@ TEST(TuneTieredDriver, TransientChildFailureWritesNoRecord) {
     EXPECT_TRUE(read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float").cells.empty());
     FakeMeasurer m;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    EXPECT_EQ(m.keys.size(), 8u) << "the next run measures every cell";
+    EXPECT_EQ(m.keys.size(), 4u) << "the next run measures every cell (preview: round 0 only)";
 }
 
 // ---- Task 8: race records, the worker wire format, the fresh-process audit --------------------
@@ -3345,9 +3369,9 @@ TEST(TuneTieredDriver, AuditMatchKeepsTheWorkerAndReportsRestarts) {
     m.restart_at = 16;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     ::close(fd);
-    EXPECT_EQ(m.worker_keys.size(), 8u);
+    EXPECT_EQ(m.worker_keys.size(), 4u) << "preview: round 0 only";
     EXPECT_EQ(m.fresh_keys, m.worker_keys) << "every cell audited, none moved to fresh children";
-    EXPECT_EQ(m.footprints, (std::vector<double>{1e3, 4e3, 16e3, 64e3, 8e3, 11e3, 9e3, 10e3})) << "no batch key: bytes";
+    EXPECT_EQ(m.footprints, (std::vector<double>{1e3, 4e3, 16e3, 64e3})) << "no batch key: bytes";
     const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     EXPECT_EQ(l.runs.at(0).worker_mode.at("fakeop.float"), "worker");
     const std::string ev = read_file(events);
@@ -3406,7 +3430,7 @@ std::map<std::pair<std::string, std::string>, std::pair<int, std::string>> recor
 
 const std::vector<std::string> kPipeDtypes{"float", "double", "cfloat"};
 
-TieredOpts pipe_opts(const TempDir& repo, const TempDir& ledger, std::vector<int> devices, Tier tier = Tier::preview) {
+TieredOpts pipe_opts(const TempDir& repo, const TempDir& ledger, std::vector<int> devices, Tier tier = Tier::coarse) {
     TieredOpts o = fake_opts(repo, ledger, tier);
     o.dtypes = kPipeDtypes;
     o.devices = std::move(devices);
@@ -3436,7 +3460,7 @@ TEST(TuneTieredPipeline, IdleGpusRunLaterJobsWhileAStragglerFinishesItsRound) {
             ++later;
             EXPECT_LT(c.t1, slow_end) << c.dtype << " " << c.key << ": waited for float's straggler";
         }
-    EXPECT_EQ(later, 16u) << "double and cfloat: 4 lattice + 4 refinement cells each";
+    EXPECT_EQ(later, 20u) << "double and cfloat: 7 lattice + 3 refinement cells each";
     const auto recs = records_of(ledger, kPipeDtypes);
     for (const auto& c : m.calls) {
         const int round = recs.at({c.dtype, c.key}).first;
@@ -3492,9 +3516,10 @@ TEST(TuneTieredPipeline, RecordsMatchTheSingleGpuRun) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m4), 0);
     const auto a = records_of(one, kPipeDtypes), b = records_of(four, kPipeDtypes);
     EXPECT_EQ(a, b);
-    ASSERT_EQ(a.size(), 24u);
+    ASSERT_EQ(a.size(), 30u);
     for (const std::string& d : kPipeDtypes)
-        for (const char* k : {"n=1", "n=4", "n=16", "n=64", "n=8", "n=11", "n=9", "n=10"}) EXPECT_TRUE(a.count({d, k})) << d << " " << k;
+        for (const char* k : {"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9", "n=10"})
+            EXPECT_TRUE(a.count({d, k})) << d << " " << k;
 }
 
 TEST(TuneSchedule, WorkerShareRunsInAscendingPerItemFootprint) {
@@ -3732,8 +3757,8 @@ TEST(TuneTieredDriver, EveryOpDtypeGetsAtLeastOneAudit) {
 
 TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
     TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
-    o.refine_cap_factor = 0.5;  // 4 lattice cells: 2 refinement cells
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);  // preview never refines
+    o.refine_cap_factor = 0.3;  // 7 lattice cells: 2 refinement cells
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
@@ -3742,16 +3767,16 @@ TEST(TuneTieredDriver, RefinementCapStopsAndReportsIt) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
     const std::string out = testing::internal::GetCapturedStdout();
     ::close(fd);
-    EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64", "n=8", "n=11"}));
+    EXPECT_EQ(m.keys, (std::vector<std::string>{"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64", "n=11", "n=9"}));
     const std::string ev = read_file(events);
-    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1, \"t\": "),
+    EXPECT_NE(ev.find("{\"ev\": \"refine_cap\", \"op\": \"fakeop\", \"dtype\": \"float\", \"lattice\": 7, \"refined\": 2, \"cap\": 2, \"dropped\": 1, \"t\": "),
               std::string::npos) << ev;
     EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
 }
 
 TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
     TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);
     o.plan = true;
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -3761,8 +3786,8 @@ TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
     const std::string out = testing::internal::GetCapturedStdout();
     ::close(fd);
     const std::string ev = read_file(events);
-    // No history: refine_cap_factor 3.0 x 0.5 x 4 lattice cells.
-    EXPECT_NE(ev.find("\"refine_cells\": 6"), std::string::npos) << ev;
+    // No history: refine_cap_factor 1.0 x 0.5 x 7 lattice cells, rounded.
+    EXPECT_NE(ev.find("\"refine_cells\": 4,"), std::string::npos) << ev;
     EXPECT_NE(ev.find("\"est_refine_s\""), std::string::npos) << ev;
     EXPECT_NE(out.find("with refinement"), std::string::npos) << out;
     EXPECT_NE(out.find("lattice only"), std::string::npos) << out;
@@ -3917,13 +3942,13 @@ TEST(TuneTieredDriver, AHashPickedFallbackCellDoesNotUseUpTheForcedAudit) {
 
 TEST(TuneTieredDriver, BudgetStoppedRunResumesRefinementWithinTheCap) {
     TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+    TieredOpts o = fake_opts(repo, ledger, Tier::coarse);  // preview never refines
     o.budget_h = 1e-12;  // run 1: the lattice only, then the budget stops refinement
     FakeMeasurer first;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
-    EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
+    EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=2", "n=4", "n=8", "n=16", "n=32", "n=64"}));
     o.budget_h = 0;
-    o.refine_cap_factor = 0.5;  // floor(0.5 x 4 stored round-0 records) = 2 refinement cells over all runs
+    o.refine_cap_factor = 0.3;  // floor(0.3 x 7 stored round-0 records) = 2 refinement cells over all runs
     const fs::path events = ledger.path / "events.jsonl";
     const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     o.progress_fd = fd;
@@ -3931,24 +3956,26 @@ TEST(TuneTieredDriver, BudgetStoppedRunResumesRefinementWithinTheCap) {
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
     ::close(fd);
     o.progress_fd = -1;  // closed: a later run must not write events into whatever reuses the fd
-    EXPECT_EQ(resumed.keys, (std::vector<std::string>{"n=8", "n=11"})) << "the stored lattice is the cap base";
-    EXPECT_NE(read_file(events).find("\"lattice\": 4, \"refined\": 2, \"cap\": 2, \"dropped\": 1"), std::string::npos)
+    EXPECT_EQ(resumed.keys, (std::vector<std::string>{"n=11", "n=9"})) << "the stored lattice is the cap base";
+    EXPECT_NE(read_file(events).find("\"lattice\": 7, \"refined\": 2, \"cap\": 2, \"dropped\": 1"), std::string::npos)
         << read_file(events);
     FakeMeasurer third;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &third), 0);
     EXPECT_TRUE(third.keys.empty()) << "the 2 stored refinement cells used the cap up";
-    o.refine_cap_factor = -1;  // preview's 3.0: 12 in all, the bracket closes after 2 more
+    o.refine_cap_factor = -1;  // coarse's 1.0: 7 in all, the bracket closes after 1 more
     FakeMeasurer fourth;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &fourth), 0);
-    EXPECT_EQ(sorted(fourth.keys), sorted({"n=9", "n=10"}));
+    EXPECT_EQ(fourth.keys, (std::vector<std::string>{"n=10"}));
     const Ledger l = read_ledger(ledger_file(ledger.str(), "fakeop", "sm_fake"), "float");
     std::size_t lattice = 0, refined = 0;
     for (const CellRecord& c : l.cells) ++(c.round == 0 ? lattice : refined);
-    EXPECT_EQ(lattice, 4u);
-    EXPECT_LE(refined, std::size_t(3 * lattice));
+    EXPECT_EQ(lattice, 7u);
+    EXPECT_LE(refined, lattice);
 }
 
-TEST(TuneTieredDriver, AResumedLatticeStillGetsTheMarginHedge) {
+// preview is round 0 only: neither a flip (FakeMeasurer: b wins n <= 10) nor a 5% bracket inside the old
+// 10% margin (CloseMeasurer) adds a cell, fresh or resumed on its stored lattice; the plan estimates none.
+TEST(TuneTieredDriver, PreviewMeasuresTheLatticeOnlyNeverABracket) {
     class CloseMeasurer : public FakeMeasurer {
     public:
         ArmBatch measure(const CellJob& j) override {
@@ -3958,34 +3985,41 @@ TEST(TuneTieredDriver, AResumedLatticeStillGetsTheMarginHedge) {
             return b;
         }
     };
+    const std::vector<std::string> lattice{"n=1", "n=4", "n=16", "n=64"};
+    {
+        TempDir repo, ledger;
+        TieredOpts o = fake_opts(repo, ledger, Tier::preview);
+        o.plan = true;
+        const fs::path events = ledger.path / "events.jsonl";
+        const int fd = ::open(events.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        o.progress_fd = fd;
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+        const std::string plan = testing::internal::GetCapturedStdout();
+        ::close(fd);
+        o.progress_fd = -1;
+        EXPECT_NE(plan.find("   round 0 only: no frontier or refinement rounds"), std::string::npos) << plan;
+        EXPECT_NE(plan.find("(~0 refinement cells;"), std::string::npos) << plan;
+        const std::string ev = read_file(events);
+        EXPECT_EQ(count_of(ev, "\"refine_cells\": 0,"), 2u) << "plan_job and plan" << ev;
+        o.plan = false;
+        FakeMeasurer flip;
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &flip), 0);
+        const std::string out = testing::internal::GetCapturedStdout();
+        EXPECT_EQ(flip.keys, lattice) << "coarse bisects the 4|16 flip";
+        EXPECT_NE(out.find("measured 4 lattice + 0 refinement cells, per round 4;"), std::string::npos) << out;
+    }
     TempDir repo, ledger;
     TieredOpts o = fake_opts(repo, ledger, Tier::preview);
     o.budget_h = 1e-12;
     CloseMeasurer first;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &first), 0);
-    EXPECT_EQ(first.keys, (std::vector<std::string>{"n=1", "n=4", "n=16", "n=64"}));
+    EXPECT_EQ(first.keys, lattice);
     o.budget_h = 0;
     CloseMeasurer resumed;
     ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &resumed), 0);
-    EXPECT_EQ(sorted(resumed.keys), sorted({"n=2", "n=8", "n=32"})) << "stored round-0 cells are lattice ends";
-}
-
-TEST(TuneTieredDriver, MarginRefinesLatticeBracketsOnly) {
-    // a wins everywhere, b 5% behind: every lattice bracket is a margin hedge, no midpoint re-triggers.
-    class CloseMeasurer : public FakeMeasurer {
-    public:
-        ArmBatch measure(const CellJob& j) override {
-            keys.push_back(key_arg(j.key));
-            ArmBatch b;
-            for (const std::string& a : j.arms) b.arms.push_back(arm(a, "ok", {a == "a" ? 1.0 : 1.05}));
-            return b;
-        }
-    };
-    TempDir repo, ledger;
-    TieredOpts o = fake_opts(repo, ledger, Tier::preview);
-    CloseMeasurer m;
-    ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
-    EXPECT_EQ(sorted(m.keys), sorted({"n=1", "n=4", "n=16", "n=64", "n=2", "n=8", "n=32"}));
+    EXPECT_TRUE(resumed.keys.empty()) << "a resumed preview hedges no stored bracket: " << resumed.keys.size();
 }
 
 TEST(TuneTieredDriver, ArmsRacedAloneStayOutOfTheAuditsWarmSide) {
@@ -5290,27 +5324,89 @@ TEST(TuneTieredDriver, FrontierReRacesEveryPartlyStaleCellInRoundZero) {
     EXPECT_NE(out.find("(21 partial)"), std::string::npos) << out;
 }
 
-TEST(TuneTieredDriver, PreviewPlansByFrontierUnlessTheSpecKeepsTheLattice) {
+// preview keeps its round 0 (the spec's frontier stride, or its own stride-2 lattice for a stride-1 spec)
+// and stops there: no frontier or bisection round, and a plan of 0 refinement cells.
+TEST(TuneTieredDriver, PreviewStopsAfterRoundZeroForFrontierAndLatticeSpecs) {
+    std::set<std::string> lattice2;
+    for (int e = 0; e <= 20; e += 2) lattice2.insert("n=" + std::to_string(1 << e));
     for (const int stride : {2, 1}) {
         TempDir repo, ledger;
         g_frontier1d.plan = {stride};
         TieredOpts o = frontier_opts(repo, ledger, g_frontier1d);
         o.tier = Tier::preview;
-        o.refine_cap_factor = 0.1;
-        MapMeasurer m(crossover_at_10);
+        o.plan = true;
+        testing::internal::CaptureStdout();
+        ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, nullptr), 0);
+        const std::string plan = testing::internal::GetCapturedStdout();
+        EXPECT_NE(plan.find("   round 0 only: no frontier or refinement rounds"), std::string::npos) << plan;
+        EXPECT_EQ(plan.find("   frontier (stride"), std::string::npos) << plan;
+        EXPECT_NE(plan.find("(~0 refinement cells;"), std::string::npos) << plan;
+        o.plan = false;
+        MapMeasurer m(crossover_at_10);  // deep measures 18 (stride 2) or 24 (stride 1) cells here
         testing::internal::CaptureStdout();
         ASSERT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
         const std::string out = testing::internal::GetCapturedStdout();
-        if (stride == 2) {
-            EXPECT_EQ(m.keys.size(), 18u) << out;
-            EXPECT_NE(out.find("measured 11 round-0 (stride 2) + 7 frontier"), std::string::npos) << out;
-            EXPECT_EQ(out.find("refinement cap hit"), std::string::npos) << out;
-        } else {  // preview's own lattice (stride 2), index refill, margin hedge and cap
-            EXPECT_NE(out.find("measured 11 lattice + 1 refinement"), std::string::npos) << out;
-            EXPECT_NE(out.find("refinement cap hit"), std::string::npos) << out;
-        }
+        EXPECT_EQ(m.keys.size(), 11u) << stride << out;
+        EXPECT_EQ(std::set<std::string>(m.keys.begin(), m.keys.end()), lattice2) << stride;
+        EXPECT_NE(out.find(stride == 2 ? "measured 11 round-0 (stride 2) + 0 frontier and bisection cells, per round 11;"
+                                       : "measured 11 lattice + 0 refinement cells, per round 11;"),
+                  std::string::npos) << out;
     }
     g_frontier1d.plan = {};
+}
+
+namespace {
+
+// gemm's shape: a demand-driven grid (here m <= n), not the lattice of its axes, and the full grid as round 0.
+class TriangleSpec : public FakeSpec {
+public:
+    std::string op() const override { return "triangle"; }
+    std::vector<std::string> key_names() const override { return {"n:log", "m:log"}; }
+    std::vector<std::pair<std::string, std::vector<std::string>>> axes() const override {
+        std::vector<std::string> v;
+        for (int e = 0; e <= 15; ++e) v.push_back(std::to_string(1 << e));
+        return {{"n", v}, {"m", v}};
+    }
+    std::vector<CellKey> grid(const std::string&, const std::map<std::string, std::vector<std::string>>&) const override {
+        std::vector<CellKey> g;
+        for (int n = 0; n <= 15; ++n)
+            for (int m = 0; m <= n; ++m) g.push_back({{"n", std::to_string(1 << n)}, {"m", std::to_string(1 << m)}});
+        return g;
+    }
+};
+
+const TriangleSpec kTriangle;
+
+}  // namespace
+
+TEST(TuneTieredDriver, PreviewSamplesADemandDrivenGridAtHashTwelveInsideCoarse) {
+    TempDir repo, coarse_ledger, preview_ledger;
+    if (!find_spec(kTriangle.op())) register_spec(&kTriangle);
+    std::set<std::string> grid, every12;
+    for (const CellKey& k : kTriangle.grid("float", {})) {
+        grid.insert(key_arg(k));
+        if (fnv1a64(key_arg(k)) % 12 == 0) every12.insert(key_arg(k));
+    }
+    ASSERT_EQ(grid.size(), 136u);
+    ASSERT_GE(every12.size(), 5u);
+    auto run = [&](const TempDir& ledger, Tier tier) {
+        TieredOpts o = fake_opts(repo, ledger, tier);
+        o.ops = {kTriangle.op()};
+        o.max_dim = 0;
+        MapMeasurer m([](const CellKey& k) { return std::pair{1.0, key_int(k, "n") <= 64 ? 0.5 : 2.0}; });
+        testing::internal::CaptureStdout();
+        EXPECT_EQ(run_tiered(o, {"sm_fake", "Fake"}, &m), 0);
+        (void)testing::internal::GetCapturedStdout();
+        return m.keys;
+    };
+    const std::vector<std::string> c = run(coarse_ledger, Tier::coarse);
+    ASSERT_GE(c.size(), grid.size()) << "coarse: every grid cell in round 0, then refinement";
+    const std::set<std::string> coarse0(c.begin(), c.begin() + std::ptrdiff_t(grid.size()));
+    EXPECT_EQ(coarse0, grid);
+    const std::vector<std::string> p = run(preview_ledger, Tier::preview);
+    EXPECT_EQ(p.size(), every12.size()) << "round 0 only";
+    EXPECT_EQ(std::set<std::string>(p.begin(), p.end()), every12);
+    EXPECT_TRUE(std::includes(coarse0.begin(), coarse0.end(), every12.begin(), every12.end()));
 }
 
 TEST(TuneTieredDriver, FrontierOnAGridPicksEveryCellRightAndSkipsTheFarCorners) {

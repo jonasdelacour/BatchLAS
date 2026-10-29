@@ -279,8 +279,8 @@ void TieredRun::build(const std::string& op, const std::string& dtype) {
     const std::vector<CellKey> full = tier_lattice(j->axes, Tier::deep);
     // A lattice op subsamples its axes; a demand-driven grid (gemm's grid() override) by key hash.
     const bool lattice = std::set<CellKey>(grid.begin(), grid.end()) == std::set<CellKey>(full.begin(), full.end());
-    // Every tier plans by flip frontier unless the spec keeps the full lattice; a partly stale record joins
-    // round 0 (frontier and calibrate), as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
+    // Every tier plans by flip frontier unless the spec keeps the full lattice (preview stops after round 0); a
+    // partly stale record joins round 0 (frontier and calibrate), as the lattice re-raced it. evidence: docs/design/tiered-tuning.md#engine-round-planning-by-flip-frontier
     j->fp = s.frontier();
     j->frontier = !named_only() && !calibrate() && j->fp.stride > 1;
     if (calibrate()) {
@@ -677,7 +677,7 @@ std::size_t TieredRun::stage(Job& j) {
 // Runs without sq_; no other thread touches j meanwhile (its queue is empty and nothing of it runs).
 void TieredRun::advance(Job& j) {
     for (;;) {
-        if (j.capped || named_only()) j.next.clear();
+        if (j.capped || named_only() || params(o_.tier).round0_only) j.next.clear();
         else refine(j);
         if (!j.next.empty() && over_budget()) budget_left_ += j.next.size(), j.next.clear();
         if (j.next.empty()) break;
@@ -924,7 +924,8 @@ int TieredRun::go() {
         bool history = false;
         std::size_t open = 0;
         double open_s = 0;
-        if (j->frontier) {  // the grid cells after round 0 that plan_round would measure
+        const bool r0_only = params(o_.tier).round0_only;
+        if (j->frontier && !r0_only) {  // the grid cells after round 0 that plan_round would measure
             const std::set<CellKey> r0(j->next.begin(), j->next.end());
             std::vector<CellKey> rest;
             for (const CellKey& k : j->universe)
@@ -935,7 +936,7 @@ int TieredRun::go() {
                                                    &j->runnable, o_.max_dim))
                 if (measurable(c)) ++open, open_s += c.est_s;
         }
-        const double ratio = named_only() || j->frontier || calibrate() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
+        const double ratio = r0_only || named_only() || j->frontier || calibrate() ? 0.0 : refine_ratio_estimate(j->ledger, o_.tier, cap_factor(), &history);
         j->est_refine_cells = j->frontier ? kFrontierShare * double(open) : ratio * double(n_measure);
         const double s = j->frontier ? kFrontierShare * open_s
                                      : n_measure ? j->est_refine_cells * est_measure / double(n_measure) : 0;
@@ -946,6 +947,9 @@ int TieredRun::go() {
                         "the prior, data-dependent (%zu grid cells off the probe lattice), cells off the probes race the "
                         "prior's top 2 + families it lacks + the neighbours' winners; the rest get prior rows\n",
                         j->probes.size(), j->universe.size() - j->probes.size());
+        else if (r0_only)
+            std::printf("   round 0 only: no frontier or refinement rounds (0 cells, est 0 h); an unmeasured cell takes the "
+                        "nearest measured row\n");
         else if (j->frontier)
             std::printf("   frontier (stride %d, k %zu, %.0f%%): ~%.0f cells, data-dependent (%.2f x the %zu grid cells "
                         "round 0 leaves, the replay's share), est %s; no cap, only --budget\n", j->fp.stride, j->fp.k,

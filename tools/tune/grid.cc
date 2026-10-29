@@ -62,7 +62,7 @@ std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, int stride)
 }
 
 std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
-    const auto stride = std::uint64_t(std::max(params(t).stride, 1));
+    const auto stride = std::uint64_t(std::max(params(t).hash_stride > 0 ? params(t).hash_stride : params(t).stride, 1));
     std::vector<CellKey> out;
     for (const CellKey& c : grid)
         if (fnv1a64(key_arg(c)) % stride == 0) out.push_back(c);

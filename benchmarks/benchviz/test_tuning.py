@@ -184,6 +184,11 @@ class Status(unittest.TestCase):
             self.assertIn(f'{t}: "--t-{t}"', var)
             self.assertIn(f"--t-{t}:", html.split("</style>", 1)[0])
 
+    def test_core_mirrors_the_tuners_alias(self):
+        src = (tuning.REPO / "tools/tune/schedule.cc").read_text()
+        body = src.split("core_ops() {", 1)[1].split("};", 1)[0]
+        self.assertEqual(tuple(body.split("{", 1)[1].replace('"', "").replace(" ", "").split(",")), tuning.CORE_OPS)
+
     def test_the_checked_in_data_loads(self):
         """Every shipped table equals its ledger (what `sweep_to_table.py --check` proves)."""
         L = tuning.Ledgers()

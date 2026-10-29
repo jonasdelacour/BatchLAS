@@ -39,16 +39,22 @@ deep results. Parameters: `params()` in `tools/tune/tier.hh`.
 
 | Parameter | preview | coarse | deep |
 | --- | --- | --- | --- |
-| Starting lattice | stride 2 of each `choice.hh` axis (batch: the CU-aligned ladder), ends kept, then flip-frontier rounds; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice at coarse and deep | as preview | as coarse |
-| Bisection (stride-1 ops) | index space plus a 10% runner-up margin | geometric to hi/lo < 1.1 | as coarse |
-| Refinement cap (x round-0 cells; stride-1 ops only) | 3.0 | 1.0 | 2.0 |
+| Starting lattice | stride 2 of each `choice.hh` axis (batch: the CU-aligned ladder), ends kept; gemm's demand-driven grid: key hash % 12 | stride 2, ends kept, then flip-frontier rounds; stride-1 ops (gemm, geqrf, getri, orgqr, spmm): full lattice | as coarse |
+| Rounds after round 0 | none: an unmeasured cell takes the nearest measured row (`select::choose`) | flip frontier and bisection | as coarse |
+| Bisection (stride-1 ops) | none | geometric to hi/lo < 1.1 | as coarse |
+| Refinement cap (x round-0 cells; stride-1 ops only) | none | 1.0 | 2.0 |
 | Race reps floor per candidate | 3 | 4 | 6 |
 | Elimination confidence | 0.80 | 0.90 | 0.98, plus a reversed confirmation round |
 | Fresh-process audit sample | 2% | 2% | 1% |
 
 - `calibrate` races at coarse quality on a stride-4 probe lattice against a prior table.
+- preview is a quick first table: round 0 only (`TierParams::round0_only`), so `batchlas_tune core
+  --tier preview --dtype float,cfloat --max-dim 2048` plans 0.88 h on an M5 Max (2026-10-29; 7.94 h
+  with the frontier and bisection rounds it used to run). Its index-bisection, margin and cap
+  values in `params()` drive only `tune_replay`.
 - The tie margin is 3% in every tier. Lattices nest (preview ⊂ coarse ⊂ deep); a grid that is not a
-  lattice is subsampled by a stable hash of the cell key.
+  lattice is subsampled by a stable hash of the cell key (preview: hash % 12, inside the % 2 an
+  older preview used, so its records stay round-0 cells).
 
 Per cell: **probe** each candidate's pin (`*_buffer_size` under `select::ScopedPin`, or one untimed
 run); 0 or 1 runnable candidates record the cell untimed. **Skip** it if a current record at the
@@ -156,7 +162,8 @@ Expert overrides (`--reps`, `--warm`, `--passes`, `--remeasure`, `--refine-ratio
 1. **Flip.** A bracket is a flip when its two winners differ and the flip is decisive at *either*
    end: the other end's winner is more than the 3% tie slower there, or cannot run. Requiring it at
    both ends dropped the trsm flips (crossover near one end) and failed every tier in replay.
-2. **Margin.** The preview margin (10%) applies only to brackets whose ends are both round-0 cells.
+2. **Margin.** A tier's margin (preview's 10%, replay only) applies only to brackets whose ends are
+   both round-0 cells.
 3. **Batch** is never bisected; it refills its own axis values ("Engine: the CU-aligned batch ladder").
 4. **Cap.** Without a frontier, refinement cells per op and dtype ≤ `refine_cap_factor` × round-0
    cells, counting the ledger's current records, so a stopped run resumes within the same total.
@@ -212,8 +219,8 @@ The sm_120 gemm table was regenerated on 2026-10-21 and not re-replayed.
 
 ## Engine: round planning by flip frontier
 
-Preview, coarse and deep runs plan rounds by the flip frontier (`TieredRun::build` and `refine`,
-`tiered_driver.cc`); preview's index refill, margin and cap are off in frontier mode. Tests:
+Coarse and deep runs plan rounds by the flip frontier (`TieredRun::build` and `refine`,
+`tiered_driver.cc`). Preview takes the same round 0 and stops there (`TieredRun::advance`). Tests:
 `TuneTieredDriver.Frontier*`, `TuneTieredDriver.Preview*`, `TuneFrontier.Start*`,
 `TuneReplay.BisectSchemes*`.
 
