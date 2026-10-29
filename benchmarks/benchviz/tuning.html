@@ -96,7 +96,7 @@ textarea.field { width: 100%; min-height: 64px; font: 12px/1.5 var(--mono); resi
     <div id="dbin"></div>
     <div class="lbl">Tier <span class="hint">a cheaper tier never replaces a better record</span></div>
     <div class="tiers" id="dtier"></div>
-    <div class="lbl">Operations <a id="dall">all / none</a></div>
+    <div class="lbl">Operations <a id="dall">all / none</a> · <a id="dcore" title="batchlas_tune core">core</a></div>
     <div class="opgrid" id="dops"></div>
     <div class="lbl">Precision</div>
     <div class="chips" id="dtypes"></div>
@@ -825,6 +825,7 @@ function buildDrawer() {
   $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip on" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
   for (const id of ["dtypes", "dgpus"]) $(id).onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
   $("dall").onclick = () => { const bs = [...$("dops").querySelectorAll("input")], on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
+  $("dcore").onclick = () => { $("dops").querySelectorAll("input").forEach(b => b.checked = (meta.core || []).includes(b.value)); estimate(); };
   for (const id of ["dtier", "dops", "ddirty"]) $(id).onchange = estimate;
   for (const id of ["dmax", "dbudget", "dwait", "dkeys"]) $(id).oninput = estimate;
   $("dledger").textContent = meta.ledger;

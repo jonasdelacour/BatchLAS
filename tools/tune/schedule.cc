@@ -323,6 +323,11 @@ const std::vector<std::string>& canonical_op_order() {
     return order;
 }
 
+const std::vector<std::string>& core_ops() {  // mirrored by benchmarks/benchviz/tuning.py CORE_OPS
+    static const std::vector<std::string> ops{"gemm", "trsm", "syrk", "herk", "potrf", "getrf", "geqrf", "syev"};
+    return ops;
+}
+
 std::vector<std::string> all_ops(std::vector<std::string> registered) {
     const auto& c = canonical_op_order();
     auto rank = [&](const std::string& op) { return std::find(c.begin(), c.end(), op) - c.begin(); };

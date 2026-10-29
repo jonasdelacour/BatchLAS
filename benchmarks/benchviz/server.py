@@ -363,7 +363,8 @@ class Handler(BaseHTTPRequestHandler):
             from runner import detect_gpus
             binary, why = tuning.find_tuner(self.build_dirs)
             return self._json({"read_only": self.read_only, "ops": self.ledgers.ops(load=False), "dtypes": tuning.DTYPES,
-                               "tiers": tuning.TIER_NOTES, "tier_order": tuning.TIERS, "gpus": detect_gpus(),
+                               "tiers": tuning.TIER_NOTES, "tier_order": tuning.TIERS, "core": list(tuning.CORE_OPS),
+                               "gpus": detect_gpus(),
                                "ledger": str(self.ledgers.root), "tuned": str(self.ledgers.tuned),
                                "binary": str(binary) if binary else None, "binary_problem": why,
                                "dirty": tuning.tree_dirty(), "builds": [build_info(d) for d in self.build_dirs]})

@@ -18,6 +18,7 @@ and gives each child its GPU. `tune_replay` is the host-only replay ("Offline re
     batchlas_tune potrf --tier preview --dtype float,double --devices 1 --plan   # plan + estimate, no GPU
     batchlas_tune potrf,trsm --tier preview --devices 1 --out /tmp/tables        # measure, then tables
     batchlas_tune all --tier coarse --devices 1,2 --budget 6 --progress-fd 3 3>events.jsonl
+    batchlas_tune core --tier preview --dtype float,cfloat --devices 1             # a quick first table
     batchlas_tune --status | --list | --guard-probe          # ledger matrix / ops+candidates+hash / guard view
     batchlas_tune --import-raw /tmp/raw/trsm.float.sm_120.jsonl                  # schema-1 raw -> deep run
     # custom protocol, raw only (an A/B over hidden axes: sweep_to_table refuses such a ledger)
@@ -36,8 +37,8 @@ Modes (none given: the tuner stops and asks):
 
 | flag | default | meaning |
 |---|---|---|
-| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list or `all`. Tiered runs order ops by dependency (`op_order()`, `schedule.cc`) and skip, with a note, a dtype a spec refuses |
-| `--tier` | none | `preview`, `coarse`, `deep`, `calibrate`; `custom` only with `--remeasure-keys` (exactly the named cells, every candidate, no lattice or refinement) |
+| `<op>` | required (not for `--list`, `--status`, `--import-raw`) | one op, a comma list, `all`, or `core` (gemm, trsm, syrk, herk, potrf, getrf, geqrf, syev). Tiered runs order ops by dependency (`op_order()`, `schedule.cc`) and skip, with a note, a dtype a spec refuses |
+| `--tier` | none | `preview` (round 0 only: no frontier or bisection rounds; a demand-driven grid at key hash % 12), `coarse`, `deep`, `calibrate`; `custom` only with `--remeasure-keys` (exactly the named cells, every candidate, no lattice or refinement) |
 | `--prior DEVICE` | newest fully timed `tuned/<op>.*.txt` | calibrate only: the borrowed table |
 | `--probe-stride N` | 4 | calibrate only: probe every N-th value of each log axis |
 | `--plan` | off | print cells, skips with reasons and the estimate (summed over GPUs), then exit. No GPU |

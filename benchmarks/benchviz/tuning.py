@@ -33,7 +33,8 @@ TIERS = list(stt.LEDGER_TIERS)
 DTYPES = list(stt.DTYPES)
 TIMED = set(stt.LEDGER_STATUS_TIMED)
 TIER_NOTES = {
-    "preview": "every 2nd lattice point plus flip-frontier rounds, short races: a first look, not a table",
+    "preview": "round 0 only: every 2nd lattice point (gemm, geqrf, orgqr: 1 in 12 grid cells), no frontier or "
+               "bisection rounds, short races; the nearest measured row serves the rest: a quick first table",
     "calibrate": "every 4th lattice point raced against the nearest shipped table (prior), measured only where "
                  "the device disagrees; the prior fills the rest: a new GPU's first table",
     "coarse": "every 2nd lattice point plus flip-frontier rounds (gemm, geqrf, getri, orgqr, spmm: the full "
@@ -42,6 +43,8 @@ TIER_NOTES = {
             "at 0.98 confidence; the shipped tables",
     "custom": "exactly the cells listed below, every candidate, no lattice: a rehash sample",
 }
+# batchlas_tune's `core` op alias; mirrors core_ops() in tools/tune/schedule.cc.
+CORE_OPS = ("gemm", "trsm", "syrk", "herk", "potrf", "getrf", "geqrf", "syev")
 # Flags this tab passes; a tuner whose --help lacks one predates the current tuner.
 TUNER_FLAGS = ("--tier", "--plan", "--progress-fd", "--ledger", "--device-key", "--remeasure-keys", "--allow-dirty")
 
