@@ -113,7 +113,7 @@ Level-3 correctness findings are on @ref perf_level3.
 - A coverage row cannot confirm that a particular shape ran: rows are keyed on a power-of-two `shape_class` and
   are first-writer-wins. Prove a shape with a deliberate break that is red only for it.
 - The vendor-free suite is not green; the gap is missing kernels (`NoRouteError`), not dispatch
-  (@ref design_vendor_free_status).
+  ([vendor-free build](../design/vendor-independence.md#vendor-free-status)).
 - Level-3 debts (transcribed sm_89 tables, unverified windows) are on @ref perf_level3.
 
 ## Raw evidence
