@@ -23,20 +23,12 @@ namespace detail {
 // child they reach refuses the mask. Asked by the dispatcher before its m fill, by each arm's
 // entry and by each arm's size query. evidence: docs/design/masked-batches.md#masked-batches-refusal-policy
 template <Backend B, typename T>
-void syevx_iterative_refuse_mask(const Queue& ctx, const char* who, Span<const std::uint8_t> mask,
+void syevx_iterative_refuse_mask(const Queue& /*ctx*/, const char* who, Span<const std::uint8_t> mask,
                                  const SyevxParams<T>& params, bool lobpcg) {
     if (mask.empty()) return;
     const std::string w(who);
     if constexpr (B == Backend::NETLIB) {
         throw batchlas::unsupported(w + ": batch mask not supported on the host backend, whose gemm is the host BLAS");
-    }
-    // ortho forces Householder on a host device; on a GPU the Cholesky family runs potrf.
-    const OrthoAlgorithm a = params.algorithm;
-    const bool cholesky = a == OrthoAlgorithm::Cholesky || a == OrthoAlgorithm::Chol2 || a == OrthoAlgorithm::ShiftChol3;
-    if (cholesky && ctx.device().type == DeviceType::GPU) {
-        // mask: lift after potrf (W2a)
-        throw batchlas::unsupported(w + ": batch mask not supported with a Cholesky ortho algorithm on a GPU; "
-                                        "use OrthoAlgorithm::CGS2, SVQB or Householder");
     }
     if (!lobpcg) return;
     if (params.preconditioner != nullptr || params.build_preconditioner) {

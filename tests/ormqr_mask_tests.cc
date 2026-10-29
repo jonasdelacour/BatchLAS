@@ -24,6 +24,8 @@
 #include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -249,5 +251,37 @@ TYPED_TEST(OrmqrMask, SaturatingOrmqxCta) {
     this->check_cta(7, 6, 1024, true);
     this->check_cta(29, 20, 1024, true);
 }
+
+#ifdef BATCHLAS_ORMQR_CTA_CC_PATH
+// ormqx_cta packs several items per sub-group: a dead or inactive partition must reach every
+// partition barrier, so neither the kernels nor apply_reflector_small may `return;` before one
+// (I2). Every backend that runs this test tolerates the early return: Metal, and sm_89, where a
+// revert of both (tail and tau = 0 returns) left the batch-tail and mask cases green and
+// compute-sanitizer cannot attach to a DPC++ process. So this source scan holds the property.
+TEST(OrmqxCtaSource, NoReturnBeforeAPartitionBarrier) {
+    const std::string path = BATCHLAS_ORMQR_CTA_CC_PATH;
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    ASSERT_NE(f, nullptr) << path;
+    const std::regex bare_return(R"(\breturn\s*;)");
+    char line[8192];
+    // 0: before the helper; 1: in the helper before its first barrier; 2: after it; 3: in a kernel.
+    int state = 0, kernels = 0, live_reads_mask = 0;
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const std::size_t cut = text.find("//");
+        const std::string code = cut == std::string::npos ? text : text.substr(0, cut);
+        if (code.find("inline void apply_reflector_small(") != std::string::npos) state = 1;
+        if (state == 1 && code.find("group_barrier(part)") != std::string::npos) state = 2;
+        if (code.find("parallel_for<OrmQxCTAKernel") != std::string::npos) state = 3, ++kernels;
+        if (state == 3 && code.find("mask[prob_id]") != std::string::npos) ++live_reads_mask;
+        if (state == 1 || state == 3)
+            EXPECT_FALSE(std::regex_search(code, bare_return)) << "an early return before a partition barrier: " << text;
+    }
+    std::fclose(f);
+    EXPECT_GE(state, 2) << "apply_reflector_small or its barrier was not found";
+    EXPECT_EQ(kernels, 2) << "expected the Left and Right kernel launches";
+    EXPECT_EQ(live_reads_mask, 2) << "each kernel's live predicate reads the mask";
+}
+#endif  // BATCHLAS_ORMQR_CTA_CC_PATH
 
 }  // namespace

@@ -2,8 +2,8 @@
 // syevx honours a batch mask (W4c) on tests/masked_contract.hh: A, W, V, m and info of an inactive
 // item keep every byte, and an active item equals the unmasked call with the public syev pinned
 // strictly (cta_fused on a GPU, the LAPACKE loop on the host backend). Direct runs every range on
-// both backends. LOBPCG and Filtered run on a GPU with a non-Cholesky ortho; on the host backend
-// (gemm is the host BLAS), with a Cholesky ortho on a GPU, and on DirectSubset (stebz, stein and
+// both backends. LOBPCG and Filtered run on a GPU with every ortho; on the host backend
+// (gemm is the host BLAS) and on DirectSubset (stebz, stein and
 // sytrd_sy2sb refuse) a masked call throws before any write. Every mask is device-only; data
 // complex where T is, ld and stride padded for A and V, W, m and info poisoned.
 // evidence: docs/design/masked-batches.md#masked-batches-tests
@@ -26,7 +26,9 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <array>
 #include <optional>
+#include <variant>
 #include <span>
 #include <string>
 #include <vector>
@@ -150,12 +152,19 @@ protected:
 
     // Bit-identical to the unmasked call where the route allows it: Direct everywhere, and LOBPCG
     // with Householder (complex T). Elsewhere EXPECT_VERIFY mode: m equal, and an item the unmasked
-    // call converged converges with W within 1e3 eps of it. Inactive items are bit-exact either way.
+    // call converged converges with W within max(1e3 eps, the relative tolerance) of it. Inactive items are bit-exact either way.
     void check(const std::string& what, int n, int batch, int neigs, JobType jobz, const SyevxParams<T>& p,
                bool same = false) {
         SCOPED_TRACE(what + " n " + std::to_string(n) + " batch " + std::to_string(batch) + " neigs " +
                      std::to_string(neigs) + (jobz == JobType::EigenVectors ? " V" : " N"));
         Queue& q = *this->ctx;
+        // The unmasked reference would route a level-2/3, potrf or QR child to the vendor on a GPU,
+        // which refuses the masked call: both runs pin them `native`.
+        std::array<std::optional<select::ScopedPin<std::monostate>>, 10> children;
+        if (!kHost) {
+            const char* ops[] = {"gemm", "gemv", "trsm", "trmm", "syrk", "herk", "potrf", "geqrf", "orgqr", "ormqr"};
+            for (std::size_t i = 0; i < children.size(); ++i) children[i].emplace(ops[i], "native");
+        }
         Problem<T, B> pr(q, n, batch, neigs, jobz, p, same);
         auto c = pr.make_case(items_per_subgroup(n));
         std::vector<R> w_ref;
@@ -171,7 +180,9 @@ protected:
             m_ref.assign(pr.m.data(), pr.m.data() + pr.m.size());
             if (p.iterations > 0) EXPECT_GT(std::count(info_ref.begin(), info_ref.end(), 0), 0) << "the unmasked call converged no item";
             c.verify_active = [&](const std::string& pattern, std::span<const int> active) {
-                const R tol = R(1000) * std::numeric_limits<R>::epsilon();
+                // An item stops at the solver's tolerance, and the masked call's iteration count (and
+                // Filtered's degree) can differ, so W agrees to that tolerance, not to the rounding.
+                const R tol = std::max(R(1000) * std::numeric_limits<R>::epsilon(), R(std::abs(p.relative_tolerance)));
                 for (const int b : active) {
                     EXPECT_EQ(pr.m[std::size_t(b)], m_ref[std::size_t(b)]) << pattern << " m of item " << b;
                     if (info_ref[std::size_t(b)] != 0) continue;  // an unconverged reference bounds nothing
@@ -355,14 +366,13 @@ TYPED_TEST(SyevxMask, LobpcgAndFilteredRefuseOnTheHostBackend) {
                              TestFixture::iterative(a, true));
 }
 
-// A Cholesky ortho runs potrf, which refuses a masked view: refused before the m fill.
-TYPED_TEST(SyevxMask, CholeskyOrthoRefusesOnAGpu) {
+// A Cholesky ortho runs potrf, trsm and the gram (all honour the mask) on the masked views.
+TYPED_TEST(SyevxMask, CholeskyOrthoOnAGpu) {
     if (TestFixture::kHost) GTEST_SKIP() << "the host device forces Householder ortho";
     for (const auto a : {SyevxAlgorithm::LOBPCG, SyevxAlgorithm::Filtered})
         for (const auto o : {OrthoAlgorithm::Chol2, OrthoAlgorithm::Cholesky, OrthoAlgorithm::ShiftChol3})
-            this->expect_refused(std::string(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered") + " ortho " +
-                                     std::to_string(int(o)),
-                                 16, 8, 3, TestFixture::iterative(a, true, o));
+            this->check(std::string(a == SyevxAlgorithm::LOBPCG ? "lobpcg" : "filtered") + " ortho " + std::to_string(int(o)),
+                        16, 20, 3, JobType::EigenVectors, TestFixture::iterative(a, true, o));
 }
 
 // DirectSubset carries the mask to every child, but stebz, stein and sytrd_sy2sb refuse it.

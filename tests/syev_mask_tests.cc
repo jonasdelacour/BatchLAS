@@ -341,9 +341,13 @@ TYPED_TEST(SyevMask, SytrdCompositesLeaveInactiveItemsUntouched) {
     const bool vendor = B == Backend::CUDA || B == Backend::ROCM;
     const int batch = 10;
     const Uplo u = Uplo::Lower;  // the only triangle the three composites implement
+    // The tuned default fuses the trailing update into the latrd panel at these n; "0" runs
+    // sytrd_blocked's own update kernel.
+    for (const char* fuse : {"", "0"})
     for (const int n : {45, 70}) {
         {
-            SCOPED_TRACE("sytrd_blocked n " + std::to_string(n) + " " + ts::uplo_name(u));
+            const ScopedEnvVar fuse_env("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", *fuse ? fuse : nullptr);
+            SCOPED_TRACE("sytrd_blocked n " + std::to_string(n) + " " + ts::uplo_name(u) + " fuse " + fuse);
             Matrix<T> A = ts::padded<T>(n, n, batch);
             PaddedVec<T> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
             mc::Case c;

@@ -487,24 +487,26 @@ std::vector<Entry<T>> direct_entries() {
         add("ormbr", [=](P& p) { ormbr<B, T>(p.q, p.mat(p.a), p.vec(p.tau), p.mat(p.c), 'Q', Side::Left, N, p.ws); });
     }
     // syevx and syevx_direct honour the mask (W4c): syevx_mask_tests holds their contract. LOBPCG and
-    // Filtered refuse it on the host backend (its gemm is the host BLAS) and with the default Chol2
-    // ortho on a GPU; with another ortho on a GPU they honour it (syevx_mask_tests).
+    // Filtered refuse it on the host backend (its gemm is the host BLAS); on a GPU they honour it with
+    // every ortho, Chol2 included (syevx_mask_tests).
     add("syevx_direct_subset", [=](P& p) {
         syevx_direct_subset<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), P::flat(p.m), 2, p.ws, ev,
                                                        p.mat(p.z), SyevxParams<T>());
     });
-    add("syevx_lobpcg", [=](P& p) {
-        syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
-    });
-    add("syevx_filtered", [=](P& p) {
-        syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
-    });
+    if constexpr (B == Backend::NETLIB) {
+        add("syevx_lobpcg", [=](P& p) {
+            syevx_lobpcg<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+        });
+        add("syevx_filtered", [=](P& p) {
+            syevx_filtered<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.wspan(), 2, p.ws, ev, p.mat(p.z), SyevxParams<T>());
+        });
+    }
     // ortho, ritz_values, norm and cond honour the mask (W4c): norm_mask_tests and ortho_mask_tests
-    // hold their contract. ortho's Cholesky family (the default Chol2 on a GPU) refuses until potrf
-    // does; on the host backend ritz_values and ortho(M) reach its BLAS gemm, which refuses.
-    if constexpr (B != Backend::NETLIB) add("ortho", [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), N, p.ws); });
-    out.push_back({"ortho(M)", B == Backend::NETLIB,
-                   [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
+    // hold their contract, ortho's Cholesky family included. On the host backend ritz_values and
+    // ortho(M) reach its BLAS gemm, which refuses.
+    if constexpr (B == Backend::NETLIB)
+        out.push_back({"ortho(M)", true,
+                       [=](P& p) { ortho<B, T>(p.q, p.mat(p.a, kN, 2), p.mat(p.z, kN, 2), N, N, p.ws); }});
     if constexpr (B == Backend::NETLIB)
         out.push_back({"ritz_values", true, [=](P& p) {
                            ritz_values<B, T, MatrixFormat::Dense>(p.q, p.mat(p.a), p.mat(p.z), p.vec(p.w), p.ws);

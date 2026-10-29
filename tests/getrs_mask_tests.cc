@@ -262,6 +262,7 @@ TYPED_TEST(LuSolveMask, GetrsBlockedLeavesInactiveItemsUntouched) {
     for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
         this->getrs_check({"blocked", 9, 3, 12, t});
         this->getrs_check({"blocked", 70, 5, 8, t});
+        this->getrs_check({"blocked", 40, 17, 8, t});  // nrhs >= 16: the SLM gather, not the laswp walk
     }
 }
 

@@ -23,7 +23,9 @@
 #include <cstring>
 #include <complex>
 #include <cstdint>
+#include <array>
 #include <optional>
+#include <variant>
 #include <span>
 #include <string>
 #include <vector>
@@ -158,41 +160,15 @@ protected:
                 return std::vector<mc::Output>{mc::Output::matrix("A", A.view()),
                                                mc::Output::span<T>("cond", std::span<const T>(out.data(), out.size()), 1)};
             };
-            // On a GPU inv reaches getri's blocked family, which refuses a mask until its trsm leg
-            // is lifted (getri.cc, "mask: lift after trsm"): the masked call throws, writing nothing.
-            if (type != NormType::Spectral && this->ctx->device().type == DeviceType::GPU) return expect_refusal(q, c);
+            // On a GPU inv's children (getrf, getri, trsm, gemm) are pinned `native` for both runs:
+            // the unmasked reference would otherwise route one to the vendor, which refuses a mask.
+            std::array<std::optional<select::ScopedPin<std::monostate>>, 6> children;
+            if (this->ctx->device().type == DeviceType::GPU) {
+                const char* ops[] = {"getrf", "getri", "trsm", "trmm", "gemm", "gemv"};
+                for (std::size_t i = 0; i < children.size(); ++i) children[i].emplace(ops[i], "native");
+            }
             mc::check(q, c);
         }
-    }
-
-    static void expect_refusal(Queue& q, const mc::Case& c) {
-        {
-            UnifiedVector<std::byte> ws(std::max<std::size_t>(c.buffer_size({}), 1));
-            c.prepare();
-            ASSERT_NO_THROW(c.call({}, ws.to_span()));
-            q.wait();
-        }
-        const mc::DeviceMask mk(q, mc::by_rule("alternating", c.batch, [](int b) { return b % 2 == 1; }).bytes);
-        // The refusal may come from the size query already (the routed getri has no masked family).
-        std::size_t need = 0;
-        try {
-            need = c.buffer_size(mk.span());
-        } catch (const batchlas::unsupported&) {
-            need = c.buffer_size({});
-        }
-        UnifiedVector<std::byte> ws(std::max<std::size_t>(need, 1));
-        c.prepare();
-        q.wait();
-        const auto outs = c.outputs();
-        std::vector<std::vector<std::byte>> before;
-        for (const auto& o : outs) before.emplace_back(o.base, o.base + o.stride_bytes * std::size_t(c.batch));
-        EXPECT_ANY_THROW({
-            c.call(mk.span(), ws.to_span());
-            q.wait();
-        });
-        q.wait();
-        for (std::size_t i = 0; i < outs.size(); ++i)
-            EXPECT_EQ(0, std::memcmp(before[i].data(), outs[i].base, before[i].size())) << "the refused call wrote " << outs[i].name;
     }
 };
 

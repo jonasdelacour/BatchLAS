@@ -467,6 +467,10 @@ function(batchlas_add_test_target test_name)
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_GEBRD_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/gesvd/gebrd/gebrd_cta.cc")
     endif()
+    if(test_name STREQUAL "ormqr_mask_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_ORMQR_CTA_CC_PATH="${PROJECT_SOURCE_DIR}/src/ops/ormqr/kernels/ormqr_cta.cc")
+    endif()
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_INCLUDE_DIR_PATH="${PROJECT_SOURCE_DIR}/include/batchlas")

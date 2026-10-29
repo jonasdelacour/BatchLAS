@@ -139,57 +139,23 @@ namespace batchlas
                     }
                     result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
                 } else if (norm_type == NormType::One) {
-                    // Metal has no floating atomics on threadgroup memory: one item owns each sum.
-                    if (sycl_impl::on_metal()) {
-                        for (int k = local_idx; k < cols; k += local_size) {
-                            float_t<T> s = 0;
-                            for (int i = 0; i < rows; ++i) s += detail::abs(data_span[k * ld + i]);
-                            local_mem[k] = s;
-                        }
-                    } else {
-                        // Initialize local memory with zeros for column sums
-                        for (int j = local_idx; j < cols; j += local_size) {
-                            local_mem[j] = 0;
-                        }
-                        sycl::group_barrier(cta);
-
-                        // Sum absolute values for each column across all rows
-                        for (int j = local_idx; j < rows * cols; j += local_size) {
-                            auto col = j / rows;
-                            auto row = j % rows;
-                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                            sycl::memory_scope::work_group>
-                                atomic_local_mem(local_mem[col]);
-                            atomic_local_mem += detail::abs(data_span[col * ld + row]);
-                        }
+                    // One item owns each column sum: atomics would make the order, and so the bits,
+                    // vary between calls (and Metal has no floating atomics on threadgroup memory).
+                    for (int k = local_idx; k < cols; k += local_size) {
+                        float_t<T> s = 0;
+                        for (int i = 0; i < rows; ++i) s += detail::abs(data_span[k * ld + i]);
+                        local_mem[k] = s;
                     }
                     sycl::group_barrier(cta);
 
                     // Find the maximum column sum (the One norm)
                     result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
                 } else if (norm_type == NormType::Inf) {
-                    if (sycl_impl::on_metal()) {
-                        for (int k = local_idx; k < rows; k += local_size) {
-                            float_t<T> s = 0;
-                            for (int i = 0; i < cols; ++i) s += detail::abs(data_span[i * ld + k]);
-                            local_mem[k] = s;
-                        }
-                    } else {
-                        // Initialize local memory with zeros for row sums
-                        for (int j = local_idx; j < rows; j += local_size) {
-                            local_mem[j] = 0;
-                        }
-                        sycl::group_barrier(cta);
-
-                        // Sum absolute values for each row across all columns
-                        for (int j = local_idx; j < rows * cols; j += local_size) {
-                            auto col = j / rows;
-                            auto row = j % rows;
-                            sycl::atomic_ref<float_t<T>, sycl::memory_order::relaxed,
-                                            sycl::memory_scope::work_group>
-                                atomic_local_mem(local_mem[row]);
-                            atomic_local_mem += detail::abs(data_span[col * ld + row]);
-                        }
+                    // One item owns each row sum, as for One.
+                    for (int k = local_idx; k < rows; k += local_size) {
+                        float_t<T> s = 0;
+                        for (int i = 0; i < cols; ++i) s += detail::abs(data_span[i * ld + k]);
+                        local_mem[k] = s;
                     }
                     sycl::group_barrier(cta);
 

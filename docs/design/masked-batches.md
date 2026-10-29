@@ -304,6 +304,19 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
   Metal only); steqr wg's sweep (every NETLIB steqr case, Metal n = 40, stedc on the CPU queue);
   steqr_legacy's (NETLIB stedc only); stedc's in-place diagonal edit (the recursive cases); the
   per-level expanded mask (the level cases, through `info`).
+- **CUDA verification of the union** (sm_89, every scalar, 2026-10-29): ortho's Cholesky, Chol2 and
+  ShiftChol3 (and syevx's iterative arms over them) run a masked batch. On CUDA an unmasked
+  reference routes children to the vendor, which a masked call refuses, so the composite cases pin
+  their children `native` for both runs. norm's One and Inf sums used shared-memory float atomics
+  off Metal, which made two unmasked calls differ in their bits; every backend now gives each sum
+  one owner. One break per build, each red only on its own cases and the composites over it:
+  sytrs `cta` (with sysv `compose`), sytrs `wg`, the shared sytrf/sysv `cta` launch, getrf tiny's
+  fold (holes inside a sub-group), syev `cta_fused`'s fold, getrf `blocked`'s sub-view re-attach
+  (with gesv `blocked`), getrs `blocked`'s gather (only once a case reached nrhs >= 16), getri
+  `blocked` (with inv), sytrd_blocked's own update (only once a case ran unfused) and sygst's diagonal
+  kernel. ormqr blocked's trmm leg and sygst's mirror write scratch only, so their breaks stay green.
+  A revert of gebrd_cta's and ormqx_cta's barrier fixes also stays green on sm_89 (exited lanes count
+  as arrived), so source scans hold both; compute-sanitizer cannot attach to a DPC++ process.
 
 ## Rejected alternatives {#masked-batches-rejected}
 

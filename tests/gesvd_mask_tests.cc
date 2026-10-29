@@ -24,11 +24,14 @@
 #include <tests/test_utils.hh>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
 #include <cstdio>
 #include <limits>
+#include <optional>
+#include <variant>
 #include <string>
 #include <vector>
 
@@ -299,21 +302,35 @@ protected:
 
     bool device() const { return this->ctx->device().type == DeviceType::GPU && B != Backend::NETLIB; }
     bool sg32() const { return this->ctx->device().supports_sub_group_size(32); }
+    // On a GPU the unmasked reference would route a level-2/3 child to the vendor, which refuses
+    // the masked call: pin them `native` for both runs, so both take the same route.
+    using ChildPins = std::array<std::optional<select::ScopedPin<std::monostate>>, 6>;
+    void pin_children(ChildPins& pins) const {
+        if (!device()) return;
+        const char* ops[] = {"gemm", "gemv", "trmm", "trsm", "syrk", "herk"};
+        for (std::size_t i = 0; i < pins.size(); ++i) pins[i].emplace(ops[i], "native");
+    }
 
     void check(const Shape& s) {
         SCOPED_TRACE(label(s));
+        ChildPins pins;
+        pin_children(pins);
         GesvdProblem<T, B> p(*this->ctx, s);
         mc::check<ops::gesvd::GesvdChoice>(*this->ctx, "gesvd", s.spelling, p.make_case());
     }
     void check_gebrd(typename GebrdProblem<T, B>::Kernel kind, int m, int n, int batch, bool identical = false) {
         SCOPED_TRACE("gebrd " + std::to_string(int(kind)) + " " + std::to_string(m) + "x" + std::to_string(n) +
                      " batch " + std::to_string(batch));
+        ChildPins pins;
+        pin_children(pins);
         GebrdProblem<T, B> p(*this->ctx, kind, m, n, batch, identical);
         mc::check(*this->ctx, p.make_case());
     }
     void check_ormbr(char v, int am, int an, int cm, int cn, int batch, Transpose t, int nb) {
         SCOPED_TRACE(std::string("ormbr ") + v + " A " + std::to_string(am) + "x" + std::to_string(an) + " C " +
                      std::to_string(cm) + "x" + std::to_string(cn));
+        ChildPins pins;
+        pin_children(pins);
         OrmbrProblem<T, B> p(*this->ctx, v, am, an, cm, cn, batch, t, nb);
         mc::check(*this->ctx, p.make_case());
     }
