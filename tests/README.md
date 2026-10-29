@@ -2,8 +2,7 @@
 
 > **Status:** current · test counts are whatever `ctest -N` lists for your tree
 
-Run the narrowest scope that covers your change. The full suite takes 15-20 minutes and a few
-binaries hold nearly all of it.
+Run the narrowest scope that covers your change; the full suite takes 15-20 minutes.
 
 | scope | command |
 |---|---|
@@ -15,10 +14,8 @@ binaries hold nearly all of it.
 | everything but the slow suites | `ctest -LE slow` (count: `ctest -N -LE slow`) |
 | everything | `ctest` (count: `ctest -N`) |
 
-Counts move as binaries are added, so none is written here: read them off `ctest -N` (see
-[the CI page](../docs/ci.md#running-all-of-it-locally)).
-`ctest -R` is a substring regex: `-R syev` matches `syev_tests`, `syevx_tests`, `syev_cta_tests`.
-Anchor with `^...$` for one binary.
+Read counts off `ctest -N` ([the CI page](../docs/ci.md#running-all-of-it-locally)). `ctest -R`
+is a substring regex (`-R syev` also matches `syevx_tests`): anchor with `^...$`.
 
 ## Running on every GPU at once
 
@@ -43,18 +40,8 @@ scripts/ctest_gpus.sh --test-dir build-vf -L eig  # another tree
 - Use the serial run for a `GTEST_OUTPUT=xml:<dir>/` gate (docs/ci.md): a route-pinned rerun
   writes the same file name as its twin, and in parallel they can overlap.
 
-Measured `-LE slow` on threadripper02 (4x RTX PRO 6000), the only box validated:
-
-| mode | time |
-|---|---|
-| serial, one GPU visible | 469 s |
-| 1 slot per GPU | 126 s |
-| 2 slots per GPU | 78 s |
-
-Failing names are identical in all modes. On the 2x RTX 4090 box (125 GB, zero swap, two OOM
-kills under concurrency; `docs/ci.md`) keep the full gate serial. On threadripper02 a process
-that sees all four GPUs runs several times slower than one that sees one (cause unknown); set
-`CUDA_VISIBLE_DEVICES` when running a binary by hand.
+Validated on threadripper02 only (2 slots per GPU is 6x faster than serial, agent guide §8).
+Keep the full gate serial on the 2x RTX 4090 box (zero swap; OOM kills under concurrency).
 
 ## Labels
 
@@ -65,8 +52,7 @@ anything under `include/batchlas/util`) run the full suite.
 
 The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `stedc_tests`,
 `steqr_tests`, `sytrd_sb2st_tests`, `gesvd_tests` and `consumer_package_tests`. `ctest -LE slow`
-is a good broad check but not a pre-push gate. Label a test `slow` when it grows past about 15 s,
-and remove the label when it no longer dominates.
+is a broad check, not a pre-push gate. Label a test `slow` past about 15 s.
 
 ## The sub-group partition layer
 
@@ -127,9 +113,7 @@ BATCHLAS_TEST_FLOAT_TYPE=float ./build/tests/steqr_tests   # skip double/complex
 | | `complex` | both complex types |
 
 The two combine. `BATCHLAS_TEST_BACKEND=CUDA` is the largest lever: NETLIB instantiations run host
-O(n^3) reference solves (91% of `steqr_tests` runtime). Original CUDA-only vs all-backend timings
-(suites have changed since; the ratio is the point): `trmm_tests` ~1.5 s vs ~58 s, `stedc_tests`
-~7.6 s vs ~34 s, `trsm_tests` ~1.2 s vs ~5.4 s, `gemv_tests` ~0.4 s vs ~1.8 s.
+O(n^3) reference solves (most of `steqr_tests` runtime).
 
 > **Warning:** both filters are `GTEST_SKIP()`s. Case list and pass count look unchanged while the
 > filtered coverage is gone, and startup is not cut. An unrecognised value skips every case:
@@ -145,7 +129,7 @@ A launch that finds no device image for its kernel ("No kernel named ...") fails
 1. **Do not combine large `n` with large `batch`.** `n` drives algorithmic depth (D&C merge
    levels, panel count, bulge-chase sweeps); `batch` only multiplies work. Cover large `n` at
    small batch and large batch at small `n`. A shared-local-memory kernel still needs one
-   saturating-batch case at small `n` (`docs/developer/agent-guide.md` §8).
+   saturating-batch case at small `n` (agent guide §8).
 2. **Watch the reference solve.** `Matrix::Zeros(n, n, batch)` plus `syev` / `ritz_values` /
    `batchlas::verify::eigenvalues` cost O(n^3)·batch on the host for NETLIB instantiations; the
    reference, not the kernel, usually makes a test slow.
@@ -160,8 +144,7 @@ and for typed tests by pinned type parameter; each block names its cause. CI dif
 against that ledger; see
 [the CI page](../docs/ci.md#the-known-failures-workflow).
 
-- `syev_cta_tests` is flaky under `ctest -j2`/`-j4`; `sytrd_blocked_tests` also flakes on
-  untouched `main`.
+- `syev_cta_tests` is flaky under `ctest -j2`/`-j4`.
 - Double-precision CPU-only failures are usually the broken OpenBLAS Cooperlake `dgemm` kernel
   on this machine. CMake detects it and sets `OPENBLAS_CORETYPE` for tests run through ctest; a
   bare `./build/tests/foo` does not.
