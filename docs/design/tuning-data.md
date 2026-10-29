@@ -13,10 +13,11 @@ The only normative page for tables, ledgers, tiers, staleness and generation: tw
 The key and candidate vocabulary lives only in `src/ops/<op>/choice.hh`. The tuner copies it into
 each run line of the ledger; nothing else spells it.
 
-**Shipped set (2026-10-29):** 59 tables. sm_120: 29 tables of `deep` rows, plus `transcribed` rows
-where no deep row lies near (beyond the 2048 dimension cap, for example). sm_89: 29 tables, 20 of
-them untimed (`transcribed`, potrf `converted`), 9 with measured `deep`, `preview` or `custom`
-rows. cpu: `spmm.cpu.txt`, `transcribed`.
+**Shipped set (2026-10-29):** 59 tables. sm_120: 19 tables of `deep` rows (plus `transcribed`
+rows where no deep row lies near, beyond the 2048 dimension cap for example) and 10 untimed ones
+(hemm, her2k, herk, potri, potrs, sygst, sygvd, sysv, sytrf, sytrs). sm_89: 29 tables, 9 with
+measured rows (geqrf, hemm, potrf, potri, potrs, sygst, symm, sysv, sytrs), the rest untimed
+(`transcribed`). cpu: `spmm.cpu.txt`, `transcribed`.
 
 ## The ledger file {#tuning-data-ledger-file}
 
