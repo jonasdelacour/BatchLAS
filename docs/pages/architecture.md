@@ -51,5 +51,4 @@ Design records: decisions and their rationale. Measured evidence is in @ref perf
 | Page | What you find there |
 | --- | --- |
 | @subpage design_known_defects "Known defects" | Located-but-unfixed defects. |
-| @subpage design_flat_selection_phase3_plan "Flat selection, phase 3 plan (history)" | Execution plan for posv, trsm and gemm. |
-| @subpage design_small_n_plan "Small-n factorization campaign (history)" | Campaign plan and comment-density burn-down; kept for its evidence and cited anchors. |
+| @subpage design_small_n_plan "Small-n factorizations" | Design rules, decisions and open debts of the small-n native factorizations; the comment-density waiver block. |
