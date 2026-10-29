@@ -164,6 +164,7 @@ namespace batchlas {
         if (eigvects.rows() != eigvects.cols()) {
             throw batchlas::invalid_argument("Matrix must be square for eigenvalue computation.");
         }
+        if (params.sort) require_sortable(eigenvalues);
         const VectorView<T> evals = eigenvalues.with_batch_mask(mask);
         auto eigvects_mut = jobz == JobType::EigenVectors ? eigvects.with_batch_mask(mask) : eigvects;
         if (jobz == JobType::EigenVectors && !params.back_transform) {

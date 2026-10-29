@@ -293,6 +293,7 @@ Event steqr_wg(Queue& ctx,
     // The working copies are rebuilt from the pool, so they take the call's mask back on.
     const auto mask = batchlas::detail::call_mask("steqr_wg", d_in, e_in, eigenvalues, eigvects);
     const VectorView<T> evals = eigenvalues.with_batch_mask(mask);
+    if (params.sort) require_sortable(evals);
 
     if (jobz == JobType::EigenVectors) {
         if (eigvects.rows() != eigvects.cols()) {

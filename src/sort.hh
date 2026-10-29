@@ -222,13 +222,19 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
     return ctx.get_event();
 }
 
+// permute() needs unit increments. A solver that sorts last calls this before its first launch:
+// a throw with its passes still in flight frees the caller's buffers under them.
 template <typename T>
-Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
-    // permute() needs unit increments; refuse before anything is enqueued.
+void require_sortable(const VectorView<T>& eigs) {
     if (eigs.inc() != 1) {
         throw batchlas::invalid_argument("sort: eigenvalues must have unit increment (inc=1), got inc=" +
                                          std::to_string(eigs.inc()));
     }
+}
+
+template <typename T>
+Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixFormat::Dense>& eigvects, JobType jobz, SortOrder order, Span<std::byte> workspace){
+    require_sortable(eigs);  // before anything is enqueued
     auto pool = BumpAllocator(workspace);
     const VectorView<T>& eigs_unit = eigs;
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
