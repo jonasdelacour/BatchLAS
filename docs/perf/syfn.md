@@ -1,11 +1,10 @@
 # syfn: matrix functions of Hermitian matrices {#perf_syfn}
 
-> **Status:** current · composition only, nothing here is timed (RTX 4090 sm_89, CUDA 13.2, 2026-10-25)
+> **Status:** current · composition only, untimed
 
-`syfn` forms \f$ F = V f(\Lambda) V^H \f$ per batch item (fullerenes plan P2.2). gfn2-xTB needs it twice:
-the Loewdin orthogonaliser \f$ S^{-1/2} \f$ once per geometry, and the density matrix
-\f$ P = C f(\varepsilon) C^H \f$ with Fermi occupations \f$ f \f$ in every SCC iteration. The plan text is
-lost; the contract below is the one this track chose.
+`syfn` forms \f$ F = V f(\Lambda) V^H \f$ per batch item. gfn2-xTB needs it for
+the Loewdin orthogonaliser \f$ S^{-1/2} \f$ and the density matrix \f$ P = C f(\varepsilon) C^H \f$
+with Fermi occupations \f$ f \f$.
 
 ## syfn composition {#syfn-composition}
 
@@ -47,49 +46,33 @@ Two entries (`include/batchlas/blas/functions/syfn.hh`):
 
 ## syfn tests and deliberate breaks {#syfn-tests-and-breaks}
 
-`tests/syfn_tests.cc` builds each item (except the Loewdin and out-of-order-queue inputs, drawn from `fill_graded_hermitian`) as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
-Householder reflectors (complex vectors for complex types) held in double, so every reference is a
-closed form in double, formed and compared by `MatrixView`'s checks (`product`,
-`similarity_residual`, `qr_reconstruction`), on padded poisoned storage from `tests/test_support/`:
-Loewdin \f$ \|F A F - I\| / \kappa \f$ on a graded `fill_graded_hermitian` input (\f$ \kappa = 10^6 \f$
-double, \f$ 10^3 \f$ float, whose 7 digits a \f$ 10^6 \f$ condition would exhaust), \f$ e^A \f$ in place
-against \f$ Q e^D Q^H \f$, \f$ F F = A \f$ and \f$ F A = I \f$ on an indefinite \f$ A \f$, the weights
-and herk forms against \f$ (V \operatorname{diag}(f)) V^H \f$ on a non-orthonormal padded `V`, `syfn(A)` with signed weights on an
-unsorted spectrum against the ascending pairing (and the deducing spelling bit-identical to the
-explicit one), per-item `info` with the other items correct, 1024 identical items bit-identical, an
-out-of-order queue bit-identical, and argument checks (partial `F`/`V` overlap, host weights).
+`tests/syfn_tests.cc` builds each item as \f$ Q \operatorname{diag}(d) Q^H \f$ with \f$ Q \f$ two
+Householder reflectors held in double, so every reference is a closed form; Loewdin and the
+out-of-order-queue inputs come from `fill_graded_hermitian` (\f$ \kappa = 10^6 \f$ double, \f$ 10^3 \f$
+float). All storage is padded and poisoned (`tests/test_support/`).
 
-Deliberate breaks of `src/ops/syfn/syfn.cc`, each reverted (md5 checked), on the full-target
-tree (configs 0-3 NETLIB, 4-7 CUDA; float, double, cfloat, cdouble). Green before: 80/80 (72 before
-the review fixes of 2026-10-26; the last four rows are from that round). Re-run on 2026-10-27 after
-the move onto `tests/test_support/`: the `InvSqrt` scale (32), `V` at ld = n (8) and `hermitize(Upper)`
-(48) breaks gave the same red sets.
+Deliberate breaks of `src/ops/syfn/syfn.cc` (2026-10-26/27, configs NETLIB + CUDA, all four types; green
+before 80/80), each with a narrow red set:
 
 | Break | Red set |
 |---|---|
-| `InvSqrt` scale \f$ w^{-1/2} \f$ instead of \f$ w^{-1/4} \f$ | `InvSqrtOfGradedSpdIsLoewdin`, `FromEigenMatchesHostReference`, `OutOfDomainEigenvaluesSetInfo`, `SaturatingBatchIsBitIdentical`; all 8 configs (32) |
-| column scale reads `V` at ld = n | `FromEigenMatchesHostReference` only (8): the only padded `V` |
-| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`, `WeightsPairWithAscendingEigenvalues`; complex only, NETLIB and CUDA (12; re-run 2026-10-27 on the migrated suite, which adds the third test) |
-| `hermitize(Upper)` | every test with a herk-form product (6 tests x 8 = 48); `NoEigenpairs`, `OutOfOrder`, `Rejects` green |
-| `info` a flag, not a count | `OutOfDomainEigenvaluesSetInfo` only (8) |
-| `Sqrt` domain `w <= 0` | `OutOfDomainEigenvaluesSetInfo` only (8): the exact-zero straddle |
-| `m = 0` leaves `F` unwritten | `NoEigenpairsGivesZero` only (8) |
-| `syfn` without `on_in_order_queue` | `OutOfOrderQueueMatchesInOrder` only: 7 of 8 configs in one run, 19 of 24 over three repeats (every config at least once, NETLIB every time). Still a race; with batch 8 and no pending writer it caught 2 of 8 |
-| weights paired in reverse order | `WeightsPairWithAscendingEigenvalues`, `FromEigenMatchesHostReference`; all 8 configs (16) |
-| overlap check back to a start-pointer compare | `RejectsBadArguments` only, on its "V is later columns of F" assertion; all 8 configs |
-| no weights pointer check | `RejectsBadArguments` only, on both "host weights" assertions (explicit and deducing spelling); CUDA only (4): a CPU queue reaches host memory |
+| `InvSqrt` scale \f$ w^{-1/2} \f$ | Loewdin, `FromEigenMatchesHostReference`, `OutOfDomainEigenvaluesSetInfo`, `SaturatingBatchIsBitIdentical` |
+| column scale reads `V` at ld = n | `FromEigenMatchesHostReference` only (the only padded `V`) |
+| gemm form uses `Trans`, not `ConjTrans` | `SqrtAndInverseOfIndefinite`, `FromEigenMatchesHostReference`, `WeightsPairWithAscendingEigenvalues`; complex only |
+| `hermitize(Upper)` | every herk-form test (6) |
+| `info` a flag, not a count; `Sqrt` domain `w <= 0` | `OutOfDomainEigenvaluesSetInfo` only |
+| `m = 0` leaves `F` unwritten | `NoEigenpairsGivesZero` only |
+| no `on_in_order_queue` | `OutOfOrderQueueMatchesInOrder` only, as a race (19 of 24 config-runs) |
+| weights paired in reverse | `WeightsPairWithAscendingEigenvalues`, `FromEigenMatchesHostReference` |
+| overlap check / weights pointer check removed | `RejectsBadArguments` only (pointer check: CUDA only) |
 
-Vendor-free tree (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`): the 36 CUDA cases pass on native routes; the
-NETLIB cases skip, and `SyfnVendorFree.HostWithoutLapackeThrowsNoRoute` checks the `NoRouteError`.
-There, the `Trans` break turns the same two tests red on CUDA cfloat/cdouble (4) and `hermitize(Upper)`
-the same six on CUDA (24).
+Vendor-free (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`) the CUDA cases pass on native routes and
+`SyfnVendorFree.HostWithoutLapackeThrowsNoRoute` checks the `NoRouteError`.
 
-Not covered by a break: `info > n` after a `syev` convergence failure (no input makes `syev` fail),
-and the drain before a sub-op's exception propagates (removing it left everything green: whether the
-freed workspace is still in use is a race). Vendor-free, only `syfn_from_eigen` reaches the drain:
-`syfn` and `syfn_buffer_size` throw while sizing `syev`'s workspace, before any kernel.
+Not covered by a break: `info > n` after a `syev` convergence failure (no input makes `syev` fail), and
+the drain before a sub-op's exception propagates (removing it stays green: a race).
 
 ## syfn timing to do {#syfn-timing-to-do}
 
-Untimed. On a quiet box, at saturation, the split to measure is `syev` against the product
-(`herk` vs `gemm` form) for gfn2's shapes (n = 480, batch 1819; n = 1200, batch 76).
+Untimed. To measure at saturation: `syev` against the product (`herk` vs `gemm` form) for gfn2's shapes
+(n = 480, batch 1819; n = 1200, batch 76).
