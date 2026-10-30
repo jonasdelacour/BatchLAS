@@ -465,3 +465,37 @@ TYPED_TEST(PosvTest, LinalgSolveSpdLeavesItsInputsAlone) {
     for (int item : {0, p.batch - 1})
         EXPECT_VERIFY(T, verify::Check::solve, n, solve_residual(*this->ctx, p, item, Uplo::Lower));
 }
+
+// A heterogeneous batch and an empty n or nrhs are caller errors: invalid_argument, the message
+// opening with the op name, on every backend (the candidate suite runs only on a GPU).
+TYPED_TEST(PosvTest, UnservableShapesAreInvalidArgument) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 6, nrhs = 2, batch = 3;
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
+    UnifiedVector<int> act(batch), cols(batch);
+    for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
+    Matrix<T, MatrixFormat::Dense> A0(0, 0, 1), B0(0, 1, 1), A4(4, 4, 1), B4(4, 0, 1);
+    struct Case { const char* what; MatrixView<T, MatrixFormat::Dense> a, b; };
+    const Case cases[] = {{"A heterogeneous", A.with_active_dims(act.to_span(), act.to_span()), Bm.view()},
+                          {"B heterogeneous", A.view(), Bm.with_active_dims(act.to_span(), cols.to_span())},
+                          {"n = 0", A0.view(), B0.view()},
+                          {"nrhs = 0", A4.view(), B4.view()}};
+    UnifiedVector<std::byte> ws(1 << 16);
+    UnifiedVector<int32_t> info(batch);
+    for (const auto& k : cases) {
+        for (bool sizing : {true, false}) {
+            try {
+                if (sizing) (void)posv_buffer_size<B, T>(*this->ctx, k.a, k.b, Uplo::Lower);
+                else (void)posv<B, T>(*this->ctx, k.a, k.b, Uplo::Lower, ws.to_span(), info.to_span());
+                ADD_FAILURE() << k.what << ": no throw";
+            } catch (const batchlas::invalid_argument& e) {
+                EXPECT_EQ(std::string(e.what()).rfind("posv", 0), 0u) << k.what << ": " << e.what();
+            } catch (const std::exception& e) {
+                ADD_FAILURE() << k.what << (sizing ? " posv_buffer_size" : " posv") << ": threw " << e.what()
+                              << ", not invalid_argument";
+            }
+        }
+    }
+    this->ctx->wait();
+}
