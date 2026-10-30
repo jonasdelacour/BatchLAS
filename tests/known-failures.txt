@@ -41,16 +41,10 @@
 #   type_param, so a shifted index is a hard error, never a silent mask.
 
 # --- lanczos ------------------------------------------------------------------
-# Re-verified 2026-10-12 on threadripper02 after the B1 fix (steqr now reads each
-# item's off-diagonals at stride n; LanczosStride.MixedBatchItemsMatchUniformBatches passes).
-# Cause still open (docs/design/known-defects.md, "lanczos returns a spectrum"); NOT entry 3 (that one is 2x
-# work with a right answer): every item's whole spectrum comes out ~3x too wide
-# (Toeplitz n=64, a=2, b=-5: [-28, 32] for [-8, 12]), at batch 1 too.
-# Unconfirmed lead: the SVQB2 re-orthogonalization in lanczos_iteration mixes
-# v_{it-1} and v_it after their alphas/betas were recorded.
-lanczos_tests::LanczosTestBase.LanczosTest
-lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
-lanczos_tests::LanczosStride.ClosedFormSpectrum
+# Fixed 2026-10-30 (docs/design/known-defects.md, "lanczos returned a spectrum about three times
+# too wide"): ortho re-orthogonalized the already used pair [v_{it-1}, v_it], returning a rotated
+# (SVQB) or sign-flipped (Householder) basis. LanczosTest, ToeplitzEigenpairs, ClosedFormSpectrum
+# removed (green on the acpp OpenMP CPU device; GPU re-check pending).
 
 # --- steqr --------------------------------------------------------------------
 # Verified 2026-09-09 (also on the WP0 and WP1 trees).

@@ -48,8 +48,5 @@ her2k_tests::Her2kTest/2.OptionStructMatchesPositional;type_param=Her2kConfig<st
 posv_tests::PosvTest/5.PublicPosvSolvesOnBothTriangles;type_param=(anonymous namespace)::PosvConfig<std::__1::complex<float>, (batchlas::Backend)5>
 
 # --- BatchLAS: shared with DPC++ (tests/known-failures.txt) and acpp generic ---
-# docs/design/known-defects.md, "lanczos returns a spectrum" (cause open; not entry 3): every
-# item's spectrum comes out ~3x too wide, at batch 1 too. Same three cases as tests/known-failures.txt.
-lanczos_tests::LanczosTestBase.LanczosTest
-lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
-lanczos_tests::LanczosStride.ClosedFormSpectrum
+# lanczos (LanczosTest, ToeplitzEigenpairs, ClosedFormSpectrum): fixed 2026-10-30, removed; cause in
+# docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".

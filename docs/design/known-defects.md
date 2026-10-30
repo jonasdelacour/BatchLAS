@@ -16,10 +16,10 @@ runs every algorithm under `NoTrans`, `Trans` and `ConjTrans`.
 ## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
 Open: right answer, twice the level-3 work. `padded_vector` and `padded_output` are two columns
-wide (`src/ops/lanczos/lanczos.cc:65-66`) so the sparse arm does not fall back to SpMV; the spmm/gemm
-at `:122-124` fills both, and the kernel reads only column 0 (`local_v_next`, `:139`). The red
-`lanczos_tests` cases are a different defect:
-[the spectrum](#lanczos-returns-a-spectrum-about-three-times-too-wide).
+wide (`src/ops/lanczos/lanczos.cc:68-69`) so the sparse arm does not fall back to SpMV; the spmm/gemm
+at `:130-132` fills both, and the kernel reads only column 0 (`local_v_next`, `:148`). The formerly
+red `lanczos_tests` cases were a different defect:
+[the spectrum](#lanczos-returned-a-spectrum-about-three-times-too-wide).
 
 ## Defect 4: rocSPARSE conjugates a real transpose
 
@@ -192,15 +192,20 @@ Composing `geqrf`, `triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ af
 calls twice in one process. Look first at state that outlives a call: the `Queue`'s arena
 (@ref design_runtime_internals), a static, or a stale event.
 
-## lanczos returns a spectrum about three times too wide
+## lanczos returned a spectrum about three times too wide
 
-Open, cause not located. Toeplitz tridiag(-5, 2, -5), n = 64, float, CSR returns eigenvalues over
-about [-28, 32] against the exact [-8, 12], at batch 1 too. Red in `tests/known-failures.txt`:
-`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`, `LanczosStride.ClosedFormSpectrum`.
-**Lead (unconfirmed):** the SVQB2 re-orthogonalization (the `ortho` call in `lanczos_iteration`,
-`src/ops/lanczos/lanczos.cc`) rotates \f$[v_{it-1}, v_{it}]\f$ after their alphas and betas were
-recorded, breaking the three-term recurrence; raising steqr's `max_sweeps` to 50 changed nothing.
-**To fix:** compare the recorded alphas/betas with \f$V^T A V\f$ for one item.
+Fixed 2026-10-30 on the CPU device (acpp OpenMP); GPU confirmation pending. Toeplitz
+tridiag(-5, 2, -5), n = 64, float, returned eigenvalues over about [-28, 32] for the exact [-8, 12],
+at batch 1 too, while \f$V\f$ stayed orthonormal: the recorded \f$T\f$ was not \f$V^T A V\f$.
+`lanczos_iteration` re-orthogonalized the pair \f$[v_{it-1}, v_{it}]\f$ after their alphas and
+betas were recorded, and `ortho` returns an orthonormal basis of the span, not the input vectors:
+SVQB rotates the pair by the eigenvectors of its near-identity Gram matrix, and Householder (forced
+on non-GPU devices) can flip a column's sign. Now only \f$v_{it}\f$ is re-orthogonalized, against
+\f$v_0 \ldots v_{it-1}\f$, and the kernel gives \f$\beta_{it-1}\f$ the sign of
+\f$v_{it-1}^T A v_{it}\f$ (`src/ops/lanczos/lanczos.cc:114-124`, `:157-166`). The `LanczosTest`
+fixture also read an uninitialized dense reference on the host. Guards:
+`Lanczos/LanczosOrtho.EigenpairsMatchClosedForm/*` (every ortho algorithm, CSR and dense,
+`tests/lanczos_tests.cc`) and the three formerly ledgered cases.
 
 ## Unverified candidates
 

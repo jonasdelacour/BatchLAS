@@ -63,11 +63,8 @@ syev_tests::SyevTest/3.DoubleBandEveryOrderUploAndJobz;type_param=SyevConfig<std
 util_device_queue_tests::QueueAsyncErrors.ErrorCollectedByAQueueCopySurfacesAtTheNextWait
 util_device_queue_tests::QueueAsyncErrors.OversizedLocalMemoryThrowsFromTheLaunch
 
-# Shared with DPC++ (tests/known-failures.txt): docs/design/known-defects.md, "lanczos returns a
-# spectrum".
-lanczos_tests::LanczosStride.ClosedFormSpectrum
-lanczos_tests::LanczosTestBase.LanczosTest
-lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+# lanczos (ClosedFormSpectrum, LanczosTest, ToeplitzEigenpairs): fixed 2026-10-30, removed; cause in
+# docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".
 
 # Seen once on this tree, cause open: linalg::syev values after the scratch is freed
 # (LinalgWrappers.ScratchOutlivesKernels), gesvd cta U orthogonality for float and double (entry 18

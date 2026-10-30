@@ -24,10 +24,8 @@
 # vs 8), red on DPC++ at 6b0907ea too and in neither ledger.
 
 # --- shared with DPC++ (tests/known-failures.txt) -----------------------------
-# docs/design/known-defects.md, "lanczos returns a spectrum": every item's spectrum comes out
-# ~3x too wide (cause open; NOT entry 3, which is 2x work with a right answer).
-lanczos_tests::LanczosTestBase.LanczosTest
-lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+# lanczos (LanczosTest, ToeplitzEigenpairs): fixed 2026-10-30, removed; cause in
+# docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".
 
 # steqr_wg does not converge on the mixed-scale case-3 input (on every device, DPC++
 # CUDA included). acpp's host device has sub-group size 1, so these NETLIB instances
