@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <iostream>
 #include <vector>
 
@@ -1215,6 +1216,124 @@ TYPED_TEST(LinalgTyped, GramBothSidesBothTriangles) {
     EXPECT_VERIFY(T, verify::Check::blas, n,
                   MV<T>::gemm_backward_error(q, A, Transpose::NoTrans, A, h, outer, outer, T(1), T(0)))
         << "A A^H";
+}
+
+// ---- geqrf + triangular_mask_into + orgqr, composed repeatedly in one process ----
+// The composition linalg::qr runs; it once returned Q R != A after an earlier call in the
+// process and passed alone. evidence: docs/design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process
+
+namespace {
+
+template <typename T>
+void expect_composed_qr(Queue& q, int m, int n, int batch, unsigned seed, const std::string& what) {
+    auto A = make<T>(q, m, n, batch, Fill::general, seed);
+    auto F = padded<T>(q, A);
+    auto R = padded<T>(q, A);  // every element is overwritten by the mask
+    UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch), kPoison<T>);
+    (void)geqrf(q, F, tau.to_span());
+    (void)linalg::triangular_mask_into(q, F, R, Uplo::Upper);
+    (void)orgqr(q, F, tau.to_span());
+    q.wait();
+    EXPECT_VERIFY(T, verify::Check::factorization, m, MV<T>::qr_reconstruction(q, A, F, R)) << what;
+    EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV<T>::orthogonality(q, F)) << what;
+    int nonzero = 0;
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = j + 1; i < m; ++i) nonzero += elem<T>(R, i, j, b) != T(0);
+    EXPECT_EQ(nonzero, 0) << what << ": R below the diagonal";
+}
+
+// Two shapes and batch counts, then the first again, on one queue, then on a fresh queue.
+template <typename T>
+void expect_repeated_qr(Queue& q, const std::string& where) {
+    struct Shape { int m, n, batch; };
+    const Shape seq[] = {{12, 8, 5}, {37, 21, 1030}, {12, 8, 5}, {16, 16, 3}};
+    unsigned seed = 151;
+    for (const auto& s : seq)
+        expect_composed_qr<T>(q, s.m, s.n, s.batch, seed++,
+                              where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
+                                  std::to_string(s.batch));
+}
+
+}  // namespace
+
+TYPED_TEST(LinalgTyped, ComposedQrRepeatsAcrossCallsAndQueues) {
+    using T = TypeParam;
+    expect_repeated_qr<T>(this->q, "fixture queue");
+    {
+        Queue fresh;
+        expect_repeated_qr<T>(fresh, "fresh default queue");
+    }
+    // A native route pin cannot run on the NETLIB queue; under a pin only the GPU legs run.
+    if (!std::getenv("BATCHLAS_GEQRF_ROUTE") && !std::getenv("BATCHLAS_ORGQR_ROUTE")) {
+        Queue netlib("cpu");
+        ASSERT_EQ(netlib.backend(), Backend::NETLIB);
+        expect_repeated_qr<T>(netlib, "NETLIB queue");
+    }
+    expect_repeated_qr<T>(this->q, "fixture queue again");
+}
+
+// ---- linalg::qr: the same sequence through the wrapper --------------------------
+
+namespace {
+
+// Padded, poisoned A; R is n x n and exactly zero below the diagonal; A is left untouched.
+template <typename T>
+void expect_wrapper_qr(Queue& q, int m, int n, int batch, unsigned seed, const std::string& what) {
+    auto A0 = make<T>(q, m, n, batch, Fill::general, seed);
+    auto A = padded<T>(q, A0);
+    auto f = linalg::qr(q, A);
+    q.wait();
+    ASSERT_EQ(f.q.rows(), m) << what;
+    ASSERT_EQ(f.q.cols(), n) << what;
+    ASSERT_EQ(f.r.rows(), n) << what;
+    ASSERT_EQ(f.r.cols(), n) << what;
+    EXPECT_VERIFY(T, verify::Check::factorization, m, MV<T>::qr_reconstruction(q, A0, f.q, f.r)) << what;
+    EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV<T>::orthogonality(q, f.q)) << what;
+    int nonzero = 0, changed = 0;
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j) {
+            for (int i = j + 1; i < n; ++i) nonzero += elem<T>(f.r, i, j, b) != T(0);
+            for (int i = 0; i < m; ++i) changed += elem<T>(A, i, j, b) != elem<T>(A0, i, j, b);
+        }
+    EXPECT_EQ(nonzero, 0) << what << ": R below the diagonal";
+    EXPECT_EQ(changed, 0) << what << ": A was modified";
+}
+
+template <typename T>
+void expect_repeated_wrapper_qr(Queue& q, const std::string& where) {
+    struct Shape { int m, n, batch; };
+    const Shape seq[] = {{12, 8, 5}, {37, 21, 1030}, {12, 8, 5}, {16, 16, 3}};
+    unsigned seed = 171;
+    for (const auto& s : seq)
+        expect_wrapper_qr<T>(q, s.m, s.n, s.batch, seed++,
+                             where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
+                                 std::to_string(s.batch));
+}
+
+}  // namespace
+
+TYPED_TEST(LinalgTyped, QrRepeatsAcrossCallsAndQueues) {
+    using T = TypeParam;
+    expect_repeated_wrapper_qr<T>(this->q, "fixture queue");
+    {
+        Queue fresh;
+        expect_repeated_wrapper_qr<T>(fresh, "fresh default queue");
+        Queue ooo(fresh, false);
+        expect_repeated_wrapper_qr<T>(ooo, "out-of-order queue");
+    }
+    if (!std::getenv("BATCHLAS_GEQRF_ROUTE") && !std::getenv("BATCHLAS_ORGQR_ROUTE")) {
+        Queue netlib("cpu");
+        ASSERT_EQ(netlib.backend(), Backend::NETLIB);
+        expect_repeated_wrapper_qr<T>(netlib, "NETLIB queue");
+    }
+    expect_repeated_wrapper_qr<T>(this->q, "fixture queue again");
+}
+
+TEST(LinalgWrappers, QrRefusesWideA) {
+    Queue q;
+    Matrix<float> A(4, 5, 2);
+    EXPECT_THROW((void)linalg::qr(q, A), std::invalid_argument);
 }
 
 // ---- out-of-order queues -------------------------------------------------------

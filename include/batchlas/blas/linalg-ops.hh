@@ -833,8 +833,40 @@ inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     return Lu<T>{std::move(LU), std::move(pivots), std::move(info)};
 }
 
-// linalg::qr is deliberately absent: an unexplained cross-Queue wrong answer.
-// evidence: docs/design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process
+/// @brief Result of qr().
+template <typename T>
+struct Qr {
+    Matrix<T, MatrixFormat::Dense> q;  ///< m x n per item, orthonormal columns
+    Matrix<T, MatrixFormat::Dense> r;  ///< n x n per item, upper triangular, zeros below
+};
+
+/// @brief Reduced QR factorisation \f$A = QR\f$ of a tall or square A; A is not modified.
+///
+/// **Blocks** before returning (its Householder scalars must outlive the kernels).
+/// @param ctx   queue; supplies the backend and the arena
+/// @param A     m x n per item, m >= n
+/// @return      Q and R, valid after the queue is waited on
+/// @throws batchlas::invalid_argument if `A` has more columns than rows
+template <typename T>
+inline Qr<T> qr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    detail::refuse_batch_mask("qr", A);
+    const int m = A.rows(), n = A.cols(), batch = A.batch_size();
+    if (n > m)
+        throw batchlas::invalid_argument("linalg::qr: A is " + std::to_string(m) + " x " + std::to_string(n) +
+                                         "; the reduced QR needs rows >= cols");
+    auto Q = detail::like(A);
+    Matrix<T, MatrixFormat::Dense> R(n, n, batch);
+    UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch));
+    (void)::batchlas::detail::on_in_order_queue(ctx, [&](Queue& q) {
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(q, Q, A);
+        (void)geqrf(q, Q, tau.to_span());
+        if (n > 0) (void)triangular_mask_into<T>(q, Q(Slice(0, n), Slice()), R, Uplo::Upper);
+        (void)orgqr(q, Q, tau.to_span());
+        q.wait();  // ~UnifiedVector frees `tau` without waiting
+        return q.get_event();
+    });
+    return Qr<T>{std::move(Q), std::move(R)};
+}
 
 /// @}
 

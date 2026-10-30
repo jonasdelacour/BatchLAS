@@ -369,7 +369,7 @@ ctx.wait();                           // before reading any of them
 
 - Factorisation, solve, eigen and SVD results carry a per-item `info`; check it.
 - `multiply` is elementwise; `matmul` is the matrix product, and its options have no `beta`.
-- There is no `linalg::qr`; compose `geqrf` and `orgqr`
-  ([why](design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process)).
+- `qr` is the reduced QR of a tall or square A (`f.q` m x n, `f.r` n x n upper triangular); like
+  `svd` it blocks before returning.
 
 Adding an entry point rather than calling one? See [extending.md](extending.md).
