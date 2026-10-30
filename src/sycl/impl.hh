@@ -235,19 +235,43 @@ inline void on_async_errors(sycl::exception_list errors) {
     for (const std::exception_ptr& e : errors) s.errors.push_back(e);
 }
 
+// Integrated multipass launches through clang's CUDA/HIP stub, which leaves a failed launch in
+// the submitting thread's last-error slot and registers nothing. Read and cleared here, so it
+// is reported once and only on the launching thread; no synchronize.
+#if defined(__clang__) && defined(__CUDA__)
+inline std::exception_ptr take_native_launch_error(sycl::queue& q) {
+    if (cudaPeekAtLastError() == cudaSuccess || !is_cuda(backend_of(q))) return nullptr;
+    const cudaError_t err = cudaGetLastError();
+    const sycl::errc ec = err == cudaErrorInvalidConfiguration ? sycl::errc::nd_range : sycl::errc::runtime;
+    return std::make_exception_ptr(sycl::exception(
+        sycl::make_error_code(ec), std::string("CUDA kernel launch failed: ") + cudaGetErrorName(err)));
+}
+#elif defined(__clang__) && defined(__HIP__)
+inline std::exception_ptr take_native_launch_error(sycl::queue& q) {
+    if (hipPeekAtLastError() == hipSuccess || !is_hip(backend_of(q))) return nullptr;
+    const hipError_t err = hipGetLastError();
+    const sycl::errc ec = err == hipErrorInvalidConfiguration ? sycl::errc::nd_range : sycl::errc::runtime;
+    return std::make_exception_ptr(sycl::exception(
+        sycl::make_error_code(ec), std::string("HIP kernel launch failed: ") + hipGetErrorName(err)));
+}
+#else
+inline std::exception_ptr take_native_launch_error(sycl::queue&) { return nullptr; }
+#endif
+
 // Collects the pending errors and rethrows the first; the rest are dropped, as DPC++'s
 // rethrowing handler drops them.
 inline void throw_async_errors(sycl::queue& q) {
+    std::exception_ptr native = take_native_launch_error(q);
     q.throw_asynchronous();
     std::exception_ptr first;
     {
         AsyncErrorSink& s = async_error_sink();
         std::lock_guard<std::mutex> lock(s.m);
-        if (s.errors.empty()) return;
-        first = s.errors.front();
+        if (!s.errors.empty()) first = s.errors.front();
         s.errors.clear();
     }
-    std::rethrow_exception(first);
+    if (!first) first = native;
+    if (first) std::rethrow_exception(first);
 }
 #else
 // Rethrows the first asynchronous error at queue::wait_and_throw / throw_asynchronous; the
@@ -258,7 +282,8 @@ inline void on_async_errors(sycl::exception_list errors) {
 #endif
 
 // After every submission: acpp registers a failed launch (CU:1 for an over-limit grid or an
-// unservable SLM request) asynchronously; DPC++ throws it from the submit itself.
+// unservable SLM request) asynchronously, or (multipass) leaves it in cudaGetLastError; DPC++
+// throws it from the submit itself.
 inline void throw_launch_errors([[maybe_unused]] sycl::queue& q) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     throw_async_errors(q);
