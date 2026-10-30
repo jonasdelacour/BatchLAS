@@ -308,28 +308,34 @@ QueueImpl& Queue::operator*() const {
 
 void Queue::enqueue(Event& event) {
     if(event.impl_.get() == nullptr) return;
-#if BATCHLAS_SYCL_IMPL_ACPP
-    // acpp has no queue-wide barrier: work submitted later to an out-of-order queue does not wait for
-    // the barrier node, so a copy after syev_align read V mid-update. Wait on the host instead.
-    if (!in_order_) {
-        static_cast<sycl::event>(*event).wait();
-        return;
-    }
-#endif
     // Ensure the queue is ordered after `event`.
     // A command group with only depends_on() is not guaranteed to create an actual
     // scheduling node on all backends. Use a barrier when available, else fall
     // back to a no-op kernel.
     try {
-        sycl::event e = impl::submit_barrier(*impl_, {static_cast<sycl::event>(*event)});
+        std::vector<sycl::event> deps{static_cast<sycl::event>(*event)};
+#if BATCHLAS_SYCL_IMPL_ACPP
+        // acpp's barrier node orders nothing after it on an out-of-order queue: QueueImpl makes each
+        // later submission depend on it instead (pending_), chained across repeated enqueues.
+        if (const sycl::event* prev = impl_->pending()) deps.push_back(*prev);
+#endif
+        sycl::event e = impl::submit_barrier(*impl_, deps);
         impl_->last_event_ = e;
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (!in_order_) impl_->pending_ = e;
+#endif
         return;
     } catch (const sycl::exception&) {
     }
-    impl_->submit([&](sycl::handler& h) {
+    sycl::event e = impl_->submit([&](sycl::handler& h) {
         h.depends_on(static_cast<sycl::event>(*event));
         h.single_task<QueueEnqueueNoopKernel>([]() {});
     });
+#if BATCHLAS_SYCL_IMPL_ACPP
+    if (!in_order_) impl_->pending_ = e;
+#else
+    (void)e;
+#endif
 }
 
 Event Queue::get_event() const {

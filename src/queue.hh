@@ -235,8 +235,9 @@ struct QueueImpl : public sycl::queue{
 
         // Drain first: freeing USM under in-flight kernels is a use-after-free. Metal always drains:
         // coarse events leave its command buffer open, so a derived queue's work
-        // (select::on_in_order_queue) outlived the caller's wait. Other builds are unchanged.
-        if (metal_ || !arena_.blocks_.empty()) {
+        // (select::on_in_order_queue) outlived the caller's wait. An acpp in-order CPU queue drains
+        // too: its executor freed by its own OpenMP worker (last node ref) self-joins and hangs.
+        if (metal_ || omp_in_order_ || !arena_.blocks_.empty()) {
             try {
                 wait();
             } catch (...) {
@@ -276,12 +277,47 @@ struct QueueImpl : public sycl::queue{
 
     mutable LastEvent last_event_;
 
+#if BATCHLAS_SYCL_IMPL_ACPP
+    // acpp has no queue-wide barrier, so Queue::enqueue on an out-of-order queue parks its barrier
+    // here and every later submission through QueueImpl depends on it until it completes.
+    std::optional<sycl::event> pending_;
+
+    const sycl::event* pending() {
+        if (!pending_) return nullptr;
+        if (pending_->get_info<sycl::info::event::command_execution_status>() ==
+            sycl::info::event_command_status::complete) {
+            pending_.reset();
+            return nullptr;
+        }
+        return &*pending_;
+    }
+#endif
+
+    // direct() is the plain submission; with an enqueue()d event pending (acpp, out-of-order),
+    // cg(h) is submitted after it instead. cg is generic so DPC++ never instantiates its kernel.
+    template <typename Direct, typename CG>
+    sycl::event after_pending(Direct&& direct, CG&& cg) {
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (const sycl::event* p = pending()) {
+            return sycl::queue::submit([&](sycl::handler& h) {
+                h.depends_on(*p);
+                cg(h);
+            });
+        }
+#else
+        (void)cg;
+#endif
+        return direct();
+    }
+
     WorkspaceArena arena_;
 
 #if BATCHLAS_SYCL_IMPL_ACPP && BATCHLAS_HAS_SYCL_BACKEND
     bool metal_ = impl::is_metal(impl::backend_of(get_device()));
+    bool omp_in_order_ = is_in_order() && get_device().is_cpu();
 #else
     static constexpr bool metal_ = false;
+    static constexpr bool omp_in_order_ = false;
 #endif
 
     // See Queue::attach_to_current_thread. The two guarded members each carry
@@ -414,15 +450,18 @@ struct QueueImpl : public sycl::queue{
     // the last RECORDED event, so an unrecorded copy outlives a caller's wait on it.
     template <typename... Args>
     sycl::event memcpy(Args&&... args) {
-        return record_untraced(sycl::queue::memcpy(std::forward<Args>(args)...));
+        return record_untraced(after_pending([&] { return sycl::queue::memcpy(std::forward<Args>(args)...); },
+                                             [&](auto& h) { h.memcpy(args...); }));
     }
     template <typename... Args>
     sycl::event memset(Args&&... args) {
-        return record_untraced(sycl::queue::memset(std::forward<Args>(args)...));
+        return record_untraced(after_pending([&] { return sycl::queue::memset(std::forward<Args>(args)...); },
+                                             [&](auto& h) { h.memset(args...); }));
     }
     template <typename... Args>
     sycl::event fill(Args&&... args) {
-        return record_untraced(sycl::queue::fill(std::forward<Args>(args)...));
+        return record_untraced(after_pending([&] { return sycl::queue::fill(std::forward<Args>(args)...); },
+                                             [&](auto& h) { h.fill(args...); }));
     }
 #if defined(SYCL_EXT_ONEAPI_MEMCPY2D)
     template <typename... Args>
@@ -435,7 +474,8 @@ struct QueueImpl : public sycl::queue{
     // earlier work, as the launch's would be.
     sycl::event empty_launch() {
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::submit([](sycl::handler& h) { impl::skip_empty_launch(h, 0); });
+            const auto cg = [](sycl::handler& h) { impl::skip_empty_launch(h, 0); };
+            return after_pending([&] { return sycl::queue::submit(cg); }, cg);
         }, false);
     }
     sycl::event record_untraced(sycl::event event) {
@@ -446,7 +486,7 @@ struct QueueImpl : public sycl::queue{
     template <typename SubmitFunc>
     sycl::event submit(SubmitFunc&& f) {
         return submit_and_record("sycl_submit", [&] {
-            return sycl::queue::submit(std::forward<SubmitFunc>(f));
+            return after_pending([&] { return sycl::queue::submit(std::forward<SubmitFunc>(f)); }, f);
         });
     }
 
@@ -454,7 +494,9 @@ struct QueueImpl : public sycl::queue{
     sycl::event parallel_for(const sycl::range<Dimensions>& num_work_items, KernelFunc&& kernel_func) {
         impl::check_global_range(*this, num_work_items);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for(num_work_items, std::forward<KernelFunc>(kernel_func));
+            return after_pending(
+                [&] { return sycl::queue::parallel_for(num_work_items, std::forward<KernelFunc>(kernel_func)); },
+                [&](auto& h) { h.parallel_for(num_work_items, kernel_func); });
         });
     }
 
@@ -463,9 +505,9 @@ struct QueueImpl : public sycl::queue{
         impl::check_global_range(*this, sycl::range<1>(num_work_items));
         auto kfunc = std::forward<KernelFunc>(kernel_func);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {
-                kfunc(static_cast<std::size_t>(idx[0]));
-            });
+            const auto k = [=](sycl::id<1> idx) { kfunc(static_cast<std::size_t>(idx[0])); };
+            return after_pending([&] { return sycl::queue::parallel_for(sycl::range<1>(num_work_items), k); },
+                                 [&](auto& h) { h.parallel_for(sycl::range<1>(num_work_items), k); });
         });
     }
 
@@ -474,7 +516,9 @@ struct QueueImpl : public sycl::queue{
         if (exec_range.get_global_range().size() == 0) return empty_launch();
         impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for(exec_range, std::forward<KernelFunc>(kernel_func));
+            return after_pending(
+                [&] { return sycl::queue::parallel_for(exec_range, std::forward<KernelFunc>(kernel_func)); },
+                [&](auto& h) { h.parallel_for(exec_range, kernel_func); });
         });
     }
 
@@ -482,7 +526,9 @@ struct QueueImpl : public sycl::queue{
     sycl::event parallel_for(const sycl::range<Dimensions>& num_work_items, KernelFunc&& kernel_func) {
         impl::check_global_range(*this, num_work_items);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for<KernelName>(num_work_items, std::forward<KernelFunc>(kernel_func));
+            return after_pending(
+                [&] { return sycl::queue::parallel_for<KernelName>(num_work_items, std::forward<KernelFunc>(kernel_func)); },
+                [&](auto& h) { h.template parallel_for<KernelName>(num_work_items, kernel_func); });
         });
     }
 
@@ -491,9 +537,10 @@ struct QueueImpl : public sycl::queue{
         impl::check_global_range(*this, sycl::range<1>(num_work_items));
         auto kfunc = std::forward<KernelFunc>(kernel_func);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for<KernelName>(sycl::range<1>(num_work_items), [=](sycl::id<1> idx) {
-                kfunc(static_cast<std::size_t>(idx[0]));
-            });
+            const auto k = [=](sycl::id<1> idx) { kfunc(static_cast<std::size_t>(idx[0])); };
+            return after_pending(
+                [&] { return sycl::queue::parallel_for<KernelName>(sycl::range<1>(num_work_items), k); },
+                [&](auto& h) { h.template parallel_for<KernelName>(sycl::range<1>(num_work_items), k); });
         });
     }
 
@@ -502,21 +549,26 @@ struct QueueImpl : public sycl::queue{
         if (exec_range.get_global_range().size() == 0) return empty_launch();
         impl::check_group_count(*this, exec_range);
         return submit_and_record("sycl_parallel_for", [&] {
-            return sycl::queue::parallel_for<KernelName>(exec_range, std::forward<KernelFunc>(kernel_func));
+            return after_pending(
+                [&] { return sycl::queue::parallel_for<KernelName>(exec_range, std::forward<KernelFunc>(kernel_func)); },
+                [&](auto& h) { h.template parallel_for<KernelName>(exec_range, kernel_func); });
         });
     }
 
     template <typename KernelFunc>
     sycl::event single_task(KernelFunc&& kernel_func) {
         return submit_and_record("sycl_single_task", [&] {
-            return sycl::queue::single_task(std::forward<KernelFunc>(kernel_func));
+            return after_pending([&] { return sycl::queue::single_task(std::forward<KernelFunc>(kernel_func)); },
+                                 [&](auto& h) { h.single_task(kernel_func); });
         });
     }
 
     template <typename KernelName, typename KernelFunc>
     sycl::event single_task(KernelFunc&& kernel_func) {
         return submit_and_record("sycl_single_task", [&] {
-            return sycl::queue::single_task<KernelName>(std::forward<KernelFunc>(kernel_func));
+            return after_pending(
+                [&] { return sycl::queue::single_task<KernelName>(std::forward<KernelFunc>(kernel_func)); },
+                [&](auto& h) { h.template single_task<KernelName>(kernel_func); });
         });
     }
 

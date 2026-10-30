@@ -349,6 +349,8 @@ struct BATCHLAS_API Queue{
 
     /// @brief Order all later work on this Queue after `event`, without a host wait.
     /// A moved-from Event is ignored; a default-constructed one is already complete.
+    /// AdaptiveCpp has no queue-wide barrier: on an out-of-order queue, later work submitted
+    /// through this Queue depends on the event instead, and work on sycl_queue() is not ordered.
     void enqueue(Event& event);
     /// @brief An Event that completes after everything enqueued on this Queue so far.
     Event get_event() const;
