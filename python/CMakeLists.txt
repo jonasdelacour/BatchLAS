@@ -52,7 +52,7 @@ if(IS_ABSOLUTE "${BATCHLAS_PYTHON_INSTALL_DIR}")
 else()
     file(RELATIVE_PATH _batchlas_py_libdir_rpath
          "/prefix/${BATCHLAS_PYTHON_INSTALL_DIR}/batchlas" "/prefix/${CMAKE_INSTALL_LIBDIR}")
-    set(_batchlas_py_libdir_rpath "$ORIGIN/${_batchlas_py_libdir_rpath}")
+    set(_batchlas_py_libdir_rpath "${BATCHLAS_RPATH_ORIGIN}/${_batchlas_py_libdir_rpath}")
 endif()
 
 set_target_properties(_batchlas PROPERTIES
