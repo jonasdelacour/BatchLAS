@@ -165,6 +165,32 @@ Fixed 2026-10-09; kept because the symptom points at the wrong component. `syevx
 every column at or after `block_vectors` with \f$\lVert s_c\rVert^2 \le (n\varepsilon)^2\f$. Guards:
 `Pinned/SyevxProjectedSyevRouteTest.SmallestDenseMatchesReferenceSyev/*` (`tests/syevx_tests.cc`).
 
+## linalg::qr returns a wrong QR after an earlier call in the process
+
+Not reproduced; the wrapper ships again (2026-10-30). In August, composing `geqrf`,
+`triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ by four orders of magnitude, the same
+value each time, after an earlier `linalg::qr` test in the same process, in 2-4 of 4 *concurrent*
+runs of the test binary; never alone or serially (commit `ae08b7ea`, 2026-08-12, on the code of that
+date). The cause was never located and may have gone with later changes to the drivers or the arena.
+
+- **Repro and guards:** `LinalgTyped.ComposedQrRepeatsAcrossCallsAndQueues` (the composition) and
+  `LinalgTyped.QrRepeatsAcrossCallsAndQueues` (the wrapper; adds an out-of-order queue and checks A
+  is untouched), `tests/linalg_layer_tests.cc`: four shapes and batch counts (one at batch 1030, the
+  first repeated) on the fixture, a fresh, a NETLIB queue and the fixture again; float, double,
+  complex; padded ld and stride. Under a `BATCHLAS_GEQRF_ROUTE`/`ORGQR_ROUTE` pin the NETLIB leg is
+  skipped (a native pin cannot run there).
+- **CPU** (2026-10-30, threadripper02, OpenCL CPU): 180/180 over 5 rounds of 4 concurrent binaries.
+- **GPU** (2026-10-30, JRHNBR, RTX 4090, DPC++ CUDA, one GPU shared by all copies), every process
+  `--gtest_repeat=3`: 4 concurrent copies x 10 rounds of the composed test on the default routes,
+  geqrf/orgqr pinned `blocked`/`blocked`, `cta`/`blocked` and `vendor`/`vendor`: 160/160 pass;
+  8 concurrent x 15 rounds, default and `blocked`/`blocked`: 240/240; 4 concurrent whole
+  `linalg_layer_tests` binaries x 10 rounds: 40/40. With the wrapper and both tests, the same four
+  route settings x 4 concurrent x 10 rounds: 160/160; 8 concurrent x 10: 80/80; 4 whole binaries
+  x 10: 40/40.
+- **If it returns:** the 2026-08 notes ruled out freed pages, uninitialised Q/R and scratch
+  lifetime; suspect vendor work run inline on `get_native`'s stream (`src/sycl/impl.hh` `run_native`)
+  or a missing dependency in the blocked drivers' chunk loops.
+
 ## Known defects: the CTA SYTRD Lower path
 
 Worked around, not reproduced. `src/ops/syev/kernels/syev_cta.cc:131-133` says the CTA SYTRD/SYEV
@@ -172,26 +198,6 @@ pipeline is wrong for `Uplo::Lower`, so Lower input is mirrored into Upper first
 (`syev_cta_fused.cc`) also always runs Upper. No test or failure is recorded. To settle it, pin the
 Lower reduction on graded complex input with a poisoned upper triangle and compare against Upper;
 then fix the kernel and drop the mirror, or record the failure here.
-
-## linalg::qr returns a wrong QR after an earlier call in the process
-
-Observed on a GPU; cause not located; the wrapper is withheld (`include/batchlas/blas/linalg-ops.hh:836`).
-Composing `geqrf`, `triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ by four orders of
-magnitude, the same value each time, after an earlier `linalg::qr` test in the same process, in 2-4
-of 4 *concurrent* runs of the test binary; never alone or serially (commit `ae08b7ea`, 2026-08-12,
-on the code of that date).
-
-- **Repro:** `LinalgTyped.ComposedQrRepeatsAcrossCallsAndQueues` (`tests/linalg_layer_tests.cc`):
-  four shapes and batch counts (one at batch 1030, the first repeated) on the fixture queue, a fresh
-  queue, a NETLIB queue, then the fixture again; float, double, complex; padded ld and stride.
-- **Not reproduced on a CPU device** (2026-10-30, threadripper02, icpx OpenCL CPU): every call
-  routes to the NETLIB vendor arm; 180/180 passes over 5 rounds of 4 concurrent binaries.
-- **Lead (unconfirmed):** a load-dependent ordering race on the GPU, not leaked values (the 2026-08
-  notes rule out freed pages, uninitialised Q/R and scratch lifetime). Candidates: vendor work run
-  inline on `get_native`'s stream (`src/sycl/impl.hh` `run_native`), or a missing dependency
-  inside the native blocked drivers' chunk loops.
-- **To fix:** run the repro on a GPU, 4 binaries at once, on the native and vendor routes
-  (`BATCHLAS_GEQRF_ROUTE`, `BATCHLAS_ORGQR_ROUTE`).
 
 ## lanczos returns a spectrum about three times too wide
 
