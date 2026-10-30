@@ -890,15 +890,16 @@ TEST_F(Select, TableLoaderParsesEachFileOnce) {
     const std::size_t before = sel::testing::parse_count();
     const auto dev = sel::device_from_key(files.front().first.substr(5, files.front().first.size() - 9));
     std::map<std::string, std::vector<sel::Table>> fresh;  // the reference: one direct parse per file
+    std::map<std::string, std::size_t> carrying;           // dtype -> files with its table (apple has no fp64)
+    for (const auto& f : files)
+        for (const sel::Table& t : fresh[f.first] = sel::parse_tables(f.second, f.first)) ++carrying[t.dtype];
     for (const char* dtype : {"float", "double", "cfloat", "cdouble"}) {
         const auto tables = sel::tables_in_borrow_order("gemm", dtype, dev);
-        ASSERT_EQ(tables.size(), files.size()) << dtype;
+        ASSERT_EQ(tables.size(), carrying[dtype]) << dtype;
         for (const sel::Table* t : tables) {
             EXPECT_TRUE(t->is_override) << t->file;
-            const auto it = std::find_if(files.begin(), files.end(), [&](const auto& f) { return f.first == t->file; });
-            ASSERT_NE(it, files.end()) << t->file;
-            auto& ref = fresh[t->file];
-            if (ref.empty()) ref = sel::parse_tables(it->second, it->first);
+            ASSERT_TRUE(fresh.count(t->file)) << t->file;
+            const auto& ref = fresh[t->file];
             const auto want = std::find_if(ref.begin(), ref.end(), [&](const sel::Table& x) { return x.dtype == dtype; });
             ASSERT_NE(want, ref.end()) << t->file << " " << dtype;
             ASSERT_EQ(t->rows.size(), want->rows.size()) << t->file << " " << dtype;

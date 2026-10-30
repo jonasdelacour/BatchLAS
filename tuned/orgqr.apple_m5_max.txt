@@ -1,0 +1,17 @@
+# op=orgqr device=apple_m5_max batchlas=0a3e4070 kernels=a6c9eb2a family_kernels=blocked:7a2cb728,vendor:1a4a611e date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/orgqr.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:14,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact m:log n:log:2
+dtype=float m=8 n=2 | blocked 1.088 # preview
+dtype=float m=32 n=16 | blocked 10.52 # preview
+dtype=float m=64 n=64 | blocked 94.43 # preview
+dtype=float m=384 n=32 | blocked 31.26 # preview
+dtype=float m=512 n=64 | blocked 48.80 # preview
+dtype=float m=2048 n=64 | blocked 35.18 # preview
+dtype=float m=2048 n=2048 | blocked 290.2 # preview
+dtype=cfloat m=8 n=2 | blocked 0.4456 # preview
+dtype=cfloat m=32 n=16 | blocked 11.67 # preview
+dtype=cfloat m=64 n=64 | blocked 89.01 # preview
+dtype=cfloat m=384 n=32 | blocked 27.53 # preview
+dtype=cfloat m=512 n=64 | blocked 45.67 # preview
+dtype=cfloat m=2048 n=64 | blocked 41.04 # preview
+dtype=cfloat m=2048 n=2048 | blocked 555.4 # preview

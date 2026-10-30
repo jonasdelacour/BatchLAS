@@ -1,0 +1,39 @@
+# op=her2k device=apple_m5_max batchlas=0a3e4070 kernels=6c257129 family_kernels=triangular:8d4d5f50,fold:0e2d311c,vendor:d6e6909d date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/her2k.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:36,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact n:log:2 k:log batch:log
+dtype=cfloat n=1 k=1 batch=8 | fold 0.1706 # preview
+dtype=cfloat n=1 k=1 batch=512 | fold 0.2739 # preview
+dtype=cfloat n=1 k=1 batch=4096 | fold 0.2690 # preview
+dtype=cfloat n=1 k=64 batch=8 | fold 0.4026 # preview
+dtype=cfloat n=1 k=64 batch=512 | fold 0.3799 # preview
+dtype=cfloat n=1 k=64 batch=4096 | fold 0.3916 # preview
+dtype=cfloat n=4 k=1 batch=8 | fold 0.2351 # preview
+dtype=cfloat n=4 k=1 batch=512 | fold 0.5696 # preview
+dtype=cfloat n=4 k=1 batch=4096 | fold 0.4458 # preview
+dtype=cfloat n=4 k=64 batch=8 | fold 0.2554 # preview
+dtype=cfloat n=4 k=64 batch=512 | fold 0.3455 # preview
+dtype=cfloat n=4 k=64 batch=4096 | fold 0.5374 # preview
+dtype=cfloat n=16 k=1 batch=8 | fold 0.2122 # preview
+dtype=cfloat n=16 k=1 batch=512 | fold 0.3984 # preview
+dtype=cfloat n=16 k=1 batch=4096 | fold 0.4483 # preview
+dtype=cfloat n=16 k=64 batch=8 | fold 0.2412 # preview
+dtype=cfloat n=16 k=64 batch=512 | fold 0.2679 # preview
+dtype=cfloat n=16 k=64 batch=4096 | fold 0.5107 # preview
+dtype=cfloat n=64 k=1 batch=8 | fold 0.2273 # preview
+dtype=cfloat n=64 k=1 batch=512 | fold 1.214 # preview
+dtype=cfloat n=64 k=1 batch=4096 | fold 2.206 # preview
+dtype=cfloat n=64 k=64 batch=8 | fold 0.2303 # preview
+dtype=cfloat n=64 k=64 batch=512 | fold 0.7285 # preview
+dtype=cfloat n=64 k=64 batch=4096 | fold 5.732 # preview
+dtype=cfloat n=128 k=1 batch=8 | fold 0.2258 # preview
+dtype=cfloat n=128 k=1 batch=512 | fold 2.936 # preview
+dtype=cfloat n=128 k=1 batch=4096 | fold 7.623 # preview
+dtype=cfloat n=128 k=64 batch=8 | fold 0.2678 # preview
+dtype=cfloat n=128 k=64 batch=512 | fold 3.071 # preview
+dtype=cfloat n=128 k=64 batch=4096 | fold 20.15 # preview
+dtype=cfloat n=512 k=1 batch=8 | fold 0.4983 # preview
+dtype=cfloat n=512 k=1 batch=512 | fold 14.95 # preview
+dtype=cfloat n=512 k=64 batch=8 | fold 0.9367 # preview
+dtype=cfloat n=512 k=64 batch=512 | fold 40.16 # preview
+dtype=cfloat n=2048 k=1 batch=8 | fold 3.088 # preview
+dtype=cfloat n=2048 k=64 batch=8 | fold 14.09 # preview

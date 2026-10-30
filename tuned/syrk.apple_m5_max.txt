@@ -1,0 +1,319 @@
+# op=syrk device=apple_m5_max batchlas=0a3e4070 kernels=f12ac7b7 family_kernels=gram:97368808,triangular:be7693b5,vendor:880b2317 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/syrk.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:316,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact form:exact trans:exact n:log:2 k:log batch:log
+dtype=float form=sq trans=C n=1 k=1 batch=1 | gram 0.1973 | triangular 0.1968 # preview
+dtype=float form=sq trans=N n=1 k=1 batch=1 | triangular 0.1758 | gram 0.2006 # preview
+dtype=float form=sq trans=N n=1 k=1 batch=4 | gram 0.1977 | triangular 0.2076 # preview
+dtype=float form=sq trans=N n=1 k=1 batch=64 | gram 0.2142 | triangular 0.2595 # preview
+dtype=float form=sq trans=N n=1 k=1 batch=4096 | gram 0.2811 | triangular 0.5516 # preview
+dtype=float form=sq trans=N n=1 k=1 batch=131072 | gram 1.447 | triangular 5.270 # preview
+dtype=float form=sq trans=N n=4 k=8 batch=1 | gram 0.1991 | triangular 0.1970 # preview
+dtype=float form=sq trans=N n=4 k=8 batch=4 | gram 0.1788 | triangular 0.1920 # preview
+dtype=float form=sq trans=N n=4 k=8 batch=64 | gram 0.1751 | triangular 0.2029 # preview
+dtype=float form=sq trans=N n=4 k=8 batch=4096 | gram 0.2363 | triangular 0.3688 # preview
+dtype=float form=sq trans=N n=4 k=8 batch=131072 | gram 1.615 | triangular 6.319 # preview
+dtype=float form=sq trans=N n=16 k=8 batch=1 | gram 0.1560 | triangular 0.2088 # preview
+dtype=float form=sq trans=N n=16 k=8 batch=4 | gram 0.1905 | triangular 0.2010 # preview
+dtype=float form=sq trans=N n=16 k=8 batch=64 | triangular 0.1908 | gram 0.1994 # preview
+dtype=float form=sq trans=N n=16 k=8 batch=4096 | gram 0.2022 | triangular 0.4037 # preview
+dtype=float form=sq trans=N n=16 k=8 batch=131072 | gram 1.695 | triangular 6.995 # preview
+dtype=float form=sq trans=N n=257 k=512 batch=1 | triangular 0.2935 # preview
+dtype=float form=sq trans=N n=257 k=512 batch=4 | triangular 0.3104 # preview
+dtype=float form=sq trans=N n=257 k=512 batch=64 | triangular 1.163 # preview
+dtype=float form=sq trans=N n=385 k=512 batch=1 | triangular 0.3356 # preview
+dtype=float form=sq trans=N n=385 k=512 batch=4 | triangular 0.3637 # preview
+dtype=float form=sq trans=N n=385 k=512 batch=64 | triangular 1.676 # preview
+dtype=float form=sq trans=N n=513 k=512 batch=1 | triangular 0.2830 # preview
+dtype=float form=sq trans=N n=513 k=512 batch=4 | triangular 0.3476 # preview
+dtype=float form=sq trans=N n=513 k=512 batch=64 | triangular 2.414 # preview
+dtype=float form=sq trans=N n=641 k=512 batch=1 | triangular 0.2833 # preview
+dtype=float form=sq trans=N n=641 k=512 batch=4 | triangular 1.425 # preview
+dtype=float form=sq trans=N n=641 k=512 batch=64 | triangular 3.343 # preview
+dtype=float form=sq trans=N n=769 k=512 batch=1 | triangular 0.2762 # preview
+dtype=float form=sq trans=N n=769 k=512 batch=4 | triangular 0.5513 # preview
+dtype=float form=sq trans=N n=769 k=512 batch=64 | triangular 4.385 # preview
+dtype=float form=sq trans=N n=897 k=512 batch=1 | triangular 0.3426 # preview
+dtype=float form=sq trans=N n=897 k=512 batch=4 | triangular 0.7142 # preview
+dtype=float form=sq trans=N n=897 k=512 batch=64 | triangular 5.553 # preview
+dtype=float form=sq trans=T n=1 k=1 batch=1 | gram 0.2057 | triangular 0.2064 # preview
+dtype=float form=sq trans=T n=1 k=1 batch=4 | gram 0.2552 | triangular 0.2779 # preview
+dtype=float form=sq trans=T n=1 k=1 batch=64 | gram 0.2287 | triangular 0.2303 # preview
+dtype=float form=sq trans=T n=1 k=1 batch=4096 | gram 0.2714 | triangular 0.4662 # preview
+dtype=float form=sq trans=T n=1 k=1 batch=131072 | gram 1.554 | triangular 5.544 # preview
+dtype=float form=sq trans=T n=4 k=8 batch=1 | gram 0.1998 | triangular 0.1984 # preview
+dtype=float form=sq trans=T n=4 k=8 batch=4 | gram 0.1664 | triangular 0.1669 # preview
+dtype=float form=sq trans=T n=4 k=8 batch=64 | gram 0.1770 | triangular 0.2071 # preview
+dtype=float form=sq trans=T n=4 k=8 batch=4096 | gram 0.2455 | triangular 0.4147 # preview
+dtype=float form=sq trans=T n=4 k=8 batch=131072 | gram 1.701 | triangular 6.437 # preview
+dtype=float form=sq trans=T n=16 k=8 batch=1 | gram 0.1795 | triangular 0.1980 # preview
+dtype=float form=sq trans=T n=16 k=8 batch=4 | gram 0.1716 | triangular 0.2057 # preview
+dtype=float form=sq trans=T n=16 k=8 batch=64 | gram 0.1978 | triangular 0.1931 # preview
+dtype=float form=sq trans=T n=16 k=8 batch=4096 | gram 0.2276 | triangular 0.3922 # preview
+dtype=float form=sq trans=T n=16 k=8 batch=131072 | gram 1.832 | triangular 7.016 # preview
+dtype=float form=sq trans=T n=257 k=512 batch=1 | triangular 0.2847 # preview
+dtype=float form=sq trans=T n=257 k=512 batch=4 | triangular 0.3497 # preview
+dtype=float form=sq trans=T n=257 k=512 batch=64 | triangular 1.213 # preview
+dtype=float form=sq trans=T n=385 k=512 batch=1 | triangular 0.3410 # preview
+dtype=float form=sq trans=T n=385 k=512 batch=4 | triangular 0.3914 # preview
+dtype=float form=sq trans=T n=385 k=512 batch=64 | triangular 1.839 # preview
+dtype=float form=sq trans=T n=513 k=512 batch=1 | triangular 0.3199 # preview
+dtype=float form=sq trans=T n=513 k=512 batch=4 | triangular 0.3606 # preview
+dtype=float form=sq trans=T n=513 k=512 batch=64 | triangular 2.642 # preview
+dtype=float form=sq trans=T n=641 k=512 batch=1 | triangular 0.9540 # preview
+dtype=float form=sq trans=T n=641 k=512 batch=4 | triangular 0.5914 # preview
+dtype=float form=sq trans=T n=641 k=512 batch=64 | triangular 3.616 # preview
+dtype=float form=sq trans=T n=769 k=512 batch=1 | triangular 0.3233 # preview
+dtype=float form=sq trans=T n=769 k=512 batch=4 | triangular 0.7027 # preview
+dtype=float form=sq trans=T n=769 k=512 batch=64 | triangular 4.771 # preview
+dtype=float form=sq trans=T n=897 k=512 batch=1 | triangular 0.3620 # preview
+dtype=float form=sq trans=T n=897 k=512 batch=4 | triangular 0.8862 # preview
+dtype=float form=sq trans=T n=897 k=512 batch=64 | triangular 6.060 # preview
+dtype=float form=tall trans=C n=4 k=1 batch=1 | triangular 0.3043 | gram 0.3292 # preview
+dtype=float form=tall trans=C n=16 k=1 batch=1 | gram 0.1687 | triangular 0.2024 # preview
+dtype=float form=tall trans=C n=64 k=1 batch=1 | gram 0.2056 | triangular 0.2208 # preview
+dtype=float form=tall trans=C n=129 k=1 batch=1 | triangular 0.4124 # preview
+dtype=float form=tall trans=C n=257 k=1 batch=1 | triangular 0.2167 # preview
+dtype=float form=tall trans=C n=385 k=1 batch=1 | triangular 0.2107 # preview
+dtype=float form=tall trans=C n=513 k=1 batch=1 | triangular 0.2233 # preview
+dtype=float form=tall trans=C n=641 k=1 batch=1 | triangular 0.1615 # preview
+dtype=float form=tall trans=C n=769 k=1 batch=1 | triangular 0.1782 # preview
+dtype=float form=tall trans=C n=897 k=1 batch=1 | triangular 0.2241 # preview
+dtype=float form=tall trans=C n=1025 k=1 batch=1 | triangular 0.2258 # preview
+dtype=float form=tall trans=C n=1153 k=1 batch=1 | triangular 0.2170 # preview
+dtype=float form=tall trans=C n=1537 k=1 batch=1 | triangular 0.1772 # preview
+dtype=float form=tall trans=N n=4 k=1 batch=1 | gram 0.1787 | triangular 0.1900 # preview
+dtype=float form=tall trans=N n=4 k=1 batch=4 | gram 0.2036 | triangular 0.2191 # preview
+dtype=float form=tall trans=N n=4 k=1 batch=64 | gram 0.1830 | triangular 0.2092 # preview
+dtype=float form=tall trans=N n=4 k=1 batch=4096 | gram 0.2396 | triangular 0.3559 # preview
+dtype=float form=tall trans=N n=4 k=1 batch=131072 | gram 1.601 | triangular 5.908 # preview
+dtype=float form=tall trans=N n=16 k=1 batch=1 | gram 0.1994 | triangular 0.2043 # preview
+dtype=float form=tall trans=N n=16 k=1 batch=4 | triangular 0.1932 | gram 0.2039 # preview
+dtype=float form=tall trans=N n=16 k=1 batch=64 | gram 0.2487 | triangular 0.2505 # preview
+dtype=float form=tall trans=N n=16 k=1 batch=4096 | gram 0.2704 | triangular 0.4492 # preview
+dtype=float form=tall trans=N n=16 k=1 batch=131072 | gram 1.650 | triangular 6.418 # preview
+dtype=float form=tall trans=N n=64 k=1 batch=1 | gram 0.1954 | triangular 0.2065 # preview
+dtype=float form=tall trans=N n=64 k=1 batch=4 | gram 0.1895 | triangular 0.2114 # preview
+dtype=float form=tall trans=N n=64 k=1 batch=64 | gram 0.2994 | triangular 0.2957 # preview
+dtype=float form=tall trans=N n=64 k=1 batch=4096 | gram 0.3910 | triangular 0.5942 # preview
+dtype=float form=tall trans=N n=64 k=8 batch=1 | gram 0.1807 | triangular 0.2046 # preview
+dtype=float form=tall trans=N n=64 k=8 batch=4 | gram 0.1877 | triangular 0.1993 # preview
+dtype=float form=tall trans=N n=64 k=8 batch=64 | gram 0.1949 | triangular 0.1945 # preview
+dtype=float form=tall trans=N n=64 k=8 batch=4096 | gram 0.3992 | triangular 0.5302 # preview
+dtype=float form=tall trans=N n=129 k=1 batch=1 | triangular 0.1847 # preview
+dtype=float form=tall trans=N n=129 k=1 batch=4 | triangular 0.3895 # preview
+dtype=float form=tall trans=N n=129 k=1 batch=64 | triangular 0.4583 # preview
+dtype=float form=tall trans=N n=129 k=1 batch=4096 | triangular 1.748 # preview
+dtype=float form=tall trans=N n=129 k=8 batch=1 | triangular 0.2190 # preview
+dtype=float form=tall trans=N n=129 k=8 batch=4 | triangular 0.2025 # preview
+dtype=float form=tall trans=N n=129 k=8 batch=64 | triangular 0.2338 # preview
+dtype=float form=tall trans=N n=129 k=8 batch=4096 | triangular 1.430 # preview
+dtype=float form=tall trans=N n=257 k=1 batch=1 | triangular 0.1938 # preview
+dtype=float form=tall trans=N n=257 k=1 batch=4 | triangular 0.2055 # preview
+dtype=float form=tall trans=N n=257 k=1 batch=64 | triangular 0.2787 # preview
+dtype=float form=tall trans=N n=257 k=1 batch=4096 | triangular 3.568 # preview
+dtype=float form=tall trans=N n=257 k=8 batch=1 | triangular 0.1816 # preview
+dtype=float form=tall trans=N n=257 k=8 batch=4 | triangular 0.2186 # preview
+dtype=float form=tall trans=N n=257 k=8 batch=64 | triangular 0.2676 # preview
+dtype=float form=tall trans=N n=257 k=8 batch=4096 | triangular 3.875 # preview
+dtype=float form=tall trans=N n=385 k=1 batch=1 | triangular 0.2148 # preview
+dtype=float form=tall trans=N n=385 k=1 batch=4 | triangular 0.2011 # preview
+dtype=float form=tall trans=N n=385 k=1 batch=64 | triangular 0.3133 # preview
+dtype=float form=tall trans=N n=385 k=8 batch=1 | triangular 0.1965 # preview
+dtype=float form=tall trans=N n=385 k=8 batch=4 | triangular 0.2176 # preview
+dtype=float form=tall trans=N n=385 k=8 batch=64 | triangular 0.3080 # preview
+dtype=float form=tall trans=N n=513 k=1 batch=1 | triangular 0.1883 # preview
+dtype=float form=tall trans=N n=513 k=1 batch=4 | triangular 0.2112 # preview
+dtype=float form=tall trans=N n=513 k=1 batch=64 | triangular 0.3594 # preview
+dtype=float form=tall trans=N n=513 k=8 batch=1 | triangular 0.1790 # preview
+dtype=float form=tall trans=N n=513 k=8 batch=4 | triangular 0.1947 # preview
+dtype=float form=tall trans=N n=513 k=8 batch=64 | triangular 0.3719 # preview
+dtype=float form=tall trans=N n=641 k=1 batch=1 | triangular 0.2238 # preview
+dtype=float form=tall trans=N n=641 k=1 batch=4 | triangular 0.2052 # preview
+dtype=float form=tall trans=N n=641 k=1 batch=64 | triangular 0.4691 # preview
+dtype=float form=tall trans=N n=641 k=8 batch=1 | triangular 0.2154 # preview
+dtype=float form=tall trans=N n=641 k=8 batch=4 | triangular 0.2201 # preview
+dtype=float form=tall trans=N n=641 k=8 batch=64 | triangular 0.4821 # preview
+dtype=float form=tall trans=N n=769 k=1 batch=1 | triangular 0.1952 # preview
+dtype=float form=tall trans=N n=769 k=1 batch=4 | triangular 0.1827 # preview
+dtype=float form=tall trans=N n=769 k=1 batch=64 | triangular 0.6012 # preview
+dtype=float form=tall trans=N n=769 k=8 batch=1 | triangular 0.2008 # preview
+dtype=float form=tall trans=N n=769 k=8 batch=4 | triangular 0.1932 # preview
+dtype=float form=tall trans=N n=769 k=8 batch=64 | triangular 0.8101 # preview
+dtype=float form=tall trans=N n=897 k=1 batch=1 | triangular 0.1956 # preview
+dtype=float form=tall trans=N n=897 k=1 batch=4 | triangular 0.2352 # preview
+dtype=float form=tall trans=N n=897 k=1 batch=64 | triangular 0.7986 # preview
+dtype=float form=tall trans=N n=897 k=8 batch=1 | triangular 0.2155 # preview
+dtype=float form=tall trans=N n=897 k=8 batch=4 | triangular 0.2037 # preview
+dtype=float form=tall trans=N n=897 k=8 batch=64 | triangular 0.7787 # preview
+dtype=float form=tall trans=N n=1025 k=1 batch=1 | triangular 0.1976 # preview
+dtype=float form=tall trans=N n=1025 k=1 batch=4 | triangular 0.2549 # preview
+dtype=float form=tall trans=N n=1025 k=1 batch=64 | triangular 0.9753 # preview
+dtype=float form=tall trans=N n=1025 k=8 batch=1 | triangular 0.2150 # preview
+dtype=float form=tall trans=N n=1025 k=8 batch=4 | triangular 0.2583 # preview
+dtype=float form=tall trans=N n=1025 k=8 batch=64 | triangular 0.9986 # preview
+dtype=float form=tall trans=N n=1025 k=512 batch=1 | triangular 0.3497 # preview
+dtype=float form=tall trans=N n=1025 k=512 batch=4 | triangular 0.7599 # preview
+dtype=float form=tall trans=N n=1025 k=512 batch=64 | triangular 6.829 # preview
+dtype=float form=tall trans=N n=1153 k=1 batch=1 | triangular 0.2260 # preview
+dtype=float form=tall trans=N n=1153 k=1 batch=4 | triangular 0.2354 # preview
+dtype=float form=tall trans=N n=1153 k=1 batch=64 | triangular 1.224 # preview
+dtype=float form=tall trans=N n=1153 k=8 batch=1 | triangular 0.1856 # preview
+dtype=float form=tall trans=N n=1153 k=8 batch=4 | triangular 0.2660 # preview
+dtype=float form=tall trans=N n=1153 k=8 batch=64 | triangular 1.174 # preview
+dtype=float form=tall trans=N n=1153 k=512 batch=1 | triangular 0.3760 # preview
+dtype=float form=tall trans=N n=1153 k=512 batch=4 | triangular 1.209 # preview
+dtype=float form=tall trans=N n=1153 k=512 batch=64 | triangular 8.632 # preview
+dtype=float form=tall trans=N n=1537 k=1 batch=1 | triangular 0.1914 # preview
+dtype=float form=tall trans=N n=1537 k=1 batch=4 | triangular 0.2998 # preview
+dtype=float form=tall trans=N n=1537 k=1 batch=64 | triangular 1.957 # preview
+dtype=float form=tall trans=N n=1537 k=8 batch=1 | triangular 0.1972 # preview
+dtype=float form=tall trans=N n=1537 k=8 batch=4 | triangular 0.2935 # preview
+dtype=float form=tall trans=N n=1537 k=8 batch=64 | triangular 1.960 # preview
+dtype=float form=tall trans=N n=1537 k=512 batch=1 | triangular 0.4389 # preview
+dtype=float form=tall trans=N n=1537 k=512 batch=4 | triangular 1.244 # preview
+dtype=float form=tall trans=N n=1537 k=512 batch=64 | triangular 13.67 # preview
+dtype=float form=tall trans=T n=4 k=1 batch=1 | gram 0.3603 | triangular 0.3809 # preview
+dtype=float form=tall trans=T n=4 k=1 batch=4 | triangular 0.1769 | gram 0.1916 # preview
+dtype=float form=tall trans=T n=4 k=1 batch=64 | gram 0.1633 | triangular 0.2007 # preview
+dtype=float form=tall trans=T n=4 k=1 batch=4096 | gram 0.2330 | triangular 0.4010 # preview
+dtype=float form=tall trans=T n=4 k=1 batch=131072 | gram 1.686 | triangular 6.334 # preview
+dtype=float form=tall trans=T n=16 k=1 batch=1 | gram 0.1998 | triangular 0.2070 # preview
+dtype=float form=tall trans=T n=16 k=1 batch=4 | gram 0.2437 | triangular 0.2610 # preview
+dtype=float form=tall trans=T n=16 k=1 batch=64 | gram 0.2091 | triangular 0.2112 # preview
+dtype=float form=tall trans=T n=16 k=1 batch=4096 | gram 0.2707 | triangular 0.4660 # preview
+dtype=float form=tall trans=T n=16 k=1 batch=131072 | gram 1.820 | triangular 6.875 # preview
+dtype=float form=tall trans=T n=64 k=1 batch=1 | triangular 0.2020 | gram 0.2441 # preview
+dtype=float form=tall trans=T n=64 k=1 batch=4 | gram 0.3187 | triangular 0.4703 # preview
+dtype=float form=tall trans=T n=64 k=1 batch=64 | gram 0.2187 | triangular 0.2226 # preview
+dtype=float form=tall trans=T n=64 k=1 batch=4096 | gram 0.3942 | triangular 0.5347 # preview
+dtype=float form=tall trans=T n=64 k=8 batch=1 | gram 0.1831 | triangular 0.2071 # preview
+dtype=float form=tall trans=T n=64 k=8 batch=4 | gram 0.2053 | triangular 0.2261 # preview
+dtype=float form=tall trans=T n=64 k=8 batch=64 | gram 0.2044 | triangular 0.2111 # preview
+dtype=float form=tall trans=T n=64 k=8 batch=4096 | gram 0.3986 | triangular 0.5556 # preview
+dtype=float form=tall trans=T n=129 k=1 batch=1 | triangular 0.3256 # preview
+dtype=float form=tall trans=T n=129 k=1 batch=4 | triangular 0.4106 # preview
+dtype=float form=tall trans=T n=129 k=1 batch=64 | triangular 0.3129 # preview
+dtype=float form=tall trans=T n=129 k=1 batch=4096 | triangular 1.459 # preview
+dtype=float form=tall trans=T n=129 k=8 batch=1 | triangular 0.2060 # preview
+dtype=float form=tall trans=T n=129 k=8 batch=4 | triangular 0.1579 # preview
+dtype=float form=tall trans=T n=129 k=8 batch=64 | triangular 0.1915 # preview
+dtype=float form=tall trans=T n=129 k=8 batch=4096 | triangular 1.518 # preview
+dtype=float form=tall trans=T n=257 k=1 batch=1 | triangular 0.1919 # preview
+dtype=float form=tall trans=T n=257 k=1 batch=4 | triangular 0.1715 # preview
+dtype=float form=tall trans=T n=257 k=1 batch=64 | triangular 0.2243 # preview
+dtype=float form=tall trans=T n=257 k=1 batch=4096 | triangular 3.608 # preview
+dtype=float form=tall trans=T n=257 k=8 batch=1 | triangular 0.2062 # preview
+dtype=float form=tall trans=T n=257 k=8 batch=4 | triangular 0.2062 # preview
+dtype=float form=tall trans=T n=257 k=8 batch=64 | triangular 0.2882 # preview
+dtype=float form=tall trans=T n=257 k=8 batch=4096 | triangular 3.689 # preview
+dtype=float form=tall trans=T n=385 k=1 batch=1 | triangular 0.1673 # preview
+dtype=float form=tall trans=T n=385 k=1 batch=4 | triangular 0.1883 # preview
+dtype=float form=tall trans=T n=385 k=1 batch=64 | triangular 0.2945 # preview
+dtype=float form=tall trans=T n=385 k=8 batch=1 | triangular 0.2173 # preview
+dtype=float form=tall trans=T n=385 k=8 batch=4 | triangular 0.2235 # preview
+dtype=float form=tall trans=T n=385 k=8 batch=64 | triangular 0.3093 # preview
+dtype=float form=tall trans=T n=513 k=1 batch=1 | triangular 0.2228 # preview
+dtype=float form=tall trans=T n=513 k=1 batch=4 | triangular 0.1889 # preview
+dtype=float form=tall trans=T n=513 k=1 batch=64 | triangular 0.3806 # preview
+dtype=float form=tall trans=T n=513 k=8 batch=1 | triangular 0.2109 # preview
+dtype=float form=tall trans=T n=513 k=8 batch=4 | triangular 0.1916 # preview
+dtype=float form=tall trans=T n=513 k=8 batch=64 | triangular 0.3811 # preview
+dtype=float form=tall trans=T n=641 k=1 batch=1 | triangular 0.1938 # preview
+dtype=float form=tall trans=T n=641 k=1 batch=4 | triangular 0.1817 # preview
+dtype=float form=tall trans=T n=641 k=1 batch=64 | triangular 0.4818 # preview
+dtype=float form=tall trans=T n=641 k=8 batch=1 | triangular 0.2125 # preview
+dtype=float form=tall trans=T n=641 k=8 batch=4 | triangular 0.2202 # preview
+dtype=float form=tall trans=T n=641 k=8 batch=64 | triangular 0.4844 # preview
+dtype=float form=tall trans=T n=769 k=1 batch=1 | triangular 0.1659 # preview
+dtype=float form=tall trans=T n=769 k=1 batch=4 | triangular 0.1790 # preview
+dtype=float form=tall trans=T n=769 k=1 batch=64 | triangular 0.6250 # preview
+dtype=float form=tall trans=T n=769 k=8 batch=1 | triangular 0.1728 # preview
+dtype=float form=tall trans=T n=769 k=8 batch=4 | triangular 0.2216 # preview
+dtype=float form=tall trans=T n=769 k=8 batch=64 | triangular 0.7537 # preview
+dtype=float form=tall trans=T n=897 k=1 batch=1 | triangular 0.2142 # preview
+dtype=float form=tall trans=T n=897 k=1 batch=4 | triangular 0.2448 # preview
+dtype=float form=tall trans=T n=897 k=1 batch=64 | triangular 0.8025 # preview
+dtype=float form=tall trans=T n=897 k=8 batch=1 | triangular 0.1869 # preview
+dtype=float form=tall trans=T n=897 k=8 batch=4 | triangular 0.2365 # preview
+dtype=float form=tall trans=T n=897 k=8 batch=64 | triangular 0.8853 # preview
+dtype=float form=tall trans=T n=1025 k=1 batch=1 | triangular 0.1899 # preview
+dtype=float form=tall trans=T n=1025 k=1 batch=4 | triangular 0.2139 # preview
+dtype=float form=tall trans=T n=1025 k=1 batch=64 | triangular 0.9585 # preview
+dtype=float form=tall trans=T n=1025 k=8 batch=1 | triangular 0.2086 # preview
+dtype=float form=tall trans=T n=1025 k=8 batch=4 | triangular 0.2371 # preview
+dtype=float form=tall trans=T n=1025 k=8 batch=64 | triangular 0.9710 # preview
+dtype=float form=tall trans=T n=1025 k=512 batch=1 | triangular 0.5070 # preview
+dtype=float form=tall trans=T n=1025 k=512 batch=4 | triangular 0.7754 # preview
+dtype=float form=tall trans=T n=1025 k=512 batch=64 | triangular 7.533 # preview
+dtype=float form=tall trans=T n=1153 k=1 batch=1 | triangular 0.2234 # preview
+dtype=float form=tall trans=T n=1153 k=1 batch=4 | triangular 0.4951 # preview
+dtype=float form=tall trans=T n=1153 k=1 batch=64 | triangular 1.188 # preview
+dtype=float form=tall trans=T n=1153 k=8 batch=1 | triangular 0.2147 # preview
+dtype=float form=tall trans=T n=1153 k=8 batch=4 | triangular 0.2303 # preview
+dtype=float form=tall trans=T n=1153 k=8 batch=64 | triangular 1.153 # preview
+dtype=float form=tall trans=T n=1153 k=512 batch=1 | triangular 0.8573 # preview
+dtype=float form=tall trans=T n=1153 k=512 batch=4 | triangular 0.8449 # preview
+dtype=float form=tall trans=T n=1153 k=512 batch=64 | triangular 9.291 # preview
+dtype=float form=tall trans=T n=1537 k=1 batch=1 | triangular 0.2349 # preview
+dtype=float form=tall trans=T n=1537 k=1 batch=4 | triangular 0.2937 # preview
+dtype=float form=tall trans=T n=1537 k=1 batch=64 | triangular 1.885 # preview
+dtype=float form=tall trans=T n=1537 k=8 batch=1 | triangular 0.1843 # preview
+dtype=float form=tall trans=T n=1537 k=8 batch=4 | triangular 0.2968 # preview
+dtype=float form=tall trans=T n=1537 k=8 batch=64 | triangular 1.904 # preview
+dtype=float form=tall trans=T n=1537 k=512 batch=1 | triangular 0.4980 # preview
+dtype=float form=tall trans=T n=1537 k=512 batch=4 | triangular 1.239 # preview
+dtype=float form=tall trans=T n=1537 k=512 batch=64 | triangular 15.04 # preview
+dtype=float form=wide trans=N n=1 k=8 batch=1 | gram 0.1720 | triangular 0.1888 # preview
+dtype=float form=wide trans=N n=1 k=8 batch=4 | gram 0.1694 | triangular 0.1738 # preview
+dtype=float form=wide trans=N n=1 k=8 batch=64 | gram 0.1776 | triangular 0.2094 # preview
+dtype=float form=wide trans=N n=1 k=8 batch=4096 | gram 0.2014 | triangular 0.3566 # preview
+dtype=float form=wide trans=N n=1 k=8 batch=131072 | gram 1.455 | triangular 5.473 # preview
+dtype=float form=wide trans=N n=1 k=512 batch=1 | gram 0.1746 | triangular 0.2767 # preview
+dtype=float form=wide trans=N n=1 k=512 batch=4 | gram 0.2208 | triangular 0.2753 # preview
+dtype=float form=wide trans=N n=1 k=512 batch=64 | gram 0.1779 | triangular 0.3515 # preview
+dtype=float form=wide trans=N n=1 k=512 batch=4096 | gram 0.8120 | triangular 9.083 # preview
+dtype=float form=wide trans=N n=1 k=512 batch=131072 | gram 18.78 | triangular 282.8 # preview
+dtype=float form=wide trans=N n=4 k=512 batch=1 | gram 0.2105 | triangular 0.2740 # preview
+dtype=float form=wide trans=N n=4 k=512 batch=4 | gram 0.1827 | triangular 0.3133 # preview
+dtype=float form=wide trans=N n=4 k=512 batch=64 | gram 0.2069 | triangular 0.3430 # preview
+dtype=float form=wide trans=N n=4 k=512 batch=4096 | gram 0.8253 | triangular 9.279 # preview
+dtype=float form=wide trans=N n=4 k=512 batch=131072 | gram 19.45 | triangular 288.1 # preview
+dtype=float form=wide trans=N n=16 k=512 batch=1 | gram 0.2332 | triangular 0.2901 # preview
+dtype=float form=wide trans=N n=16 k=512 batch=4 | gram 0.2369 | triangular 0.3212 # preview
+dtype=float form=wide trans=N n=16 k=512 batch=64 | gram 0.2312 | triangular 0.3304 # preview
+dtype=float form=wide trans=N n=16 k=512 batch=4096 | gram 0.8592 | triangular 9.266 # preview
+dtype=float form=wide trans=N n=64 k=512 batch=1 | gram 0.1955 | triangular 0.2986 # preview
+dtype=float form=wide trans=N n=64 k=512 batch=4 | gram 0.2142 | triangular 0.3217 # preview
+dtype=float form=wide trans=N n=64 k=512 batch=64 | gram 0.2226 | triangular 0.3572 # preview
+dtype=float form=wide trans=N n=64 k=512 batch=4096 | gram 1.945 | triangular 11.13 # preview
+dtype=float form=wide trans=N n=129 k=512 batch=1 | triangular 0.3231 # preview
+dtype=float form=wide trans=N n=129 k=512 batch=4 | triangular 0.2879 # preview
+dtype=float form=wide trans=N n=129 k=512 batch=64 | triangular 0.7095 # preview
+dtype=float form=wide trans=N n=129 k=512 batch=4096 | triangular 27.72 # preview
+dtype=float form=wide trans=T n=1 k=8 batch=1 | gram 0.1971 | triangular 0.2048 # preview
+dtype=float form=wide trans=T n=1 k=8 batch=4 | gram 0.2019 | triangular 0.2030 # preview
+dtype=float form=wide trans=T n=1 k=8 batch=64 | triangular 0.1757 | gram 0.1853 # preview
+dtype=float form=wide trans=T n=1 k=8 batch=4096 | gram 0.2077 | triangular 0.3427 # preview
+dtype=float form=wide trans=T n=1 k=8 batch=131072 | gram 1.531 | triangular 5.369 # preview
+dtype=float form=wide trans=T n=1 k=512 batch=1 | gram 0.1971 | triangular 0.2935 # preview
+dtype=float form=wide trans=T n=1 k=512 batch=4 | gram 0.1915 | triangular 0.3232 # preview
+dtype=float form=wide trans=T n=1 k=512 batch=64 | gram 0.1973 | triangular 0.3523 # preview
+dtype=float form=wide trans=T n=1 k=512 batch=4096 | gram 0.8635 | triangular 9.107 # preview
+dtype=float form=wide trans=T n=1 k=512 batch=131072 | gram 18.94 | triangular 281.5 # preview
+dtype=float form=wide trans=T n=4 k=512 batch=1 | gram 0.2130 | triangular 0.3179 # preview
+dtype=float form=wide trans=T n=4 k=512 batch=4 | gram 0.1935 | triangular 0.2999 # preview
+dtype=float form=wide trans=T n=4 k=512 batch=64 | gram 0.2044 | triangular 0.3330 # preview
+dtype=float form=wide trans=T n=4 k=512 batch=4096 | gram 0.8264 | triangular 9.056 # preview
+dtype=float form=wide trans=T n=4 k=512 batch=131072 | gram 18.95 | triangular 282.1 # preview
+dtype=float form=wide trans=T n=16 k=512 batch=1 | gram 0.2070 | triangular 0.3042 # preview
+dtype=float form=wide trans=T n=16 k=512 batch=4 | gram 0.2290 | triangular 0.3361 # preview
+dtype=float form=wide trans=T n=16 k=512 batch=64 | gram 0.1782 | triangular 0.3156 # preview
+dtype=float form=wide trans=T n=16 k=512 batch=4096 | gram 0.8650 | triangular 9.265 # preview
+dtype=float form=wide trans=T n=64 k=512 batch=1 | gram 0.2007 | triangular 0.2810 # preview
+dtype=float form=wide trans=T n=64 k=512 batch=4 | gram 0.2150 | triangular 0.3015 # preview
+dtype=float form=wide trans=T n=64 k=512 batch=64 | gram 0.2387 | triangular 0.3492 # preview
+dtype=float form=wide trans=T n=64 k=512 batch=4096 | gram 1.881 | triangular 9.485 # preview
+dtype=float form=wide trans=T n=129 k=512 batch=1 | triangular 0.3389 # preview
+dtype=float form=wide trans=T n=129 k=512 batch=4 | triangular 0.2983 # preview
+dtype=float form=wide trans=T n=129 k=512 batch=64 | triangular 0.7478 # preview
+dtype=float form=wide trans=T n=129 k=512 batch=4096 | triangular 28.65 # preview

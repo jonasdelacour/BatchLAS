@@ -1,0 +1,67 @@
+# op=herk device=apple_m5_max batchlas=0a3e4070 kernels=7490b151 family_kernels=gram:0be262f3,triangular:8decd751,fold:36fe847f,vendor:d5e0ca7b date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/herk.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:64,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact trans:exact n:log:2 k:log batch:log
+dtype=cfloat trans=C n=1 k=1 batch=8 | gram 0.1920 | fold 0.2202 | triangular 0.2253 # preview
+dtype=cfloat trans=C n=1 k=1 batch=512 | gram 0.2028 | fold 0.2107 | triangular 0.3232 # preview
+dtype=cfloat trans=C n=1 k=1 batch=4096 | fold 0.2206 | gram 0.3115 | triangular 1.073 # preview
+dtype=cfloat trans=C n=1 k=64 batch=8 | gram 0.1899 | fold 0.2180 | triangular 0.2802 # preview
+dtype=cfloat trans=C n=1 k=64 batch=512 | gram 0.1898 | fold 0.2202 | triangular 0.8890 # preview
+dtype=cfloat trans=C n=1 k=64 batch=4096 | fold 0.2299 | gram 0.4174 | triangular 5.346 # preview
+dtype=cfloat trans=C n=4 k=1 batch=8 | gram 0.3587 | triangular 0.4579 | fold 0.4777 # preview
+dtype=cfloat trans=C n=4 k=1 batch=512 | fold 0.2257 | gram 0.2374 | triangular 0.5475 # preview
+dtype=cfloat trans=C n=4 k=1 batch=4096 | fold 0.2014 | gram 0.3166 | triangular 1.205 # preview
+dtype=cfloat trans=C n=4 k=64 batch=8 | gram 0.1775 | fold 0.2214 | triangular 0.2677 # preview
+dtype=cfloat trans=C n=4 k=64 batch=512 | gram 0.2120 | fold 0.2220 | triangular 0.9797 # preview
+dtype=cfloat trans=C n=4 k=64 batch=4096 | fold 0.2331 | gram 0.4020 | triangular 5.587 # preview
+dtype=cfloat trans=C n=16 k=1 batch=8 | gram 0.3318 | triangular 0.4052 | fold 0.5175 # preview
+dtype=cfloat trans=C n=16 k=1 batch=512 | fold 0.2278 | gram 0.2511 | triangular 0.5137 # preview
+dtype=cfloat trans=C n=16 k=1 batch=4096 | fold 0.3247 | gram 0.3441 | triangular 1.254 # preview
+dtype=cfloat trans=C n=16 k=64 batch=8 | gram 0.1990 | fold 0.2288 | triangular 0.2996 # preview
+dtype=cfloat trans=C n=16 k=64 batch=512 | gram 0.2060 | fold 0.2605 | triangular 0.9353 # preview
+dtype=cfloat trans=C n=16 k=64 batch=4096 | gram 0.4495 | fold 0.4839 | triangular 6.760 # preview
+dtype=cfloat trans=C n=64 k=1 batch=8 | fold 0.2300 | gram 0.2421 | triangular 0.2889 # preview
+dtype=cfloat trans=C n=64 k=1 batch=512 | gram 0.2805 | fold 0.3105 | triangular 0.5535 # preview
+dtype=cfloat trans=C n=64 k=1 batch=4096 | gram 0.5798 | triangular 1.626 | fold 2.328 # preview
+dtype=cfloat trans=C n=64 k=64 batch=8 | gram 0.1928 | fold 0.2540 | triangular 0.2747 # preview
+dtype=cfloat trans=C n=64 k=64 batch=512 | gram 0.3081 | fold 0.8339 | triangular 0.9855 # preview
+dtype=cfloat trans=C n=64 k=64 batch=4096 | gram 1.001 | fold 4.876 | triangular 6.114 # preview
+dtype=cfloat trans=C n=256 k=1 batch=8 | fold 0.2767 | triangular 0.3219 # preview
+dtype=cfloat trans=C n=256 k=1 batch=512 | triangular 1.207 | fold 1.947 # preview
+dtype=cfloat trans=C n=256 k=64 batch=8 | triangular 0.3191 | fold 0.3504 # preview
+dtype=cfloat trans=C n=256 k=64 batch=512 | triangular 3.223 | fold 9.436 # preview
+dtype=cfloat trans=C n=768 k=1 batch=8 | triangular 0.3962 | fold 0.8322 # preview
+dtype=cfloat trans=C n=768 k=64 batch=8 | triangular 0.6573 | fold 1.596 # preview
+dtype=cfloat trans=C n=1024 k=1 batch=8 | triangular 0.4762 | fold 1.269 # preview
+dtype=cfloat trans=C n=1024 k=64 batch=8 | triangular 0.9272 | fold 2.663 # preview
+dtype=cfloat trans=N n=1 k=1 batch=8 | gram 0.1903 | triangular 0.2146 | fold 0.2357 # preview
+dtype=cfloat trans=N n=1 k=1 batch=512 | gram 0.1926 | fold 0.1886 | triangular 0.3080 # preview
+dtype=cfloat trans=N n=1 k=1 batch=4096 | fold 0.2250 | gram 0.3071 | triangular 1.006 # preview
+dtype=cfloat trans=N n=1 k=64 batch=8 | gram 0.1780 | fold 0.2238 | triangular 0.2838 # preview
+dtype=cfloat trans=N n=1 k=64 batch=512 | gram 0.2066 | fold 0.2221 | triangular 0.8876 # preview
+dtype=cfloat trans=N n=1 k=64 batch=4096 | fold 0.2287 | gram 0.3856 | triangular 5.303 # preview
+dtype=cfloat trans=N n=4 k=1 batch=8 | gram 0.2126 | fold 0.2116 | triangular 0.2309 # preview
+dtype=cfloat trans=N n=4 k=1 batch=512 | fold 0.2429 | gram 0.3300 | triangular 0.9139 # preview
+dtype=cfloat trans=N n=4 k=1 batch=4096 | fold 0.2010 | gram 0.3067 | triangular 1.708 # preview
+dtype=cfloat trans=N n=4 k=64 batch=8 | gram 0.1874 | fold 0.1960 | triangular 0.2949 # preview
+dtype=cfloat trans=N n=4 k=64 batch=512 | gram 0.2086 | fold 0.2186 | triangular 0.8654 # preview
+dtype=cfloat trans=N n=4 k=64 batch=4096 | fold 0.2356 | gram 0.3945 | triangular 5.503 # preview
+dtype=cfloat trans=N n=16 k=1 batch=8 | gram 0.1798 | fold 0.2185 | triangular 0.2397 # preview
+dtype=cfloat trans=N n=16 k=1 batch=512 | gram 0.2524 | fold 0.2908 | triangular 0.5338 # preview
+dtype=cfloat trans=N n=16 k=1 batch=4096 | fold 0.2895 | gram 0.3521 | triangular 1.719 # preview
+dtype=cfloat trans=N n=16 k=64 batch=8 | gram 0.1809 | fold 0.2081 | triangular 0.2900 # preview
+dtype=cfloat trans=N n=16 k=64 batch=512 | gram 0.2087 | fold 0.2696 | triangular 0.9741 # preview
+dtype=cfloat trans=N n=16 k=64 batch=4096 | gram 0.4224 | fold 0.4458 | triangular 5.735 # preview
+dtype=cfloat trans=N n=64 k=1 batch=8 | triangular 0.2001 | gram 0.2222 | fold 0.2302 # preview
+dtype=cfloat trans=N n=64 k=1 batch=512 | gram 0.2924 | fold 0.4123 | triangular 0.5393 # preview
+dtype=cfloat trans=N n=64 k=1 batch=4096 | gram 0.9073 | triangular 2.807 | fold 3.183 # preview
+dtype=cfloat trans=N n=64 k=64 batch=8 | gram 0.1859 | fold 0.2313 | triangular 0.2950 # preview
+dtype=cfloat trans=N n=64 k=64 batch=512 | gram 0.3098 | fold 0.5993 | triangular 0.9751 # preview
+dtype=cfloat trans=N n=64 k=64 batch=4096 | gram 0.9774 | triangular 5.909 | fold 5.934 # preview
+dtype=cfloat trans=N n=256 k=1 batch=8 | fold 0.2353 | triangular 0.2532 # preview
+dtype=cfloat trans=N n=256 k=1 batch=512 | triangular 1.198 | fold 1.970 # preview
+dtype=cfloat trans=N n=256 k=64 batch=8 | triangular 0.3358 | fold 0.4134 # preview
+dtype=cfloat trans=N n=256 k=64 batch=512 | triangular 3.142 | fold 11.37 # preview
+dtype=cfloat trans=N n=768 k=1 batch=8 | triangular 0.3489 | fold 0.8275 # preview
+dtype=cfloat trans=N n=768 k=64 batch=8 | triangular 0.5981 | fold 1.650 # preview
+dtype=cfloat trans=N n=1024 k=1 batch=8 | triangular 0.4439 | fold 1.139 # preview
+dtype=cfloat trans=N n=1024 k=64 batch=8 | triangular 0.8547 | fold 2.688 # preview

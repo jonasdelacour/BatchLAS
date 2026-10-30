@@ -21,16 +21,18 @@ Each table is generated from its ledger, never edited by hand; the rules and com
 ## Inventory
 
 Every op ships a table for each dtype it instantiates (float, double, cfloat, cdouble; hemm, herk
-and her2k are complex only) on sm_89 and sm_120. spmm also ships a CPU table. Any other device borrows
+and her2k are complex only) on sm_89 and sm_120. spmm also ships a CPU table. apple_m5_max ships
+float and cfloat only (no GPU fp64; symm, syrk and syr2k float only). Any other device or dtype borrows
 the nearest table and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`)
-checks this inventory.
+checks the sm_89, sm_120 and cpu inventory.
 
-Counts: 59 files, 29 per GPU device plus `spmm.cpu.txt`.
+Counts: 88 files, 29 per GPU device plus `spmm.cpu.txt`.
 
 | device | ledger tiers | where from |
 |---|---|---|
 | sm_120 | `deep`, plus `transcribed` rows where the deep lattice measured nothing near and a few `custom` rows (gemv, posv, trmm); gemm double and cdouble are `transcribed` only; potri and potrs all `transcribed` (from sm_89's measured rows); sytrf, sysv, sytrs, sygst and sygvd all `transcribed` | "The sm_120 deep tables" below; potri: @ref perf_potri; potrs: @ref perf_potrs; sytrf, sysv and sytrs: @ref perf_sytrf; sygst and sygvd: @ref perf_sygvd |
 | sm_89 | `transcribed` (the old routers' order, untimed); potrf `converted` plus 12 `deep` float Upper rows; geqrf 16 `deep` wide rows (both re-measured 2026-10-24); potri and potrs float and cfloat `deep` (2026-10-26), double and cdouble `transcribed` from them; sygst float and cfloat `deep` (2026-10-27, every itype and uplo), its double and cdouble `transcribed` from them; sytrs float and cfloat `preview` (double, cdouble `transcribed` from them) and sysv float and cfloat `preview` (2026-10-26, @ref perf_sytrf) | the old transcribed tables and the sm_89 potrf forced-route archive, migrated (`docs/design/tuning-data.md`) |
+| apple_m5_max | `preview` (2026-10-29, `0a3e4070`, float and cfloat); gemm float also 1669 `calibrate` cells | the M5 Max preview run's ledgers |
 | cpu (spmm) | `transcribed` | likewise |
 
 Transcribed rows reproduce deleted routers' windows (or copy a measured ranking, untimed) at their

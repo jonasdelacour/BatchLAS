@@ -1,0 +1,140 @@
+# op=gesv device=apple_m5_max batchlas=0a3e4070 kernels=134ab8c1 family_kernels=tiny:a9b6009b,blocked:b96b5709 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/gesv.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:137,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact n:log:3 nrhs:log
+dtype=float n=1 nrhs=1 | tiny 0.2059 | blocked 0.2647 # preview
+dtype=float n=1 nrhs=4 | tiny 0.2095 | blocked 0.2658 # preview
+dtype=float n=1 nrhs=8 | blocked 0.6195 # preview
+dtype=float n=1 nrhs=64 | blocked 1.581 # preview
+dtype=float n=1 nrhs=256 | blocked 2.777 # preview
+dtype=float n=3 nrhs=1 | tiny 0.3509 | blocked 0.6595 # preview
+dtype=float n=3 nrhs=4 | tiny 0.3949 | blocked 0.5686 # preview
+dtype=float n=3 nrhs=8 | blocked 0.5950 # preview
+dtype=float n=3 nrhs=64 | blocked 1.255 # preview
+dtype=float n=3 nrhs=256 | blocked 2.818 # preview
+dtype=float n=6 nrhs=1 | tiny 0.4887 | blocked 0.8493 # preview
+dtype=float n=6 nrhs=4 | tiny 0.6088 | blocked 1.148 # preview
+dtype=float n=6 nrhs=8 | blocked 1.051 # preview
+dtype=float n=6 nrhs=64 | blocked 1.290 # preview
+dtype=float n=6 nrhs=256 | blocked 7.550 # preview
+dtype=float n=12 nrhs=1 | tiny 0.4706 | blocked 0.7026 # preview
+dtype=float n=12 nrhs=4 | tiny 0.8007 | blocked 1.080 # preview
+dtype=float n=12 nrhs=8 | blocked 1.293 # preview
+dtype=float n=12 nrhs=64 | blocked 3.328 # preview
+dtype=float n=12 nrhs=256 | blocked 11.92 # preview
+dtype=float n=17 nrhs=1 | tiny 1.472 | blocked 1.814 # preview
+dtype=float n=17 nrhs=4 | blocked 1.826 | tiny 1.954 # preview
+dtype=float n=17 nrhs=8 | blocked 1.720 # preview
+dtype=float n=17 nrhs=64 | blocked 3.962 # preview
+dtype=float n=17 nrhs=256 | blocked 12.08 # preview
+dtype=float n=24 nrhs=1 | tiny 3.036 | blocked 4.930 # preview
+dtype=float n=24 nrhs=4 | tiny 4.078 | blocked 5.247 # preview
+dtype=float n=24 nrhs=8 | blocked 5.099 # preview
+dtype=float n=24 nrhs=64 | blocked 7.357 # preview
+dtype=float n=24 nrhs=256 | blocked 13.80 # preview
+dtype=float n=32 nrhs=1 | tiny 26.18 | blocked 37.56 # preview
+dtype=float n=32 nrhs=4 | tiny 24.74 | blocked 37.75 # preview
+dtype=float n=32 nrhs=8 | blocked 37.33 # preview
+dtype=float n=32 nrhs=64 | blocked 40.11 # preview
+dtype=float n=32 nrhs=256 | blocked 48.13 # preview
+dtype=float n=40 nrhs=1 | blocked 6.197 # preview
+dtype=float n=40 nrhs=4 | blocked 6.953 # preview
+dtype=float n=40 nrhs=8 | blocked 7.978 # preview
+dtype=float n=40 nrhs=64 | blocked 15.62 # preview
+dtype=float n=40 nrhs=256 | blocked 55.18 # preview
+dtype=float n=64 nrhs=1 | blocked 11.86 # preview
+dtype=float n=64 nrhs=4 | blocked 12.91 # preview
+dtype=float n=64 nrhs=8 | blocked 14.67 # preview
+dtype=float n=64 nrhs=64 | blocked 25.53 # preview
+dtype=float n=64 nrhs=256 | blocked 64.53 # preview
+dtype=float n=128 nrhs=1 | blocked 74.92 # preview
+dtype=float n=128 nrhs=4 | blocked 77.31 # preview
+dtype=float n=128 nrhs=8 | blocked 82.24 # preview
+dtype=float n=128 nrhs=64 | blocked 105.4 # preview
+dtype=float n=256 nrhs=1 | blocked 119.2 # preview
+dtype=float n=256 nrhs=4 | blocked 120.9 # preview
+dtype=float n=256 nrhs=8 | blocked 124.1 # preview
+dtype=float n=256 nrhs=64 | blocked 144.8 # preview
+dtype=float n=256 nrhs=256 | blocked 206.4 # preview
+dtype=float n=512 nrhs=1 | blocked 194.9 # preview
+dtype=float n=512 nrhs=4 | blocked 196.6 # preview
+dtype=float n=512 nrhs=8 | blocked 204.3 # preview
+dtype=float n=512 nrhs=64 | blocked 227.9 # preview
+dtype=float n=512 nrhs=256 | blocked 296.9 # preview
+dtype=float n=1024 nrhs=1 | blocked 298.4 # preview
+dtype=float n=1024 nrhs=4 | blocked 307.2 # preview
+dtype=float n=1024 nrhs=8 | blocked 305.7 # preview
+dtype=float n=1024 nrhs=64 | blocked 323.5 # preview
+dtype=float n=1024 nrhs=256 | blocked 404.5 # preview
+dtype=float n=2048 nrhs=1 | blocked 466.5 # preview
+dtype=float n=2048 nrhs=4 | blocked 476.2 # preview
+dtype=float n=2048 nrhs=8 | blocked 477.5 # preview
+dtype=float n=2048 nrhs=64 | blocked 492.8 # preview
+dtype=float n=2048 nrhs=256 | blocked 588.4 # preview
+dtype=cfloat n=1 nrhs=1 | tiny 0.2219 | blocked 0.2648 # preview
+dtype=cfloat n=1 nrhs=4 | tiny 0.2350 | blocked 0.3114 # preview
+dtype=cfloat n=1 nrhs=8 | blocked 0.9918 # preview
+dtype=cfloat n=1 nrhs=64 | blocked 1.075 # preview
+dtype=cfloat n=1 nrhs=256 | blocked 2.866 # preview
+dtype=cfloat n=3 nrhs=1 | tiny 0.4943 | blocked 0.8147 # preview
+dtype=cfloat n=3 nrhs=4 | blocked 0.5050 | tiny 0.6822 # preview
+dtype=cfloat n=3 nrhs=8 | blocked 0.5126 # preview
+dtype=cfloat n=3 nrhs=64 | blocked 1.087 # preview
+dtype=cfloat n=3 nrhs=256 | blocked 3.279 # preview
+dtype=cfloat n=6 nrhs=1 | blocked 0.6337 | tiny 0.7538 # preview
+dtype=cfloat n=6 nrhs=4 | blocked 0.9430 | tiny 1.162 # preview
+dtype=cfloat n=6 nrhs=8 | blocked 1.127 # preview
+dtype=cfloat n=6 nrhs=64 | blocked 1.451 # preview
+dtype=cfloat n=6 nrhs=256 | blocked 5.887 # preview
+dtype=cfloat n=12 nrhs=1 | tiny 1.042 | blocked 1.091 # preview
+dtype=cfloat n=12 nrhs=4 | tiny 1.213 | blocked 1.471 # preview
+dtype=cfloat n=12 nrhs=8 | blocked 1.377 # preview
+dtype=cfloat n=12 nrhs=64 | blocked 2.637 # preview
+dtype=cfloat n=12 nrhs=256 | blocked 7.533 # preview
+dtype=cfloat n=17 nrhs=1 | blocked 5.446 | tiny 7.093 # preview
+dtype=cfloat n=17 nrhs=4 | blocked 6.146 | tiny 8.092 # preview
+dtype=cfloat n=17 nrhs=8 | blocked 7.106 # preview
+dtype=cfloat n=17 nrhs=64 | blocked 12.57 # preview
+dtype=cfloat n=17 nrhs=256 | blocked 34.57 # preview
+dtype=cfloat n=24 nrhs=1 | tiny 26.67 | blocked 37.18 # preview
+dtype=cfloat n=24 nrhs=4 | tiny 21.88 | blocked 37.95 # preview
+dtype=cfloat n=24 nrhs=8 | blocked 39.41 # preview
+dtype=cfloat n=24 nrhs=64 | blocked 46.42 # preview
+dtype=cfloat n=24 nrhs=256 | blocked 77.37 # preview
+dtype=cfloat n=32 nrhs=1 | tiny 97.39 | blocked 105.6 # preview
+dtype=cfloat n=32 nrhs=4 | tiny 93.67 | blocked 107.0 # preview
+dtype=cfloat n=32 nrhs=8 | blocked 108.9 # preview
+dtype=cfloat n=32 nrhs=64 | blocked 117.5 # preview
+dtype=cfloat n=32 nrhs=256 | blocked 155.2 # preview
+dtype=cfloat n=40 nrhs=1 | blocked 12.88 # preview
+dtype=cfloat n=40 nrhs=4 | blocked 14.88 # preview
+dtype=cfloat n=40 nrhs=8 | blocked 15.63 # preview
+dtype=cfloat n=40 nrhs=64 | blocked 32.41 # preview
+dtype=cfloat n=40 nrhs=256 | blocked 91.36 # preview
+dtype=cfloat n=64 nrhs=1 | blocked 26.96 # preview
+dtype=cfloat n=64 nrhs=4 | blocked 29.54 # preview
+dtype=cfloat n=64 nrhs=8 | blocked 33.23 # preview
+dtype=cfloat n=64 nrhs=64 | blocked 47.59 # preview
+dtype=cfloat n=128 nrhs=1 | blocked 92.76 # preview
+dtype=cfloat n=128 nrhs=4 | blocked 95.37 # preview
+dtype=cfloat n=128 nrhs=8 | blocked 101.8 # preview
+dtype=cfloat n=128 nrhs=64 | blocked 138.1 # preview
+dtype=cfloat n=256 nrhs=1 | blocked 142.5 # preview
+dtype=cfloat n=256 nrhs=4 | blocked 145.4 # preview
+dtype=cfloat n=256 nrhs=8 | blocked 164.9 # preview
+dtype=cfloat n=256 nrhs=64 | blocked 183.3 # preview
+dtype=cfloat n=256 nrhs=256 | blocked 305.5 # preview
+dtype=cfloat n=512 nrhs=1 | blocked 228.5 # preview
+dtype=cfloat n=512 nrhs=4 | blocked 244.5 # preview
+dtype=cfloat n=512 nrhs=8 | blocked 247.0 # preview
+dtype=cfloat n=512 nrhs=64 | blocked 268.1 # preview
+dtype=cfloat n=512 nrhs=256 | blocked 432.0 # preview
+dtype=cfloat n=1024 nrhs=1 | blocked 301.9 # preview
+dtype=cfloat n=1024 nrhs=4 | blocked 322.7 # preview
+dtype=cfloat n=1024 nrhs=8 | blocked 322.3 # preview
+dtype=cfloat n=1024 nrhs=64 | blocked 344.5 # preview
+dtype=cfloat n=1024 nrhs=256 | blocked 508.2 # preview
+dtype=cfloat n=2048 nrhs=1 | blocked 625.1 # preview
+dtype=cfloat n=2048 nrhs=4 | blocked 625.0 # preview
+dtype=cfloat n=2048 nrhs=8 | blocked 624.2 # preview
+dtype=cfloat n=2048 nrhs=64 | blocked 651.3 # preview
+dtype=cfloat n=2048 nrhs=256 | blocked 819.0 # preview

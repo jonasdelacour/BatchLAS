@@ -1,0 +1,203 @@
+# op=potrf device=apple_m5_max batchlas=0a3e4070 kernels=9010dde6 family_kernels=tiny:58ae0e5a,cta:0b652da6,lpanel:3d64c72e,blocked:e5a78b09,vendor:886ccac2 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/potrf.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:200,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact uplo:exact n:log:3 batch:log
+dtype=float uplo=L n=1 batch=8 | cta 0.1698 | blocked 0.1938 | lpanel:panel=16 0.1954 | lpanel:panel=8 0.1983 | tiny 0.2005 # preview
+dtype=float uplo=L n=1 batch=512 | tiny 0.2067 | lpanel:panel=8 0.2016 | lpanel:panel=16 0.2131 | cta 0.2560 | blocked 0.3122 # preview
+dtype=float uplo=L n=1 batch=4096 | tiny 0.1953 | lpanel:panel=8 0.2470 | lpanel:panel=16 0.2670 | cta 0.3369 | blocked 0.3674 # preview
+dtype=float uplo=L n=3 batch=8 | tiny 0.2011 | lpanel:panel=8 0.1986 | lpanel:panel=16 0.1960 | cta 0.2080 | blocked 0.2284 # preview
+dtype=float uplo=L n=3 batch=512 | tiny 0.2034 | lpanel:panel=8 0.2038 | lpanel:panel=16 0.2045 | cta 0.2274 | blocked 0.2415 # preview
+dtype=float uplo=L n=3 batch=4096 | tiny 0.2435 | lpanel:panel=8 0.3015 | lpanel:panel=16 0.3231 | cta 0.3819 | blocked 0.4242 # preview
+dtype=float uplo=L n=6 batch=8 | tiny 0.1845 | lpanel:panel=8 0.1997 | lpanel:panel=16 0.2052 | cta 0.2095 | blocked 0.2380 # preview
+dtype=float uplo=L n=6 batch=512 | tiny 0.2214 | lpanel:panel=8 0.2301 | cta 0.2341 | lpanel:panel=16 0.2365 | blocked 0.2747 # preview
+dtype=float uplo=L n=6 batch=4096 | tiny 0.1635 | lpanel:panel=8 0.2599 | lpanel:panel=16 0.2653 | cta 0.2792 | blocked 0.2820 # preview
+dtype=float uplo=L n=12 batch=8 | lpanel:panel=8 0.2041 | lpanel:panel=16 0.2137 | tiny 0.2177 | cta 0.2319 | blocked 0.2459 # preview
+dtype=float uplo=L n=12 batch=512 | tiny 0.2062 | lpanel:panel=8 0.2169 | lpanel:panel=16 0.2230 | cta 0.2442 | blocked 0.2647 # preview
+dtype=float uplo=L n=12 batch=4096 | tiny 0.2854 | lpanel:panel=16 0.3625 | blocked 0.4753 | lpanel:panel=8 0.5083 | cta 0.7325 # preview
+dtype=float uplo=L n=20 batch=8 | lpanel:panel=8 0.2117 | lpanel:panel=16 0.2255 | blocked 0.2344 | tiny 0.2350 | cta 0.2411 # preview
+dtype=float uplo=L n=20 batch=512 | lpanel:panel=8 0.2384 | lpanel:panel=16 0.2526 | tiny 0.2554 | cta 0.2590 | blocked 0.3001 # preview
+dtype=float uplo=L n=20 batch=4096 | tiny 0.4322 | lpanel:panel=8 0.4417 | lpanel:panel=16 0.9435 | cta 1.310 | blocked 1.330 # preview
+dtype=float uplo=L n=28 batch=8 | lpanel:panel=8 0.2199 | lpanel:panel=16 0.2326 | tiny 0.2445 | cta 0.2521 | blocked 0.2774 # preview
+dtype=float uplo=L n=28 batch=512 | tiny 0.2539 | lpanel:panel=8 0.2556 | cta 0.2681 | lpanel:panel=16 0.2715 | blocked 0.2959 # preview
+dtype=float uplo=L n=28 batch=4096 | tiny 0.3606 | lpanel:panel=16 0.3735 | lpanel:panel=8 0.3927 | cta 0.4871 | blocked 0.5035 # preview
+dtype=float uplo=L n=36 batch=8 | lpanel:panel=8 0.2256 | lpanel:panel=16 0.2361 | blocked 0.4188 # preview
+dtype=float uplo=L n=36 batch=512 | lpanel:panel=8 0.5513 | lpanel:panel=16 0.6260 | blocked 0.8799 # preview
+dtype=float uplo=L n=36 batch=4096 | lpanel:panel=8 1.040 | lpanel:panel=16 1.215 | blocked 1.404 # preview
+dtype=float uplo=L n=48 batch=8 | lpanel:panel=8 0.2356 | lpanel:panel=16 0.2549 | blocked 0.4419 # preview
+dtype=float uplo=L n=48 batch=512 | lpanel:panel=8 0.6609 | lpanel:panel=16 0.7291 | blocked 1.117 # preview
+dtype=float uplo=L n=48 batch=4096 | lpanel:panel=8 0.7397 | lpanel:panel=16 0.7662 | blocked 1.117 # preview
+dtype=float uplo=L n=64 batch=8 | lpanel:panel=8 0.3449 | blocked 0.7367 # preview
+dtype=float uplo=L n=64 batch=512 | lpanel:panel=8 0.8849 | blocked 1.250 # preview
+dtype=float uplo=L n=64 batch=4096 | lpanel:panel=8 0.9422 | blocked 1.524 # preview
+dtype=float uplo=L n=96 batch=8 | lpanel:panel=8 0.3377 | blocked 0.7353 # preview
+dtype=float uplo=L n=96 batch=512 | lpanel:panel=8 0.4346 | blocked 1.030 # preview
+dtype=float uplo=L n=96 batch=4096 | lpanel:panel=8 1.873 | blocked 3.955 # preview
+dtype=float uplo=L n=128 batch=8 | lpanel:panel=8 0.3488 | blocked 0.9419 # preview
+dtype=float uplo=L n=128 batch=512 | lpanel:panel=8 0.6575 | blocked 1.603 # preview
+dtype=float uplo=L n=128 batch=4096 | lpanel:panel=8 3.259 | blocked 10.52 # preview
+dtype=float uplo=L n=192 batch=8 | blocked 3.514 # preview
+dtype=float uplo=L n=192 batch=512 | blocked 3.720 # preview
+dtype=float uplo=L n=192 batch=4096 | blocked 25.02 # preview
+dtype=float uplo=L n=256 batch=8 | blocked 2.395 # preview
+dtype=float uplo=L n=256 batch=512 | blocked 7.096 # preview
+dtype=float uplo=L n=256 batch=4096 | blocked 54.41 # preview
+dtype=float uplo=L n=320 batch=8 | blocked 2.780 # preview
+dtype=float uplo=L n=320 batch=512 | blocked 11.42 # preview
+dtype=float uplo=L n=320 batch=4096 | blocked 88.92 # preview
+dtype=float uplo=L n=448 batch=8 | blocked 2.505 # preview
+dtype=float uplo=L n=448 batch=512 | blocked 29.19 # preview
+dtype=float uplo=L n=448 batch=4096 | blocked 230.7 # preview
+dtype=float uplo=L n=640 batch=8 | blocked 4.403 # preview
+dtype=float uplo=L n=640 batch=512 | blocked 72.71 # preview
+dtype=float uplo=L n=1024 batch=8 | blocked 11.11 # preview
+dtype=float uplo=L n=1024 batch=512 | blocked 264.3 # preview
+dtype=float uplo=L n=1280 batch=8 | blocked 18.64 # preview
+dtype=float uplo=L n=1280 batch=512 | blocked 459.3 # preview
+dtype=float uplo=U n=1 batch=8 | tiny 0.2094 | cta 0.2078 | blocked 0.2383 # preview
+dtype=float uplo=U n=1 batch=512 | tiny 0.2553 | cta 0.2547 | blocked 0.2986 # preview
+dtype=float uplo=U n=1 batch=4096 | tiny 0.2472 | cta 0.3313 | blocked 0.3725 # preview
+dtype=float uplo=U n=3 batch=8 | tiny 0.2340 | cta 0.2812 | blocked 0.2996 # preview
+dtype=float uplo=U n=3 batch=512 | tiny 0.2371 | cta 0.2574 | blocked 0.2663 # preview
+dtype=float uplo=U n=3 batch=4096 | tiny 0.2440 | cta 0.3734 | blocked 0.4300 # preview
+dtype=float uplo=U n=6 batch=8 | tiny 0.2089 | cta 0.2259 | blocked 0.2404 # preview
+dtype=float uplo=U n=6 batch=512 | tiny 0.2135 | cta 0.2577 | blocked 0.2599 # preview
+dtype=float uplo=U n=6 batch=4096 | tiny 0.2519 | blocked 0.4426 | cta 0.4432 # preview
+dtype=float uplo=U n=12 batch=8 | tiny 0.2454 | cta 0.3054 | blocked 0.3090 # preview
+dtype=float uplo=U n=12 batch=512 | tiny 0.2931 | cta 0.3336 | blocked 0.3450 # preview
+dtype=float uplo=U n=12 batch=4096 | tiny 0.3736 | cta 0.7799 | blocked 0.8730 # preview
+dtype=float uplo=U n=20 batch=8 | tiny 0.3259 | cta 0.3751 | blocked 0.3847 # preview
+dtype=float uplo=U n=20 batch=512 | tiny 0.2848 | cta 0.3555 | blocked 0.4201 # preview
+dtype=float uplo=U n=20 batch=4096 | tiny 0.3880 | cta 0.5513 | blocked 0.6322 # preview
+dtype=float uplo=U n=28 batch=8 | tiny 0.3312 | cta 0.4268 | blocked 0.4738 # preview
+dtype=float uplo=U n=28 batch=512 | tiny 0.3543 | cta 0.4578 | blocked 0.4792 # preview
+dtype=float uplo=U n=28 batch=4096 | tiny 0.4381 | cta 0.7685 | blocked 0.7963 # preview
+dtype=float uplo=U n=36 batch=8 | blocked 0.9347 # preview
+dtype=float uplo=U n=36 batch=512 | blocked 0.9365 # preview
+dtype=float uplo=U n=36 batch=4096 | blocked 1.092 # preview
+dtype=float uplo=U n=48 batch=8 | blocked 0.7700 # preview
+dtype=float uplo=U n=48 batch=512 | blocked 1.115 # preview
+dtype=float uplo=U n=48 batch=4096 | blocked 1.970 # preview
+dtype=float uplo=U n=64 batch=8 | blocked 0.7055 # preview
+dtype=float uplo=U n=64 batch=512 | blocked 1.515 # preview
+dtype=float uplo=U n=64 batch=4096 | blocked 1.860 # preview
+dtype=float uplo=U n=96 batch=8 | blocked 1.340 # preview
+dtype=float uplo=U n=96 batch=512 | blocked 1.424 # preview
+dtype=float uplo=U n=96 batch=4096 | blocked 5.130 # preview
+dtype=float uplo=U n=128 batch=8 | blocked 2.135 # preview
+dtype=float uplo=U n=128 batch=512 | blocked 2.143 # preview
+dtype=float uplo=U n=128 batch=4096 | blocked 10.46 # preview
+dtype=float uplo=U n=192 batch=8 | blocked 3.007 # preview
+dtype=float uplo=U n=192 batch=512 | blocked 4.892 # preview
+dtype=float uplo=U n=192 batch=4096 | blocked 33.91 # preview
+dtype=float uplo=U n=256 batch=8 | blocked 2.298 # preview
+dtype=float uplo=U n=256 batch=512 | blocked 9.229 # preview
+dtype=float uplo=U n=256 batch=4096 | blocked 73.21 # preview
+dtype=float uplo=U n=320 batch=8 | blocked 2.756 # preview
+dtype=float uplo=U n=320 batch=512 | blocked 11.77 # preview
+dtype=float uplo=U n=320 batch=4096 | blocked 91.56 # preview
+dtype=float uplo=U n=448 batch=8 | blocked 2.549 # preview
+dtype=float uplo=U n=448 batch=512 | blocked 30.12 # preview
+dtype=float uplo=U n=448 batch=4096 | blocked 238.7 # preview
+dtype=float uplo=U n=640 batch=8 | blocked 4.399 # preview
+dtype=float uplo=U n=640 batch=512 | blocked 77.29 # preview
+dtype=float uplo=U n=1024 batch=8 | blocked 11.02 # preview
+dtype=float uplo=U n=1024 batch=512 | blocked 285.4 # preview
+dtype=float uplo=U n=1280 batch=8 | blocked 18.60 # preview
+dtype=float uplo=U n=1280 batch=512 | blocked 473.6 # preview
+dtype=cfloat uplo=L n=1 batch=8 | tiny 0.1764 | lpanel:panel=8 0.2037 | cta 0.2141 | blocked 0.2285 # preview
+dtype=cfloat uplo=L n=1 batch=512 | tiny 0.2036 | lpanel:panel=8 0.2052 | cta 0.2162 | blocked 0.2488 # preview
+dtype=cfloat uplo=L n=1 batch=4096 | tiny 0.1944 | lpanel:panel=8 0.1939 | cta 0.2096 | blocked 0.2172 # preview
+dtype=cfloat uplo=L n=3 batch=8 | lpanel:panel=8 0.1776 | cta 0.1985 | tiny 0.2106 | blocked 0.2356 # preview
+dtype=cfloat uplo=L n=3 batch=512 | tiny 0.2470 | cta 0.2487 | lpanel:panel=8 0.2695 | blocked 0.3345 # preview
+dtype=cfloat uplo=L n=3 batch=4096 | tiny 0.2056 | lpanel:panel=8 0.2070 | cta 0.2285 | blocked 0.2544 # preview
+dtype=cfloat uplo=L n=6 batch=8 | cta 0.1877 | lpanel:panel=8 0.2051 | tiny 0.2114 | blocked 0.2295 # preview
+dtype=cfloat uplo=L n=6 batch=512 | tiny 0.2031 | lpanel:panel=8 0.2105 | cta 0.2222 | blocked 0.2545 # preview
+dtype=cfloat uplo=L n=6 batch=4096 | tiny 0.1850 | lpanel:panel=8 0.2337 | blocked 0.2464 | cta 0.2535 # preview
+dtype=cfloat uplo=L n=12 batch=8 | lpanel:panel=8 0.2009 | tiny 0.2293 | blocked 0.2322 | cta 0.2432 # preview
+dtype=cfloat uplo=L n=12 batch=512 | lpanel:panel=8 0.2343 | tiny 0.2542 | cta 0.2745 | blocked 0.3674 # preview
+dtype=cfloat uplo=L n=12 batch=4096 | tiny 0.2583 | lpanel:panel=8 0.2893 | cta 0.3784 | blocked 0.4328 # preview
+dtype=cfloat uplo=L n=20 batch=8 | lpanel:panel=8 0.2078 | cta 0.2439 | blocked 0.2477 | tiny 0.2801 # preview
+dtype=cfloat uplo=L n=20 batch=512 | lpanel:panel=8 0.2433 | cta 0.2712 | tiny 0.2940 | blocked 0.3170 # preview
+dtype=cfloat uplo=L n=20 batch=4096 | lpanel:panel=8 0.3488 | tiny 0.5100 | cta 0.5439 | blocked 0.6005 # preview
+dtype=cfloat uplo=L n=28 batch=8 | lpanel:panel=8 0.2256 | tiny 0.2742 | blocked 0.4547 # preview
+dtype=cfloat uplo=L n=28 batch=512 | lpanel:panel=8 0.2213 | tiny 0.2625 | blocked 0.5215 # preview
+dtype=cfloat uplo=L n=28 batch=4096 | lpanel:panel=8 0.4152 | tiny 0.4959 | blocked 0.9936 # preview
+dtype=cfloat uplo=L n=36 batch=8 | lpanel:panel=8 0.2501 | blocked 0.7799 # preview
+dtype=cfloat uplo=L n=36 batch=512 | lpanel:panel=8 0.5538 | blocked 0.9719 # preview
+dtype=cfloat uplo=L n=36 batch=4096 | lpanel:panel=8 0.6787 | blocked 1.266 # preview
+dtype=cfloat uplo=L n=48 batch=8 | lpanel:panel=8 0.2066 | blocked 0.4480 # preview
+dtype=cfloat uplo=L n=48 batch=512 | lpanel:panel=8 0.3678 | blocked 0.7243 # preview
+dtype=cfloat uplo=L n=48 batch=4096 | lpanel:panel=8 0.8874 | blocked 2.316 # preview
+dtype=cfloat uplo=L n=64 batch=8 | lpanel:panel=8 0.4363 | blocked 1.142 # preview
+dtype=cfloat uplo=L n=64 batch=512 | lpanel:panel=8 0.4101 | blocked 1.174 # preview
+dtype=cfloat uplo=L n=64 batch=4096 | lpanel:panel=8 1.150 | blocked 4.069 # preview
+dtype=cfloat uplo=L n=96 batch=8 | blocked 1.030 # preview
+dtype=cfloat uplo=L n=96 batch=512 | blocked 1.831 # preview
+dtype=cfloat uplo=L n=96 batch=4096 | blocked 12.05 # preview
+dtype=cfloat uplo=L n=128 batch=8 | blocked 1.339 # preview
+dtype=cfloat uplo=L n=128 batch=512 | blocked 2.704 # preview
+dtype=cfloat uplo=L n=128 batch=4096 | blocked 24.32 # preview
+dtype=cfloat uplo=L n=192 batch=8 | blocked 3.805 # preview
+dtype=cfloat uplo=L n=192 batch=512 | blocked 7.055 # preview
+dtype=cfloat uplo=L n=192 batch=4096 | blocked 51.09 # preview
+dtype=cfloat uplo=L n=256 batch=8 | blocked 3.354 # preview
+dtype=cfloat uplo=L n=256 batch=512 | blocked 15.15 # preview
+dtype=cfloat uplo=L n=256 batch=4096 | blocked 118.6 # preview
+dtype=cfloat uplo=L n=320 batch=8 | blocked 3.274 # preview
+dtype=cfloat uplo=L n=320 batch=512 | blocked 25.01 # preview
+dtype=cfloat uplo=L n=320 batch=4096 | blocked 200.0 # preview
+dtype=cfloat uplo=L n=448 batch=8 | blocked 5.743 # preview
+dtype=cfloat uplo=L n=448 batch=512 | blocked 63.79 # preview
+dtype=cfloat uplo=L n=640 batch=8 | blocked 11.29 # preview
+dtype=cfloat uplo=L n=640 batch=512 | blocked 198.8 # preview
+dtype=cfloat uplo=L n=1024 batch=8 | blocked 28.61 # preview
+dtype=cfloat uplo=L n=1024 batch=512 | blocked 711.4 # preview
+dtype=cfloat uplo=L n=1280 batch=8 | blocked 43.24 # preview
+dtype=cfloat uplo=U n=1 batch=8 | tiny 0.2625 | cta 0.2611 | blocked 0.3152 # preview
+dtype=cfloat uplo=U n=1 batch=512 | tiny 0.2046 | cta 0.2062 | blocked 0.2390 # preview
+dtype=cfloat uplo=U n=1 batch=4096 | tiny 0.2134 | cta 0.2117 | blocked 0.2628 # preview
+dtype=cfloat uplo=U n=3 batch=8 | tiny 0.2813 | cta 0.2860 | blocked 0.3886 # preview
+dtype=cfloat uplo=U n=3 batch=512 | tiny 0.1765 | cta 0.2102 | blocked 0.2388 # preview
+dtype=cfloat uplo=U n=3 batch=4096 | tiny 0.2023 | cta 0.2008 | blocked 0.2561 # preview
+dtype=cfloat uplo=U n=6 batch=8 | tiny 0.2795 | cta 0.3025 | blocked 0.4339 # preview
+dtype=cfloat uplo=U n=6 batch=512 | cta 0.1808 | tiny 0.2064 | blocked 0.2419 # preview
+dtype=cfloat uplo=U n=6 batch=4096 | tiny 0.1808 | cta 0.2517 | blocked 0.2773 # preview
+dtype=cfloat uplo=U n=12 batch=8 | tiny 0.2700 | cta 0.3115 | blocked 0.3714 # preview
+dtype=cfloat uplo=U n=12 batch=512 | tiny 0.2130 | cta 0.2361 | blocked 0.3116 # preview
+dtype=cfloat uplo=U n=12 batch=4096 | tiny 0.2802 | cta 0.3545 | blocked 0.3892 # preview
+dtype=cfloat uplo=U n=20 batch=8 | cta 0.3173 | tiny 0.3571 | blocked 0.3978 # preview
+dtype=cfloat uplo=U n=20 batch=512 | cta 0.2633 | tiny 0.2767 | blocked 0.3040 # preview
+dtype=cfloat uplo=U n=20 batch=4096 | tiny 0.5119 | cta 0.5365 | blocked 0.5900 # preview
+dtype=cfloat uplo=U n=28 batch=8 | tiny 0.5153 | blocked 1.058 # preview
+dtype=cfloat uplo=U n=28 batch=512 | tiny 0.2858 | blocked 0.4181 # preview
+dtype=cfloat uplo=U n=28 batch=4096 | tiny 0.5115 | blocked 0.9017 # preview
+dtype=cfloat uplo=U n=36 batch=8 | blocked 1.443 # preview
+dtype=cfloat uplo=U n=36 batch=512 | blocked 1.059 # preview
+dtype=cfloat uplo=U n=36 batch=4096 | blocked 1.367 # preview
+dtype=cfloat uplo=U n=48 batch=8 | blocked 0.8755 # preview
+dtype=cfloat uplo=U n=48 batch=512 | blocked 0.8257 # preview
+dtype=cfloat uplo=U n=48 batch=4096 | blocked 2.741 # preview
+dtype=cfloat uplo=U n=64 batch=8 | blocked 2.635 # preview
+dtype=cfloat uplo=U n=64 batch=512 | blocked 1.261 # preview
+dtype=cfloat uplo=U n=64 batch=4096 | blocked 5.003 # preview
+dtype=cfloat uplo=U n=96 batch=8 | blocked 3.993 # preview
+dtype=cfloat uplo=U n=96 batch=512 | blocked 2.099 # preview
+dtype=cfloat uplo=U n=96 batch=4096 | blocked 14.81 # preview
+dtype=cfloat uplo=U n=128 batch=8 | blocked 1.302 # preview
+dtype=cfloat uplo=U n=128 batch=512 | blocked 3.379 # preview
+dtype=cfloat uplo=U n=128 batch=4096 | blocked 32.40 # preview
+dtype=cfloat uplo=U n=192 batch=8 | blocked 3.769 # preview
+dtype=cfloat uplo=U n=192 batch=512 | blocked 8.950 # preview
+dtype=cfloat uplo=U n=192 batch=4096 | blocked 65.83 # preview
+dtype=cfloat uplo=U n=256 batch=8 | blocked 3.205 # preview
+dtype=cfloat uplo=U n=256 batch=512 | blocked 20.59 # preview
+dtype=cfloat uplo=U n=256 batch=4096 | blocked 162.4 # preview
+dtype=cfloat uplo=U n=320 batch=8 | blocked 3.282 # preview
+dtype=cfloat uplo=U n=320 batch=512 | blocked 32.59 # preview
+dtype=cfloat uplo=U n=320 batch=4096 | blocked 260.3 # preview
+dtype=cfloat uplo=U n=448 batch=8 | blocked 5.809 # preview
+dtype=cfloat uplo=U n=448 batch=512 | blocked 82.44 # preview
+dtype=cfloat uplo=U n=640 batch=8 | blocked 11.33 # preview
+dtype=cfloat uplo=U n=640 batch=512 | blocked 244.7 # preview
+dtype=cfloat uplo=U n=1024 batch=8 | blocked 27.77 # preview
+dtype=cfloat uplo=U n=1024 batch=512 | blocked 877.1 # preview
+dtype=cfloat uplo=U n=1280 batch=8 | blocked 44.59 # preview

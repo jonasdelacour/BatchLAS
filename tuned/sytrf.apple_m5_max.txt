@@ -1,0 +1,23 @@
+# op=sytrf device=apple_m5_max batchlas=0a3e4070 kernels=3347c81e family_kernels=cta:c5e5169a,wg:c5e5169a,blocked:7cf39d96,vendor:3adf8b32 date=2026-10-29
+# source=ledger:benchmarks/results/tuning/ledger/sytrf.apple_m5_max.jsonl tiers=deep:0,coarse:0,calibrate:0,preview:20,custom:0,converted:0,prior:0,transcribed:0
+# keys: dtype:exact n:log:3 batch:log
+dtype=float n=1 batch=8 | cta 0.2014 | wg 0.1963 | blocked 0.2075 # preview
+dtype=float n=1 batch=512 | wg 0.1999 | cta 0.2077 | blocked 0.2165 # preview
+dtype=float n=1 batch=4096 | cta 0.1827 | wg 0.1947 | blocked 0.2160 # preview
+dtype=float n=64 batch=512 | wg 0.8403 | blocked 0.9662 # preview
+dtype=float n=64 batch=4096 | blocked 6.209 | wg 6.525 # preview
+dtype=float n=256 batch=8 | blocked 2.364 | wg 3.769 # preview
+dtype=float n=256 batch=512 | blocked 19.97 | wg 26.33 # preview
+dtype=float n=256 batch=4096 | blocked 158.7 | wg 187.2 # preview
+dtype=float n=1024 batch=8 | blocked 21.26 | wg 137.3 # preview
+dtype=float n=2048 batch=8 | blocked 101.4 | wg 1185 # preview
+dtype=cfloat n=1 batch=8 | wg 0.1790 | blocked 0.1765 | cta 0.2041 # preview
+dtype=cfloat n=1 batch=512 | wg 0.1595 | blocked 0.1727 | cta 0.2018 # preview
+dtype=cfloat n=1 batch=4096 | wg 0.2485 | blocked 0.2981 | cta 0.3297 # preview
+dtype=cfloat n=64 batch=8 | wg 0.5317 | blocked 0.5798 # preview
+dtype=cfloat n=64 batch=512 | wg 1.566 | blocked 1.864 # preview
+dtype=cfloat n=64 batch=4096 | wg 7.303 | blocked 9.116 # preview
+dtype=cfloat n=256 batch=8 | blocked 2.768 | wg 4.405 # preview
+dtype=cfloat n=256 batch=512 | blocked 27.42 | wg 36.86 # preview
+dtype=cfloat n=1024 batch=8 | blocked 27.82 | wg 197.4 # preview
+dtype=cfloat n=2048 batch=8 | blocked 131.1 | wg 1484 # preview
