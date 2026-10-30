@@ -45,24 +45,6 @@ hermitian_candidates_tests::HermitianCandidates/1.ComplexSymmetricSyrkFamilies;t
 hermitian_candidates_tests::HermitianCandidates/1.HerkPinnedFamiliesStraddleTheirLimits;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 
-# Saturating-batch bit-identity: items of one repeated matrix differ (syev chunks, gesvd blocked,
-# syev_align). The same cases pass on DPC++ and on acpp generic. Cause open: a local-memory race
-# that only multipass scheduling exposes is the first suspect.
-gesvd_tests::GesvdGeneralComplexTest/0.BlockedPastTheGridIsBitIdentical;type_param=GesvdConfig<std::complex<float>,(batchlas::Backend)1>
-gesvd_tests::GesvdGeneralComplexTest/0.BlockedSaturatingBatchIsBitIdentical;type_param=GesvdConfig<std::complex<float>,(batchlas::Backend)1>
-gesvd_tests::GesvdGeneralComplexTest/1.BlockedSaturatingBatchIsBitIdentical;type_param=GesvdConfig<std::complex<double>,(batchlas::Backend)1>
-gesvd_tests::GesvdTest/0.BlockedChunksAtSaturatingBatchAreBitIdentical;type_param=GesvdConfig<float,(batchlas::Backend)1>
-gesvd_tests::GesvdTest/0.BlockedPastTheGridIsBitIdentical;type_param=GesvdConfig<float,(batchlas::Backend)1>
-gesvd_tests::GesvdTest/1.BlockedChunksAtSaturatingBatchAreBitIdentical;type_param=GesvdConfig<double,(batchlas::Backend)1>
-syev_align_tests::SyevAlignTest/0.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<float,(batchlas::Backend)1>
-syev_align_tests::SyevAlignTest/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<double,(batchlas::Backend)1>
-syev_align_tests::SyevAlignTest/2.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<std::complex<float>,(batchlas::Backend)1>
-syev_align_tests::SyevAlignTest/3.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::SyevAlignConfig<std::complex<double>,(batchlas::Backend)1>
-syev_tests::SyevTest/0.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<float,(batchlas::Backend)1>
-syev_tests::SyevTest/1.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<double,(batchlas::Backend)1>
-syev_tests::SyevTest/2.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<std::complex<float>,(batchlas::Backend)1>
-syev_tests::SyevTest/3.ChunksAtSaturatingBatchAreBitIdentical;type_param=SyevConfig<std::complex<double>,(batchlas::Backend)1>
-
 # Error model: on multipass CUDA a launch with 1 MiB of local memory is not reported at the launch
 # or the next wait (QueueAsyncErrors.*), and queue_from_sycl accepts the CPU device it should
 # reject as foreign (SyclInterop.QueueFromSyclRejectsForeignDevice). Cause open.
