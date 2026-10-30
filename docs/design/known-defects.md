@@ -37,13 +37,16 @@ Fixed 2026-10-30 for NETLIB. The host solve computed `alpha * Bb.at(i, j, 0) - s
 BLAS does. Guard: `TrsmNetlib.AlphaZeroIgnoresNanB*` (every side, uplo, trans and diag, real and
 complex, NaN `A` and `B`, padded `ld`).
 
-Still open on the device routes, which read `B` at `alpha == 0`: the CTA kernel
-(`src/ops/trsm/kernels/trsm_native.cc:264-269`, `dev_mul(alpha_d, B)`), the sub-group left kernel
-(`src/ops/trsm/kernels/trsm_sg_left.cc:157`), the blocked route through its first diagonal block
-(`trsm_native.cc:458-459` calls the CTA kernel with `alpha`; its trailing gemms take `beta = alpha`
-and skip `C`, see Defect 11), and the CUDA complex substitute kernel (`src/backends/cublas.cc`, the
-`alpha * Bb[j * ldb + i] - sum` arms of `trsm_vendor`). The real cuBLAS and rocBLAS calls follow
-their libraries.
+Fixed 2026-10-30 for every route of the public `trsm`. The device routes read `B` at `alpha == 0`:
+the CTA kernel (`src/ops/trsm/kernels/trsm_native.cc:264-269`, `dev_mul(alpha_d, B)`), the sub-group
+left kernel (`trsm_sg_left.cc:157`), the blocked route through its first diagonal block
+(`trsm_native.cc:458-459`), and the CUDA complex substitute kernel in `src/backends/cublas.cc`
+`trsm_vendor`. The driver (`src/ops/trsm/trsm.cc`) now answers `alpha == 0` before selection with
+one masked `fill_zeros` of `B`, so no route runs and neither operand is read; a mask off the GPU
+still refuses. Guard: `TrsmOperationsTest.AlphaZeroIgnoresNanUnderEveryRoute` pins each route a
+strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN `A` and `B`, padded
+`ld` and stride, batch 3). The kernels themselves still read `B` when called directly
+(`backend::trsm_vendor`, `sycl_trsm::*`); only the driver calls them.
 
 ## Defect 11: native gemm reads C at beta zero
 
