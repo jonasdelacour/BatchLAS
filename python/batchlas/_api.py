@@ -61,7 +61,9 @@ def _normalize_backend(backend: str | None, device: str | None = None) -> str:
     elif normalized_device == "accelerator":
         preferred = ["cuda", "rocm"]
     else:
-        preferred = ["cuda", "rocm", "netlib"]
+        # No netlib here: the default device may be a GPU (Metal), and "auto" lets
+        # the Queue resolve the backend from the device it actually got.
+        preferred = ["cuda", "rocm"]
     for candidate in preferred:
         if candidate in available:
             return candidate

@@ -105,7 +105,7 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
         syevx_params.instrumentation = &*instrumentation;
     }
 
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -248,7 +248,7 @@ py::object steqr_common(const DenseVector& d_wrapper,
             : batchlas::steqr_buffer_size<T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
                                              jobz, params);
     UnifiedVector<std::byte> workspace(workspace_size);
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         if (cta) {
             batchlas::steqr_cta<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
@@ -284,12 +284,12 @@ py::object stedc_common(const DenseVector& d_wrapper,
     const JobType jobz = JobType::EigenVectors;
     const auto params = parse_stedc_params<T>(options);
     Queue& queue = acquire_queue(device_name, backend);
-    const std::size_t workspace_size = visit_backend(queue, [&](auto backend_tag) {
+    const std::size_t workspace_size = visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         return batchlas::stedc_buffer_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
     });
     UnifiedVector<std::byte> workspace(workspace_size);
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::stedc<B, T>(queue, VectorView<T>(d), VectorView<T>(e), VectorView<T>(eigenvalues),
                               workspace.to_span(), jobz, params, vectors.view());
@@ -331,7 +331,7 @@ py::object tridiagonal_solver_impl(const DenseVector& alpha_wrapper,
                                         : DenseMatrixT<T>(1, 1, alpha.batch_size());
     const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -356,7 +356,7 @@ DenseVector ritz_values_impl(const Matrix<T, MF>& matrix,
                              const std::optional<std::string>& device_name) {
     const auto& vectors = std::get<DenseMatrixT<T>>(vectors_wrapper.storage);
     Queue& queue = acquire_queue(device_name, backend);
-    return visit_backend(queue, [&](auto backend_tag) {
+    return visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         auto values = batchlas::ritz_values<B, T, MF>(queue, matrix.view(), vectors.view());
         queue.wait();
@@ -376,7 +376,7 @@ py::object syev_jacobi_cta_impl(const DenseMatrix& a_wrapper,
     const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
     const auto params = parse_jacobi_params<T>(options);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -414,7 +414,7 @@ py::tuple sytrd_dense_impl(const DenseMatrix& a_wrapper,
     Vector<T> tau(off, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
     if (blocked) {
-        run_backend_with_workspace(
+        run_backend_with_workspace<T>(
             queue,
             [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
@@ -425,7 +425,7 @@ py::tuple sytrd_dense_impl(const DenseMatrix& a_wrapper,
                 batchlas::sytrd_blocked<B, T>(queue, out.view(), d, e, tau, uplo, workspace, block_size);
             });
     } else {
-        visit_backend(queue, [&](auto backend_tag) {
+        visit_backend<T>(queue, [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             // sytrd_cta needs no global workspace; the span is accepted for API symmetry.
             batchlas::sytrd_cta<B, T>(queue, out.view(), d, e, tau, uplo, Span<std::byte>(),
@@ -456,7 +456,7 @@ py::tuple sytrd_sy2sb_impl(const DenseMatrix& a_wrapper,
     DenseMatrixT<T> ab(kd + 1, n, out.batch_size());
     Vector<T> tau(n - kd, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -493,7 +493,7 @@ py::tuple sytrd_band_to_tridiagonal_impl(const DenseMatrix& ab_wrapper,
     Vector<T> tau(off, ab.batch_size());
     const auto params = parse_sytrd_band_reduction_params(options);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -549,7 +549,7 @@ void init_spectral_ops(py::module_& module) {
             // The positional spelling rather than the SyevOptions one, because
             // that is where `info` lives -- the arena lease is identical either
             // way (run_backend_with_workspace calls queue.workspace() too).
-            run_backend_with_workspace(
+            run_backend_with_workspace<scalar_type>(
                 queue,
                 [&](auto backend_tag) {
                     constexpr Backend B = decltype(backend_tag)::value;
@@ -593,7 +593,7 @@ void init_spectral_ops(py::module_& module) {
             Vector<typename base_type<scalar_type>::type> values(out.rows(), out.batch_size());
             const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
             Queue& queue = acquire_queue(device_name, backend);
-            run_backend_with_workspace(
+            run_backend_with_workspace<scalar_type>(
                 queue,
                 [&](auto backend_tag) {
                     constexpr Backend B = decltype(backend_tag)::value;
@@ -628,7 +628,7 @@ void init_spectral_ops(py::module_& module) {
             const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
             const auto params = parse_stedc_params<typename base_type<scalar_type>::type>(options);
             Queue& queue = acquire_queue(device_name, backend);
-            run_backend_with_workspace(
+            run_backend_with_workspace<scalar_type>(
                 queue,
                 [&](auto backend_tag) {
                     constexpr Backend B = decltype(backend_tag)::value;
@@ -663,7 +663,7 @@ void init_spectral_ops(py::module_& module) {
             const JobType jobz = JobType::EigenVectors;
             const auto params = parse_stedc_params<typename base_type<scalar_type>::type>(options);
             Queue& queue = acquire_queue(device_name, backend);
-            run_backend_with_workspace(
+            run_backend_with_workspace<scalar_type>(
                 queue,
                 [&](auto backend_tag) {
                     constexpr Backend B = decltype(backend_tag)::value;
