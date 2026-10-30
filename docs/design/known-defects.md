@@ -198,9 +198,6 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:355`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
-- **Recursive `stedc` under `NoEigenVectors`** may merge from unset leaf vectors
-  (`src/ops/syev/stedc/stedc.cc:537`); see
-  [stedc](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
 - **`compute_optimal_wg_size` assumes a 32-bit `long`:** `31 - __builtin_clzl`
   (`include/batchlas/util/kernel-heuristics.hh:104,109`) is a negative shift on LP64. Fix with
   `std::bit_floor`.
