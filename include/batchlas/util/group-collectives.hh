@@ -158,6 +158,18 @@ inline T wg_reduce_floating(Group g, T x, Op op) {
     return r;
 }
 
+// TRAP (multipass CUDA/HIP): its work-group broadcast (generic/hiplike/group_functions.hpp:78-89)
+// has no barrier after the read of its one static slot, so the next broadcast of the same T can
+// overwrite it before a slower warp reads it: that warp silently gets the next value.
+inline constexpr bool kFencedWgBroadcastPass = ACPP_LIBKERNEL_IS_DEVICE_PASS_CUDA || ACPP_LIBKERNEL_IS_DEVICE_PASS_HIP;
+
+template <typename Group, typename W, typename... Id>
+inline W broadcast_fenced(Group g, W w, Id... id) {
+    const W r = sycl::group_broadcast(g, w, id...);
+    if constexpr (kFencedWgBroadcastPass && kWorkGroup<Group>) sycl::group_barrier(g);
+    return r;
+}
+
 } // namespace detail
 
 /// @addtogroup api_internal_helpers
@@ -168,9 +180,9 @@ template <typename Group, typename T, typename... Id>
     requires sycl::is_group_v<Group>
 inline T group_broadcast(Group g, T x, Id... id) {
     if constexpr (detail::kSplitWords<T>) {
-        return detail::map_words(x, [&](auto w) { return sycl::group_broadcast(g, w, id...); });
+        return detail::map_words(x, [&](auto w) { return detail::broadcast_fenced(g, w, id...); });
     } else {
-        return sycl::group_broadcast(g, x, id...);
+        return detail::broadcast_fenced(g, x, id...);
     }
 }
 
