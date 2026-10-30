@@ -50,18 +50,9 @@ hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;
 # "n too large for the device's local memory" after n = 449..1200 pass (~120 s).
 syev_tests::SyevTest/3.DoubleBandEveryOrderUploAndJobz;type_param=SyevConfig<std::complex<double>,(batchlas::Backend)1>
 
-# Error model (cause found 2026-10-30, in AdaptiveCpp): the default integrated multipass launches
-# through clang's CUDA stub (include/AdaptiveCpp/hipSYCL/glue/generic/hiplike/clang.hpp:44-48,
-# reached from hiplike_kernel_launcher.hpp:352-354; etc/AdaptiveCpp/acpp-core.json:22
-# default-is-explicit-multipass false), which never reads cudaGetLastError. A failed launch runs
-# inline on the submitting thread and leaves cudaErrorInvalidConfiguration (an over-limit grid
-# submitted around BatchLAS's check) or cudaErrorInvalidValue (1 MiB of local memory) in that
-# thread's last-error slot; nothing reaches acpp's error list, so neither the launch nor the next
-# wait throws; a 20-line acpp program without BatchLAS reproduces it. Explicit multipass would
-# register it (hiplike_kernel_launcher.hpp:634-639); unverified, --acpp-explicit-multipass fails
-# to compile here (texture_fetch_functions.h not found).
-util_device_queue_tests::QueueAsyncErrors.ErrorCollectedByAQueueCopySurfacesAtTheNextWait
-util_device_queue_tests::QueueAsyncErrors.OversizedLocalMemoryThrowsFromTheLaunch
+# Error model: fixed 2026-10-30, removed. Integrated multipass launches through clang's CUDA stub
+# (glue/generic/hiplike/clang.hpp:44-48), which never reads cudaGetLastError, so a failed launch
+# reached no error list; impl::throw_async_errors (src/sycl/impl.hh) now polls and clears it.
 
 # lanczos (ClosedFormSpectrum, LanczosTest, ToeplitzEigenpairs): fixed 2026-10-30, removed; cause in
 # docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".
