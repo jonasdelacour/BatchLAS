@@ -93,7 +93,7 @@ py::object dense_gesv_impl(const DenseMatrix& a_wrapper,
     UnifiedVector<int64_t> pivots(static_cast<std::size_t>(pivots_per_batch * batch_size));
     UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -126,7 +126,7 @@ py::object dense_posv_impl(const DenseMatrix& a_wrapper,
     const int batch_size = factor.batch_size();
     UnifiedVector<int32_t> info = requested_info(return_info, batch_size);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -237,7 +237,7 @@ DenseMatrix dense_ormqr_impl(const DenseMatrix& qr_wrapper,
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(c_wrapper.storage).clone();
     const auto& tau = std::get<Vector<T>>(tau_wrapper.storage);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -276,7 +276,7 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
     DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(static_cast<int>(svd_vh_rows(job, n, k)), n, out.batch_size())
                                          : DenseMatrixT<T>(1, 1, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -401,7 +401,7 @@ py::tuple dense_gebrd_impl(const DenseMatrix& a_wrapper,
     Vector<T> tauq(k, out.batch_size());
     Vector<T> taup(k, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::gebrd_unblocked<B, T>(queue, out.view(), VectorView<typename base_type<T>::type>(d),
                                         VectorView<typename base_type<T>::type>(e), VectorView<T>(tauq),
@@ -436,7 +436,7 @@ py::tuple dense_gebrd_variant_impl(const DenseMatrix& a_wrapper,
     Vector<T> taup(n, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
     if (blocked) {
-        run_backend_with_workspace(
+        run_backend_with_workspace<T>(
             queue,
             [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
@@ -447,7 +447,7 @@ py::tuple dense_gebrd_variant_impl(const DenseMatrix& a_wrapper,
                 batchlas::gebrd_blocked<B, T>(queue, out.view(), d, e, tauq, taup, workspace, block_size);
             });
     } else {
-        visit_backend(queue, [&](auto backend_tag) {
+        visit_backend<T>(queue, [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
             batchlas::gebrd_cta<B, T>(queue, out.view(), d, e, tauq, taup, cta_wg_size_multiplier);
         });
@@ -479,7 +479,7 @@ py::object dense_gesvd_cta_impl(const DenseMatrix& a_wrapper,
     DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size())
                                          : DenseMatrixT<T>(1, 1, out.batch_size());
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -522,7 +522,7 @@ DenseVector dense_bdsqr_impl(const DenseVector& d_wrapper,
     const std::size_t workspace_size =
         batchlas::bdsqr_buffer_size(queue, VectorView<T>(d), VectorView<T>(e), singular_values.data());
     UnifiedVector<std::byte> workspace(workspace_size);
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         batchlas::bdsqr<B, T>(queue, VectorView<T>(d), VectorView<T>(e), singular_values.data(), workspace.to_span(),
                               sort_desc);
@@ -547,7 +547,7 @@ DenseMatrix dense_ormbr_impl(const DenseMatrix& a_wrapper,
     const auto& tau = std::get<Vector<T>>(tau_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(c_wrapper.storage).clone();
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -657,7 +657,7 @@ void init_factorization_ops(py::module_& module) {
         return visit_dense(a, [&](auto tag, const auto& typed_a) {
             using scalar_type = typename decltype(tag)::type;
             Queue& queue = acquire_queue(device_name, backend);
-            auto out = visit_backend(queue, [&](auto backend_tag) {
+            auto out = visit_backend<scalar_type>(queue, [&](auto backend_tag) {
                 constexpr Backend B = decltype(backend_tag)::value;
                 return batchlas::inv<B, scalar_type>(queue, typed_a.view());
             });

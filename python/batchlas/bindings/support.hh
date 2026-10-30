@@ -362,9 +362,13 @@ decltype(auto) visit_iluk(const ILUKHandle& handle, F&& fn) {
 // backend matches, and acquire_queue has already rejected that case. Catching
 // here would also swallow genuine runtime errors raised from inside `fn` and
 // report them as "backend unavailable", which is far worse than the raw error.
-template <typename F>
+//
+// T is the call's element type: in a build without device fp64 the SYCL branch is
+// never instantiated for double/complex<double> (the library has no such symbols)
+// and throws batchlas::unsupported at run time instead.
+template <typename T, typename F>
 decltype(auto) visit_backend(Queue& queue, F&& fn) {
-    return batchlas::with_backend(queue, std::forward<F>(fn));
+    return batchlas::with_backend_for<T>(queue, nullptr, std::forward<F>(fn));
 }
 
 // Size a workspace and run the call with it.
@@ -377,9 +381,9 @@ decltype(auto) visit_backend(Queue& queue, F&& fn) {
 // behind this call.
 //
 // The backend is resolved once, for both the size and the invoke call.
-template <typename SizeFn, typename InvokeFn>
+template <typename T, typename SizeFn, typename InvokeFn>
 void run_backend_with_workspace(Queue& queue, SizeFn&& size_fn, InvokeFn&& invoke_fn) {
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         auto lease = queue.workspace(static_cast<std::size_t>(size_fn(backend_tag)));
         invoke_fn(backend_tag, lease.span());
     });

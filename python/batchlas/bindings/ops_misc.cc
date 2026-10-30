@@ -40,7 +40,7 @@ template <typename T, MatrixFormat MF>
 DenseVector cond_impl(const Matrix<T, MF>& matrix, NormType norm_type, Backend backend,
                       const std::optional<std::string>& device_name) {
     Queue& queue = acquire_queue(device_name, backend);
-    DenseVector result = visit_backend(queue, [&](auto backend_tag) {
+    DenseVector result = visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         auto values = batchlas::cond<B, T, MF>(queue, matrix.view(), norm_type);
         queue.wait();
@@ -61,7 +61,7 @@ DenseMatrix ortho_impl(const DenseMatrix& a_wrapper,
         options.contains("algorithm") ? parse_ortho_algorithm(py::cast<std::string>(options["algorithm"]))
                                       : OrthoAlgorithm::Chol2;
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -93,7 +93,7 @@ DenseMatrix ortho_metric_impl(const DenseMatrix& a_wrapper,
                                       : OrthoAlgorithm::Chol2;
     const std::size_t iterations = py_scalar_or_default<std::size_t>(options, "iterations", 2);
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -118,7 +118,7 @@ ILUKHandle iluk_factorize_impl(const SparseMatrix& matrix_wrapper,
     const ILUKParams<T> params = parse_iluk_params<T>(options);
     Queue& queue = acquire_queue(device_name, backend);
     ILUKPreconditioner<T> handle{};
-    visit_backend(queue, [&](auto backend_tag) {
+    visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         handle = batchlas::iluk_factorize<B, T>(queue, matrix.view(), params);
     });
@@ -135,7 +135,7 @@ DenseMatrix iluk_apply_impl(const ILUKHandle& handle_wrapper,
     const auto& handle = std::get<ILUKPreconditioner<T>>(handle_wrapper.storage);
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(rhs_wrapper.storage).clone();
     Queue& queue = acquire_queue(device_name, backend);
-    run_backend_with_workspace(
+    run_backend_with_workspace<T>(
         queue,
         [&](auto backend_tag) {
             constexpr Backend B = decltype(backend_tag)::value;
@@ -162,7 +162,7 @@ DenseMatrix conditioned_random_impl(const std::string& which,
                                     Backend backend,
                                     const std::optional<std::string>& device_name) {
     Queue& queue = acquire_queue(device_name, backend);
-    return visit_backend(queue, [&](auto backend_tag) {
+    return visit_backend<T>(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
         if (which == "random_with_log10_cond_metric") {
             return wrap_dense(batchlas::random_with_log10_cond_metric<B, T>(queue, n, log10_kappa, metric, batch_size,
