@@ -99,9 +99,8 @@ Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     trsm_validate_params(A, B, side, uplo, transA, diag);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    // alpha == 0 is B := 0 reading neither A nor B (reference BLAS), for every route: one masked fill
-    // instead of a solve, since the kernels form alpha * B and 0 * NaN = NaN. A mask the routes here
-    // would refuse (no native family off the GPU) still refuses; a heterogeneous batch still has no route.
+    // alpha == 0 is B := 0 reading neither A nor B (reference BLAS): one masked fill, no solve, since
+    // the kernels form alpha * B. A refused mask still refuses; a heterogeneous batch has no route.
     if (alpha == T(0) && !A.is_heterogeneous() && !B.is_heterogeneous()) {
         if (!mask.empty() && !select::device_of<Back>(ctx, ops::trsm::spec.vendor).is_gpu)
             batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm", Back, A, B);
