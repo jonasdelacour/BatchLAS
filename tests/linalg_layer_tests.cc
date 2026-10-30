@@ -933,7 +933,8 @@ TEST(LinalgLayer, EighSubsetRejectsExtremal) {
 template <typename T>
 class LinalgTyped : public ::testing::Test {
 protected:
-    Queue q;
+    // Metal has no device fp64: the double cases run on the CPU device there instead.
+    Queue q = test_utils::native_gpu_lacks_fp64 && std::is_same_v<T, double> ? Queue(Device("cpu")) : Queue();
 };
 
 using LinalgTypes = ::testing::Types<float, double, std::complex<float>>;
@@ -1261,8 +1262,8 @@ TYPED_TEST(LinalgTyped, ComposedQrRepeatsAcrossCallsAndQueues) {
     using T = TypeParam;
     expect_repeated_qr<T>(this->q, "fixture queue");
     {
-        Queue fresh;
-        expect_repeated_qr<T>(fresh, "fresh default queue");
+        Queue fresh(this->q.device());
+        expect_repeated_qr<T>(fresh, "fresh queue on the fixture's device");
     }
     // A native route pin cannot run on the NETLIB queue; under a pin only the GPU legs run.
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE") && !std::getenv("BATCHLAS_ORGQR_ROUTE")) {
@@ -1317,8 +1318,8 @@ TYPED_TEST(LinalgTyped, QrRepeatsAcrossCallsAndQueues) {
     using T = TypeParam;
     expect_repeated_wrapper_qr<T>(this->q, "fixture queue");
     {
-        Queue fresh;
-        expect_repeated_wrapper_qr<T>(fresh, "fresh default queue");
+        Queue fresh(this->q.device());
+        expect_repeated_wrapper_qr<T>(fresh, "fresh queue on the fixture's device");
         Queue ooo(fresh, false);
         expect_repeated_wrapper_qr<T>(ooo, "out-of-order queue");
     }
