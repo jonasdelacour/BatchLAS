@@ -1087,16 +1087,8 @@ TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
                     Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
                     const auto lambda = fill_poisoned<T>(*this->ctx, A, c.uplo, A0);
                     UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
-                    // syev heads every size with its own pointer array (syev.cc ptr_array_bytes); the chunk
-                    // budget caps the drivers' part, so size_of strips it.
-                    const auto head = [&](int items) {
-                        BumpAllocator pool = BumpAllocator::measuring();
-                        (void)pool.allocate<T*>(*this->ctx, static_cast<std::size_t>(items));
-                        return pool.required_bytes();
-                    };
                     const auto size_of = [&](int items) {
-                        return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo) -
-                               head(items);
+                        return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo);
                     };
                     const std::size_t one = size_of(1), per = size_of(2) - one, three = size_of(3), whole = size_of(batch);
                     ASSERT_GT(per, 0u) << where;
@@ -1112,7 +1104,7 @@ TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
                     if (!by_budget || linear)
                         EXPECT_EQ(parted, three + ptr_bytes) << where << ": the largest part is 3 items";
                     if (by_budget) EXPECT_LE(parted, budget_bytes) << where << " one=" << one << " per=" << per << " whole=" << whole;
-                    UnifiedVector<std::byte> ws(parted + head(batch));
+                    UnifiedVector<std::byte> ws(parted);
                     UnifiedVector<int32_t> info(batch, int32_t(-1));
                     (void)syev<B, T>(*this->ctx, A, W.to_span(), c.jobz, c.uplo, ws.to_span(), info.to_span());
                     this->ctx->wait();

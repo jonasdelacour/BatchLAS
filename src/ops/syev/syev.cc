@@ -8,7 +8,6 @@
 
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/settings.hh>
-#include <batchlas/util/mempool.hh>
 
 #include <src/ops/syev/choice.hh>
 #include <src/ops/syev/vendor.hh>
@@ -109,25 +108,6 @@ Event launch(Queue& q, const SyevChoice& c, const MV<T>& A, Span<Real<T>> w, Job
     }, c);
 }
 
-// A view over the caller's own buffer has no pointer array, and the families' sub-ops reach
-// pointer-array vendor calls on slices of A (sy2sb's geqrf -> cublas<t>geqrfBatched). syev hands
-// every family A over an array of its own, carved from the head of the workspace; can_run admits
-// no heterogeneous A, so the base, ld, stride and mask are the whole view.
-template <typename T>
-std::size_t ptr_array_bytes(Queue& q, const MV<T>& A) {
-    BumpAllocator pool = BumpAllocator::measuring();
-    (void)pool.allocate<T*>(q, static_cast<std::size_t>(A.batch_size()));
-    return pool.required_bytes();
-}
-
-template <typename T>
-MV<T> with_own_ptr_array(Queue& q, const MV<T>& A, Span<std::byte> ws) {
-    BumpAllocator pool(ws);
-    Span<T*> ptrs = pool.allocate<T*>(q, static_cast<std::size_t>(A.batch_size()));
-    return MV<T>(A.data_ptr(), A.rows(), A.cols(), A.ld(), A.stride(), A.batch_size(), ptrs.data())
-        .with_batch_mask(A.batch_mask());
-}
-
 // Every driver refuses a non-square A, and the vendor would read rows() as the order.
 // Thrown before choose() so neither Auto nor a pin can take it.
 template <typename T>
@@ -161,13 +141,11 @@ Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typenam
         ops::syev::spec, ctx, key, ops::syev::candidates<T>(),
         [&](const auto& c, const auto& d) { return ops::syev::can_run<Back, T>(c, d, A); }, shape, key,
         [&](const auto& c) {
-            const std::size_t head = ops::syev::ptr_array_bytes<T>(ctx, A);
-            if (workspace.size() < head + ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
+            if (workspace.size() < ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
                 throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
-            const auto Aw = ops::syev::with_own_ptr_array<T>(ctx, A, workspace);
             // Blocked and TwoStage require an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return ops::syev::launch<Back, T>(q, c, Aw, eigenvalues, jobtype, uplo, workspace.subspan(head), info);
+                return ops::syev::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
             });
         });
 }
@@ -180,7 +158,7 @@ size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     const auto c = select::pick<Back, T>(
         ops::syev::spec, ctx, ops::syev::key_of<T>(A, jobtype), ops::syev::candidates<T>(),
         [&](const auto& k, const auto& d) { return ops::syev::can_run<Back, T>(k, d, A); });
-    return ops::syev::ptr_array_bytes<T>(ctx, A) + ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
+    return ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
 }
 
 namespace ops::syev::detail {
