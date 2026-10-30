@@ -45,12 +45,23 @@ hermitian_candidates_tests::HermitianCandidates/1.ComplexSymmetricSyrkFamilies;t
 hermitian_candidates_tests::HermitianCandidates/1.HerkPinnedFamiliesStraddleTheirLimits;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 
-# Error model: on multipass CUDA a launch with 1 MiB of local memory is not reported at the launch
-# or the next wait (QueueAsyncErrors.*), and queue_from_sycl accepts the CPU device it should
-# reject as foreign (SyclInterop.QueueFromSyclRejectsForeignDevice). Cause open.
+# Same cap, in a test input (2026-10-30): fill_graded_hermitian takes 2*sizeof(T)*n bytes of local
+# memory (src/matrix.cc:1292), 51,200 B for complex<double> at n = 1600, over 49,152 B, and throws
+# "n too large for the device's local memory" after n = 449..1200 pass (~120 s).
+syev_tests::SyevTest/3.DoubleBandEveryOrderUploAndJobz;type_param=SyevConfig<std::complex<double>,(batchlas::Backend)1>
+
+# Error model (cause found 2026-10-30, in AdaptiveCpp): the default integrated multipass launches
+# through clang's CUDA stub (include/AdaptiveCpp/hipSYCL/glue/generic/hiplike/clang.hpp:44-48,
+# reached from hiplike_kernel_launcher.hpp:352-354; etc/AdaptiveCpp/acpp-core.json:22
+# default-is-explicit-multipass false), which never reads cudaGetLastError. A failed launch runs
+# inline on the submitting thread and leaves cudaErrorInvalidConfiguration (an over-limit grid
+# submitted around BatchLAS's check) or cudaErrorInvalidValue (1 MiB of local memory) in that
+# thread's last-error slot; nothing reaches acpp's error list, so neither the launch nor the next
+# wait throws; a 20-line acpp program without BatchLAS reproduces it. Explicit multipass would
+# register it (hiplike_kernel_launcher.hpp:634-639); unverified, --acpp-explicit-multipass fails
+# to compile here (texture_fetch_functions.h not found).
 util_device_queue_tests::QueueAsyncErrors.ErrorCollectedByAQueueCopySurfacesAtTheNextWait
 util_device_queue_tests::QueueAsyncErrors.OversizedLocalMemoryThrowsFromTheLaunch
-util_device_queue_tests::SyclInterop.QueueFromSyclRejectsForeignDevice
 
 # Shared with DPC++ (tests/known-failures.txt): docs/design/known-defects.md, "lanczos returns a
 # spectrum".

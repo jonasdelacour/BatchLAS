@@ -115,7 +115,13 @@ struct SyclInteropAccess {
             for (size_t i = 0; i < all[t].size(); ++i) {
                 if (all[t][i] != dev) continue;
                 const auto in_ctx = ctx.get_devices();
-                if (std::find(in_ctx.begin(), in_ctx.end(), dev) == in_ctx.end()) {
+                bool member = std::find(in_ctx.begin(), in_ctx.end(), dev) != in_ctx.end();
+#if BATCHLAS_SYCL_IMPL_ACPP
+                // acpp adds its host device to every context: the cpu belongs only to a cpu-only one.
+                if (dev.is_cpu())
+                    member = member && std::all_of(in_ctx.begin(), in_ctx.end(), [](const sycl::device& d) { return d.is_cpu(); });
+#endif
+                if (!member) {
                     throw batchlas::device_error("queue_from_sycl: the device is not part of the given context");
                 }
                 return Queue(Device(i, static_cast<DeviceType>(t)), in_order, SyclQueueSource{ctx, dev});
@@ -302,6 +308,14 @@ QueueImpl& Queue::operator*() const {
 
 void Queue::enqueue(Event& event) {
     if(event.impl_.get() == nullptr) return;
+#if BATCHLAS_SYCL_IMPL_ACPP
+    // acpp has no queue-wide barrier: work submitted later to an out-of-order queue does not wait for
+    // the barrier node, so a copy after syev_align read V mid-update. Wait on the host instead.
+    if (!in_order_) {
+        static_cast<sycl::event>(*event).wait();
+        return;
+    }
+#endif
     // Ensure the queue is ordered after `event`.
     // A command group with only depends_on() is not guaranteed to create an actual
     // scheduling node on all backends. Use a barrier when available, else fall
