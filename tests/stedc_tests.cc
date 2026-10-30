@@ -790,3 +790,95 @@ TYPED_TEST(StedcTest, StedcFusedWideWorkgroupRescale) {
         EXPECT_VERIFY(Real, verify::Check::orthogonality, n, MV::orthogonality(*this->ctx, Q, Q.all_items()));
     }
 }
+
+// Values only (jobz = NoEigenVectors). Every merge builds its secular vector from the last row of
+// the left child's eigenvectors and the first row of the right child's (stedc_merge_step), so a
+// driver that skips the leaf vectors under NoEigenVectors merges from zeros: every z component
+// deflates and the result is the sorted torn diagonal, finite and plausible. The workspace is NaN
+// poison and the eigenvector matrix a large finite one, so nothing upstream hides a missed write.
+// Four different items per batch: graded (cond ~1e12), glued Wilkinson clusters, alternating-sign
+// off-diagonals (rho < 0 at every split) and random. n = 180 and 600 recurse three and four times
+// at recursion_threshold 32 and pad on the level driver; 256 is unpadded.
+namespace {
+template <typename Real>
+void stedc_values_only_items(Vector<Real>& d, Vector<Real>& e, int n) {
+    for (int i = 0; i < n; ++i) {
+        const double t = n > 1 ? double(i) / double(n - 1) : 0.0;
+        d(i, 0) = Real(std::pow(10.0, -6.0 + 12.0 * t));
+        d(i, 1) = Real(std::fabs(10.0 - double(i % 21)));
+        d(i, 2) = Real(2);
+        d(i, 3) = Real(std::sin(1.7 * i + 0.3));
+    }
+    for (int i = 0; i + 1 < n; ++i) {
+        e(i, 0) = Real(0.25 * std::sqrt(double(d(i, 0)) * double(d(i + 1, 0))));
+        e(i, 1) = Real((i % 21) == 20 ? 1e-5 : 1.0);
+        e(i, 2) = Real((i % 2) ? -1 : 1);
+        e(i, 3) = Real(std::cos(0.9 * i + 1.1));
+    }
+}
+} // namespace
+
+TYPED_TEST(StedcTest, NoEigenVectorsMatchesReferenceOnPoisonedWorkspace) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int batch = 4;
+    const std::vector<int> items = {0, 1, 2, 3};
+    for (StedcAlgorithm algorithm : {StedcAlgorithm::Recursive, StedcAlgorithm::Auto}) {
+        for (int n : {180, 256, 600}) {
+            SCOPED_TRACE(::testing::Message() << "n " << n << " algorithm " << int(algorithm));
+            auto d = Vector<float_type>::zeros(n, batch);
+            auto e = Vector<float_type>::zeros(n - 1, batch);
+            stedc_values_only_items(d, e, n);
+            Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
+            dense.fill_tridiag(*this->ctx, e, d, e).wait();
+
+            StedcParams<float_type> params{.recursion_threshold = 32, .algorithm = algorithm};
+            UnifiedVector<float_type> eigvals(static_cast<size_t>(n) * batch, float_type(1e30));
+            auto eigvects = Matrix<float_type>::Zeros(n, n, batch);
+            eigvects.fill(*this->ctx, float_type(1e30)).wait();
+            UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::NoEigenVectors, params),
+                                        std::byte{0xFF});
+            UnifiedVector<int32_t> info(batch, int32_t(-1));
+            (void)stedc(*this->ctx, d, e, VectorView<float_type>(eigvals, n, batch), ws, JobType::NoEigenVectors,
+                        params, eigvects, info.to_span());
+            this->ctx->wait();
+
+            for (int b = 0; b < batch; ++b) EXPECT_EQ(info[b], 0) << "item " << b;
+            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n, false, items);
+            // Values only leaves the caller's matrix alone, as LAPACK does with COMPZ = 'N'.
+            for (int b = 0; b < batch; ++b) {
+                EXPECT_EQ(eigvects(n - 1, 0, b), float_type(1e30)) << "item " << b;
+                EXPECT_EQ(eigvects(0, n - 1, b), float_type(1e30)) << "item " << b;
+            }
+        }
+    }
+}
+
+// The same values-only call with no eigenvector matrix at all, the natural values-only spelling:
+// a driver that still needs one as working storage reads through a null view.
+TYPED_TEST(StedcTest, NoEigenVectorsWithoutAnEigenvectorMatrix) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int batch = 4;
+    const std::vector<int> items = {0, 1, 2, 3};
+    for (StedcAlgorithm algorithm : {StedcAlgorithm::Recursive, StedcAlgorithm::Auto}) {
+        for (int n : {180, 256}) {
+            SCOPED_TRACE(::testing::Message() << "n " << n << " algorithm " << int(algorithm));
+            auto d = Vector<float_type>::zeros(n, batch);
+            auto e = Vector<float_type>::zeros(n - 1, batch);
+            stedc_values_only_items(d, e, n);
+            Matrix<float_type> dense = Matrix<float_type>::Zeros(n, n, batch);
+            dense.fill_tridiag(*this->ctx, e, d, e).wait();
+
+            StedcParams<float_type> params{.recursion_threshold = 32, .algorithm = algorithm};
+            UnifiedVector<float_type> eigvals(static_cast<size_t>(n) * batch, float_type(1e30));
+            UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::NoEigenVectors, params),
+                                        std::byte{0xFF});
+            (void)stedc(*this->ctx, d, e, VectorView<float_type>(eigvals, n, batch), ws, JobType::NoEigenVectors,
+                        params, MatrixView<float_type, MatrixFormat::Dense>());
+            this->ctx->wait();
+
+            test_utils::expect_eigenvalues_match_lapacke<float_type>(dense, eigvals, n, false, items);
+        }
+    }
+}

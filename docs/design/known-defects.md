@@ -232,9 +232,6 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:355`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
-- **Recursive `stedc` under `NoEigenVectors`** may merge from unset leaf vectors
-  (`src/ops/syev/stedc/stedc.cc:537`); see
-  [stedc](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
 - Matrix containers, the environment parser and the 3-D tile-group race are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed),
