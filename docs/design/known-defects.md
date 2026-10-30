@@ -209,9 +209,6 @@ Located to a line, not confirmed by a test.
 - **Recursive `stedc` under `NoEigenVectors`** may merge from unset leaf vectors
   (`src/ops/syev/stedc/stedc.cc:537`); see
   [stedc](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
-- **`compute_optimal_wg_size` assumes a 32-bit `long`:** `31 - __builtin_clzl`
-  (`include/batchlas/util/kernel-heuristics.hh:104,109`) is a negative shift on LP64. Fix with
-  `std::bit_floor`.
 - **`gesv` and `posv` throw `internal_error` for a caller error** (heterogeneous or bad-shape batch,
   `src/ops/gesv/gesv.cc:89,92`, `src/ops/posv/posv.cc:96,99`); see
   [error model](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
