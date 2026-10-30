@@ -109,7 +109,13 @@ if(BATCHLAS_STRIP_RELWITHDEBINFO_G AND CMAKE_CXX_FLAGS_RELWITHDEBINFO MATCHES "(
 endif()
 
 # Installed components find each other ($ORIGIN) and their vendor libraries (link path).
-list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN")
+# dyld reads $ORIGIN literally; Mach-O spells it @loader_path.
+if(APPLE)
+    set(BATCHLAS_RPATH_ORIGIN "@loader_path")
+else()
+    set(BATCHLAS_RPATH_ORIGIN "$ORIGIN")
+endif()
+list(APPEND CMAKE_INSTALL_RPATH "${BATCHLAS_RPATH_ORIGIN}")
 if(NOT DEFINED CMAKE_INSTALL_RPATH_USE_LINK_PATH)
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 endif()
