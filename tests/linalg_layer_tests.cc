@@ -1217,6 +1217,58 @@ TYPED_TEST(LinalgTyped, GramBothSidesBothTriangles) {
         << "A A^H";
 }
 
+// ---- geqrf + triangular_mask_into + orgqr, composed repeatedly in one process ----
+// The composition linalg::qr would be; it once returned Q R != A after an earlier call in the
+// process and passed alone. evidence: docs/design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process
+
+namespace {
+
+template <typename T>
+void expect_composed_qr(Queue& q, int m, int n, int batch, unsigned seed, const std::string& what) {
+    auto A = make<T>(q, m, n, batch, Fill::general, seed);
+    auto F = padded<T>(q, A);
+    auto R = padded<T>(q, A);  // every element is overwritten by the mask
+    UnifiedVector<T> tau(static_cast<size_t>(n) * static_cast<size_t>(batch), kPoison<T>);
+    (void)geqrf(q, F, tau.to_span());
+    (void)linalg::triangular_mask_into(q, F, R, Uplo::Upper);
+    (void)orgqr(q, F, tau.to_span());
+    q.wait();
+    EXPECT_VERIFY(T, verify::Check::factorization, m, MV<T>::qr_reconstruction(q, A, F, R)) << what;
+    EXPECT_VERIFY(T, verify::Check::orthogonality, m, MV<T>::orthogonality(q, F)) << what;
+    int nonzero = 0;
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = j + 1; i < m; ++i) nonzero += elem<T>(R, i, j, b) != T(0);
+    EXPECT_EQ(nonzero, 0) << what << ": R below the diagonal";
+}
+
+// Two shapes and batch counts, then the first again, on one queue, then on a fresh queue.
+template <typename T>
+void expect_repeated_qr(Queue& q, const std::string& where) {
+    struct Shape { int m, n, batch; };
+    const Shape seq[] = {{12, 8, 5}, {37, 21, 1030}, {12, 8, 5}, {16, 16, 3}};
+    unsigned seed = 151;
+    for (const auto& s : seq)
+        expect_composed_qr<T>(q, s.m, s.n, s.batch, seed++,
+                              where + " " + std::to_string(s.m) + "x" + std::to_string(s.n) + " batch " +
+                                  std::to_string(s.batch));
+}
+
+}  // namespace
+
+TYPED_TEST(LinalgTyped, ComposedQrRepeatsAcrossCallsAndQueues) {
+    using T = TypeParam;
+    expect_repeated_qr<T>(this->q, "fixture queue");
+    {
+        Queue fresh;
+        expect_repeated_qr<T>(fresh, "fresh default queue");
+    }
+    Queue netlib("cpu");
+    ASSERT_EQ(netlib.backend(), Backend::NETLIB);
+    expect_repeated_qr<T>(netlib, "NETLIB queue");
+    expect_repeated_qr<T>(this->q, "fixture queue again");
+}
+
 // ---- out-of-order queues -------------------------------------------------------
 // A wrapper that copies A and then factors the copy is two launches: on an out-of-order
 // Queue they need an explicit order. Saturating batches give the race room to show.

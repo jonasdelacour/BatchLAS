@@ -175,11 +175,23 @@ then fix the kernel and drop the mirror, or record the failure here.
 
 ## linalg::qr returns a wrong QR after an earlier call in the process
 
-Observed; cause not located; the wrapper is withheld (`include/batchlas/blas/linalg-ops.hh:836`).
-Composing `geqrf`, `triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ after an earlier
-`linalg::qr` call in the same process, and passed alone. No repro is checked in: compose the three
-calls twice in one process. Look first at state that outlives a call: the `Queue`'s arena
-(@ref design_runtime_internals), a static, or a stale event.
+Observed on a GPU; cause not located; the wrapper is withheld (`include/batchlas/blas/linalg-ops.hh:836`).
+Composing `geqrf`, `triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ by four orders of
+magnitude, the same value each time, after an earlier `linalg::qr` test in the same process, in 2-4
+of 4 *concurrent* runs of the test binary; never alone or serially (commit `ae08b7ea`, 2026-08-12,
+on the code of that date).
+
+- **Repro:** `LinalgTyped.ComposedQrRepeatsAcrossCallsAndQueues` (`tests/linalg_layer_tests.cc`):
+  four shapes and batch counts (one at batch 1030, the first repeated) on the fixture queue, a fresh
+  queue, a NETLIB queue, then the fixture again; float, double, complex; padded ld and stride.
+- **Not reproduced on a CPU device** (2026-10-30, threadripper02, icpx OpenCL CPU): every call
+  routes to the NETLIB vendor arm; 180/180 passes over 5 rounds of 4 concurrent binaries.
+- **Lead (unconfirmed):** a load-dependent ordering race on the GPU, not leaked values (the 2026-08
+  notes rule out freed pages, uninitialised Q/R and scratch lifetime). Candidates: vendor work run
+  inline on `get_native`'s stream (`src/sycl/impl.hh` `run_native`), or a missing dependency
+  inside the native blocked drivers' chunk loops.
+- **To fix:** run the repro on a GPU, 4 binaries at once, on the native and vendor routes
+  (`BATCHLAS_GEQRF_ROUTE`, `BATCHLAS_ORGQR_ROUTE`).
 
 ## lanczos returns a spectrum about three times too wide
 
