@@ -1185,9 +1185,9 @@ TYPED_TEST(LinalgTyped, MatvecBothOps) {
     for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
         const int len = t == Transpose::NoTrans ? n : m;
         // inc 2 and a padded stride, poison in the gaps.
-        Vector<T> x(len, batch, Stride{2 * len + 3}, Inc{2});
-        for (int b = 0; b < batch; ++b)
-            for (int i = 0; i < 2 * len + 3; ++i) x.data_ptr()[b * (2 * len + 3) + i] = kPoison<T>;
+        // The value constructor poisons every stored element; the last item ends at its last
+        // entry, so a loop over batch * stride would write past the allocation.
+        Vector<T> x(len, kPoison<T>, batch, Stride{2 * len + 3}, Inc{2});
         for (int b = 0; b < batch; ++b)
             for (int i = 0; i < len; ++i) x(i, b) = scalar_of<T>(0.5 * i - b, 0.25 * (i + b));
         auto y = linalg::matvec(q, A, x, t);
