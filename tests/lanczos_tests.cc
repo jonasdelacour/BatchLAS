@@ -12,10 +12,11 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <string>
+#include <tuple>
 
 
 using namespace batchlas;
-#if BATCHLAS_HAS_GPU_BACKEND
 // Test fixture for SYEVX operations
 class LanczosTestBase : public ::testing::Test {
 protected:
@@ -24,7 +25,8 @@ protected:
         ctx = std::make_shared<Queue>(Device::default_device());
 
         // Initialize test matrices
-        A_data = UnifiedVector<float>(rows * rows * batch_size);
+        // Zeroed: setupCSRMatrices writes only the non-zeros of the dense LAPACKE reference.
+        A_data = UnifiedVector<float>(rows * rows * batch_size, 0.0f);
         W_data = UnifiedVector<float>(rows * batch_size);
 
         // Set up CSR format data for symmetric matrices with known eigenvalues
@@ -350,4 +352,64 @@ TEST(LanczosStride, ClosedFormSpectrum) {
         EXPECT_VERIFY(float, verify::Check::values, n, err);
     }
 }
-#endif // BATCHLAS_HAS_GPU_BACKEND
+
+// Every ortho algorithm and reorthogonalization interval, CSR and dense (ld = n + 3), on a batch
+// of two Toeplitz tridiag(b, a, b) with different {a, b}: values against the closed form, V
+// orthonormal and A V = V diag(W). Reorthogonalizing an already used Lanczos vector (SVQB rotates
+// the pair, Householder flips signs) breaks the recurrence while V stays orthonormal.
+using LanczosOrthoCase = std::tuple<OrthoAlgorithm, int, MatrixFormat>;
+class LanczosOrtho : public ::testing::TestWithParam<LanczosOrthoCase> {};
+
+TEST_P(LanczosOrtho, EigenpairsMatchClosedForm) {
+    const auto [algo, reorth, format] = GetParam();
+    constexpr int n = 48, ld = n + 3, batch = 2;
+    constexpr ToeplitzCoef coef[batch] = {{2.0f, -5.0f}, {-1.0f, 0.75f}};
+    Queue ctx(Device::default_device());
+    Matrix<float> Ad(n, n, batch, ld, ld * n);
+    for (int e = 0; e < ld * n * batch; ++e) Ad.data_ptr()[e] = e % ld < n ? 0.0f : std::nanf("");
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            Ad.at(j, j, b) = coef[b].first;
+            if (j + 1 < n) Ad.at(j + 1, j, b) = Ad.at(j, j + 1, b) = coef[b].second;
+        }
+    }
+    LanczosParams<float> params;
+    params.ortho_algorithm = algo;
+    params.reorthogonalization_iterations = reorth;
+    UnifiedVector<float> W(n * batch);
+    Matrix<float> V(n, n, batch);
+    auto run = [&](const auto& A) {
+        UnifiedVector<std::byte> ws(lanczos_buffer_size(ctx, A, W, JobType::EigenVectors, V, params));
+        (void)lanczos(ctx, A, W, ws, JobType::EigenVectors, V, params);
+        ctx.wait();
+    };
+    if (format == MatrixFormat::CSR) {
+        auto csr = Ad.convert_to<MatrixFormat::CSR>();
+        run(csr.view());
+    } else {
+        run(Ad);
+    }
+
+    std::vector<std::vector<double>> ref(batch, std::vector<double>(n));
+    for (int b = 0; b < batch; ++b) {
+        for (int k = 1; k <= n; ++k) ref[b][k - 1] = coef[b].first + 2.0 * coef[b].second * std::cos(k * M_PI / (n + 1));
+        std::sort(ref[b].begin(), ref[b].end());
+    }
+    for (int b = 0; b < batch; ++b) {
+        const int items[] = {b};
+        const double scale = std::fabs(coef[b].first) + 2.0 * std::fabs(coef[b].second);
+        const double err = MatrixView<float, MatrixFormat::Dense>::values_error(
+            VectorView<float>(W.data(), n, batch), ref, scale, items);
+        EXPECT_VERIFY(float, verify::Check::values, n, err) << "item " << b;
+        test_utils::expect_eigenpairs<float>(ctx, Ad, V.view(), W, n, b);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(Lanczos, LanczosOrtho,
+    ::testing::Combine(::testing::Values(OrthoAlgorithm::CGS2, OrthoAlgorithm::SVQB2, OrthoAlgorithm::Householder,
+                                         OrthoAlgorithm::Chol2),
+                       ::testing::Values(1, 2), ::testing::Values(MatrixFormat::CSR, MatrixFormat::Dense)),
+    [](const ::testing::TestParamInfo<LanczosOrthoCase>& info) {
+        return std::string(to_string(std::get<0>(info.param))) + "_every" + std::to_string(std::get<1>(info.param)) +
+               (std::get<2>(info.param) == MatrixFormat::CSR ? "_CSR" : "_Dense");
+    });
