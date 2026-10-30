@@ -79,9 +79,8 @@ Rule four (every class carries `BATCHLAS_API`) is in
 - `error` is the catchable base and the home for a failure that fits no child.
 - `internal_error` covers library invariants (formerly `std::logic_error`). Selection throws are
   [listed above](#error-model-kernel-selection-throws-outside-the-hierarchy).
-- `gesv` and `posv` (`src/ops/gesv/gesv.cc`, `src/ops/posv/posv.cc`) throw `internal_error` for an
-  empty problem or a heterogeneous batch before selection runs, so a pin cannot change it. By
-  meaning these are `invalid_argument` or `unsupported`.
+- `gesv` and `posv` (`src/ops/gesv/gesv.cc`, `src/ops/posv/posv.cc`) throw `invalid_argument` for
+  an empty problem or a heterogeneous batch before selection runs, so a pin cannot change it.
 
 ## error model: Python exception classes {#error-model-python-exception-classes}
 

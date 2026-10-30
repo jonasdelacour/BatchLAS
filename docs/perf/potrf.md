@@ -62,7 +62,7 @@ so `cta` or `blocked` can run cuSOLVER `potrf` underneath. Keys: `dtype`, `uplo`
   `n <= 32` (16 for cdouble) and `nrhs <= 4`, except cfloat `n > 24` at `nrhs <= 2`, which ranks `cta`; `cta` above.
   Off-grid cells at the edges can differ: cfloat n = 25 and 26 at `nrhs <= 2` take the `tiny` n = 24 row.
 * **sm_120 table** is deep-measured; the earlier 3329-cell seed sweep is `benchmarks/results/routing/sm120_posv_sweep.jsonl`.
-* An empty problem or a heterogeneous batch throws `batchlas::internal_error` before `choose()`; no pin can take them.
+* An empty problem or a heterogeneous batch throws `batchlas::invalid_argument` before `choose()`; no pin can take them.
 * **Pins:** `BATCHLAS_POSV_ROUTE=auto|native|vendor|tiny|cta|blocked`. Bare `native` is Auto's pick; `vendor` warns and
   falls back to Auto; `native:<family>` throws.
 
