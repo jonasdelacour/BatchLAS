@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <cstdint>
 // Installed header: public includes only (src/ is not installed).
@@ -58,10 +59,8 @@ struct BatchedMatrixDecomposition {
  * @param problem_size Characteristic problem size (e.g., matrix dimension); 0 = no cap
  * @param batch_size Number of matrices in batch; currently unused
  * @param memory_per_problem Currently unused
- * @return Work-group size
- * @trap For REDUCTION and SCAN the "power of two" rounding is `1 << (31 - __builtin_clzl(x))`,
- *       which assumes a 32-bit `long`. On LP64 the shift count is negative (undefined
- *       behaviour), so the result is NOT guaranteed to be a power of two.
+ * @return Work-group size. For REDUCTION and SCAN the capped base is rounded down to a power
+ *         of two before the problem-size and device caps, which can still make it a non-power.
  */
 inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_type,
                                       size_t problem_size = 0, size_t batch_size = 1, size_t memory_per_problem = 0) {
@@ -100,13 +99,12 @@ inline size_t compute_optimal_wg_size(const Device& device, KernelType kernel_ty
             } else {
                 base_wg_size = std::min(base_wg_size, size_t(64));
             }
-            // "Power of 2" only where long is 32-bit: see the @trap above.
-            base_wg_size = size_t(1) << (31 - __builtin_clzl(base_wg_size));
+            base_wg_size = std::bit_floor(base_wg_size);
             break;
 
         case KernelType::SCAN:
             base_wg_size = std::min(base_wg_size, size_t(256));
-            base_wg_size = size_t(1) << (31 - __builtin_clzl(base_wg_size));
+            base_wg_size = std::bit_floor(base_wg_size);
             break;
 
         case KernelType::MEMORY_BOUND:

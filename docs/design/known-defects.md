@@ -31,11 +31,22 @@ scalars in cuSPARSE. **Fix needs:** a `rocsparse_op<T>` like `cusparse_op<T>`
 
 ## Defect 5: netlib `trsm` reads `B` when `alpha == 0`
 
-Open. All four arms of the host solve compute `T x = alpha * Bb.at(i, j, 0) - sum`
-(`src/backends/netlib_lapack.cc:407`, `:419`, `:436`, `:448`) with no `alpha == 0` quick return, so
-unzeroed `BumpAllocator` memory gives `0 * NaN = NaN`. **Fix needs:** substitute `T(0)` for the alpha
-term (as the native bodies and the host `spmm` do), and an `alpha == 0` case in
-`tests/trsm_tests.cc` with `B` poisoned by NaN; a merely wrong `B` cannot reveal it.
+Fixed 2026-10-30 for NETLIB. The host solve computed `alpha * Bb.at(i, j, 0) - sum` with no
+`alpha == 0` quick return, so unzeroed `BumpAllocator` memory gave `0 * NaN = NaN`; the batch loop in
+`trsm_vendor` (`src/backends/netlib_lapack.cc`) now stores `B := 0` without reading `A` or `B`, as
+BLAS does. Guard: `TrsmNetlib.AlphaZeroIgnoresNanB*` (every side, uplo, trans and diag, real and
+complex, NaN `A` and `B`, padded `ld`).
+
+Fixed 2026-10-30 for every route of the public `trsm`. The device routes read `B` at `alpha == 0`:
+the CTA kernel (`src/ops/trsm/kernels/trsm_native.cc:264-269`, `dev_mul(alpha_d, B)`), the sub-group
+left kernel (`trsm_sg_left.cc:157`), the blocked route through its first diagonal block
+(`trsm_native.cc:458-459`), and the CUDA complex substitute kernel in `src/backends/cublas.cc`
+`trsm_vendor`. The driver (`src/ops/trsm/trsm.cc`) now answers `alpha == 0` before selection with
+one masked `fill_zeros` of `B`, so no route runs and neither operand is read; a mask off the GPU
+still refuses. Guard: `TrsmOperationsTest.AlphaZeroIgnoresNanUnderEveryRoute` pins each route a
+strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN `A` and `B`, padded
+`ld` and stride, batch 3). The kernels themselves still read `B` when called directly
+(`backend::trsm_vendor`, `sycl_trsm::*`); only the driver calls them.
 
 ## Defect 11: native gemm reads C at beta zero
 
@@ -201,12 +212,6 @@ Located to a line, not confirmed by a test.
 - **Recursive `stedc` under `NoEigenVectors`** may merge from unset leaf vectors
   (`src/ops/syev/stedc/stedc.cc:537`); see
   [stedc](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
-- **`compute_optimal_wg_size` assumes a 32-bit `long`:** `31 - __builtin_clzl`
-  (`include/batchlas/util/kernel-heuristics.hh:104,109`) is a negative shift on LP64. Fix with
-  `std::bit_floor`.
-- **`gesv` and `posv` throw `internal_error` for a caller error** (heterogeneous or bad-shape batch,
-  `src/ops/gesv/gesv.cc:89,92`, `src/ops/posv/posv.cc:96,99`); see
-  [error model](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
 - Matrix containers, the environment parser and the 3-D tile-group race are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed),

@@ -10,6 +10,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <type_traits>
 #include <tests/test_utils.hh>
@@ -17,6 +18,7 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 #include <src/select/vendor.hh>
+#include <src/ops/trsm/choice.hh>
 #include <src/ops/trsm/trsm_native.hh>
 
 using namespace batchlas;
@@ -988,5 +990,133 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
                             MV::trsm_residual(*ctx, A, Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit,
                                               B, B0, MV::up(T(1)), items),
                             (batchlas::verify::Slack{factor, "the old ||AX-B||/||B|| < 1e-5"}));
+    }
+}
+
+#if BATCHLAS_HAS_HOST_BACKEND
+// BLAS trsm at alpha == 0 sets B := 0 and reads neither A nor B, so NaN in either must not
+// reach the result. Unzeroed workspace B is the real case: 0 * NaN = NaN.
+template <typename T>
+void NetlibTrsmAlphaZeroIgnoresNanB() {
+    Queue q(Device("cpu"), Backend::NETLIB);
+    const int n = 5, k = 3, bs = 3, lda = n + 2, ldbl = n + 3, ldbr = k + 4;
+    const T nan = T(std::numeric_limits<typename base_type<T>::type>::quiet_NaN());
+    for (Side side : {Side::Left, Side::Right})
+        for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+            for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                for (Diag diag : {Diag::NonUnit, Diag::Unit}) {
+                    const int rows = side == Side::Left ? n : k, cols = side == Side::Left ? k : n;
+                    const int ldb = side == Side::Left ? ldbl : ldbr;
+                    const int sa = lda * n + 1, sb = ldb * cols + 2;
+                    UnifiedVector<T> a(static_cast<size_t>(sa) * bs, nan), b(static_cast<size_t>(sb) * bs, nan);
+                    MatrixView<T, MatrixFormat::Dense> Av(a.data(), n, n, lda, sa, bs);
+                    MatrixView<T, MatrixFormat::Dense> Bv(b.data(), rows, cols, ldb, sb, bs);
+                    (void)backend::trsm_vendor<Backend::NETLIB, T>(q, Av, Bv, side, uplo, tr, diag, T(0));
+                    q.wait();
+                    int bad = 0, padding = 0;
+                    for (int it = 0; it < bs; ++it)
+                        for (int c = 0; c < cols; ++c)
+                            for (int r = 0; r < ldb; ++r) {
+                                const T v = b[static_cast<size_t>(it) * sb + c * ldb + r];
+                                if (r < rows) bad += !(v == T(0));
+                                else padding += !(v != v);
+                            }
+                    EXPECT_EQ(bad, 0) << "side=" << int(side) << " uplo=" << int(uplo) << " trans=" << int(tr)
+                                      << " diag=" << int(diag) << ": B entries not zeroed";
+                    EXPECT_EQ(padding, 0) << "side=" << int(side) << " uplo=" << int(uplo) << " trans=" << int(tr)
+                                          << " diag=" << int(diag) << ": store into B's ld padding";
+                }
+}
+
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBFloat) { NetlibTrsmAlphaZeroIgnoresNanB<float>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBDouble) { NetlibTrsmAlphaZeroIgnoresNanB<double>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexFloat) { NetlibTrsmAlphaZeroIgnoresNanB<std::complex<float>>(); }
+TEST(TrsmNetlib, AlphaZeroIgnoresNanBComplexDouble) { NetlibTrsmAlphaZeroIgnoresNanB<std::complex<double>>(); }
+#endif
+
+// The public trsm at alpha == 0 under every route the build can run here: B := 0 with A and B
+// all NaN (ld padding and stride gaps included), the padding untouched. Each pin is first proved
+// real for the shape by a strict pin at alpha == 1, so a route the device lacks is not counted.
+TYPED_TEST(TrsmOperationsTest, AlphaZeroIgnoresNanUnderEveryRoute) {
+    using T = typename TestFixture::ScalarType;
+    constexpr Backend B = TestFixture::BackendType;
+    Queue& q = *this->ctx;
+    const T nan = T(std::numeric_limits<typename base_type<T>::type>::quiet_NaN());
+    const int k = 3, bs = 3;
+    struct Operands {
+        UnifiedVector<T> a, b;
+        MatrixView<T, MatrixFormat::Dense> A, Bv;
+    };
+    auto make = [&](int n, Side side, T fill) {
+        const int rows = side == Side::Left ? n : k, cols = side == Side::Left ? k : n;
+        const int lda = n + 2, ldb = rows + 3, sa = lda * n + 1, sb = ldb * cols + 2;
+        UnifiedVector<T> a(static_cast<size_t>(sa) * bs, fill), b(static_cast<size_t>(sb) * bs, fill);
+        MatrixView<T, MatrixFormat::Dense> Av(a.data(), n, n, lda, sa, bs), Bv(b.data(), rows, cols, ldb, sb, bs);
+        return Operands{std::move(a), std::move(b), Av, Bv};
+    };
+    int runs = 0;
+    std::string reached;
+    for (const char* route : {"cta", "sg_left", "blocked", "vendor"})
+        for (int n : {5, 40})
+            for (Side side : {Side::Left, Side::Right}) {
+                bool admitted = true;
+                {
+                    auto ok = make(n, side, T(0));
+                    for (int it = 0; it < bs; ++it)
+                        for (int i = 0; i < n; ++i) ok.a[static_cast<size_t>(it) * ok.A.stride() + i * (ok.A.ld() + 1)] = T(1);
+                    const select::ScopedPin<ops::trsm::TrsmChoice> pin("trsm", route, select::StrictPin{});
+                    try {
+                        trsm<B, T>(q, ok.A, ok.Bv, T(1), side, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit);
+                        q.wait();
+                    } catch (const batchlas::invalid_argument&) {
+                        admitted = false;
+                    }
+                }
+                if (!admitted) continue;
+                reached += std::string(" ") + route + "/" + std::to_string(n) + (side == Side::Left ? "L" : "R");
+                const ScopedEnvVar env("BATCHLAS_TRSM_ROUTE", route);
+                for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                    for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                        for (Diag diag : {Diag::NonUnit, Diag::Unit}) {
+                            auto p = make(n, side, nan);
+                            trsm<B, T>(q, p.A, p.Bv, T(0), side, uplo, tr, diag);
+                            q.wait();
+                            ++runs;
+                            int bad = 0, padding = 0;
+                            for (int it = 0; it < bs; ++it)
+                                for (int c = 0; c < p.Bv.cols(); ++c)
+                                    for (int r = 0; r < p.Bv.ld(); ++r) {
+                                        const T v = p.b[static_cast<size_t>(it) * p.Bv.stride() + c * p.Bv.ld() + r];
+                                        if (r < p.Bv.rows()) bad += !(v == T(0));
+                                        else padding += !(v != v);
+                                    }
+                            EXPECT_EQ(bad, 0) << route << " n=" << n << " side=" << int(side) << " uplo=" << int(uplo)
+                                              << " trans=" << int(tr) << " diag=" << int(diag) << ": B not zeroed";
+                            EXPECT_EQ(padding, 0) << route << " n=" << n << " side=" << int(side)
+                                                  << ": a store into B's ld padding";
+                        }
+            }
+    std::cout << "[ alpha=0  ] backend " << int(B) << " routes:" << reached << " (" << runs << " solves)\n";
+    EXPECT_GT(runs, 0) << "no trsm route admitted this shape";
+
+    // A mask carried by A alone still decides which items of B are zeroed; off the GPU no
+    // route honours a mask, and alpha == 0 refuses it as alpha == 1 does.
+    auto p = make(5, Side::Left, nan);
+    UnifiedVector<std::uint8_t> mask(bs, std::uint8_t{1});
+    mask[1] = 0;
+    const auto masked = [&] {
+        trsm<B, T>(q, p.A.with_batch_mask(mask.to_span()), p.Bv, T(0), Side::Left, Uplo::Lower,
+                   Transpose::NoTrans, Diag::NonUnit);
+        q.wait();
+    };
+    if (q.device().type != DeviceType::GPU) {
+        EXPECT_ANY_THROW(masked());
+        return;
+    }
+    masked();
+    for (int it = 0; it < bs; ++it) {
+        const T v = p.b[static_cast<size_t>(it) * p.Bv.stride()];
+        if (it == 1) EXPECT_TRUE(v != v) << "the masked-off item was written";
+        else EXPECT_EQ(v, T(0)) << "item " << it;
     }
 }

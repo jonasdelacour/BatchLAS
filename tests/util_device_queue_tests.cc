@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/backend_config.h>
 
 #include <batchlas/sycl_interop.hh>
@@ -13,6 +14,7 @@
 #include <src/queue.hh>
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
@@ -560,4 +562,40 @@ TEST(SyclInterop, QueueFromSyclRejectsForeignDevice) {
     }
     if (ran == 0) GTEST_SKIP() << "one gpu, no sub-device partition, no cpu device: nothing foreign to construct";
     std::cout << "[ INFO ] foreign-device cases run: " << ran << "\n";
+}
+
+// REDUCTION and SCAN round the per-device base down to a power of two before the problem-size
+// cap. The rounding was `1 << (31 - __builtin_clzl(x))`, a negative shift on LP64 that came out
+// as 2^32 x the intended size, so only the problem-size and device caps bounded it.
+TEST(KernelHeuristics, ReductionAndScanRoundTheBaseDownToAPowerOfTwo) {
+    for (const char* kind : {"cpu", "gpu"}) {
+        std::optional<Device> dev;
+        try {
+            dev.emplace(kind);
+        } catch (const std::exception&) {
+            continue;
+        }
+        const size_t max_wg = dev->get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
+        const size_t cus = dev->get_property(DeviceProperty::MAX_COMPUTE_UNITS);
+        const bool gpu = dev->type == DeviceType::GPU;
+        const size_t base = gpu ? 256 : std::min(size_t(64), cus * 2);
+        const struct { batchlas::KernelType kt; size_t cap; const char* name; } cases[] = {
+            {batchlas::KernelType::REDUCTION, gpu ? size_t(512) : size_t(64), "REDUCTION"},
+            {batchlas::KernelType::SCAN, 256, "SCAN"},
+        };
+        for (const auto& c : cases) {
+            const size_t rounded = std::bit_floor(std::min(base, c.cap));
+            for (size_t ps : {size_t(0), rounded + 1, size_t(1000), size_t(1) << 20}) {
+                const size_t want = std::max(std::min(rounded, max_wg), size_t(1));
+                EXPECT_EQ(batchlas::compute_optimal_wg_size(*dev, c.kt, ps), want)
+                    << kind << " " << c.name << " problem_size=" << ps;
+            }
+            // A problem size at or below the rounded base caps the result, as it did before.
+            for (size_t ps : {size_t(1), size_t(3), rounded - 1, rounded}) {
+                if (ps == 0) continue;
+                EXPECT_EQ(batchlas::compute_optimal_wg_size(*dev, c.kt, ps), std::min(ps, max_wg))
+                    << kind << " " << c.name << " problem_size=" << ps;
+            }
+        }
+    }
 }

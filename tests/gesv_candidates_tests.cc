@@ -444,7 +444,7 @@ TYPED_TEST(GesvCandidates, CanRunEqualsLaunch) {
 }
 
 // A heterogeneous A or B is refused before choose(), under Auto and under every pin, with
-// internal_error. The tiny driver refuses it as well.
+// invalid_argument, a caller error. The tiny driver refuses it as well.
 TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
     using T = typename TestFixture::T;
     using R = RealOf<T>;
@@ -471,12 +471,12 @@ TYPED_TEST(GesvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
             std::optional<Pin> pin;
             if (c) pin.emplace("gesv", *c);
             const std::string what = std::string(k.what) + " " + (c ? select::to_string(*c) : "auto");
-            EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, k.a, k.b)), batchlas::internal_error)
+            EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, k.a, k.b)), batchlas::invalid_argument)
                 << what << ": gesv_buffer_size";
             UnifiedVector<std::byte> ws(1 << 20);
             UnifiedVector<int32_t> info(batch);
             EXPECT_THROW(((void)gesv<B, T>(*this->ctx, k.a, k.b, piv.to_span(), ws.to_span(), info.to_span())),
-                         batchlas::internal_error)
+                         batchlas::invalid_argument)
                 << what << ": gesv";
             if (c && std::holds_alternative<gs::Tiny>(*c))
                 EXPECT_FALSE(this->direct_launches(*c, k.a, k.b)) << what << ": the driver launched";
@@ -746,7 +746,7 @@ TYPED_TEST(GesvCandidates, EmptyShapesThrowBeforeChoose) {
     for (auto [n, nrhs, batch] : {std::tuple{0, 1, 1}, std::tuple{4, 0, 1}}) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
         const Pin pin("gesv", C{gs::Blocked{}});
-        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm)), batchlas::internal_error)
+        EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A, Bm)), batchlas::invalid_argument)
             << n << " " << nrhs << " " << batch;
     }
     Matrix<T, MatrixFormat::Dense> A(4, 4, 0), Bm(4, 1, 0);

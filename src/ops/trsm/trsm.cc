@@ -95,10 +95,19 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
 template <Backend Back, typename T>
 Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
-    (void)batchlas::detail::call_mask("trsm", A, B);
+    const auto mask = batchlas::detail::call_mask("trsm", A, B);
     trsm_validate_params(A, B, side, uplo, transA, diag);
     // An empty batch is a no-op under any pin, as gemm's is: it never reaches selection.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
+    // alpha == 0 is B := 0 reading neither A nor B (reference BLAS), for every route: one masked fill
+    // instead of a solve, since the kernels form alpha * B and 0 * NaN = NaN. A mask the routes here
+    // would refuse (no native family off the GPU) still refuses; a heterogeneous batch still has no route.
+    if (alpha == T(0) && !A.is_heterogeneous() && !B.is_heterogeneous()) {
+        if (!mask.empty() && !select::device_of<Back>(ctx, ops::trsm::spec.vendor).is_gpu)
+            batchlas::detail::refuse_batch_mask<T>(Op::trsm, "trsm", Back, A, B);
+        if (B.rows() == 0 || B.cols() == 0) return ctx.create_event_after_external_work();
+        return (mask.empty() ? B : B.with_batch_mask(mask)).fill_zeros(ctx);
+    }
     // The coverage row's key: m, n are B's extents and k the triangular order, as before.
     const coverage::Shape shape{.m = B.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA, .uplo = uplo, .side = side, .diag = diag};

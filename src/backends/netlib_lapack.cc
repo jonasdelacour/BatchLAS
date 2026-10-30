@@ -388,6 +388,16 @@ namespace batchlas{
                 const int rows = Bb.rows();
                 const int cols = Bb.cols();
 
+                // BLAS: alpha == 0 sets B := 0 without reading A or B.
+                if (alpha == T(0)) {
+                    for (int j = 0; j < cols; ++j) {
+                        for (int i = 0; i < rows; ++i) {
+                            Bb.at(i, j, 0) = T(0);
+                        }
+                    }
+                    continue;
+                }
+
                 auto opA = [&](int r, int c) {
                     if (transA == Transpose::NoTrans) {
                         return Ab.at(r, c, 0);

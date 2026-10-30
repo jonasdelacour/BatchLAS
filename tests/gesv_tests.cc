@@ -6,6 +6,7 @@
 // evidence: docs/perf/lu.md#the-fused-gesv-tier
 #include <gtest/gtest.h>
 
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/matrix.hh>
@@ -409,3 +410,49 @@ TYPED_TEST(GesvTest, PublicGesvRejectsNonConformingViews) {
     auto Bv = b_view(p);
     EXPECT_THROW((gesv_buffer_size<B, T>(*this->ctx, NotSq, Bv)), batchlas::invalid_argument);
 }
+
+// A heterogeneous batch and an empty n or nrhs are caller errors: invalid_argument, the message
+// opening with the op name, on every backend. GesvTest skips off-GPU, hence the NETLIB TEST below.
+template <Backend B, typename T>
+void ExpectUnservableShapesAreInvalidArgument(Queue& q) {
+    const int n = 6, nrhs = 2, batch = 3;
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
+    UnifiedVector<int> act(batch), cols(batch);
+    for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = nrhs - (b % 2);
+    Matrix<T, MatrixFormat::Dense> A0(0, 0, 1), B0(0, 1, 1), A4(4, 4, 1), B4(4, 0, 1);
+    struct Case { const char* what; MatrixView<T, MatrixFormat::Dense> a, b; };
+    const Case cases[] = {{"A heterogeneous", A.with_active_dims(act.to_span(), act.to_span()), Bm.view()},
+                          {"B heterogeneous", A.view(), Bm.with_active_dims(act.to_span(), cols.to_span())},
+                          {"n = 0", A0.view(), B0.view()},
+                          {"nrhs = 0", A4.view(), B4.view()}};
+    UnifiedVector<int64_t> piv(size_t(n) * batch);
+    UnifiedVector<std::byte> ws(1 << 16);
+    UnifiedVector<int32_t> info(batch);
+    for (const auto& k : cases) {
+        for (bool sizing : {true, false}) {
+            try {
+                if (sizing) (void)gesv_buffer_size<B, T>(q, k.a, k.b);
+                else (void)gesv<B, T>(q, k.a, k.b, piv.to_span(), ws.to_span(), info.to_span());
+                ADD_FAILURE() << k.what << ": no throw";
+            } catch (const batchlas::invalid_argument& e) {
+                EXPECT_EQ(std::string(e.what()).rfind("gesv", 0), 0u) << k.what << ": " << e.what();
+            } catch (const std::exception& e) {
+                ADD_FAILURE() << k.what << (sizing ? " gesv_buffer_size" : " gesv") << ": threw " << e.what()
+                              << ", not invalid_argument";
+            }
+        }
+    }
+    q.wait();
+}
+
+TYPED_TEST(GesvTest, UnservableShapesAreInvalidArgument) {
+    ExpectUnservableShapesAreInvalidArgument<TestFixture::BackendType, typename TestFixture::T>(*this->ctx);
+}
+
+#if BATCHLAS_HAS_HOST_BACKEND
+TEST(GesvNetlib, UnservableShapesAreInvalidArgument) {
+    Queue q(Device("cpu"), Backend::NETLIB);
+    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, double>(q);
+    ExpectUnservableShapesAreInvalidArgument<Backend::NETLIB, std::complex<double>>(q);
+}
+#endif

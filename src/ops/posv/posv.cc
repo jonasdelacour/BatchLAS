@@ -96,10 +96,10 @@ template <typename T>
 void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
                          const char* who) {
     if (A.is_heterogeneous() || Bm.is_heterogeneous())
-        throw batchlas::internal_error(std::string(who) + ": a heterogeneous batch (per-item active dims on " +
+        throw batchlas::invalid_argument(std::string(who) + ": a heterogeneous batch (per-item active dims on " +
                                        (A.is_heterogeneous() ? "A" : "B") + "), which no posv kernel serves.");
     if (A.rows() >= 1 && Bm.cols() >= 1 && A.batch_size() >= 1) return;
-    throw batchlas::internal_error(std::string(who) + ": n = " + std::to_string(A.rows()) + ", nrhs = " +
+    throw batchlas::invalid_argument(std::string(who) + ": n = " + std::to_string(A.rows()) + ", nrhs = " +
                                    std::to_string(Bm.cols()) + ", batch = " + std::to_string(A.batch_size()) +
                                    " is an empty problem, which no posv kernel serves.");
 }

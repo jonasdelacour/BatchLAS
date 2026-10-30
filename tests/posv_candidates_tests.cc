@@ -517,7 +517,7 @@ TYPED_TEST(PosvCandidates, CanRunEqualsLaunch) {
 }
 
 // A heterogeneous A or B (the other homogeneous) is refused before choose(), under Auto and
-// under every pin, with internal_error. Blocked's vendor children would
+// under every pin, with invalid_argument, a caller error. Blocked's vendor children would
 // otherwise solve at the full storage order; the padding is nonzero and indefinite so such a
 // solve would be wrong, not merely harmless. The natives' own drivers refuse it as well.
 TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
@@ -547,12 +547,12 @@ TYPED_TEST(PosvCandidates, HeterogeneousBatchIsRefusedUnderEveryPin) {
                 if (c) pin.emplace("posv", *c);
                 const std::string what = std::string(k.what) + " " + (c ? select::to_string(*c) : "auto") +
                                          (uplo == Uplo::Lower ? " L" : " U");
-                EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, k.a, k.b, uplo)), batchlas::internal_error)
+                EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, k.a, k.b, uplo)), batchlas::invalid_argument)
                     << what << ": posv_buffer_size";
                 UnifiedVector<std::byte> ws(1 << 20);
                 UnifiedVector<int32_t> info(batch);
                 EXPECT_THROW(((void)posv<B, T>(*this->ctx, k.a, k.b, uplo, ws.to_span(), info.to_span())),
-                             batchlas::internal_error)
+                             batchlas::invalid_argument)
                     << what << ": posv";
                 if (c && !std::holds_alternative<ps::Blocked>(*c))
                     EXPECT_FALSE(this->direct_launches(*c, k.a, k.b, uplo)) << what << ": the driver launched";
@@ -855,7 +855,7 @@ TYPED_TEST(PosvCandidates, EmptyShapesThrowBeforeChoose) {
         Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, nrhs, batch);
         const Pin pin("posv", C{ps::Blocked{}});
         EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bm, Uplo::Lower)),
-                     batchlas::internal_error)
+                     batchlas::invalid_argument)
             << n << " " << nrhs << " " << batch;
     }
     Matrix<T, MatrixFormat::Dense> A(4, 4, 0), Bm(4, 1, 0);
