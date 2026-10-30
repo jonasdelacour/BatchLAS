@@ -31,11 +31,19 @@ scalars in cuSPARSE. **Fix needs:** a `rocsparse_op<T>` like `cusparse_op<T>`
 
 ## Defect 5: netlib `trsm` reads `B` when `alpha == 0`
 
-Open. All four arms of the host solve compute `T x = alpha * Bb.at(i, j, 0) - sum`
-(`src/backends/netlib_lapack.cc:407`, `:419`, `:436`, `:448`) with no `alpha == 0` quick return, so
-unzeroed `BumpAllocator` memory gives `0 * NaN = NaN`. **Fix needs:** substitute `T(0)` for the alpha
-term (as the native bodies and the host `spmm` do), and an `alpha == 0` case in
-`tests/trsm_tests.cc` with `B` poisoned by NaN; a merely wrong `B` cannot reveal it.
+Fixed 2026-10-30 for NETLIB. The host solve computed `alpha * Bb.at(i, j, 0) - sum` with no
+`alpha == 0` quick return, so unzeroed `BumpAllocator` memory gave `0 * NaN = NaN`; the batch loop in
+`trsm_vendor` (`src/backends/netlib_lapack.cc`) now stores `B := 0` without reading `A` or `B`, as
+BLAS does. Guard: `TrsmNetlib.AlphaZeroIgnoresNanB*` (every side, uplo, trans and diag, real and
+complex, NaN `A` and `B`, padded `ld`).
+
+Still open on the device routes, which read `B` at `alpha == 0`: the CTA kernel
+(`src/ops/trsm/kernels/trsm_native.cc:264-269`, `dev_mul(alpha_d, B)`), the sub-group left kernel
+(`src/ops/trsm/kernels/trsm_sg_left.cc:157`), the blocked route through its first diagonal block
+(`trsm_native.cc:458-459` calls the CTA kernel with `alpha`; its trailing gemms take `beta = alpha`
+and skip `C`, see Defect 11), and the CUDA complex substitute kernel (`src/backends/cublas.cc`, the
+`alpha * Bb[j * ldb + i] - sum` arms of `trsm_vendor`). The real cuBLAS and rocBLAS calls follow
+their libraries.
 
 ## Defect 11: native gemm reads C at beta zero
 
