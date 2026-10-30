@@ -45,10 +45,9 @@ hermitian_candidates_tests::HermitianCandidates/1.ComplexSymmetricSyrkFamilies;t
 hermitian_candidates_tests::HermitianCandidates/1.HerkPinnedFamiliesStraddleTheirLimits;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 
-# Same cap, in a test input (2026-10-30): fill_graded_hermitian takes 2*sizeof(T)*n bytes of local
-# memory (src/matrix.cc:1292), 51,200 B for complex<double> at n = 1600, over 49,152 B, and throws
-# "n too large for the device's local memory" after n = 449..1200 pass (~120 s).
-syev_tests::SyevTest/3.DoubleBandEveryOrderUploAndJobz;type_param=SyevConfig<std::complex<double>,(batchlas::Backend)1>
+# fill_graded_hermitian over the 48 KiB cap (SyevTest/3.DoubleBandEveryOrderUploAndJobz,
+# complex<double> at n = 1600): fixed 2026-10-30, removed; the square fills fall back to
+# global-memory scratch when their scratch does not fit local memory.
 
 # Error model: fixed 2026-10-30, removed. Integrated multipass launches through clang's CUDA stub
 # (glue/generic/hiplike/clang.hpp:44-48), which never reads cudaGetLastError, so a failed launch

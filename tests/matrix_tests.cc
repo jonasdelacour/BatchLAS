@@ -16,6 +16,11 @@
 
 using namespace batchlas;
 
+namespace batchlas::detail {
+// src/matrix.cc: overrides the local-memory budget of the square fills (0 restores the device's).
+std::size_t set_fill_local_budget(std::size_t bytes);
+}  // namespace batchlas::detail
+
 TEST (MatrixDenseTest, StridedConstruction) {
     constexpr int rows = 3;
     constexpr int cols = 2;
@@ -1631,6 +1636,60 @@ TYPED_TEST(MatrixFillTest, LocalMemoryFillsAreRaceFreeAtASaturatingBatch) {
         run(again);
         EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(padded)) << "layout changed the values";
         EXPECT_TRUE(TestFixture::active(packed) == TestFixture::active(again)) << "a rerun changed the values";
+    }
+}
+
+// A 1-byte local budget sends every n down the global-scratch path the device takes once n
+// outgrows its local memory (graded at order 1600 complex<double> on AdaptiveCpp's 48 KiB).
+// It must reproduce the local path bit for bit: other tests' expected values come from it.
+TYPED_TEST(MatrixFillTest, GlobalScratchFillsMatchTheLocalPathBitForBit) {
+    using T = typename TestFixture::T;
+    struct Budget {
+        explicit Budget(std::size_t bytes) : old(batchlas::detail::set_fill_local_budget(bytes)) {}
+        ~Budget() { batchlas::detail::set_fill_local_budget(old); }
+        std::size_t old;
+    };
+    for (int which = 0; which < 2; ++which) {
+        SCOPED_TRACE(which == 0 ? "pivoted" : "graded");
+        auto run = [&](Matrix<T, MatrixFormat::Dense>& m, unsigned seed) {
+            if (which == 0) m.fill_random_pivoted(*this->ctx, seed).wait();
+            else m.fill_graded_hermitian(*this->ctx, 5.0, seed).wait();
+        };
+        // 257 > the 256-wide group: every strided loop wraps; batch 1024 saturates the device.
+        for (auto [n, batch] : {std::pair{1, 3}, {16, 3}, {70, 3}, {257, 2}, {32, 1024}}) {
+            SCOPED_TRACE("n=" + std::to_string(n) + " batch=" + std::to_string(batch));
+            const unsigned seed = 1000u + unsigned(n);
+            auto local = TestFixture::padded(n, batch), global = TestFixture::padded(n, batch);
+            run(local, seed);
+            {
+                Budget forced(1);
+                run(global, seed);
+            }
+            TestFixture::expect_padding_untouched(global);
+            EXPECT_TRUE(TestFixture::active(local) == TestFixture::active(global)) << "the global-scratch path changed the bits";
+        }
+    }
+}
+
+TYPED_TEST(MatrixFillTest, ZZProbeHashes) {
+    using T = typename TestFixture::T;
+    auto fnv = [](const std::vector<T>& v) {
+        std::uint64_t h = 1469598103934665603ull;
+        const auto* p = reinterpret_cast<const unsigned char*>(v.data());
+        for (std::size_t k = 0; k < v.size() * sizeof(T); ++k) h = (h ^ p[k]) * 1099511628211ull;
+        return h;
+    };
+    const char* tn = std::is_same_v<T, float> ? "s" : std::is_same_v<T, double> ? "d" : std::is_same_v<T, std::complex<float>> ? "c" : "z";
+    for (int n : {1, 2, 16, 33, 70, 128, 257, 512, 1024, 1600}) {
+        const int batch = n >= 1024 ? 1 : 3;
+        for (unsigned seed : {1u, 4801u}) {
+            auto g = TestFixture::padded(n, batch);
+            g.fill_graded_hermitian(*this->ctx, 6.0, seed).wait();
+            std::printf("HASH graded %s n=%d seed=%u %016llx\n", tn, n, seed, (unsigned long long)fnv(TestFixture::active(g)));
+            auto p = TestFixture::padded(n, batch);
+            p.fill_random_pivoted(*this->ctx, seed).wait();
+            std::printf("HASH pivoted %s n=%d seed=%u %016llx\n", tn, n, seed, (unsigned long long)fnv(TestFixture::active(p)));
+        }
     }
 }
 
