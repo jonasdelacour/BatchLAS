@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-push gate on persistent trees: configure once, rebuild incrementally, full ctest, ledger diff.
 #
-#   scripts/gate.sh [--only full|vf] [--seed-from TREE [--seed-allow-dirty]] [--parallel]
+#   scripts/gate.sh [--only full|vf] [--serial] [--no-build] [--seed-from TREE [--seed-allow-dirty]]
+#                   [--parallel]
 #
 #   build-gate     full targets, preset dev-tests (the ledger tests/known-failures.txt was
 #                  recorded under it); full ctest, slow suites included; gated by
@@ -11,6 +12,14 @@
 #                  ledger (see the nightly CI job), so it gates on build success and reports
 #                  failing names, plus the diff against this tree's previous gate run.
 #
+# Both trees build first, one after the other. Then, with two or more GPUs visible
+# (CUDA_VISIBLE_DEVICES, else nvidia-smi), the two ctests run at once: vf on the first visible
+# GPU, full on the second, each with DPCPP_CPU_NUM_CUS=cores/2 for its opencl:cpu half. With one
+# GPU, --serial, --parallel or --only they run one after the other (full on the second GPU, vf
+# on the first, when two are visible).
+#
+#   --serial       never run the two ctests at once
+#   --no-build     skip configure and build: test the trees as they are
 #   --seed-from T  seed a tree that does not exist yet from built tree T (scripts/seed_build_tree.sh),
 #                  only when T's BATCHLAS_ENABLE_VENDOR_BLAS matches that tree's
 #   --seed-allow-dirty  pass --allow-dirty to the seeding (T's checkout has uncommitted files)
@@ -18,14 +27,17 @@
 #
 # Environment: BATCHLAS_GATE_CUDA (default ON), BATCHLAS_GATE_PRESET (default dev-tests),
 # BATCHLAS_GATE_DIR / BATCHLAS_GATE_VF_DIR (default build-gate / build-gate-vf),
-# BATCHLAS_GATE_CXX (compiler for a new tree; default /opt/dpcpp-cuda/bin/clang++ when present).
+# BATCHLAS_GATE_CXX (compiler for a new tree; default /opt/dpcpp-cuda/bin/clang++ when present),
+# BATCHLAS_GATE_CPU_CUS (DPCPP_CPU_NUM_CUS per tree when the ctests overlap; default cores/2).
 # ctest runs with ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu' when it is unset and sycl-ls lists
 # both a native_cpu and an opencl:cpu device: else CPU queues land on native_cpu, which has no
-# image in a spir64_x86_64 build ("No kernel named"). CUDA_VISIBLE_DEVICES is left to the caller.
+# image in a spir64_x86_64 build ("No kernel named").
 # Every configure forces the gate's shape (full CPU+GPU targets, every test, split libraries,
 # no offset twins), so a GPU-only or smoke seed cannot turn the gate into a smaller run.
 # The box-wide build lock (/tmp/batchlas-build.lock) is held for the whole gate, ctest included:
-# a build beside a full ctest is how the 2x4090 box was OOM-killed (docs/ci.md).
+# a build beside a full ctest is how the 2x4090 box was OOM-killed (docs/ci.md). Each ctest
+# records per-entry peak RSS in <tree>/gate/rss.tsv (scripts/gate_rss.py, Linux only).
+# After each ctest, CTestCostData.txt is rewritten from its junit times (serial ctest skews it).
 # Exit 0 only when every selected tree built and the full tree's ledger diff is clean.
 set -eu
 set -o pipefail
@@ -36,13 +48,17 @@ only=""
 seed_from=""
 seed_dirty=()
 parallel=0
+serial=0
+build=1
 while [ "$#" -gt 0 ]; do
     case $1 in
         --only) only=$2; shift 2 ;;
         --seed-from) seed_from=$(cd "$2" && pwd); shift 2 ;;
         --seed-allow-dirty) seed_dirty=(--allow-dirty); shift ;;
         --parallel) parallel=1; shift ;;
-        -h|--help) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --serial) serial=1; shift ;;
+        --no-build) build=0; shift ;;
+        -h|--help) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gate: unknown argument $1" >&2; exit 64 ;;
     esac
 done
@@ -58,7 +74,7 @@ cxx=${BATCHLAS_GATE_CXX:-}
 shape=(-DBATCHLAS_CPU_TARGET=auto -DBATCHLAS_TEST_TARGET_SET=all -DBATCHLAS_SYCL_GLOBAL_OFFSET=OFF)
 [ "$(uname -s)" = Darwin ] || shape+=(-DBATCHLAS_MONOLITHIC_LIBRARY=OFF)
 summary_dir=$full_dir; [ "$only" != vf ] || summary_dir=$vf_dir
-summary="$root/$summary_dir/gate-summary.txt"
+case $summary_dir in /*) summary="$summary_dir/gate-summary.txt" ;; *) summary="$root/$summary_dir/gate-summary.txt" ;; esac
 t_start=$(date +%s)
 
 lock=${BATCHLAS_BUILD_LOCK:-/tmp/batchlas-build.lock}
@@ -75,6 +91,8 @@ lines=()
 overall=0
 note() { lines+=("$*"); echo "gate: $*"; }
 elapsed() { printf '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 )); }
+notes_file=/dev/null
+tnote() { printf '%s\n' "$*" >> "$notes_file"; echo "gate: $*"; }
 
 failing_names() {
     python3 -c '
@@ -89,7 +107,26 @@ for case in ET.parse(sys.argv[1]).getroot().iter("testcase"):
 ' "$1" | sort -u
 }
 
-run_tree() {
+# A serial ctest (-j 1) never reads CTestCostData.txt, so it writes time/runs: the gate trees'
+# costs read 1/2, then 1/3, ... of the real times (ctest 4.2.3 and 4.3.2). After each run, the
+# file is rewritten from this run's junit as one run per entry.
+reset_cost_data() {
+    local junit=$2 cost="$1/Testing/Temporary/CTestCostData.txt"
+    [ -f "$cost" ] || return 0
+    if [ -f "$junit" ] && python3 -c '
+import sys, xml.etree.ElementTree as ET
+for case in ET.parse(sys.argv[1]).getroot().iter("testcase"):
+    if case.get("status") in ("run", "fail") and case.get("time"):
+        print(case.get("name"), 1, case.get("time"))
+print("---")
+' "$junit" > "$cost.tmp"; then
+        mv "$cost.tmp" "$cost"
+    else
+        rm -f "$cost" "$cost.tmp"
+    fi
+}
+
+build_tree() {
     local kind=$1 dir=$2 vendor want have rc t0
     local -a extra=()
     if [ "$kind" = vf ]; then vendor=OFF; extra=(-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF); else vendor=ON; fi
@@ -110,7 +147,6 @@ run_tree() {
 
     [ -f "$dir/CMakeCache.txt" ] || [ -z "$cxx" ] || extra+=("-DCMAKE_CXX_COMPILER=$cxx")
     mkdir -p "$dir/gate"
-    t0=$(date +%s)
     if ! cmake --preset "$preset" -B "$dir" -DBATCHLAS_ENABLE_CUDA="$cuda" "${shape[@]}" \
             -DBATCHLAS_LINK_DEPENDS_NO_SHARED=OFF "${extra[@]}" > "$dir/gate/configure.log" 2>&1; then
         note "$kind: CONFIGURE FAILED ($dir/gate/configure.log)"; return 1
@@ -134,28 +170,50 @@ print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(s
     t0=$(date +%s); rc=0
     BATCHLAS_FULL_BUILD=1 "$here/b" -B "$dir" > "$dir/gate/build.out" 2>&1 || rc=$?
     note "$kind: build exit $rc in $(elapsed $(( $(date +%s) - t0 ))) ($(grep -o '[^ ]*/logs/[^ )]*' "$dir/gate/build.out" | tail -n 1))"
-    [ "$rc" -eq 0 ] || return 1
+    [ "$rc" -eq 0 ]
+}
 
-    local junit="$root/$dir/gate/ctest-junit.xml" gx="$root/$dir/gate/gtest-xml"
+# ctest, peak RSS, failing names and the ledger diff of one tree. Notes go to
+# <dir>/gate/test-notes.txt, so two trees can run at once in background subshells.
+test_tree() {
+    local kind=$1 dir=$2 gpu=$3 cus=$4 rc t0 cpid spid=""
+    notes_file="$dir/gate/test-notes.txt"
+    : > "$notes_file"
+    local abs=$dir
+    case $dir in /*) ;; *) abs="$root/$dir" ;; esac
+    local junit="$abs/gate/ctest-junit.xml" gx="$abs/gate/gtest-xml"
     local -a filter=()
     [ "$kind" = full ] || filter=(-LE slow)
     local -a envp=(GTEST_OUTPUT="xml:$gx/")
     [ -z "$selector" ] || envp+=(ONEAPI_DEVICE_SELECTOR="$selector")
+    [ -z "$gpu" ] || envp+=(CUDA_VISIBLE_DEVICES="$gpu")
+    [ -z "$cus" ] || envp+=(DPCPP_CPU_NUM_CUS="$cus")
+    local -a runner=(ctest --test-dir "$dir" -j 1)
+    [ "$parallel" = 0 ] || runner=("$here/ctest_gpus.sh" --test-dir "$dir")
+    local -a timer=()
+    rm -f "$dir/gate/ctest-maxrss.txt" "$dir/gate/rss.tsv"
+    [ -z "$gnu_time" ] || timer=("$gnu_time" -f 'maxrss_kb %M' -o "$dir/gate/ctest-maxrss.txt")
     rm -rf "$gx" "$junit"; mkdir -p "$gx"
     t0=$(date +%s); rc=0
-    if [ "$parallel" = 1 ]; then
-        env "${envp[@]}" "$here/ctest_gpus.sh" --test-dir "$dir" --output-junit "$junit" "${filter[@]}" \
-            > "$dir/gate/ctest.out" 2>&1 || rc=$?
-    else
-        env "${envp[@]}" ctest --test-dir "$dir" -j 1 --output-junit "$junit" "${filter[@]}" \
-            > "$dir/gate/ctest.out" 2>&1 || rc=$?
+    env "${envp[@]}" "${timer[@]}" "${runner[@]}" --output-junit "$junit" "${filter[@]}" \
+        > "$dir/gate/ctest.out" 2>&1 &
+    cpid=$!
+    if [ -d /proc/self ]; then
+        python3 "$here/gate_rss.py" --pid "$cpid" --log "$dir/gate/ctest.out" --out "$dir/gate/rss.tsv" &
+        spid=$!
     fi
-    note "$kind: ctest ${filter[*]:-(full)} exit $rc in $(elapsed $(( $(date +%s) - t0 ))): $(grep -E 'tests passed|tests failed' "$dir/gate/ctest.out" | tail -n 1)"
-    [ -f "$junit" ] || { note "$kind: no junit report written"; return 1; }
+    wait "$cpid" || rc=$?
+    [ -z "$spid" ] || wait "$spid" || true
+    reset_cost_data "$dir" "$junit"
+    tnote "$kind: ctest ${filter[*]:-(full)}${gpu:+ on CUDA_VISIBLE_DEVICES=$gpu}${cus:+ DPCPP_CPU_NUM_CUS=$cus} exit $rc in $(elapsed $(( $(date +%s) - t0 ))): $(grep -E 'tests passed|tests failed' "$dir/gate/ctest.out" | tail -n 1)"
+    if [ -f "$dir/gate/rss.tsv" ]; then
+        tnote "$kind: $(python3 "$here/gate_rss.py" --summary "$dir/gate/rss.tsv" --exact "$dir/gate/ctest-maxrss.txt") ($dir/gate/rss.tsv)"
+    fi
+    [ -f "$junit" ] || { tnote "$kind: no junit report written"; return 1; }
 
     [ ! -f "$dir/gate/failing.txt" ] || mv "$dir/gate/failing.txt" "$dir/gate/failing.prev.txt"
     failing_names "$junit" > "$dir/gate/failing.txt"
-    note "$kind: $(grep -c . "$dir/gate/failing.txt" || true) failing ctest test(s): $(tr '\n' ' ' < "$dir/gate/failing.txt")"
+    tnote "$kind: $(grep -c . "$dir/gate/failing.txt" || true) failing ctest test(s): $(tr '\n' ' ' < "$dir/gate/failing.txt")"
 
     local -a cmp=(python3 .github/ci/compare_failures.py --junit "$junit" --gtest-dir "$gx"
                   --build-dir "$dir" --expected-tests-from "$dir")
@@ -167,18 +225,22 @@ print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(s
     rc=0
     "${cmp[@]}" > "$dir/gate/compare.txt" 2>&1 || rc=$?
     if [ "$kind" = full ]; then
-        note "full: ledger diff $( [ "$rc" -eq 0 ] && echo CLEAN || echo FAILED ) ($dir/gate/compare.txt)"
-        [ "$rc" -eq 0 ] || while IFS= read -r l; do lines+=("    $l"); done < <(tail -n 20 "$dir/gate/compare.txt")
+        tnote "full: ledger diff $( [ "$rc" -eq 0 ] && echo CLEAN || echo FAILED ) ($dir/gate/compare.txt)"
+        [ "$rc" -eq 0 ] || tail -n 20 "$dir/gate/compare.txt" | sed 's/^/    /' >> "$notes_file"
         return "$rc"
     fi
-    note "vf: ledger diff exit $rc, informational only (no vendor-free ledger exists)"
+    tnote "vf: ledger diff exit $rc, informational only (no vendor-free ledger exists)"
     if [ -f "$dir/gate/failing.prev.txt" ]; then
         local new fixed
         new=$(comm -13 "$dir/gate/failing.prev.txt" "$dir/gate/failing.txt" | tr '\n' ' ')
         fixed=$(comm -23 "$dir/gate/failing.prev.txt" "$dir/gate/failing.txt" | tr '\n' ' ')
-        note "vf: vs previous gate run: new failures [${new}] now passing [${fixed}]"
+        tnote "vf: vs previous gate run: new failures [${new}] now passing [${fixed}]"
     fi
     return 0
+}
+
+collect_notes() {
+    [ ! -f "$1/gate/test-notes.txt" ] || while IFS= read -r l; do lines+=("$l"); done < "$1/gate/test-notes.txt"
 }
 
 export LC_ALL=C
@@ -192,11 +254,62 @@ if [ -z "${ONEAPI_DEVICE_SELECTOR+set}" ]; then
         note "ctest runs with ONEAPI_DEVICE_SELECTOR='$selector' (sycl-ls lists native_cpu and opencl:cpu)"
     fi
 fi
+gnu_time=""
+if /usr/bin/time --version 2>&1 | grep GNU > /dev/null; then gnu_time=/usr/bin/time; fi
+
+gpus=()
+if [ "$cuda" = ON ]; then
+    if [ -n "${CUDA_VISIBLE_DEVICES+set}" ]; then
+        IFS=, read -r -a gpus <<<"$CUDA_VISIBLE_DEVICES"
+    elif command -v nvidia-smi > /dev/null; then
+        while IFS= read -r g; do gpus+=("$g"); done < <(nvidia-smi -L 2>/dev/null | sed -n 's/^GPU \([0-9][0-9]*\):.*/\1/p')
+    fi
+fi
+gpu_vf=""; gpu_full=""
+if [ "${#gpus[@]}" -ge 2 ] && [ "$parallel" = 0 ]; then gpu_vf=${gpus[0]}; gpu_full=${gpus[1]}; fi
+
+kinds=()
 for kind in full vf; do
     [ -z "$only" ] || [ "$only" = "$kind" ] || continue
     dir=$full_dir; [ "$kind" = full ] || dir=$vf_dir
-    run_tree "$kind" "$dir" || overall=1
+    if [ "$build" = 0 ]; then
+        [ -f "$dir/CMakeCache.txt" ] || { note "$kind: --no-build but $dir has no CMakeCache.txt"; overall=1; continue; }
+        mkdir -p "$dir/gate"
+    elif ! build_tree "$kind" "$dir"; then
+        overall=1; continue
+    fi
+    kinds+=("$kind")
 done
+
+if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ]; then
+    # Builds are done and the lock is held, so nothing else on the box allocates beside the
+    # two ctests (the recorded OOM kills both had a build running); rss.tsv shows the margin.
+    cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+    cus=${BATCHLAS_GATE_CPU_CUS:-$(( cores / 2 > 0 ? cores / 2 : 1 ))}
+    note "ctest: full on GPU $gpu_full and vf on GPU $gpu_vf at once, DPCPP_CPU_NUM_CUS=$cus each"
+    t0=$(date +%s)
+    { test_tree full "$full_dir" "$gpu_full" "$cus" || exit "$?"; } &
+    pid_full=$!
+    { test_tree vf "$vf_dir" "$gpu_vf" "$cus" || exit "$?"; } &
+    pid_vf=$!
+    wait "$pid_full" || overall=1
+    wait "$pid_vf" || overall=1
+    collect_notes "$full_dir"
+    collect_notes "$vf_dir"
+    note "ctest phase (both trees at once) took $(elapsed $(( $(date +%s) - t0 )))"
+else
+    [ "${#kinds[@]}" -lt 2 ] || [ -n "$gpu_full" ] || [ "$serial" = 1 ] ||
+        note "ctest: one tree at a time (${#gpus[@]} GPU(s) visible$( [ "$parallel" = 0 ] || echo ', --parallel'))"
+    for kind in "${kinds[@]}"; do
+        if [ "$kind" = full ]; then
+            test_tree full "$full_dir" "$gpu_full" "" || overall=1
+            collect_notes "$full_dir"
+        else
+            test_tree vf "$vf_dir" "$gpu_vf" "" || overall=1
+            collect_notes "$vf_dir"
+        fi
+    done
+fi
 
 mkdir -p "$(dirname "$summary")"
 {
