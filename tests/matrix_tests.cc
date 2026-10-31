@@ -1671,28 +1671,6 @@ TYPED_TEST(MatrixFillTest, GlobalScratchFillsMatchTheLocalPathBitForBit) {
     }
 }
 
-TYPED_TEST(MatrixFillTest, ZZProbeHashes) {
-    using T = typename TestFixture::T;
-    auto fnv = [](const std::vector<T>& v) {
-        std::uint64_t h = 1469598103934665603ull;
-        const auto* p = reinterpret_cast<const unsigned char*>(v.data());
-        for (std::size_t k = 0; k < v.size() * sizeof(T); ++k) h = (h ^ p[k]) * 1099511628211ull;
-        return h;
-    };
-    const char* tn = std::is_same_v<T, float> ? "s" : std::is_same_v<T, double> ? "d" : std::is_same_v<T, std::complex<float>> ? "c" : "z";
-    for (int n : {1, 2, 16, 33, 70, 128, 257, 512, 1024, 1600}) {
-        const int batch = n >= 1024 ? 1 : 3;
-        for (unsigned seed : {1u, 4801u}) {
-            auto g = TestFixture::padded(n, batch);
-            g.fill_graded_hermitian(*this->ctx, 6.0, seed).wait();
-            std::printf("HASH graded %s n=%d seed=%u %016llx\n", tn, n, seed, (unsigned long long)fnv(TestFixture::active(g)));
-            auto p = TestFixture::padded(n, batch);
-            p.fill_random_pivoted(*this->ctx, seed).wait();
-            std::printf("HASH pivoted %s n=%d seed=%u %016llx\n", tn, n, seed, (unsigned long long)fnv(TestFixture::active(p)));
-        }
-    }
-}
-
 // compute_nd_range_sizes caps the grid above INT_MAX / 2 work items, so a kernel that handles one
 // element per work-item silently skipped everything past the cap. 2^30 + 32768 floats (4 GiB).
 TEST(MatrixKernels, GridCapCoversAllElements) {

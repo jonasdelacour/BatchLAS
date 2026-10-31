@@ -16,12 +16,14 @@
 #include <src/select/vendor.hh>
 #include <src/ops/syev/kernels/chunk_budget.hh>
 #include <src/select/select.hh>
+#include <src/queue.hh>
 #include <batchlas/no_route.hh>
 #include <algorithm>
 #include <cstring>
 #include <complex>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <iostream>
@@ -656,23 +658,58 @@ TYPED_TEST(SyevTest, ChunksOnAnOutOfOrderQueue) {
 namespace {
 
 // A graded Hermitian batch from the library fill (lambda_i = 10^(-6 i / (n - 1)), a different Q per
-// item, deterministic in the seed) in A's strided storage, copied whole into `full`. Then a large
-// finite poison (9e3 against ||A||_2 = 1) overwrites the triangle `uplo` does not name.
+// item, seed 91 + n), generated once per (n, batch, ld, stride) and kept pristine: `image` in that
+// strided storage, zero padding included, and `full`, its dense copy. A fill at n >= 1024 costs 12-46 s.
 template <typename T>
-std::vector<std::vector<double>> fill_poisoned(Queue& ctx, MatrixView<T, MatrixFormat::Dense> A, Uplo uplo,
-                                               const MatrixView<T, MatrixFormat::Dense>& full) {
-    const int n = A.rows();
-    A.fill_graded_hermitian(ctx, 6.0, 91u + unsigned(n)).wait();
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, full, A).wait();
+class GradedFills {
+public:
+    struct Entry {
+        Entry(int n, int batch, int ld, int stride)
+            : n(n), batch(batch), ld(ld), stride(stride), image(size_t(stride) * batch, T(0)), full(n, n, batch) {}
+        int n, batch, ld, stride;
+        UnifiedVector<T> image;
+        Matrix<T, MatrixFormat::Dense> full;
+    };
+
+    const Entry& get(Queue& ctx, int n, int batch, int ld, int stride) {
+        for (const auto& e : entries_)
+            if (e->n == n && e->batch == batch && e->ld == ld && e->stride == stride) return *e;
+        Entry& e = *entries_.emplace_back(std::make_unique<Entry>(n, batch, ld, stride));
+        UnifiedVector<T*> ptrs(batch, nullptr);
+        MatrixView<T, MatrixFormat::Dense> image(e.image.data(), n, n, ld, stride, batch, ptrs.data());
+        image.fill_graded_hermitian(ctx, 6.0, 91u + unsigned(n)).wait();
+        MatrixView<T, MatrixFormat::Dense>::copy(ctx, e.full, image).wait();
+        return e;
+    }
+
+private:
+    std::vector<std::unique_ptr<Entry>> entries_;
+};
+
+template <typename T>
+struct Poisoned {
+    const Matrix<T, MatrixFormat::Dense>& A0;
+    std::vector<std::vector<double>> lambda;
+};
+
+// The cached graded batch device-copied into A (whose buffer is exactly stride * batch), then a large
+// finite poison (9e3 against ||A||_2 = 1) over the triangle `uplo` does not name, on the device.
+template <typename T>
+Poisoned<T> fill_poisoned(Queue& ctx, GradedFills<T>& fills, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    const int n = A.rows(), ld = A.ld(), stride = A.stride();
+    const auto& e = fills.get(ctx, n, A.batch_size(), ld, stride);
     const T poison = vendor_syev_cast<T>({-9.0e3, is_std_complex_v<T> ? 7.0e3 : 0.0});
-    for (int b = 0; b < A.batch_size(); ++b)
-        for (int j = 0; j < n; ++j)
-            for (int i = 0; i < n; ++i)
-                if (uplo == Uplo::Lower ? i < j : i > j) A(i, j, b) = poison;
+    const bool lower = uplo == Uplo::Lower;
+    T* const a = A.data_ptr();
+    ctx->memcpy(a, e.image.data(), e.image.size() * sizeof(T)).wait();
+    ctx->parallel_for(sycl::range<3>(size_t(e.batch), size_t(n), size_t(n)), [=](sycl::id<3> id) {
+           const int b = int(id[0]), j = int(id[1]), i = int(id[2]);
+           if (lower ? i < j : i > j) a[size_t(b) * stride + size_t(j) * ld + i] = poison;
+       }).wait();
     std::vector<double> lam(n);
     for (int i = 0; i < n; ++i) lam[i] = std::pow(10.0, n == 1 ? 0.0 : -6.0 * i / (n - 1));
     std::sort(lam.begin(), lam.end());
-    return std::vector<std::vector<double>>(A.batch_size(), lam);
+    return {e.full, std::vector<std::vector<double>>(A.batch_size(), lam)};
 }
 
 }  // namespace
@@ -686,6 +723,7 @@ void expect_auto_ignores_other_triangle(Queue& ctx, std::initializer_list<int> n
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const int batch = 2;
+    GradedFills<T> fills;
     for (const int n : ns)
         for (const Uplo uplo : {Uplo::Lower, Uplo::Upper})
             for (const JobType jobz : {JobType::EigenVectors, JobType::NoEigenVectors}) {
@@ -695,8 +733,7 @@ void expect_auto_ignores_other_triangle(Queue& ctx, std::initializer_list<int> n
                 UnifiedVector<T> buf(size_t(stride) * batch, T(0));
                 UnifiedVector<T*> ptrs(batch, nullptr);
                 MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
-                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
-                const auto lambda = fill_poisoned<T>(ctx, A, uplo, A0);
+                const auto [A0, lambda] = fill_poisoned<T>(ctx, fills, A, uplo);
                 UnifiedVector<Real> W(size_t(n) * batch, Real(0));
                 UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W.to_span(), jobz, uplo));
                 (void)syev<B, T>(ctx, A, W.to_span(), jobz, uplo, ws.to_span(), Span<int32_t>{});
@@ -718,10 +755,12 @@ struct RepeatCase {
 };
 
 // Same device, same route, same build: two solves of identical copies of one batch agree bit for bit
-// (W and the whole buffer: eigenvectors, the other triangle and the padding).
+// (W and the whole buffer: eigenvectors, the other triangle and the padding). buf[1] is a device copy
+// of buf[0]; expect_graded_fill_deterministic checks the fill itself.
 template <typename T, Backend B>
 void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase> cases) {
     using Real = typename base_type<T>::type;
+    GradedFills<T> fills;
     for (const RepeatCase& c : cases) {
         if (B == Backend::ROCM && std::string(c.route) == "cta") continue;
         const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", c.route);
@@ -731,19 +770,15 @@ void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase
                                           " batch=" + std::to_string(c.batch) + (uplo == Uplo::Lower ? " L" : " U") +
                                           (jobz == JobType::EigenVectors ? " V" : " N");
                 const int ld = c.n + 3, stride = ld * c.n + 5;
-                Matrix<T, MatrixFormat::Dense> A0(c.n, c.n, c.batch);
                 UnifiedVector<T> buf[2] = {UnifiedVector<T>(size_t(stride) * c.batch, T(0)),
                                            UnifiedVector<T>(size_t(stride) * c.batch, T(0))};
                 UnifiedVector<Real> W[2] = {UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-1)),
                                             UnifiedVector<Real>(size_t(c.n) * c.batch, Real(-2))};
                 UnifiedVector<T*> ptrs[2] = {UnifiedVector<T*>(c.batch, nullptr), UnifiedVector<T*>(c.batch, nullptr)};
-                for (int r = 0; r < 2; ++r) {
-                    MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
-                    (void)fill_poisoned<T>(ctx, A, uplo, A0);
-                    if (r == 1)
-                        ASSERT_EQ(0, std::memcmp(buf[0].data(), buf[1].data(), buf[0].size() * sizeof(T)))
-                            << where << ": the inputs differ";
-                }
+                (void)fill_poisoned<T>(
+                    ctx, fills, MatrixView<T, MatrixFormat::Dense>(buf[0].data(), c.n, c.n, ld, stride, c.batch, ptrs[0].data()),
+                    uplo);
+                ctx->memcpy(buf[1].data(), buf[0].data(), buf[0].size() * sizeof(T)).wait();
                 for (int r = 0; r < 2; ++r) {
                     MatrixView<T, MatrixFormat::Dense> A(buf[r].data(), c.n, c.n, ld, stride, c.batch, ptrs[r].data());
                     UnifiedVector<std::byte> ws(syev_buffer_size<B, T>(ctx, A, W[r].to_span(), jobz, uplo));
@@ -756,6 +791,18 @@ void expect_pinned_route_repeatable(Queue& ctx, std::initializer_list<RepeatCase
                     << where << ": eigenvectors or A differ between two runs";
             }
     }
+}
+
+// Two fresh graded fills of the same strided storage agree bit for bit: the fill-determinism half of
+// PinnedRouteIsBitwiseRepeatable, which the cache above no longer exercises per solve.
+template <typename T>
+void expect_graded_fill_deterministic(Queue& ctx, int n, int batch) {
+    const int ld = n + 3, stride = ld * n + 5;
+    GradedFills<T> first, second;
+    const auto& a = first.get(ctx, n, batch, ld, stride);
+    const auto& b = second.get(ctx, n, batch, ld, stride);
+    EXPECT_EQ(0, std::memcmp(a.image.data(), b.image.data(), a.image.size() * sizeof(T)))
+        << "n=" << n << " batch=" << batch << ": two graded fills differ";
 }
 
 }  // namespace
@@ -786,6 +833,7 @@ TYPED_TEST(SyevTest, PinnedRouteIsBitwiseRepeatable) {
     if constexpr (TestFixture::BackendType == Backend::NETLIB) {
         GTEST_SKIP() << "the pinned native families are GPU kernels";
     } else {
+        expect_graded_fill_deterministic<typename TestFixture::ScalarType>(*this->ctx, 17, 64);
         expect_pinned_route_repeatable<typename TestFixture::ScalarType, TestFixture::BackendType>(
             *this->ctx, {{"cta", 17, 64}, {"blocked", 32, 64}, {"two_stage", 40, 64}});
     }
@@ -855,15 +903,14 @@ std::vector<double> graded_lambda(int n) {
 // One solve of a poisoned graded batch (fill_poisoned: condition 1e6, ld = n + 3, stride = ld n + 5),
 // checked through verify. Returns the route the trace names.
 template <Backend B, typename T>
-std::string solve_graded_band(Queue& ctx, int n, int batch, Uplo uplo, JobType jobz, const std::string& where) {
+std::string solve_graded_band(Queue& ctx, GradedFills<T>& fills, int n, int batch, Uplo uplo, JobType jobz, const std::string& where) {
     using Real = typename base_type<T>::type;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const int ld = n + 3, stride = ld * n + 5;
     UnifiedVector<T> buf(size_t(stride) * batch, T(0));
     UnifiedVector<T*> ptrs(batch, nullptr);
     MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
-    Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
-    const auto lambda = fill_poisoned<T>(ctx, A, uplo, A0);
+    const auto [A0, lambda] = fill_poisoned<T>(ctx, fills, A, uplo);
     UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
     const std::string route = traced_syev<B, T>(ctx, A, W, jobz, uplo);
     const VectorView<Real> w(W.data(), n, batch);
@@ -897,11 +944,11 @@ std::vector<BandCase> band_grid(std::initializer_list<int> orders) {
 // Auto: vendor-free, a GPU row must name a runnable native family (never the last resort); with the
 // library the GPU row is served as transcribed and the CPU takes LAPACKE.
 template <Backend B, typename T>
-void expect_band_auto(Queue& ctx, const std::vector<BandCase>& cases) {
+void expect_band_auto(Queue& ctx, GradedFills<T>& fills, const std::vector<BandCase>& cases) {
     constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
     for (const BandCase& c : cases) {
         const std::string where = band_where(c.n, c.uplo, c.jobz);
-        const std::string route = solve_graded_band<B, T>(ctx, c.n, 2, c.uplo, c.jobz, where);
+        const std::string route = solve_graded_band<B, T>(ctx, fills, c.n, 2, c.uplo, c.jobz, where);
         if (B == Backend::NETLIB) {
             EXPECT_EQ(route.rfind("vendor", 0), 0u) << where << ": " << route;
         } else {
@@ -913,12 +960,12 @@ void expect_band_auto(Queue& ctx, const std::vector<BandCase>& cases) {
 
 // Each native family pinned, so both are exercised whatever the table ranks first.
 template <Backend B, typename T>
-void expect_band_pinned(Queue& ctx, const std::vector<BandCase>& cases) {
+void expect_band_pinned(Queue& ctx, GradedFills<T>& fills, const std::vector<BandCase>& cases) {
     for (const char* family : {"blocked", "two_stage"}) {
         const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", family);
         for (const BandCase& c : cases) {
             const std::string where = family + band_where(c.n, c.uplo, c.jobz);
-            EXPECT_EQ((solve_graded_band<B, T>(ctx, c.n, 2, c.uplo, c.jobz, where)), family) << where;
+            EXPECT_EQ((solve_graded_band<B, T>(ctx, fills, c.n, 2, c.uplo, c.jobz, where)), family) << where;
         }
     }
 }
@@ -933,9 +980,11 @@ TYPED_TEST(SyevTest, DoubleBandAutoIsServedByARow) {
     if constexpr (!kDoubleScalar<T>) {
         GTEST_SKIP() << "the band is a double / complex<double> requirement";
     } else if constexpr (B == Backend::NETLIB) {
-        expect_band_auto<B, T>(*this->ctx, {{449, Uplo::Lower, JobType::EigenVectors}});
+        GradedFills<T> fills;
+        expect_band_auto<B, T>(*this->ctx, fills, {{449, Uplo::Lower, JobType::EigenVectors}});
     } else {
-        expect_band_auto<B, T>(*this->ctx, {{449, Uplo::Lower, JobType::EigenVectors},
+        GradedFills<T> fills;
+        expect_band_auto<B, T>(*this->ctx, fills, {{449, Uplo::Lower, JobType::EigenVectors},
                                             {480, Uplo::Upper, JobType::EigenVectors},
                                             {1200, Uplo::Upper, JobType::NoEigenVectors}});
     }
@@ -947,7 +996,8 @@ TYPED_TEST(SyevTest, DoubleBandPinnedNativeFamilies) {
     if constexpr (!kDoubleScalar<T> || B == Backend::NETLIB) {
         GTEST_SKIP() << "the native families are GPU kernels; the band is double / complex<double>";
     } else {
-        expect_band_pinned<B, T>(*this->ctx, band_grid({449}));
+        GradedFills<T> fills;
+        expect_band_pinned<B, T>(*this->ctx, fills, band_grid({449}));
     }
 }
 
@@ -959,8 +1009,9 @@ TYPED_TEST(SyevTest, DoubleBandEveryOrderUploAndJobz) {
     if constexpr (!kDoubleScalar<T> || B == Backend::NETLIB) {
         GTEST_SKIP() << "the band is a double / complex<double> GPU requirement (LAPACKE: the quick case)";
     } else {
-        expect_band_auto<B, T>(*this->ctx, band_grid({449, 480, 1024, 1200, 1600}));
-        expect_band_pinned<B, T>(*this->ctx, band_grid({1200}));
+        GradedFills<T> fills;
+        expect_band_auto<B, T>(*this->ctx, fills, band_grid({449, 480, 1024, 1200, 1600}));
+        expect_band_pinned<B, T>(*this->ctx, fills, band_grid({1200}));
     }
 }
 
@@ -1076,6 +1127,7 @@ TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
         GTEST_SKIP() << "the chunk loop serves the native families, GPU kernels";
     } else {
         const int n = 64, batch = 7, ld = n + 3, stride = ld * n + 5;
+        GradedFills<T> fills;
         for (const bool by_budget : {false, true})
             for (const char* family : {"blocked", "two_stage"})
                 for (const BandCase& c : band_grid({n})) {
@@ -1084,8 +1136,7 @@ TYPED_TEST(SyevTest, BatchPartsUnderAScratchBudget) {
                     UnifiedVector<T> buf(size_t(stride) * batch, T(0));
                     UnifiedVector<T*> ptrs(batch, nullptr);
                     MV A(buf.data(), n, n, ld, stride, batch, ptrs.data());
-                    Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
-                    const auto lambda = fill_poisoned<T>(*this->ctx, A, c.uplo, A0);
+                    const auto [A0, lambda] = fill_poisoned<T>(*this->ctx, fills, A, c.uplo);
                     UnifiedVector<Real> W(size_t(n) * batch, Real(-1));
                     const auto size_of = [&](int items) {
                         return syev_buffer_size<B, T>(*this->ctx, A.batch_range(0, items), W.to_span(), c.jobz, c.uplo);
