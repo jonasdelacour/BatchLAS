@@ -329,19 +329,18 @@ TYPED_TEST(SytrdSb2stTest, SubgroupKernelEveryStorageCombination) {
     }
 }
 
-TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
-    using T = typename TestFixture::ScalarType;
+namespace {
+// BANDR1 band reduction of a random banded Hermitian A0 (kd = 6, batch 5), default and d=2 schedules,
+// against A0's dense spectrum; the input band must come back unchanged.
+template <typename T>
+void band_reduction_matches_dense(Queue& ctx, int n) {
     using Real = typename base_type<T>::type;
-    constexpr Backend B = TestFixture::BackendType;
-
-    auto& ctx = *this->ctx;
     if (!BATCHLAS_VERIFY_HAVE_LAPACKE) GTEST_SKIP() << "no host LAPACKE reference in this build";
 
     #if defined(BATCHLAS_SB2ST_DEBUG_PRINTF)
-    const int n = 12;
+    n = 12;
     const int kd = 3;
     #else
-    const int n = 256;
     const int kd = 6;
     #endif
     const int batch = 5;
@@ -414,6 +413,16 @@ TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
 
     ASSERT_TRUE(check_spectrum(d_out, e_out, "default"));
     ASSERT_TRUE(check_spectrum(d_out2, e_out2, "d=2"));
+}
+}  // namespace
+
+TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrum) {
+    band_reduction_matches_dense<typename TestFixture::ScalarType>(*this->ctx, 96);
+}
+
+// The long chase: ctest runs it as sytrd_sb2st_tests_slow (BATCHLAS_SLOW_CASES_sytrd_sb2st_tests).
+TYPED_TEST(SytrdSb2stTest, BandReductionMatchesDenseSyevSpectrumN256) {
+    band_reduction_matches_dense<typename TestFixture::ScalarType>(*this->ctx, 256);
 }
 
 TYPED_TEST(SytrdSb2stTest, BandReductionSpectrumSmallSweep) {

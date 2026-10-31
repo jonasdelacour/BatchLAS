@@ -51,7 +51,8 @@ low-level code (`Queue`, `Matrix`/`MatrixView`, the memory pool, `sg_partition`,
 anything under `include/batchlas/util`) run the full suite.
 
 The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `stedc_tests`,
-`steqr_tests`, `sytrd_sb2st_tests`, `gesvd_tests` and `consumer_package_tests`. `ctest -LE slow`
+`steqr_tests`, `gesvd_tests` and `consumer_package_tests`; `BATCHLAS_SLOW_CASES_<name>` moves single
+cases to a `<name>_slow` entry (`sytrd_sb2st_tests_slow`: BANDR1 at n=256). `ctest -LE slow`
 is a broad check, not a pre-push gate. Label a test `slow` past about 15 s.
 
 ## The sub-group partition layer
