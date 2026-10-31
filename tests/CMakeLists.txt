@@ -524,8 +524,11 @@ function(batchlas_add_test_target test_name)
     elseif(BATCHLAS_SLOW_CASES_${test_name})
         # Its XML is renamed from BATCHLAS_GTEST_XML_STEM as _heavy's is.
         set(_slow_cmd ${_cmd})
+        set(_slow_env_mod "")
         if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
             set(_slow_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
+        elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
+            set(_slow_env_mod "GTEST_OUTPUT=string_append:${test_name}_slow.xml")
         endif()
         add_test(NAME ${test_name} COMMAND ${_cmd} "--gtest_filter=-${BATCHLAS_SLOW_CASES_${test_name}}")
         add_test(NAME ${test_name}_slow COMMAND ${_slow_cmd} "--gtest_filter=${BATCHLAS_SLOW_CASES_${test_name}}")
@@ -585,6 +588,9 @@ function(batchlas_add_test_target test_name)
             LABELS "${_component};slow"
             ENVIRONMENT "${_slow_env}"
             SKIP_REGULAR_EXPRESSION "Running 0 tests from 0 test suites")
+        if(_slow_env_mod)
+            set_tests_properties(${test_name}_slow PROPERTIES ENVIRONMENT_MODIFICATION "${_slow_env_mod}")
+        endif()
     endif()
 endfunction()
 

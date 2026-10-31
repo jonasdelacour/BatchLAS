@@ -16,7 +16,8 @@ src/select, src/sycl, src/util, cmake/, ...) falls back to the full build and th
 `ctest -LE 'slow|heavy'`. A changed header (src/ops/**, include/**, tests/*.hh) also selects
 every test whose .cc includes it, directly or through a tests/*.hh. The regex names the quick
 entries and their route-pinned `_native` reruns; --heavy adds the `<name>_heavy` case tiers
-(tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS). Builds go through scripts/b.
+(tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS). A `<name>_slow` case tier (BATCHLAS_SLOW_CASES_<name>)
+is named when the diff reaches <name> directly, and under --heavy always. Builds go through scripts/b.
 This is an iteration aid: the pre-push gate is still the full run (agent guide section 8).
 """
 
@@ -64,7 +65,8 @@ def read_registry():
     pinned = [w for w in cmake_list(text, "BATCHLAS_ROUTE_PINNED_TESTS") if not w.startswith('"')]
     return {"targets": sorted(set(targets)), "heavy": set(cmake_list(text, "BATCHLAS_HEAVY_TESTS")),
             "pinned": set(w for w in pinned if w.endswith("_tests")),
-            "slow": set(cmake_list(text, "BATCHLAS_SLOW_TESTS"))}
+            "slow": set(cmake_list(text, "BATCHLAS_SLOW_TESTS")),
+            "slow_cases": set(re.findall(r"^\s*set\(\s*BATCHLAS_SLOW_CASES_(\w+)", text, re.M))}
 
 
 def git(*args):
@@ -240,7 +242,7 @@ def affected(paths, heavy):
     for name in touched_ops:
         binaries |= tests_for(name, targets)
     # Callers reached only through the closure: their quick entries, not the slow binaries.
-    slow_skipped = set()
+    direct, slow_skipped = set(binaries), set()
     for name in closure - touched_ops:
         found = tests_for(name, targets) - binaries
         slow_skipped |= found & reg["slow"]
@@ -250,6 +252,8 @@ def affected(paths, heavy):
     entries |= set(b + "_native" for b in binaries if b in reg["pinned"])
     if heavy:
         entries |= set(b + "_heavy" for b in binaries if b in reg["heavy"])
+    # A <name>_slow case tier (BATCHLAS_SLOW_CASES_<name>) for a binary the diff reaches directly.
+    entries |= set(b + "_slow" for b in binaries if b in reg["slow_cases"] and (heavy or b in direct))
     return {"shared": shared, "ignored": ignored, "ops": sorted(touched_ops),
             "ops_with_callers": sorted(closure), "targets": sorted(binaries),
             "slow_callers_skipped": sorted(slow_skipped),

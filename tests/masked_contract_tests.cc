@@ -113,45 +113,89 @@ TEST(MaskedContract, TheWorkspaceArrivesPoisonedEveryRun) {
     EXPECT_EQ(op.unpoisoned, 0);
 }
 
+namespace cov = batchlas::coverage;
+
+// gemm, F32, SYCL, Upper, "native": n 33..63 and batch 2..3 share one row key.
+void record_gemm(int64_t n, int64_t batch, const char* spelling, bool native_existed, int native_supported) {
+    cov::Shape s;
+    s.op = batchlas::Op::gemm;
+    s.m = s.n = s.k = n;
+    s.batch = batch;
+    s.uplo = batchlas::Uplo::Upper;
+    cov::record_choice(batchlas::Op::gemm, batchlas::ScalarKind::F32, batchlas::Backend::SYCL, s, "native", spelling,
+                       native_existed, native_supported);
+}
+
+// The process's tables set aside for one test: it starts empty, with the switch as given, and its
+// synthetic rows never reach a BATCHLAS_COVERAGE_OUT file.
+struct CoverageWindow {
+    cov::Snapshot at = cov::snapshot();
+    explicit CoverageWindow(bool recording) {
+        at.keep = false;
+        cov::g_dynamic_enabled = recording;
+    }
+    ~CoverageWindow() { cov::restore(at); }
+};
+
 // The in-process capture (src/select/coverage.hh): only the run's own calls, a nested capture's
-// rows its own, and the table and the recording switch restored after.
+// rows merged into the outer one (recording was on under it), and with recording off before, the
+// tables and the switch restored after.
 TEST(ReachedRows, CaptureSeesOnlyItsRunAndRestoresTheTable) {
-    namespace cov = batchlas::coverage;
-    using batchlas::Backend;
-    using batchlas::Op;
-    using batchlas::ScalarKind;
-    const auto record = [](int64_t n, const char* spelling) {
-        cov::Shape s;
-        s.op = Op::gemm;
-        s.m = s.n = s.k = n;
-        s.batch = 3;
-        s.uplo = batchlas::Uplo::Upper;
-        cov::record_choice(Op::gemm, ScalarKind::F32, Backend::SYCL, s, "native", spelling, true, 1);
-    };
-    const cov::Snapshot at = cov::snapshot();
+    const CoverageWindow window(false);
+    record_gemm(40, 3, "tiled", true, 1);  // before the capture: not in it
     std::vector<std::string> inner;
     const auto rows = test_support::reached_rows([&] {
         EXPECT_TRUE(cov::dynamic_enabled());
-        record(40, "tiled");
-        record(40, "tiled");
+        record_gemm(40, 3, "tiled", true, 1);
+        record_gemm(40, 3, "tiled", true, 1);
         inner = test_support::captured_lines([&] {
-            record(300, "direct");
-            cov::record_miss(Op::trsm, ScalarKind::C64, Backend::SYCL, "none");
+            record_gemm(300, 3, "direct", true, 1);
+            cov::record_miss(batchlas::Op::trsm, batchlas::ScalarKind::C64, batchlas::Backend::SYCL, "none");
         });
     });
     ASSERT_EQ(inner.size(), 2u);
     EXPECT_EQ(test_support::csv_fields(inner[0]).at(10), "direct");
     EXPECT_EQ(inner[1], "miss,trsm,complex<double>,SYCL,,,,,,,,1,0,0,none\n");
-    ASSERT_EQ(rows.size(), 1u) << "the inner capture's restore hides its row from the outer one";
-    EXPECT_EQ(rows[0].op, "gemm");
-    EXPECT_EQ(rows[0].spelling, "tiled");
-    EXPECT_EQ(rows[0].backend, "SYCL");
-    EXPECT_EQ(rows[0].uplo, batchlas::Uplo::Upper);
-    EXPECT_EQ(rows[0].calls, 2);
-    const cov::Snapshot after = cov::snapshot();
-    EXPECT_EQ(after.calls, at.calls);
-    EXPECT_EQ(after.enabled, at.enabled);
+    ASSERT_EQ(rows.size(), 2u) << "the inner capture's restore merges its row into the outer one";
+    for (const auto& r : rows) {
+        EXPECT_EQ(r.op, "gemm");
+        EXPECT_EQ(r.backend, "SYCL");
+        EXPECT_EQ(r.uplo, batchlas::Uplo::Upper);
+        EXPECT_EQ(r.calls, r.spelling == "tiled" ? 2 : 1) << r.spelling;
+    }
+    EXPECT_FALSE(cov::dynamic_enabled());
+    const auto table = cov::rows_since(window.at);
+    ASSERT_EQ(table.size(), 1u) << "recording was off: the capture's rows are dropped";
+    EXPECT_EQ(test_support::csv_fields(table[0]).at(11), "1");
     EXPECT_TRUE(test_support::captured_lines([] {}).empty());
+}
+
+// A capture while recording is already on (BATCHLAS_COVERAGE_OUT, route_diff.sh) reports its own
+// call's shape and native flags, not an earlier call's in the same row key, and restore keeps both.
+TEST(ReachedRows, ACaptureUnderRecordingReportsItsOwnCallAndKeepsTheCounts) {
+    const CoverageWindow window(true);
+    record_gemm(40, 3, "tiled", true, 1);
+    record_gemm(40, 3, "tiled", true, 1);
+    const auto rows = test_support::reached_rows([] { record_gemm(33, 2, "tiled", false, 0); });
+    ASSERT_EQ(rows.size(), 1u);
+    EXPECT_EQ(rows[0].m, 33);
+    EXPECT_EQ(rows[0].n, 33);
+    EXPECT_EQ(rows[0].k, 33);
+    EXPECT_EQ(rows[0].batch, 2);
+    EXPECT_EQ(rows[0].calls, 1);
+    const auto line = test_support::captured_lines([] { record_gemm(33, 2, "tiled", false, 0); });
+    ASSERT_EQ(line.size(), 1u);
+    EXPECT_EQ(test_support::csv_fields(line[0]).at(12), "0") << "native_route_existed of the in-window call";
+    EXPECT_EQ(test_support::csv_fields(line[0]).at(13), "0") << "native_route_supported of the in-window call";
+    EXPECT_TRUE(cov::dynamic_enabled());
+    const auto table = cov::rows_since(window.at);
+    ASSERT_EQ(table.size(), 1u);
+    const auto f = test_support::csv_fields(table[0]);
+    EXPECT_EQ(f.at(5), "40") << "the earlier call made the row";
+    EXPECT_EQ(f.at(8), "3");
+    EXPECT_EQ(f.at(11), "4") << "two earlier calls and two captured ones";
+    EXPECT_EQ(f.at(12), "1");
+    EXPECT_EQ(f.at(13), "1");
 }
 
 // The patterns whose failures `run` raised, each failure required to carry `what`.

@@ -13,10 +13,11 @@
 #                  failing names, plus the diff against this tree's previous gate run.
 #
 # Both trees build first, one after the other. Then, with two or more GPUs visible
-# (CUDA_VISIBLE_DEVICES, else nvidia-smi), the two ctests run at once: vf on the first visible
-# GPU, full on the second, each with DPCPP_CPU_NUM_CUS=cores/2 for its opencl:cpu half. With one
-# GPU, --serial, --parallel or --only they run one after the other (full on the second GPU, vf
-# on the first, when two are visible).
+# (CUDA_VISIBLE_DEVICES, else the idle ones nvidia-smi lists, by the BATCHLAS_GPU_BUSY_* test of
+# scripts/ctest_gpus.sh), the two ctests run at once: vf on the first GPU, full on the second,
+# each with DPCPP_CPU_NUM_CUS=cores/2 for its opencl:cpu half and its own TMPDIR. With one GPU,
+# --serial, --parallel or --only they run one after the other (full on the second GPU, vf on the
+# first, when two are visible; both on the one idle GPU). INT/TERM kill both ctests.
 #
 #   --serial       never run the two ctests at once
 #   --no-build     skip configure and build: test the trees as they are
@@ -58,7 +59,7 @@ while [ "$#" -gt 0 ]; do
         --parallel) parallel=1; shift ;;
         --serial) serial=1; shift ;;
         --no-build) build=0; shift ;;
-        -h|--help) sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gate: unknown argument $1" >&2; exit 64 ;;
     esac
 done
@@ -86,6 +87,23 @@ if ! flock -n 9; then
 fi
 { printf 'pid %s user %s since %s running scripts/gate.sh in %s\n' "$$" "$(id -un)" "$(date '+%F %T')" "$root" > "$lock.info"; } 2>/dev/null || true
 export BATCHLAS_BUILD_LOCK_HELD=1
+
+# Async children ignore SIGINT and inherit fd 9 (the lock), so Ctrl-C alone would orphan a
+# ctest that keeps the lock and the GPU. Each ctest gets its own process group (setsid, else
+# perl's setpgrp); the traps kill those groups (else the pid and its children) and the subshells.
+children=(); subshells=()
+stop_children() {
+    local p
+    for p in ${subshells[@]+"${subshells[@]}"}; do kill -TERM "$p" 2>/dev/null || true; done
+    for p in ${children[@]+"${children[@]}"}; do
+        kill -TERM -- "-$p" 2>/dev/null || { pkill -TERM -P "$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; } || true
+    done
+}
+trap 'stop_children; exit 130' INT
+trap 'stop_children; exit 143' TERM
+setsid=()
+if command -v setsid > /dev/null; then setsid=(setsid)
+elif command -v perl > /dev/null; then setsid=(perl -e 'setpgrp(0, 0); exec @ARGV or die "gate: exec $ARGV[0]: $!\n"'); fi
 
 lines=()
 overall=0
@@ -184,26 +202,30 @@ test_tree() {
     local junit="$abs/gate/ctest-junit.xml" gx="$abs/gate/gtest-xml"
     local -a filter=()
     [ "$kind" = full ] || filter=(-LE slow)
-    local -a envp=(GTEST_OUTPUT="xml:$gx/")
+    # Per-tree TMPDIR: death tests reuse fixed temp_directory_path() names across processes.
+    local -a envp=(GTEST_OUTPUT="xml:$gx/" TMPDIR="$abs/gate/tmp")
     [ -z "$selector" ] || envp+=(ONEAPI_DEVICE_SELECTOR="$selector")
-    [ -z "$gpu" ] || envp+=(CUDA_VISIBLE_DEVICES="$gpu")
+    [ -z "$gpu" ] || envp+=(CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}" CUDA_VISIBLE_DEVICES="$gpu")
     [ -z "$cus" ] || envp+=(DPCPP_CPU_NUM_CUS="$cus")
     local -a runner=(ctest --test-dir "$dir" -j 1)
     [ "$parallel" = 0 ] || runner=("$here/ctest_gpus.sh" --test-dir "$dir")
     local -a timer=()
     rm -f "$dir/gate/ctest-maxrss.txt" "$dir/gate/rss.tsv"
     [ -z "$gnu_time" ] || timer=("$gnu_time" -f 'maxrss_kb %M' -o "$dir/gate/ctest-maxrss.txt")
-    rm -rf "$gx" "$junit"; mkdir -p "$gx"
+    rm -rf "$gx" "$junit" "$abs/gate/tmp"; mkdir -p "$gx" "$abs/gate/tmp"
     t0=$(date +%s); rc=0
-    env "${envp[@]}" "${timer[@]}" "${runner[@]}" --output-junit "$junit" "${filter[@]}" \
-        > "$dir/gate/ctest.out" 2>&1 &
+    ${setsid[@]+"${setsid[@]}"} env "${envp[@]}" ${timer[@]+"${timer[@]}"} "${runner[@]}" \
+        --output-junit "$junit" ${filter[@]+"${filter[@]}"} > "$dir/gate/ctest.out" 2>&1 &
     cpid=$!
+    children+=("$cpid")
     if [ -d /proc/self ]; then
         python3 "$here/gate_rss.py" --pid "$cpid" --log "$dir/gate/ctest.out" --out "$dir/gate/rss.tsv" &
         spid=$!
+        children+=("$spid")
     fi
     wait "$cpid" || rc=$?
     [ -z "$spid" ] || wait "$spid" || true
+    children=()
     reset_cost_data "$dir" "$junit"
     tnote "$kind: ctest ${filter[*]:-(full)}${gpu:+ on CUDA_VISIBLE_DEVICES=$gpu}${cus:+ DPCPP_CPU_NUM_CUS=$cus} exit $rc in $(elapsed $(( $(date +%s) - t0 ))): $(grep -E 'tests passed|tests failed' "$dir/gate/ctest.out" | tail -n 1)"
     if [ -f "$dir/gate/rss.tsv" ]; then
@@ -257,16 +279,32 @@ fi
 gnu_time=""
 if /usr/bin/time --version 2>&1 | grep GNU > /dev/null; then gnu_time=/usr/bin/time; fi
 
-gpus=()
+gpus=(); busy=""; gpu_src="in CUDA_VISIBLE_DEVICES"
 if [ "$cuda" = ON ]; then
     if [ -n "${CUDA_VISIBLE_DEVICES+set}" ]; then
         IFS=, read -r -a gpus <<<"$CUDA_VISIBLE_DEVICES"
     elif command -v nvidia-smi > /dev/null; then
-        while IFS= read -r g; do gpus+=("$g"); done < <(nvidia-smi -L 2>/dev/null | sed -n 's/^GPU \([0-9][0-9]*\):.*/\1/p')
+        # scripts/ctest_gpus.sh's busy test and knobs: never pin a tree to a GPU in use.
+        gpu_src="idle"
+        while IFS=, read -r idx util mem; do
+            case $idx in ''|*[!0-9]*) continue ;; esac
+            case "$util$mem" in ''|*[!0-9]*) util=0; mem=0 ;; esac
+            if [ "${BATCHLAS_GPU_BUSY_SKIP:-1}" != 0 ] && { [ "$util" -gt "${BATCHLAS_GPU_BUSY_UTIL:-30}" ] ||
+                    [ "$mem" -gt "${BATCHLAS_GPU_BUSY_MEM_MB:-4096}" ]; }; then
+                busy="$busy GPU $idx (${util}%, ${mem} MiB)"
+            else
+                gpus+=("$idx")
+            fi
+        done < <(nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+        [ -z "$busy" ] || note "ctest: skipping busy$busy (BATCHLAS_GPU_BUSY_SKIP=0 keeps them)"
     fi
 fi
 gpu_vf=""; gpu_full=""
-if [ "${#gpus[@]}" -ge 2 ] && [ "$parallel" = 0 ]; then gpu_vf=${gpus[0]}; gpu_full=${gpus[1]}; fi
+if [ "$parallel" = 0 ]; then
+    if [ "${#gpus[@]}" -ge 2 ]; then gpu_vf=${gpus[0]}; gpu_full=${gpus[1]}
+    elif [ "${#gpus[@]}" -eq 1 ] && [ -n "$busy" ]; then gpu_vf=${gpus[0]}; gpu_full=${gpus[0]}; fi
+fi
+[ "$gpu_src" != idle ] || [ "${#gpus[@]}" -gt 0 ] || [ -z "$busy" ] || note "ctest: every GPU is busy; running unpinned"
 
 kinds=()
 for kind in full vf; do
@@ -281,25 +319,33 @@ for kind in full vf; do
     kinds+=("$kind")
 done
 
-if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ]; then
+if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ] && [ "$gpu_full" != "$gpu_vf" ]; then
     # Builds are done and the lock is held, so nothing else on the box allocates beside the
     # two ctests (the recorded OOM kills both had a build running); rss.tsv shows the margin.
     cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
     cus=${BATCHLAS_GATE_CPU_CUS:-$(( cores / 2 > 0 ? cores / 2 : 1 ))}
     note "ctest: full on GPU $gpu_full and vf on GPU $gpu_vf at once, DPCPP_CPU_NUM_CUS=$cus each"
     t0=$(date +%s)
-    { test_tree full "$full_dir" "$gpu_full" "$cus" || exit "$?"; } &
+    # A subshell drops the parent's traps; the main trap TERMs it, its own kills its ctest group.
+    { subshells=(); trap 'stop_children; exit 143' TERM; test_tree full "$full_dir" "$gpu_full" "$cus" || exit "$?"; } &
     pid_full=$!
-    { test_tree vf "$vf_dir" "$gpu_vf" "$cus" || exit "$?"; } &
+    subshells+=("$pid_full")
+    { subshells=(); trap 'stop_children; exit 143' TERM; test_tree vf "$vf_dir" "$gpu_vf" "$cus" || exit "$?"; } &
     pid_vf=$!
+    subshells+=("$pid_vf")
     wait "$pid_full" || overall=1
     wait "$pid_vf" || overall=1
+    subshells=()
     collect_notes "$full_dir"
     collect_notes "$vf_dir"
     note "ctest phase (both trees at once) took $(elapsed $(( $(date +%s) - t0 )))"
 else
-    [ "${#kinds[@]}" -lt 2 ] || [ -n "$gpu_full" ] || [ "$serial" = 1 ] ||
-        note "ctest: one tree at a time (${#gpus[@]} GPU(s) visible$( [ "$parallel" = 0 ] || echo ', --parallel'))"
+    why="${#gpus[@]} GPU(s) $gpu_src"
+    [ "$serial" = 0 ] || why=--serial
+    [ "$parallel" = 0 ] || why=--parallel
+    [ "${#kinds[@]}" -eq 2 ] || why="one tree to test"
+    [ "${#kinds[@]}" -eq 0 ] ||
+        note "ctest: one tree at a time${gpu_full:+, full on GPU $gpu_full and vf on GPU $gpu_vf} ($why)"
     for kind in "${kinds[@]}"; do
         if [ "$kind" = full ]; then
             test_tree full "$full_dir" "$gpu_full" "" || overall=1
@@ -314,7 +360,7 @@ fi
 mkdir -p "$(dirname "$summary")"
 {
     echo "BatchLAS gate summary  $(date '+%F %T')  host $(hostname)"
-    echo "HEAD $(git -C "$root" rev-parse --short=12 HEAD)$(git -C "$root" diff --quiet HEAD -- 2>/dev/null || echo ' (+ uncommitted changes)')  preset $preset  CUDA=$cuda  ${only:+only=$only}"
+    echo "HEAD $(git -C "$root" rev-parse --short=12 HEAD)$(git -C "$root" diff --quiet HEAD -- 2>/dev/null || echo ' (+ uncommitted changes)')  preset $preset  CUDA=$cuda  ${only:+only=$only}$( [ "$build" = 1 ] || echo '  no-build (trees not rebuilt: binaries may predate HEAD)')"
     printf '%s\n' "${lines[@]}"
     echo "total $(elapsed $(( $(date +%s) - t_start )))  verdict: $( [ "$overall" -eq 0 ] && echo PASS || echo FAIL )"
 } > "$summary.tmp"

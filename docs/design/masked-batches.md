@@ -169,7 +169,7 @@ every child it calls is migrated, because the child runs on the composite's mask
 - **Per op and family** (`tests/masked_contract.hh`, used by each wave; its own checks are in
   `tests/masked_contract_tests.cc`): `masked_contract::check<Choice>(q, op, spelling, case)` pins
   the family strictly and requires a coverage `reached` row of it on the alternating pattern's
-  masked call, captured in-process (`coverage::snapshot`, `reached_since`, `restore`; no
+  masked call, captured in-process (`coverage::snapshot`, `rows_since`, `restore`; no
   death-test child). Then for each pattern it checks that every inactive item's outputs (the case
   lists matrices, `w`, `info`, pivots, `tau`) are bit-identical to the poisoned input, and every
   active item to the unmasked call on the same pin, or the case's `verify_active` hook for the

@@ -38,9 +38,9 @@ struct ReachedRow {
     batchlas::Transpose trans_a = batchlas::Transpose::NoTrans, trans_b = batchlas::Transpose::NoTrans;
 };
 
-/// The `reached`, then `miss`, CSV lines (src/select/coverage.cc's emit() format) `run` adds, the
-/// calls column counting this run alone. Recording is on for the run; the table and the switch are restored
-/// after (an exception in `run` passes through), so BATCHLAS_COVERAGE_OUT never sees the capture.
+/// The `reached`, then `miss`, CSV lines (src/select/coverage.cc's emit() format) `run` records into
+/// empty tables, as a fresh process would. Recording is on for the run; the tables and the switch are
+/// restored after (an exception in `run` passes through), the calls merged in if recording was on before.
 template <typename Run>
 std::vector<std::string> captured_lines(Run&& run) {
     struct Restore {

@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <unistd.h>   // getpid; see emit()
@@ -235,51 +236,50 @@ void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library)
     ++row.calls;
 }
 
+struct Snapshot::Tables {
+    std::unordered_map<std::string, Row> choices;
+    std::unordered_map<uint64_t, MissRow> misses;
+};
+
 Snapshot snapshot() {
     Snapshot s;
     s.enabled = g_dynamic_enabled;
+    s.keep = s.enabled;
+    s.saved = std::make_shared<Snapshot::Tables>();
     std::lock_guard<std::mutex> lock(table_mutex());
-    for (const auto& [k, r] : choice_table()) s.calls.emplace(k, r.calls);
-    for (const auto& [k, m] : misses()) s.misses.emplace(k, m.calls);
+    choice_table().swap(s.saved->choices);
+    misses().swap(s.saved->misses);
     return s;
 }
 
-std::vector<std::string> rows_since(const Snapshot& s) {
+std::vector<std::string> rows_since(const Snapshot&) {
     std::vector<std::string> out;
     std::lock_guard<std::mutex> lock(table_mutex());
-    for (const auto& [k, r] : choice_table()) {
-        const auto it = s.calls.find(k);
-        const uint64_t before = it == s.calls.end() ? 0 : it->second;
-        if (r.calls > before) out.push_back(reached_line(r, r.calls - before));
-    }
-    for (const auto& [k, m] : misses()) {
-        const auto it = s.misses.find(k);
-        const uint64_t before = it == s.misses.end() ? 0 : it->second;
-        if (m.calls > before) out.push_back(miss_line(m, m.calls - before));
-    }
+    for (const auto& [k, r] : choice_table()) out.push_back(reached_line(r, r.calls));
+    for (const auto& [k, m] : misses()) out.push_back(miss_line(m, m.calls));
     return out;
 }
 
 namespace {
-template <typename Table, typename Calls>
-void rewind(Table& t, const Calls& was_calls) {
-    for (auto it = t.begin(); it != t.end();) {
-        const auto was = was_calls.find(it->first);
-        if (was == was_calls.end()) {
-            it = t.erase(it);
-        } else {
-            it->second.calls = was->second;
-            ++it;
-        }
+template <typename Table>
+void merge_into(Table& into, Table& from) {  // the earlier row keeps its first call's shape
+    for (auto& [k, r] : from) {
+        const auto [it, fresh] = into.try_emplace(k, std::move(r));
+        if (!fresh) it->second.calls += r.calls;
     }
 }
 }  // namespace
 
-void restore(const Snapshot& s) {
-    {
+void restore(Snapshot& s) {
+    if (s.saved) {
         std::lock_guard<std::mutex> lock(table_mutex());
-        rewind(choice_table(), s.calls);
-        rewind(misses(), s.misses);
+        if (s.keep) {
+            merge_into(s.saved->choices, choice_table());
+            merge_into(s.saved->misses, misses());
+        }
+        choice_table().swap(s.saved->choices);
+        misses().swap(s.saved->misses);
+        s.saved.reset();
     }
     g_dynamic_enabled = s.enabled;
 }

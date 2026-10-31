@@ -80,8 +80,10 @@ sh .github/ci/run_local_checks.sh [PREFIX]         # touched cmake/, include/ or
   and `build-gate-vf` (vendor-free, `-LE slow`), both relinking every executable
   (`BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF`). It holds the build lock through ctest and sets
   `ONEAPI_DEVICE_SELECTOR` (§8). After both builds it runs the two ctests at once, vf on the
-  first visible GPU and full on the second, each serial with `DPCPP_CPU_NUM_CUS`=cores/2;
-  `CUDA_VISIBLE_DEVICES=0` or `--serial` runs them one after the other. Read the peak RSS line
+  first visible GPU and full on the second, each serial with `DPCPP_CPU_NUM_CUS`=cores/2 and its
+  own `TMPDIR`; without `CUDA_VISIBLE_DEVICES` it skips busy GPUs as `ctest_gpus.sh` does.
+  `CUDA_VISIBLE_DEVICES=0`, one idle GPU or `--serial` runs them one after the other. Ctrl-C
+  kills both ctests. Read the peak RSS line
   (`<tree>/gate/rss.tsv`, `docs/ci.md`). Seed a missing gate tree only from a `dev-tests` tree
   (plain `build/` differs in `BATCHLAS_ALLOW_UNSAFE_ENV`). Never `--parallel` (§8) here: it was
   validated only on threadripper02, where `scripts/agent/dispatch.sh` now forbids it.
@@ -181,13 +183,15 @@ Findings and before/after tables: @ref design_build_performance.
 ## 8. Testing Policy
 
 - **Do not run the full ctest by default.** Scope: one case `--gtest_filter` -> one binary
-  `ctest -R '^X(_heavy)?$'` (anchor the regex) -> one component `-L util|blas|ortho|tridiag|eig|sparse`
+  `ctest -R '^X(_heavy|_slow)?$'` (anchor the regex) -> one component `-L util|blas|ortho|tridiag|eig|sparse`
   -> `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
   (`Queue`, `Matrix`/`MatrixView`, mempool, `sg_partition`, `include/batchlas/util`).
   `scripts/affected_tests.py` maps a diff to binaries (callers included; over-selects by design).
 - **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` is two entries: `X` (quick cases) and
   `X_heavy` (label `heavy`: saturating-batch race guards, table sweeps). Run `X_heavy` before
-  claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not.
+  claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not. A binary
+  with `BATCHLAS_SLOW_CASES_X` splits the same way into `X` and `X_slow` (label `slow`): run
+  `X_slow` too. Both tiers fold onto `X::` in the ledger.
 - **Full-target tree on the 4090 box**: `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` and
   `CUDA_VISIBLE_DEVICES=0`, else CPU backends land on `native_cpu` ("No kernel named").
 - **`scripts/ctest_gpus.sh`** (ctest's arguments) runs one test per GPU slot from

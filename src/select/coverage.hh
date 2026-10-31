@@ -12,8 +12,8 @@
 #include <src/util/internal-api.hh>
 
 #include <cstdint>
+#include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace batchlas::coverage {  /** @addtogroup api_selection */ /** @{ */
@@ -58,17 +58,24 @@ BATCHLAS_API extern bool g_dynamic_enabled;
 
 inline bool dynamic_enabled() { return g_dynamic_enabled; }
 
-/// The `reached` and `miss` tables' call counts by row key and the recording switch, for an
-/// in-process capture: snapshot, run, rows_since, restore. Tests only; not ABI.
+/// A test-only capture: snapshot (the tables moved aside; the run records into empty ones), run,
+/// rows_since, restore (once).
 struct Snapshot {
-    std::unordered_map<std::string, uint64_t> calls;
-    std::unordered_map<uint64_t, uint64_t> misses;
+    struct Tables;
+    std::shared_ptr<Tables> saved;
     bool enabled = false;
+    bool keep = false;  // merge the capture's calls back on restore; snapshot() sets it to `enabled`
+    Snapshot() = default;
+    Snapshot(const Snapshot&) = delete;
+    Snapshot& operator=(const Snapshot&) = delete;
+    Snapshot(Snapshot&&) = default;
+    Snapshot& operator=(Snapshot&&) = default;
 };
 
 BATCHLAS_INTERNAL_API Snapshot snapshot();
-/// emit()'s `reached`, then `miss`, lines for the rows called since `s`, the calls column the delta.
-BATCHLAS_INTERNAL_API std::vector<std::string> rows_since(const Snapshot& s);
-BATCHLAS_INTERNAL_API void restore(const Snapshot& s);  // tables and switch as at `s`
+BATCHLAS_INTERNAL_API std::vector<std::string> rows_since(const Snapshot& s);  // emit()'s lines of the open capture
+/// The saved tables and switch back; with `s.keep` the capture's calls merge into them (counts add,
+/// new rows insert), so BATCHLAS_COVERAGE_OUT keeps them, else they are dropped.
+BATCHLAS_INTERNAL_API void restore(Snapshot& s);
 
 /** @} */ } // namespace batchlas::coverage

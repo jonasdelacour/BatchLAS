@@ -239,12 +239,17 @@ struct Pristine {
         for (std::size_t g = 0; hole && g < segs.size(); ++g)
             if (hole->off >= segs[g].off && hole->off < segs[g].off + segs[g].stride)
                 hseg = g, hrel = hole->off - segs[g].off, hld = hole->ld, hrows = hole->rows, hcols = hole->cols;
-        std::array<std::uint32_t, W> fw{};
-        std::memcpy(fw.data(), &fill, sizeof(T));
-        auto out = device_block(2 * sizeof(unsigned long long));
-        auto* hit = reinterpret_cast<unsigned long long*>(out.get());
+        // The two hit slots, then the fill's words: every ref below is a global pointer (a ref that
+        // may be a captured array fails Metal's JIT, "conflicting address space in PHI node").
+        constexpr std::size_t kHit = 2 * sizeof(unsigned long long);
+        std::array<std::byte, kHit + sizeof(T)> init;
         const unsigned long long none[2] = {kNone, kNone};
-        q.memcpy(hit, none, sizeof none).wait();
+        std::memcpy(init.data(), none, kHit);
+        std::memcpy(init.data() + kHit, &fill, sizeof(T));
+        auto out = device_block(init.size());
+        auto* hit = reinterpret_cast<unsigned long long*>(out.get());
+        const auto* fw = reinterpret_cast<const std::uint32_t*>(out.get() + kHit);
+        q.memcpy(out.get(), init.data(), init.size()).wait();
         const auto* got = reinterpret_cast<const std::uint32_t*>(usm);
         const auto* want = reinterpret_cast<const std::uint32_t*>(dev.get());
         const std::size_t nsegs = segs.size(), nbatch = batch, nreps = reps;
@@ -253,7 +258,7 @@ struct Pristine {
              std::size_t g = kMaxSegs;
              for (std::size_t k = 0; k < nsegs; ++k)
                  if (e >= sg[k].off) g = k;
-             const std::uint32_t* ref = fw.data();
+             const std::uint32_t* ref = fw;
              bool in_hole_rep = false;
              if (g < kMaxSegs && e < sg[g].off + nbatch * sg[g].stride) {
                  const std::size_t rel = e - sg[g].off, it = rel / sg[g].stride, r = rel % sg[g].stride;
