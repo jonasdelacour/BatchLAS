@@ -21,6 +21,7 @@
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/ops/gemv/choice.hh>
 #include <src/ops/gemv/gemv_native.hh>
@@ -51,6 +52,7 @@ using namespace batchlas;
 namespace {
 
 namespace gv = batchlas::ops::gemv;
+namespace ub = test_utils::usm_bulk;
 using C = gv::GemvChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -87,7 +89,7 @@ struct Problem {
     std::size_t a_off = 0, x_off = 0, y_off = 0;
     int lda = 0, sa = 0, incx = 2, sx = 0, incy = 3, sy = 0;
     UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
+    std::vector<T> mem0;  // host snapshot of mem before any kernel
 
     MVof<T> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
     VectorView<T> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
@@ -135,7 +137,7 @@ Problem<T> make_problem(const Spec& s) {
             for (int i = 0; i < s.out(); ++i)
                 p.mem[p.yi(it, i)] = it < reps ? draw() : p.mem[p.yi(r, i)];
     }
-    p.mem0 = p.mem;
+    p.mem0.assign(p.mem.data(), p.mem.data() + p.mem.size());
     return p;
 }
 
@@ -150,13 +152,16 @@ void expect_gemv(Queue& ctx, const Problem<T>& p, const std::string& what) {
     else items = {0, 1, s.batch / 2, s.batch - 1};
     // Reference-BLAS quick return: m == 0 or n == 0 leaves y untouched, even when out > 0.
     const bool quick = s.m == 0 || s.n == 0;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
     for (int it : items)
         if (quick)
             for (int o = 0; o < s.out(); ++o)
-                ASSERT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem0[p.yi(it, o)])) << what << ": quick return wrote y";
+                ASSERT_TRUE(same_bits(got[p.yi(it, o)], p.mem0[p.yi(it, o)])) << what << ": quick return wrote y";
     if (!quick) {
-        // Operands and y0 from the pristine copy; y from the result buffer.
-        auto at0 = [&](std::size_t off) { return const_cast<T*>(p.mem0.data()) + off; };
+        // Operands and y0 from a device-readable copy of the pristine snapshot; y from the result buffer.
+        UnifiedVector<T> pristine(p.mem0.size());
+        ub::copy(pristine.data(), p.mem0.data(), p.mem0.size() * sizeof(T), pristine.data());
+        auto at0 = [&](std::size_t off) { return pristine.data() + off; };
         const MVof<T> A0(at0(p.a_off), s.m, s.n, p.lda, p.sa, s.batch);
         const VectorView<T> X0(at0(p.x_off), s.red(), s.batch, Inc{p.incx}, Stride{p.sx});
         const VectorView<T> Y0(at0(p.y_off), s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
@@ -166,15 +171,19 @@ void expect_gemv(Queue& ctx, const Problem<T>& p, const std::string& what) {
             << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
     }
-    std::vector<char> iny(p.mem.size(), 0);
-    for (int it = 0; it < s.batch; ++it)
-        for (int o = 0; o < s.out(); ++o) iny[p.yi(it, o)] = 1;
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!iny[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside y at element " << e;
+    // y's footprint from the index: item it = (e - y_off) / sy, element o where the rest is o * incy.
+    const auto in_y = [&](std::size_t e) {
+        if (e < p.y_off) return false;
+        const std::size_t rel = e - p.y_off, r = rel % std::size_t(p.sy);
+        return rel / std::size_t(p.sy) < std::size_t(s.batch) && r % std::size_t(p.incy) == 0 &&
+               r / std::size_t(p.incy) < std::size_t(s.out());
+    };
+    for (std::size_t e = 0; e < p.mem0.size(); ++e)
+        if (!in_y(e)) ASSERT_TRUE(same_bits(got[e], p.mem0[e])) << what << ": wrote outside y at element " << e;
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
             for (int o = 0; o < s.out(); ++o)
-                ASSERT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem[p.yi(it % s.period, o)]))
+                ASSERT_TRUE(same_bits(got[p.yi(it, o)], got[p.yi(it % s.period, o)]))
                     << what << ": y of item " << it << " differs from its representative at " << o;
 }
 
@@ -250,6 +259,11 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "GPU fixture (GemvCandidatesCpu covers host)";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     // ---- the limit oracle: the drivers' own rules, not gemv.cc's can_run ----
@@ -386,9 +400,11 @@ TYPED_TEST(GemvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
                 expect_gemv(*this->ctx, pinned, what);
-                for (std::size_t e = 0; e < pinned.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
-                        << what << ": the pinned facade did not run this family's driver; element " << e;
+                const std::size_t n_el = pinned.mem.size();
+                const auto e = ub::first_diff(ub::download(pinned.mem.data(), n_el, 0),
+                                              ub::download(direct.mem.data(), n_el, 1), n_el);
+                ASSERT_FALSE(e.has_value()) << what << ": the pinned facade did not run this family's driver; element "
+                                            << e.value_or(0);
                 ++compared;
             }
     EXPECT_GT(compared, 0);
@@ -471,8 +487,8 @@ TYPED_TEST(GemvCandidates, MismatchedViewsHaveNoNativeRoute) {
                 << k.what;
         }
     }
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
+    const auto wrote = ub::first_diff(ub::download(p.mem.data(), p.mem.size(), 0), p.mem0.data(), p.mem0.size());
+    ASSERT_FALSE(wrote.has_value()) << "a refused call wrote element " << wrote.value_or(0);
     // Auto: the vendor (known-defects #1's ortho call goes the same way). It indexes by A's
     // extents and batch, which stay inside this buffer.
     if (TestFixture::kVendor)
@@ -861,7 +877,7 @@ void check_masked(Queue& q, const MaskCase& k) {
     mc.batch = k.batch;
     mc.wg_items = k.wg_items;
     mc.identical_items = k.period == 1;
-    mc.prepare = [&] { std::copy(p.mem0.data(), p.mem0.data() + p.mem0.size(), p.mem.data()); };
+    mc.prepare = [&] { ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data()); };
     mc.call = [&](Span<const std::uint8_t> mask, Span<std::byte>) {
         const auto pick = [&](char v) { return on.find(v) != std::string::npos ? mask : Span<const std::uint8_t>{}; };
         (void)gemv<B, T>(q, p.A().with_batch_mask(pick('A')), p.X().with_batch_mask(pick('X')),
@@ -935,7 +951,7 @@ TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
         {
             const Pin pin("gemv", "vendor", select::StrictPin{});
             this->run(p);  // the unmasked call runs on this pin, so the masked throw is the mask's
-            p.mem = p.mem0;
+            ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data());
             try {
                 masked();
                 ADD_FAILURE() << trans_s(t) << ": a vendor pin ran a masked call";
@@ -943,11 +959,12 @@ TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
                 EXPECT_NE(std::string(e.what()).find("(strict): no vendor candidate"), std::string::npos) << e.what();
             }
         }
-        p.mem = p.mem0;
+        ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data());
         EXPECT_NE(traced_choice(masked), "vendor") << trans_s(t);
+        const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
         for (int it : {0, 2})
             for (int o = 0; o < s.out(); ++o)
-                EXPECT_TRUE(same_bits(p.mem[p.yi(it, o)], p.mem0[p.yi(it, o)])) << "inactive item " << it;
+                EXPECT_TRUE(same_bits(got[p.yi(it, o)], p.mem0[p.yi(it, o)])) << "inactive item " << it;
     }
 }
 
@@ -955,7 +972,17 @@ TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
 // table, so the last resort decides: the vendor (netlib) where compiled, else direct; cta's
 // sub-group body cannot run there, and a direct pin runs and is correct.
 template <typename Config>
-class GemvCandidatesCpu : public test_utils::BatchLASTest<Config> {};
+class GemvCandidatesCpu : public test_utils::BatchLASTest<Config> {
+protected:
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->ctx) ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
+    }
+};
 TYPED_TEST_SUITE(GemvCandidatesCpu, Types);
 
 TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {

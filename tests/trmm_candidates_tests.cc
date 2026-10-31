@@ -96,8 +96,7 @@ struct Prob {
     T alpha{};
     Region a, b, c;
     UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
-    ub::Pristine<T> pristine;  // mem0's contents, run-length on the host
+    ub::Pristine<T> pristine;  // mem's initial contents: the reps on the host and the device
 
     MVof<T> A() { return {mem.data() + a.off, s.n, s.n, a.ld, a.stride, s.batch}; }
     MVof<T> B() { return {mem.data() + b.off, b.rows, b.cols, b.ld, b.stride, s.batch}; }
@@ -106,6 +105,22 @@ struct Prob {
     std::size_t bi(int it, int i, int j) const { return b.off + std::size_t(it) * b.stride + std::size_t(j) * b.ld + i; }
     std::size_t ci(int it, int i, int j) const { return c.off + std::size_t(it) * c.stride + std::size_t(j) * c.ld + i; }
     bool owned(int i, int j) const { return s.uplo == Uplo::Lower ? i > j : i < j; }
+    // The first element of mem not bit-identical to its initial contents (a device check), C's
+    // footprint skipped when skip_c. The second: with skip_c, the first C element of an item at
+    // or past the representatives that differs from its representative's.
+    std::pair<std::optional<std::size_t>, std::optional<std::size_t>> changes(bool skip_c) const {
+        using H = typename ub::Pristine<T>::Hole;
+        std::optional<H> hole;
+        if (skip_c) hole = H{c.off, std::size_t(c.ld), std::size_t(c.rows), std::size_t(c.cols)};
+        return pristine.first_change_on_device(mem.data(), hole);
+    }
+    std::optional<std::size_t> first_change() const { return changes(false).first; }
+    // mem back to its initial contents, so one problem serves every candidate of a shape.
+    void restore() { pristine.write(mem.data()); }
+    // A view of region g's representatives as first written (batch reps), on the device.
+    MatrixView<T, MatrixFormat::Dense> initial(const Region& g) const {
+        return {pristine.rep(g.off), g.rows, g.cols, g.ld, g.stride, int(pristine.reps)};
+    }
 };
 
 template <typename T>
@@ -145,21 +160,21 @@ Prob<T> make_prob(const Spec& s) {
     }
     p.mem = UnifiedVector<T>(total);
     p.pristine.write(p.mem.data());
-    p.mem0 = p.mem;
     return p;
 }
 
-// Worst componentwise backward error of C = alpha op(A) B (Right: B op(A)) over `items` through the
-// library; A is read as its triangle (Unit: no diagonal), operands from the pristine copy.
+// Worst componentwise backward error of C = alpha op(A) B (Right: B op(A)) over `items` (all below
+// the representatives) through the library; A is read as its triangle (Unit: no diagonal), operands
+// from the pristine representatives.
 template <typename T>
 double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
-    auto at0 = [&](const Region& g) { return MV(p.mem0.data() + g.off, g.rows, g.cols, g.ld, g.stride, s.batch); };
-    const MV B0 = at0(p.b), C0 = at0(p.c);
-    const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, s.batch);
-    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, s.batch);
-    MV::copy(ctx, A0, at0(p.a)).wait();
+    const int reps = int(p.pristine.reps);
+    const MV B0 = p.initial(p.b), C0 = p.initial(p.c);
+    const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, reps);
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps);
+    MV::copy(ctx, A0, p.initial(p.a)).wait();
     A0.triangularize(ctx, s.uplo, s.diag).wait();
     if (s.side == Side::Left)
         return MV::gemm_backward_error(ctx, A0, s.trans, B0, Transpose::NoTrans, C0, C, MV::up(p.alpha), MV::up(T(0)), items);
@@ -182,21 +197,13 @@ void expect_trmm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.n, r))
         << what << " worst backward error over " << items.size() << " items " << r << " exceeds "
         << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.n);
-    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
-    using H = typename ub::Pristine<T>::Hole;
-    const H hole{p.c.off, std::size_t(p.c.ld), std::size_t(p.c.rows), std::size_t(p.c.cols)};
-    const auto moved = p.pristine.first_change(got, p.mem.size(), hole);
+    const auto [moved, unlike] = p.changes(true);
     ASSERT_FALSE(moved.has_value()) << what << ": wrote outside C at element " << moved.value_or(0);
-    if (s.period > 0)
-        for (int it = s.period; it < s.batch; ++it)
-            for (int j = 0; j < p.c.cols; ++j) {
-                const T* x = got + p.ci(it, 0, j);
-                const T* rep = got + p.ci(it % s.period, 0, j);
-                if (std::memcmp(x, rep, std::size_t(p.c.rows) * sizeof(T)) == 0) continue;
-                int i = 0;
-                while (same_bits(x[i], rep[i])) ++i;
-                FAIL() << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
-            }
+    if (unlike) {
+        const std::size_t rel = *unlike - p.c.off, at = rel % std::size_t(p.c.stride);
+        FAIL() << what << ": item " << rel / std::size_t(p.c.stride) << " differs from its representative at ("
+               << at % std::size_t(p.c.ld) << "," << at / std::size_t(p.c.ld) << ")";
+    }
 }
 
 std::string label(const Spec& s) {
@@ -332,19 +339,28 @@ protected:
         }
     }
     std::string auto_choice(const Spec& s) {
-        const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
         auto p = make_prob<T>(s);
+        return auto_choice(p);
+    }
+    std::string auto_choice(Prob<T>& p) {
+        const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
         return traced_choice([&] { run(p); });
     }
-    // What Auto (or, native_only, the class word `native`) must pick, from the shipped tables.
-    std::string table_pick(const Spec& s, bool native_only = false) {
+    // What Auto (or, native_only, the class word `native`) must pick, from the shipped tables; each
+    // probe runs on `p` restored, and p is left consumed.
+    std::string table_pick(Prob<T>& p, bool native_only = false) {
+        const Spec& s = p.s;
         const select::Key key{{"side", s.side == Side::Left ? "L" : "R"}, {"order", s.n}, {"q", s.q},
                               {"batch", s.batch}};
         return test_utils::shipped_table_pick<C>("trmm", select::dtype_name<T>(), select::device_of<B>(*this->ctx),
                                                  key, [&] {
-                                                     auto p = make_prob<T>(s);
+                                                     p.restore();
                                                      run(p);
                                                  }, native_only);
+    }
+    std::string table_pick(const Spec& s, bool native_only = false) {
+        auto p = make_prob<T>(s);
+        return table_pick(p, native_only);
     }
     // This device's trmm table replaced by one row per side (other tables kept), so a test of
     // can_run's fallthrough does not hang on what the shipped table ranks first. Pair with TableGuard.
@@ -408,17 +424,22 @@ TYPED_TEST_SUITE(TrmmCandidates, Types);
 TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
     using T = typename TestFixture::T;
     int ran = 0, refused = 0;
-    for (const C& c : tm::candidates<T>())
-        for (Side side : {Side::Left, Side::Right})
-            for (int n : {1, 16, 17, 33, 65, 129})
-                for (int q : {1, 5, 130}) {
-                    Spec s{side, n % 2 ? Uplo::Lower : Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, n, q, 3};
-                    s.seed = 1000u + 31u * n + q;
-                    auto p = make_prob<T>(s);
+    // One problem per shape, restored before each candidate.
+    for (Side side : {Side::Left, Side::Right})
+        for (int n : {1, 16, 17, 33, 65, 129})
+            for (int q : {1, 5, 130}) {
+                Spec s{side, n % 2 ? Uplo::Lower : Uplo::Upper, Transpose::NoTrans, Diag::NonUnit, n, q, 3};
+                s.seed = 1000u + 31u * n + q;
+                auto p = make_prob<T>(s);
+                bool used = false;
+                for (const C& c : tm::candidates<T>()) {
+                    if (std::exchange(used, true)) p.restore();
                     const std::string what = name(c, s);
                     if (TestFixture::vendor_word_falls_back(c)) {
-                        EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), this->auto_choice(s)) << what;
+                        const std::string pinned = traced_choice([&] { this->run_pinned(c, p); });
                         expect_trmm(*this->ctx, p, what + " (vendor-free: Auto)");
+                        p.restore();
+                        EXPECT_EQ(pinned, this->auto_choice(p)) << what;
                         continue;
                     }
                     if (!this->expect_runs(c, s)) {
@@ -430,6 +451,7 @@ TYPED_TEST(TrmmCandidates, PinnedCandidatesStraddleTheirLimits) {
                     expect_trmm(*this->ctx, p, what);
                     ++ran;
                 }
+            }
     EXPECT_GT(ran, 0);
     EXPECT_GT(refused, 0);
 }
@@ -467,20 +489,23 @@ TYPED_TEST(TrmmCandidates, ExpandFitStraddlesTheScratchBudget) {
 // Every (side, uplo, trans, diag) on every candidate, ConjTrans with an imaginary alpha.
 TYPED_TEST(TrmmCandidates, EveryCombinationOnEveryCandidate) {
     using T = typename TestFixture::T;
-    for (const C& c : tm::candidates<T>())
-        for (int n : {13, 70})
-            for (Side side : {Side::Left, Side::Right})
-                for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
-                    for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
-                        for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
-                            Spec s{side, uplo, t, dg, n, 9, 3};
-                            s.seed = 77u + n;
+    for (int n : {13, 70})
+        for (Side side : {Side::Left, Side::Right})
+            for (Uplo uplo : {Uplo::Lower, Uplo::Upper})
+                for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+                    for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
+                        Spec s{side, uplo, t, dg, n, 9, 3};
+                        s.seed = 77u + n;
+                        std::optional<Prob<T>> p;
+                        for (const C& c : tm::candidates<T>()) {
                             if (!this->expect_runs(c, s)) continue;
-                            auto p = make_prob<T>(s);
-                            this->run_pinned(c, p);
-                            expect_trmm(*this->ctx, p, name(c, s));
+                            if (p) p->restore();
+                            else p.emplace(make_prob<T>(s));
+                            this->run_pinned(c, *p);
+                            expect_trmm(*this->ctx, *p, name(c, s));
                             if (::testing::Test::HasFatalFailure()) return;
                         }
+                    }
 }
 
 // The pinned facade runs exactly that family's launch: bit-identical to the direct call.
@@ -500,9 +525,11 @@ TYPED_TEST(TrmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
                 expect_trmm(*this->ctx, pinned, what);
-                for (std::size_t e = 0; e < pinned.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
-                        << what << ": the pinned facade did not run this family's launch; element " << e;
+                const std::size_t n_el = pinned.mem.size();
+                const auto e = ub::first_diff(ub::download(pinned.mem.data(), n_el, 0),
+                                              ub::download(direct.mem.data(), n_el, 1), n_el);
+                ASSERT_FALSE(e.has_value()) << what << ": the pinned facade did not run this family's launch; element "
+                                            << e.value_or(0);
                 ++compared;
             }
     EXPECT_GT(compared, 0);
@@ -534,15 +561,17 @@ TYPED_TEST(TrmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
 TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
     int disagreements = 0;
-    for (const C& c : tm::candidates<T>())
-        for (Side side : {Side::Left, Side::Right})
-            for (int n : {1, 2, 16, 17, 64, 65, 130})
-                for (int q : {1, 9}) {
+    for (Side side : {Side::Left, Side::Right})
+        for (int n : {1, 2, 16, 17, 64, 65, 130})
+            for (int q : {1, 9}) {
+                Spec s{side, Uplo::Lower, Transpose::Trans, Diag::NonUnit, n, q, 2};
+                s.seed = 61u + n;
+                auto a = make_prob<T>(s);
+                auto b = make_prob<T>(s);
+                bool used = false;
+                for (const C& c : tm::candidates<T>()) {
                     if (TestFixture::vendor_word_falls_back(c)) continue;
-                    Spec s{side, Uplo::Lower, Transpose::Trans, Diag::NonUnit, n, q, 2};
-                    s.seed = 61u + n;
-                    auto a = make_prob<T>(s);
-                    auto b = make_prob<T>(s);
+                    if (std::exchange(used, true)) a.restore(), b.restore();
                     const bool pin = this->pin_accepted(c, a);
                     std::string why;
                     const bool run = this->direct(c, b, &why);
@@ -551,6 +580,7 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
                     EXPECT_EQ(pin, this->expect_runs(c, s)) << name(c, s) << ": can_run disagrees with the oracle";
                     disagreements += pin != run;
                 }
+            }
     EXPECT_EQ(disagreements, 0);
 }
 
@@ -676,8 +706,8 @@ TYPED_TEST(TrmmCandidates, UnknownPinsThrow) {
         auto p = make_prob<T>(Spec{});
         const Pin pin("trmm", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
-        for (std::size_t e = 0; e < p.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << word << ": a refused pin wrote element " << e;
+        const auto e = p.first_change();
+        ASSERT_FALSE(e.has_value()) << word << ": a refused pin wrote element " << e.value_or(0);
     }
 }
 
@@ -724,8 +754,8 @@ TYPED_TEST(TrmmCandidates, InvalidShapesThrowBeforeChoose) {
                                        Transpose::NoTrans, Diag::NonUnit)), std::invalid_argument) << what;
     }
     this->ctx->wait();
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
+    const auto e = p.first_change();
+    ASSERT_FALSE(e.has_value()) << "a refused call wrote element " << e.value_or(0);
 }
 
 // An empty batch, order or rhs count is a no-op under Auto and every pin, vendor-free too
@@ -753,8 +783,8 @@ TYPED_TEST(TrmmCandidates, EmptyProblemIsANoOp) {
                 << " batch=" << k.batch;
         }
     }
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty problem wrote element " << e;
+    const auto e = p.first_change();
+    ASSERT_FALSE(e.has_value()) << "an empty problem wrote element " << e.value_or(0);
 }
 
 // A heterogeneous operand on CUDA (expect_heterogeneous_has_no_route).
@@ -838,9 +868,10 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
             for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
                 Spec s{side, Uplo::Lower, t, Diag::NonUnit, r.n, r.q, r.batch};
                 s.seed = 41u + r.n;
-                const std::string want = this->table_pick(s);
-                ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
                 auto p = make_prob<T>(s);
+                const std::string want = this->table_pick(p);
+                ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
+                p.restore();
                 EXPECT_EQ(traced_choice([&] { this->run(p); }), want) << label(s);
                 expect_trmm(*this->ctx, p, "auto " + label(s));
             }
@@ -979,7 +1010,17 @@ TYPED_TEST(TrmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
 
 // On a CPU queue (NETLIB) no native family can run: native pins throw, Auto is the vendor.
 template <typename Config>
-class TrmmCandidatesCpu : public test_utils::BatchLASTest<Config> {};
+class TrmmCandidatesCpu : public test_utils::BatchLASTest<Config> {
+protected:
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->ctx) ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
+    }
+};
 TYPED_TEST_SUITE(TrmmCandidatesCpu, Types);
 
 TYPED_TEST(TrmmCandidatesCpu, CpuQueueRunsNoNativeFamily) {

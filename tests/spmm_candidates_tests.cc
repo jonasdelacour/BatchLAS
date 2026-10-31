@@ -17,6 +17,7 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/ops/spmm/choice.hh>
 #include <src/ops/spmm/spmm_native.hh>
@@ -46,6 +47,7 @@ namespace {
 namespace sp = batchlas::ops::spmm;
 using C = sp::SpmmChoice;
 using Pin = select::ScopedPin<C>;
+namespace ub = test_utils::usm_bulk;
 template <typename T>
 using Dense = MatrixView<T, MatrixFormat::Dense>;
 template <typename T>
@@ -148,20 +150,28 @@ Problem<T> make(const Spec& s) {
         const auto re = u(gen), im = u(gen);
         v = Dense<T>::make(re, im);
     }
+    std::vector<T> val_h(p.val.size());
+    std::vector<int> ci_h(p.ci.size()), ro_h(p.ro.size());
     for (int b = 0; b < s.batch; ++b) {
         const int r = b % reps;
         const int nnz = int(cols[r].size());
-        for (int i = 0; i < p.ostride; ++i) p.ro[std::size_t(b) * p.ostride + i] = i <= s.m ? rows[r][i] : p.cap;
+        for (int i = 0; i < p.ostride; ++i) ro_h[std::size_t(b) * p.ostride + i] = i <= s.m ? rows[r][i] : p.cap;
         for (int q = 0; q < p.vstride; ++q) {
             const std::size_t at = std::size_t(b) * p.vstride + q;
-            p.val[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : Dense<T>::make(R(1e6), R(-1e6));
-            p.ci[at] = q < nnz ? cols[r][q] : 0;
+            val_h[at] = q < nnz ? vals_rep[std::size_t(r) * p.vstride + q] : Dense<T>::make(R(1e6), R(-1e6));
+            ci_h[at] = q < nnz ? cols[r][q] : 0;
         }
+    }
+    // An empty batch writes nothing: the vectors keep what resize() left, as before.
+    if (s.batch > 0) {
+        ub::copy(p.val.data(), val_h.data(), val_h.size() * sizeof(T), p.val.data());
+        ub::copy(p.ci.data(), ci_h.data(), ci_h.size() * sizeof(int), p.ci.data());
+        ub::copy(p.ro.data(), ro_h.data(), ro_h.size() * sizeof(int), p.ro.data());
     }
     p.boff = 5;
     p.coff = p.boff + std::size_t(p.sb) * std::max(1, s.batch) + 11;
     p.mem.resize(p.coff + std::size_t(p.sc) * std::max(1, s.batch) + 13);
-    for (std::size_t e = 0; e < p.mem.size(); ++e) p.mem[e] = poison<T>();
+    std::vector<T> mem_h(p.mem.size(), poison<T>());
     std::vector<T> brep(std::size_t(std::max(1, p.b_rows)) * std::max(1, p.b_cols) * reps),
         crep(std::size_t(std::max(1, p.out_rows)) * std::max(1, s.nrhs) * reps);
     for (auto& v : brep) {
@@ -176,12 +186,14 @@ Problem<T> make(const Spec& s) {
         const std::size_t r = std::size_t(b % reps);
         for (int j = 0; j < p.b_cols; ++j)
             for (int i = 0; i < p.b_rows; ++i)
-                p.mem[p.bi(b, i, j)] = brep[(r * std::max(1, p.b_cols) + j) * std::max(1, p.b_rows) + i];
+                mem_h[p.bi(b, i, j)] = brep[(r * std::max(1, p.b_cols) + j) * std::max(1, p.b_rows) + i];
         for (int j = 0; j < s.nrhs; ++j)
             for (int i = 0; i < p.out_rows; ++i)
-                p.mem[p.cidx(b, i, j)] = crep[(r * std::max(1, s.nrhs) + j) * std::max(1, p.out_rows) + i];
+                mem_h[p.cidx(b, i, j)] = crep[(r * std::max(1, s.nrhs) + j) * std::max(1, p.out_rows) + i];
     }
-    p.mem0 = p.mem;
+    p.mem0 = UnifiedVector<T>(mem_h.size());
+    ub::copy(p.mem.data(), mem_h.data(), mem_h.size() * sizeof(T), p.mem.data());
+    ub::copy(p.mem0.data(), mem_h.data(), mem_h.size() * sizeof(T), p.mem0.data());
     return p;
 }
 
@@ -205,8 +217,10 @@ void expect_correct(Queue& ctx, const Problem<T>& p, const std::string& what) {
     for (int b = 0; b < s.batch; ++b)
         for (int c = 0; c < s.nrhs; ++c)
             for (int i = 0; i < p.out_rows; ++i) in_c[p.cidx(b, i, c)] = 1;
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    const T* want = ub::download(p.mem0.data(), p.mem.size(), 1);
     for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!in_c[e] && !same_bits(p.mem[e], p.mem0[e])) {
+        if (!in_c[e] && !same_bits(got[e], want[e])) {
             ADD_FAILURE() << what << ": element " << e << " outside C was written";
             return;
         }
@@ -268,6 +282,11 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     // ---- the limit oracle: what the driver needs, written out here, not spmm.cc's can_run ----
@@ -299,8 +318,9 @@ protected:
         (void)spmm<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, p.s.ta, p.s.tb,
                          Span<std::byte>(arena.data(), need));
         q.wait();
+        const std::byte* guard = ub::download(arena.data() + need, kGuard, 0);
         for (std::size_t e = need; e < arena.size(); ++e)
-            ASSERT_EQ(arena[e], std::byte{0xA5}) << "workspace overrun at byte " << e << " of " << need;
+            ASSERT_EQ(guard[e - need], std::byte{0xA5}) << "workspace overrun at byte " << e << " of " << need;
     }
     void run_pinned(const C& c, Problem<T>& p) {
         const Pin pin("spmm", c);
@@ -394,9 +414,8 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                     auto again = make<T>(s);
                     this->direct(c, again);
                     auto equal = [](const Problem<T>& x, const Problem<T>& y) {
-                        for (std::size_t e = 0; e < x.mem.size(); ++e)
-                            if (!same_bits(x.mem[e], y.mem[e])) return false;
-                        return true;
+                        return !ub::first_diff(ub::download(x.mem.data(), x.mem.size(), 0),
+                                               ub::download(y.mem.data(), x.mem.size(), 1), x.mem.size());
                     };
                     if (!equal(pinned, direct) && !equal(pinned, again)) {
                         // Two agreeing vendor runs do not prove a third agrees; the
@@ -409,9 +428,10 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                     }
                     continue;
                 }
-                for (std::size_t e = 0; e < pinned.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
-                        << what << ": the pinned facade did not run this family's driver; element " << e;
+                const auto e = ub::first_diff(ub::download(pinned.mem.data(), pinned.mem.size(), 0),
+                                              ub::download(direct.mem.data(), pinned.mem.size(), 1), pinned.mem.size());
+                ASSERT_FALSE(e.has_value())
+                    << what << ": the pinned facade did not run this family's driver; element " << e.value_or(0);
                 ++compared;
             }
     }
@@ -433,10 +453,11 @@ TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 this->run_pinned(c, p);
                 expect_correct(*this->ctx, p, what);
                 if (ta != Transpose::NoTrans || std::holds_alternative<sp::Vendor>(c)) continue;
+                const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
                 for (int b = kPeriod; b < kBatch; ++b)
                     for (int j = 0; j < s.nrhs; ++j)
                         for (int i = 0; i < p.out_rows; ++i)
-                            ASSERT_TRUE(same_bits(p.mem[p.cidx(b, i, j)], p.mem[p.cidx(b % kPeriod, i, j)]))
+                            ASSERT_TRUE(same_bits(got[p.cidx(b, i, j)], got[p.cidx(b % kPeriod, i, j)]))
                                 << what << ": item " << b << " differs from item " << b % kPeriod;
             }
 }
@@ -492,8 +513,9 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
         } catch (const std::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << k.what;
         }
-        for (std::size_t e = 0; e < p.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << k.what << ": a refused call wrote element " << e;
+        const auto e = ub::first_diff(ub::download(p.mem.data(), p.mem.size(), 0),
+                                      ub::download(p.mem0.data(), p.mem.size(), 1), p.mem.size());
+        ASSERT_FALSE(e.has_value()) << k.what << ": a refused call wrote element " << e.value_or(0);
     }
 }
 
@@ -572,8 +594,9 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
                                        Transpose::NoTrans, Span<std::byte>())),
                      std::invalid_argument)
             << (on_c ? "C" : "B") << " heterogeneous";
-        for (std::size_t e = 0; e < q.mem.size(); ++e)
-            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << "a refused call wrote element " << e;
+        const auto e = ub::first_diff(ub::download(q.mem.data(), q.mem.size(), 0),
+                                      ub::download(q.mem0.data(), q.mem.size(), 1), q.mem.size());
+        ASSERT_FALSE(e.has_value()) << "a refused call wrote element " << e.value_or(0);
     }
     const ScopedEnvVar clear("BATCHLAS_SPMM_ROUTE", nullptr);
     auto call = [&] {
