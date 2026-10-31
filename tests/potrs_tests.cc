@@ -305,7 +305,7 @@ TYPED_TEST(PotrsTest, CoverageRowNamesThePinnedFamily) {
         const ScopedEnvVar clear("BATCHLAS_POTRS_ROUTE", nullptr);
         for (auto [n, nrhs, uplo, c] : {std::tuple{16, 4, Uplo::Lower, C{ps::Fused{}}}, std::tuple{24, 3, Uplo::Upper, C{ps::Trsm{}}}}) {
             auto p = this->sys(n, nrhs, 2, uplo, 3u);
-            if (!this->factor(p)) std::exit(3);
+            if (!this->factor(p)) throw std::runtime_error("no potrf route for n " + std::to_string(n));
             const Pin pin("potrs", c);
             this->solve(p);
         }

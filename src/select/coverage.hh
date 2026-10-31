@@ -9,8 +9,12 @@
 #include <batchlas/export.hh>
 #include <batchlas/no_route.hh>
 
+#include <src/util/internal-api.hh>
+
 #include <cstdint>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace batchlas::coverage {  /** @addtogroup api_selection */ /** @{ */
 
@@ -53,5 +57,19 @@ BATCHLAS_API std::string static_table();  // the `linked` rows: what this build 
 BATCHLAS_API extern bool g_dynamic_enabled;
 
 inline bool dynamic_enabled() { return g_dynamic_enabled; }
+
+/// The `reached` and `miss` tables' call counts by row key and the recording switch, for an
+/// in-process capture: snapshot, run, rows_since, restore. Tests only; not ABI.
+struct Snapshot {
+    std::unordered_map<std::string, uint64_t> calls;
+    std::unordered_map<uint64_t, uint64_t> misses;
+    bool enabled = false;
+};
+
+BATCHLAS_INTERNAL_API Snapshot snapshot();
+/// emit()'s `reached`, then `miss`, lines for the rows called since `s`, the calls column the delta.
+BATCHLAS_INTERNAL_API std::vector<std::string> rows_since(const Snapshot& s);
+/// The table and the switch as at `s`: a capture leaves BATCHLAS_COVERAGE_OUT untouched.
+BATCHLAS_INTERNAL_API void restore(const Snapshot& s);
 
 /** @} */ } // namespace batchlas::coverage
