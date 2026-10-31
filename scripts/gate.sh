@@ -16,7 +16,8 @@
 # (CUDA_VISIBLE_DEVICES, else the idle ones nvidia-smi lists, by the BATCHLAS_GPU_BUSY_* test of
 # scripts/ctest_gpus.sh), the two ctests run at once: vf on the first GPU, full on the second,
 # each with DPCPP_CPU_NUM_CUS=cores/2 for its opencl:cpu half and its own TMPDIR. With one GPU,
-# --serial, --parallel or --only they run one after the other (full on the second GPU, vf on the
+# a busy box (1-minute load above BATCHLAS_GATE_MAX_LOAD, default cores/4, or another process
+# above 200% CPU), --serial, --parallel or --only they run one after the other (full on the second GPU, vf on the
 # first, when two are visible; both on the one idle GPU). INT/TERM kill both ctests.
 #
 #   --serial       never run the two ctests at once
@@ -59,7 +60,7 @@ while [ "$#" -gt 0 ]; do
         --parallel) parallel=1; shift ;;
         --serial) serial=1; shift ;;
         --no-build) build=0; shift ;;
-        -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "gate: unknown argument $1" >&2; exit 64 ;;
     esac
 done
@@ -265,6 +266,40 @@ collect_notes() {
     [ ! -f "$1/gate/test-notes.txt" ] || while IFS= read -r l; do lines+=("$l"); done < "$1/gate/test-notes.txt"
 }
 
+# Why the box is too busy to overlap the two ctests, else nothing: a 1-minute load average above
+# $1, or a process (Linux: a 1 s /proc sample) above 200% CPU. Called between the builds and the
+# ctests, when the gate itself runs nothing.
+box_busy() {
+    python3 - "$1" <<'EOF'
+import os, sys, time
+max_load = float(sys.argv[1])
+load = os.getloadavg()[0]
+if load > max_load:
+    print(f"1-minute load {load:.2f} > {max_load:g}")
+    sys.exit()
+if not os.path.isdir("/proc/self"):
+    sys.exit()
+def ticks():
+    out = {}
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                head, rest = f.read().rsplit(")", 1)
+            v = rest.split()
+            out[pid] = (head.split("(", 1)[1], int(v[11]) + int(v[12]))
+        except (OSError, IndexError, ValueError):
+            pass
+    return out
+a = ticks(); time.sleep(1); b = ticks()
+hz = os.sysconf("SC_CLK_TCK")
+for pid, (comm, t) in b.items():
+    pct = 100.0 * (t - a.get(pid, (comm, t))[1]) / hz
+    if pct > 200:
+        print(f"pid {pid} ({comm}) at {pct:.0f}% CPU")
+        break
+EOF
+}
+
 export LC_ALL=C
 selector=""
 if [ -z "${ONEAPI_DEVICE_SELECTOR+set}" ]; then
@@ -319,10 +354,14 @@ for kind in full vf; do
     kinds+=("$kind")
 done
 
+cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+loaded=""
 if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ] && [ "$gpu_full" != "$gpu_vf" ]; then
+    loaded=$(box_busy "${BATCHLAS_GATE_MAX_LOAD:-$(( cores / 4 > 0 ? cores / 4 : 1 ))}" || true)
+fi
+if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ] && [ "$gpu_full" != "$gpu_vf" ] && [ -z "$loaded" ]; then
     # Builds are done and the lock is held, so nothing else on the box allocates beside the
     # two ctests (the recorded OOM kills both had a build running); rss.tsv shows the margin.
-    cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
     cus=${BATCHLAS_GATE_CPU_CUS:-$(( cores / 2 > 0 ? cores / 2 : 1 ))}
     note "ctest: full on GPU $gpu_full and vf on GPU $gpu_vf at once, DPCPP_CPU_NUM_CUS=$cus each"
     t0=$(date +%s)
@@ -341,6 +380,7 @@ if [ "${#kinds[@]}" -eq 2 ] && [ "$serial" = 0 ] && [ -n "$gpu_full" ] && [ "$gp
     note "ctest phase (both trees at once) took $(elapsed $(( $(date +%s) - t0 )))"
 else
     why="${#gpus[@]} GPU(s) $gpu_src"
+    [ -z "$loaded" ] || why="box busy: $loaded"
     [ "$serial" = 0 ] || why=--serial
     [ "$parallel" = 0 ] || why=--parallel
     [ "${#kinds[@]}" -eq 2 ] || why="one tree to test"

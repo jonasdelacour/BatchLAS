@@ -82,7 +82,8 @@ sh .github/ci/run_local_checks.sh [PREFIX]         # touched cmake/, include/ or
   `ONEAPI_DEVICE_SELECTOR` (§8). After both builds it runs the two ctests at once, vf on the
   first visible GPU and full on the second, each serial with `DPCPP_CPU_NUM_CUS`=cores/2 and its
   own `TMPDIR`; without `CUDA_VISIBLE_DEVICES` it skips busy GPUs as `ctest_gpus.sh` does.
-  `CUDA_VISIBLE_DEVICES=0`, one idle GPU or `--serial` runs them one after the other. Ctrl-C
+  `CUDA_VISIBLE_DEVICES=0`, one idle GPU, a busy box (load above `BATCHLAS_GATE_MAX_LOAD`, default
+  cores/4, or a process above 200% CPU) or `--serial` runs them one after the other. Ctrl-C
   kills both ctests. Read the peak RSS line
   (`<tree>/gate/rss.tsv`, `docs/ci.md`). Seed a missing gate tree only from a `dev-tests` tree
   (plain `build/` differs in `BATCHLAS_ALLOW_UNSAFE_ENV`). Never `--parallel` (§8) here: it was
