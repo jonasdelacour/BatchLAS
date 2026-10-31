@@ -32,8 +32,9 @@ ruled-out idea; §12 conventions; §13 machines (`scripts/agent/dispatch.sh host
 - Never run the full ctest by default: `--gtest_filter` -> `ctest -R '^X(_heavy)?$'` -> `-L
   <component>` -> `-LE 'slow|heavy'` -> `-LE slow`; `scripts/affected_tests.py --print-build-cmd
   --print-ctest-cmd` maps a diff to binaries. Run `X_heavy` before calling `X` green (§8).
-- Before pushing: `CUDA_VISIBLE_DEVICES=0 scripts/gate.sh` (serial) and `scripts/agent/prepush.sh`.
+- Before pushing: `scripts/gate.sh` (full and vf trees, one per GPU) and `scripts/agent/prepush.sh`.
   Full-target ctest on the 4090 box needs `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` (§6, §8).
+- Fast tests (§8 "Writing fast tests"): observe in-process, fill once, no host loops over USM.
 - main is not green: compare failing *names* with `tests/known-failures*.txt`; attribute with
   `scripts/agent/attribute_failures.py`. `BATCHLAS_TEST_BACKEND`/`_FLOAT_TYPE` skip silently (§8).
 - New tests follow the 11 "guards that cannot fail" (§8): a narrow deliberate break per axis, a
