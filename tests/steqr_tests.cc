@@ -1151,6 +1151,45 @@ bool tridiag_item_ok(Queue& ctx, const std::vector<long double>& hd, const std::
     return v_ok && r_ok && o_ok;
 }
 
+// tridiag_item_ok over every item in `items` (empty: all) at once: info == 0 and values per item, then
+// one batched eigen_residual and orthogonality_rotations. T is built in Real: every hd/he entry is
+// already rounded to Real, so it is exact. On false the caller names the bad items per item.
+template <typename Real>
+bool tridiag_batch_ok(Queue& ctx, const std::vector<std::vector<long double>>& hd,
+                      const std::vector<std::vector<long double>>& he, const std::vector<std::vector<long double>>& ref,
+                      const Vector<Real>& evals, const Matrix<Real>& Z, const UnifiedVector<int32_t>& info,
+                      std::span<const int> items = {}) {
+    using batchlas::verify::Check;
+    using MV = MatrixView<Real, MatrixFormat::Dense>;
+    const int batch = static_cast<int>(hd.size());
+    const int n = static_cast<int>(hd[0].size());
+    std::vector<int> all;
+    if (items.empty()) {
+        all.resize(static_cast<size_t>(batch));
+        for (int b = 0; b < batch; ++b) all[static_cast<size_t>(b)] = b;
+        items = all;
+    }
+    std::vector<Real> T(static_cast<size_t>(n) * n * batch, Real(0));
+    std::vector<std::vector<double>> refd(static_cast<size_t>(batch));
+    for (const int b : items) {
+        if (info[b] != 0) return false;
+        refd[b].assign(ref[b].begin(), ref[b].end());
+        Real* t = T.data() + static_cast<size_t>(b) * n * n;
+        double tnorm = 0;
+        for (int i = 0; i < n; ++i) {
+            t[i + static_cast<size_t>(i) * n] = static_cast<Real>(hd[b][i]);
+            if (i < n - 1) t[i + 1 + static_cast<size_t>(i) * n] = static_cast<Real>(he[b][i]);
+            tnorm = std::max(tnorm, static_cast<double>(std::fabs(hd[b][i]) + (i > 0 ? std::fabs(he[b][i - 1]) : 0.0L) +
+                                                        (i < n - 1 ? std::fabs(he[b][i]) : 0.0L)));
+        }
+        if (!batchlas::verify::pass<Real>(Check::values, n, MV::values_error(evals, refd, tnorm, std::span<const int>(&b, 1))))
+            return false;
+    }
+    const MV Tv(T.data(), n, n, n, n * n, batch);
+    return batchlas::verify::pass<Real>(Check::eigen_residual, n, MV::eigen_residual(ctx, Tv, Z, evals, items)) &&
+           batchlas::verify::pass<Real>(Check::orthogonality_rotations, n, MV::orthogonality(ctx, Z, items));
+}
+
 // steqr with eigenvectors, sorted ascending, on long-double input rounded to
 // Real. Returns false with `skip_reason` set on a missing kernel bundle.
 template <Backend B, typename Real>
@@ -1247,6 +1286,10 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
 
         for (const auto scheme : kSteqrUpdateSchemes) {
             for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
+                // NETLIB's host queue never takes steqr_cta (should_use_cta, src/ops/syev/steqr/steqr.cc:15-24,40-43)
+                // and steqr_wg reads no cta_* field: every (scheme, shift) pair there is the same run.
+                if (B == Backend::NETLIB && (scheme != kSteqrUpdateSchemes[0] || shift != SteqrShiftStrategy::Lapack))
+                    continue;
                 Vector<Real> evals(n, Real(0), batch);
                 auto eigvects = Matrix<Real>::Zeros(n, n, batch);
                 UnifiedVector<int32_t> info(batch, int32_t(0));
@@ -1258,6 +1301,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
                     GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
                 }
 
+                if (tridiag_batch_ok(*this->ctx, hd, he, ref, evals, eigvects, info)) continue;
                 const std::string tag = std::string("n=") + std::to_string(n) + " " + update_scheme_name(scheme) +
                                         (shift == SteqrShiftStrategy::Lapack ? " Lapack" : " Wilkinson");
                 int bad_items = 0;
@@ -1269,6 +1313,7 @@ TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
                     EXPECT_TRUE(ok) << tag << " item " << b << " (kind " << b % 5 << "): info " << info[b] << ", "
                                     << why;
                 }
+                EXPECT_GT(bad_items, 0) << tag << ": the batched check failed and no single item did";
             }
         }
     }
@@ -1391,6 +1436,10 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                     GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
                 }
 
+                std::vector<int> items;
+                for (int b = 0; b < batch; ++b)
+                    if (checked(b)) items.push_back(b);
+                if (tridiag_batch_ok(*this->ctx, hd, he, ref, evals, eigvects, info, items)) continue;
                 int bad_items = 0;
                 for (int b = 0; b < batch && bad_items < 8; ++b) {
                     if (!checked(b)) continue;
@@ -1401,6 +1450,8 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
                     EXPECT_TRUE(ok) << "n=" << n << " mult=" << mult << " batch=" << batch << " item " << b
                                     << ": info " << info[b] << ", " << why;
                 }
+                EXPECT_GT(bad_items, 0) << "n=" << n << " mult=" << mult << " batch=" << batch
+                                        << ": the batched check failed and no single item did";
             }
         }
     }
