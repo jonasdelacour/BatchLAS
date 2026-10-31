@@ -89,7 +89,7 @@ struct Problem {
     std::size_t a_off = 0, x_off = 0, y_off = 0;
     int lda = 0, sa = 0, incx = 2, sx = 0, incy = 3, sy = 0;
     UnifiedVector<T> mem;
-    std::vector<T> mem0;  // host snapshot of mem before any kernel
+    ub::Pristine<T> pristine;  // mem's initial contents: the representatives, poison elsewhere
 
     MVof<T> A() { return {mem.data() + a_off, s.m, s.n, lda, sa, s.batch}; }
     VectorView<T> X() { return {mem.data() + x_off, s.red(), s.batch, Inc{incx}, Stride{sx}}; }
@@ -97,6 +97,22 @@ struct Problem {
     std::size_t ai(int it, int i, int j) const { return a_off + std::size_t(it) * sa + std::size_t(j) * lda + i; }
     std::size_t xi(int it, int i) const { return x_off + std::size_t(it) * sx + std::size_t(i) * incx; }
     std::size_t yi(int it, int i) const { return y_off + std::size_t(it) * sy + std::size_t(i) * incy; }
+    // The first element of the host copy `got` of mem not bit-identical to its initial contents,
+    // y's footprint in every item skipped when skip_y.
+    std::optional<std::size_t> first_change(const T* got, bool skip_y) const {
+        using H = typename ub::Pristine<T>::Hole;
+        std::optional<H> hole;
+        if (skip_y) hole = H{y_off, std::size_t(incy), 1, std::size_t(s.out())};
+        return pristine.first_change(got, mem.size(), hole);
+    }
+    // mem back to its initial contents.
+    void restore() { pristine.write(mem.data()); }
+    // Representative items as first written, on the host (reps items from `off`, stride `stride`).
+    T* initial(std::size_t off) const {
+        for (auto g = pristine.segs.rbegin(); g != pristine.segs.rend(); ++g)
+            if (g->off <= off) return const_cast<T*>(g->rep.data()) + (off - g->off);
+        return nullptr;
+    }
 };
 
 template <typename T>
@@ -117,27 +133,28 @@ Problem<T> make_problem(const Spec& s) {
     p.sy = p.incy * std::max(s.out(), 1) + 11;
     p.x_off = std::size_t(p.sa) * s.batch + 13;
     p.y_off = p.x_off + std::size_t(p.sx) * s.batch + 17;
-    p.mem = UnifiedVector<T>(p.y_off + std::size_t(p.sy) * s.batch + 19, poison<T>());
+    const std::size_t total = p.y_off + std::size_t(p.sy) * s.batch + 19;
+    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
+    p.pristine = ub::Pristine<T>(total, std::size_t(s.batch), std::size_t(reps), poison<T>(),
+                                 {{p.a_off, std::size_t(p.sa)}, {p.x_off, std::size_t(p.sx)}, {p.y_off, std::size_t(p.sy)}});
     std::mt19937 gen(s.seed);
     std::uniform_real_distribution<R> u(R(-1), R(1));
-    const int reps = s.period > 0 ? std::min(s.period, s.batch) : s.batch;
-    for (int it = 0; it < s.batch; ++it) {
-        const int r = it % reps;
+    // Only the representatives draw; write() copies them over the rest of the batch.
+    for (int it = 0; it < reps; ++it) {
         // Named locals: the two draws of a complex entry in a fixed order on every compiler.
         auto draw = [&] {
             const auto re = u(gen), im = u(gen);
             return MatrixView<T, MatrixFormat::Dense>::make(re, im);
         };
         for (int j = 0; j < s.n; ++j)
-            for (int i = 0; i < s.m; ++i)
-                p.mem[p.ai(it, i, j)] = it < reps ? draw() : p.mem[p.ai(r, i, j)];
-        for (int i = 0; i < s.red(); ++i) p.mem[p.xi(it, i)] = it < reps ? draw() : p.mem[p.xi(r, i)];
+            for (int i = 0; i < s.m; ++i) p.pristine.at(p.ai(it, i, j)) = draw();
+        for (int i = 0; i < s.red(); ++i) p.pristine.at(p.xi(it, i)) = draw();
         // beta == 0 must not read y: its old contents stay poison.
         if (!s.beta_zero)
-            for (int i = 0; i < s.out(); ++i)
-                p.mem[p.yi(it, i)] = it < reps ? draw() : p.mem[p.yi(r, i)];
+            for (int i = 0; i < s.out(); ++i) p.pristine.at(p.yi(it, i)) = draw();
     }
-    p.mem0.assign(p.mem.data(), p.mem.data() + p.mem.size());
+    p.mem = UnifiedVector<T>(total);
+    p.pristine.write(p.mem.data());
     return p;
 }
 
@@ -156,30 +173,23 @@ void expect_gemv(Queue& ctx, const Problem<T>& p, const std::string& what) {
     for (int it : items)
         if (quick)
             for (int o = 0; o < s.out(); ++o)
-                ASSERT_TRUE(same_bits(got[p.yi(it, o)], p.mem0[p.yi(it, o)])) << what << ": quick return wrote y";
+                ASSERT_TRUE(same_bits(got[p.yi(it, o)], *p.initial(p.yi(it, o)))) << what << ": quick return wrote y";
     if (!quick) {
-        // Operands and y0 from a device-readable copy of the pristine snapshot; y from the result buffer.
-        UnifiedVector<T> pristine(p.mem0.size());
-        ub::copy(pristine.data(), p.mem0.data(), p.mem0.size() * sizeof(T), pristine.data());
-        auto at0 = [&](std::size_t off) { return pristine.data() + off; };
-        const MVof<T> A0(at0(p.a_off), s.m, s.n, p.lda, p.sa, s.batch);
-        const VectorView<T> X0(at0(p.x_off), s.red(), s.batch, Inc{p.incx}, Stride{p.sx});
-        const VectorView<T> Y0(at0(p.y_off), s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
-        const VectorView<T> Y1(const_cast<T*>(p.mem.data()) + p.y_off, s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
+        // Operands and y0 from the host representatives (every checked item is one), y from the
+        // download: gemv_backward_error reads its views on the host (astype, column_of).
+        const int reps = int(p.pristine.reps);
+        const MVof<T> A0(p.initial(p.a_off), s.m, s.n, p.lda, p.sa, reps);
+        const VectorView<T> X0(p.initial(p.x_off), s.red(), reps, Inc{p.incx}, Stride{p.sx});
+        const VectorView<T> Y0(p.initial(p.y_off), s.out(), reps, Inc{p.incy}, Stride{p.sy});
+        const VectorView<T> Y1(const_cast<T*>(got) + p.y_off, s.out(), s.batch, Inc{p.incy}, Stride{p.sy});
         const double err = MVof<T>::gemv_backward_error(ctx, A0, s.trans, X0, Y0, Y1, MVof<T>::up(p.alpha), MVof<T>::up(p.beta), items);
         ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, s.red(), err))
             << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
             << batchlas::verify::bound<T>(batchlas::verify::Check::blas, s.red());
     }
-    // y's footprint from the index: item it = (e - y_off) / sy, element o where the rest is o * incy.
-    const auto in_y = [&](std::size_t e) {
-        if (e < p.y_off) return false;
-        const std::size_t rel = e - p.y_off, r = rel % std::size_t(p.sy);
-        return rel / std::size_t(p.sy) < std::size_t(s.batch) && r % std::size_t(p.incy) == 0 &&
-               r / std::size_t(p.incy) < std::size_t(s.out());
-    };
-    for (std::size_t e = 0; e < p.mem0.size(); ++e)
-        if (!in_y(e)) ASSERT_TRUE(same_bits(got[e], p.mem0[e])) << what << ": wrote outside y at element " << e;
+    // Every element outside y's footprint (out elements incy apart in every item).
+    const auto outside = p.first_change(got, true);
+    ASSERT_FALSE(outside.has_value()) << what << ": wrote outside y at element " << outside.value_or(0);
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
             for (int o = 0; o < s.out(); ++o)
@@ -487,7 +497,7 @@ TYPED_TEST(GemvCandidates, MismatchedViewsHaveNoNativeRoute) {
                 << k.what;
         }
     }
-    const auto wrote = ub::first_diff(ub::download(p.mem.data(), p.mem.size(), 0), p.mem0.data(), p.mem0.size());
+    const auto wrote = p.first_change(ub::download(p.mem.data(), p.mem.size(), 0), false);
     ASSERT_FALSE(wrote.has_value()) << "a refused call wrote element " << wrote.value_or(0);
     // Auto: the vendor (known-defects #1's ortho call goes the same way). It indexes by A's
     // extents and batch, which stay inside this buffer.
@@ -877,7 +887,7 @@ void check_masked(Queue& q, const MaskCase& k) {
     mc.batch = k.batch;
     mc.wg_items = k.wg_items;
     mc.identical_items = k.period == 1;
-    mc.prepare = [&] { ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data()); };
+    mc.prepare = [&] { p.restore(); };
     mc.call = [&](Span<const std::uint8_t> mask, Span<std::byte>) {
         const auto pick = [&](char v) { return on.find(v) != std::string::npos ? mask : Span<const std::uint8_t>{}; };
         (void)gemv<B, T>(q, p.A().with_batch_mask(pick('A')), p.X().with_batch_mask(pick('X')),
@@ -951,7 +961,7 @@ TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
         {
             const Pin pin("gemv", "vendor", select::StrictPin{});
             this->run(p);  // the unmasked call runs on this pin, so the masked throw is the mask's
-            ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data());
+            p.restore();
             try {
                 masked();
                 ADD_FAILURE() << trans_s(t) << ": a vendor pin ran a masked call";
@@ -959,12 +969,12 @@ TYPED_TEST(GemvCandidates, MaskedCallNeverReachesTheVendor) {
                 EXPECT_NE(std::string(e.what()).find("(strict): no vendor candidate"), std::string::npos) << e.what();
             }
         }
-        ub::copy(p.mem.data(), p.mem0.data(), p.mem0.size() * sizeof(T), p.mem.data());
+        p.restore();
         EXPECT_NE(traced_choice(masked), "vendor") << trans_s(t);
         const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
         for (int it : {0, 2})
             for (int o = 0; o < s.out(); ++o)
-                EXPECT_TRUE(same_bits(got[p.yi(it, o)], p.mem0[p.yi(it, o)])) << "inactive item " << it;
+                EXPECT_TRUE(same_bits(got[p.yi(it, o)], *p.initial(p.yi(it % p.pristine.reps, o)))) << "inactive item " << it;
     }
 }
 

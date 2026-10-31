@@ -19,7 +19,6 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
-#include <tests/usm_bulk_copy.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -49,7 +48,6 @@ using namespace batchlas;
 namespace {
 
 namespace gs = batchlas::ops::getrs;
-namespace ub = test_utils::usm_bulk;
 using C = gs::GetrsChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -96,8 +94,7 @@ struct Sys {
     MVof<T> A() { return {a.data(), s.n, s.n, lda, sa, s.batch, aptr.data()}; }
     MVof<T> B() { return {b.data(), s.n, s.nrhs, ldb, sb, s.batch, bptr.data()}; }
     T& f(int it, int i, int j) { return a[std::size_t(it) * sa + std::size_t(j) * lda + i]; }
-    std::size_t xi(int it, int i, int j) const { return std::size_t(it) * sb + std::size_t(j) * ldb + i; }
-    T& x(int it, int i, int j) { return b[xi(it, i, j)]; }
+    T& x(int it, int i, int j) { return b[std::size_t(it) * sb + std::size_t(j) * ldb + i]; }
     int* p32() { return reinterpret_cast<int*>(piv.data()); }
 };
 
@@ -145,20 +142,13 @@ Sys<T> make_sys(const Spec& s) {
     for (int it = 0; it < s.batch; ++it) {
         const int r = it % reps;
         for (int k = 0; k < s.n; ++k) pv[std::size_t(it) * s.n + k] = p.ipiv[r][k] + 1;
+        if (it < reps) continue;
+        for (int j = 0; j < s.n; ++j)
+            for (int i = 0; i < s.n; ++i) p.f(it, i, j) = p.f(r, i, j);
+        for (int j = 0; j < s.nrhs; ++j)
+            for (int i = 0; i < s.n; ++i) p.x(it, i, j) = p.x(r, i, j);
     }
-    // Items past the representatives: the first `have` items doubled in place (Pristine::write),
-    // whole strides, so item it holds item it % reps with its pads and gap.
-    const auto replicate = [&](UnifiedVector<T>& v, std::size_t stride) {
-        for (std::size_t have = reps; have < std::size_t(s.batch);) {
-            const std::size_t more = std::min(have, std::size_t(s.batch) - have);
-            ub::copy(v.data() + have * stride, v.data(), more * stride * sizeof(T), v.data());
-            have += more;
-        }
-    };
-    replicate(p.a, std::size_t(p.sa));
-    replicate(p.b, std::size_t(p.sb));
-    const T* b0 = ub::download(p.b.data(), p.b.size(), 0);
-    p.b0.assign(b0, b0 + p.b.size());
+    p.b0.assign(p.b.begin(), p.b.end());
     return p;
 }
 
@@ -184,21 +174,19 @@ void expect_solved(Queue& ctx, Sys<T>& p, const std::string& what, const std::ve
     const double r = residual(ctx, p, items);
     ASSERT_TRUE(::test_utils::verify_pass<T>(verify::Check::solve, s.n, r))
         << what << " worst residual over " << items.size() << " items " << r;
-    const T* got = ub::download(p.b.data(), p.b.size(), 0);
     for (std::size_t e = 0; e < p.b.size(); ++e) {
         const std::size_t off = e % std::size_t(p.sb), col = off / std::size_t(p.ldb), row = off % std::size_t(p.ldb);
         if (col >= std::size_t(s.nrhs) || row >= std::size_t(s.n))
-            ASSERT_TRUE(same_bits(got[e], p.b0[e])) << what << ": wrote outside B at element " << e;
+            ASSERT_TRUE(same_bits(p.b[e], p.b0[e])) << what << ": wrote outside B at element " << e;
     }
-    if (a0) {
-        const auto e = ub::first_diff(ub::download(p.a.data(), p.a.size(), 1), a0->data(), p.a.size());
-        ASSERT_FALSE(e.has_value()) << what << ": wrote A at element " << e.value_or(0);
-    }
+    if (a0)
+        for (std::size_t e = 0; e < p.a.size(); ++e)
+            ASSERT_TRUE(same_bits(p.a[e], (*a0)[e])) << what << ": wrote A at element " << e;
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
             for (int j = 0; j < s.nrhs; ++j)
                 for (int i = 0; i < s.n; ++i)
-                    ASSERT_TRUE(same_bits(got[p.xi(it, i, j)], got[p.xi(it % s.period, i, j)]))
+                    ASSERT_TRUE(same_bits(p.x(it, i, j), p.x(it % s.period, i, j)))
                         << what << ": X of item " << it << " differs from its representative at (" << i << "," << j << ")";
 }
 
@@ -267,11 +255,6 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
-        ub::attach(this->ctx.get());
-    }
-    void TearDown() override {
-        ub::detach();
-        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     std::size_t budget() const {
@@ -404,8 +387,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
                     continue;
                 }
                 ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
-                const T* a_pre = ub::download(p.a.data(), p.a.size(), 1);
-                const std::vector<T> a0(a_pre, a_pre + p.a.size());
+                const std::vector<T> a0(p.a.begin(), p.a.end());
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), select::to_string(c)) << what;
                 expect_solved(*this->ctx, p, what, &a0);
                 if (::testing::Test::HasFatalFailure()) return;
@@ -456,11 +438,9 @@ TYPED_TEST(GetrsCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
                 expect_solved(*this->ctx, pinned, what);
-                const std::size_t n_el = pinned.b.size();
-                const auto e = ub::first_diff(ub::download(pinned.b.data(), n_el, 0),
-                                              ub::download(direct.b.data(), n_el, 1), n_el);
-                ASSERT_FALSE(e.has_value()) << what << ": the pinned facade did not run this family's driver; element "
-                                            << e.value_or(0);
+                for (std::size_t e = 0; e < pinned.b.size(); ++e)
+                    ASSERT_TRUE(same_bits(pinned.b[e], direct.b[e]))
+                        << what << ": the pinned facade did not run this family's driver; element " << e;
                 ++compared;
             }
     EXPECT_GT(compared, 0);
@@ -536,9 +516,8 @@ TYPED_TEST(GetrsCandidates, WorkspaceIsExactlyWhatTheChoiceNeeds) {
             UnifiedVector<std::byte> arena(need + kTail, std::byte{0xA5});
             (void)getrs<B, T>(*this->ctx, A, Bm, s.trans, p.piv.to_span(), Span<std::byte>(arena.data(), need));
             this->ctx->wait();
-            const std::byte* ar = ub::download(arena.data(), arena.size(), 0);
             for (std::size_t e = need; e < arena.size(); ++e)
-                ASSERT_EQ(ar[e], std::byte{0xA5}) << name(c, s) << ": wrote past the workspace at byte " << e;
+                ASSERT_EQ(arena[e], std::byte{0xA5}) << name(c, s) << ": wrote past the workspace at byte " << e;
             expect_solved(*this->ctx, p, name(c, s) + " (exact workspace)");
         }
     }

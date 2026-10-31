@@ -19,7 +19,6 @@
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
 #include <tests/test_support/coverage_rows.hh>
-#include <tests/usm_bulk_copy.hh>
 
 #include <batchlas/verify/reference.hh>
 #include <batchlas/verify/tolerance.hh>
@@ -52,7 +51,6 @@ namespace {
 namespace gf = batchlas::ops::getrf;
 using C = gf::GetrfChoice;
 using Pin = select::ScopedPin<C>;
-namespace ub = test_utils::usm_bulk;
 
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
@@ -93,12 +91,10 @@ Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
     const int reps = period > 0 ? std::min(period, batch) : batch;
     if (n > 0 && reps > 0) {
         const auto R = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, reps, seed);
-        const T* rh = ub::download(R.data_ptr(), std::size_t(R.stride()) * reps, 0);
         for (int b = 0; b < batch; ++b)
             for (int j = 0; j < n; ++j)
                 for (int r = 0; r < n; ++r) {
-                    const std::size_t rb = std::size_t(period > 0 ? b % period : b);
-                    const auto v = MVof<T>::up(rh[rb * R.stride() + std::size_t(j) * R.ld() + r]);
+                    const auto v = MVof<T>::up(R(r, j, period > 0 ? b % period : b));
                     const double d = r == j ? 4.0 * n : 0.0;
                     p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + (r + 1) % n] =
                         MVof<T>::make(std::real(v) + d, std::imag(v));
@@ -111,14 +107,10 @@ Lu<T> make_lu(int n, int batch, unsigned seed, int period = 0) {
 // info, pivots and the residual of the first and last item, and the padding bit for bit.
 template <typename T>
 void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool info_passed = true) {
-    const int32_t* info = ub::download(p.info.data(), p.info.size(), 0);
-    for (int b = 0; info_passed && b < p.batch; ++b) ASSERT_EQ(info[b], 0) << what << " item " << b;
-    const int* ip = reinterpret_cast<const int*>(ub::download(p.piv.data(), p.piv.size(), 1));
+    for (int b = 0; info_passed && b < p.batch; ++b) ASSERT_EQ(p.info[b], 0) << what << " item " << b;
     for (int b : {0, p.batch - 1})
-        for (int k = 0; k < p.n; ++k) {
-            const int v = ip[std::size_t(b) * p.n + k];
-            ASSERT_TRUE(v >= k + 1 && v <= p.n) << what << " item " << b << " pivot " << k << " = " << v;
-        }
+        for (int k = 0; k < p.n; ++k)
+            ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.n) << what << " item " << b << " pivot " << k << " = " << p.ip(b)[k];
     // ||P A0 - L U||_F / ||A0||_F, P rebuilt from the 1-based interchange list.
     const std::vector<int> items = p.batch > 1 ? std::vector<int>{0, p.batch - 1} : std::vector<int>{0};
     const MVof<T> A0(const_cast<T*>(p.a0.data()), p.n, p.n, p.ld, p.stride, p.batch);
@@ -126,11 +118,10 @@ void expect_factored(Queue& ctx, const Lu<T>& p, const std::string& what, bool i
     const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.ip(0))), p.n, p.batch, 1, p.n);
     const double r = MVof<T>::getrf_residual(ctx, A0, F, piv, items);
     EXPECT_VERIFY(T, verify::Check::factorization, p.n, r) << what << " residual " << r;
-    const T* got = ub::download(p.buf.data(), p.a0.size(), 0);
     for (std::size_t e = 0; e < p.a0.size(); ++e) {
         const int r = int(e % p.stride), i = r % p.ld, j = r / p.ld;
         if (!(i < p.n && j < p.n) || int(e / p.stride) >= p.batch)
-            ASSERT_TRUE(same_bits(got[e], p.a0[e])) << what << ": padding written at element " << e;
+            ASSERT_TRUE(same_bits(p.buf[e], p.a0[e])) << what << ": padding written at element " << e;
     }
 }
 
@@ -164,13 +155,11 @@ Rect<T> make_rect(int m, int n, int batch, unsigned seed, int period = 0, int ze
     // breaks those ties differently from LAPACKE, which makes the pivot oracle meaningless.
     const int reps = period > 0 ? std::min(period, batch) : batch;
     const auto R = Matrix<T, MatrixFormat::Dense>::Random(m, n, false, reps, seed);
-    const T* rh = ub::download(R.data_ptr(), std::size_t(R.stride()) * reps, 0);
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i)
                 p.buf[std::size_t(b) * p.stride + std::size_t(j) * p.ld + i] =
-                    j == zero_col ? MVof<T>::make(0.0, 0.0)
-                                  : rh[std::size_t(period > 0 ? b % period : b) * R.stride() + std::size_t(j) * R.ld() + i];
+                    j == zero_col ? MVof<T>::make(0.0, 0.0) : R(i, j, period > 0 ? b % period : b);
     p.a0.assign(p.buf.begin(), p.buf.end());
     return p;
 }
@@ -179,30 +168,27 @@ template <typename T>
 void expect_rect_factored(Queue& ctx, const Rect<T>& p, const std::string& what, int zero_col) {
     const int mn = p.mn();
     const int want_info = (zero_col >= 0 && zero_col < mn) ? zero_col + 1 : 0;
-    const int32_t* info = ub::download(p.info.data(), p.info.size(), 0);
-    for (int b = 0; b < p.batch; ++b) ASSERT_EQ(info[b], want_info) << what << " item " << b;
-    const int* raw = reinterpret_cast<const int*>(ub::download(p.piv.data(), p.piv.size(), 1));
+    for (int b = 0; b < p.batch; ++b) ASSERT_EQ(p.info[b], want_info) << what << " item " << b;
+    const int* raw = reinterpret_cast<const int*>(p.piv.data());
     for (std::size_t i = std::size_t(mn) * p.batch; i < 2 * p.piv.size(); ++i)
         ASSERT_EQ(raw[i], int(0x0BADBEEF)) << what << ": pivot tail written at int32 " << i;
     std::vector<int> items{0, p.batch - 1};
     if (p.batch == 1) items = {0};
     const MVof<T> A0(const_cast<T*>(p.a0.data()), p.m, p.n, p.ld, p.stride, p.batch);
     for (int b : items) {
-        const int* ip = raw + std::size_t(b) * mn;
         for (int k = 0; k < mn; ++k)
-            ASSERT_TRUE(ip[k] >= k + 1 && ip[k] <= p.m) << what << " item " << b << " pivot " << k;
+            ASSERT_TRUE(p.ip(b)[k] >= k + 1 && p.ip(b)[k] <= p.m) << what << " item " << b << " pivot " << k;
         std::vector<std::int32_t> ref;
         if (verify::getrf_pivots(A0, b, ref))
-            for (int k = 0; k < mn; ++k) ASSERT_EQ(ip[k], ref[k]) << what << " item " << b << ": LAPACKE pivot " << k;
+            for (int k = 0; k < mn; ++k) ASSERT_EQ(p.ip(b)[k], ref[k]) << what << " item " << b << ": LAPACKE pivot " << k;
     }
     const MVof<T> F(const_cast<T*>(p.buf.data()), p.m, p.n, p.ld, p.stride, p.batch);
     const VectorView<int32_t> piv(const_cast<int32_t*>(reinterpret_cast<const int32_t*>(p.ip(0))), mn, p.batch, 1, mn);
     const double r = MVof<T>::getrf_residual(ctx, A0, F, piv, items);
     EXPECT_VERIFY(T, verify::Check::factorization, std::max(p.m, p.n), r) << what << " residual " << r;
-    const T* got = ub::download(p.buf.data(), p.a0.size(), 0);
     for (std::size_t e = 0; e < p.a0.size(); ++e) {
         const int rr = int(e % p.stride), i = rr % p.ld, j = rr / p.ld;
-        if (!(i < p.m && j < p.n)) ASSERT_TRUE(same_bits(got[e], p.a0[e])) << what << ": padding written at " << e;
+        if (!(i < p.m && j < p.n)) ASSERT_TRUE(same_bits(p.buf[e], p.a0[e])) << what << ": padding written at " << e;
     }
 }
 
@@ -258,11 +244,6 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
-        ub::attach(this->ctx.get());
-    }
-    void TearDown() override {
-        ub::detach();
-        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     // ---- the limit oracle: each driver's own capacity query, not getrf.cc's can_run ----
@@ -451,13 +432,10 @@ TYPED_TEST(GetrfCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             this->run_pinned(c, a);
             std::string why;
             ASSERT_TRUE(this->direct(c, b, &why)) << TestFixture::name(c, n, 5) << ": " << why;
-            const auto e = ub::first_diff(ub::download(a.buf.data(), a.buf.size(), 0),
-                                          ub::download(b.buf.data(), b.buf.size(), 1), a.buf.size());
-            ASSERT_FALSE(e.has_value()) << TestFixture::name(c, n, 5) << " element " << e.value_or(0);
-            const int* ap = reinterpret_cast<const int*>(ub::download(a.piv.data(), a.piv.size(), 0));
-            const int* bp = reinterpret_cast<const int*>(ub::download(b.piv.data(), b.piv.size(), 1));
+            for (std::size_t e = 0; e < a.buf.size(); ++e)
+                ASSERT_TRUE(same_bits(a.buf[e], b.buf[e])) << TestFixture::name(c, n, 5) << " element " << e;
             for (std::size_t k = 0; k < std::size_t(n) * 5; ++k)
-                ASSERT_EQ(ap[k], bp[k]) << TestFixture::name(c, n, 5) << " pivot " << k;
+                ASSERT_EQ(a.ip(0)[k], b.ip(0)[k]) << TestFixture::name(c, n, 5) << " pivot " << k;
         }
     }
 }
@@ -474,15 +452,13 @@ TYPED_TEST(GetrfCandidates, SaturatingBatchIsBitIdentical) {
         this->run_pinned(c, p);
         const std::string what = TestFixture::name(c, n, 1024);
         expect_factored(*this->ctx, p, what);
-        const T* got = ub::download(p.buf.data(), p.buf.size(), 0);
-        const int* ip = reinterpret_cast<const int*>(ub::download(p.piv.data(), p.piv.size(), 1));
         for (int it = 1; it < p.batch; ++it) {
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
-                    ASSERT_TRUE(same_bits(got[std::size_t(it) * p.stride + std::size_t(j) * p.ld + i],
-                                          got[std::size_t(j) * p.ld + i]))
+                    ASSERT_TRUE(same_bits(p.buf[std::size_t(it) * p.stride + std::size_t(j) * p.ld + i],
+                                          p.buf[std::size_t(j) * p.ld + i]))
                         << what << ": item " << it << " differs at (" << i << "," << j << ")";
-            for (int k = 0; k < n; ++k) ASSERT_EQ(ip[std::size_t(it) * n + k], ip[k]) << what << " item " << it;
+            for (int k = 0; k < n; ++k) ASSERT_EQ(p.ip(it)[k], p.ip(0)[k]) << what << " item " << it;
         }
     }
 }
@@ -615,15 +591,13 @@ TYPED_TEST(GetrfCandidates, NonSquareSaturatingBatchIsBitIdentical) {
         const std::string what = select::to_string(k.c) + " " + std::to_string(k.m) + "x" + std::to_string(k.n);
         expect_rect_factored(*this->ctx, p, what, -1);
         const int mn = p.mn();
-        const T* got = ub::download(p.buf.data(), p.buf.size(), 0);
-        const int* ip = reinterpret_cast<const int*>(ub::download(p.piv.data(), p.piv.size(), 1));
         for (int it = 1; it < p.batch; ++it) {
             for (int j = 0; j < k.n; ++j)
                 for (int i = 0; i < k.m; ++i)
-                    ASSERT_TRUE(same_bits(got[std::size_t(it) * p.stride + std::size_t(j) * p.ld + i],
-                                          got[std::size_t(j) * p.ld + i]))
+                    ASSERT_TRUE(same_bits(p.buf[std::size_t(it) * p.stride + std::size_t(j) * p.ld + i],
+                                          p.buf[std::size_t(j) * p.ld + i]))
                         << what << ": item " << it << " differs at (" << i << "," << j << ")";
-            for (int q = 0; q < mn; ++q) ASSERT_EQ(ip[std::size_t(it) * mn + q], ip[q]) << what << " item " << it;
+            for (int q = 0; q < mn; ++q) ASSERT_EQ(p.ip(it)[q], p.ip(0)[q]) << what << " item " << it;
         }
     }
 }
@@ -657,25 +631,20 @@ TYPED_TEST(GetrfVendor, NonSquareFactorsWholeMatrix) {
             (void)getrf<B, T>(*this->ctx, A, piv.to_span(), Span<std::byte>(ws.data(), bytes), info.to_span());
             this->ctx->wait();
             const std::string what = std::to_string(m) + "x" + std::to_string(n);
-            const int32_t* info_h = ub::download(info.data(), info.size(), 0);
-            for (int b = 0; b < batch; ++b) ASSERT_EQ(info_h[b], 0) << what << " item " << b;
-            const int64_t* piv_h = ub::download(piv.data(), piv.size(), 1);
+            for (int b = 0; b < batch; ++b) ASSERT_EQ(info[b], 0) << what << " item " << b;
             for (std::size_t i = std::size_t(mn) * batch; i < piv.size(); ++i)
-                ASSERT_EQ(piv_h[i], int64_t(-7)) << what << ": pivot written past min(m, n) * batch";
-            std::vector<int32_t> p32_h(std::size_t(mn) * batch);
-            for (std::size_t i = 0; i < p32_h.size(); ++i) p32_h[i] = static_cast<int32_t>(piv_h[i]);
-            UnifiedVector<int32_t> p32(p32_h.size());
-            ub::copy(p32.data(), p32_h.data(), p32_h.size() * sizeof(int32_t), p32.data());
+                ASSERT_EQ(piv[i], int64_t(-7)) << what << ": pivot written past min(m, n) * batch";
+            UnifiedVector<int32_t> p32(std::size_t(mn) * batch);
+            for (std::size_t i = 0; i < p32.size(); ++i) p32[i] = static_cast<int32_t>(piv[i]);
             UnifiedVector<T> a0buf(a0.size());
-            ub::copy(a0buf.data(), a0.data(), a0.size() * sizeof(T), a0buf.data());
+            for (std::size_t e = 0; e < a0.size(); ++e) a0buf[e] = a0[e];
             const MVof<T> A0(a0buf.data(), m, n, ld, stride, batch);
             const VectorView<int32_t> pv(p32.data(), mn, batch, 1, mn);
             const double r = MVof<T>::getrf_residual(*this->ctx, A0, MVof<T>(buf.data(), m, n, ld, stride, batch), pv);
             EXPECT_VERIFY(T, verify::Check::factorization, std::max(m, n), r) << what << " residual " << r;
-            const T* got = ub::download(buf.data(), a0.size(), 0);
             for (std::size_t e = 0; e < a0.size(); ++e) {
                 const int rr = int(e % stride), i = rr % ld, j = rr / ld;
-                if (!(i < m && j < n)) ASSERT_TRUE(same_bits(got[e], a0[e])) << what << ": padding written at " << e;
+                if (!(i < m && j < n)) ASSERT_TRUE(same_bits(buf[e], a0[e])) << what << ": padding written at " << e;
             }
         }
     }
@@ -705,9 +674,8 @@ TYPED_TEST(GetrfCandidates, ExactWorkspaceInAPoisonedArena) {
                                                    pass_info ? p.info.to_span() : Span<int32_t>{}),
                                  this->ctx->wait()))
                     << what;
-                const std::byte* guard = ub::download(arena.data() + bytes, kGuard, 0);
                 for (std::size_t i = 0; i < kGuard; ++i)
-                    ASSERT_EQ(static_cast<unsigned>(guard[i]), 0xA5u)
+                    ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
                         << what << ": wrote " << i << " bytes past the sized workspace";
                 expect_factored(*this->ctx, p, what, pass_info);
             }

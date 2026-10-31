@@ -241,8 +241,12 @@ audit); the harness took the rest. Keep every guard above and spend nothing besi
    one per TEST, as its first statement.
 2. Generate a deterministic input once per test (cache by type, n, batch, seed); copy and
    re-poison it per axis value. A graded fill at n >= 1024 costs 12-46 s.
-3. No host loops over `malloc_shared` (`UnifiedVector`/`Matrix`) a kernel has touched: use
-   `test_utils::usm_bulk` (`q.memcpy`) or a device-side check. Build input images once, memcpy in.
+3. Prefer a device-side check against `usm_bulk::Pristine` (reps on the host, buffer written by
+   device copies) to host loops over `malloc_shared`. Bulk copies are no free win on the 4090
+   box: a `q.memcpy` out of shared pages the host wrote and no kernel touched migrates them to the
+   device first (an ormqr guard check moved 22 GB to read 4 KB), a pageable host <-> shared
+   copy runs at ~0.9 GB/s, while the host faults touched pages back at ~20 GB/s. Download only
+   the bytes you read; `usm_bulk::download` uses pinned scratch. ABBA a conversion before keeping it.
 4. Allocate outside loops: one problem or workspace per test at the largest size, poisoned per
    run. No per-candidate rebuild of an identical problem; no `UnifiedVector` copy-assign in a hot
    loop (it builds a `sycl::queue`).

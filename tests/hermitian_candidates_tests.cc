@@ -23,7 +23,6 @@
 #include <src/select/vendor.hh>
 
 #include <tests/test_utils.hh>
-#include <tests/usm_bulk_copy.hh>
 
 #include <cctype>
 #include <complex>
@@ -40,7 +39,6 @@ namespace {
 
 template <typename T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
-namespace ub = test_utils::usm_bulk;
 
 const char* uplo_s(Uplo u) { return u == Uplo::Lower ? "L" : "U"; }
 
@@ -74,10 +72,7 @@ struct Operand {
                     if (uplo == Uplo::Lower ? i < j : i > j) at(it, i, j) = T(4096 + i, -2048 - j);
                 }
     }
-    void snapshot() {
-        mem0 = UnifiedVector<T>(mem.size());
-        ub::copy(mem0.data(), mem.data(), mem.size() * sizeof(T), mem.data());
-    }
+    void snapshot() { mem0 = mem; }
     // Every element outside the `uplo` triangle of each item (padding and gaps included) is unchanged.
     ::testing::AssertionResult untouched_outside(Uplo uplo) const {
         std::vector<char> owned(mem.size(), 0);
@@ -85,29 +80,25 @@ struct Operand {
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < rows; ++i)
                     if (uplo == Uplo::Lower ? i >= j : i <= j) owned[std::size_t(it) * stride + std::size_t(j) * ld + i] = 1;
-        const T* got = ub::download(mem.data(), mem.size(), 0);
-        const T* want = ub::download(mem0.data(), mem.size(), 1);
         for (std::size_t e = 0; e < mem.size(); ++e)
-            if (!owned[e] && std::memcmp(&got[e], &want[e], sizeof(T)) != 0)
+            if (!owned[e] && std::memcmp(&mem[e], &mem0[e], sizeof(T)) != 0)
                 return ::testing::AssertionFailure() << "wrote element " << e << " outside its triangle";
         return ::testing::AssertionSuccess();
     }
     ::testing::AssertionResult diagonal_real() const {
-        const T* got = ub::download(mem.data(), mem.size(), 0);
         for (int it = 0; it < batch; ++it)
             for (int d = 0; d < rows; ++d)
-                if (got[std::size_t(it) * stride + std::size_t(d) * ld + d].imag() != 0)
+                if (mem[std::size_t(it) * stride + std::size_t(d) * ld + d].imag() != 0)
                     return ::testing::AssertionFailure() << "item " << it << " diagonal " << d << " not real";
         return ::testing::AssertionSuccess();
     }
     ::testing::AssertionResult repeats(int period) const {  // item it bit-identical to item it % period
-        const T* got = ub::download(mem.data(), mem.size(), 0);
         for (int it = period; it < batch; ++it)
             for (int j = 0; j < cols; ++j)
                 for (int i = 0; i < rows; ++i) {
                     const std::size_t a = std::size_t(it) * stride + std::size_t(j) * ld + i;
                     const std::size_t b = std::size_t(it % period) * stride + std::size_t(j) * ld + i;
-                    if (std::memcmp(&got[a], &got[b], sizeof(T)) != 0)
+                    if (std::memcmp(&mem[a], &mem[b], sizeof(T)) != 0)
                         return ::testing::AssertionFailure() << "item " << it << " (" << i << "," << j << ")";
                 }
         return ::testing::AssertionSuccess();
@@ -154,11 +145,6 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native families are GPU families";
-        ub::attach(this->ctx.get());
-    }
-    void TearDown() override {
-        ub::detach();
-        test_utils::BatchLASTest<Config>::TearDown();
     }
     Queue& q() { return *this->ctx; }
 

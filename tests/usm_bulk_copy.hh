@@ -25,9 +25,19 @@ namespace test_utils::usm_bulk {
 // The fixture's Queue between attach() and detach(), else null: copies then fall back to the host.
 inline batchlas::Queue* copy_queue = nullptr;
 // Two host scratch slots, kept for one test case so a large download does not fault in fresh
-// pages per problem; plain host memory, so no SYCL object outlives the runtime in a static.
-inline std::unique_ptr<std::byte[]> scratch[2];
+// pages per problem. Pinned (malloc_host on the attached queue, freed by detach()): a shared-to-
+// pageable copy ran at ~0.9 GB/s on the 4090 box, slower than faulting the pages back.
+inline std::byte* scratch[2] = {nullptr, nullptr};
 inline std::size_t scratch_bytes[2] = {0, 0};
+inline bool scratch_pinned[2] = {false, false};
+
+inline void release_scratch(int slot) {
+    if (scratch_pinned[slot]) sycl::free(scratch[slot], batchlas::sycl_queue(*copy_queue));
+    else delete[] scratch[slot];
+    scratch[slot] = nullptr;
+    scratch_bytes[slot] = 0;
+    scratch_pinned[slot] = false;
+}
 // Grow-only device blocks on the attached queue (pointer, bytes, in use): a released block serves
 // the next request it fits, and detach() frees them all, so a test case pays no malloc per problem.
 struct DeviceBlock {
@@ -45,11 +55,8 @@ inline void detach() {
         for (const DeviceBlock& b : device_blocks) sycl::free(b.ptr, q);
     }
     device_blocks.clear();
+    for (int i = 0; i < 2; ++i) release_scratch(i);
     copy_queue = nullptr;
-    for (int i = 0; i < 2; ++i) {
-        scratch[i].reset();
-        scratch_bytes[i] = 0;
-    }
 }
 
 // A device block of at least `bytes` on the attached queue, returned to the pool when the last
@@ -91,11 +98,14 @@ template <typename T>
 const T* download(const T* usm, std::size_t n, int slot) {
     const std::size_t bytes = n * sizeof(T);
     if (scratch_bytes[slot] < bytes) {
-        scratch[slot] = std::make_unique_for_overwrite<std::byte[]>(bytes);
+        release_scratch(slot);
+        if (copy_queue) scratch[slot] = sycl::malloc_host<std::byte>(bytes, batchlas::sycl_queue(*copy_queue));
+        scratch_pinned[slot] = scratch[slot] != nullptr;
+        if (!scratch[slot]) scratch[slot] = new std::byte[bytes];
         scratch_bytes[slot] = bytes;
     }
-    usm_bulk::copy(scratch[slot].get(), usm, bytes, usm);
-    return reinterpret_cast<const T*>(scratch[slot].get());
+    usm_bulk::copy(scratch[slot], usm, bytes, usm);
+    return reinterpret_cast<const T*>(scratch[slot]);
 }
 
 // The first index at which two host arrays of `n` elements differ bit for bit.
@@ -295,17 +305,18 @@ private:
         auto step = [&](sycl::event ev) {
             if (!ordered) ev.wait();
         };
+        // The reps staged back to back and uploaded in one copy: a wait per segment cost a GPU
+        // time slice each on a shared device. The staging outlives the final wait.
+        std::vector<T> stage;
         if (!dev) {
-            std::size_t n = 0;
-            for (const Segment& g : segs) n += g.rep.size();
-            dev = device_block(std::max<std::size_t>(n, 1) * sizeof(T));
-            std::size_t base = 0;
-            for (const Segment& g : segs) {
-                q.memcpy(reinterpret_cast<T*>(dev.get()) + base, g.rep.data(), g.rep.size() * sizeof(T)).wait();
-                base += g.rep.size();
-            }
+            for (const Segment& g : segs) stage.insert(stage.end(), g.rep.begin(), g.rep.end());
+            dev = device_block(std::max<std::size_t>(stage.size(), 1) * sizeof(T));
+            step(q.memcpy(dev.get(), stage.data(), stage.size() * sizeof(T)));
         }
-        if (!usm) return;
+        if (!usm) {
+            q.wait();
+            return;
+        }
         auto fill_run = [&](std::size_t from, std::size_t to) {
             if (to > from) step(q.fill(usm + from, fill, to - from));
         };
