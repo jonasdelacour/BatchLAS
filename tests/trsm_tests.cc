@@ -993,7 +993,7 @@ TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
     }
 }
 
-#if BATCHLAS_HAS_HOST_BACKEND
+#if BATCHLAS_HAS_HOST_BACKEND && BATCHLAS_HAS_CBLAS
 // BLAS trsm at alpha == 0 sets B := 0 and reads neither A nor B, so NaN in either must not
 // reach the result. Unzeroed workspace B is the real case: 0 * NaN = NaN.
 template <typename T>
