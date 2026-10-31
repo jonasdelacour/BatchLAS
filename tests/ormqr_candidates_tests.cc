@@ -22,6 +22,7 @@
 
 #include <src/ops/ormqr/choice.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +46,7 @@ using namespace batchlas;
 namespace {
 
 namespace om = batchlas::ops::ormqr;
+namespace ub = test_utils::usm_bulk;
 using C = om::OrmqrChoice;
 using Pin = select::ScopedPin<C>;
 using cd = std::complex<double>;
@@ -156,16 +158,17 @@ Apply<T> make_apply(const Spec& s) {
 }
 
 // Componentwise |C - op(Q) C0| / (|op(Q)||C0|) (Side::Right: C0 op(Q)) for one item, with
-// Q = H_0 ... H_{k-1} (m x m) formed by MatrixView::form_q from the stored reflectors and tau.
+// Q = H_0 ... H_{k-1} (m x m) formed by MatrixView::form_q from the stored reflectors and tau;
+// C read from `got`, a host copy of p.mem.
 template <typename T>
-double apply_error(Queue& ctx, const Apply<T>& p, int it) {
+double apply_error(Queue& ctx, const Apply<T>& p, int it, const T* got) {
     const Spec& s = p.s;
     using D = typename MVof<T>::promoted_type;
     T* m0 = const_cast<T*>(p.mem0.data());
     const MVof<T> F(m0 + p.a.off, s.m, s.k, p.a.ld, p.a.stride, s.batch);
     const auto Q = MVof<T>::form_q(ctx, F, VectorView<T>(p.tau.data(), s.k, s.batch, 1, s.k), it, s.m);
     const auto C0 = MVof<T>(m0 + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
-    const auto C = MVof<T>(p.mem.data() + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
+    const auto C = MVof<T>(const_cast<T*>(got) + p.ci(it, 0, 0), p.c.rows, p.c.cols, p.c.ld).template astype<D>();
     if (s.side == Side::Left)
         return MVof<D>::gemm_backward_error(ctx, Q, s.trans, C0, Transpose::NoTrans, C0, C, D(1), D(0));
     return MVof<D>::gemm_backward_error(ctx, C0, Transpose::NoTrans, Q, s.trans, C0, C, D(1), D(0));
@@ -180,8 +183,9 @@ void expect_applied(Queue& ctx, const Apply<T>& p, const std::string& what) {
     if (s.period > 0) for (int it = 0; it < std::min(s.period, s.batch); ++it) items.push_back(it);
     else if (s.batch <= 8) for (int it = 0; it < s.batch; ++it) items.push_back(it);
     else items = {0, 1, s.batch / 2, s.batch - 1};
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
     for (int it : items) {
-        const double err = apply_error(ctx, p, it);
+        const double err = apply_error(ctx, p, it, got);
         ASSERT_TRUE(test_utils::verify_pass<T>(verify::Check::blas, s.m, err)) << what << " item " << it << " error " << err;
     }
     std::vector<char> inc(p.mem.size(), 0);
@@ -189,12 +193,12 @@ void expect_applied(Queue& ctx, const Apply<T>& p, const std::string& what) {
         for (int j = 0; j < p.c.cols; ++j)
             for (int i = 0; i < p.c.rows; ++i) inc[p.ci(it, i, j)] = 1;
     for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+        if (!inc[e]) ASSERT_TRUE(same_bits(got[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
             for (int j = 0; j < p.c.cols; ++j)
                 for (int i = 0; i < p.c.rows; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[p.ci(it, i, j)], p.mem[p.ci(it % s.period, i, j)]))
+                    ASSERT_TRUE(same_bits(got[p.ci(it, i, j)], got[p.ci(it % s.period, i, j)]))
                         << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
 }
 
@@ -260,6 +264,11 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native family is GPU-only";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     // The limit oracle: the drivers' own refusals, not ormqr.cc's can_run. Complex Trans is
@@ -290,8 +299,9 @@ protected:
         UnifiedVector<std::byte> ws(need + 4096, std::byte{0xA5});
         (void)ormqr<B, T>(qq, p.A(), p.Cm(), p.s.side, p.s.trans, p.Tau(), Span<std::byte>(ws.data(), need), p.s.hint);
         qq.wait();
+        const std::byte* guard = ub::download(ws.data(), ws.size(), 1);
         for (std::size_t i = need; i < ws.size(); ++i)
-            ASSERT_EQ(ws[i], std::byte{0xA5}) << label(p.s) << ": wrote " << (i - need) << " bytes past the workspace";
+            ASSERT_EQ(guard[i], std::byte{0xA5}) << label(p.s) << ": wrote " << (i - need) << " bytes past the workspace";
     }
     void run_pinned(const C& c, Apply<T>& p) {
         const Pin pin("ormqr", c);
@@ -409,8 +419,9 @@ TYPED_TEST(OrmqrCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             this->run_pinned(c, a);
             std::string why;
             ASSERT_TRUE(this->direct(c, b, &why)) << name(c, s) << ": " << why;
-            for (std::size_t e = 0; e < a.mem.size(); ++e)
-                ASSERT_TRUE(same_bits(a.mem[e], b.mem[e])) << name(c, s) << ": differs at element " << e;
+            const std::size_t n_el = a.mem.size();
+            const auto e = ub::first_diff(ub::download(a.mem.data(), n_el, 0), ub::download(b.mem.data(), n_el, 1), n_el);
+            ASSERT_FALSE(e.has_value()) << name(c, s) << ": differs at element " << e.value_or(0);
         }
 }
 
@@ -539,8 +550,8 @@ TYPED_TEST(OrmqrCandidates, ComplexTransIsRefusedUnderEveryPin) {
                     EXPECT_TRUE(TestFixture::is_undefined_error(e)) << what << ": " << e.what();
                 }
             }
-            for (std::size_t e = 0; e < p.mem.size(); ++e)
-                ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": a refused call wrote element " << e;
+            const auto e = ub::first_diff(ub::download(p.mem.data(), p.mem.size(), 0), p.mem0.data(), p.mem0.size());
+            ASSERT_FALSE(e.has_value()) << what << ": a refused call wrote element " << e.value_or(0);
         }
         if constexpr (kCx<T>) {
             for (const C& c : om::candidates<T>()) {

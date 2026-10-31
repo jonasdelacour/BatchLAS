@@ -17,6 +17,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/kernels/common/triangular_expand.hh>
 #include <src/expansion_budget.hh>
@@ -45,6 +46,7 @@ using namespace batchlas;
 namespace {
 
 namespace sy = batchlas::ops::symm;
+namespace ub = test_utils::usm_bulk;
 using C = sy::SymmChoice;
 using Pin = select::ScopedPin<C>;
 template <typename T>
@@ -81,7 +83,7 @@ struct Prob {
     T alpha = T(1.5), beta = T(-0.75);
     Region a, b, c;
     UnifiedVector<T> mem;
-    UnifiedVector<T> mem0;
+    UnifiedVector<T> mem0;  // pristine mem, device-readable for the reference kernels
     UnifiedVector<T*> aptr, bptr, cptr;
 
     MVof<T> A() { return {mem.data() + a.off, a.rows, a.cols, a.ld, a.stride, s.batch, aptr.data()}; }
@@ -124,7 +126,8 @@ Prob<T> make_prob(const Spec& s) {
                 p.mem[p.at(p.c, it, i, j)] = it < reps ? T(u(gen)) : p.mem[p.at(p.c, r, i, j)];
             }
     }
-    p.mem0 = p.mem;
+    p.mem0 = UnifiedVector<T>(p.mem.size());
+    ub::copy(p.mem0.data(), p.mem.data(), p.mem.size() * sizeof(T), p.mem0.data());
     return p;
 }
 
@@ -157,17 +160,19 @@ void expect_symm(Queue& ctx, const Prob<T>& p, const std::string& what) {
     ASSERT_TRUE(batchlas::verify::pass<T>(batchlas::verify::Check::blas, k, err))
         << what << " worst backward error over " << items.size() << " items " << err << " exceeds "
         << batchlas::verify::bound<T>(batchlas::verify::Check::blas, k);
+    const T* got = ub::download(p.mem.data(), p.mem.size(), 0);
+    const T* got0 = ub::download(p.mem0.data(), p.mem0.size(), 1);
     std::vector<char> inc(p.mem.size(), 0);
     for (int it = 0; it < s.batch; ++it)
         for (int j = 0; j < s.n; ++j)
             for (int i = 0; i < s.m; ++i) inc[p.at(p.c, it, i, j)] = 1;
     for (std::size_t e = 0; e < p.mem.size(); ++e)
-        if (!inc[e]) ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << what << ": wrote outside C at element " << e;
+        if (!inc[e]) ASSERT_TRUE(same_bits(got[e], got0[e])) << what << ": wrote outside C at element " << e;
     if (s.period > 0)
         for (int it = s.period; it < s.batch; ++it)
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i)
-                    ASSERT_TRUE(same_bits(p.mem[p.at(p.c, it, i, j)], p.mem[p.at(p.c, it % s.period, i, j)]))
+                    ASSERT_TRUE(same_bits(got[p.at(p.c, it, i, j)], got[p.at(p.c, it % s.period, i, j)]))
                         << what << ": item " << it << " differs from its representative at (" << i << "," << j << ")";
 }
 
@@ -281,6 +286,11 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "expand is a GPU kernel";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
@@ -428,9 +438,11 @@ TYPED_TEST(SymmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 std::string why;
                 ASSERT_TRUE(this->direct(c, direct, &why)) << what << ": " << why;
                 expect_symm(*this->ctx, pinned, what);
-                for (std::size_t e = 0; e < pinned.mem.size(); ++e)
-                    ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
-                        << what << ": the pinned facade did not run this family's code; element " << e;
+                const std::size_t n_el = pinned.mem.size();
+                const auto e = ub::first_diff(ub::download(pinned.mem.data(), n_el, 0),
+                                              ub::download(direct.mem.data(), n_el, 1), n_el);
+                ASSERT_FALSE(e.has_value()) << what << ": the pinned facade did not run this family's code; element "
+                                            << e.value_or(0);
                 ++compared;
             }
     }
@@ -539,8 +551,9 @@ TYPED_TEST(SymmCandidates, InvalidShapesThrowBeforeChoose) {
                 << bad.what << " under " << (c ? select::to_string(*c) : std::string("auto"));
         }
     this->ctx->wait();
-    for (std::size_t e = 0; e < p.mem.size(); ++e)
-        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
+    const auto wrote = ub::first_diff(ub::download(p.mem.data(), p.mem.size(), 0),
+                                      ub::download(p.mem0.data(), p.mem0.size(), 1), p.mem.size());
+    ASSERT_FALSE(wrote.has_value()) << "a refused call wrote element " << wrote.value_or(0);
 }
 
 // R6: a spelling that names nothing compiled throws instead of meaning Auto: the removed
@@ -638,7 +651,8 @@ TYPED_TEST(SymmCandidates, EmptyProblemIsANoOp) {
                 << " batch=" << k.batch << " " << side_s(k.side);
         }
     }
-    for (std::size_t e = 0; e < c.size(); ++e) ASSERT_EQ(c[e], T(2)) << "an empty problem wrote element " << e;
+    const T* hc = ub::download(c.data(), c.size(), 0);
+    for (std::size_t e = 0; e < c.size(); ++e) ASSERT_EQ(hc[e], T(2)) << "an empty problem wrote element " << e;
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment. Auto
@@ -890,7 +904,17 @@ TYPED_TEST(SymmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
 
 // On a CPU queue no native family can run: expand pins throw, Auto is the vendor (or no route).
 template <typename Config>
-class SymmCandidatesCpu : public test_utils::BatchLASTest<Config> {};
+class SymmCandidatesCpu : public test_utils::BatchLASTest<Config> {
+protected:
+    void SetUp() override {
+        test_utils::BatchLASTest<Config>::SetUp();
+        if (this->ctx) ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
+    }
+};
 TYPED_TEST_SUITE(SymmCandidatesCpu, Types);
 
 TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
