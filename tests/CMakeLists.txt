@@ -245,17 +245,16 @@ set(BATCHLAS_TEST_LABELS_sparse
 # run, and everything listed is invisible to it. iluk_tests (2.5 s) sat here long
 # enough for an API-breaking regression to survive a `-LE slow` verification.
 set(BATCHLAS_SLOW_TESTS
-    stedc_tests            # 27 s: dense reference solves at n=512/1024
     steqr_tests            # 13 s here with NETLIB compiled in and nothing skipped,
                            # against a ~135 s figure recorded earlier on this box --
                            # kept until the discrepancy is understood
-    sytrd_sb2st_tests      # 69 s, launch-latency bound bulge chase
-    gesvd_tests)           # 1.8 s here, but 37 of its 92 cases skip in this build
-                           # config; not timed in a configuration that runs them
+    sytrd_sb2st_tests)     # 69 s, launch-latency bound bulge chase
 # Dropped after timing (serial, this build, all cases running -- none skipped):
 #   iluk_tests             2.5 s, 17 tests
 #   syevx_tests            2.7 s, 102 tests
 #   sytrd_sb2st_hh_tests   5.8 s, 9 tests
+#   stedc_tests            10.7 s (2x4090 gate junit, 2026-10-31; under the 15 s rule)
+#   gesvd_tests            3.8 s + 3.9 s for gesvd_tests_heavy (same run)
 
 # Case-level tiers. A binary in BATCHLAS_HEAVY_TESTS is registered twice: <name> runs
 # --gtest_filter=-<HEAVY> and <name>_heavy (label heavy) runs --gtest_filter=<HEAVY>.
@@ -284,7 +283,13 @@ set(BATCHLAS_HEAVY_TEST_PATTERNS
     *EigenvaluesOnlyLowerMatchesNetlib*
     *GradedHermitianRunsAtN512*
     *PastTheGrid*
-    *DoubleBandEvery*)
+    *DoubleBandEvery*
+    # Mask-contract cases over every blocked size or composite (sygvd/syev/gesvd mask).
+    *AtBlockedSizes*
+    *Composites*
+    *BlockedOverEach*
+    *SygstDeviceFamilies*
+    *FactoredCompose*)
 string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
 # Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
 # binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy
@@ -304,6 +309,8 @@ list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS sygvd_mask_tests syev_mask_tests syevx_mask_tests getrs_mask_tests
+    getrf_mask_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
