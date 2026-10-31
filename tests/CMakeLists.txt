@@ -596,7 +596,6 @@ endfunction()
 set(BATCHLAS_ROUTE_PINNED_TESTS
     gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
     gemv_tests   "BATCHLAS_GEMV_ROUTE=native"
-    trsm_tests   "BATCHLAS_TRSM_ROUTE=native"
     potrf_tests  "BATCHLAS_POTRF_ROUTE=native"
     # '|' separates several pins for one suite, NOT ';': a semicolon inside a
     # quoted entry is a list separator, so it flattens into this list and breaks
@@ -610,10 +609,11 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     symm_tests   "BATCHLAS_SYMM_ROUTE=native"
     syrk_tests   "BATCHLAS_SYRK_ROUTE=native"
     syr2k_tests  "BATCHLAS_SYR2K_ROUTE=native"
-    trmm_tests   "BATCHLAS_TRMM_ROUTE=native"
     hemm_tests   "BATCHLAS_HEMM_ROUTE=native"
     herk_tests   "BATCHLAS_HERK_ROUTE=native"
     her2k_tests  "BATCHLAS_HER2K_ROUTE=native"
+    # No trsm_tests/trmm_tests rerun: their sm_89 and apple_m5_max tables rank a native first
+    # in every row (tuned_tables_tests TrmmTrsmRowsRankANativeFirstOnSm89AndAppleM5Max).
 )
 
 function(batchlas_add_route_pinned_test test_name env)

@@ -10,6 +10,7 @@
 #include <string>
 
 #include <tests/test_utils.hh>
+#include <tests/test_support/storage.hh>
 #include <src/select/vendor.hh>
 
 using namespace batchlas;
@@ -42,38 +43,28 @@ double trmm_error(Queue& ctx, const Matrix<T>& A, const Matrix<T>& B, const Matr
     return MV::gemm_backward_error(ctx, B, Transpose::NoTrans, tri, trans, C, C, 1.0, 0.0);
 }
 
+// Every (trans, side, uplo, diag) at an odd order on padded storage: ld = n + 3 and a gap between
+// items, every pad holding the poison, so a read through a natural ld or into a gap fails. The first
+// call's C is all poison (beta = 0 must not read it). One A per (uplo, diag); complex T, complex data.
 TYPED_TEST(TrmmTest, AllCombinations) {
     using T = typename TestFixture::ScalarType;
-    constexpr Backend Ba = TestFixture::BackendType;
-
-    // keep the problem size small so that iterating over all parameter combinations is feasible
-    const int n         = 512;
+    auto& ctx = *this->ctx;
+    const int n = 129;
     const int batchSize = 4;
 
-    // reuse one random B matrix for all permutations
-    Matrix<T> B = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batchSize);
-    Matrix<T> C = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batchSize);
-    // loop over every combination of transpose, side, uplo and diagonal
-    for (auto trans : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-        for (auto side : {Side::Right, Side::Left}) {
-            for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-                for (auto diag : {Diag::NonUnit, Diag::Unit}) {
-                    // generate A for the current uplo/diag
-                    Matrix<T> A = Matrix<T, MatrixFormat::Dense>::RandomTriangular(n, uplo, diag, batchSize);
-
-
-                    // compute C = trmm(A,B) with the current combination
-                    trmm(*(this->ctx),
-                             A,
-                             B,
-                             C,
-                             {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
-
-                    EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(*(this->ctx), A, B, C, side, uplo, trans, diag))
-                        << "Failed combination: trans=" << static_cast<int>(trans)
-                        << ", side=" << static_cast<int>(side)
-                        << ", uplo=" << static_cast<int>(uplo)
-                        << ", diag=" << static_cast<int>(diag);
+    Matrix<T> B = test_support::padded<T>(n, n, batchSize);
+    MatrixView<T>::copy(ctx, B, Matrix<T>::Random(n, n, false, batchSize)).wait();
+    Matrix<T> A = test_support::padded<T>(n, n, batchSize);
+    Matrix<T> C = test_support::padded<T>(n, n, batchSize);
+    for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
+        for (auto diag : {Diag::NonUnit, Diag::Unit}) {
+            MatrixView<T>::copy(ctx, A, Matrix<T>::RandomTriangular(n, uplo, diag, batchSize)).wait();
+            for (auto trans : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                for (auto side : {Side::Right, Side::Left}) {
+                    trmm(ctx, A, B, C, {.side = side, .uplo = uplo, .trans = trans, .diag = diag}).wait();
+                    EXPECT_VERIFY(T, verify::Check::blas, n, trmm_error(ctx, A, B, C, side, uplo, trans, diag))
+                        << "trans=" << static_cast<int>(trans) << " side=" << static_cast<int>(side)
+                        << " uplo=" << static_cast<int>(uplo) << " diag=" << static_cast<int>(diag);
                 }
             }
         }
