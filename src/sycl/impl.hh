@@ -191,16 +191,19 @@ std::size_t kernel_max_wg_size(const sycl::context& ctx, const sycl::device& dev
 }
 
 // Every nd_range launch from a command group: h.parallel_for([Name], r, rest...), with an empty r a
-// no-op as SYCL specifies. acpp 25.10 launches it as a 0-block grid (CU:1) and errors on an empty
-// command group, so there h gets a no-op operation. QueueImpl::parallel_for skips it itself.
-inline bool skip_empty_launch([[maybe_unused]] sycl::handler& h, [[maybe_unused]] std::size_t global) {
+// no-op as SYCL specifies. Neither runtime does that: DPC++ asserts in adjustNDRangePerKernel on
+// a zero global size with a nonzero local size, and acpp 25.10 launches a 0-block grid (CU:1). So
+// the launch is skipped and h gets an operation that keeps its event after earlier work: a barrier
+// on DPC++ (an empty command group's event completes at once), a no-op on acpp (which errors on an
+// empty one). QueueImpl::parallel_for skips it itself.
+inline bool skip_empty_launch(sycl::handler& h, std::size_t global) {
+    if (global != 0) return false;
 #if BATCHLAS_SYCL_IMPL_ACPP
-    if (global == 0) {
-        h.AdaptiveCpp_enqueue_custom_operation([](sycl::interop_handle&) {});
-        return true;
-    }
+    h.AdaptiveCpp_enqueue_custom_operation([](sycl::interop_handle&) {});
+#else
+    h.ext_oneapi_barrier();
 #endif
-    return false;
+    return true;
 }
 template <typename Name, int D, typename... Rest>
 void parallel_for(sycl::handler& h, const sycl::nd_range<D>& r, Rest&&... rest) {
@@ -232,19 +235,43 @@ inline void on_async_errors(sycl::exception_list errors) {
     for (const std::exception_ptr& e : errors) s.errors.push_back(e);
 }
 
+// Integrated multipass launches through clang's CUDA/HIP stub, which leaves a failed launch in
+// the submitting thread's last-error slot and registers nothing. Read and cleared here, so it
+// is reported once and only on the launching thread; no synchronize.
+#if defined(__clang__) && defined(__CUDA__)
+inline std::exception_ptr take_native_launch_error(sycl::queue& q) {
+    if (cudaPeekAtLastError() == cudaSuccess || !is_cuda(backend_of(q))) return nullptr;
+    const cudaError_t err = cudaGetLastError();
+    const sycl::errc ec = err == cudaErrorInvalidConfiguration ? sycl::errc::nd_range : sycl::errc::runtime;
+    return std::make_exception_ptr(sycl::exception(
+        sycl::make_error_code(ec), std::string("CUDA kernel launch failed: ") + cudaGetErrorName(err)));
+}
+#elif defined(__clang__) && defined(__HIP__)
+inline std::exception_ptr take_native_launch_error(sycl::queue& q) {
+    if (hipPeekAtLastError() == hipSuccess || !is_hip(backend_of(q))) return nullptr;
+    const hipError_t err = hipGetLastError();
+    const sycl::errc ec = err == hipErrorInvalidConfiguration ? sycl::errc::nd_range : sycl::errc::runtime;
+    return std::make_exception_ptr(sycl::exception(
+        sycl::make_error_code(ec), std::string("HIP kernel launch failed: ") + hipGetErrorName(err)));
+}
+#else
+inline std::exception_ptr take_native_launch_error(sycl::queue&) { return nullptr; }
+#endif
+
 // Collects the pending errors and rethrows the first; the rest are dropped, as DPC++'s
 // rethrowing handler drops them.
 inline void throw_async_errors(sycl::queue& q) {
+    std::exception_ptr native = take_native_launch_error(q);
     q.throw_asynchronous();
     std::exception_ptr first;
     {
         AsyncErrorSink& s = async_error_sink();
         std::lock_guard<std::mutex> lock(s.m);
-        if (s.errors.empty()) return;
-        first = s.errors.front();
+        if (!s.errors.empty()) first = s.errors.front();
         s.errors.clear();
     }
-    std::rethrow_exception(first);
+    if (!first) first = native;
+    if (first) std::rethrow_exception(first);
 }
 #else
 // Rethrows the first asynchronous error at queue::wait_and_throw / throw_asynchronous; the
@@ -255,7 +282,8 @@ inline void on_async_errors(sycl::exception_list errors) {
 #endif
 
 // After every submission: acpp registers a failed launch (CU:1 for an over-limit grid or an
-// unservable SLM request) asynchronously; DPC++ throws it from the submit itself.
+// unservable SLM request) asynchronously, or (multipass) leaves it in cudaGetLastError; DPC++
+// throws it from the submit itself.
 inline void throw_launch_errors([[maybe_unused]] sycl::queue& q) {
 #if BATCHLAS_SYCL_IMPL_ACPP
     throw_async_errors(q);

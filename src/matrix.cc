@@ -6,6 +6,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <sycl/sycl.hpp>
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -21,6 +22,7 @@
 #include <src/backends/backend_handle_impl.hh>
 #include <src/util/philox.hh>
 #include <src/util/batch_mask.hh>
+#include <src/util/internal-api.hh>
 
 namespace batchlas {
 
@@ -1162,14 +1164,119 @@ float_t<T> dominant_shift(int n) {
 constexpr std::uint64_t kPermutationStream = 1;
 constexpr std::uint64_t kReflectorStream = 2;
 
-std::size_t square_fill_group_size(const Queue& ctx, const char* who, std::size_t local_bytes) {
-    const Device dev = ctx.device();
-    if (local_bytes > dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))
-        throw batchlas::invalid_argument(std::string(who) + ": n too large for the device's local memory");
-    return std::min<std::size_t>(256, dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+// 0: the device's own local memory size; detail::set_fill_local_budget lowers it for tests.
+std::atomic<std::size_t> fill_local_budget{0};
+
+// A square fill keeps its per-matrix scratch in local memory when it fits, else in global memory;
+// both run the same body, so the bits do not depend on which one a device gets.
+bool fill_scratch_fits_local(const Queue& ctx, std::size_t local_bytes) {
+    const std::size_t forced = fill_local_budget.load(std::memory_order_relaxed);
+    return local_bytes <= (forced ? forced : ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
+}
+
+std::size_t square_fill_group_size(const Queue& ctx) {
+    return std::min<std::size_t>(256, ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+}
+
+// One work-group per item; perm is n ints (a local_accessor or a global pointer).
+template <typename T, typename Perm>
+void random_pivoted_item(sycl::nd_item<1> item, Perm perm, T* data, std::size_t ld, std::size_t stride, int n,
+                         std::size_t wg, float_t<T> shift, unsigned int seed) {
+    const std::size_t b = item.get_group(0);
+    const std::size_t lid = item.get_local_id(0);
+    const std::size_t N = static_cast<std::size_t>(n);
+    if (lid == 0) {
+        // Sattolo's shuffle: a uniformly random n-cycle, so no row stays in place.
+        for (int i = 0; i < n; ++i) perm[i] = i;
+        for (int i = n - 1; i > 0; --i) {
+            const float u = philox::uniform_unit<float>(seed, kPermutationStream, b * N + static_cast<std::size_t>(i));
+            const int j = sycl::min(static_cast<int>(u * static_cast<float>(i)), i - 1);
+            const int t = perm[i];
+            perm[i] = perm[j];
+            perm[j] = t;
+        }
+    }
+    sycl::group_barrier(item.get_group());
+    for (std::size_t e = lid; e < N * N; e += wg) {
+        const std::size_t i = e % N;
+        const std::size_t c = e / N;
+        const std::size_t r = static_cast<std::size_t>(perm[i]);
+        T value = seeded_uniform<T>(seed, (b * N + c) * N + r);
+        if (r == c) value += T(shift);
+        data[b * stride + c * ld + i] = value;
+    }
+}
+
+// One work-group per item; v and s are n entries each (local_accessors or global pointers).
+template <typename T, typename Vec>
+void graded_hermitian_item(sycl::nd_item<1> item, Vec v, Vec s, T* data, std::size_t ld, std::size_t stride, int n,
+                           std::size_t wg, float_t<T> decades, unsigned int seed) {
+    using R = float_t<T>;
+    const auto g = item.get_group();
+    const std::size_t b = item.get_group(0);
+    const std::size_t lid = item.get_local_id(0);
+    const std::size_t N = static_cast<std::size_t>(n);
+    T* A = data + b * stride;
+    for (std::size_t e = lid; e < N * N; e += wg) {
+        const std::size_t r = e % N;
+        const std::size_t c = e / N;
+        const R lambda = n == 1 ? R(1) : sycl::pow(R(10), -decades * R(r) / R(n - 1));
+        A[c * ld + r] = r == c ? T(lambda) : T(0);
+    }
+    sycl::group_barrier(g);
+    for (std::size_t k = 0; k < N; ++k) {
+        R partial = 0;
+        for (std::size_t r = lid; r < N; r += wg) {
+            // Real T needs real reflectors, or the complex Q leaves a non-real result.
+            v[r] = seeded_uniform<T>(seed, (b * N + k) * N + r, kReflectorStream);
+            partial += abs2_of(v[r]);
+        }
+        const R vv = portable::reduce_over_group(g, partial, sycl::plus<R>());
+        if (vv == R(0)) continue;
+        const R inv = R(1) / sycl::sqrt(vv);
+        for (std::size_t r = lid; r < N; r += wg) v[r] *= inv;
+        sycl::group_barrier(g);
+        // M <- H M H, H = I - 2 v v^H: first the columns (H M), then the rows (M H).
+        for (std::size_t c = lid; c < N; c += wg) {
+            T acc = 0;
+            for (std::size_t r = 0; r < N; ++r) acc += conj_of(v[r]) * A[c * ld + r];
+            s[c] = acc;
+        }
+        sycl::group_barrier(g);
+        for (std::size_t e = lid; e < N * N; e += wg) {
+            const std::size_t r = e % N;
+            const std::size_t c = e / N;
+            A[c * ld + r] -= R(2) * v[r] * s[c];
+        }
+        sycl::group_barrier(g);
+        for (std::size_t r = lid; r < N; r += wg) {
+            T acc = 0;
+            for (std::size_t c = 0; c < N; ++c) acc += A[c * ld + r] * v[c];
+            s[r] = acc;
+        }
+        sycl::group_barrier(g);
+        for (std::size_t e = lid; e < N * N; e += wg) {
+            const std::size_t r = e % N;
+            const std::size_t c = e / N;
+            A[c * ld + r] -= R(2) * s[r] * conj_of(v[c]);
+        }
+        sycl::group_barrier(g);
+    }
+    for (std::size_t e = lid; e < N * N; e += wg) {
+        const std::size_t r = e % N;
+        const std::size_t c = e / N;
+        if (r > c) A[r * ld + c] = conj_of(A[c * ld + r]);
+        else if (r == c) A[c * ld + c] = T(std::real(A[c * ld + c]));
+    }
 }
 
 }  // namespace
+
+namespace detail {
+// Test hook (matrix_tests declares it): a nonzero byte budget overrides the device's local memory
+// size for the square fills, so a small n reaches the global-scratch path. Returns the old budget.
+BATCHLAS_INTERNAL_API std::size_t set_fill_local_budget(std::size_t bytes) { return fill_local_budget.exchange(bytes); }
+}  // namespace detail
 
 template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
@@ -1240,41 +1347,34 @@ Event MatrixView<T, MType>::fill_random_pivoted(const Queue& ctx, unsigned int s
     const int n = rows_;
     const int batch = batch_size_;
     if (n == 0 || batch == 0) return ctx.get_event();
-    const std::size_t wg = square_fill_group_size(ctx, "fill_random_pivoted", sizeof(int) * n);
+    const std::size_t wg = square_fill_group_size(ctx);
     T* data = data_ptr();
     const std::size_t ld = static_cast<std::size_t>(ld_);
     const std::size_t stride = static_cast<std::size_t>(stride_);
     const float_t<T> shift = dominant_shift<T>(n);
     const std::uint8_t* mask = detail::mask_ptr(batch_mask_);
+    const std::size_t N = static_cast<std::size_t>(n);
+    const sycl::nd_range<1> range(wg * batch, wg);
+    if (fill_scratch_fits_local(ctx, sizeof(int) * N)) {
+        ctx->submit([&](sycl::handler& cgh) {
+            sycl::local_accessor<int, 1> perm(sycl::range<1>(N), cgh);
+            batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
+                if (mask && !mask[item.get_group(0)]) return;  // uniform per work-group: before the barrier
+                random_pivoted_item<T>(item, perm, data, ld, stride, n, wg, shift, seed);
+            });
+        });
+        return ctx.get_event();
+    }
+    UnifiedVector<int> scratch(N * static_cast<std::size_t>(batch));
+    int* perm = scratch.data();
     ctx->submit([&](sycl::handler& cgh) {
-        sycl::local_accessor<int, 1> perm(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(wg * batch, wg), [=](sycl::nd_item<1> item) {
+        batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
             const std::size_t b = item.get_group(0);
-            if (mask && !mask[b]) return;  // uniform per work-group: before the barrier
-            const std::size_t lid = item.get_local_id(0);
-            const std::size_t N = static_cast<std::size_t>(n);
-            if (lid == 0) {
-                // Sattolo's shuffle: a uniformly random n-cycle, so no row stays in place.
-                for (int i = 0; i < n; ++i) perm[i] = i;
-                for (int i = n - 1; i > 0; --i) {
-                    const float u = philox::uniform_unit<float>(seed, kPermutationStream, b * N + static_cast<std::size_t>(i));
-                    const int j = sycl::min(static_cast<int>(u * static_cast<float>(i)), i - 1);
-                    const int t = perm[i];
-                    perm[i] = perm[j];
-                    perm[j] = t;
-                }
-            }
-            sycl::group_barrier(item.get_group());
-            for (std::size_t e = lid; e < N * N; e += wg) {
-                const std::size_t i = e % N;
-                const std::size_t c = e / N;
-                const std::size_t r = static_cast<std::size_t>(perm[i]);
-                T value = seeded_uniform<T>(seed, (b * N + c) * N + r);
-                if (r == c) value += T(shift);
-                data[b * stride + c * ld + i] = value;
-            }
+            if (mask && !mask[b]) return;
+            random_pivoted_item<T>(item, perm + b * N, data, ld, stride, n, wg, shift, seed);
         });
     });
+    ctx->wait();  // the scratch dies with this frame
     return ctx.get_event();
 }
 
@@ -1289,75 +1389,35 @@ Event MatrixView<T, MType>::fill_graded_hermitian(const Queue& ctx, double log10
     const int n = rows_;
     const int batch = batch_size_;
     if (n == 0 || batch == 0) return ctx.get_event();
-    const std::size_t wg = square_fill_group_size(ctx, "fill_graded_hermitian", 2 * sizeof(T) * n);
+    const std::size_t wg = square_fill_group_size(ctx);
     T* data = data_ptr();
     const std::size_t ld = static_cast<std::size_t>(ld_);
     const std::size_t stride = static_cast<std::size_t>(stride_);
     const R decades = static_cast<R>(log10_cond);
     const std::uint8_t* mask = detail::mask_ptr(batch_mask_);
+    const std::size_t N = static_cast<std::size_t>(n);
+    const sycl::nd_range<1> range(wg * batch, wg);
+    if (fill_scratch_fits_local(ctx, 2 * sizeof(T) * N)) {
+        ctx->submit([&](sycl::handler& cgh) {
+            sycl::local_accessor<T, 1> v(sycl::range<1>(N), cgh);
+            sycl::local_accessor<T, 1> s(sycl::range<1>(N), cgh);
+            batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
+                if (mask && !mask[item.get_group(0)]) return;  // uniform per work-group: before the first barrier
+                graded_hermitian_item<T>(item, v, s, data, ld, stride, n, wg, decades, seed);
+            });
+        });
+        return ctx.get_event();
+    }
+    UnifiedVector<T> scratch(2 * N * static_cast<std::size_t>(batch));
+    T* vs = scratch.data();
     ctx->submit([&](sycl::handler& cgh) {
-        sycl::local_accessor<T, 1> v(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
-        sycl::local_accessor<T, 1> s(sycl::range<1>(static_cast<std::size_t>(n)), cgh);
-        batchlas::impl::parallel_for(cgh, sycl::nd_range<1>(wg * batch, wg), [=](sycl::nd_item<1> item) {
-            const auto g = item.get_group();
+        batchlas::impl::parallel_for(cgh, range, [=](sycl::nd_item<1> item) {
             const std::size_t b = item.get_group(0);
-            if (mask && !mask[b]) return;  // uniform per work-group: before the first barrier
-            const std::size_t lid = item.get_local_id(0);
-            const std::size_t N = static_cast<std::size_t>(n);
-            T* A = data + b * stride;
-            for (std::size_t e = lid; e < N * N; e += wg) {
-                const std::size_t r = e % N;
-                const std::size_t c = e / N;
-                const R lambda = n == 1 ? R(1) : sycl::pow(R(10), -decades * R(r) / R(n - 1));
-                A[c * ld + r] = r == c ? T(lambda) : T(0);
-            }
-            sycl::group_barrier(g);
-            for (std::size_t k = 0; k < N; ++k) {
-                R partial = 0;
-                for (std::size_t r = lid; r < N; r += wg) {
-                    // Real T needs real reflectors, or the complex Q leaves a non-real result.
-                    v[r] = seeded_uniform<T>(seed, (b * N + k) * N + r, kReflectorStream);
-                    partial += abs2_of(v[r]);
-                }
-                const R vv = portable::reduce_over_group(g, partial, sycl::plus<R>());
-                if (vv == R(0)) continue;
-                const R inv = R(1) / sycl::sqrt(vv);
-                for (std::size_t r = lid; r < N; r += wg) v[r] *= inv;
-                sycl::group_barrier(g);
-                // M <- H M H, H = I - 2 v v^H: first the columns (H M), then the rows (M H).
-                for (std::size_t c = lid; c < N; c += wg) {
-                    T acc = 0;
-                    for (std::size_t r = 0; r < N; ++r) acc += conj_of(v[r]) * A[c * ld + r];
-                    s[c] = acc;
-                }
-                sycl::group_barrier(g);
-                for (std::size_t e = lid; e < N * N; e += wg) {
-                    const std::size_t r = e % N;
-                    const std::size_t c = e / N;
-                    A[c * ld + r] -= R(2) * v[r] * s[c];
-                }
-                sycl::group_barrier(g);
-                for (std::size_t r = lid; r < N; r += wg) {
-                    T acc = 0;
-                    for (std::size_t c = 0; c < N; ++c) acc += A[c * ld + r] * v[c];
-                    s[r] = acc;
-                }
-                sycl::group_barrier(g);
-                for (std::size_t e = lid; e < N * N; e += wg) {
-                    const std::size_t r = e % N;
-                    const std::size_t c = e / N;
-                    A[c * ld + r] -= R(2) * s[r] * conj_of(v[c]);
-                }
-                sycl::group_barrier(g);
-            }
-            for (std::size_t e = lid; e < N * N; e += wg) {
-                const std::size_t r = e % N;
-                const std::size_t c = e / N;
-                if (r > c) A[r * ld + c] = conj_of(A[c * ld + r]);
-                else if (r == c) A[c * ld + c] = T(std::real(A[c * ld + c]));
-            }
+            if (mask && !mask[b]) return;
+            graded_hermitian_item<T>(item, vs + 2 * b * N, vs + (2 * b + 1) * N, data, ld, stride, n, wg, decades, seed);
         });
     });
+    ctx->wait();  // the scratch dies with this frame
     return ctx.get_event();
 }
 

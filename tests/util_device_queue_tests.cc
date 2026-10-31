@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/backend_config.h>
 
 #include <batchlas/sycl_interop.hh>
@@ -13,11 +14,15 @@
 #include <src/queue.hh>
 
 #include <algorithm>
+#include <atomic>
+#include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 #ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
 #include <cuda_runtime_api.h>
@@ -484,6 +489,108 @@ TEST(QueueTest, EmptyNdRangeEventFollowsEarlierWork) {
     sycl::free(dst, sq);
 }
 
+// The same through a command group (impl::parallel_for), with a local accessor in the group: the
+// kernel path most drivers launch by.
+class EmptyNdRangeCgKernel;
+TEST(QueueTest, EmptyNdRangeInCommandGroupFollowsEarlierWork) {
+    constexpr size_t n = size_t(1) << 26;
+    std::optional<Queue> q;
+    try {
+        q.emplace(Device("gpu"), true);
+    } catch (const std::exception&) {
+        GTEST_SKIP() << "no gpu device";
+    }
+    sycl::queue& sq = batchlas::sycl_queue(*q);
+    float* src = sycl::malloc_device<float>(n, sq);
+    float* dst = sycl::malloc_host<float>(n, sq);
+    sq.fill(src, 2.5f, n).wait();
+    std::fill(dst, dst + n, 0.0f);
+    (*q)->memcpy(dst, src, n * sizeof(float));
+    sycl::event e = (*q)->submit([&](sycl::handler& h) {
+        sycl::local_accessor<float, 1> scratch(sycl::range<1>(32), h);
+        batchlas::impl::parallel_for<EmptyNdRangeCgKernel>(h, sycl::nd_range<1>(0, 32), [=](sycl::nd_item<1> it) {
+            scratch[it.get_local_id(0)] = -1.0f;
+            dst[0] = scratch[0];
+        });
+    });
+    e.wait();
+    EXPECT_EQ(dst[n - 1], 2.5f) << "the copy was still running after a wait on the empty launch";
+    EXPECT_EQ(dst[0], 2.5f) << "the empty launch ran a work-item";
+    q->wait();
+    sycl::free(src, sq);
+    sycl::free(dst, sq);
+}
+
+// enqueue() orders every later submission path of an out-of-order queue after the event, with no
+// host wait. The event is a kernel spinning on a host flag the host sets only after submitting;
+// acpp's barrier node alone ordered nothing, so reads saw 0 and writes were overwritten. A watchdog
+// sets the flag after 5 s, so a host wait in enqueue() fails the test instead of hanging. CPU only:
+// a GPU kernel need not see a host store while it runs.
+class OooEnqueueNamedKernel;
+class OooEnqueueNamedTask;
+TEST(QueueTest, OutOfOrderEnqueueOrdersLaterSubmissionsWithoutAHostWait) {
+    std::optional<Queue> ooo;
+    try {
+        ooo.emplace(Device("cpu"), false);
+    } catch (const std::exception&) {
+        GTEST_SKIP() << "no cpu device";
+    }
+    Queue gate_q(*ooo, true);
+    sycl::queue& sq = batchlas::sycl_queue(*ooo);
+    constexpr int slots = 9;
+    int* gate = sycl::malloc_host<int>(2, sq);
+    int* marker = gate + 1;
+    int* out = sycl::malloc_host<int>(slots, sq);
+    gate[0] = 0;
+    *marker = 0;
+    std::fill(out, out + slots, -1);
+    std::atomic_ref<int> open(gate[0]);
+
+    sycl::event held = gate_q->single_task([=] {
+        sycl::atomic_ref<int, sycl::memory_order::relaxed, sycl::memory_scope::system> flag(gate[0]);
+        while (flag.load() == 0) {
+        }
+        *marker = 1;
+        out[6] = out[7] = 0;
+    });
+    std::atomic<bool> opened_by_watchdog{false};
+    std::thread watchdog([&] {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (open.load() == 0 && std::chrono::steady_clock::now() < until) std::this_thread::yield();
+        if (open.exchange(1) == 0) opened_by_watchdog = true;
+    });
+
+    Event e = batchlas::event_from_sycl(held);
+    ooo->enqueue(e);
+    const bool enqueue_waited = open.load() != 0;
+    (*ooo)->submit([&](sycl::handler& h) { h.single_task([=] { out[0] = *marker; }); });
+    (*ooo)->parallel_for(sycl::range<1>(1), [=](sycl::id<1>) { out[1] = *marker; });
+    (*ooo)->parallel_for(size_t(1), [=](size_t) { out[2] = *marker; });
+    (*ooo)->parallel_for<OooEnqueueNamedKernel>(sycl::nd_range<1>(1, 1), [=](sycl::nd_item<1>) {
+        out[3] = *marker;
+    });
+    (*ooo)->single_task([=] { out[4] = *marker; });
+    (*ooo)->memcpy(out + 5, marker, sizeof(int));
+    (*ooo)->fill(out + 6, 9, 1);
+    (*ooo)->memset(out + 7, 0x01, sizeof(int));
+    (*ooo)->single_task<OooEnqueueNamedTask>([=] { out[8] = *marker; });
+    open.store(1);
+    watchdog.join();
+    ooo->wait();
+    gate_q.wait();
+
+    EXPECT_FALSE(enqueue_waited || opened_by_watchdog) << "enqueue() waited on the host";
+    const char* path[slots] = {"submit", "parallel_for(range)", "parallel_for(size_t)",
+                               "parallel_for<Name>(nd_range)", "single_task", "memcpy",
+                               "fill", "memset", "single_task<Name>"};
+    const int want[slots] = {1, 1, 1, 1, 1, 1, 9, 0x01010101, 1};
+    for (int i = 0; i < slots; ++i) {
+        EXPECT_EQ(out[i], want[i]) << path[i] << " ran before the enqueued event";
+    }
+    sycl::free(gate, sq);
+    sycl::free(out, sq);
+}
+
 // queue_from_sycl: a root Queue inside the caller's context, so the caller's malloc_shared USM is
 // used in place. Non-natural ld and batch stride, complex data, beta != 0.
 TEST(SyclInterop, QueueFromSyclSharesContext) {
@@ -560,4 +667,40 @@ TEST(SyclInterop, QueueFromSyclRejectsForeignDevice) {
     }
     if (ran == 0) GTEST_SKIP() << "one gpu, no sub-device partition, no cpu device: nothing foreign to construct";
     std::cout << "[ INFO ] foreign-device cases run: " << ran << "\n";
+}
+
+// REDUCTION and SCAN round the per-device base down to a power of two before the problem-size
+// cap. The rounding was `1 << (31 - __builtin_clzl(x))`, a negative shift on LP64 that came out
+// as 2^32 x the intended size, so only the problem-size and device caps bounded it.
+TEST(KernelHeuristics, ReductionAndScanRoundTheBaseDownToAPowerOfTwo) {
+    for (const char* kind : {"cpu", "gpu"}) {
+        std::optional<Device> dev;
+        try {
+            dev.emplace(kind);
+        } catch (const std::exception&) {
+            continue;
+        }
+        const size_t max_wg = dev->get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
+        const size_t cus = dev->get_property(DeviceProperty::MAX_COMPUTE_UNITS);
+        const bool gpu = dev->type == DeviceType::GPU;
+        const size_t base = gpu ? 256 : std::min(size_t(64), cus * 2);
+        const struct { batchlas::KernelType kt; size_t cap; const char* name; } cases[] = {
+            {batchlas::KernelType::REDUCTION, gpu ? size_t(512) : size_t(64), "REDUCTION"},
+            {batchlas::KernelType::SCAN, 256, "SCAN"},
+        };
+        for (const auto& c : cases) {
+            const size_t rounded = std::bit_floor(std::min(base, c.cap));
+            for (size_t ps : {size_t(0), rounded + 1, size_t(1000), size_t(1) << 20}) {
+                const size_t want = std::max(std::min(rounded, max_wg), size_t(1));
+                EXPECT_EQ(batchlas::compute_optimal_wg_size(*dev, c.kt, ps), want)
+                    << kind << " " << c.name << " problem_size=" << ps;
+            }
+            // A problem size at or below the rounded base caps the result, as it did before.
+            for (size_t ps : {size_t(1), size_t(3), rounded - 1, rounded}) {
+                if (ps == 0) continue;
+                EXPECT_EQ(batchlas::compute_optimal_wg_size(*dev, c.kt, ps), std::min(ps, max_wg))
+                    << kind << " " << c.name << " problem_size=" << ps;
+            }
+        }
+    }
 }

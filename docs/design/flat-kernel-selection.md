@@ -253,7 +253,7 @@ timings, so it never picks `lpanel`.
 `tiny` is the fused factor-and-solve kernel; `cta` is the public `potrf` plus one fused solve
 (`ops::potrs::solve`), `blocked` the public `potrf` plus two public trsm. The children choose for
 themselves, so the tuner's `cta` and `blocked` times include them. No vendor family: a `vendor` pin
-warns and runs Auto. Empty problems and heterogeneous batches throw `internal_error` before
+warns and runs Auto. Empty problems and heterogeneous batches throw `invalid_argument` before
 `choose()`. The names `cta` and `blocked` are misnomers kept so benchviz and the scripts keep working.
 
 ### trsm {#phase-3-trsm}

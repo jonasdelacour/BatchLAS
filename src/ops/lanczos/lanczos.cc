@@ -72,8 +72,8 @@ namespace batchlas {
         if constexpr (!(MF == MatrixFormat::Dense)){
             spmm_buffer = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
         }
-        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size).with_batch_mask(mask),
-            MatrixView(Vmem.data(), n, n-2, n, (n+1)*n, batch_size).with_batch_mask(mask), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
+        auto ortho_buffer = pool.allocate<std::byte>(ctx, ortho_buffer_size<B>(ctx, MatrixView(Vmem.data(), n, 1, n, (n+1)*n, batch_size).with_batch_mask(mask),
+            MatrixView(Vmem.data(), n, n-1, n, (n+1)*n, batch_size).with_batch_mask(mask), Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
 
         auto basis_ptr_mem = pool.allocate<T*>(ctx, batch_size);
         auto vector_view_ptr_mem = pool.allocate<T*>(ctx, batch_size);
@@ -110,9 +110,13 @@ namespace batchlas {
 
         auto lanczos_iteration = [&](const int iterations){
             for (int it = 0; it < iterations; it++) {
+                // Only v_it, against v_0..v_{it-1}: the earlier vectors' alphas and betas are recorded, and
+                // ortho returns a basis of the span (SVQB rotates a pair, Householder flips signs), not
+                // the input vectors. A flipped v_it is absorbed by the signed beta in the kernel below.
+                // evidence: docs/design/known-defects.md#lanczos-returned-a-spectrum-about-three-times-too-wide
                 if (it > 0) {
-                    auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data()).with_batch_mask(mask);
-                    auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data()).with_batch_mask(mask);
+                    auto basis_view = MatrixView(Vmem.data(), n, it, n, (n+1)*n, batch_size, basis_ptr_mem.data()).with_batch_mask(mask);
+                    auto vector_view = MatrixView(Vmem.data() + it*n, n, 1, n, (n+1)*n, batch_size, vector_view_ptr_mem.data()).with_batch_mask(mask);
                     if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
                         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                         // is already ordered after this one and the Event carries nothing the caller needs.
@@ -153,8 +157,16 @@ namespace batchlas {
                         auto alpha = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>());
                         localAlphas[it] = alpha;
                         if (it > 0) {
+                            // beta_{it-1} takes the sign of v_{it-1}^T A v_it, which reorthogonalization may flip.
+                            const T beta_prev = localBetas[it - 1];
                             for (int i = tid; i < n; i += wg) {
-                                local_v_next[i] -= localBetas[it - 1] * local_v_prev[i] + alpha * local_v_current[i];
+                                dot_mem[i] = local_v_prev[i] * local_v_next[i];
+                            }
+                            auto coupling = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>());
+                            const T signed_beta = sycl::copysign(real_part(beta_prev), real_part(coupling));
+                            if (tid == 0) localBetas[it - 1] = signed_beta;
+                            for (int i = tid; i < n; i += wg) {
+                                local_v_next[i] -= signed_beta * local_v_prev[i] + alpha * local_v_current[i];
                             }
                         } else {
                             for (int i = tid; i < n; i += wg) {
@@ -234,7 +246,7 @@ namespace batchlas {
         auto padded_vector_view = MatrixView(V.data_ptr(), n, 2, n, (n+1)*n, batch_size);
         auto padded_output_vector_view = MatrixView(V.data_ptr(), n, 2, n, (2)*n, batch_size);
         auto single_vector_view = MatrixView(V.data_ptr(), n, 1, n, (n+1)*n, batch_size);
-        auto subspace_view = MatrixView(V.data_ptr(), n, n - 1, n, (n+1)*n, batch_size);
+        auto subspace_view = MatrixView(V.data_ptr(), n, n - 1, n, (n+1)*n, batch_size);  // ortho's largest basis, v_0..v_{n-2}
 
         // Basic memory required for Lanczos iteration
         size_t basic_size = BumpAllocator::allocation_size<T>(ctx, (n+1)*n*batch_size) +
@@ -242,7 +254,7 @@ namespace batchlas {
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // alphas
                           BumpAllocator::allocation_size<T>(ctx, n*batch_size) +    // betas
                           BumpAllocator::allocation_size<T*>(ctx, batch_size) * 3 +
-                          BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, padded_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
+                          BumpAllocator::allocation_size<std::byte>(ctx, ortho_buffer_size<B>(ctx, single_vector_view, subspace_view, Transpose::NoTrans, Transpose::NoTrans, params.ortho_algorithm, params.ortho_iterations));
         if constexpr (!(MF == MatrixFormat::Dense)){
             basic_size += BumpAllocator::allocation_size<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, padded_vector_view, padded_output_vector_view, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans));
         }

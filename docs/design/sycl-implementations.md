@@ -128,7 +128,7 @@ acpp's ahead-of-time CUDA flow: a host pass plus an NVPTX device pass by acpp's 
 | Failed launch (grid over 65,535 in y/z, unservable local memory) | `sycl::exception` from the submit | registered in one process-wide error list; the submit returns |
 | `queue::wait()` after a device fault | reports nothing | registers the fault in that list |
 | `~queue()` | no handler call | `throw_asynchronous()` over the whole list |
-| Empty `nd_range` | no-op | a 0-block grid, `CU:1` |
+| Empty `nd_range` | libsycl asserts (`adjustNDRangePerKernel`) | a 0-block grid, `CU:1` |
 
 So a rethrowing handler on acpp turns any unconsumed error into `std::terminate` at the next
 `sycl::queue` destructor, copies included.
@@ -138,11 +138,16 @@ So a rethrowing handler on acpp turns any unconsumed error into `std::terminate`
 - **Where errors surface.** `QueueImpl::submit_and_record` calls `impl::throw_launch_errors` after
   the submit, so a failed launch throws from the launching call as on DPC++; `Queue::wait()`,
   `wait_and_throw()` and `impl::wait_and_throw(event, q)` throw what a wait registered.
+- **Multipass CUDA/HIP.** acpp launches through clang's CUDA stub, which never reads
+  `cudaGetLastError`, so a failed launch reaches neither the list nor the submit.
+  `impl::take_native_launch_error` peeks the launching thread's last error in `throw_async_errors`
+  (hence after every submit and in every wait) and clears it once reported.
 - **Grid limit.** `impl::check_group_count` refuses an over-limit `nd_range` before launch with
   DPC++'s `errc::nd_range` message, in `QueueImpl::parallel_for(nd_range)` and the five command-group
   tile launchers (syrk gram/triangular, syr2k, trmm, `expand_mirrored`).
-- **Empty `nd_range`.** Every command-group launch goes through `impl::parallel_for(handler, ...)`,
-  which submits a no-op custom operation, keeping in-order event ordering.
+- **Empty `nd_range`.** Every launch goes through `impl::parallel_for(handler, ...)` or
+  `QueueImpl::parallel_for`, which skip an empty one on both runtimes and keep its event ordered
+  after earlier work: a no-op custom operation on acpp, `ext_oneapi_barrier()` on DPC++.
 - **Vendor calls** submit untraced, so they never appear in `BATCHLAS_KERNEL_TRACE`, as on DPC++.
   Tests: `util_device_queue_tests` `QueueAsyncErrors.*`.
 - **Upstream** (v25.10.0): `sycl/queue.hpp:288-290` (`~queue`), `glue/error.hpp:145` (global list),

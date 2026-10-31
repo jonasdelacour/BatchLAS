@@ -76,11 +76,18 @@ ragged calls; not done.
 
 ## stedc: eigenvalues-only still builds eigenvectors
 
-Open inside `stedc`, avoided by `syev` (which uses `stebz` for values-only). Merges consume the
-leaves' eigenvectors: the level driver ignores `jobz` and the recursive driver forwards it only to
-the leaf `steqr_dispatch`. Unverified hazard: a direct `stedc(..., NoEigenVectors, ...)` on the
-recursive driver may merge from vectors never computed; it needs a test before it is filed as a
-defect. Boundary-row D&C (Zhan & Zhang, arXiv:2605.26599) is the matching algorithm.
+Open as a cost, avoided by `syev` (which uses `stebz` for values-only; no internal caller passes
+`NoEigenVectors` to `stedc`). Each merge builds its secular vector from the last row of the left
+child's eigenvectors and the first row of the right child's. The recursive driver used to forward
+`NoEigenVectors` to the leaf `steqr_dispatch`, which then wrote no vectors, so every merge read the
+zeroed matrix: all of z deflated and the "eigenvalues" were the sorted torn diagonal, finite and
+plausible (values error 3.6e-3 against a bound of 3.4e-4 at n = 180, float, Metal). With no
+eigenvector matrix the call threw instead. Fixed 2026-10-30: `stedc_dispatch` turns
+`NoEigenVectors` into a vector solve into a workspace Z (`stedc_buffer_size` adds \f$n^2\f$ reals
+per item) and never touches the caller's matrix. Guards: `NoEigenVectorsMatchesReferenceOnPoisonedWorkspace`
+and `NoEigenVectorsWithoutAnEigenvectorMatrix` in `tests/stedc_tests.cc`. The cost is still a full
+vector solve; boundary-row D&C (Zhan & Zhang, arXiv:2605.26599), which carries only the two rows
+the merge reads, is the matching algorithm.
 
 ## stedc: the level-synchronous driver
 

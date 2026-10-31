@@ -173,8 +173,8 @@ Do not flatten the branch.
 
 - `gesv` chooses between its fused `tiny` kernel and the `blocked` composition through its own
   table (`src/ops/gesv/gesv.cc`). Do not copy that choice into `batchlas::linalg`.
-- `gesv` throws `batchlas::internal_error` on an empty problem (`n`, `nrhs` or `batch` < 1)
-  before selection, as `solve_spd` does.
+- `gesv` throws `batchlas::invalid_argument` on an empty problem (`n`, `nrhs` or `batch` < 1)
+  before selection.
 
 ### api conventions: linalg::solve_spd is a separate entry point
 

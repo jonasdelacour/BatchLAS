@@ -16,10 +16,10 @@ runs every algorithm under `NoTrans`, `Trans` and `ConjTrans`.
 ## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
 Open: right answer, twice the level-3 work. `padded_vector` and `padded_output` are two columns
-wide (`src/ops/lanczos/lanczos.cc:65-66`) so the sparse arm does not fall back to SpMV; the spmm/gemm
-at `:122-124` fills both, and the kernel reads only column 0 (`local_v_next`, `:139`). The red
-`lanczos_tests` cases are a different defect:
-[the spectrum](#lanczos-returns-a-spectrum-about-three-times-too-wide).
+wide (`src/ops/lanczos/lanczos.cc:68-69`) so the sparse arm does not fall back to SpMV; the spmm/gemm
+at `:130-132` fills both, and the kernel reads only column 0 (`local_v_next`, `:148`). The formerly
+red `lanczos_tests` cases were a different defect:
+[the spectrum](#lanczos-returned-a-spectrum-about-three-times-too-wide).
 
 ## Defect 4: rocSPARSE conjugates a real transpose
 
@@ -31,11 +31,22 @@ scalars in cuSPARSE. **Fix needs:** a `rocsparse_op<T>` like `cusparse_op<T>`
 
 ## Defect 5: netlib `trsm` reads `B` when `alpha == 0`
 
-Open. All four arms of the host solve compute `T x = alpha * Bb.at(i, j, 0) - sum`
-(`src/backends/netlib_lapack.cc:407`, `:419`, `:436`, `:448`) with no `alpha == 0` quick return, so
-unzeroed `BumpAllocator` memory gives `0 * NaN = NaN`. **Fix needs:** substitute `T(0)` for the alpha
-term (as the native bodies and the host `spmm` do), and an `alpha == 0` case in
-`tests/trsm_tests.cc` with `B` poisoned by NaN; a merely wrong `B` cannot reveal it.
+Fixed 2026-10-30 for NETLIB. The host solve computed `alpha * Bb.at(i, j, 0) - sum` with no
+`alpha == 0` quick return, so unzeroed `BumpAllocator` memory gave `0 * NaN = NaN`; the batch loop in
+`trsm_vendor` (`src/backends/netlib_lapack.cc`) now stores `B := 0` without reading `A` or `B`, as
+BLAS does. Guard: `TrsmNetlib.AlphaZeroIgnoresNanB*` (every side, uplo, trans and diag, real and
+complex, NaN `A` and `B`, padded `ld`).
+
+Fixed 2026-10-30 for every route of the public `trsm`. The device routes read `B` at `alpha == 0`:
+the CTA kernel (`src/ops/trsm/kernels/trsm_native.cc:264-269`, `dev_mul(alpha_d, B)`), the sub-group
+left kernel (`trsm_sg_left.cc:157`), the blocked route through its first diagonal block
+(`trsm_native.cc:458-459`), and the CUDA complex substitute kernel in `src/backends/cublas.cc`
+`trsm_vendor`. The driver (`src/ops/trsm/trsm.cc`) now answers `alpha == 0` before selection with
+one masked `fill_zeros` of `B`, so no route runs and neither operand is read; a mask off the GPU
+still refuses. Guard: `TrsmOperationsTest.AlphaZeroIgnoresNanUnderEveryRoute` pins each route a
+strict pin admits (both sides, orders 5 and 40, every uplo, trans and diag, NaN `A` and `B`, padded
+`ld` and stride, batch 3). The kernels themselves still read `B` when called directly
+(`backend::trsm_vendor`, `sycl_trsm::*`); only the driver calls them.
 
 ## Defect 11: native gemm reads C at beta zero
 
@@ -165,6 +176,32 @@ Fixed 2026-10-09; kept because the symptom points at the wrong component. `syevx
 every column at or after `block_vectors` with \f$\lVert s_c\rVert^2 \le (n\varepsilon)^2\f$. Guards:
 `Pinned/SyevxProjectedSyevRouteTest.SmallestDenseMatchesReferenceSyev/*` (`tests/syevx_tests.cc`).
 
+## linalg::qr returns a wrong QR after an earlier call in the process
+
+Not reproduced; the wrapper ships again (2026-10-30). In August, composing `geqrf`,
+`triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ by four orders of magnitude, the same
+value each time, after an earlier `linalg::qr` test in the same process, in 2-4 of 4 *concurrent*
+runs of the test binary; never alone or serially (commit `ae08b7ea`, 2026-08-12, on the code of that
+date). The cause was never located and may have gone with later changes to the drivers or the arena.
+
+- **Repro and guards:** `LinalgTyped.ComposedQrRepeatsAcrossCallsAndQueues` (the composition) and
+  `LinalgTyped.QrRepeatsAcrossCallsAndQueues` (the wrapper; adds an out-of-order queue and checks A
+  is untouched), `tests/linalg_layer_tests.cc`: four shapes and batch counts (one at batch 1030, the
+  first repeated) on the fixture, a fresh, a NETLIB queue and the fixture again; float, double,
+  complex; padded ld and stride. Under a `BATCHLAS_GEQRF_ROUTE`/`ORGQR_ROUTE` pin the NETLIB leg is
+  skipped (a native pin cannot run there).
+- **CPU** (2026-10-30, threadripper02, OpenCL CPU): 180/180 over 5 rounds of 4 concurrent binaries.
+- **GPU** (2026-10-30, JRHNBR, RTX 4090, DPC++ CUDA, one GPU shared by all copies), every process
+  `--gtest_repeat=3`: 4 concurrent copies x 10 rounds of the composed test on the default routes,
+  geqrf/orgqr pinned `blocked`/`blocked`, `cta`/`blocked` and `vendor`/`vendor`: 160/160 pass;
+  8 concurrent x 15 rounds, default and `blocked`/`blocked`: 240/240; 4 concurrent whole
+  `linalg_layer_tests` binaries x 10 rounds: 40/40. With the wrapper and both tests, the same four
+  route settings x 4 concurrent x 10 rounds: 160/160; 8 concurrent x 10: 80/80; 4 whole binaries
+  x 10: 40/40.
+- **If it returns:** the 2026-08 notes ruled out freed pages, uninitialised Q/R and scratch
+  lifetime; suspect vendor work run inline on `get_native`'s stream (`src/sycl/impl.hh` `run_native`)
+  or a missing dependency in the blocked drivers' chunk loops.
+
 ## Known defects: the CTA SYTRD Lower path
 
 Worked around, not reproduced. `src/ops/syev/kernels/syev_cta.cc:131-133` says the CTA SYTRD/SYEV
@@ -173,23 +210,20 @@ pipeline is wrong for `Uplo::Lower`, so Lower input is mirrored into Upper first
 Lower reduction on graded complex input with a poisoned upper triangle and compare against Upper;
 then fix the kernel and drop the mirror, or record the failure here.
 
-## linalg::qr returns a wrong QR after an earlier call in the process
+## lanczos returned a spectrum about three times too wide
 
-Observed; cause not located; the wrapper is withheld (`include/batchlas/blas/linalg-ops.hh:836`).
-Composing `geqrf`, `triangular_mask_into` and `orgqr` returned \f$QR \ne A\f$ after an earlier
-`linalg::qr` call in the same process, and passed alone. No repro is checked in: compose the three
-calls twice in one process. Look first at state that outlives a call: the `Queue`'s arena
-(@ref design_runtime_internals), a static, or a stale event.
-
-## lanczos returns a spectrum about three times too wide
-
-Open, cause not located. Toeplitz tridiag(-5, 2, -5), n = 64, float, CSR returns eigenvalues over
-about [-28, 32] against the exact [-8, 12], at batch 1 too. Red in `tests/known-failures.txt`:
-`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`, `LanczosStride.ClosedFormSpectrum`.
-**Lead (unconfirmed):** the SVQB2 re-orthogonalization (the `ortho` call in `lanczos_iteration`,
-`src/ops/lanczos/lanczos.cc`) rotates \f$[v_{it-1}, v_{it}]\f$ after their alphas and betas were
-recorded, breaking the three-term recurrence; raising steqr's `max_sweeps` to 50 changed nothing.
-**To fix:** compare the recorded alphas/betas with \f$V^T A V\f$ for one item.
+Fixed 2026-10-30 on the CPU device (acpp OpenMP); GPU confirmation pending. Toeplitz
+tridiag(-5, 2, -5), n = 64, float, returned eigenvalues over about [-28, 32] for the exact [-8, 12],
+at batch 1 too, while \f$V\f$ stayed orthonormal: the recorded \f$T\f$ was not \f$V^T A V\f$.
+`lanczos_iteration` re-orthogonalized the pair \f$[v_{it-1}, v_{it}]\f$ after their alphas and
+betas were recorded, and `ortho` returns an orthonormal basis of the span, not the input vectors:
+SVQB rotates the pair by the eigenvectors of its near-identity Gram matrix, and Householder (forced
+on non-GPU devices) can flip a column's sign. Now only \f$v_{it}\f$ is re-orthogonalized, against
+\f$v_0 \ldots v_{it-1}\f$, and the kernel gives \f$\beta_{it-1}\f$ the sign of
+\f$v_{it-1}^T A v_{it}\f$ (`src/ops/lanczos/lanczos.cc:114-124`, `:157-166`). The `LanczosTest`
+fixture also read an uninitialized dense reference on the host. Guards:
+`Lanczos/LanczosOrtho.EigenpairsMatchClosedForm/*` (every ortho algorithm, CSR and dense,
+`tests/lanczos_tests.cc`) and the three formerly ledgered cases.
 
 ## Unverified candidates
 
@@ -198,15 +232,6 @@ Located to a line, not confirmed by a test.
 - **`gesvdj_cta` global rescale ignores columns 32..63 on the C=64 rung**
   (`src/ops/gesvd/kernels/gesvdj_cta.cc:355`): overflow headroom is narrower than designed; see
   [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling).
-- **Recursive `stedc` under `NoEigenVectors`** may merge from unset leaf vectors
-  (`src/ops/syev/stedc/stedc.cc:537`); see
-  [stedc](../perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors).
-- **`compute_optimal_wg_size` assumes a 32-bit `long`:** `31 - __builtin_clzl`
-  (`include/batchlas/util/kernel-heuristics.hh:104,109`) is a negative shift on LP64. Fix with
-  `std::bit_floor`.
-- **`gesv` and `posv` throw `internal_error` for a caller error** (heterogeneous or bad-shape batch,
-  `src/ops/gesv/gesv.cc:89,92`, `src/ops/posv/posv.cc:96,99`); see
-  [error model](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
 - Matrix containers, the environment parser and the 3-D tile-group race are tracked on their pages:
   [matrix model](matrix-model.md#matrix-model-open-debts),
   [environment](environment.md#environment-parser-defects-recorded-not-fixed),

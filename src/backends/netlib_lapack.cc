@@ -388,6 +388,16 @@ namespace batchlas{
                 const int rows = Bb.rows();
                 const int cols = Bb.cols();
 
+                // BLAS: alpha == 0 sets B := 0 without reading A or B.
+                if (alpha == T(0)) {
+                    for (int j = 0; j < cols; ++j) {
+                        for (int i = 0; i < rows; ++i) {
+                            Bb.at(i, j, 0) = T(0);
+                        }
+                    }
+                    continue;
+                }
+
                 auto opA = [&](int r, int c) {
                     if (transA == Transpose::NoTrans) {
                         return Ab.at(r, c, 0);
@@ -1084,8 +1094,10 @@ namespace batchlas{
         for (int b = 0; b < batch; ++b) {
             if (mask != nullptr && mask[b] == 0) continue;
             auto Ab = A_mut.batch_item(b);
-            auto Ub = U.batch_item(b);
-            auto Vhb = Vh.batch_item(b);
+            // A None side may be an empty view with batch size 1: never index it.
+            using DenseView = MatrixView<T, MatrixFormat::Dense>;
+            const DenseView Ub = jobu != SvdVectors::None ? U.batch_item(b) : DenseView();
+            const DenseView Vhb = jobvh != SvdVectors::None ? Vh.batch_item(b) : DenseView();
             typename base_type<T>::type* sb = singular_values.data() + static_cast<std::size_t>(b) * static_cast<std::size_t>(k);
 
             lapack_int info = 0;

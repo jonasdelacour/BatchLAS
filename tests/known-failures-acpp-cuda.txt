@@ -45,18 +45,16 @@ hermitian_candidates_tests::HermitianCandidates/1.ComplexSymmetricSyrkFamilies;t
 hermitian_candidates_tests::HermitianCandidates/1.HerkPinnedFamiliesStraddleTheirLimits;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 hermitian_candidates_tests::HermitianCandidates/1.SaturatingBatchIsBitIdentical;type_param=(anonymous namespace)::Cfg<std::complex<double>,(batchlas::Backend)1>
 
-# Error model: on multipass CUDA a launch with 1 MiB of local memory is not reported at the launch
-# or the next wait (QueueAsyncErrors.*), and queue_from_sycl accepts the CPU device it should
-# reject as foreign (SyclInterop.QueueFromSyclRejectsForeignDevice). Cause open.
-util_device_queue_tests::QueueAsyncErrors.ErrorCollectedByAQueueCopySurfacesAtTheNextWait
-util_device_queue_tests::QueueAsyncErrors.OversizedLocalMemoryThrowsFromTheLaunch
-util_device_queue_tests::SyclInterop.QueueFromSyclRejectsForeignDevice
+# fill_graded_hermitian over the 48 KiB cap (SyevTest/3.DoubleBandEveryOrderUploAndJobz,
+# complex<double> at n = 1600): fixed 2026-10-30, removed; the square fills fall back to
+# global-memory scratch when their scratch does not fit local memory.
 
-# Shared with DPC++ (tests/known-failures.txt): docs/design/known-defects.md, "lanczos returns a
-# spectrum".
-lanczos_tests::LanczosStride.ClosedFormSpectrum
-lanczos_tests::LanczosTestBase.LanczosTest
-lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+# Error model: fixed 2026-10-30, removed. Integrated multipass launches through clang's CUDA stub
+# (glue/generic/hiplike/clang.hpp:44-48), which never reads cudaGetLastError, so a failed launch
+# reached no error list; impl::throw_async_errors (src/sycl/impl.hh) now polls and clears it.
+
+# lanczos (ClosedFormSpectrum, LanczosTest, ToeplitzEigenpairs): fixed 2026-10-30, removed; cause in
+# docs/design/known-defects.md, "lanczos returned a spectrum about three times too wide".
 
 # Seen once on this tree, cause open: linalg::syev values after the scratch is freed
 # (LinalgWrappers.ScratchOutlivesKernels), gesvd cta U orthogonality for float and double (entry 18

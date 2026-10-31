@@ -115,7 +115,13 @@ struct SyclInteropAccess {
             for (size_t i = 0; i < all[t].size(); ++i) {
                 if (all[t][i] != dev) continue;
                 const auto in_ctx = ctx.get_devices();
-                if (std::find(in_ctx.begin(), in_ctx.end(), dev) == in_ctx.end()) {
+                bool member = std::find(in_ctx.begin(), in_ctx.end(), dev) != in_ctx.end();
+#if BATCHLAS_SYCL_IMPL_ACPP
+                // acpp adds its host device to every context: the cpu belongs only to a cpu-only one.
+                if (dev.is_cpu())
+                    member = member && std::all_of(in_ctx.begin(), in_ctx.end(), [](const sycl::device& d) { return d.is_cpu(); });
+#endif
+                if (!member) {
                     throw batchlas::device_error("queue_from_sycl: the device is not part of the given context");
                 }
                 return Queue(Device(i, static_cast<DeviceType>(t)), in_order, SyclQueueSource{ctx, dev});
@@ -307,15 +313,29 @@ void Queue::enqueue(Event& event) {
     // scheduling node on all backends. Use a barrier when available, else fall
     // back to a no-op kernel.
     try {
-        sycl::event e = impl::submit_barrier(*impl_, {static_cast<sycl::event>(*event)});
+        std::vector<sycl::event> deps{static_cast<sycl::event>(*event)};
+#if BATCHLAS_SYCL_IMPL_ACPP
+        // acpp's barrier node orders nothing after it on an out-of-order queue: QueueImpl makes each
+        // later submission depend on it instead (pending_), chained across repeated enqueues.
+        if (const sycl::event* prev = impl_->pending()) deps.push_back(*prev);
+#endif
+        sycl::event e = impl::submit_barrier(*impl_, deps);
         impl_->last_event_ = e;
+#if BATCHLAS_SYCL_IMPL_ACPP
+        if (!in_order_) impl_->pending_ = e;
+#endif
         return;
     } catch (const sycl::exception&) {
     }
-    impl_->submit([&](sycl::handler& h) {
+    sycl::event e = impl_->submit([&](sycl::handler& h) {
         h.depends_on(static_cast<sycl::event>(*event));
         h.single_task<QueueEnqueueNoopKernel>([]() {});
     });
+#if BATCHLAS_SYCL_IMPL_ACPP
+    if (!in_order_) impl_->pending_ = e;
+#else
+    (void)e;
+#endif
 }
 
 Event Queue::get_event() const {

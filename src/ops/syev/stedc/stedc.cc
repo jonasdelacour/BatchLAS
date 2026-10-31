@@ -551,9 +551,8 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     if (n <= effective_params.recursion_threshold){
         // steqr_dispatch, not steqr: this leaf must RAISE the caller's `info`, not clear
         // it; the two half-solves below accumulate through info_report's fetch_max.
-        // `jobz` is forwarded as the caller's, although the merges consume leaf
-        // eigenvectors: an unverified hazard for direct NoEigenVectors calls.
-        // evidence: docs/perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors
+        // `jobz` is EigenVectors here: stedc_dispatch turns NoEigenVectors into a
+        // vector solve into its own Z, as the merges consume these leaf eigenvectors.
         return steqr_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
 
@@ -1035,8 +1034,20 @@ Event stedc_dispatch(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>&
         steqr_params.back_transform = false;
         return steqr_legacy<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
-
     const auto n = d.size();
+    // Values only: every merge builds its secular vector from the children's eigenvectors, which a
+    // NoEigenVectors leaf never writes, and the caller's eigvects may be empty. Solve with vectors
+    // into a workspace Z instead; the caller's matrix is never touched.
+    // evidence: docs/perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors
+    if (jobz == JobType::NoEigenVectors && n > 0) {
+        const size_t z_count = static_cast<size_t>(n) * n * d.batch_size();
+        auto pool = BumpAllocator(ws);
+        const auto z = stedc_masked(
+            MatrixView<T>(pool.allocate<T>(ctx, z_count).data(), n, n, n, n * n, d.batch_size()), mask);
+        return stedc_dispatch<B, T>(ctx, d, e, eigenvalues, ws.subspan(BumpAllocator::allocation_size<T>(ctx, z_count)),
+                                    JobType::EigenVectors, params, z, info);
+    }
+
     const auto effective_params = resolve_stedc_tuning<B, T>(n, params, ctx.device().type == DeviceType::GPU);
     if (params.algorithm != StedcAlgorithm::Recursive) {
         const auto plan = plan_stedc_levels(n, effective_params.recursion_threshold);
@@ -1073,6 +1084,11 @@ size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, 
         steqr_params.sort_order = SortOrder::Ascending;
         steqr_params.back_transform = false;
         return steqr_legacy_buffer_size<T>(ctx, diag, offdiag, evals, jobz, steqr_params);
+    }
+    if (jobz == JobType::NoEigenVectors) {
+        // stedc_dispatch's workspace Z, then the vector solve it runs.
+        return BumpAllocator::allocation_size<T>(ctx, n * n * batch_size)
+               + stedc_buffer_size<B, T>(ctx, n, batch_size, JobType::EigenVectors, params);
     }
 
     const size_t recursive_bytes =

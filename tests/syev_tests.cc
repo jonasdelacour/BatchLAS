@@ -25,6 +25,7 @@
 #include <string>
 #include <utility>
 #include <iostream>
+#include <optional>
 #include <vector>
 #include <cmath>
 #include <random>
@@ -1181,6 +1182,102 @@ TYPED_TEST(SyevTest, VendorFreeCpuHasNoRoute) {
             EXPECT_THROW(((void)syev<B, T>(*this->ctx, A.view(), W.to_span(), jobz, Uplo::Lower, ws.to_span(),
                                            Span<int32_t>{})),
                          batchlas::NoRouteError);
+        }
+    }
+}
+
+// ---- Raw-pointer views on every route ---------------------------------------------------
+//
+// A MatrixView over the caller's own USM buffer has no pointer array (data_ptrs_ is empty),
+// unlike Matrix::view(). Each route is pinned at an n it admits, two_stage above 512 where
+// sy2sb's panel geqrf (pinned to vendor) consumes one; padded ld and an odd stride. Item b is (1 + b/8)
+// times H diag(lambda) H, H = I - 2 v v^T, built in O(n^2): A_ij = d_i [i==j] + v_i v_j (4s - 2d_i - 2d_j).
+
+namespace {
+
+struct RawViewRoute {
+    const char* route;
+    int n;
+};
+constexpr RawViewRoute kRawViewRoutes[] = {{"cta", 24},     {"cta_fused", 24}, {"jacobi", 24},
+                                           {"blocked", 96}, {"two_stage", 520}, {"vendor", 96}};
+
+std::vector<double> raw_view_item(int n, int b) {
+    std::mt19937 gen(4321u + 13u * unsigned(b));
+    std::uniform_real_distribution<double> dis(-1.0, 1.0);
+    std::vector<double> v(n), d(n), A(size_t(n) * n);
+    double vnorm2 = 0.0;
+    for (auto& x : v) {
+        x = dis(gen);
+        vnorm2 += x * x;
+    }
+    double s = 0.0;
+    for (int i = 0; i < n; ++i) {
+        v[i] /= std::sqrt(vnorm2);
+        d[i] = vendor_syev_lambda(i, n) * chunk_item_scale(b);
+        s += d[i] * v[i] * v[i];
+    }
+    for (int j = 0; j < n; ++j)
+        for (int i = 0; i < n; ++i)
+            A[i + size_t(j) * n] = (i == j ? d[i] : 0.0) + v[i] * v[j] * (4.0 * s - 2.0 * d[i] - 2.0 * d[j]);
+    return A;
+}
+
+}  // namespace
+
+TYPED_TEST(SyevTest, RawPointerViewsRunEveryRoute) {
+    using T = typename TestFixture::ScalarType;
+    using MV = MatrixView<T, MatrixFormat::Dense>;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB || is_std_complex_v<T>) {
+        GTEST_SKIP() << "GPU routes; real types carry the fullerene Hessian case";
+    } else {
+        const int batch = 3;
+        const T poison = T(777);
+        for (const auto& r : kRawViewRoutes) {
+            if (std::string(r.route) == "vendor" && !batchlas::select::solver_vendor_available<B>) continue;
+            const ScopedEnvVar pin("BATCHLAS_SYEV_ROUTE", r.route);
+            // sy2sb's panel geqrf on a slice of A is the pointer-array consumer; pinned, not left to the table.
+            std::optional<ScopedEnvVar> geqrf_pin;
+            if (std::string(r.route) == "two_stage" && batchlas::select::factorization_vendor_available<B>)
+                geqrf_pin.emplace("BATCHLAS_GEQRF_ROUTE", "vendor");
+            const int n = r.n, ld = n + 3, stride = ld * n + 5;
+            std::vector<std::vector<double>> want(batch, std::vector<double>(n));
+            for (int b = 0; b < batch; ++b) {
+                for (int i = 0; i < n; ++i) want[b][i] = vendor_syev_lambda(i, n) * chunk_item_scale(b);
+                std::sort(want[b].begin(), want[b].end());
+            }
+            for (const JobType jobz : {JobType::NoEigenVectors, JobType::EigenVectors}) {
+                const std::string where = std::string(r.route) + " n=" + std::to_string(n) +
+                                          (jobz == JobType::EigenVectors ? " V" : " N");
+                UnifiedVector<T> buf(size_t(stride) * batch, poison);
+                Matrix<T, MatrixFormat::Dense> A0(n, n, batch);
+                for (int b = 0; b < batch; ++b) {
+                    const auto ref = raw_view_item(n, b);
+                    for (int j = 0; j < n; ++j)
+                        for (int i = 0; i < n; ++i) {
+                            buf[size_t(b) * stride + i + size_t(j) * ld] = T(ref[i + size_t(j) * n]);
+                            A0.view()(i, j, b) = T(ref[i + size_t(j) * n]);
+                        }
+                }
+                MV A(buf.data(), n, n, ld, stride, batch);
+                UnifiedVector<T> W(size_t(n) * batch, T(-1));
+                UnifiedVector<std::byte> ws(syev_buffer_size(*this->ctx, A, W.to_span(), jobz, Uplo::Lower));
+                ASSERT_NO_THROW((void)syev(*this->ctx, A, W.to_span(), SyevOptions{.jobz = jobz}, ws.to_span()))
+                    << where;
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b)
+                    for (int o = n * ld; o < stride; ++o)
+                        ASSERT_EQ(buf[size_t(b) * stride + o], poison) << where << ": item " << b << " tail " << o;
+                const VectorView<T> w(W.data(), n, batch);
+                EXPECT_VERIFY(T, verify::Check::values, n, MV::values_error(w, want, 1e3 * chunk_item_scale(batch - 1),
+                                                                            A0.all_items()))
+                    << where;
+                if (jobz != JobType::EigenVectors) continue;
+                EXPECT_VERIFY(T, verify::Check::eigen_residual, n,
+                              MV::eigen_residual(*this->ctx, A0, A, w, A0.all_items()))
+                    << where;
+            }
         }
     }
 }

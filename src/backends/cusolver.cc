@@ -6,6 +6,7 @@
 #include <batchlas/util/sycl-span.hh>
 #include <src/queue.hh>
 #include <batchlas/util/mempool.hh>
+#include <src/backends/vendor_ptr_arrays.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
 #include <batchlas/blas/linalg.hh>
@@ -72,7 +73,8 @@ namespace batchlas {
             });
         } else {
             auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());
-            T** a_ptrs = descrA.data_ptrs(ctx).data();  // fills and waits: never inside run_native
+            const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, descrA);  // never inside run_native
+            T** a_ptrs = arrays[0];
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,

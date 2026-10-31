@@ -20,6 +20,7 @@
 #include <src/backends/batch_launch.hh>
 #include <src/backends/level3_shape.hh>
 #include <src/backends/gemm_heterogeneous.hh>
+#include <src/backends/vendor_ptr_arrays.hh>
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include <src/util/template-instantiations.hh>
@@ -578,12 +579,10 @@ namespace batchlas {
                                   }
                               });
         } else {
-            T** a_ptrs = nullptr;
-            T** b_ptrs = nullptr;
-            if (batch_size != 1) {
-                a_ptrs = A.data_ptrs(ctx).data();
-                b_ptrs = B.data_ptrs(ctx).data();
-            }
+            ::batchlas::detail::VendorPtrArrays<T, 2> arrays;
+            if (batch_size != 1) arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, B);
+            T** a_ptrs = arrays[0];
+            T** b_ptrs = arrays[1];
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 alignas(16) auto alpha_h = alpha;  // cuBLASLt vector-loads it; closures are 8-aligned
@@ -647,7 +646,8 @@ namespace batchlas {
                 size_t i = item.get(0);
                 tau_ptrs[i] = tau_data + i * k;
             });
-            T** a_ptrs = A.data_ptrs(ctx).data();
+            const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A);
+            T** a_ptrs = arrays[0];
             if (!ctx.in_order()) ctx.wait();  // tau_ptrs' kernel is not ordered before the native call
             // cublas<t>geqrfBatched's info is a host int: a parameter-error code, set before return.
             int info_h = 0;
@@ -891,8 +891,9 @@ namespace batchlas {
             // the change this family has been bitten by before.
             static_cast<void>(pool);
             auto reinterpreted_pivots = pivots.as_span<int>();
-            T** a_ptrs = A.data_ptrs(ctx).data();
-            T** b_ptrs = B.data_ptrs(ctx).data();
+            const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, B);
+            T** a_ptrs = arrays[0];
+            T** b_ptrs = arrays[1];
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 int info;
@@ -928,7 +929,8 @@ namespace batchlas {
             // It used to be pool scratch that nothing ever read.
             auto info = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
-            T** a_ptrs = A.data_ptrs(ctx).data();
+            const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A);
+            T** a_ptrs = arrays[0];
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetrfBatched, cublasDgetrfBatched, cublasCgetrfBatched, cublasZgetrfBatched,
@@ -964,8 +966,9 @@ namespace batchlas {
             // result was thrown away, leaving the caller a matrix of infinities.
             auto info_arr = ::batchlas::detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch_size));
             auto reinterpreted_pivots = pivots.as_span<int>();
-            T** a_ptrs = A.data_ptrs(ctx).data();  // fills and waits: never inside run_native
-            T** c_ptrs = C.data_ptrs(ctx).data();
+            const auto arrays = ::batchlas::detail::vendor_ptr_arrays<T>(ctx, A, C);  // never inside run_native
+            T** a_ptrs = arrays[0];
+            T** c_ptrs = arrays[1];
             impl::run_native<impl::Native::Cuda>(*ctx, [=](auto stream) mutable {
                 handle.setStream(stream);
                 call_backend<T, BackendLibrary::CUBLAS, B>(cublasSgetriBatched, cublasDgetriBatched, cublasCgetriBatched, cublasZgetriBatched,
