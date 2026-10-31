@@ -69,7 +69,6 @@ struct Snapshot {
 BATCHLAS_INTERNAL_API Snapshot snapshot();
 /// emit()'s `reached`, then `miss`, lines for the rows called since `s`, the calls column the delta.
 BATCHLAS_INTERNAL_API std::vector<std::string> rows_since(const Snapshot& s);
-/// The table and the switch as at `s`: a capture leaves BATCHLAS_COVERAGE_OUT untouched.
-BATCHLAS_INTERNAL_API void restore(const Snapshot& s);
+BATCHLAS_INTERNAL_API void restore(const Snapshot& s);  // tables and switch as at `s`
 
 /** @} */ } // namespace batchlas::coverage
