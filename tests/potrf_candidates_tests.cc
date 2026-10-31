@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/usm_bulk_copy.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potrf/choice.hh>
@@ -46,6 +47,7 @@ namespace {
 namespace pc = batchlas::ops::potrf;
 using C = pc::PotrfChoice;
 using Pin = select::ScopedPin<C>;
+namespace ub = test_utils::usm_bulk;
 
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
@@ -141,13 +143,14 @@ void expect_factored(Queue& ctx, const Prob<T>& p, const std::vector<int32_t>& i
                      bool other_triangle_is_scratch = false) {
     for (int b = 0; b < p.batch; ++b) ASSERT_EQ(info[b], 0) << what << " b=" << b;
     EXPECT_VERIFY(T, verify::Check::factorization, p.n, residual(ctx, p)) << what << " b=0 and " << p.batch - 1;
+    const T* got = ub::download(p.buf.data(), p.before.size(), 0);
     for (size_t e = 0; e < p.before.size(); ++e) {
         const int b = static_cast<int>(e / p.stride);
         const int r = static_cast<int>(e % p.stride);
         const int i = r % p.ld, j = r / p.ld;
         const bool owned = b < p.batch && j < p.n && i < p.n && (other_triangle_is_scratch || p.in_tri(i, j));
         if (!owned)
-            ASSERT_TRUE(same_bits(p.buf[e], p.before[e]))
+            ASSERT_TRUE(same_bits(got[e], p.before[e]))
                 << what << ": wrote outside the factored triangle at element " << e << " (b=" << b
                 << " i=" << i << " j=" << j << ")";
     }
@@ -202,6 +205,11 @@ protected:
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the native tiers are GPU kernels";
         if (!this->ctx->device().supports_sub_group_size(32)) GTEST_SKIP() << "no sub-group size 32";
+        ub::attach(this->ctx.get());
+    }
+    void TearDown() override {
+        ub::detach();
+        test_utils::BatchLASTest<Config>::TearDown();
     }
 
     std::size_t budget() const {
@@ -268,7 +276,9 @@ protected:
         UnifiedVector<int32_t> info(p.batch, int32_t(-7));
         (void)potrf<B, T>(*this->ctx, p.view(), p.uplo, Span<std::byte>(ws.data(), bytes), info.to_span());
         this->ctx->wait();
-        return std::vector<int32_t>(info.begin(), info.end());
+        std::vector<int32_t> out(p.batch);
+        ub::copy(out.data(), info.data(), out.size() * sizeof(int32_t), info.data());
+        return out;
     }
 
     // The family's own driver, sized by its own query; Blocked gets the public gemm and trsm,
@@ -396,11 +406,13 @@ TYPED_TEST(PotrfCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 UnifiedVector<int32_t> dinfo(3, int32_t(-7));
                 ASSERT_NO_THROW(this->run_direct(c, direct.view(), uplo, dinfo.to_span()))
                     << this->name(c, uplo, n);
-                for (int b = 0; b < 3; ++b) ASSERT_EQ(info[b], dinfo[b]) << this->name(c, uplo, n);
-                for (size_t e = 0; e < pinned.before.size(); ++e)
-                    ASSERT_TRUE(same_bits(pinned.buf[e], direct.buf[e]))
-                        << this->name(c, uplo, n) << ": the pinned facade did not run this family's "
-                        << "driver; element " << e << " differs";
+                const int32_t* dinfo_h = ub::download(dinfo.data(), 3, 0);
+                for (int b = 0; b < 3; ++b) ASSERT_EQ(info[b], dinfo_h[b]) << this->name(c, uplo, n);
+                const size_t n_el = pinned.before.size();
+                const auto e = ub::first_diff(ub::download(pinned.buf.data(), n_el, 0),
+                                              ub::download(direct.buf.data(), n_el, 1), n_el);
+                ASSERT_FALSE(e.has_value()) << this->name(c, uplo, n) << ": the pinned facade did not run this family's "
+                                            << "driver; element " << e.value_or(0) << " differs";
             }
         }
     }
@@ -422,11 +434,12 @@ TYPED_TEST(PotrfCandidates, SaturatingBatchIsBitIdentical) {
                 auto p = make_prob<T>(n, kBatch, uplo, 777u, /*identical=*/true);
                 const auto info = this->run_pinned(c, p);
                 expect_factored(*this->ctx, p, info, this->name(c, uplo, n));
+                const T* got = ub::download(p.buf.data(), p.buf.size(), 0);
                 for (int b = 1; b < kBatch; ++b)
                     for (int j = 0; j < n; ++j)
                         for (int i = 0; i < n; ++i)
                             if (p.in_tri(i, j))
-                                ASSERT_TRUE(same_bits(p.buf[p.at(i, j, b)], p.buf[p.at(i, j, 0)]))
+                                ASSERT_TRUE(same_bits(got[p.at(i, j, b)], got[p.at(i, j, 0)]))
                                     << this->name(c, uplo, n) << ": item " << b << " differs from item 0 at ("
                                     << i << "," << j << ")";
             }
@@ -460,9 +473,12 @@ TYPED_TEST(PotrfCandidates, CanRunEqualsLaunch) {
             // A heterogeneous batch: the natives would silently factor the full order.
             const int n = 16;
             Matrix<T, MatrixFormat::Dense> A(n, n, 4);
-            A.fill(T{});
+            std::vector<T> img(static_cast<size_t>(A.stride()) * 4, T{});
             for (int b = 0; b < 4; ++b)
-                for (int i = 0; i < n; ++i) A(i, i, b) = MatrixView<T, MatrixFormat::Dense>::make(R(2), R(0));
+                for (int i = 0; i < n; ++i)
+                    img[static_cast<size_t>(b) * A.stride() + i + static_cast<size_t>(i) * A.ld()] =
+                        MatrixView<T, MatrixFormat::Dense>::make(R(2), R(0));
+            ub::copy(A.data_ptr(), img.data(), img.size() * sizeof(T), A.data_ptr());
             UnifiedVector<int> act(4);
             for (int b = 0; b < 4; ++b) act[b] = n - b;
             auto V = A.view().with_active_dims(act.to_span(), act.to_span());
@@ -504,11 +520,13 @@ TYPED_TEST(PotrfCandidates, ExactWorkspaceInAPoisonedArena) {
                                                        pass_info ? info.to_span() : Span<int32_t>{}),
                                      this->ctx->wait()))
                         << what;
+                    const std::byte* guard = ub::download(arena.data() + bytes, kGuard, 0);
                     for (std::size_t i = 0; i < kGuard; ++i)
-                        ASSERT_EQ(static_cast<unsigned>(arena[bytes + i]), 0xA5u)
+                        ASSERT_EQ(static_cast<unsigned>(guard[i]), 0xA5u)
                             << what << ": wrote " << i << " bytes past the sized workspace";
                     if (pass_info) {
-                        expect_factored(*this->ctx, p, std::vector<int32_t>(info.begin(), info.end()), what,
+                        const int32_t* info_h = ub::download(info.data(), info.size(), 0);
+                        expect_factored(*this->ctx, p, std::vector<int32_t>(info_h, info_h + info.size()), what,
                                         clobbers_other(c, uplo));
                     } else {
                         expect_factored(*this->ctx, p, std::vector<int32_t>(p.batch, 0), what, clobbers_other(c, uplo));
