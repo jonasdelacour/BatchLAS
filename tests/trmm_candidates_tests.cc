@@ -171,9 +171,12 @@ double residual(Queue& ctx, const Prob<T>& p, std::span<const int> items) {
     using MV = MatrixView<T, MatrixFormat::Dense>;
     const Spec& s = p.s;
     const int reps = int(p.pristine.reps);
-    const MV B0 = p.initial(p.b), C0 = p.initial(p.c);
+    // The reps live in device memory and gemm_backward_error reads on the host: stage them.
+    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps), B0(p.b.rows, p.b.cols, reps),
+        C0(p.c.rows, p.c.cols, reps);
+    MV::copy(ctx, B0, p.initial(p.b)).wait();
+    MV::copy(ctx, C0, p.initial(p.c)).wait();
     const MV C(p.mem.data() + p.c.off, p.c.rows, p.c.cols, p.c.ld, p.c.stride, reps);
-    Matrix<T, MatrixFormat::Dense> A0(p.a.rows, p.a.cols, reps);
     MV::copy(ctx, A0, p.initial(p.a)).wait();
     A0.triangularize(ctx, s.uplo, s.diag).wait();
     if (s.side == Side::Left)
