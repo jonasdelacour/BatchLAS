@@ -168,15 +168,21 @@ every child it calls is migrated, because the child runs on the composite's mask
     owned views; the exact length binds, an empty span clears, `batch_range` slices.
 - **Per op and family** (`tests/masked_contract.hh`, used by each wave; its own checks are in
   `tests/masked_contract_tests.cc`): `masked_contract::check<Choice>(q, op, spelling, case)` pins
-  the family strictly and requires a coverage `reached` row of it on a masked call. Then for each
-  pattern it checks that every inactive item's outputs (the case lists matrices, `w`, `info`,
-  pivots, `tau`) are bit-identical to the poisoned input, and every active item to the unmasked
-  call on the same pin, or the case's `verify_active` hook for the exceptions above. The patterns
-  are none, all active, alternating, single, the packed work-group holes (slot 0 off, only the last
-  slot on, the interior off), and, under `BATCHLAS_TUNE_L2_CHUNK_ITEMS`, the part edges off and one
-  part wholly inactive. Every mask is device-only, written by a kernel. `buffer_size` must not move
-  with the pattern, and each pattern runs in exactly that size. `identical_items` adds the
-  saturating-batch check (active items bit-identical to the first active one).
+  the family strictly and requires a coverage `reached` row of it on the alternating pattern's
+  masked call, captured in-process (`coverage::snapshot`, `reached_since`, `restore`; no
+  death-test child). Then for each pattern it checks that every inactive item's outputs (the case
+  lists matrices, `w`, `info`, pivots, `tau`) are bit-identical to the poisoned input, and every
+  active item to the unmasked call on the same pin, or the case's `verify_active` hook for the
+  exceptions above. The patterns are none, all active, alternating, single, the packed work-group
+  holes (slot 0 off, only the last slot on, the interior off), and, under
+  `BATCHLAS_TUNE_L2_CHUNK_ITEMS`, the part edges off and one part wholly inactive. Each runs once:
+  `none` is the reference (each chunk setting adds its own), under `masked_reference` the
+  all-active masked call is (the unmasked call does not run), and `verify_active` runs none, so the
+  unmasked call's run-to-run determinism is no longer checked. Every mask is device-only, written
+  by a kernel, one per pattern. `buffer_size` must not move with the pattern, and each pattern runs
+  in exactly that size, on the check's one workspace poisoned before every run. `identical_items`
+  adds the saturating-batch check (active items bit-identical to the first active one) and runs
+  only none, all active, alternating and work-group slot 0 off.
 
 Deliberate breaks, one per axis (agent guide section 8, rule 1):
 
@@ -189,6 +195,11 @@ Deliberate breaks, one per axis (agent guide section 8, rule 1):
 - The contract's own checks name their red sets: a call that ignores the mask is red on exactly
   the seven patterns with an inactive item; an active item that differs is red on every masked
   pattern; a size that follows the mask is red on every pattern after the first masked one.
+- The single-run harness (sm_89, every scalar, 2026-10-31) kept those red sets. Not recording
+  potrf `cta`'s choice turned exactly its two pinned shapes red as "the masked call never reached
+  cta". Not poisoning the workspace turned `TheWorkspaceArrivesPoisonedEveryRun` red. Dropping
+  potrf `cta`'s two I1 returns turned only the patterns with an inactive item red ("was written"),
+  saturating ones included, on its pins and the composites over it.
 - Per wave: drop `active()` in one family (red: that pin's patterns with holes); stop slicing the
   mask in `batch_range` (red: the chunk patterns); drop one vendor refusal (red: `BatchPolicy` on
   that vendor); revert `info_clear` to a memset (red: the `info` sentinel only).

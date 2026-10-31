@@ -71,27 +71,35 @@ struct Problem {
           C(test_support::padded<T>(c.rows, c.cols, batch_)), op(std::move(op_)) {}
 
     // Small values over 8 and a heavy diagonal, so every item is distinct and well conditioned.
-    void fill(Matrix<T>& M, int salt) {
-        T* p = M.data_ptr();
+    std::vector<T> image(const Matrix<T>& M, int salt) const {
         const std::size_t per = std::size_t(M.stride()), ld = std::size_t(M.ld());
-        for (std::size_t e = 0; e < per * std::size_t(batch); ++e) {
+        std::vector<T> img(per * std::size_t(batch));
+        for (std::size_t e = 0; e < img.size(); ++e) {
             const std::size_t item = identical ? 0 : e / per, off = e % per;
             double re = double(int((off * 7 + item * 3 + salt) % 23) - 11) / 8;
             const double im = double(int((off * 5 + item + salt) % 13) - 6) / 8;
             if (off % ld == off / ld) re += 4;
-            p[e] = MV<T>::make(re, im);
+            img[e] = MV<T>::make(re, im);
         }
+        return img;
     }
+    // The inputs' host images, built on the first prepare and copied in by q.memcpy on every one.
+    std::vector<T> imgA, imgB, imgC;
+    void load(Matrix<T>& M, const std::vector<T>& img) { q->memcpy(M.data_ptr(), img.data(), img.size() * sizeof(T)); }
     mc::Case make_case(int chunk_items = 0) {
         mc::Case c;
         c.batch = batch;
         c.chunk_items = chunk_items;
         c.identical_items = identical;
         c.prepare = [this] {
-            fill(A, 1);
-            fill(Bm, 5);
-            std::fill_n(C.data_ptr(), std::size_t(C.stride()) * batch, test_support::poison<T>());
-            if (!beta0) fill(C, 9);
+            if (imgA.empty()) {
+                imgA = image(A, 1);
+                imgB = image(Bm, 5);
+                imgC = beta0 ? std::vector<T>(std::size_t(C.stride()) * batch, test_support::poison<T>()) : image(C, 9);
+            }
+            load(A, imgA);
+            load(Bm, imgB);
+            load(C, imgC);
         };
         c.call = [this](Span<const std::uint8_t> mask, Span<std::byte>) {
             op(q, A.view().with_batch_mask(mask), Bm.view().with_batch_mask(mask), C.view().with_batch_mask(mask), beta0);

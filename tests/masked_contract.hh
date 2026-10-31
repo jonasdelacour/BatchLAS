@@ -86,6 +86,18 @@ inline std::vector<Pattern> patterns(int batch, int wg_items = 0, int chunk_item
     return out;
 }
 
+/// The patterns check() runs: patterns(), or for an identical_items (saturating) case the four
+/// {none, all-active, alternating, wg-slot0-off}.
+template <typename C>
+std::vector<Pattern> patterns_for(const C& c) {
+    auto out = patterns(c.batch, c.wg_items, c.chunk_items);
+    if (c.identical_items)
+        std::erase_if(out, [](const Pattern& p) {
+            return p.name != "none" && p.name != "all-active" && p.name != "alternating" && p.name != "wg-slot0-off";
+        });
+    return out;
+}
+
 /// Device-only mask bytes written by a kernel from a host copy.
 class DeviceMask {
 public:
@@ -137,9 +149,25 @@ struct Case {
 namespace detail {
 using Bytes = std::vector<std::vector<std::byte>>;
 
+/// A host-side copy, for the one-off refusal checks outside check().
 inline Bytes snapshot(const std::vector<Output>& outs, int batch) {
     Bytes s;
     for (const Output& o : outs) s.emplace_back(o.base, o.base + o.stride_bytes * static_cast<std::size_t>(batch));
+    return s;
+}
+
+// Device to host by q.memcpy (no host walk over shared pages); a plain memcpy for host memory.
+inline Bytes snapshot(batchlas::Queue& q, const std::vector<Output>& outs, int batch) {
+    Bytes s;
+    for (const Output& o : outs) {
+        auto& dst = s.emplace_back(o.stride_bytes * static_cast<std::size_t>(batch));
+        if (dst.empty()) continue;
+        if (sycl::get_pointer_type(o.base, q->get_context()) == sycl::usm::alloc::unknown)
+            std::memcpy(dst.data(), o.base, dst.size());
+        else
+            q->memcpy(dst.data(), o.base, dst.size());
+    }
+    q.wait();
     return s;
 }
 
@@ -150,64 +178,86 @@ inline bool item_equal(const std::vector<std::byte>& a, const std::vector<std::b
     return std::memcmp(a.data() + off, b.data() + off_b, o.item_bytes) == 0;
 }
 
-inline Bytes run(batchlas::Queue& q, const Case& c, const Pattern& p, std::size_t ws_bytes, Bytes* before) {
+/// One workspace per check, grown to the largest size asked and poisoned before every run.
+class Workspace {
+public:
+    static constexpr int kPoison = 0xA5;
+    explicit Workspace(batchlas::Queue& q) : q_(q) {}
+    batchlas::Span<std::byte> poisoned(std::size_t bytes) {
+        if (!buf_ || buf_->size() < bytes) buf_.emplace(std::max<std::size_t>(bytes, 1));
+        q_->memset(buf_->data(), kPoison, buf_->size());
+        return {buf_->data(), bytes};
+    }
+
+private:
+    batchlas::Queue& q_;
+    std::optional<batchlas::UnifiedVector<std::byte>> buf_;
+};
+
+inline Bytes run(batchlas::Queue& q, const Case& c, const Pattern& p, const DeviceMask& mask, std::size_t ws_bytes,
+                 Workspace& ws, Bytes* before) {
     std::optional<batchlas::ScopedEnvVar> chunk;
     if (p.chunk_items > 0) chunk.emplace("BATCHLAS_TUNE_L2_CHUNK_ITEMS", std::to_string(p.chunk_items).c_str());
-    batchlas::UnifiedVector<std::byte> ws(std::max<std::size_t>(ws_bytes, 1));
     c.prepare();
+    const auto span = ws.poisoned(ws_bytes);
     q.wait();
     const auto outs = c.outputs();
-    if (before) *before = snapshot(outs, c.batch);
-    DeviceMask mask(q, p.bytes);
-    c.call(mask.span(), {ws.data(), ws_bytes});
+    if (before) *before = snapshot(q, outs, c.batch);
+    c.call(mask.span(), span);
     q.wait();
-    return snapshot(outs, c.batch);
+    return snapshot(q, outs, c.batch);
 }
 }  // namespace detail
 
-/// Runs every pattern of `c` and checks the contract. With `op` set, it first pins `spelling`
-/// (strict) and requires a coverage `reached` row of op on that spelling for a masked call.
+/// Runs every pattern of `c` (patterns_for) once and checks the contract. Each pattern is compared
+/// with its chunk setting's reference: the unmasked call (`none`, which is that reference at no
+/// chunk), or under masked_reference the all-active masked call (the unmasked call then never
+/// runs); verify_active runs no reference. With `op` set, it pins `spelling` (strict) and requires
+/// a coverage `reached` row of op on that spelling, captured in-process around the alternating run.
 template <typename Choice>
 void check(batchlas::Queue& q, const char* op, const std::string& spelling, const Case& c) {
     using batchlas::select::ScopedPin;
     using batchlas::select::StrictPin;
-    const auto pats = patterns(c.batch, c.wg_items, c.chunk_items);
     std::optional<ScopedPin<Choice>> pin;
-    if (op) {
-        pin.emplace(op, spelling, StrictPin{});
-        const auto rows = test_support::reached_rows([&] {
-            const ScopedPin<Choice> inner(op, spelling, StrictPin{});
-            detail::run(q, c, pats[2], c.buffer_size ? c.buffer_size(DeviceMask(q, pats[2].bytes).span()) : 0, nullptr);
-        });
-        EXPECT_TRUE(std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.op == op && r.spelling == spelling; }))
-            << op << ": the masked call never reached " << spelling;
-    }
+    if (op) pin.emplace(op, spelling, StrictPin{});
+    const bool bitwise = !c.verify_active;
+    const auto is_reference = [&](const Pattern& p) {
+        return c.masked_reference ? p.name == "all-active" && p.chunk_items == 0 : p.bytes.empty();
+    };
+    detail::Workspace ws(q);
     std::optional<std::size_t> size;
-    std::map<int, detail::Bytes> refs;  // the unmasked call per chunk setting
-    std::map<int, detail::Bytes> masked_refs;  // masked_reference: the all-active call per chunk setting
-    for (const Pattern& p : pats) {
+    std::map<int, detail::Bytes> refs;  // per chunk setting
+    for (const Pattern& p : patterns_for(c)) {
+        if (p.bytes.empty() && c.masked_reference && bitwise) continue;
         SCOPED_TRACE(std::string(op ? op : "op") + " " + spelling + " pattern " + p.name);
+        const DeviceMask mask(q, p.bytes);
         std::size_t need = 0;
         if (c.buffer_size) {
-            DeviceMask m(q, p.bytes);
-            need = c.buffer_size(m.span());
+            need = c.buffer_size(mask.span());
             if (!p.bytes.empty()) {
                 if (size) EXPECT_EQ(need, *size) << "buffer_size depends on the mask's contents";
                 size = need;
             }
         }
-        if (!refs.count(p.chunk_items)) {
-            const Pattern none{"none", {}, p.chunk_items};
-            refs[p.chunk_items] = detail::run(q, c, none, c.buffer_size ? c.buffer_size({}) : 0, nullptr);
+        // The reference first, so the reach capture below sees masked calls only.
+        const bool self_reference = bitwise && is_reference(p) && !refs.count(p.chunk_items);
+        if (bitwise && !self_reference && !refs.count(p.chunk_items)) {
+            const Pattern r = c.masked_reference ? by_rule("all-active", c.batch, [](int) { return true; }, p.chunk_items)
+                                                 : Pattern{"none", {}, p.chunk_items};
+            const DeviceMask rm(q, r.bytes);
+            refs[p.chunk_items] = detail::run(q, c, r, rm, c.buffer_size ? c.buffer_size(rm.span()) : 0, ws, nullptr);
         }
-        if (c.masked_reference && !p.bytes.empty() && !masked_refs.count(p.chunk_items)) {
-            const Pattern all = by_rule("all-active", c.batch, [](int) { return true; }, p.chunk_items);
-            DeviceMask m(q, all.bytes);
-            masked_refs[p.chunk_items] = detail::run(q, c, all, c.buffer_size ? c.buffer_size(m.span()) : 0, nullptr);
+        detail::Bytes before, got;
+        if (op && p.name == "alternating") {
+            const auto rows = test_support::reached_rows([&] { got = detail::run(q, c, p, mask, need, ws, &before); });
+            EXPECT_TRUE(std::any_of(rows.begin(), rows.end(), [&](const auto& r) { return r.op == op && r.spelling == spelling; }))
+                << op << ": the masked call never reached " << spelling;
+        } else {
+            got = detail::run(q, c, p, mask, need, ws, &before);
         }
-        const detail::Bytes& ref = c.masked_reference && !p.bytes.empty() ? masked_refs[p.chunk_items] : refs[p.chunk_items];
-        detail::Bytes before;
-        const detail::Bytes got = detail::run(q, c, p, need, &before);
+        if (self_reference) refs[p.chunk_items] = std::move(got);
+        const detail::Bytes& res = self_reference ? refs[p.chunk_items] : got;
+        const detail::Bytes* ref = bitwise && !self_reference ? &refs[p.chunk_items] : nullptr;
         const auto outs = c.outputs();
         std::vector<int> active;
         for (int b = 0; b < c.batch; ++b)
@@ -215,13 +265,13 @@ void check(batchlas::Queue& q, const char* op, const std::string& spelling, cons
         for (std::size_t o = 0; o < outs.size(); ++o)
             for (int b = 0; b < c.batch; ++b) {
                 if (!p.active(b))
-                    EXPECT_TRUE(detail::item_equal(got[o], before[o], outs[o], b))
+                    EXPECT_TRUE(detail::item_equal(res[o], before[o], outs[o], b))
                         << outs[o].name << ": inactive item " << b << " was written";
-                else if (!c.verify_active)
-                    EXPECT_TRUE(detail::item_equal(got[o], ref[o], outs[o], b))
+                else if (ref)
+                    EXPECT_TRUE(detail::item_equal(res[o], (*ref)[o], outs[o], b))
                         << outs[o].name << ": active item " << b << " differs from the unmasked call";
                 if (c.identical_items && p.active(b) && !active.empty())
-                    EXPECT_TRUE(detail::item_equal(got[o], got[o], outs[o], b, active.front()))
+                    EXPECT_TRUE(detail::item_equal(res[o], res[o], outs[o], b, active.front()))
                         << outs[o].name << ": active item " << b << " differs from item " << active.front();
             }
         if (c.verify_active) c.verify_active(p.name, active);
