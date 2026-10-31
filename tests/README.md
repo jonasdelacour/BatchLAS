@@ -41,7 +41,8 @@ scripts/ctest_gpus.sh --test-dir build-vf -L eig  # another tree
   writes the same file name as its twin, and in parallel they can overlap.
 
 Validated on threadripper02 only (2 slots per GPU is 6x faster than serial, agent guide §8).
-Keep the full gate serial on the 2x RTX 4090 box (zero swap; OOM kills under concurrency).
+Keep each gate tree's ctest serial on the 2x RTX 4090 box (zero swap; OOM kills under
+concurrency); `scripts/gate.sh` runs its two trees side by side, one per GPU (docs/ci.md).
 
 ## Labels
 
@@ -50,9 +51,9 @@ Component labels, one per binary (see `CMakeLists.txt`): `util`, `blas`, `ortho`
 low-level code (`Queue`, `Matrix`/`MatrixView`, the memory pool, `sg_partition`,
 anything under `include/batchlas/util`) run the full suite.
 
-The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `stedc_tests`,
-`steqr_tests`, `gesvd_tests` and `consumer_package_tests`; `BATCHLAS_SLOW_CASES_<name>` moves single
-cases to a `<name>_slow` entry (`sytrd_sb2st_tests_slow`: BANDR1 at n=256). `ctest -LE slow`
+The `slow` label (`BATCHLAS_SLOW_TESTS` in `tests/CMakeLists.txt`) marks `steqr_tests` and
+`consumer_package_tests`; `BATCHLAS_SLOW_CASES_<name>` moves single cases to a `<name>_slow`
+entry (`sytrd_sb2st_tests_slow`: BANDR1 at n=256). `ctest -LE slow`
 is a broad check, not a pre-push gate. Label a test `slow` past about 15 s.
 
 ## The sub-group partition layer

@@ -159,11 +159,26 @@ cmake --build --preset dev-tests
 ctest --preset dev-tests
 ```
 
-`scripts/gate.sh` (`CUDA_VISIBLE_DEVICES=0` on the 4090 box) does this on persistent trees:
+`scripts/gate.sh` does this on persistent trees:
 `build-gate` (full ctest, `compare_failures.py`; report `build-gate/gate/compare.txt`) and
 `build-gate-vf` (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, `-LE slow`, no ledger), summary in
 `build-gate/gate-summary.txt`. It sets `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` when unset and
 `sycl-ls` lists `native_cpu`. Serial on the 4090 box (2026-10): `-LE 'slow|heavy'` 416 s, full 1287 s.
+
+Both trees build first. With two GPUs visible, the two ctests then run at once, each serial: vf on
+the first GPU, full on the second, each with `DPCPP_CPU_NUM_CUS` at cores/2 (the Intel OpenCL CPU
+runtime's thread count; on threadripper02 the default 64-thread pool burned 96 s of sys time for
+7 s of wall). The full tree used to wait for the vf tree's 3939 s. `--serial`, a single visible GPU
+(`CUDA_VISIBLE_DEVICES=0`), `--parallel` or `--only` run one tree at a time. `--no-build` tests the
+trees as built, and `BATCHLAS_GATE_DIR` / `BATCHLAS_GATE_VF_DIR` / `BATCHLAS_BUILD_LOCK` point
+the gate at other trees and another lock.
+
+Each ctest writes `<tree>/gate/rss.tsv` (`scripts/gate_rss.py`; Linux): peak summed RSS per ctest
+entry, death-test children included, the box's lowest `MemAvailable`, and a cross-check against
+`/usr/bin/time`'s exact largest process. The summary quotes the top three entries. After each run,
+the gate rewrites `Testing/Temporary/CTestCostData.txt` from the junit times. A serial ctest never
+reads that file and writes time/runs, so the costs had sunk to half the real times, and any
+ranking built on them was wrong.
 
 Not a pre-push gate: `-LE slow` (no slow suites, no `consumer_package_tests`), `-LE 'slow|heavy'` (also
 no saturating-batch race guards), `BATCHLAS_TEST_TARGET_SET=smoke`. Scoping table: `tests/README.md`.
@@ -182,4 +197,8 @@ no saturating-batch race guards), `BATCHLAS_TEST_TARGET_SET=smoke`. Scoping tabl
 
 `ctest` dies with no test failure or "Child aborted"; `dmesg -T | grep -i 'killed process'` names the
 victim. The box has 125 GB and no swap, and both recorded kills had a build or a second `ctest`
-running. Stop everything else and keep `ctest` serial.
+running. Stop everything else and keep each `ctest` serial. The gate's two-tree phase is the
+exception, and it is safe for these reasons: it starts only after both builds have finished, it
+holds the build lock, so no build can start beside it, and it records per-entry peak RSS and the
+box's lowest `MemAvailable` (`<tree>/gate/rss.tsv`). If that minimum nears zero, run
+`scripts/gate.sh --serial`.
