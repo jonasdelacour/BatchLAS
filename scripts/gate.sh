@@ -195,7 +195,7 @@ print(" ".join("%s=%s->%s" % (k, a.get(k, "-"), b.get(k, "-")) for k in sorted(s
 # ctest, peak RSS, failing names and the ledger diff of one tree. Notes go to
 # <dir>/gate/test-notes.txt, so two trees can run at once in background subshells.
 test_tree() {
-    local kind=$1 dir=$2 gpu=$3 cus=$4 rc t0 cpid spid=""
+    local kind=$1 dir=$2 gpu=$3 cus=$4 rc t0 cpid spid="" tmp
     notes_file="$dir/gate/test-notes.txt"
     : > "$notes_file"
     local abs=$dir
@@ -203,8 +203,10 @@ test_tree() {
     local junit="$abs/gate/ctest-junit.xml" gx="$abs/gate/gtest-xml"
     local -a filter=()
     [ "$kind" = full ] || filter=(-LE slow)
-    # Per-tree TMPDIR: death tests reuse fixed temp_directory_path() names across processes.
-    local -a envp=(GTEST_OUTPUT="xml:$gx/" TMPDIR="$abs/gate/tmp")
+    # Per-tree TMPDIR: death tests reuse fixed temp_directory_path() names across processes. Outside
+    # the checkout: tune_tests' scratch repo under a git worktree finds the wrong toplevel.
+    tmp="${TMPDIR:-/tmp}/batchlas-gate-$(id -un)-$kind"
+    local -a envp=(GTEST_OUTPUT="xml:$gx/" TMPDIR="$tmp")
     [ -z "$selector" ] || envp+=(ONEAPI_DEVICE_SELECTOR="$selector")
     [ -z "$gpu" ] || envp+=(CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}" CUDA_VISIBLE_DEVICES="$gpu")
     [ -z "$cus" ] || envp+=(DPCPP_CPU_NUM_CUS="$cus")
@@ -213,7 +215,7 @@ test_tree() {
     local -a timer=()
     rm -f "$dir/gate/ctest-maxrss.txt" "$dir/gate/rss.tsv"
     [ -z "$gnu_time" ] || timer=("$gnu_time" -f 'maxrss_kb %M' -o "$dir/gate/ctest-maxrss.txt")
-    rm -rf "$gx" "$junit" "$abs/gate/tmp"; mkdir -p "$gx" "$abs/gate/tmp"
+    rm -rf "$gx" "$junit" "$tmp"; mkdir -p "$gx" "$tmp"
     t0=$(date +%s); rc=0
     ${setsid[@]+"${setsid[@]}"} env "${envp[@]}" ${timer[@]+"${timer[@]}"} "${runner[@]}" \
         --output-junit "$junit" ${filter[@]+"${filter[@]}"} > "$dir/gate/ctest.out" 2>&1 &
