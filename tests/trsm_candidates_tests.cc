@@ -21,6 +21,7 @@
 #include <src/ops/trsm/choice.hh>
 #include <src/ops/trsm/trsm_native.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -885,21 +886,15 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
 
 // The coverage row (§5.6): the real backend (the old shape builder left it AUTO), the trsm key
 // (m = B.rows, n = B.cols, k = order, side, uplo, transA, diag) and the native flags.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "trsm_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     const Spec lo{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 16, 4, 2};
     const Spec hi{Side::Right, Uplo::Upper, Transpose::ConjTrans, Diag::Unit, 48, 3, 2};
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("trsm", C{ts::Cta{}});
             auto p = make_solve<T>(lo);
@@ -908,22 +903,14 @@ TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
         const Pin pin("trsm", C{ts::Blocked{}});
         auto p = make_solve<T>(hi);
         this->run(p);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n k" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,trsm,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 19u) << line;
-            rows[f[5] + " " + f[6] + " " + f[7]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,trsm,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 19u) << line;
+        rows[f[5] + " " + f[6] + " " + f[7]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     const std::string klo = "16 4 16", khi = "3 48 48";
     ASSERT_TRUE(rows.count(klo)) << "no Left 16x4 row";

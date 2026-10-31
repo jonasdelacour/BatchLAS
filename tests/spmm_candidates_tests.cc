@@ -16,6 +16,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <src/ops/spmm/choice.hh>
 #include <src/ops/spmm/spmm_native.hh>
@@ -786,43 +787,28 @@ TYPED_TEST(SpmmCandidates, DirectHasNoGpuGate) {
 
 // The coverage row (§5.6): the real backend, m = A.rows, n = nrhs, k = A.cols, transA and transB
 // as passed (not folded), the chosen spelling and origin, and the native flags.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "spmm_cov." + std::string(select::dtype_name<T>()) +
-                            (B == Backend::NETLIB ? ".netlib" : ".gpu");
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     const Spec lo{17, 9, 3, 2, Transpose::NoTrans, Transpose::NoTrans};
     const Spec hi{40, 23, 5, 2, Transpose::ConjTrans, Transpose::Trans};
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_SPMM_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         const Pin pin("spmm", C{sp::Direct{}});
         auto a = make<T>(lo);
         this->run(a);
         auto b = make<T>(hi);
         this->run(b);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n k" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,spmm,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 20u) << line;
-            rows[f[5] + " " + f[6] + " " + f[7]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,spmm,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 20u) << line;
+        rows[f[5] + " " + f[6] + " " + f[7]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"

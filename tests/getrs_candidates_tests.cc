@@ -18,6 +18,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -748,43 +749,29 @@ TYPED_TEST(GetrsCandidates, VendorFreeLastResortIsBlocked) {
 }
 
 // The coverage row (§5.6): the real backend, getrs's key (m = k = order, n = nrhs, transA) and
-// the native flags. threadsafe: the child re-executes the binary, so CUDA starts fresh.
+// the native flags. Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "getrs_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     const Spec lo{16, 4, 2, Transpose::NoTrans};
     const Spec hi{48, 3, 2, Transpose::ConjTrans};
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         {
             auto p = make_sys<T>(lo);
             this->run_pinned(C{gs::Cta{}}, p);
         }
         auto p = make_sys<T>(hi);
         this->run_pinned(C{gs::Blocked{}}, p);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n k" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,getrs,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 19u) << line;
-            rows[f[5] + " " + f[6] + " " + f[7]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,getrs,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 19u) << line;
+        rows[f[5] + " " + f[6] + " " + f[7]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
