@@ -704,12 +704,13 @@ TYPED_TEST(GetrsCandidates, ScopedPinBeatsTheEnvironment) {
 TYPED_TEST(GetrsCandidates, AutoReadsTheShippedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
-    struct Cell { int n, nrhs, batch; };
+    struct Cell { int n, nrhs, batch, period = 0; };  // period: Spec::period, the key unchanged
     const Cell cells[] = {{31, 1, 128}, {32, 1, 128}, {40, 2, 200},  {40, 3, 200},   {45, 4, 128},  {45, 5, 128},
                           {36, 8, 128}, {36, 9, 128}, {20, 63, 128}, {20, 64, 128},  {20, 64, 127}, {24, 100, 300},
-                          {20, 127, 128}, {20, 128, 128}, {20, 128, 100}, {300, 1, 3}, {600, 2, 1000}};
+                          {20, 127, 128}, {20, 128, 128}, {20, 128, 100}, {300, 1, 3}, {600, 2, 1000, 1}};
     for (const Cell& k : cells) {
         Spec s{k.n, k.nrhs, k.batch, Transpose::Trans};
+        s.period = k.period;
         s.seed = 41u + k.n;
         const std::string want = this->table_pick(s);
         ASSERT_NE(want, test_utils::kNoTableEntryRuns) << label(s);
