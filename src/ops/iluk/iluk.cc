@@ -4,6 +4,8 @@
 
 #include <src/util/template-instantiations.hh>
 
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/iluk-spmm.hh>
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/util/mempool.hh>
 #include <optional>
@@ -21,6 +23,8 @@
 
 namespace batchlas {
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T>
 using RealT = typename base_type<T>::type;
@@ -938,25 +942,25 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
             if (masked && mask[b] == 0) return;
             const int i = level_rows[begin + t];
 
-            auto at = [&](int slot) -> T& { return work[static_cast<size_t>(slot) * batch + b]; };
+            // Item b's slots of the slot-major working values.
+            const v2::InterleavedVec<T> at{work, static_cast<size_t>(batch), static_cast<size_t>(b)};
 
+            // IKJ elimination: l_ij = a_ij / u_jj, then row i -= l_ij * (row j's update slots).
             for (int e = step_ptr[i]; e < step_ptr[i + 1]; ++e) {
                 const T lij = at(step_target[e]) / at(step_pivot[e]);
                 at(step_target[e]) = lij;
-                for (int u = step_upd_ptr[e]; u < step_upd_ptr[e + 1]; ++u) {
-                    at(upd_dst[u]) -= lij * at(upd_src[u]);
-                }
+                const int u0 = step_upd_ptr[e];
+                const int nu = step_upd_ptr[e + 1] - u0;
+                v2::axpy_sub<v2::NativeArith<T>>(v2::Thread{}, lij, v2::us_gather(at, upd_src + u0, nu),
+                                                 v2::us_gather(at, upd_dst + u0, nu));
             }
 
             const int rs = sym_ro[i];
             const int re = sym_ro[i + 1];
             const int dg = diag_abs[i];
+            const auto row = v2::sp_range(at, rs, re - rs);
 
-            RealT<T> scale = RealT<T>(0);
-            for (int p = rs; p < re; ++p) {
-                const auto m = abs_value(at(p));
-                if (m > scale) scale = m;
-            }
+            const RealT<T> scale = v2::norm_max(v2::Thread{}, row);
             const auto one = RealT<T>(1);
             const auto threshold = drop_tolerance * (scale > one ? scale : one);
 
@@ -997,11 +1001,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
                 --kept;
             }
 
-            RealT<T> final_scale = RealT<T>(0);
-            for (int p = rs; p < re; ++p) {
-                const auto m = abs_value(at(p));
-                if (m > final_scale) final_scale = m;
-            }
+            const RealT<T> final_scale = v2::norm_max(v2::Thread{}, row);
             at(dg) = stabilize_pivot_no_throw(at(dg), final_scale, diagonal_shift, diag_pivot_threshold, st);
         });
     }
@@ -1455,52 +1455,46 @@ Event iluk_apply(Queue& ctx,
         const int linear = static_cast<int>(item.get_group(0));
         const int b = linear / nrhs;
         const int col = linear % nrhs;
-        const int lid = static_cast<int>(item.get_local_id(0));
         if (masked && mask[b] == 0) return;  // I1: uniform per work-group, before any barrier
+        const v2::WorkGroup<wg_size> ex{item};
+        using Ar = v2::NativeArith<T>;  // the base kernel's operators: bit-identical, Annex-G complex kept
 
         const int ro_base = b * lu_kv.offset_stride_;
         const int lu_base = b * lu_kv.matrix_stride_;
-        const int rhs_base = b * rhs_kv.stride_ + col * rhs_kv.ld_;
-        const int out_base = b * out_kv.stride_ + col * out_kv.ld_;
+        const v2::BasedVec<const T> lu_val{lu_vals, lu_base};
+        const v2::BasedVec<const int> lu_col{lu_ci, lu_base};
+        const v2::BasedVec<const T> rhs_col{rhs_data, b * rhs_kv.stride_ + col * rhs_kv.ld_};
+        const v2::BasedVec<T> y{out_data, b * out_kv.stride_ + col * out_kv.ld_};
 
-        // Forward solve into out (as temporary y).
+        // y := L^{-1} rhs (unit lower: the strict lower part of each sorted row), level by level;
+        // the rows of a level are independent, so only a barrier separates levels.
         for (int lv = 0; lv < l_levels; ++lv) {
             const int begin = l_level_ptr[lv];
-            const int end = l_level_ptr[lv + 1];
-            for (int t = begin + lid; t < end; t += wg_size) {
-                const int i = l_rows[t];
-                T sum = rhs_data[rhs_base + i];
-                const int rs = lu_ro[ro_base + i];
-                const int re = lu_ro[ro_base + i + 1];
-                for (int p = rs; p < re; ++p) {
-                    const int j = lu_ci[lu_base + p];
-                    if (j >= i) break;
-                    sum -= lu_vals[lu_base + p] * out_data[out_base + j];
-                }
-                out_data[out_base + i] = sum;
-            }
-            sycl::group_barrier(item.get_group());
+            v2::for_each_owned(ex, l_level_ptr[lv + 1] - begin, [&](int k) {
+                const int i = l_rows[begin + k];
+                const T sum = rhs_col(i);
+                const auto row = v2::sp_row(lu_val, lu_col, lu_ro[ro_base + i], lu_ro[ro_base + i + 1]);
+                y(i) = v2::usdot_sub_below<Ar>(v2::Thread{}, sum, row, y, i);
+            });
+            ex.barrier(v2::Mem::Global);
         }
 
+        // y := U^{-1} y, level by level.
         for (int lv = 0; lv < u_levels; ++lv) {
             const int begin = u_level_ptr[lv];
-            const int end = u_level_ptr[lv + 1];
-            for (int t = begin + lid; t < end; t += wg_size) {
-                const int i = u_rows[t];
-                T sum = out_data[out_base + i];
+            v2::for_each_owned(ex, u_level_ptr[lv + 1] - begin, [&](int k) {
+                const int i = u_rows[begin + k];
+                const T sum = y(i);
                 const int diag_abs = diag_pos[b * n + i];
                 const int re = lu_ro[ro_base + i + 1];
                 // Usability of every U diagonal was established when the factor was
                 // built; this only substitutes the shifted value.
-                T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
-                // Columns are sorted ascending, so the strict upper part of row i
-                // starts one past the diagonal.
-                for (int p = diag_abs - lu_base + 1; p < re; ++p) {
-                    sum -= lu_vals[lu_base + p] * out_data[out_base + lu_ci[lu_base + p]];
-                }
-                out_data[out_base + i] = sum / diag;
-            }
-            sycl::group_barrier(item.get_group());
+                const T diag = stabilize_pivot_or_mark(lu_vals[diag_abs], diag_shift, nullptr);
+                // Columns are sorted ascending: the strict upper part starts one past the diagonal.
+                const auto row = v2::sp_row(lu_val, lu_col, diag_abs - lu_base + 1, re);
+                y(i) = Ar::div(v2::usdot_sub<Ar>(v2::Thread{}, sum, row, y), diag);
+            });
+            ex.barrier(v2::Mem::Global);
         }
     });
 
