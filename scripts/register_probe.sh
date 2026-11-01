@@ -101,7 +101,9 @@
 # a gate nobody else can run is not a gate. `set -e` so a failed cd cannot silently
 # replay link.txt from whatever directory happens to be current.
 set -euo pipefail
-REPO="$(git rev-parse --show-toplevel)"
+# The script's own checkout, not the cwd's: `<tree>/scripts/register_probe.sh` run from another
+# worktree probed that worktree's build and reported it as <tree>'s (tridiag-modernize WP4).
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${BATCHLAS_BUILD_DIR:-$REPO/build}"
 cd "$BUILD/src"
 OUT="${1:-$(mktemp -t regprobe.XXXXXX.log)}"
