@@ -10,6 +10,8 @@
 
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-collectives.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/bdsqr-bdsdc.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
@@ -24,6 +26,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device::v2;
 
 template <Backend B, typename T> class BdsdcBuildGk;
 template <Backend B, typename T> class BdsdcValuesOnly;
@@ -108,22 +112,19 @@ void bdsdc_build_gk(Queue& ctx,
             sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-            for (int32_t i = 0; i < N; ++i) {
-                GD(i, b) = T(0);
-            }
+            const v2::Thread th{};
+            const auto gd = v2::vec_item(GD, b);
+            const auto ge = v2::vec_item(GE, b);
+            const auto gs = v2::vec_item(GS, b);
+            v2::fill(th, v2::Zero{}, gd);
             // off-diagonal f[2k] = d_k (couples v_k,u_k), f[2k+1] = e_k (couples u_k,v_{k+1})
-            for (int32_t k = 0; k < nn; ++k) {
-                GE(2 * k, b) = D(k, b);
-                if (k < nn - 1) {
-                    GE(2 * k + 1, b) = E(k, b);
-                }
-            }
-            GS(0, b) = T(1);
+            v2::interleave(th, v2::vec_item(D, b), v2::vec_item(E, b).head(nn - 1), ge);
+            gs(0) = T(1);
             for (int32_t i = 0; i < N - 1; ++i) {
-                const T fi = GE(i, b);
+                const T fi = ge(i);
                 const T sgn = (fi >= T(0)) ? T(1) : T(-1);
-                GS(i + 1, b) = GS(i, b) * sgn;
-                GE(i, b) = sycl::fabs(fi);
+                gs(i + 1) = gs(i) * sgn;
+                ge(i) = sycl::fabs(fi);
             }
         });
     });
@@ -189,27 +190,23 @@ void bdsdc_extract_vectors(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(n) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
+            const v2::WorkGroup<kGroup> wg{it};
             const int32_t grp = static_cast<int32_t>(it.get_group(0));
-            const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
             const int32_t b = grp / nn;
             if (mask != nullptr && mask[b] == 0) return;  // I1: one work-group per (item, column)
             const int32_t i = grp - b * nn;
             const int32_t src = desc ? (2 * nn - 1 - i) : (nn + i);
 
-            T p2 = T(0);
-            T q2 = T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                const T pv = Zk(2 * r, src, b);
-                const T qv = Zk(2 * r + 1, src, b);
-                p2 += pv * pv;
-                q2 += qv * qv;
-            }
-            p2 = batchlas::portable::reduce_over_group(it.get_group(), p2, sycl::plus<T>());
-            q2 = batchlas::portable::reduce_over_group(it.get_group(), q2, sycl::plus<T>());
+            // Eigenvector src of the Golub-Kahan matrix: even rows -> v, odd rows -> u.
+            const auto z = v2::mat_item(Zk, b).col(src);
+            const auto s = v2::vec_item(S, b);
+            const auto zv = v2::slice(z, 0, nn, 2), zu = v2::slice(z, 1, nn, 2);
+            const auto sv = v2::slice(s, 0, nn, 2), su = v2::slice(s, 1, nn, 2);
+            const auto [p2, q2] = v2::sumsq_many<v2::Scope::Group>(wg, zv, zu);
             const T pn = sycl::sqrt(p2);
             const T qn = sycl::sqrt(q2);
 
-            if (lid == 0) {
+            if (wg.leader()) {
                 sig[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(L(src, b), T(0));
             }
 
@@ -220,15 +217,9 @@ void bdsdc_extract_vectors(Queue& ctx,
             const T half_present = T(0.0625);
             const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
             const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
-            for (int32_t r = lid; r < nn; r += kGroup) {
-                if (wv) {
-                    // Vh is V^T: row i, column r.
-                    Vh(i, r, b) = S(2 * r, b) * Zk(2 * r, src, b) * pinv;
-                }
-                if (wu) {
-                    U(r, i, b) = S(2 * r + 1, b) * Zk(2 * r + 1, src, b) * qinv;
-                }
-            }
+            // Vh is V^T: row i holds v_i. Signs undo the off-diagonal normalisation.
+            if (wv) v2::dgmv(wg, pinv, sv, zv, v2::mat_item(Vh, b).row(i).head(nn));
+            if (wu) v2::dgmv(wg, qinv, su, zu, v2::mat_item(U, b).col(i).head(nn));
         });
     });
 }
@@ -271,91 +262,63 @@ void bdsdc_repair_degenerate(Queue& ctx,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * kGroup),
                               sycl::range<1>(kGroup)),
             [=](sycl::nd_item<1> it) {
+            const v2::WorkGroup<kGroup> wg{it};
+            const v2::Thread th{};  // the uniform scalar prologue, replicated on every item
             const int32_t b = static_cast<int32_t>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1
-            const int32_t lid = static_cast<int32_t>(it.get_local_id(0));
-            auto grp = it.get_group();
-            const T* sb = sig + static_cast<size_t>(b) * static_cast<size_t>(nn);
+            const auto sb = v2::vec(sig + static_cast<size_t>(b) * static_cast<size_t>(nn), nn);
 
-            T smax = T(0);
-            for (int32_t i = 0; i < nn; ++i) smax = sycl::fmax(smax, sb[i]);
-            const T tol = smax * tol_factor;
-
-            int32_t ndeg = 0;
-            for (int32_t i = 0; i < nn; ++i) ndeg += (sb[i] <= tol) ? 1 : 0;
+            const T tol = v2::fmax_reduce(th, nn, [&](int i) { return sb(i); }, T(0)) * tol_factor;
+            const int32_t ndeg = v2::reduce(th, nn, [&](int i) { return (sb(i) <= tol) ? 1 : 0; });
             if (ndeg == 0) return;
 
-            // which = 0 -> rebuild V (rows of Vh), which = 1 -> rebuild U (cols of U)
+            // Basis vector t is column t of Q: Q = V (= Vh^T) for which == 0, Q = U for which == 1.
+            const auto vq = v2::trans(v2::mat_item(Vh, b).sub(0, 0, nn, nn));
+            const auto uq = v2::as_smat(v2::mat_item(U, b).sub(0, 0, nn, nn));
             for (int32_t which = 0; which < 2; ++which) {
                 if (which == 0 && !wv) continue;
                 if (which == 1 && !wu) continue;
+                const v2::SMat<T> Q = (which == 0) ? vq : uq;
 
                 for (int32_t j = 0; j < nn; ++j) {
-                    if (sb[j] > tol) continue;
+                    if (sb(j) > tol) continue;
+                    // The final columns: the earlier rebuilt ones (t < j) and ALL
+                    // non-degenerate ones, including those after j. Skipping the latter
+                    // loses orthogonality against them under ascending order.
+                    auto final_col = [&](int t) { return t != j && !(t > j && sb(t) <= tol); };
 
-                    // Rank against every column already final: the earlier rebuilt ones
-                    // (t < j) and ALL non-degenerate ones, including those after j. Skipping
-                    // the latter loses orthogonality against them under ascending order.
-                    T best = std::numeric_limits<T>::max();
-                    int32_t best_c = lid;
-                    for (int32_t c = lid; c < nn; c += kGroup) {
+                    // Seed axis: e_c with the smallest residual 1 - ||Q(c, final)||^2.
+                    const int32_t c_star = v2::iminloc<v2::Scope::Group>(wg, nn, [&](int c) {
                         T acc = T(0);
                         for (int32_t t = 0; t < nn; ++t) {
-                            if (t == j) continue;
-                            if (t > j && sb[t] <= tol) continue;
-                            const T q = (which == 0) ? Vh(t, c, b) : U(c, t, b);
+                            if (!final_col(t)) continue;
+                            const T q = Q(c, t);
                             acc += q * q;
                         }
-                        if (acc < best) { best = acc; best_c = c; }
-                    }
-                    const T best_all = batchlas::portable::reduce_over_group(grp, best, sycl::minimum<T>());
-                    const int32_t c_star = batchlas::portable::reduce_over_group(
-                        grp, (best == best_all) ? best_c : nn, sycl::minimum<int32_t>());
+                        return acc;
+                    });
 
-                    // Seed w := e_c*, project out the final columns, twice -- one
-                    // pass is not enough when e_c* is nearly in their span.
-                    for (int32_t r = lid; r < nn; r += kGroup) {
-                        const T seed = (r == c_star) ? T(1) : T(0);
-                        if (which == 0) { Vh(j, r, b) = seed; } else { U(r, j, b) = seed; }
-                    }
-                    it.barrier(sycl::access::fence_space::global_and_local);
-
+                    // w := e_c*, project out the final columns twice (modified Gram-Schmidt;
+                    // one pass is not enough when e_c* is nearly in their span), normalise.
+                    const auto w = Q.col(j);
+                    v2::set_unit(wg, w, c_star);
+                    wg.barrier(v2::Mem::Global);
                     for (int32_t pass = 0; pass < 2; ++pass) {
                         for (int32_t t = 0; t < nn; ++t) {
-                            if (t == j) continue;
-                            if (t > j && sb[t] <= tol) continue;
-                            T dot = T(0);
-                            for (int32_t r = lid; r < nn; r += kGroup) {
-                                const T wr = (which == 0) ? Vh(j, r, b) : U(r, j, b);
-                                const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
-                                dot += wr * tr;
-                            }
-                            dot = batchlas::portable::reduce_over_group(grp, dot, sycl::plus<T>());
-                            for (int32_t r = lid; r < nn; r += kGroup) {
-                                const T tr = (which == 0) ? Vh(t, r, b) : U(r, t, b);
-                                if (which == 0) { Vh(j, r, b) -= dot * tr; }
-                                else            { U(r, j, b) -= dot * tr; }
-                            }
-                            it.barrier(sycl::access::fence_space::global_and_local);
+                            if (!final_col(t)) continue;
+                            const T dot = v2::dot<v2::Scope::Group>(wg, w, Q.col(t));
+                            v2::axpy(wg, -dot, Q.col(t), w);
+                            wg.barrier(v2::Mem::Global);
                         }
                     }
-
-                    T acc = T(0);
-                    for (int32_t r = lid; r < nn; r += kGroup) {
-                        const T wr = (which == 0) ? Vh(j, r, b) : U(r, j, b);
-                        acc += wr * wr;
-                    }
-                    const T nrm2 = batchlas::portable::reduce_over_group(grp, acc, sycl::plus<T>());
+                    const T nrm2 = v2::dot<v2::Scope::Group>(wg, w, w);
                     // c_star is the best axis available, so a residual too small to normalise
                     // means the final columns already span the space; leave the column as
                     // extracted rather than amplifying noise.
                     if (nrm2 > std::numeric_limits<T>::min()) {
-                        const T inv = T(1) / sycl::sqrt(nrm2);
-                        for (int32_t r = lid; r < nn; r += kGroup) {
-                            if (which == 0) { Vh(j, r, b) *= inv; } else { U(r, j, b) *= inv; }
-                        }
+                        v2::scal(wg, T(1) / sycl::sqrt(nrm2), w);
                     }
-                    it.barrier(sycl::access::fence_space::global_and_local);
+                    wg.barrier(v2::Mem::Global);
                 }
             }
         });
