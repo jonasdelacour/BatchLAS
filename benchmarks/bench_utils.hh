@@ -7,6 +7,8 @@
 // The structured-benchmark implementation lives in `include/batchlas/util/*`.
 #include <batchlas/util/minibench_structured.hh>
 
+#include <batchlas/blas/enums.hh>
+
 #include <complex>
 
 #if BATCHLAS_HAS_CUDA_BACKEND
@@ -123,3 +125,9 @@
     BATCHLAS_BENCH_ROCM_COMPLEX_TYPES(name, sizes) \
     BATCHLAS_BENCH_SYCL_COMPLEX_TYPES(name, sizes) \
     BATCHLAS_BENCH_NETLIB_COMPLEX_TYPES(name, sizes)
+
+// jobz argument convention of the syev benchmarks: 0 = NoEigenVectors, anything else (1) =
+// EigenVectors. state.range() returns 0 for an absent argument, so omitting it means eigenvalues only.
+inline batchlas::JobType parse_jobz(int v) {
+    return (v == 0) ? batchlas::JobType::NoEigenVectors : batchlas::JobType::EigenVectors;
+}
