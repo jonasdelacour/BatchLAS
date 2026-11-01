@@ -38,11 +38,6 @@ namespace batchlas {
         }
 
         template <typename T>
-        inline constexpr bool is_numerically_zero(const T& value) {
-            return abs(value) < std::numeric_limits<base_float_t<T>>::epsilon();
-        }
-
-        template <typename T>
         inline constexpr base_float_t<T> norm_squared(const T& value) {
             if constexpr (is_complex<T>::value) {
                 return std::real(std::conj(value) * value); // For complex numbers, return the squared norm
