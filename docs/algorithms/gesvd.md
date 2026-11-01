@@ -179,7 +179,7 @@ sigma_c = ||A_c|| 2^l ranked descending; U_c = A_c/||A_c||; V^H = J^H       :L61
 Columns of \f$U\f$ with \f$\sigma_c \le \varepsilon\sigma_{\max}\f$ (`:L640`; times
 `zero_sigma_multiplier`, default 1) and columns \f$n{+}1..m\f$ of a full \f$U\f$ are filled from
 coordinate axes by two passes of modified Gram-Schmidt (`:L707-L724`), accepting an axis whose
-residual norm² exceeds \f$1/(2m)\f$ (`:L685`, `:L732`).
+squared residual norm \f$\lVert r\rVert_2^2\f$ exceeds \f$1/(2m)\f$ (`:L685`, `:L732`).
 
 ## gesvd: references
 
