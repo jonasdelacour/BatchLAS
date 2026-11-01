@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/device/detail/group_blas_common.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/jacobi.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -7,6 +9,8 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
+#include <src/kernels/common/dla_v2_partition.hh>
 #include <src/kernels/common/sg_partition/sg_partition.hh>
 #include <batchlas/backend_config.h>
 #include <src/math-helpers.hh>
@@ -35,67 +39,7 @@ class SyevJacobiCTAKernel;
 
 namespace {
 
-template <typename U>
-inline typename base_type<U>::type abs_if_complex_j(const U& x) {
-    using Real = typename base_type<U>::type;
-    if constexpr (detail::is_complex<U>::value) {
-        return sycl::hypot(x.real(), x.imag());
-    } else {
-        return sycl::fabs(x);
-    }
-}
-
-// Zero the imaginary part (no-op for real types). Used to keep Hermitian
-// diagonals exactly real after an update.
-template <typename U>
-inline U force_real_j(const U& x) {
-    if constexpr (detail::is_complex<U>::value) {
-        return U(x.real(), typename base_type<U>::type(0));
-    } else {
-        return x;
-    }
-}
-
-template <typename U>
-inline typename base_type<U>::type real_part_j(const U& x) {
-    if constexpr (detail::is_complex<U>::value) {
-        return x.real();
-    } else {
-        return x;
-    }
-}
-
-// Butterfly reduction over a chunked partition. Mirrors the pattern used by
-// sytrd_cta: DPC++'s CUDA path has limitations for group collectives on
-// non-uniform groups, so we use XOR shuffles and keep the result replicated.
-template <typename T, typename Group>
-inline T partition_reduce_sum_j(const Group& g, T v) {
-    const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
-    for (uint32_t offset = lanes / 2; offset > 0; offset >>= 1) {
-        v += permute_group_by_xor(g, v, offset);
-    }
-    return v;
-}
-
-// Round-robin ("circle method") pairing: for even m, round t in [0, m-2] gives m/2
-// disjoint pairs, and the m-1 rounds cover every pair once. Index 0 is fixed and
-// the rest rotate. Weakly equivalent to cyclic-by-rows (Hari & Begovic Kovac 2017),
-// so it inherits that ordering's convergence.
-inline void round_robin_pair(int32_t m, int32_t t, int32_t k, int32_t& p, int32_t& q) {
-    const int32_t ring = m - 1;
-    if (k == 0) {
-        p = 0;
-        q = (t % ring) + 1;
-    } else {
-        p = ((t + k) % ring) + 1;
-        q = (((t - k) % ring + ring) % ring) + 1;
-    }
-    if (p > q) {
-        const int32_t tmp = p;
-        p = q;
-        q = tmp;
-    }
-}
+namespace v2 = ::batchlas::device::v2;
 
 template <typename T, size_t P, bool ComputeVectors, bool Upper>
 inline void syev_jacobi_cta_impl(Queue& ctx,
@@ -189,17 +133,9 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const bool do_sort = params.sort;
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
-        // Relative off-diagonal threshold: rotate only when |a_pq| > tol*sqrt(|a_pp a_qq|).
-        // The classical absolute test would forfeit the relative accuracy.
-        const Real tol = params.tol_multiplier
-                       * static_cast<Real>(nn)
-                       * std::numeric_limits<Real>::epsilon();
-        // Only denormal/zero off-diagonals count as unconditionally converged: guards
-        // against churn when a diagonal passes through zero on indefinite input.
-        const Real tiny = std::numeric_limits<Real>::min();
-        // Above this magnitude tau*tau would overflow, so use the asymptotic
-        // branch t ~ 1/(2*tau) instead.
-        const Real tau_big = Real(1) / sycl::sqrt(std::numeric_limits<Real>::epsilon());
+        // RELATIVE off-diagonal threshold (an absolute test forfeits the relative accuracy);
+        // tiny and tau_big as documented on v2::JacobiThreshold.
+        const auto thr = v2::JacobiThreshold<Real>::relative(params.tol_multiplier, nn);
 
         Real* W = w_ptr;
         // A local of the submit lambda for the same reason as W, so the kernel's
@@ -210,268 +146,102 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         impl::parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(cgh,
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) {
+                constexpr int kP = static_cast<int>(P);
+                using Tile = v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LD>, v2::Mem::Local>;
                 const auto wg = it.get_group();
                 const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
                 const int32_t local_id = static_cast<int32_t>(it.get_local_linear_id());
 
                 const int32_t pairs_per_round = mm / 2;
                 const int32_t rounds = mm - 1;
+                std::int16_t* const pair_tab = util::get_raw_ptr(Pair_local);
 
                 // Build the shared pivot-pair table; every work-item reaches its barrier.
                 for (int32_t idx = local_id; idx < rounds * pairs_per_round; idx += wg_sz) {
                     const int32_t t = idx / pairs_per_round;
-                    const int32_t k = idx - t * pairs_per_round;
-                    int32_t p = 0;
-                    int32_t q = 0;
-                    round_robin_pair(mm, t, k, p, q);
-                    Pair_local[idx] = static_cast<int16_t>(p | (q << 8));
+                    pair_tab[idx] = v2::pack_pair(v2::round_robin_pair(mm, t, idx - t * pairs_per_round));
                 }
                 sycl::group_barrier(wg);
 
                 const auto sg = it.get_sub_group();
-                const auto part = make_partition<P>(sg);
-
+                const v2::SgpPartition<kP> ex{sg};
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
-                const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
-                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(part.get_group_linear_id());
+                const int32_t parts_per_sg = static_cast<int32_t>(ex.part.get_group_linear_range());
+                const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(ex.part.get_group_linear_id());
 
-                const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
+                const int32_t lane = ex.lid();
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
                 // NO EARLY RETURN: a dead partition, or an inactive item of the batch mask, sweeps a
                 // zero tile and stores nothing. The mask is read after the pair-table barrier.
                 const bool live = prob_id < nb && (mask == nullptr || mask[prob_id] != 0);
-
-                auto A_prob = A_view.batch_item(live ? prob_id : 0);
-
-                const int32_t base_a = part_id * static_cast<int32_t>(kTileElems);
-                const int32_t base_z = ComputeVectors ? (part_id * static_cast<int32_t>(kTileElems)) : 0;
-                const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
-
-                // ---- Load: symmetrize from the requested triangle. ----
-                // The pad region is zeroed so that no uninitialized value can ever
-                // reach the arithmetic, even though the pivot schedule never
-                // selects a padded index.
-                for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
-                    T v = T(0);
-                    if (live && lane < nn && c < nn) {
-                        if constexpr (Upper) {
-                            v = (lane <= c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        } else {
-                            v = (lane >= c) ? A_prob(lane, c) : batchlas::device::detail::conj(A_prob(c, lane));
-                        }
-                        if (lane == c) {
-                            // The diagonal of a Hermitian matrix is real by
-                            // definition; drop any imaginary noise in the input.
-                            if constexpr (detail::is_complex<T>::value) {
-                                v = T(v.real(), Real(0));
-                            }
-                        }
-                    }
-                    A_local[base_a + lane + c * LD] = v;
-                    if constexpr (ComputeVectors) {
-                        Z_local[base_z + lane + c * LD] = (lane == c && lane < nn) ? T(1) : T(0);
-                    }
-                }
-                group_barrier(part);
-
                 const bool pair_lane = (lane < pairs_per_round);
                 const bool row_lane = (lane < nn);
 
-                // ---- Sweeps ----
-                // This kernel terminates on ONE clean sweep, so `rot_count == 0` is the
-                // whole convergence predicate (unlike gesvdj_cta).
+                auto A_prob = A_view.batch_item(live ? prob_id : 0);
+                const Tile A{util::get_raw_ptr(A_local) + part_id * static_cast<int32_t>(kTileElems), {}, {}, {}};
+                const Tile Z{util::get_raw_ptr(Z_local) + (ComputeVectors ? part_id * static_cast<int32_t>(kTileElems) : 0),
+                             {}, {}, {}};
+                const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
+                sycl::vec<Real, 2>* const rcs = util::get_raw_ptr(Rcs_local) + base_r;
+                T* const rd = util::get_raw_ptr(Rd_local) + (kNeedPhase ? base_r : 0);
+
+                // ---- Load: A = the Hermitian matrix of the stored triangle, Z = I, zero pad. ----
+                for (int32_t c = 0; c < kP; ++c) {
+                    A(lane, c) = (live && row_lane && c < nn) ? v2::hermitian_entry<Upper>(A_prob, lane, c) : T(0);
+                    if constexpr (ComputeVectors) Z(lane, c) = (lane == c && row_lane) ? T(1) : T(0);
+                }
+                v2::sub_barrier(ex);
+
+                // ---- Sweeps of rounds: rotations, A := A U (rows), A := U^H A (columns). ----
+                // One clean sweep terminates, so `rot_count == 0` is the whole convergence
+                // predicate (unlike gesvdj_cta).
                 bool converged = false;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                     int32_t rot_count = 0;
 
                     for (int32_t t = 0; t < rounds; ++t) {
-                        const int32_t tab_base = t * pairs_per_round;
+                        const v2::RotRound<T> rnd{rcs, rd, pair_tab + t * pairs_per_round};
 
-                        int32_t p = 0;
-                        int32_t q = 0;
+                        v2::PivotPair pq{0, 0};
                         bool active = false;
-
                         if (pair_lane) {
-                            const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + lane]);
-                            p = pq & 0xFF;
-                            q = (pq >> 8) & 0xFF;
-                            active = (q < nn);
+                            pq = rnd.pair(lane);
+                            active = (pq.q < nn);
                         }
-
-                        // ---- Compute the 2x2 diagonalizing transform. ----
-                        Real c_rot = Real(1);
-                        Real s_rot = Real(0);
-                        T d_rot = T(1);
-
+                        v2::JacobiRotation<T> jr = v2::identity_rotation<T>();
                         if (active) {
-                            const T apq = A_local[base_a + p + q * LD];
-                            const Real app = real_part_j(A_local[base_a + p + p * LD]);
-                            const Real aqq = real_part_j(A_local[base_a + q + q * LD]);
-                            const Real g_abs = abs_if_complex_j(apq);
-
-                            const Real thresh = tol * sycl::sqrt(sycl::fabs(app) * sycl::fabs(aqq));
-
-                            if (g_abs > thresh && g_abs > tiny) {
-                                // Reduce to a real symmetric 2x2 by a diagonal
-                                // phase similarity, then apply the classic real
-                                // Jacobi rotation. For real T the phase is 1 and
-                                // g carries the sign of a_pq, which is exactly
-                                // Golub & Van Loan Alg. 8.5.1.
-                                Real g;
-                                if constexpr (detail::is_complex<T>::value) {
-                                    g = g_abs;
-                                    d_rot = T(apq.real() / g_abs, -apq.imag() / g_abs);
-                                } else {
-                                    g = apq;
-                                    d_rot = T(1);
-                                }
-
-                                const Real tau = (aqq - app) / (Real(2) * g);
-                                Real tt;
-                                if (sycl::fabs(tau) > tau_big) {
-                                    tt = Real(1) / (Real(2) * tau);
-                                } else {
-                                    tt = sycl::copysign(Real(1), tau)
-                                       / (sycl::fabs(tau) + sycl::sqrt(Real(1) + tau * tau));
-                                }
-                                c_rot = Real(1) / sycl::sqrt(Real(1) + tt * tt);
-                                s_rot = tt * c_rot;
-                                // A rotation that rounds to the identity would
-                                // never annihilate a_pq, so counting it would
-                                // keep the sweep loop alive forever.
-                                if (s_rot == Real(0)) active = false;
-                            } else {
-                                active = false;
-                            }
+                            jr = v2::sym_schur2<T>(v2::Arith<T>::re(A(pq.p, pq.p)), v2::Arith<T>::re(A(pq.q, pq.q)),
+                                                   static_cast<T>(A(pq.p, pq.q)), thr);
                         }
+                        active = jr.active;
+                        if (pair_lane) rnd.store(lane, jr);
+                        v2::sub_barrier(ex);
 
-                        if (!active) {
-                            c_rot = Real(1);
-                            s_rot = Real(0);
-                            d_rot = T(1);
-                        }
-
-                        if (pair_lane) {
-                            Rcs_local[base_r + lane] = sycl::vec<Real, 2>(c_rot, s_rot);
-                            if constexpr (kNeedPhase) {
-                                Rd_local[base_r + lane] = d_rot;
-                            }
-                        }
-                        group_barrier(part);
-
-                        // One reduction serves both as the sweep's rotation
-                        // counter and as an early-out for rounds in which every
-                        // pair was skipped. Late sweeps are almost all such
-                        // rounds, and skipping them avoids two full O(n) passes
-                        // over the tile.
-                        const int32_t round_active = partition_reduce_sum_j(part, active ? 1 : 0);
+                        // One count serves as the sweep's rotation counter and as an early-out
+                        // for rounds that skipped every pair (late sweeps are almost all such).
+                        const int32_t round_active = v2::count(ex, active);
                         rot_count += round_active;
                         if (round_active == 0) continue;
 
-                        // ---- Phase 1: A <- A * U, and Z <- Z * U. ----
-                        // Lane owns row `lane`; pairs touch disjoint column
-                        // pairs, so there is no cross-lane hazard within a phase.
+                        // Lane owns row `lane`; the pairs touch disjoint columns.
                         if (row_lane) {
-                            for (int32_t k = 0; k < pairs_per_round; ++k) {
-                                const sycl::vec<Real, 2> cs = Rcs_local[base_r + k];
-                                const Real ck = cs[0];
-                                const Real sk = cs[1];
-                                if (sk == Real(0)) continue;
-
-                                const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + k]);
-                                const int32_t pk = pq & 0xFF;
-                                const int32_t qk = (pq >> 8) & 0xFF;
-
-                                T u11 = T(ck);
-                                T u12 = T(sk);
-                                T u21 = T(-sk);
-                                T u22 = T(ck);
-                                if constexpr (kNeedPhase) {
-                                    const T dk = Rd_local[base_r + k];
-                                    u21 = -(dk * T(sk));
-                                    u22 = dk * T(ck);
-                                }
-
-                                const int32_t ip = base_a + lane + pk * LD;
-                                const int32_t iq = base_a + lane + qk * LD;
-                                const T ap = A_local[ip];
-                                const T aq = A_local[iq];
-                                A_local[ip] = ap * u11 + aq * u21;
-                                A_local[iq] = ap * u12 + aq * u22;
-
-                                if constexpr (ComputeVectors) {
-                                    const int32_t zp = base_z + lane + pk * LD;
-                                    const int32_t zq = base_z + lane + qk * LD;
-                                    const T zp_v = Z_local[zp];
-                                    const T zq_v = Z_local[zq];
-                                    Z_local[zp] = zp_v * u11 + zq_v * u21;
-                                    Z_local[zq] = zp_v * u12 + zq_v * u22;
-                                }
-                            }
+                            if constexpr (ComputeVectors) v2::rot_round_right(rnd, pairs_per_round, lane, A, Z);
+                            else v2::rot_round_right(rnd, pairs_per_round, lane, A);
                         }
-                        group_barrier(part);
+                        v2::sub_barrier(ex);
 
-                        // ---- Phase 2: A <- U^H * A. ----
-                        // Lane now owns column `lane`. The annihilated entries are
-                        // stored as exact zeros here rather than in a separate
-                        // pass: the rotation makes them zero in exact arithmetic,
-                        // and forcing it keeps the convergence test from chasing
-                        // rounding noise.
-                        if (row_lane) {
-                            for (int32_t k = 0; k < pairs_per_round; ++k) {
-                                const sycl::vec<Real, 2> cs = Rcs_local[base_r + k];
-                                const Real ck = cs[0];
-                                const Real sk = cs[1];
-                                if (sk == Real(0)) continue;
-
-                                const int32_t pq = static_cast<int32_t>(Pair_local[tab_base + k]);
-                                const int32_t pk = pq & 0xFF;
-                                const int32_t qk = (pq >> 8) & 0xFF;
-
-                                // c, s are real, so conj(u11) = c and
-                                // conj(u12) = s; only the phase conjugates.
-                                const T cu11 = T(ck);
-                                const T cu12 = T(sk);
-                                T cu21 = T(-sk);
-                                T cu22 = T(ck);
-                                if constexpr (kNeedPhase) {
-                                    const T dk = Rd_local[base_r + k];
-                                    cu21 = -(batchlas::device::detail::conj(dk) * T(sk));
-                                    cu22 = batchlas::device::detail::conj(dk) * T(ck);
-                                }
-
-                                const int32_t ip = base_a + pk + lane * LD;
-                                const int32_t iq = base_a + qk + lane * LD;
-                                const T ap = A_local[ip];
-                                const T aq = A_local[iq];
-
-                                T new_p = cu11 * ap + cu21 * aq;
-                                T new_q = cu12 * ap + cu22 * aq;
-
-                                if (lane == qk) {
-                                    new_p = T(0);                       // annihilated a_pq
-                                    new_q = force_real_j(new_q);        // Hermitian diagonal
-                                } else if (lane == pk) {
-                                    new_q = T(0);                       // annihilated a_qp
-                                    new_p = force_real_j(new_p);        // Hermitian diagonal
-                                }
-
-                                A_local[ip] = new_p;
-                                A_local[iq] = new_q;
-                            }
-                        }
-                        group_barrier(part);
+                        // Lane now owns column `lane`; the pivots are stored exactly (zeros,
+                        // real diagonal) so the convergence test does not chase rounding noise.
+                        if (row_lane) v2::rot_round_left_hermitian(rnd, pairs_per_round, lane, A);
+                        v2::sub_barrier(ex);
                     }
 
                     // Converged when a full sweep applied no rotation, i.e. all
                     // n(n-1)/2 pivot pairs passed the relative threshold test.
                     if (rot_count == 0) { converged = true; break; }
                 }
-                // rot_count is already partition-uniform (it is reduced across the
-                // partition inside the round loop), so every lane agrees and lane 0
-                // may report for the item. A STORE, not a raise: this kernel is the
-                // single writer for the item, so a converged item is set to 0 here
-                // rather than by a separate clear kernel that could race with it.
+                // rot_count is partition-uniform, so lane 0 reports. A STORE, not a raise: this
+                // kernel is the item's single writer (no clear kernel that could race with it).
                 if (live && lane == 0) detail::info_store(info_dev, prob_id, converged ? 0 : 1);
 
                 // ---- Sort by rank and write back. ----
@@ -479,12 +249,12 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 // than by a serial sort on the leader; ties break on index so the
                 // permutation is a bijection.
                 if (live && row_lane) {
-                    const Real wj = real_part_j(A_local[base_a + lane + lane * LD]);
+                    const Real wj = v2::Arith<T>::re(A(lane, lane));
                     int32_t dst = lane;
                     if (do_sort) {
                         int32_t rank = 0;
                         for (int32_t k = 0; k < nn; ++k) {
-                            const Real wk = real_part_j(A_local[base_a + k + k * LD]);
+                            const Real wk = v2::Arith<T>::re(A(k, k));
                             // A strict total order (NaN after every number, ties and NaNs on index):
                             // the ranks are a bijection even for NaN input, so no slot is left stale.
                             const bool nan_j = sycl::isnan(wj), nan_k = sycl::isnan(wk);
@@ -499,9 +269,7 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                     W[static_cast<int64_t>(prob_id) * nn + dst] = wj;
 
                     if constexpr (ComputeVectors) {
-                        for (int32_t r = 0; r < nn; ++r) {
-                            A_prob(r, dst) = Z_local[base_z + r + lane * LD];
-                        }
+                        v2::copy(v2::Thread{}, Z.col(lane).head(nn), v2::mat(A_prob).col(dst).head(nn));
                     }
                 }
             });
