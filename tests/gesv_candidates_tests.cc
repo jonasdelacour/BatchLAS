@@ -17,6 +17,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -692,18 +693,12 @@ TYPED_TEST(GesvCandidates, AutoReadsEveryKeyField) {
 // The coverage row's native flags come from the candidate list and can_run (§5.6): every gesv
 // shape has a runnable native candidate (Blocked), so existed = supported = 1. The row carries
 // the gesv key: m = order, n = nrhs.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(GesvCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "gesv_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_sys<T>(8, 2, 2, 51u);
         {
             const Pin pin("gesv", C{gs::Tiny{}});
@@ -711,22 +706,14 @@ TYPED_TEST(GesvCandidates, CoverageRowCarriesNativeFlags) {
         }
         auto hi = make_sys<T>(8, 9, 2, 52u);
         (void)this->run_auto(hi);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,gesv,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 14u) << line;
-            rows[f[5] + " " + f[6]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,gesv,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 14u) << line;
+        rows[f[5] + " " + f[6]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     ASSERT_TRUE(rows.count("8 2")) << "no n=8 nrhs=2 row";
     ASSERT_TRUE(rows.count("8 9")) << "no n=8 nrhs=9 row";

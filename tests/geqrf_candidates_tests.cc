@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <src/ops/geqrf/geqrf_native.hh>
 #include <src/ops/geqrf/can_run.hh>
@@ -703,19 +704,13 @@ TYPED_TEST(GeqrfCandidates, VendorOnlyRowTakesLastResortVendorFree) {
 }
 
 // The coverage row (§5.6): the backend, m, n, k = min(m, n) and the native flags.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "geqrf_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("geqrf", C{gq::Cta{}});
             auto p = make_qr<T>(Spec{40, 24, 2});
@@ -725,22 +720,14 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
             auto p = make_qr<T>(Spec{8, 20, 2});  // wide: vendor, no native candidate runs
             this->run(p);
         }
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,geqrf,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 14u) << line;
-            rows[f[5] + " " + f[6] + " " + f[7]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,geqrf,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 14u) << line;
+        rows[f[5] + " " + f[6] + " " + f[7]] = f;
     }
-    std::filesystem::remove_all(dir);
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"
                                 : B == Backend::SYCL ? "SYCL"

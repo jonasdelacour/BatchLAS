@@ -168,8 +168,10 @@ RERUN_SUFFIX = re.compile(r"^(.*)_(\d+)$")
 # A <name>_heavy ctest entry (tests/CMakeLists.txt, BATCHLAS_HEAVY_TESTS) runs the cases of
 # <name>'s executable that <name> itself filters out, and writes <name>_heavy.xml. The two
 # filters are exact complements, so folding the file back onto <name> loses nothing and a
-# ledger line keeps naming the executable whichever tier the case runs in.
+# ledger line keeps naming the executable whichever tier the case runs in. A <name>_slow
+# entry (BATCHLAS_SLOW_CASES_<name>) is the same kind of complement and folds the same way.
 HEAVY_SUFFIX = "_heavy"
+TIER_SUFFIXES = (HEAVY_SUFFIX, "_slow")
 
 # ctest's own words for "the process died" rather than "a test case reported a
 # failure". gtest writes its XML only at the end of a run, so any of these means
@@ -303,9 +305,11 @@ def read_gtest_dir(path, junit_names):
             ambiguous.add(binary)
         binaries.add(binary)
         owner = binary
-        if binary.endswith(HEAVY_SUFFIX) and len(binary) > len(HEAVY_SUFFIX):
-            owner = binary[:-len(HEAVY_SUFFIX)]
-            binaries.add(owner)
+        for suffix in TIER_SUFFIXES:
+            if binary.endswith(suffix) and len(binary) > len(suffix):
+                owner = binary[:-len(suffix)]
+                binaries.add(owner)
+                break
         full = os.path.join(path, name)
         for tc in ET.parse(full).getroot().iter("testcase"):
             ident = "%s::%s.%s" % (owner, tc.get("classname") or "", tc.get("name") or "")
@@ -661,12 +665,13 @@ def main(argv):
             #    into a binary-level one, which is what this ledger exists to
             #    prevent. Handled at the call site, where args are in scope.
             coarse = by_ident.get(binary)
-            # A case in a <name>_heavy tier is still ledgered as <name>::Case: with no gtest
-            # layer the only failing ctest entry it can match is the tier's.
-            heavy = by_ident.get(binary + HEAVY_SUFFIX)
-            if (coarse is None or coarse.outcome != FAILED) and heavy is not None \
-                    and heavy.outcome == FAILED:
-                coarse, binary = heavy, binary + HEAVY_SUFFIX
+            # A case in a <name>_heavy or _slow tier is still ledgered as <name>::Case: with no
+            # gtest layer the only failing ctest entry it can match is the tier's.
+            for suffix in TIER_SUFFIXES:
+                tier = by_ident.get(binary + suffix)
+                if (coarse is None or coarse.outcome != FAILED) and tier is not None \
+                        and tier.outcome == FAILED:
+                    coarse, binary = tier, binary + suffix
             if coarse is not None and coarse.outcome == FAILED and coarse.ran \
                     and _is_process_death(coarse.detail) and binary in host_whole_tests:
                 continue  # the host ledger names this whole test: its own entry excuses the death

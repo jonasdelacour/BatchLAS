@@ -9,8 +9,12 @@
 #include <batchlas/export.hh>
 #include <batchlas/no_route.hh>
 
+#include <src/util/internal-api.hh>
+
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace batchlas::coverage {  /** @addtogroup api_selection */ /** @{ */
 
@@ -53,5 +57,25 @@ BATCHLAS_API std::string static_table();  // the `linked` rows: what this build 
 BATCHLAS_API extern bool g_dynamic_enabled;
 
 inline bool dynamic_enabled() { return g_dynamic_enabled; }
+
+/// A test-only capture: snapshot (the tables moved aside; the run records into empty ones), run,
+/// rows_since, restore (once).
+struct Snapshot {
+    struct Tables;
+    std::shared_ptr<Tables> saved;
+    bool enabled = false;
+    bool keep = false;  // merge the capture's calls back on restore; snapshot() sets it to `enabled`
+    Snapshot() = default;
+    Snapshot(const Snapshot&) = delete;
+    Snapshot& operator=(const Snapshot&) = delete;
+    Snapshot(Snapshot&&) = default;
+    Snapshot& operator=(Snapshot&&) = default;
+};
+
+BATCHLAS_INTERNAL_API Snapshot snapshot();
+BATCHLAS_INTERNAL_API std::vector<std::string> rows_since(const Snapshot& s);  // emit()'s lines of the open capture
+/// The saved tables and switch back; with `s.keep` the capture's calls merge into them (counts add,
+/// new rows insert), so BATCHLAS_COVERAGE_OUT keeps them, else they are dropped.
+BATCHLAS_INTERNAL_API void restore(Snapshot& s);
 
 /** @} */ } // namespace batchlas::coverage

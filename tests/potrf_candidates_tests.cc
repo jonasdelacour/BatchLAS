@@ -18,6 +18,7 @@
 #include <tests/test_utils.hh>
 #include <batchlas/verify/tolerance.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <src/ops/potrf/potrf_native.hh>
 #include <src/ops/potrf/choice.hh>
@@ -541,40 +542,26 @@ TYPED_TEST(PotrfCandidates, UnknownAndUncompiledPinsThrow) {
 
 // The coverage row's native flags come from the candidate list and can_run (§5.6), not the
 // old constants 1/-1: Lower n=16 has a native tier, Upper above every Upper-capable tier none.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
-    const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_prob<T>(16, 2, Uplo::Lower, 51u);
         (void)this->run_auto(lo);
         auto hi = make_prob<T>(up, 2, Uplo::Upper, 52u);
         (void)this->run_auto(hi);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::pair<std::string, std::string>> flags;  // "n uplo" -> (existed, supported)
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,potrf,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 16u) << line;
-            flags[f[6] + " " + f[15]] = {f[12], f[13]};
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,potrf,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 16u) << line;
+        flags[f[6] + " " + f[15]] = {f[12], f[13]};
     }
-    std::filesystem::remove_all(dir);
     const std::string lower = "16 " + std::to_string(static_cast<int>(Uplo::Lower));
     const std::string upper = std::to_string(up) + " " + std::to_string(static_cast<int>(Uplo::Upper));
     ASSERT_EQ(flags.size(), 2u);

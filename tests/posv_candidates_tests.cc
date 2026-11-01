@@ -24,6 +24,7 @@
 #include <src/ops/potrf/choice.hh>
 #include <src/util/resident_capacity.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -795,44 +796,30 @@ TYPED_TEST(PosvCandidates, AutoReadsEveryKeyField) {
 // The coverage row's native flags come from the candidate list and can_run (§5.6): every
 // posv shape has a runnable native candidate (Blocked), so existed = supported = 1. The row
 // also carries the posv key: m = order, n = nrhs, and uplo.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(PosvCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "posv_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     std::string want_lo;  // this device's table decides the Lower n=8 nrhs=2 tier
     {
         const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
         auto lo = make_sys<T>(8, 2, 2, Uplo::Lower, 51u);
         want_lo = traced_choice([&] { (void)this->run_auto(lo); });
     }
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_sys<T>(8, 2, 2, Uplo::Lower, 51u);
         (void)this->run_auto(lo);
         auto hi = make_sys<T>(8, 9, 2, Uplo::Upper, 52u);
         (void)this->run_auto(hi);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n uplo" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,posv,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 16u) << line;
-            rows[f[5] + " " + f[6] + " " + f[15]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,posv,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 16u) << line;
+        rows[f[5] + " " + f[6] + " " + f[15]] = f;
     }
-    std::filesystem::remove_all(dir);
     const std::string lo = "8 2 " + std::to_string(static_cast<int>(Uplo::Lower));
     const std::string hi = "8 9 " + std::to_string(static_cast<int>(Uplo::Upper));
     ASSERT_EQ(rows.size(), 2u);

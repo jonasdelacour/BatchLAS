@@ -17,6 +17,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <batchlas/verify/tolerance.hh>
 
@@ -650,18 +651,12 @@ TYPED_TEST(SyevCandidates, VendorFreeLastResortIsBlocked) {
 }
 
 // §5.6: the coverage row carries the backend, the choice spelling and the native flags.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+// Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "syev_cov." + std::string(select::dtype_name<T>());
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
-        batchlas::coverage::g_dynamic_enabled = true;
+    const auto lines = test_support::coverage_lines([&] {
         {
             const Pin pin("syev", C{sy::Jacobi{}});
             auto p = make_eig<T>(Spec{12, 2});
@@ -670,22 +665,14 @@ TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
         const Pin pin("syev", C{sy::Blocked{}});
         auto p = make_eig<T>(Spec{40, 2, JobType::NoEigenVectors, Uplo::Upper});
         this->run(p);
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,syev,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 16u) << line;
-            rows[f[5]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,syev,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 16u) << line;
+        rows[f[5]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"

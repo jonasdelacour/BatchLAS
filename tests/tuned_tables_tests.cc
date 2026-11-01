@@ -473,6 +473,27 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
         }
 }
 
+// trmm_tests and trsm_tests have no route-native rerun: unpinned, they reach a native kernel only
+// because every row ranks a native candidate (any family but `vendor`) first. That holds on sm_89 (the
+// gate) and apple_m5_max; sm_120's deep tables rank vendor first in 823 trmm and 3642 trsm rows.
+TEST(TunedTables, TrmmTrsmRowsRankANativeFirstOnSm89AndAppleM5Max) {
+    std::set<std::string> seen;
+    for (const auto& e : sel::embedded_tables()) {
+        const std::string name(e.name);
+        if (name != "trmm.sm_89.txt" && name != "trsm.sm_89.txt" && name != "trmm.apple_m5_max.txt" &&
+            name != "trsm.apple_m5_max.txt")
+            continue;
+        seen.insert(name);
+        for (const sel::Table& t : sel::parse_tables(e.text, e.name))
+            for (const auto& row : t.rows) {
+                ASSERT_FALSE(row.ranked.empty()) << name << " line " << row.line;
+                const std::string& first = row.ranked.front().spelling;
+                EXPECT_NE(first.substr(0, first.find(':')), "vendor") << name << " " << t.dtype << " line " << row.line;
+            }
+    }
+    EXPECT_EQ(seen.size(), 4u) << "a trmm/trsm table on sm_89 or apple_m5_max is not embedded";
+}
+
 // Coverage of devices is explicit: every migrated op ships a table for every dtype on sm_89 and
 // sm_120 (spmm also on the CPU), so no shipped device borrows. Which ones are measured and which
 // are transcribed is tuned/README.md's inventory; the measured sm_120 ones are checked below.

@@ -69,8 +69,8 @@ scripts/b stedc_tests                               # library + one test binary
 ctest --test-dir build -R '^stedc_tests(_heavy)?$' --output-on-failure
 scripts/affected_tests.py --print-build-cmd --print-ctest-cmd --build-dir build   # what a diff can break
 ctest --test-dir build -LE 'slow|heavy'             # broadest iteration scope (quick tier)
-CUDA_VISIBLE_DEVICES=0 scripts/gate.sh              # before pushing (4090 box)
-CUDA_VISIBLE_DEVICES=0 scripts/gate.sh --seed-from build-dev-tests --seed-allow-dirty   # first run
+scripts/gate.sh                                     # before pushing (4090 box: one tree per GPU)
+scripts/gate.sh --seed-from build-dev-tests --seed-allow-dirty   # first run
 sh .github/ci/run_local_checks.sh [PREFIX]         # touched cmake/, include/ or install rules
 ```
 
@@ -79,10 +79,15 @@ sh .github/ci/run_local_checks.sh [PREFIX]         # touched cmake/, include/ or
 - `scripts/gate.sh` owns two persistent trees: `build-gate` (full targets, full ctest, ledger diff)
   and `build-gate-vf` (vendor-free, `-LE slow`), both relinking every executable
   (`BATCHLAS_LINK_DEPENDS_NO_SHARED=OFF`). It holds the build lock through ctest and sets
-  `ONEAPI_DEVICE_SELECTOR` (§8); the GPU pin is yours. Seed a missing gate tree only from a
-  `dev-tests` tree (plain `build/` differs in `BATCHLAS_ALLOW_UNSAFE_ENV`). Keep it serial:
-  `--parallel` (§8) was validated only on threadripper02, where `scripts/agent/dispatch.sh` now
-  forbids it.
+  `ONEAPI_DEVICE_SELECTOR` (§8). After both builds it runs the two ctests at once, vf on the
+  first visible GPU and full on the second, each serial with `DPCPP_CPU_NUM_CUS`=cores/2 and its
+  own `TMPDIR`; without `CUDA_VISIBLE_DEVICES` it skips busy GPUs as `ctest_gpus.sh` does.
+  `CUDA_VISIBLE_DEVICES=0`, one idle GPU, a busy box (load above `BATCHLAS_GATE_MAX_LOAD`, default
+  cores/4, or a process above 200% CPU) or `--serial` runs them one after the other. Ctrl-C
+  kills both ctests. Read the peak RSS line
+  (`<tree>/gate/rss.tsv`, `docs/ci.md`). Seed a missing gate tree only from a `dev-tests` tree
+  (plain `build/` differs in `BATCHLAS_ALLOW_UNSAFE_ENV`). Never `--parallel` (§8) here: it was
+  validated only on threadripper02, where `scripts/agent/dispatch.sh` now forbids it.
 - `run_local_checks.sh PREFIX` adds the `--package` checks CI cannot run (needs
   `cmake --install build --prefix PREFIX`); `ctest -R '^consumer_package_tests$'` builds
   `examples/consumer/` against an install.
@@ -179,20 +184,23 @@ Findings and before/after tables: @ref design_build_performance.
 ## 8. Testing Policy
 
 - **Do not run the full ctest by default.** Scope: one case `--gtest_filter` -> one binary
-  `ctest -R '^X(_heavy)?$'` (anchor the regex) -> one component `-L util|blas|ortho|tridiag|eig|sparse`
+  `ctest -R '^X(_heavy|_slow)?$'` (anchor the regex) -> one component `-L util|blas|ortho|tridiag|eig|sparse`
   -> `-LE 'slow|heavy'` -> `-LE slow` -> full only before pushing or after touching shared code
   (`Queue`, `Matrix`/`MatrixView`, mempool, `sg_partition`, `include/batchlas/util`).
   `scripts/affected_tests.py` maps a diff to binaries (callers included; over-selects by design).
 - **Case tiers.** A binary in `BATCHLAS_HEAVY_TESTS` is two entries: `X` (quick cases) and
   `X_heavy` (label `heavy`: saturating-batch race guards, table sweeps). Run `X_heavy` before
-  claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not.
+  claiming `X` green. `-LE slow` includes heavy entries; `-LE 'slow|heavy'` does not. A binary
+  with `BATCHLAS_SLOW_CASES_X` splits the same way into `X` and `X_slow` (label `slow`): run
+  `X_slow` too. Both tiers fold onto `X::` in the ledger.
 - **Full-target tree on the 4090 box**: `ONEAPI_DEVICE_SELECTOR='cuda:*;opencl:cpu'` and
   `CUDA_VISIBLE_DEVICES=0`, else CPU backends land on `native_cpu` ("No kernel named").
 - **`scripts/ctest_gpus.sh`** (ctest's arguments) runs one test per GPU slot from
   `<build>/ctest_resources.json` (`BATCHLAS_TEST_GPUS`, `BATCHLAS_TEST_GPU_SLOTS` default 2; only
   with a `[cuda:gpu]` at configure). threadripper02, 4x RTX PRO 6000, `-LE slow`: 469 s serial,
   126 s at 1 slot/GPU, 78 s at 2. Those GPUs are now hidden from agents (GPU load crashed the box)
-  and the 2x4090 box was OOM-killed beside ctest (`docs/ci.md`), so the gate stays serial.
+  and the 2x4090 box was OOM-killed beside a build or a second ctest (`docs/ci.md`), so each gate
+  ctest stays serial; the two trees overlap only after both builds, under the lock (§6).
 - A process that sees several GPUs is slow (threadripper02: 132 s with 4 visible, 18 s with 1;
   cause unknown): run a binary by hand with `CUDA_VISIBLE_DEVICES=<n>`.
 - `BATCHLAS_TEST_BACKEND=CUDA` / `BATCHLAS_TEST_FLOAT_TYPE=float` turn the other instantiations
@@ -224,6 +232,32 @@ dozen times. Every new or rewritten test needs:
 10. Verify a revert of an untracked file with `md5sum` against a pristine copy (`git diff` is silent).
 11. Verify with `batchlas::verify` (`EXPECT_VERIFY(T, Check::kind, n, value)`,
     `tests/test_utils.hh`; @ref design_verification); no local residual or tolerance helpers.
+
+**Writing fast tests.** Kernels under test were 4-7% of wall in the slowest gate cases (2026-10
+audit); the harness took the rest. Keep every guard above and spend nothing beside it:
+
+1. Observe in-process. A threadsafe death-test child replays the body up to its call and pays
+   0.5-1.4 s of startup, so reading state through children is quadratic. If one is unavoidable:
+   one per TEST, as its first statement.
+2. Generate a deterministic input once per test (cache by type, n, batch, seed); copy and
+   re-poison it per axis value. A graded fill at n >= 1024 costs 12-46 s.
+3. Prefer a device-side check against `usm_bulk::Pristine` (reps on the host, buffer written by
+   device copies) to host loops over `malloc_shared`. Bulk copies are no free win on the 4090
+   box: a `q.memcpy` out of shared pages the host wrote and no kernel touched migrates them to the
+   device first (an ormqr guard check moved 22 GB to read 4 KB), a pageable host <-> shared
+   copy runs at ~0.9 GB/s, while the host faults touched pages back at ~20 GB/s. Download only
+   the bytes you read; `usm_bulk::download` uses pinned scratch. ABBA a conversion before keeping it.
+4. Allocate outside loops: one problem or workspace per test at the largest size, poisoned per
+   run. No per-candidate rebuild of an identical problem; no `UnifiedVector` copy-assign in a hot
+   loop (it builds a `sycl::queue`).
+5. Verify in batch: one `EXPECT_VERIFY` over all items; per-item loops only to name failures.
+6. Saturating batches (guard 5) generate a few representatives (`period` 1-7) and copy them; no
+   RNG draw per item.
+7. Drop an axis or a backend only after reading the predicate or kernel that ignores it (NETLIB
+   ignores `cta_*`); four "independent" axes in the audit were not.
+8. Budget: a quick case over ~2 s or a binary over ~15 s goes to `heavy`/`slow` with a reason in
+   `tests/CMakeLists.txt`. Time from per-case gtest XML or the gate junit, never
+   `CTestCostData.txt` (a serial ctest skews it). No assertion-free cases in ctest.
 
 ## 9. Architecture: Routing and Dispatch
 

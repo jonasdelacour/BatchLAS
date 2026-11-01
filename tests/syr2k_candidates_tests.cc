@@ -17,6 +17,7 @@
 
 #include <tests/test_utils.hh>
 #include <tests/shipped_table_pick.hh>
+#include <tests/test_support/coverage_rows.hh>
 
 #include <src/ops/syr2k/choice.hh>
 
@@ -769,76 +770,50 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
 }
 
 // Nothing runnable vendor-free (double) throws NoRouteError and records the coverage miss row.
-// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
 TYPED_TEST(Syr2kCandidates, NoRouteRecordsAMissRow) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::kVendor || TestFixture::kNative) GTEST_SKIP() << "a route exists";
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
-    const std::string dir = ::testing::TempDir() + "syr2k_miss";
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
-        batchlas::coverage::g_dynamic_enabled = true;
+    bool threw = false;
+    const auto lines = test_support::captured_lines([&] {
         auto p = make_prob<T>(Spec{});
         try {
             this->run(p);
         } catch (const batchlas::NoRouteError&) {
-            std::exit(0);
+            threw = true;
         }
-        std::exit(1);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
+    EXPECT_TRUE(threw);
     int miss = 0;
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);)
-            if (line.rfind("miss,syr2k,double,", 0) == 0) ++miss;
-    }
-    std::filesystem::remove_all(dir);
+    for (const std::string& line : lines)
+        if (line.rfind("miss,syr2k,double,", 0) == 0) ++miss;
     EXPECT_EQ(miss, 1);
 }
 
 // The coverage row (§5.6): the real backend and scalar (the old recorder hard-coded F32/CUDA),
 // the old key (m = n = C's order, k = op(A)'s inner extent, uplo, transA, side Left, diag
-// NonUnit) and the native flags. threadsafe: the child re-executes the binary.
+// NonUnit) and the native flags. Captured
+// in-process (test_support::coverage_lines).
 TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     if constexpr (!TestFixture::kNative && !TestFixture::kVendor) GTEST_SKIP() << "no route";
-    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dt(select::dtype_name<T>());
-    const std::string dir = ::testing::TempDir() + "syr2k_cov." + dt;
-    std::filesystem::remove_all(dir);
-    std::filesystem::create_directories(dir);
-    const std::string out = dir + "/cov";
     const Spec lo{Uplo::Lower, Transpose::NoTrans, 20, 7, 2};
     const Spec hi{Uplo::Upper, Transpose::Trans, 48, 3, 1};
-    auto child = [&] {
-        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+    const auto lines = test_support::coverage_lines([&] {
         const ScopedEnvVar clear("BATCHLAS_SYR2K_ROUTE", nullptr);
-        batchlas::coverage::g_dynamic_enabled = true;
         for (const Spec& s : {lo, hi}) {
             auto p = make_prob<T>(s);
             this->run(p);
         }
-        std::exit(0);
-    };
-    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    });
     std::map<std::string, std::vector<std::string>> rows;  // "m n k" -> fields
-    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
-        std::ifstream in(ent.path());
-        for (std::string line; std::getline(in, line);) {
-            if (line.rfind("reached,syr2k,", 0) != 0) continue;
-            std::vector<std::string> f;
-            std::stringstream ss(line);
-            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
-            ASSERT_GE(f.size(), 19u) << line;
-            rows[f[5] + " " + f[6] + " " + f[7]] = f;
-        }
+    for (const std::string& line : lines) {
+        if (line.rfind("reached,syr2k,", 0) != 0) continue;
+        const auto f = test_support::csv_fields(line.substr(0, line.size() - 1));
+        ASSERT_GE(f.size(), 19u) << line;
+        rows[f[5] + " " + f[6] + " " + f[7]] = f;
     }
-    std::filesystem::remove_all(dir);
     ASSERT_EQ(rows.size(), 2u);
     const std::string backend = B == Backend::CUDA   ? "CUDA"
                                 : B == Backend::ROCM ? "ROCM"

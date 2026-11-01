@@ -245,17 +245,20 @@ set(BATCHLAS_TEST_LABELS_sparse
 # run, and everything listed is invisible to it. iluk_tests (2.5 s) sat here long
 # enough for an API-breaking regression to survive a `-LE slow` verification.
 set(BATCHLAS_SLOW_TESTS
-    stedc_tests            # 27 s: dense reference solves at n=512/1024
     steqr_tests            # 13 s here with NETLIB compiled in and nothing skipped,
                            # against a ~135 s figure recorded earlier on this box --
                            # kept until the discrepancy is understood
-    sytrd_sb2st_tests      # 69 s, launch-latency bound bulge chase
-    gesvd_tests)           # 1.8 s here, but 37 of its 92 cases skip in this build
-                           # config; not timed in a configuration that runs them
+    )
+# Per-case slow tier: <name>_slow runs these cases (label slow), <name> the rest.
+# BANDR1 at n=256: the launch-latency bound bulge chase behind most of the binary's 69 s (a
+# profile on the 4090 box, not re-timed per case since the split); n=96 stays quick.
+set(BATCHLAS_SLOW_CASES_sytrd_sb2st_tests "*BandReductionMatchesDenseSyevSpectrumN256*")
 # Dropped after timing (serial, this build, all cases running -- none skipped):
 #   iluk_tests             2.5 s, 17 tests
 #   syevx_tests            2.7 s, 102 tests
 #   sytrd_sb2st_hh_tests   5.8 s, 9 tests
+#   stedc_tests            10.7 s (2x4090 gate junit, 2026-10-31; under the 15 s rule)
+#   gesvd_tests            3.8 s + 3.9 s for gesvd_tests_heavy (same run)
 
 # Case-level tiers. A binary in BATCHLAS_HEAVY_TESTS is registered twice: <name> runs
 # --gtest_filter=-<HEAVY> and <name>_heavy (label heavy) runs --gtest_filter=<HEAVY>.
@@ -284,7 +287,13 @@ set(BATCHLAS_HEAVY_TEST_PATTERNS
     *EigenvaluesOnlyLowerMatchesNetlib*
     *GradedHermitianRunsAtN512*
     *PastTheGrid*
-    *DoubleBandEvery*)
+    *DoubleBandEvery*
+    # Mask-contract cases over every blocked size or composite (sygvd/syev/gesvd mask).
+    *AtBlockedSizes*
+    *Composites*
+    *BlockedOverEach*
+    *SygstDeviceFamilies*
+    *FactoredCompose*)
 string(REPLACE ";" ":" BATCHLAS_HEAVY_TEST_FILTER "${BATCHLAS_HEAVY_TEST_PATTERNS}")
 # Binaries with at least one matching case (checked with --gtest_list_tests at c960d7b1). A
 # binary missing here runs its heavy cases in its single entry (slower, never lost). A _heavy
@@ -304,6 +313,8 @@ list(APPEND BATCHLAS_HEAVY_TESTS sytrf_tests sytrf_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS norm_mask_tests ortho_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS steqr_mask_tests tridiag_mask_tests)
 list(APPEND BATCHLAS_HEAVY_TESTS stedc_mask_tests)
+list(APPEND BATCHLAS_HEAVY_TESTS sygvd_mask_tests syev_mask_tests syevx_mask_tests getrs_mask_tests
+    getrf_mask_tests)
 
 # Map a target to its component label.
 function(batchlas_test_component out_var test_name)
@@ -510,6 +521,18 @@ function(batchlas_add_test_target test_name)
         endif()
         add_test(NAME ${test_name}_heavy COMMAND ${_heavy_cmd} "--gtest_filter=${BATCHLAS_HEAVY_TEST_FILTER}")
         list(APPEND _entries ${test_name}_heavy)
+    elseif(BATCHLAS_SLOW_CASES_${test_name})
+        # Its XML is renamed from BATCHLAS_GTEST_XML_STEM as _heavy's is.
+        set(_slow_cmd ${_cmd})
+        set(_slow_env_mod "")
+        if(NOT BATCHLAS_TEST_GPU_LAUNCHER AND BATCHLAS_TEST_SH AND NOT APPLE)
+            set(_slow_cmd "${BATCHLAS_TEST_SH}" "${PROJECT_SOURCE_DIR}/tests/ctest_gpu_env.sh" ${_cmd})
+        elseif(NOT BATCHLAS_TEST_GPU_LAUNCHER AND NOT CMAKE_VERSION VERSION_LESS 3.22)
+            set(_slow_env_mod "GTEST_OUTPUT=string_append:${test_name}_slow.xml")
+        endif()
+        add_test(NAME ${test_name} COMMAND ${_cmd} "--gtest_filter=-${BATCHLAS_SLOW_CASES_${test_name}}")
+        add_test(NAME ${test_name}_slow COMMAND ${_slow_cmd} "--gtest_filter=${BATCHLAS_SLOW_CASES_${test_name}}")
+        list(APPEND _entries ${test_name}_slow)
     else()
         add_test(NAME ${test_name} COMMAND ${_cmd})
     endif()
@@ -559,6 +582,15 @@ function(batchlas_add_test_target test_name)
         if(_heavy_env_mod)
             set_tests_properties(${test_name}_heavy PROPERTIES ENVIRONMENT_MODIFICATION "${_heavy_env_mod}")
         endif()
+    elseif(BATCHLAS_SLOW_CASES_${test_name})
+        set(_slow_env ${_env} "BATCHLAS_GTEST_XML_STEM=${test_name}_slow")
+        set_tests_properties(${test_name}_slow PROPERTIES
+            LABELS "${_component};slow"
+            ENVIRONMENT "${_slow_env}"
+            SKIP_REGULAR_EXPRESSION "Running 0 tests from 0 test suites")
+        if(_slow_env_mod)
+            set_tests_properties(${test_name}_slow PROPERTIES ENVIRONMENT_MODIFICATION "${_slow_env_mod}")
+        endif()
     endif()
 endfunction()
 
@@ -578,7 +610,6 @@ endfunction()
 set(BATCHLAS_ROUTE_PINNED_TESTS
     gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
     gemv_tests   "BATCHLAS_GEMV_ROUTE=native"
-    trsm_tests   "BATCHLAS_TRSM_ROUTE=native"
     potrf_tests  "BATCHLAS_POTRF_ROUTE=native"
     # '|' separates several pins for one suite, NOT ';': a semicolon inside a
     # quoted entry is a list separator, so it flattens into this list and breaks
@@ -592,10 +623,11 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     symm_tests   "BATCHLAS_SYMM_ROUTE=native"
     syrk_tests   "BATCHLAS_SYRK_ROUTE=native"
     syr2k_tests  "BATCHLAS_SYR2K_ROUTE=native"
-    trmm_tests   "BATCHLAS_TRMM_ROUTE=native"
     hemm_tests   "BATCHLAS_HEMM_ROUTE=native"
     herk_tests   "BATCHLAS_HERK_ROUTE=native"
     her2k_tests  "BATCHLAS_HER2K_ROUTE=native"
+    # No trsm_tests/trmm_tests rerun: their sm_89 and apple_m5_max tables rank a native first
+    # in every row (tuned_tables_tests TrmmTrsmRowsRankANativeFirstOnSm89AndAppleM5Max).
 )
 
 function(batchlas_add_route_pinned_test test_name env)

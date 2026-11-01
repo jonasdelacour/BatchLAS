@@ -9,6 +9,8 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include <unistd.h>   // getpid; see emit()
 #include <batchlas/settings.hh>
@@ -91,6 +93,33 @@ const char* backend_name(Backend b) {
     }
 }
 
+// One `reached` CSV line; emit() and rows_since() share it, so a capture reads what a file holds.
+std::string reached_line(const Row& r, uint64_t calls) {
+    char buf[512];
+    std::snprintf(buf, sizeof buf, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
+                  std::string(op_name(r.op)).c_str(),
+                  std::string(to_string(r.scalar)).c_str(),
+                  backend_name(r.backend),
+                  r.shape.shape_class(),
+                  static_cast<long long>(r.shape.m), static_cast<long long>(r.shape.n),
+                  static_cast<long long>(r.shape.k), static_cast<long long>(r.shape.batch),
+                  r.origin.c_str(), r.algo.c_str(),
+                  static_cast<unsigned long long>(calls),
+                  r.native_existed ? 1 : 0, r.native_supported,
+                  static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
+                  static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
+                  static_cast<int>(r.shape.transB));
+    return buf;
+}
+
+std::string miss_line(const MissRow& m, uint64_t calls) {
+    char buf[256];
+    std::snprintf(buf, sizeof buf, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n", std::string(op_name(m.op)).c_str(),
+                  std::string(to_string(m.scalar)).c_str(), backend_name(m.backend),
+                  static_cast<unsigned long long>(calls), m.library.c_str());
+    return buf;
+}
+
 void emit() {
     const char* path = batchlas::settings().diagnostics.coverage_out.get();
     if (!path || !*path) {
@@ -112,29 +141,8 @@ void emit() {
                "native_route_supported,library,uplo,side,diag,transA,transB\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
-    for (const auto& [k, r] : choice_table()) {
-        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
-                     std::string(op_name(r.op)).c_str(),
-                     std::string(to_string(r.scalar)).c_str(),
-                     backend_name(r.backend),
-                     r.shape.shape_class(),
-                     static_cast<long long>(r.shape.m), static_cast<long long>(r.shape.n),
-                     static_cast<long long>(r.shape.k), static_cast<long long>(r.shape.batch),
-                     r.origin.c_str(), r.algo.c_str(),
-                     static_cast<unsigned long long>(r.calls),
-                     r.native_existed ? 1 : 0, r.native_supported,
-                     static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
-                     static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
-                     static_cast<int>(r.shape.transB));
-    }
-    for (const auto& [k, m] : misses()) {
-        std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",
-                     std::string(op_name(m.op)).c_str(),
-                     std::string(to_string(m.scalar)).c_str(),
-                     backend_name(m.backend),
-                     static_cast<unsigned long long>(m.calls),
-                     m.library.c_str());
-    }
+    for (const auto& [k, r] : choice_table()) std::fputs(reached_line(r, r.calls).c_str(), f);
+    for (const auto& [k, m] : misses()) std::fputs(miss_line(m, m.calls).c_str(), f);
 
     std::fputs(static_table().c_str(), f);
     std::fclose(f);
@@ -226,6 +234,54 @@ void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library)
         row.library = library ? library : "";
     }
     ++row.calls;
+}
+
+struct Snapshot::Tables {
+    std::unordered_map<std::string, Row> choices;
+    std::unordered_map<uint64_t, MissRow> misses;
+};
+
+Snapshot snapshot() {
+    Snapshot s;
+    s.enabled = g_dynamic_enabled;
+    s.keep = s.enabled;
+    s.saved = std::make_shared<Snapshot::Tables>();
+    std::lock_guard<std::mutex> lock(table_mutex());
+    choice_table().swap(s.saved->choices);
+    misses().swap(s.saved->misses);
+    return s;
+}
+
+std::vector<std::string> rows_since(const Snapshot&) {
+    std::vector<std::string> out;
+    std::lock_guard<std::mutex> lock(table_mutex());
+    for (const auto& [k, r] : choice_table()) out.push_back(reached_line(r, r.calls));
+    for (const auto& [k, m] : misses()) out.push_back(miss_line(m, m.calls));
+    return out;
+}
+
+namespace {
+template <typename Table>
+void merge_into(Table& into, Table& from) {  // the earlier row keeps its first call's shape
+    for (auto& [k, r] : from) {
+        const auto [it, fresh] = into.try_emplace(k, std::move(r));
+        if (!fresh) it->second.calls += r.calls;
+    }
+}
+}  // namespace
+
+void restore(Snapshot& s) {
+    if (s.saved) {
+        std::lock_guard<std::mutex> lock(table_mutex());
+        if (s.keep) {
+            merge_into(s.saved->choices, choice_table());
+            merge_into(s.saved->misses, misses());
+        }
+        choice_table().swap(s.saved->choices);
+        misses().swap(s.saved->misses);
+        s.saved.reset();
+    }
+    g_dynamic_enabled = s.enabled;
 }
 
 std::string static_table() {
