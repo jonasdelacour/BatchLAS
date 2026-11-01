@@ -98,6 +98,9 @@ struct RoutingSettings {
         return ops.size();
     }
 
+    /// @brief The route variable's name for `op`: `"BATCHLAS_" + upper-cased op + "_ROUTE"`.
+    BATCHLAS_API static std::string env_name(std::string_view op);
+
     /// @brief The captured `BATCHLAS_<OP>_ROUTE` for `op`.
     /// @throws batchlas::invalid_argument for an op not in `ops`
     const EnvValue& route(std::string_view op) const { return values[checked(op)]; }

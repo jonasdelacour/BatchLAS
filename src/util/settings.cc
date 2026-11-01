@@ -90,15 +90,8 @@ auto int_or(int fallback) { return [fallback](const char* n) { return env_int_or
 bool any_present(const char* a, const char* b) { return std::getenv(a) != nullptr || std::getenv(b) != nullptr; }
 
 void load_routing(RoutingSettings& r) {
-    // The names are synthesised ("BATCHLAS_" + upper-cased op + "_ROUTE"), so a grep
-    // for BATCHLAS_* string literals misses them.
-    for (std::size_t i = 0; i < RoutingSettings::ops.size(); ++i) {
-        std::string name = "BATCHLAS_";
-        for (const char c : RoutingSettings::ops[i])
-            name += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        name += "_ROUTE";
-        set_if_present(r.values[i], name.c_str());
-    }
+    for (std::size_t i = 0; i < RoutingSettings::ops.size(); ++i)
+        set_if_present(r.values[i], RoutingSettings::env_name(RoutingSettings::ops[i]).c_str());
 }
 
 void load_selection(SelectionSettings& s) {
@@ -323,6 +316,15 @@ void load_from_env(Settings& s) {
 }
 
 }  // namespace
+
+// The names are synthesised ("BATCHLAS_" + upper-cased op + "_ROUTE"), so a grep
+// for BATCHLAS_* string literals misses them.
+std::string RoutingSettings::env_name(std::string_view op) {
+    std::string name = "BATCHLAS_";
+    for (const char c : op) name += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    name += "_ROUTE";
+    return name;
+}
 
 const Settings& settings() {
     std::call_once(g_load_once, [] { load_from_env(mutable_settings()); });
