@@ -496,7 +496,7 @@ template <class T, int P> void run_org2l_orm2l(Dev& dev, int n) {
         v2::Frag<T, P, v2::ColPerLane> c;
         BATCHLAS_UNROLL_FULL
         for (int r = 0; r < P; ++r) c[r] = cg[std::ptrdiff_t(b) * P * P + r + lane * P];
-        v2::orm2l<v2::NativeArith<T>>(pex, c, vs, tm, tau_lane, n, lane < n);
+        v2::orm2l<v2::NativeArith<T>>(pex, c, vs, tm, tau_lane, n);
         v2::store(c, v2::vec(og + std::ptrdiff_t(b) * P * P + lane * P, P));
     });
     const auto gq = dev.down(qg, hq.size());
@@ -525,7 +525,7 @@ template <class T, int P> void run_org2l_orm2l(Dev& dev, int n) {
             }
         }
     }
-    EXPECT_EQ(bad, 0) << "orm2l<" << P << "> touched a lane with own == false";
+    EXPECT_EQ(bad, 0) << "orm2l<" << P << "> touched a pad lane (l >= n)";
     EXPECT_VERIFY(T, Check::blas, n, worst);
 }
 TYPED_TEST(DeviceBlasV2SyevDriversTest, Org2lOrm2lPartition) {

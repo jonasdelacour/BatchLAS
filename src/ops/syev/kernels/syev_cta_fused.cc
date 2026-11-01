@@ -186,19 +186,21 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_w = part_id * static_cast<int32_t>(P);
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
-                // This chunk's local tiles; NativeArith keeps the std::complex operators (strict port).
+                // NativeArith keeps the std::complex operators (strict port).
                 using Ar = v2::NativeArith<T>;
                 const v2::SgpPartition<kP> pex{sg};
-                const v2::Mat<T, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDA>, v2::Mem::Local> tile{&A_local[base_a], {}, {}, {}};
-                [[maybe_unused]] const v2::Vec<T, v2::Ext<kP>, v2::Unit, v2::Mem::Local> vs{&V_local[base_v], {}};
 
                 // ---- Stage 0: load the Hermitian completion of the stored triangle. ----
+                // The tiles are named only from here on: captures are laid out in order of first
+                // use, and naming A_local / V_local before nn and is_upper reorders the closure (strict).
                 for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                     T v = T(0);
-                    if (live && lane < nn && c < nn) v = v2::herm_at<Ar>(A_prob, is_upper, lane, c);
-                    tile(lane, c) = v;
+                    if (live && lane < nn && c < nn) v2::herm_load<Ar>(v, A_prob, is_upper, lane, c);
+                    v2::acc_mat<kP, LDA>(A_local, base_a)(lane, c) = v;
                 }
                 group_barrier(part);
+                const auto tile = v2::acc_mat<kP, LDA>(A_local, base_a);
+                [[maybe_unused]] const auto vs = v2::acc_vec<kP>(V_local, base_v);
 
                 // ---- Stage 1: tridiagonal reduction (SYTD2, upper path). ----
                 const T tau_lane = sytd2_cta_upper_partition<T, LDA>(
@@ -287,9 +289,11 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
                     // reflectors are applied afterwards, in stage 3). ----
                     QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const v2::Mat<Real, v2::Ext<kP>, v2::Ext<kP>, v2::Ext<LDQ>, v2::Mem::Local> qtile{&Q_local[base_q], {}, {}, {}};
+                    const auto qtile = v2::acc_mat<kP, LDQ>(Q_local, base_q);
 
-                    v2::laset_row<kP>(qtile.row(lane), lane, nn, Real(0), Real(1));
+                    for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
+                        v2::laset_at(qtile, lane, c, nn, Real(0), Real(1));
+                    }
                     group_barrier(part);
 
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
@@ -313,7 +317,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     group_barrier(part);
 
                     // Upper-path SYTD2 reflectors form a QL factorization: xORM2L, Left, NoTrans.
-                    v2::orm2l<Ar>(pex, C_col, vs, tile, tau_lane, nn, lane < nn);
+                    v2::orm2l<Ar>(pex, C_col, vs, tile, tau_lane, nn);
 
                     if (live && lane < nn) v2::store_n(C_col, v2::col_ref(A_prob, dst, nn), nn);
                 }
