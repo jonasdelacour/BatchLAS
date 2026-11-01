@@ -48,7 +48,9 @@ void stedc_merge_fused(Queue& ctx,
                 const auto tid = item.get_local_linear_id();
                 const auto cta = item.get_group();
                 auto Q_bid = Qview.batch_item(bid);
-                const auto sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
+                // Unused, but this first read of rho fixes the lambda's capture order; without it
+                // the closure layout and the register count move.
+                [[maybe_unused]] const auto sign = (rho[bid] >= T(0)) ? T(1) : T(-1);
                 const int dd = n_reduced[bid];
 
                 if (dd <= 0) {
