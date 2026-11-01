@@ -24,6 +24,7 @@
 #include <src/ops/syev/vendor.hh>
 #include <src/ops/syev/choice.hh>
 #include <src/util/batch_mask.hh>
+#include <batchlas/blas/device/v2/ext/syevx.hh>
 #include <optional>
 #include <string>
 
@@ -46,6 +47,11 @@ namespace batchlas {
     struct SyevxJacobiApplyKernel;
 
 namespace {
+
+// The residual kernel's R/norm sweep. true: one sub-group per column, its three squared norms
+// reduced by shuffles (deterministic, no SLM atomics, no zero-init barrier). false: the flat
+// sweep with per-column SLM atomics it replaced, kept compilable for the SASS and runtime A/B.
+constexpr bool kResidualTeamPerColumn = true;
 
 // BATCHLAS_SYEVX_PROJECTED_VENDOR: the tiny projected solves (XtAX, StAS) go to the vendor syev.
 // The run path and the buffer size must both read it, or vendor-free sizing throws.
@@ -455,37 +461,33 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 batchlas::impl::parallel_for<SyevxJacobiDiagonalKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range{size_t(batch_size * wg)}, sycl::range{wg}),
                     [=](sycl::nd_item<1> item) {
+                        namespace v2 = batchlas::device::v2;
+                        const v2::WorkGroup<static_cast<int>(wg)> ex{item};
                         const int bid = int(item.get_group_linear_id());
                         if (masked && !mk[bid]) return;  // I1, before the group reductions
-                        const int64_t tid = int64_t(item.get_local_linear_id());
-                        const int64_t local_size = int64_t(item.get_local_range(0));
-                        sycl::group<1> cta = item.get_group();
                         const auto Ab = Akv.batch_item(bid);
-                        T* dst = diag_ptr + int64_t(bid) * n;
+                        // An absent CSR entry reads back as 0, which both the definiteness
+                        // test and the singularity guard then treat as unusable.
+                        const auto diag = v2::lazy(int(n), [&](int i) -> T {
+                            if constexpr (MFormat == MatrixFormat::Dense) return Ab(i, i);
+                            else return Ab.get(i, i);
+                        });
+                        const auto dst = v2::vec(diag_ptr + int64_t(bid) * n, int(n));
+                        // dst := diag(A); in the same pass max |Re d| and min Re d. Real part
+                        // only: a Hermitian A has a real diagonal, and its sign decides whether
+                        // diag(A)^{-1} is positive definite.
                         float_type local_max = float_type(0);
                         float_type local_min = std::numeric_limits<float_type>::max();
-                        for (int64_t i = tid; i < n; i += local_size) {
-                            T d;
-                            if constexpr (MFormat == MatrixFormat::Dense) {
-                                d = Ab(int(i), int(i));
-                            } else {
-                                // An absent entry reads back as 0, which both the
-                                // definiteness test and the singularity guard then
-                                // treat as unusable.
-                                d = Ab.get(int(i), int(i));
-                            }
-                            dst[i] = d;
-                            // Real part only: a Hermitian A has a real diagonal, and its
-                            // sign decides whether diag(A)^{-1} is positive definite.
-                            float_type dr;
-                            if constexpr (detail::is_complex<T>::value) dr = d.real();
-                            else                                          dr = d;
+                        v2::for_each_owned(ex, int(n), [&](int i) {
+                            const T d = diag(i);
+                            dst(i) = d;
+                            const float_type dr = v2::Arith<T>::re(d);
                             local_max = sycl::max(local_max, sycl::fabs(dr));
                             local_min = sycl::min(local_min, dr);
-                        }
-                        const float_type dmax = batchlas::portable::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
-                        const float_type dmin = batchlas::portable::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
-                        if (tid == 0) {
+                        });
+                        const float_type dmax = v2::allreduce(ex, local_max, sycl::maximum<float_type>());
+                        const float_type dmin = v2::allreduce(ex, local_min, sycl::minimum<float_type>());
+                        if (ex.leader()) {
                             // Decided once per batch item, not per entry: a mixed-sign
                             // diagonal makes the whole operator indefinite, which no
                             // per-entry guard repairs.
@@ -625,50 +627,75 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 auto lsums = sycl::local_accessor<float_type, 1>(3 * neigs, h);
                 const bool find_largest = params.find_largest;
                 batchlas::impl::parallel_for<SyevxResidualsKernel<B,T,MFormat>>(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
+                    namespace v2 = batchlas::device::v2;
+                    using Ar = v2::Arith<T>;
+                    const v2::RtGroup<> ex{item};
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
                     // X's columns are in the ascending order syev returned them in, so
                     // column j of X pairs with lambda[eig_offset + j]. For find_largest the
                     // selected block is the *top* block_vectors, hence the offset.
                     const int64_t eig_offset = find_largest ? (int64_t(num_eigvals) - block_vectors) : 0;
-                    // Reported slot i (largest-first when find_largest) <- column of X.
-                    const auto reported_col = [=](int64_t i) {
-                        return find_largest ? (block_vectors - 1 - i) : i;
-                    };
-                    // Inverse of reported_col: column of X -> reported slot (may be >= neigs).
+                    // Column of X -> reported slot (largest-first when find_largest; may be >= neigs).
                     const auto col_to_slot = [=](int64_t c) {
                         return find_largest ? (block_vectors - 1 - c) : c;
                     };
 
-                    auto tid = item.get_local_linear_id();
-                    sycl::group<1> cta = item.get_group();
-                    const auto local_size = item.get_local_range(0);
                     auto bid = item.get_group_linear_id();
                     // I1, before the first barrier. "Converged" is the neutral flag: the host
                     // loop then stops on the active items alone.
                     if (masked && !mk[bid]) {
-                        if (tid == 0) flags[bid] = 1;
+                        if (ex.leader()) flags[bid] = 1;
                         return;
                     }
-                    auto blockR = Span(Rdata + block_vectors*n*3*bid, block_vectors*n);
-                    auto blockX = Span(Xdata + block_vectors*n*3*bid, block_vectors*n);
-                    auto blockAX = Span(AXdata + block_vectors*n*3*bid, block_vectors*n);
+                    const int nn = int(n), nb = int(block_vectors), ne = int(neigs);
+                    const auto Xb = v2::mat(Xdata + block_vectors*n*3*bid, nn, nb, nn);
+                    const auto AXb = v2::mat(AXdata + block_vectors*n*3*bid, nn, nb, nn);
+                    const auto Rb = v2::mat(Rdata + block_vectors*n*3*bid, nn, nb, nn);
                     auto blockLambdas = lambdas.subspan(bid * (num_eigvals), num_eigvals);
                     auto blockresiduals = residuals.subspan(bid * (neigs), neigs);
                     auto blockbestresiduals = best_residuals.subspan(bid * (neigs), neigs);
                     auto blockW = W.subspan(bid * (neigs), neigs);
-                    if (tid == 0) {
+                    if (ex.leader()) {
                         update_best[0] = 0;
                     }
-                    for (size_t s = tid; s < 3 * neigs; s += local_size) {
-                        lsums[s] = float_type(0);
-                    }
-                    sycl::group_barrier(cta);
 
-                    // Form R and accumulate the three per-column norms in one sweep. The
-                    // block is column-major, so flushing a running partial only on a
-                    // column change turns one atomic per element into one per column.
-                    {
+                    if constexpr (kResidualTeamPerColumn) {
+                        // R(:, c) := AX(:, c) - lambda_c X(:, c), one sub-group per column, and
+                        // in the same sweep ||r||^2, ||x||^2, ||Ax||^2 reduced by shuffles.
+                        const auto tm = ex.sub();
+                        for (int c = ex.team(); c < nb; c += ex.nteams()) {
+                            const float_type lam = blockLambdas[eig_offset + c];
+                            const auto x = Xb.col(c), ax = AXb.col(c), r = Rb.col(c);
+                            float_type pr = 0, px = 0, pax = 0;
+                            v2::for_each_owned(tm, nn, [&](int i) {
+                                const T rv = Ar::sub(ax(i), v2::scale_re(lam, x(i)));
+                                r(i) = rv;
+                                pr += v2::abs2(rv);
+                                px += v2::abs2(x(i));
+                                pax += v2::abs2(ax(i));
+                            });
+                            const int slot = int(col_to_slot(c));
+                            if (slot >= ne) continue;  // uniform over the sub-group
+                            pr = v2::allreduce(tm, pr, sycl::plus<float_type>());
+                            px = v2::allreduce(tm, px, sycl::plus<float_type>());
+                            pax = v2::allreduce(tm, pax, sycl::plus<float_type>());
+                            if (tm.leader()) {
+                                lsums[slot] = pr;
+                                lsums[neigs + slot] = px;
+                                lsums[2 * neigs + slot] = pax;
+                            }
+                        }
+                    } else {
+                        v2::for_each_owned(ex, 3 * ne, [&](int s) { lsums[s] = float_type(0); });
+                        v2::group_sync(ex);
+                        // Flat sweep over the column-major block; a running partial is
+                        // flushed (one SLM atomic per column) only on a column change.
+                        auto blockR = Rb.p;
+                        auto blockX = Xb.p;
+                        auto blockAX = AXb.p;
+                        auto tid = item.get_local_linear_id();
+                        const auto local_size = item.get_local_range(0);
                         int cur_col = -1;
                         float_type acc_r = 0, acc_x = 0, acc_ax = 0;
                         auto flush = [&]() {
@@ -700,28 +727,28 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         }
                         flush();
                     }
-                    sycl::group_barrier(cta);
+                    v2::group_sync(ex);
 
                     // Backward-stable convergence measure: ||r|| / (||Ax|| + |lambda|*||x||).
                     // ||x||*|lambda| alone collapses as lambda -> 0, so a perfectly good
                     // eigenpair with a near-zero eigenvalue could never register as
                     // converged; ||Ax|| keeps the denominator bounded away from zero for
                     // any nonzero A (Duersch et al.).
-                    for (size_t i = tid; i < neigs; i += local_size){
+                    v2::for_each_owned(ex, ne, [&](int i) {
                         const float_type r_norm  = sycl::sqrt(lsums[i]);
                         const float_type x_norm  = sycl::sqrt(lsums[neigs + i]);
                         const float_type ax_norm = sycl::sqrt(lsums[2 * neigs + i]);
-                        const auto eigval = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                        const auto eigval = blockLambdas[find_largest ? (num_eigvals - 1 - i) : i];
                         const float_type denom = ax_norm + sycl::fabs(eigval) * x_norm;
                         const float_type rel = (denom > float_type(0)) ? (r_norm / denom) : r_norm;
                         blockresiduals[i] = rel;
                         // Deliberately the *current* residual, not the running best: it
                         // labels the residual block just written into R.
                         col_conv[bid * neigs + i] = (rel <= lock_tol) ? 1 : 0;
-                    }
+                    });
 
-                    sycl::group_barrier(cta);
-                    if (tid == 0){
+                    v2::group_sync(ex);
+                    if (ex.leader()){
                         float_type current_quality = blockresiduals[0];
                         for (size_t i = 1; i < neigs; ++i) {
                             if (blockresiduals[i] > current_quality) {
@@ -734,39 +761,34 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                             best_quality_data[bid] = current_quality;
                             for (size_t i = 0; i < neigs; ++i) {
                                 blockbestresiduals[i] = blockresiduals[i];
-                                blockW[i] = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                                blockW[i] = blockLambdas[find_largest ? (num_eigvals - 1 - i) : i];
                             }
                             update_best[0] = 1;
                         }
                     }
 
-                    sycl::group_barrier(cta);
+                    v2::group_sync(ex);
                     // Instrumentation history, staged device-side.
                     // evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
                     if (stage_best_ptr != nullptr) {
-                        for (size_t i = tid; i < neigs; i += local_size) {
+                        v2::for_each_owned(ex, ne, [&](int i) {
                             const size_t dst = static_cast<size_t>(bid) * neigs + i;
                             stage_best_ptr[dst] = blockbestresiduals[i];
                             if (stage_current_ptr != nullptr) stage_current_ptr[dst] = blockresiduals[i];
                             if (stage_ritz_ptr != nullptr) {
-                                stage_ritz_ptr[dst] = blockLambdas[params.find_largest ? (num_eigvals - 1 - i) : i];
+                                stage_ritz_ptr[dst] = blockLambdas[find_largest ? (num_eigvals - 1 - i) : i];
                             }
-                        }
+                        });
                     }
                     if (want_eigenvectors && update_best[0] != 0) {
-                        auto* blockXbest = Xbest_data + bid * (n * neigs);
-                        // Where the largest-first presentation happens: slot i of the
-                        // snapshot takes column reported_col(i) of X, folded into a copy
-                        // that already touches every one of these elements.
-                        for (int i = int(tid); i < int(n * neigs); i += int(local_size)) {
-                            const int64_t slot = i / int(n);
-                            const int64_t row = i - slot * int(n);
-                            blockXbest[i] = blockX[reported_col(slot) * int64_t(n) + row];
-                        }
+                        // Where the largest-first presentation happens: slot i of the snapshot
+                        // takes column block_vectors-1-i of X, folded into this copy.
+                        v2::lacpy(ex, v2::cols_flipped(Xb.sub(0, find_largest ? nb - ne : 0, nn, ne), find_largest),
+                                  v2::mat(Xbest_data + bid * (n * neigs), nn, ne, nn));
                     }
 
-                    sycl::group_barrier(cta);
-                    if (tid == 0) {
+                    v2::group_sync(ex);
+                    if (ex.leader()) {
                         int32_t ok = 1;
                         for (size_t i = 0; i < neigs; ++i) {
                             if (blockbestresiduals[i] > tol) {
@@ -887,51 +909,47 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     auto scale_acc = sycl::local_accessor<float_type, 1>(1, h);
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
-                            const auto tid = item.get_local_linear_id();
+                            namespace v2 = batchlas::device::v2;
+                            const v2::WorkGroup<128> ex{item};
                             const auto bid = item.get_group_linear_id();
-                            const auto local_size = item.get_local_range(0);
-                            sycl::group<1> cta = item.get_group();
                             if (masked && !mk[bid]) return;  // I1
-                            auto* block = Rdata + int64_t(bid) * R_stride;
+                            const int nn = int(n), nb = int(nblk);
+                            const auto Rb = v2::mat(Rdata + int64_t(bid) * R_stride, nn, nb, int(R_ld));
+                            const auto locked = [&](int j) {
+                                return j < int(nlock) && col_conv[bid * nlock + size_t(j)] != 0;
+                            };
 
-                            for (int64_t j = int64_t(tid); j < nblk; j += int64_t(local_size))
-                                colnorm[j] = float_type(0);
-                            if (tid == 0) scale_acc[0] = float_type(0);
-                            sycl::group_barrier(cta);
+                            v2::for_each_owned(ex, nb, [&](int j) { colnorm[j] = float_type(0); });
+                            if (ex.leader()) scale_acc[0] = float_type(0);
+                            v2::group_sync(ex);
 
                             // Norm of every column that is *not* being replaced, so the
                             // filler matches the live block's scale: a unit-norm filler
                             // beside 1e-6 residual columns hands Chol2 a Gram matrix
                             // with condition ~1e12.
-                            for (int64_t j = 0; j < nblk; ++j) {
-                                const bool locked = (j < int64_t(nlock)) && (col_conv[bid * nlock + size_t(j)] != 0);
-                                if (locked) continue;
-                                const auto* col = block + j * R_ld;
-                                float_type acc = 0;
-                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
-                                    acc += detail::norm_squared(col[i]);
-                                const float_type s = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
-                                if (tid == 0) colnorm[j] = sycl::sqrt(s);
+                            for (int j = 0; j < nb; ++j) {
+                                if (locked(j)) continue;
+                                const float_type s = v2::sumsq<v2::Scope::Group>(ex, Rb.col(j));
+                                if (ex.leader()) colnorm[j] = sycl::sqrt(s);
                             }
-                            sycl::group_barrier(cta);
-                            if (tid == 0) {
+                            v2::group_sync(ex);
+                            if (ex.leader()) {
                                 float_type mx = 0;
-                                for (int64_t j = 0; j < nblk; ++j) mx = sycl::fmax(mx, colnorm[j]);
+                                for (int j = 0; j < nb; ++j) mx = sycl::fmax(mx, colnorm[j]);
                                 // Every column locked (possible when the caller asks for
                                 // no guard block): fall back to a unit scale so the
                                 // filler still produces a full-rank block.
                                 scale_acc[0] = (mx > float_type(0)) ? mx : float_type(1);
                             }
-                            sycl::group_barrier(cta);
+                            v2::group_sync(ex);
 
                             // Deterministic per (iteration, batch, column, row) hash
                             // rather than a stateful RNG: reproducible, no allocation.
                             const float_type amp =
                                 scale_acc[0] * sycl::sqrt(float_type(3) / float_type(n));
-                            for (size_t j = 0; j < nlock; ++j) {
-                                if (col_conv[bid * nlock + j] == 0) continue;
-                                auto* col = block + int64_t(j) * R_ld;
-                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size)) {
+                            for (int j = 0; j < int(nlock); ++j) {
+                                if (!locked(j)) continue;
+                                v2::for_each_owned(ex, nn, [&](int i) {
                                     uint32_t hsh = seed ^ (uint32_t(bid) * 0x9E3779B9u) ^
                                                    (uint32_t(j) * 0x85EBCA6Bu) ^ (uint32_t(i) * 0xC2B2AE35u);
                                     hsh ^= hsh >> 16; hsh *= 0x7FEB352Du;
@@ -939,8 +957,8 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                                     hsh ^= hsh >> 16;
                                     const float_type u =
                                         float_type(hsh & 0xFFFFFFu) / float_type(0x800000u) - float_type(1);
-                                    col[i] = T(amp * u);
-                                }
+                                    Rb(i, j) = T(amp * u);
+                                });
                             }
                         });
                 });
@@ -967,39 +985,37 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * residual_wg_size)},
                                           sycl::range{size_t(residual_wg_size)}),
                         [=](sycl::nd_item<1> item) {
-                            const int64_t tid = int64_t(item.get_local_linear_id());
+                            namespace v2 = batchlas::device::v2;
+                            using Ar = v2::Arith<T>;
+                            const v2::RtGroup<> ex{item};
                             const int64_t bid = int64_t(item.get_group_linear_id());
-                            const int64_t local_size = int64_t(item.get_local_range(0));
                             // R.data_ptr() already carries R's offset within S, so only
                             // the batch stride is applied here. Unshifted diag(A)^{-1}
                             // needs a positive definite diagonal; where it is not, leave
                             // the residual alone rather than apply an indefinite operator.
                             if (masked && !mk[bid]) return;  // I1 (no barrier in this kernel)
                             if (!shifted && usable_ptr[bid] == 0) return;
-                            T* blockR = Rdata + bid * block_vectors * n * 3;
-                            const T* blockD = diag_ptr + bid * n;
+                            const int nn = int(n);
+                            const auto Rb = v2::mat(Rdata + bid * block_vectors * n * 3, nn, int(block_vectors), nn);
+                            const auto dg = v2::vec(diag_ptr + bid * n, nn);
                             auto blockLambdas = lambdas_span.subspan(bid * num_eigvals, num_eigvals);
 
-                            for (int64_t idx = tid; idx < n * block_vectors; idx += local_size) {
-                                const int64_t col = idx / n;
-                                const int64_t row = idx - col * n;
+                            v2::for_each_owned_2d(ex, nn, int(block_vectors), [&](int row, int col) {
                                 const float_type lam =
                                     shifted ? blockLambdas[find_largest ? (num_eigvals - 1 - col) : col]
                                             : float_type(0);
-                                const T d = blockD[row];
+                                const T d = dg(row);
                                 const T denom = d - T(lam);
-                                const float_type denom2 = detail::norm_squared(denom);
+                                const float_type denom2 = v2::abs2(denom);
                                 const float_type scale = sycl::max(sycl::fabs(lam), detail::abs(d));
                                 const float_type floor_sq = (scale * sing_tol) * (scale * sing_tol);
-                                if (denom2 <= floor_sq || !(denom2 > float_type(0))) continue;
-                                if constexpr (detail::is_complex<T>::value) {
-                                    const T inv = T(denom.real(), -denom.imag()) *
-                                                  (float_type(1) / denom2);
-                                    blockR[idx] = blockR[idx] * inv;
+                                if (denom2 <= floor_sq || !(denom2 > float_type(0))) return;
+                                if constexpr (Ar::is_complex) {
+                                    Rb(row, col) = Ar::mul(Rb(row, col), v2::scale_re(float_type(1) / denom2, Ar::conj(denom)));
                                 } else {
-                                    blockR[idx] = blockR[idx] * (float_type(1) / denom);
+                                    Rb(row, col) = Rb(row, col) * (float_type(1) / denom);
                                 }
-                            }
+                            });
                         });
                 });
                 trace_wait("syevx: Jacobi apply done");
@@ -1021,16 +1037,14 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     const size_t nlock = neigs;
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
-                            const auto tid = item.get_local_linear_id();
+                            namespace v2 = batchlas::device::v2;
+                            const v2::WorkGroup<128> ex{item};
                             const auto bid = item.get_group_linear_id();
-                            const auto local_size = item.get_local_range(0);
                             if (masked && !mk[bid]) return;  // I1
-                            auto* block = Rdata + int64_t(bid) * R_stride;
-                            for (size_t j = 0; j < nlock; ++j) {
-                                if (col_conv[bid * nlock + j] == 0) continue;
-                                auto* col = block + int64_t(j) * R_ld;
-                                for (int64_t i = int64_t(tid); i < n; i += int64_t(local_size))
-                                    col[i] = T(0);
+                            const auto Rb = v2::mat(Rdata + int64_t(bid) * R_stride, int(n), int(nlock), int(R_ld));
+                            for (int j = 0; j < int(nlock); ++j) {
+                                if (col_conv[bid * nlock + size_t(j)] == 0) continue;
+                                v2::map(ex, Rb.col(j), [] { return T(0); });
                             }
                         });
                 });
@@ -1043,15 +1057,13 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                 ctx -> submit([&](sycl::handler& h){
                     auto Sdata = S.data_ptr();
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size*128)}, sycl::range{size_t(128)}), [=](sycl::nd_item<1> item){
-                        auto tid = item.get_local_linear_id();
+                        namespace v2 = batchlas::device::v2;
+                        const v2::WorkGroup<128> ex{item};
                         auto bid = item.get_group_linear_id();
-                        auto cta = item.get_group();
                         if (masked && !mk[bid]) return;  // I1
-                        auto block_src = Span(Sdata + (bid * 3 + 2) * n * block_vectors, n * block_vectors);
-                        auto block_dst = Span(Sdata + (bid * 3 + 1) * n * block_vectors, n * block_vectors);
-                        for(int i = tid; i < n*block_vectors; i+=cta.get_local_range(0)){
-                            block_dst[i] = block_src[i];
-                        }
+                        const int len = int(n * block_vectors);
+                        v2::copy(ex, v2::vec(Sdata + (bid * 3 + 2) * n * block_vectors, len),
+                                 v2::vec(Sdata + (bid * 3 + 1) * n * block_vectors, len));
                     });
                 });
                 trace_wait("syevx: restart shift done");
@@ -1098,27 +1110,16 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     const bool largest = params.find_largest;
                     batchlas::impl::parallel_for(h, sycl::nd_range<1>(sycl::range{size_t(batch_size * 128)}, sycl::range{size_t(128)}),
                         [=](sycl::nd_item<1> item) {
-                            const auto tid = item.get_local_linear_id();
+                            namespace v2 = batchlas::device::v2;
+                            const v2::WorkGroup<128> ex{item};
                             const auto bid = item.get_group_linear_id();
-                            const auto local_size = item.get_local_range(0);
-                            sycl::group<1> cta = item.get_group();
                             if (masked && !mk[bid]) return;  // I1, before the group reductions
-                            auto* mat = StAS_ptr + int64_t(bid) * StAS_stride;
-                            const auto* basis = Sdata + int64_t(bid) * S_stride;
-                            float_type acc = 0;
-                            for (int64_t linear = int64_t(tid); linear < nv * nv; linear += int64_t(local_size)) {
-                                const int64_t row = linear % nv;
-                                const int64_t col = linear / nv;
-                                acc += detail::norm_squared(mat[row + col * StAS_ld]);
-                            }
-                            const float_type total = batchlas::portable::reduce_over_group(cta, acc, sycl::plus<float_type>());
-                            const float_type sentinel = sycl::sqrt(total) + float_type(1);
-                            for (int64_t c = first; c < nv; ++c) {
-                                float_type part = 0;
-                                for (int64_t i = int64_t(tid); i < nrows; i += int64_t(local_size))
-                                    part += detail::norm_squared(basis[i + c * S_ld]);
-                                const float_type norm2 = batchlas::portable::reduce_over_group(cta, part, sycl::plus<float_type>());
-                                if (tid == 0 && norm2 <= null_tol) mat[c + c * StAS_ld] = T(largest ? -sentinel : sentinel);
+                            const auto H = v2::mat(StAS_ptr + int64_t(bid) * StAS_stride, int(nv), int(nv), int(StAS_ld));
+                            const auto basis = v2::mat(Sdata + int64_t(bid) * S_stride, int(nrows), int(nv), int(S_ld));
+                            const float_type sentinel = sycl::sqrt(v2::sumsq_mat<v2::Scope::Group>(ex, H)) + float_type(1);
+                            for (int c = int(first); c < int(nv); ++c) {
+                                const float_type norm2 = v2::sumsq<v2::Scope::Group>(ex, basis.col(c));
+                                if (ex.leader() && norm2 <= null_tol) H(c, c) = T(largest ? -sentinel : sentinel);
                             }
                         });
                 });
@@ -1205,17 +1206,13 @@ size_t projected_syev_buffer_size(batchlas::Queue& ctx, const batchlas::MatrixVi
                     batchlas::impl::parallel_for<SyevxReverseEigenvectorsKernel<B, T, MFormat>>(h,
                         sycl::nd_range<1>(sycl::range{size_t(batch_size * 256)}, sycl::range{size_t(256)}),
                         [=](sycl::nd_item<1> item) {
-                            const int64_t tid = int64_t(item.get_local_linear_id());
+                            namespace v2 = batchlas::device::v2;
+                            const v2::WorkGroup<256> ex{item};
                             const int64_t bid = int64_t(item.get_group_linear_id());
-                            const int64_t local_size = int64_t(item.get_local_range(0));
                             if (masked && !mk[bid]) return;  // I1
-                            auto* src = Xptr + bid * X_stride;
-                            auto* dst = Vptr + bid * V_stride;
-                            for (int64_t i = tid; i < nn * ncols; i += local_size) {
-                                const int64_t col = i / nn;
-                                const int64_t row = i - col * nn;
-                                dst[row + col * V_ld] = src[row + (k - 1 - col) * X_ld];
-                            }
+                            const auto Xb = v2::mat(Xptr + bid * X_stride, int(nn), int(k), int(X_ld));
+                            v2::lacpy(ex, v2::cols_flipped(Xb.sub(0, int(k - ncols), int(nn), int(ncols)), true),
+                                      v2::mat(Vptr + bid * V_stride, int(nn), int(ncols), int(V_ld)));
                         });
                 });
             }

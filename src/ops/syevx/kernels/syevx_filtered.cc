@@ -40,6 +40,7 @@
 #include <src/util/batch_mask.hh>
 #include <src/ops/syevx/syevx.hh>
 #include <batchlas/settings.hh>
+#include <batchlas/blas/device/v2/ext/syevx.hh>
 
 namespace batchlas {
 
@@ -260,12 +261,13 @@ Event syevx_filtered(Queue& ctx,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rg * kBoundsWG},
                                   sycl::range{kBoundsWG}),
                 [=](sycl::nd_item<1> item) {
+                    namespace v2 = batchlas::device::v2;
+                    const v2::WorkGroup<static_cast<int>(kBoundsWG)> ex{item};
                     const size_t gid = item.get_group_linear_id();
                     const int b = static_cast<int>(gid / rg);
                     if (masked && !mk[b]) return;  // I1: the group is one item's, before the reduction
                     const size_t g = gid % rg;
-                    const size_t lid = item.get_local_linear_id();
-                    const int64_t i = static_cast<int64_t>(g * kBoundsWG + lid);
+                    const int64_t i = static_cast<int64_t>(g * kBoundsWG + static_cast<size_t>(ex.lid()));
                     Real l = std::numeric_limits<Real>::max();
                     Real u = -std::numeric_limits<Real>::max();
                     if (i < nn) {
@@ -273,9 +275,9 @@ Event syevx_filtered(Queue& ctx,
                         l = rb[0];
                         u = rb[1];
                     }
-                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
-                    if (lid == 0) {
+                    l = v2::allreduce(ex, l, sycl::minimum<Real>());
+                    u = v2::allreduce(ex, u, sycl::maximum<Real>());
+                    if (ex.leader()) {
                         part[2 * gid + 0] = l;
                         part[2 * gid + 1] = u;
                     }
@@ -283,26 +285,28 @@ Event syevx_filtered(Queue& ctx,
         });
         auto lo = lo_span.data();
         auto hi = hi_span.data();
-        const size_t rwg = 128;
+        constexpr int rwg = 128;
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxFilterBoundsReduceKernel<B, T, MFormat>>(h,
                 sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * rwg},
-                                  sycl::range{rwg}),
+                                  sycl::range{static_cast<size_t>(rwg)}),
                 [=](sycl::nd_item<1> item) {
+                    namespace v2 = batchlas::device::v2;
+                    const v2::WorkGroup<rwg> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
-                    const size_t lid = item.get_local_linear_id();
-                    const size_t lsz = item.get_local_range(0);
+                    // Partials are interleaved (lo, hi) pairs, one per row group.
+                    const auto plo = v2::vec(part + 2 * static_cast<size_t>(b) * rg, static_cast<int>(rg), 2);
+                    const auto phi = v2::vec(part + 2 * static_cast<size_t>(b) * rg + 1, static_cast<int>(rg), 2);
                     Real l = std::numeric_limits<Real>::max();
                     Real u = -std::numeric_limits<Real>::max();
-                    for (size_t g = lid; g < rg; g += lsz) {
-                        const size_t idx = static_cast<size_t>(b) * rg + g;
-                        l = sycl::min(l, part[2 * idx + 0]);
-                        u = sycl::max(u, part[2 * idx + 1]);
-                    }
-                    l = batchlas::portable::reduce_over_group(item.get_group(), l, sycl::minimum<Real>());
-                    u = batchlas::portable::reduce_over_group(item.get_group(), u, sycl::maximum<Real>());
-                    if (lid == 0) {
+                    v2::for_each_owned(ex, static_cast<int>(rg), [&](int g) {
+                        l = sycl::min(l, plo(g));
+                        u = sycl::max(u, phi(g));
+                    });
+                    l = v2::allreduce(ex, l, sycl::minimum<Real>());
+                    u = v2::allreduce(ex, u, sycl::maximum<Real>());
+                    if (ex.leader()) {
                         // Degenerate spectrum: widen so e > 0 below.
                         if (!(u > l)) { u = l + Real(1); }
                         lo[b] = l;
@@ -370,43 +374,37 @@ Event syevx_filtered(Queue& ctx,
             const int64_t nn = n, mm = m, kk = k;
             const bool large = find_largest;
             const Real tolv = use_tol;
-            const size_t wg = 128;
+            constexpr int wg = 128;
             ctx->submit([&](sycl::handler& h) {
                 batchlas::impl::parallel_for<SyevxFilterResidualKernel<B, T, MFormat>>(h,
                     sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
-                                      sycl::range{wg}),
+                                      sycl::range{static_cast<size_t>(wg)}),
                     [=](sycl::nd_item<1> item) {
+                        namespace v2 = batchlas::device::v2;
+                        using Ar = v2::Arith<T>;
+                        const v2::WorkGroup<wg> ex{item};
                         const int b = static_cast<int>(item.get_group_linear_id());
-                        const int lid = static_cast<int>(item.get_local_linear_id());
-                        const int lsz = static_cast<int>(item.get_local_range(0));
                         // I1, before the reduction. "Converged" is the neutral flag: the host
                         // loop then stops on the active items alone.
                         if (masked && !mk[b]) {
-                            if (lid == 0) flag[b] = 1;
+                            if (ex.leader()) flag[b] = 1;
                             return;
                         }
+                        // One item per wanted column j: ||A x - theta x||_2, serial over rows.
                         int local_ok = 1;
-                        for (int64_t j = lid; j < kk; j += lsz) {
-                            const int64_t col = large ? (mm - 1 - j) : j;
+                        v2::for_each_owned(ex, static_cast<int>(kk), [&](int j) {
+                            const int col = large ? static_cast<int>(mm) - 1 - j : j;
                             const Real lam = th[b * mm + col];
-                            Real acc = Real(0);
-                            for (int64_t r = 0; r < nn; ++r) {
-                                const T d = AXk(static_cast<int>(r), static_cast<int>(col), b)
-                                          - T(lam) * Xk(static_cast<int>(r), static_cast<int>(col), b);
-                                if constexpr (is_std_complex_v<T>) {
-                                    acc += d.real() * d.real() + d.imag() * d.imag();
-                                } else {
-                                    acc += d * d;
-                                }
-                            }
-                            const Real nrm = sycl::sqrt(acc);
+                            const auto r = v2::lazy(static_cast<int>(nn), [&](int i) {
+                                return Ar::sub(AXk(i, col, b), v2::scale_re(lam, Xk(i, col, b)));
+                            });
+                            const Real nrm = sycl::sqrt(v2::sumsq(v2::Thread{}, r));
                             rn[b * kk + j] = nrm;
                             const Real scale = sycl::fmax(sycl::fabs(lam), Real(1));
                             if (!(nrm <= tolv * scale)) local_ok = 0;
-                        }
-                        const int all_ok = batchlas::portable::reduce_over_group(
-                            item.get_group(), local_ok, sycl::minimum<int>());
-                        if (lid == 0) flag[b] = all_ok;
+                        });
+                        const int all_ok = v2::allreduce(ex, local_ok, sycl::minimum<int>());
+                        if (ex.leader()) flag[b] = all_ok;
                     });
             });
         }
@@ -554,9 +552,12 @@ Event syevx_filtered(Queue& ctx,
                         const int64_t rem = idx - static_cast<int64_t>(b) * nn * mm;
                         const int r = static_cast<int>(rem % nn);
                         const int c = static_cast<int>(rem / nn);
-                        const T av = Tk(r, c, b) - T(cvals[b]) * Sk(r, c, b);
-                        T out = T(ca[b]) * av;
-                        if (!is_first) out = out - T(cb[b]) * Pk(r, c, b);
+                        using Ar = batchlas::device::v2::Arith<T>;
+                        using batchlas::device::v2::scale_re;
+                        // D := ca (A S - c S) - cb P, every scalar real.
+                        const T av = Ar::sub(Tk(r, c, b), scale_re(cvals[b], Sk(r, c, b)));
+                        T out = scale_re(ca[b], av);
+                        if (!is_first) out = Ar::sub(out, scale_re(cb[b], Pk(r, c, b)));
                         Dk(r, c, b) = out;
                     });
             });
@@ -647,27 +648,25 @@ Event syevx_filtered(Queue& ctx,
         const int64_t v_stride = want_vectors ? V.stride() : 0;
         const int64_t nn = n, mm = m, kk = k;
         const bool large = find_largest;
-        const size_t wg = 128;
+        constexpr int wg = 128;
         ctx->submit([&](sycl::handler& h) {
             batchlas::impl::parallel_for<SyevxFilterFinalizeKernel<B, T, MFormat>>(h,
-                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg}, sycl::range{wg}),
+                sycl::nd_range<1>(sycl::range{static_cast<size_t>(batch) * wg},
+                                  sycl::range{static_cast<size_t>(wg)}),
                 [=](sycl::nd_item<1> item) {
+                    namespace v2 = batchlas::device::v2;
+                    const v2::WorkGroup<wg> ex{item};
                     const int b = static_cast<int>(item.get_group_linear_id());
                     if (masked && !mk[b]) return;  // I1
-                    const int lid = static_cast<int>(item.get_local_linear_id());
-                    const int lsz = static_cast<int>(item.get_local_range(0));
-                    for (int64_t j = lid; j < kk; j += lsz) {
-                        const int64_t col = large ? (mm - 1 - j) : j;
-                        w_out[b * kk + j] = th[b * mm + col];
-                    }
+                    const int n_ = static_cast<int>(nn), m_ = static_cast<int>(mm), k_ = static_cast<int>(kk);
+                    // theta is ascending: the wanted block is its head, or its tail reversed.
+                    const auto th_b = v2::vec(th + b * mm, m_);
+                    v2::copy(ex, v2::flipped(large ? th_b.tail(m_ - k_) : th_b.head(k_), large),
+                             v2::vec(w_out + b * kk, k_));
                     if (v_ptr != nullptr) {
-                        for (int64_t linear = lid; linear < nn * kk; linear += lsz) {
-                            const int64_t r = linear % nn;
-                            const int64_t j = linear / nn;
-                            const int64_t col = large ? (mm - 1 - j) : j;
-                            v_ptr[b * v_stride + j * v_ld + r] =
-                                Xk(static_cast<int>(r), static_cast<int>(col), b);
-                        }
+                        const auto Xb = v2::mat(Xk.data() + static_cast<int64_t>(b) * Xk.stride(), n_, m_, Xk.ld());
+                        v2::lacpy(ex, v2::cols_flipped(Xb.sub(0, large ? m_ - k_ : 0, n_, k_), large),
+                                  v2::mat(v_ptr + b * v_stride, n_, k_, static_cast<int>(v_ld)));
                     }
                 });
         });
