@@ -171,10 +171,11 @@ runtime's thread count; on threadripper02 the default 64-thread pool burned 96 s
 7 s of wall). The full tree used to wait for the vf tree's 3939 s. Each tree's ctest gets its own
 `TMPDIR` (`$TMPDIR/batchlas-gate-<user>-<full|vf>`, outside the checkout: `tune_tests` builds a
 scratch git repo there), so the death-test scratch paths cannot collide. Without
-`CUDA_VISIBLE_DEVICES`, GPUs above `BATCHLAS_GPU_BUSY_UTIL` % (30) or `BATCHLAS_GPU_BUSY_MEM_MB`
-(4096) are skipped, as in `scripts/ctest_gpus.sh`; with one idle GPU left, both trees run on it,
-one after the other. So does a busy box: a 1-minute load average above `BATCHLAS_GATE_MAX_LOAD`
-(default cores/4) or another process above 200% CPU (the summary names it). `--serial`, a single
+`CUDA_VISIBLE_DEVICES`, GPUs above `BATCHLAS_GPU_BUSY_UTIL` % (30) or with compute processes
+holding more than `BATCHLAS_GPU_BUSY_MEM_MB` (4096; desktop graphics do not count) are skipped; with
+one idle GPU left, both trees run on it, one after the other. So does a busy box: more than
+`BATCHLAS_GATE_MAX_LOAD` busy cores (default cores/4, a 2 s `/proc/stat` sample after the builds,
+so the gate's own build does not count) or another process above 200% CPU (the summary names it). `--serial`, a single
 visible GPU (`CUDA_VISIBLE_DEVICES=0`), `--parallel` or
 `--only` run one tree at a time. `--no-build` tests the trees as built (the summary header says
 `no-build`), and `BATCHLAS_GATE_DIR` / `BATCHLAS_GATE_VF_DIR` / `BATCHLAS_BUILD_LOCK` point

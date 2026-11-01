@@ -16,7 +16,7 @@
 # (CUDA_VISIBLE_DEVICES, else the idle ones nvidia-smi lists, by the BATCHLAS_GPU_BUSY_* test of
 # scripts/ctest_gpus.sh), the two ctests run at once: vf on the first GPU, full on the second,
 # each with DPCPP_CPU_NUM_CUS=cores/2 for its opencl:cpu half and its own TMPDIR. With one GPU,
-# a busy box (1-minute load above BATCHLAS_GATE_MAX_LOAD, default cores/4, or another process
+# a busy box (more than BATCHLAS_GATE_MAX_LOAD busy cores, default cores/4, or another process
 # above 200% CPU), --serial, --parallel or --only they run one after the other (full on the second GPU, vf on the
 # first, when two are visible; both on the one idle GPU). INT/TERM kill both ctests.
 #
@@ -268,19 +268,23 @@ collect_notes() {
     [ ! -f "$1/gate/test-notes.txt" ] || while IFS= read -r l; do lines+=("$l"); done < "$1/gate/test-notes.txt"
 }
 
-# Why the box is too busy to overlap the two ctests, else nothing: a 1-minute load average above
-# $1, or a process (Linux: a 1 s /proc sample) above 200% CPU. Called between the builds and the
-# ctests, when the gate itself runs nothing.
+# Why the box is too busy to overlap the two ctests, else nothing: more than $1 busy cores, or a
+# process above 200% CPU. Linux samples /proc for 2 s (the load average still carries the gate's
+# own build that just finished); elsewhere the 1-minute load stands in. Called between the builds
+# and the ctests, when the gate itself runs nothing.
 box_busy() {
     python3 - "$1" <<'EOF'
 import os, sys, time
 max_load = float(sys.argv[1])
-load = os.getloadavg()[0]
-if load > max_load:
-    print(f"1-minute load {load:.2f} > {max_load:g}")
-    sys.exit()
 if not os.path.isdir("/proc/self"):
+    load = os.getloadavg()[0]
+    if load > max_load:
+        print(f"1-minute load {load:.2f} > {max_load:g}")
     sys.exit()
+def cpu():
+    with open("/proc/stat") as f:
+        v = [int(x) for x in f.readline().split()[1:]]
+    return sum(v), v[3] + v[4]
 def ticks():
     out = {}
     for pid in filter(str.isdigit, os.listdir("/proc")):
@@ -292,10 +296,15 @@ def ticks():
         except (OSError, IndexError, ValueError):
             pass
     return out
-a = ticks(); time.sleep(1); b = ticks()
+a, ca = ticks(), cpu(); time.sleep(2); b, cb = ticks(), cpu()
+total, idle = cb[0] - ca[0], cb[1] - ca[1]
+used = os.cpu_count() * (total - idle) / total if total else 0.0
+if used > max_load:
+    print(f"{used:.1f} cores busy > {max_load:g}")
+    sys.exit()
 hz = os.sysconf("SC_CLK_TCK")
 for pid, (comm, t) in b.items():
-    pct = 100.0 * (t - a.get(pid, (comm, t))[1]) / hz
+    pct = 100.0 * (t - a.get(pid, (comm, t))[1]) / hz / 2
     if pct > 200:
         print(f"pid {pid} ({comm}) at {pct:.0f}% CPU")
         break
@@ -321,18 +330,25 @@ if [ "$cuda" = ON ]; then
     if [ -n "${CUDA_VISIBLE_DEVICES+set}" ]; then
         IFS=, read -r -a gpus <<<"$CUDA_VISIBLE_DEVICES"
     elif command -v nvidia-smi > /dev/null; then
-        # scripts/ctest_gpus.sh's busy test and knobs: never pin a tree to a GPU in use.
+        # scripts/ctest_gpus.sh's busy test and knobs: never pin a tree to a GPU in use. Memory counts
+        # compute processes only, so a desktop's graphics on the display GPU do not make it busy.
         gpu_src="idle"
-        while IFS=, read -r idx util mem; do
+        declare -A compute_mb=()
+        while IFS=, read -r uuid used; do
+            case $used in ''|*[!0-9]*) continue ;; esac
+            compute_mb[$uuid]=$(( ${compute_mb[$uuid]:-0} + used ))
+        done < <(nvidia-smi --query-compute-apps=gpu_uuid,used_memory --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+        while IFS=, read -r idx uuid util; do
             case $idx in ''|*[!0-9]*) continue ;; esac
-            case "$util$mem" in ''|*[!0-9]*) util=0; mem=0 ;; esac
+            mem=${compute_mb[$uuid]:-0}
+            case "$util" in ''|*[!0-9]*) util=0 ;; esac
             if [ "${BATCHLAS_GPU_BUSY_SKIP:-1}" != 0 ] && { [ "$util" -gt "${BATCHLAS_GPU_BUSY_UTIL:-30}" ] ||
                     [ "$mem" -gt "${BATCHLAS_GPU_BUSY_MEM_MB:-4096}" ]; }; then
                 busy="$busy GPU $idx (${util}%, ${mem} MiB)"
             else
                 gpus+=("$idx")
             fi
-        done < <(nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
+        done < <(nvidia-smi --query-gpu=index,uuid,utilization.gpu --format=csv,noheader,nounits 2>/dev/null | tr -d ' ')
         [ -z "$busy" ] || note "ctest: skipping busy$busy (BATCHLAS_GPU_BUSY_SKIP=0 keeps them)"
     fi
 fi
