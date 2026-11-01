@@ -18,7 +18,7 @@ Single plain commands the worktree Bash guard accepts. The skills in `.claude/sk
 | `wf_dump.py` | split Workflow output into files and print an outline |
 | `tune_procs.sh` | tuner holding a GPU lock, orphaned workers; `--kill PID` takes the tree |
 | `vendor_gaps.py` | where the vendor still beats native, from the tuned tables |
-| `dispatch.sh` | worktree + headless session on jrhnbr, tr02 (CPU/build only, GPUs hidden) or the Mac; `hosts`/`list`/`logs`/`report`/`stop`/`rm` |
+| `dispatch.sh` | worktree + unattended session on jrhnbr, tr02 (CPU/build only, GPUs hidden) or the Mac, in `screen` with Remote Control on (shows as `dispatch-NAME` in claude.ai/code); `hosts`/`list`/`logs`/`report`/`attach`/`stop`/`rm` |
 | `prune_worktrees.sh` | remove clean, merged worktrees (`--apply`) |
 | `claude-settings.json` | template for `.claude/settings.json`: `session_start.sh`, `scripts/agent_build_guard.py`, `scripts/agent_tier_guard.py`, read-only allow rules |
 | `../agent_tier_guard.py` | blocks an Agent call or Workflow `agent()` that picks no tier from `.claude/agents/` |
