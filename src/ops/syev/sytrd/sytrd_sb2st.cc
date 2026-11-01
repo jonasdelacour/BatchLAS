@@ -2,6 +2,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <src/util/batch_mask.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/blas/device/v2/ext/sb2st-sy2sb.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <sycl/sycl.hpp>
@@ -28,6 +29,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T>
 inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& ab,
@@ -189,8 +192,7 @@ Event btrd_lower_inplace(Queue& q,
 
             const int b = static_cast<int>(it.get_group(0));
             if (mask != nullptr && mask[b] == 0) return;  // I1: one item per work-group, before any barrier
-            const int lid = static_cast<int>(it.get_local_id(0));
-            const int lsize = static_cast<int>(it.get_local_range(0));
+            const v2::WorkGroup<kWorkGroupSize> ex{it};
 
             auto ABv = ab.batch_item(b);
             auto Cv = c.batch_item(b);
@@ -206,12 +208,14 @@ Event btrd_lower_inplace(Queue& q,
             auto& D = Dv;
             auto& E = Ev;
             auto& TAU = TAUv;
+            Real* const Cp = C.data_ptr();  // C / WORK are built with inc = 1
+            T* const Wp = WORK.data_ptr();
 
-            for (int i = lid; i < n + kd + 2; i += lsize) {
+            v2::for_each_owned(ex, n + kd + 2, [&](int i) {
                 C[i] = Real(0);
                 WORK[i] = T(0);
-            }
-            sycl::group_barrier(it.get_group());
+            });
+            v2::group_barrier(ex);
 
             const int kd1 = kd + 1;
             const int kdm1 = kd - 1;
@@ -225,26 +229,29 @@ Event btrd_lower_inplace(Queue& q,
             int j1 = kdn + 1;
             int j2 = 0;
 
-            if (lid == 0) {
+            // The rotation sequence j = j1 + t kd1, t < cnt: its C / WORK entries, and the band
+            // entries AB(r, col + t kd1) one rotation apart (stride inca).
+            auto seq = [&](auto* p, int cnt) { return v2::vec(p + j1, cnt, kd1); };
+            auto band_seq = [&](int r, int col, int cnt) { return v2::vec(AB + idx(r, col), cnt, inca); };
+
+            if (ex.leader()) {
                 shared_ints[0] = nr;
                 shared_ints[1] = j1;
                 shared_ints[2] = j2;
                 shared_ints[3] = 0;
             }
-            sycl::group_barrier(it.get_group());
+            v2::group_barrier(ex);
 
             // Ensure diagonal is real (for Hermitian path). Parallelize across columns.
             if constexpr (detail::is_complex<T>::value) {
                 auto diag = ABv(int32_t(0), Slice{});
-                for (int j = lid; j < n; j += lsize) {
-                    diag[j] = detail::real_as_T(diag[j]);
-                }
-                sycl::group_barrier(it.get_group());
+                v2::for_each_owned(ex, n, [&](int j) { diag[j] = detail::real_as_T(diag[j]); });
+                v2::group_barrier(ex);
             }
 
             for (int i = 0; i < n - 2; ++i) {
                 for (int k = kdn; k >= 1; --k) {
-                    if (lid == 0) {
+                    if (ex.leader()) {
                         j1 += kdn;
                         j2 += kdn;
                         shared_ints[0] = nr;
@@ -252,63 +259,43 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[2] = j2;
                         shared_ints[3] = k;
                     }
-                    sycl::group_barrier(it.get_group());
+                    v2::group_barrier(ex);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
                     j2 = shared_ints[2];
-                    // k is only used for scalar work (lid==0) below.
+                    // k is only used for scalar work (leader) below.
 
                     if (nr > 0) {
-                        // Parallel LARGV over rotations.
-                        for (int t = lid; t < nr; t += lsize) {
-                            const int j = j1 + t * kd1;
-                            const T f = ABv(kd, j - kd1);
-                            const T g = WORK[j];
-                            Real ct = Real(0);
-                            T st = T(0);
-                            T rt = T(0);
-                            Ops::lartg(f, g, ct, st, rt);
-                            C[j] = ct;
-                            WORK[j] = st;
-                            ABv(kd, j - kd1) = rt;
-                        }
-                        sycl::group_barrier(it.get_group());
+                        // xLARGV: the rotations annihilating the fill WORK(j) against AB(kd, j - kd1).
+                        v2::largv<Ops>(ex, band_seq(kd, j1 - kd1, nr), seq(Wp, nr), seq(Cp, nr));
+                        v2::group_barrier(ex);
 
                         if (nr > 2 * kd - 1) {
-                            // Iteration l touches band elements (kd-1-l, c) and (kd-l, c) with
-                            // c = j-kd1+l+1, so successive l values address distinct columns and
-                            // distinct rows; across t the columns are kd1 apart. The whole (l,t)
-                            // nest therefore writes disjoint locations and needs only one barrier
-                            // at the end (mirrors btrd_lower_inplace_subgroup).
+                            // xLARTV down band diagonal l. Iteration l touches (kd-1-l, c) and
+                            // (kd-l, c) with c = j-kd1+l+1, so successive l address distinct rows and
+                            // columns and rotations are kd1 columns apart: one barrier for the nest
+                            // (mirrors btrd_lower_inplace_subgroup).
                             for (int l = 0; l < kd - 1; ++l) {
-                                for (int t = lid; t < nr; t += lsize) {
-                                    const int j = j1 + t * kd1;
-                                    Ops::rot_pair(ABv(kd - 1 - l, j - kd1 + l + 1),
-                                                  ABv(kd - l, j - kd1 + l + 1),
-                                                  C[j],
-                                                  WORK[j]);
-                                }
+                                v2::lartv<Ops>(ex, band_seq(kd - 1 - l, j1 - kd1 + l + 1, nr),
+                                               band_seq(kd - l, j1 - kd1 + l + 1, nr), seq(Cp, nr), seq(Wp, nr));
                             }
-                            sycl::group_barrier(it.get_group());
+                            v2::group_barrier(ex);
                         } else {
-                            if (lid == 0) {
+                            if (ex.leader()) {
                                 const int jend = j1 + (nr - 1) * kd1;
                                 for (int jinc = j1; jinc <= jend; jinc += kd1) {
                                     if (kdm1 > 0) {
-                                        Ops::rot(kdm1,
-                                                 detail::make_strided(AB + idx(kd - 1, jinc - kd), incx),
-                                                 detail::make_strided(AB + idx(kd, jinc - kd), incx),
-                                                 C[jinc],
-                                                 WORK[jinc]);
+                                        v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(kd - 1, jinc - kd), kdm1, incx),
+                                                     v2::vec(AB + idx(kd, jinc - kd), kdm1, incx), C[jinc], WORK[jinc]);
                                     }
                                 }
                             }
-                            sycl::group_barrier(it.get_group());
+                            v2::group_barrier(ex);
                         }
                     }
 
-                    if (lid == 0) {
+                    if (ex.leader()) {
                         if (k > 1) {
                             if (k <= n - i - 1) {
                                 const T f = ABv(k - 1, i);
@@ -324,11 +311,8 @@ Event btrd_lower_inplace(Queue& q,
                                 if (k > 2) {
                                     const Real ct = C[i + k];
                                     const T st = WORK[i + k];
-                                    Ops::rot(k - 2,
-                                             detail::make_strided(AB + idx(k - 2, i + 1), ldab - 1),
-                                             detail::make_strided(AB + idx(k - 1, i + 1), ldab - 1),
-                                             ct,
-                                             st);
+                                    v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(k - 2, i + 1), k - 2, ldab - 1),
+                                                 v2::vec(AB + idx(k - 1, i + 1), k - 2, ldab - 1), ct, st);
                                 }
                             }
                             nr += 1;
@@ -338,80 +322,59 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[1] = j1;
                         shared_ints[2] = j2;
                     }
-                    sycl::group_barrier(it.get_group());
+                    v2::group_barrier(ex);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
                     j2 = shared_ints[2];
 
                     if (nr > 0) {
-                        // Parallel LAR2V over rotations.
-                        for (int t = lid; t < nr; t += lsize) {
-                            const int j = j1 + t * kd1;
-                            Ops::lar2v(1,
-                                       detail::make_strided(AB + idx(0, j - 1), inca),
-                                       detail::make_strided(AB + idx(0, j), inca),
-                                       detail::make_strided(AB + idx(1, j - 1), inca),
-                                       detail::make_const_strided(C.data_ptr() + j, kd1),
-                                       detail::make_const_strided(WORK.data_ptr() + j, kd1));
-                        }
-                        sycl::group_barrier(it.get_group());
+                        // xLAR2V: the two-sided rotation of each 2x2 diagonal block.
+                        v2::lar2v<Ops>(ex, band_seq(0, j1 - 1, nr), band_seq(0, j1, nr), band_seq(1, j1 - 1, nr),
+                                       seq(Cp, nr), seq(Wp, nr));
+                        v2::group_barrier(ex);
 
                         // ZHBTRD requirement: conjugate WORK(J1) before right-application.
                         if constexpr (detail::is_complex<T>::value) {
-                            for (int t = lid; t < nr; t += lsize) {
-                                const int j = j1 + t * kd1;
-                                WORK[j] = batchlas::device::detail::conj(WORK[j]);
-                            }
-                            sycl::group_barrier(it.get_group());
+                            v2::conj_inplace(ex, seq(Wp, nr));
+                            v2::group_barrier(ex);
                         }
 
                         if (nr > 2 * kd - 1) {
-                            // Iteration l touches (l+2, j-1) and (l+1, j); iteration l+1 touches
-                            // (l+3, j-1) and (l+2, j) -- disjoint in both row and column, and the
-                            // t values are kd1 columns apart. One trailing barrier suffices.
+                            // xLARTV from the right. Iteration l touches (l+2, j-1) and (l+1, j);
+                            // l+1 touches (l+3, j-1) and (l+2, j): disjoint rows and columns, and the
+                            // rotations are kd1 columns apart. One trailing barrier suffices.
                             for (int l = 0; l < kd - 1; ++l) {
                                 const int nrt = (j2 + l + 2 > n) ? (nr - 1) : nr;
                                 if (nrt > 0) {
-                                    for (int t = lid; t < nrt; t += lsize) {
-                                        const int j = j1 + t * kd1;
-                                        Ops::rot_pair(ABv(l + 2, j - 1),
-                                                      ABv(l + 1, j),
-                                                      C[j],
-                                                      WORK[j]);
-                                    }
+                                    v2::lartv<Ops>(ex, band_seq(l + 2, j1 - 1, nrt), band_seq(l + 1, j1, nrt),
+                                                   seq(Cp, nrt), seq(Wp, nrt));
                                 }
                             }
-                            sycl::group_barrier(it.get_group());
+                            v2::group_barrier(ex);
                         } else {
-                            if (lid == 0) {
+                            if (ex.leader()) {
                                 const int j1end = j1 + kd1 * (nr - 2);
                                 if (j1end >= j1) {
                                     for (int j1inc = j1; j1inc <= j1end; j1inc += kd1) {
                                         if (kdm1 > 0) {
-                                            Ops::rot(kdm1,
-                                                     detail::make_strided(AB + idx(2, j1inc - 1), 1),
-                                                     detail::make_strided(AB + idx(1, j1inc), 1),
-                                                     C[j1inc],
-                                                     WORK[j1inc]);
+                                            v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(2, j1inc - 1), kdm1),
+                                                         v2::vec(AB + idx(1, j1inc), kdm1), C[j1inc], WORK[j1inc]);
                                         }
                                     }
                                 }
                                 const int lend = (n - j2 - 1 < kdm1) ? (n - j2 - 1) : kdm1;
                                 const int last = j1end + kd1;
                                 if (lend > 0) {
-                                    Ops::rot(lend,
-                                             detail::make_strided(AB + idx(2, last - 1), 1),
-                                             detail::make_strided(AB + idx(1, last), 1),
-                                             C[last],
-                                             WORK[last]);
+                                    v2::rot<Ops>(v2::Thread{}, v2::vec(AB + idx(2, last - 1), lend),
+                                                 v2::vec(AB + idx(1, last), lend), C[last], WORK[last]);
                                 }
                             }
-                            sycl::group_barrier(it.get_group());
+                            v2::group_barrier(ex);
                         }
                     }
 
-                    if (lid == 0) {
+                    if (ex.leader()) {
                         if (j2 + kdn >= n) {
                             nr -= 1;
                             j2 = j2 - kdn - 1;
@@ -420,24 +383,25 @@ Event btrd_lower_inplace(Queue& q,
                         shared_ints[1] = j1;
                         shared_ints[2] = j2;
                     }
-                    sycl::group_barrier(it.get_group());
+                    v2::group_barrier(ex);
 
                     nr = shared_ints[0];
                     j1 = shared_ints[1];
                     j2 = shared_ints[2];
 
                     if (nr > 0) {
-                        for (int t = lid; t < nr; t += lsize) {
+                        // The next fill: WORK(j + kd) = WORK(j) AB(kd, j), then AB(kd, j) *= C(j).
+                        v2::for_each_owned(ex, nr, [&](int t) {
                             const int j = j1 + t * kd1;
                             WORK[j + kd] = WORK[j] * ABv(kd, j);
                             ABv(kd, j) = T(C[j]) * ABv(kd, j);
-                        }
-                        sycl::group_barrier(it.get_group());
+                        });
+                        v2::group_barrier(ex);
                     }
                 }
             }
 
-            if (lid == 0) {
+            if (ex.leader()) {
                 Ops::finalize_tridiag(ABv, n, D, E, TAU);
             }
         });
@@ -545,13 +509,10 @@ Event sytrd_sb2st(Queue& ctx,
             h.parallel_for<AbWorkCopyKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch)),
                                                    [=](sycl::id<1> idx_b) {
                 const int b = static_cast<int>(idx_b[0]);
-                auto AB = ABsrc.batch_item(b);
-                auto W = ABdst.batch_item(b);
-                for (int j = 0; j < n; ++j) {
-                    for (int r = 0; r < ldab; ++r) {
-                        W(r, j) = AB(r, j);
-                    }
-                }
+                const auto AB = v2::mat(ABsrc.batch_item(b));
+                const auto W = v2::mat(ABdst.batch_item(b));
+                // lacpy, one column at a time
+                for (int j = 0; j < n; ++j) v2::copy(v2::Thread{}, AB.col(j).head(ldab), W.col(j).head(ldab));
             });
         });
     }
