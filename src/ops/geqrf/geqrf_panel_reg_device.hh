@@ -151,17 +151,17 @@ inline void geqr2_panel_reg_device(sycl::nd_item<1> it, D* a, int ld, int m, int
 
         // Same slots folded in the same order on every item: h is work-group-uniform.
         const R part = (live && r >= j) ? v2::absmax_ri(rA[j]) : R(0);
-        v2::team_slot_put(ex, sred, ex.team_reduce(part, v2::Fmax{}));
+        v2::team_slot_put(ex, sred, 0, ex.team_reduce(part, v2::Fmax{}));
         if (r == j) sw[0] = rA[j];
         ex.barrier();                                                  // B1
-        const R smax = v2::slot_fold_max(sred, nsg);
+        const R smax = v2::slot_fold_max(sred, 0, nsg);
         const D alpha = sw[0];
 
         R ssq_part = R(0);
         if (live && r > j && smax > R(0)) ssq_part = v2::abs2_scaled(rA[j], smax);
-        v2::team_slot_put(ex, sred + nsg, ex.team_reduce(ssq_part));
+        v2::team_slot_put(ex, sred, nsg, ex.team_reduce(ssq_part));
         ex.barrier();                                                  // B2
-        const R ssq = v2::slot_fold_sum(sred + nsg, nsg);
+        const R ssq = v2::slot_fold_sum(sred, nsg, nsg);
 
         const LarfgScalars<D> h = v2::larfg_from_ssq<v2::Conv::Lapack>(alpha, smax, ssq);
 
@@ -179,9 +179,9 @@ inline void geqr2_panel_reg_device(sycl::nd_item<1> it, D* a, int ld, int m, int
                         : ((r == j) ? sycl_device::dev_one<D>() : rA[j]);
         // larf: team partials of v^H A(:, j+1:n), B3, A -= (CONJ(tau) w) v (zgeqr2's convention).
         // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
-        v2::gemv_rowfrag_partials<N>(ex, v2::Arith<D>::conj(v), rA, j + 1, n, sw + 1, N);
+        v2::gemv_rowfrag_partials<N>(ex, v2::Arith<D>::conj(v), rA, j + 1, n, sw, 1, N);
         ex.barrier();                                                  // B3
-        v2::ger_rowfrag_slots<N>(v2::Arith<D>::conj(h.tau), v, rA, j + 1, n, sw + 1, nsg, N);
+        v2::ger_rowfrag_slots<N>(v2::Arith<D>::conj(h.tau), v, rA, j + 1, n, sw, 1, nsg, N);
     }
 
 #pragma clang loop unroll(full)

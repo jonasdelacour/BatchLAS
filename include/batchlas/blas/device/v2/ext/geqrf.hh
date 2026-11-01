@@ -151,6 +151,8 @@ template <class G, class T, class Op> BATCHLAS_DLA_INLINE T xor_desc_dyn(const G
 // For kernels launched with a run-time local range (one binary for every WG): sizes are read
 // from the nd_item, never folded. Common interface: lid lane team leader size_dyn
 // team_size_dyn nteams_dyn team_reduce group_reduce; barrier() where the scope has one.
+// Ids and ranges are read once, at construction, as the hand-written kernels read them at the
+// top: read at each use, the sub-group range is rematerialised per op (+4 REG, sm_89).
 
 // One sub-group; Scope::Sub is its whole scope. barrier() is a sub-group barrier.
 struct DynSubGroup {
@@ -158,14 +160,21 @@ struct DynSubGroup {
     static constexpr Scope natural_scope = Scope::Sub;
     template <class R> using max_op = Fmax;
     sycl::nd_item<1> it;
+    int lane_;
+    int lanes_;
+
+    BATCHLAS_DLA_INLINE DynSubGroup(sycl::nd_item<1> i)
+        : it(i),
+          lane_(static_cast<int>(i.get_sub_group().get_local_linear_id())),
+          lanes_(static_cast<int>(i.get_sub_group().get_local_linear_range())) {}
 
     BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
-    BATCHLAS_DLA_INLINE int lid() const { return static_cast<int>(sub().get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int lane() const { return lid(); }
+    BATCHLAS_DLA_INLINE int lid() const { return lane_; }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
     BATCHLAS_DLA_INLINE int team() const { return 0; }
-    BATCHLAS_DLA_INLINE bool leader() const { return lid() == 0; }
-    BATCHLAS_DLA_INLINE int size_dyn() const { return static_cast<int>(sub().get_local_linear_range()); }
-    BATCHLAS_DLA_INLINE int team_size_dyn() const { return size_dyn(); }
+    BATCHLAS_DLA_INLINE bool leader() const { return lane_ == 0; }
+    BATCHLAS_DLA_INLINE int size_dyn() const { return lanes_; }
+    BATCHLAS_DLA_INLINE int team_size_dyn() const { return lanes_; }
     BATCHLAS_DLA_INLINE int nteams_dyn() const { return 1; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
         return detail::xor_desc_dyn(sub(), v, op);
@@ -182,15 +191,30 @@ struct DynWorkGroup {
     static constexpr Scope natural_scope = Scope::Group;
     template <class R> using max_op = sycl::maximum<R>;
     sycl::nd_item<1> it;
+    int lane_;
+    int lanes_;
+    int size_;
+    int lid_;
+    int team_;
+    int nteams_;
+
+    BATCHLAS_DLA_INLINE DynWorkGroup(sycl::nd_item<1> i)
+        : it(i),
+          lane_(static_cast<int>(i.get_sub_group().get_local_linear_id())),
+          lanes_(static_cast<int>(i.get_sub_group().get_local_linear_range())),
+          size_(static_cast<int>(i.get_local_range(0))),
+          lid_(static_cast<int>(i.get_local_linear_id())),
+          team_(static_cast<int>(i.get_sub_group().get_group_linear_id())),
+          nteams_(static_cast<int>(i.get_sub_group().get_group_linear_range())) {}
 
     BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
-    BATCHLAS_DLA_INLINE int lid() const { return static_cast<int>(it.get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int lane() const { return static_cast<int>(sub().get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int team() const { return static_cast<int>(sub().get_group_linear_id()); }
-    BATCHLAS_DLA_INLINE bool leader() const { return lid() == 0; }
-    BATCHLAS_DLA_INLINE int size_dyn() const { return static_cast<int>(it.get_local_range(0)); }
-    BATCHLAS_DLA_INLINE int team_size_dyn() const { return static_cast<int>(sub().get_local_linear_range()); }
-    BATCHLAS_DLA_INLINE int nteams_dyn() const { return static_cast<int>(sub().get_group_linear_range()); }
+    BATCHLAS_DLA_INLINE int lid() const { return lid_; }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
+    BATCHLAS_DLA_INLINE int team() const { return team_; }
+    BATCHLAS_DLA_INLINE bool leader() const { return lid_ == 0; }
+    BATCHLAS_DLA_INLINE int size_dyn() const { return size_; }
+    BATCHLAS_DLA_INLINE int team_size_dyn() const { return lanes_; }
+    BATCHLAS_DLA_INLINE int nteams_dyn() const { return nteams_; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
         return detail::xor_desc_dyn(sub(), v, op);
     }
@@ -206,15 +230,27 @@ template <bool Whole> struct DynTeams {
     static constexpr Scope natural_scope = Scope::Sub;
     template <class R> using max_op = Fmax;
     sycl::nd_item<1> it;
+    int lane_;
+    int lanes_;
+    int team_;
+    int nteams_;
+
+    BATCHLAS_DLA_INLINE DynTeams(sycl::nd_item<1> i, int lane, int lanes, int team, int nteams)
+        : it(i), lane_(lane), lanes_(lanes), team_(team), nteams_(nteams) {}
+    BATCHLAS_DLA_INLINE DynTeams(sycl::nd_item<1> i)
+        : DynTeams(i, static_cast<int>(i.get_sub_group().get_local_linear_id()),
+                   static_cast<int>(i.get_sub_group().get_local_linear_range()),
+                   Whole ? 0 : static_cast<int>(i.get_sub_group().get_group_linear_id()),
+                   Whole ? 1 : static_cast<int>(i.get_sub_group().get_group_linear_range())) {}
 
     BATCHLAS_DLA_INLINE sycl::sub_group sub() const { return it.get_sub_group(); }
-    BATCHLAS_DLA_INLINE int lane() const { return static_cast<int>(sub().get_local_linear_id()); }
-    BATCHLAS_DLA_INLINE int lid() const { return lane(); }
-    BATCHLAS_DLA_INLINE int team() const { return Whole ? 0 : static_cast<int>(sub().get_group_linear_id()); }
-    BATCHLAS_DLA_INLINE bool leader() const { return lane() == 0; }
-    BATCHLAS_DLA_INLINE int size_dyn() const { return static_cast<int>(sub().get_local_linear_range()); }
-    BATCHLAS_DLA_INLINE int team_size_dyn() const { return size_dyn(); }
-    BATCHLAS_DLA_INLINE int nteams_dyn() const { return Whole ? 1 : static_cast<int>(sub().get_group_linear_range()); }
+    BATCHLAS_DLA_INLINE int lane() const { return lane_; }
+    BATCHLAS_DLA_INLINE int lid() const { return lane_; }
+    BATCHLAS_DLA_INLINE int team() const { return team_; }
+    BATCHLAS_DLA_INLINE bool leader() const { return lane_ == 0; }
+    BATCHLAS_DLA_INLINE int size_dyn() const { return lanes_; }
+    BATCHLAS_DLA_INLINE int team_size_dyn() const { return lanes_; }
+    BATCHLAS_DLA_INLINE int nteams_dyn() const { return nteams_; }
     template <class T, class Op = sycl::plus<T>> BATCHLAS_DLA_INLINE T team_reduce(T v, Op op = {}) const {
         return detail::xor_desc_dyn(sub(), v, op);
     }
@@ -223,8 +259,10 @@ template <bool Whole> struct DynTeams {
     }
 };
 
-BATCHLAS_DLA_INLINE DynTeams<true> teams_of(const DynSubGroup& ex) { return {ex.it}; }
-BATCHLAS_DLA_INLINE DynTeams<false> teams_of(const DynWorkGroup& ex) { return {ex.it}; }
+BATCHLAS_DLA_INLINE DynTeams<true> teams_of(const DynSubGroup& ex) { return {ex.it, ex.lane_, ex.lanes_, 0, 1}; }
+BATCHLAS_DLA_INLINE DynTeams<false> teams_of(const DynWorkGroup& ex) {
+    return {ex.it, ex.lane_, ex.lanes_, ex.team_, ex.nteams_};
+}
 
 template <class Ex> inline constexpr bool is_dynamic_v = requires { Ex::dynamic; };
 
@@ -266,8 +304,27 @@ BATCHLAS_DLA_INLINE T team_reduce_with(const Partition<P, M, Impl>& ex, T v, Op 
     return v;
 }
 
-// ---- operand with 64-bit element offsets ---------------------------------------------------
-// i + j * ld formed in ptrdiff_t, for kernels whose legacy addressing is 64-bit.
+// ---- operands with 64-bit element offsets --------------------------------------------------
+// Views keep the base pointer and absolute int row/column offsets: an element is
+// p[sext(r) + sext(c) * ld], the legacy addressing, and the ops below walk absolute rows
+// (r = r0 + lid; r < r0 + n), the legacy loop form. Relative loops over a moved base pointer
+// (bound m - j - 1) cost the CTA panel 3-4 REG on sm_89.
+template <class T, Mem M = Mem::Global> struct WideVec {
+    using value_type = std::remove_cv_t<T>;
+    using layout = Cyclic;
+    static constexpr Mem mem = M;
+    T* p;
+    int r0;
+    int c;
+    int ld;
+    int n;
+    BATCHLAS_DLA_INLINE T& at(int r) const { return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld]; }
+    BATCHLAS_DLA_INLINE T& operator()(int i) const { return at(r0 + i); }
+    BATCHLAS_DLA_INLINE int size() const { return n; }
+    BATCHLAS_DLA_INLINE WideVec tail(int k) const { return {p, r0 + k, c, ld, n - k}; }
+    BATCHLAS_DLA_INLINE WideVec head(int k) const { return {p, r0, c, ld, k}; }
+};
+
 template <class T, Mem M = Mem::Global> struct WideMat {
     using value_type = std::remove_cv_t<T>;
     static constexpr Mem mem = M;
@@ -275,16 +332,33 @@ template <class T, Mem M = Mem::Global> struct WideMat {
     int m;
     int n;
     int ld;
-    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const {
-        return p[static_cast<std::ptrdiff_t>(i) + static_cast<std::ptrdiff_t>(j) * ld];
+    int i0 = 0;
+    int j0 = 0;
+    BATCHLAS_DLA_INLINE T& at(int r, int c) const {
+        return p[static_cast<std::ptrdiff_t>(r) + static_cast<std::ptrdiff_t>(c) * ld];
     }
+    BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return at(i0 + i, j0 + j); }
     BATCHLAS_DLA_INLINE int rows() const { return m; }
     BATCHLAS_DLA_INLINE int cols() const { return n; }
-    BATCHLAS_DLA_INLINE Vec<T, Dyn, Unit, M> col(int j) const { return {p + static_cast<std::ptrdiff_t>(j) * ld, Dyn{m}}; }
-    BATCHLAS_DLA_INLINE WideMat sub(int i, int j, int r, int c) const {
-        return {p + static_cast<std::ptrdiff_t>(i) + static_cast<std::ptrdiff_t>(j) * ld, r, c, ld};
-    }
+    BATCHLAS_DLA_INLINE WideVec<T, M> col(int j) const { return {p, i0, j0 + j, ld, m}; }
+    BATCHLAS_DLA_INLINE WideMat sub(int i, int j, int r, int c) const { return {p, r, c, ld, i0 + i, j0 + j}; }
 };
+
+template <class X> inline constexpr bool is_wide_v = false;
+template <class T, Mem M> inline constexpr bool is_wide_v<WideVec<T, M>> = true;
+template <class T, Mem M> inline constexpr bool is_wide_v<WideMat<T, M>> = true;
+
+// f(x element) for every element of x this item owns (Cyclic); a WideVec on a run-time-sized
+// executor walks absolute rows.
+template <class Ex, class X, class F> BATCHLAS_DLA_INLINE void for_each_owned_elem(const Ex& ex, const X& x, F&& f) {
+    if constexpr (is_wide_v<X> && is_dynamic_v<Ex>) {
+        const int s = ex.size_dyn();
+        const int hi = x.r0 + x.n;
+        for (int r = x.r0 + ex.lid(); r < hi; r += s) f(x.at(r));
+    } else {
+        for_each_owned(ex, x.size(), [&](int i) { f(x(i)); });
+    }
+}
 
 // ---- xLARFG ----------------------------------------------------------------------------
 // identity: tau = 0, H = I, alpha and x unchanged. Otherwise alpha := beta and
@@ -337,11 +411,11 @@ template <Conv C = Conv::Lapack, class Ex, class T, class X>
 BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_scalars(const Ex& ex, T alpha, const X& x) {
     using R = real_t<T>;
     R smax = absmax_ri(alpha);
-    for_each_owned(ex, x.size(), [&](int i) { smax = sycl::fmax(smax, absmax_ri(static_cast<T>(x(i)))); });
+    for_each_owned_elem(ex, x, [&](const auto& e) { smax = sycl::fmax(smax, absmax_ri(static_cast<T>(e))); });
     smax = ex.group_reduce(smax, typename detail::max_op_of<Ex, R>::type{});
     R ssq = R(0);  // the reduction stays outside the test: every item reaches it
     if (smax > R(0)) {
-        for_each_owned(ex, x.size(), [&](int i) { ssq += abs2_scaled(static_cast<T>(x(i)), smax); });
+        for_each_owned_elem(ex, x, [&](const auto& e) { ssq += abs2_scaled(static_cast<T>(e), smax); });
     }
     ssq = ex.group_reduce(ssq, sycl::plus<R>());
     return larfg_from_ssq<C>(alpha, smax, ssq);
@@ -350,9 +424,9 @@ BATCHLAS_DLA_INLINE LarfgScalars<T> larfg_scalars(const Ex& ex, T alpha, const X
 // x := x * vfactor or x / vfactor, the arm larfg chose. Cyclic, no barrier.
 template <class Ex, class T, class X> BATCHLAS_DLA_INLINE void scal_or_div(const Ex& ex, const LarfgScalars<T>& h, const X& x) {
     if (h.use_mul) {
-        for_each_owned(ex, x.size(), [&](int i) { x(i) = mul_fma(static_cast<T>(x(i)), h.vfactor); });
+        for_each_owned_elem(ex, x, [&](auto& e) { e = mul_fma(static_cast<T>(e), h.vfactor); });
     } else {
-        for_each_owned(ex, x.size(), [&](int i) { x(i) = div_smith(static_cast<T>(x(i)), h.vfactor); });
+        for_each_owned_elem(ex, x, [&](auto& e) { e = div_smith(static_cast<T>(e), h.vfactor); });
     }
 }
 
@@ -369,6 +443,19 @@ BATCHLAS_DLA_INLINE void larf(const Ex& teams, T tau, const UnitHead<V>& v, cons
     const int ts = detail::team_size_of(teams);
     const int nt = detail::nteams_of(teams);
     const int m = c.rows(), n = c.cols(), h = v.head;
+    if constexpr (is_wide_v<MC> && is_wide_v<V>) {
+        // Absolute rows and columns (v.v and c share their row origin: v.v.r0 == c.i0).
+        const int r_head = c.i0 + h, r_hi = c.i0 + m, c_hi = c.j0 + n;
+        for (int cc = c.j0 + teams.team(); cc < c_hi; cc += nt) {
+            T acc = (lane == 0) ? static_cast<T>(c.at(r_head, cc)) : A::zero();
+            for (int r = r_head + 1 + lane; r < r_hi; r += ts) acc = A::add(acc, mul_fma(A::conj(static_cast<T>(v.v.at(r))), static_cast<T>(c.at(r, cc))));
+            const T w = teams.team_reduce(acc);
+            const T f = mul_fma(tau, w);
+            if (lane == 0) c.at(r_head, cc) = A::sub(c.at(r_head, cc), f);
+            for (int r = r_head + 1 + lane; r < r_hi; r += ts) c.at(r, cc) = A::sub(c.at(r, cc), mul_fma(f, static_cast<T>(v.v.at(r))));
+        }
+        return;
+    }
     for (int col = teams.team(); col < n; col += nt) {
         T acc = (lane == 0) ? static_cast<T>(c(h, col)) : A::zero();
         for (int r = h + 1 + lane; r < m; r += ts) acc = A::add(acc, mul_fma(A::conj(static_cast<T>(v.v(r))), static_cast<T>(c(r, col))));
@@ -380,53 +467,57 @@ BATCHLAS_DLA_INLINE void larf(const Ex& teams, T tau, const UnitHead<V>& v, cons
 }
 
 // ---- RowFrag forms (item / lane l holds row l of a panel in registers, F[k] = column k) ------
-// Lane 0 of each team writes its team-uniform value to slots[team]; publish before reading.
-template <class Ex, class T> BATCHLAS_DLA_INLINE void team_slot_put(const Ex& ex, T* slots, T v) {
-    if (ex.lane() == 0) slots[ex.team()] = v;
+// Slot arrays are addressed as s[off + ...] from one base, never through a moved pointer: the
+// index form decides how ptxas unrolls the run-time folds (+112 LD, +4 REG otherwise).
+// Lane 0 of each team writes its team-uniform value to slots[off + team]; publish before reading.
+template <class Ex, class T> BATCHLAS_DLA_INLINE void team_slot_put(const Ex& ex, T* slots, int off, T v) {
+    if (ex.lane() == 0) slots[off + ex.team()] = v;
 }
-// Folds of k slots in index order: max seeds with slot 0, sum with zero.
-template <class T> BATCHLAS_DLA_INLINE T slot_fold_max(const T* s, int k) {
-    T v = s[0];
-    for (int i = 1; i < k; ++i) v = sycl::fmax(v, s[i]);
+// Folds of k slots s[off + i] in index order: max seeds with slot 0, sum with zero.
+template <class T> BATCHLAS_DLA_INLINE T slot_fold_max(const T* s, int off, int k) {
+    T v = s[off];
+    for (int i = 1; i < k; ++i) v = sycl::fmax(v, s[off + i]);
     return v;
 }
-template <class T> BATCHLAS_DLA_INLINE T slot_fold_sum(const T* s, int k, int stride = 1) {
+template <class T> BATCHLAS_DLA_INLINE T slot_fold_sum(const T* s, int off, int k) {
     T v = Arith<T>::zero();
-    for (int i = 0; i < k; ++i) v = Arith<T>::add(v, s[i * stride]);
+    for (int i = 0; i < k; ++i) v = Arith<T>::add(v, s[off + i]);
     return v;
 }
 
 // gemv^H partials: for lo <= k < hi, team sum of cv * F[k] (cv = conj(v_l)), stored by lane 0
-// at slots[team * ld + k]. Shuffles only; N, lo and hi fold after the caller's unroll.
+// at slots[off + team * ld + k]. Shuffles only; N, lo and hi fold after the caller's unroll.
 template <int N, class Ex, class T>
-BATCHLAS_DLA_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, int lo, int hi, T* slots, int ld) {
+BATCHLAS_DLA_INLINE void gemv_rowfrag_partials(const Ex& ex, T cv, const T* F, int lo, int hi, T* slots, int off, int ld) {
 #pragma clang loop unroll(full)
     for (int k = 0; k < N; ++k) {
         if (k < lo || k >= hi) continue;  // uniform, or lanes drop out of the butterfly
         const T pw = ex.team_reduce(mul_fma(cv, F[k]));
-        if (ex.lane() == 0) slots[ex.team() * ld + k] = pw;
+        if (ex.lane() == 0) slots[off + ex.team() * ld + k] = pw;
     }
 }
-// ger from the partials: F[k] -= (tau * sum_t slots[t * ld + k]) * v for lo <= k < hi.
+// ger from the partials: F[k] -= (tau * sum_t slots[off + t * ld + k]) * v for lo <= k < hi.
 template <int N, class T>
-BATCHLAS_DLA_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, const T* slots, int nslots, int ld) {
+BATCHLAS_DLA_INLINE void ger_rowfrag_slots(T tau, T v, T* F, int lo, int hi, const T* slots, int off, int nslots, int ld) {
 #pragma clang loop unroll(full)
     for (int k = 0; k < N; ++k) {
         if (k < lo || k >= hi) continue;
-        const T w = slot_fold_sum(slots + k, nslots, ld);
+        T w = Arith<T>::zero();
+        for (int i = 0; i < nslots; ++i) w = Arith<T>::add(w, slots[off + i * ld + k]);
         F[k] = Arith<T>::sub(F[k], mul_fma(mul_fma(tau, w), v));
     }
 }
 
 // The three steps of a RowFrag reflector apply through a local tile, the caller's barrier
-// between each: (1) row[kk] = cv * F[k0 + kk] for k in [lo, hi), else 0; (2) lane < C:
-// y[lane] = tau * sum_{r >= r0} tile(r, lane) in row order (ColPerLane); (3) F[k0 + kk] -= v * y[kk].
-template <int C, class T> BATCHLAS_DLA_INLINE void frag_scale_to_row(T cv, const T* F, int k0, int lo, int hi, T* row) {
+// between each: (1) tile[off + kk] = cv * F[k0 + kk] for k in [lo, hi), else 0 (off = this
+// lane's row); (2) lane < C: y[lane] = tau * sum_{r >= r0} tile(r, lane) in row order
+// (ColPerLane); (3) F[k0 + kk] -= v * y[kk].
+template <int C, class T> BATCHLAS_DLA_INLINE void frag_scale_to_row(T cv, const T* F, int k0, int lo, int hi, T* tile, int off) {
 #pragma clang loop unroll(full)
     for (int kk = 0; kk < C; ++kk) {
         const int k = k0 + kk;
         const bool act = (k >= lo) && (k < hi);
-        row[kk] = act ? mul_fma(cv, F[k]) : T{};
+        tile[off + kk] = act ? mul_fma(cv, F[k]) : T{};
     }
 }
 template <int C, int NR, class T>

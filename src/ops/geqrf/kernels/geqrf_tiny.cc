@@ -181,7 +181,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     // and needs no publish/broadcast pair. Widening either leaks across
                     // partitions. evidence: docs/perf/qr.md#the-two-partition-butterflies
                     R smax = (lane >= j) ? v2::absmax_ri(rA[j]) : R(0);
-                    smax = v2::team_reduce_with<v2::alg::XorAsc>(ex, smax, v2::Fmax{});
+                    smax = v2::team_reduce_with<v2::alg::XorAsc>(ex, smax, v2::Fmax());
 
                     R ssq = R(0);
                     if (lane > j && smax > R(0)) ssq = v2::abs2_scaled(rA[j], smax);
@@ -216,7 +216,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                     for (int k0 = 0; k0 < N; k0 += C) {
                         if (k0 + C <= j + 1) continue;  // wholly at or below the diagonal
                         if (k0 >= n) continue;          // wholly past the runtime cap
-                        v2::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP + lane * SLDA);
+                        v2::frag_scale_to_row<C>(cvr, rA, k0, j + 1, n, sP, lane * SLDA);
                         sycl::group_barrier(sg);
                         v2::colsum_colperlane<C, N>(lane, ctau, sP, SLDA, j, sy);
                         sycl::group_barrier(sg);

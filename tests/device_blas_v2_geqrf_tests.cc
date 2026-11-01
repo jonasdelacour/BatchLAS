@@ -450,9 +450,9 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c) rA[c] = (live && c < n) ? p[c * m + r] : A::zero();
             const T v = (!live || r < j) ? A::zero() : (r == j ? A::one() : rA[j]);
-            v2::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, N);
+            v2::gemv_rowfrag_partials<N>(ex, A::conj(v), rA, j + 1, n, sw, 0, N);
             ex.barrier();
-            v2::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, ex.nteams_dyn(), N);
+            v2::ger_rowfrag_slots<N>(p[m * n], v, rA, j + 1, n, sw, 0, ex.nteams_dyn(), N);
 #pragma clang loop unroll(full)
             for (int c = 0; c < N; ++c)
                 if (live && c < n) p[c * m + r] = rA[c];
@@ -487,7 +487,7 @@ TYPED_TEST(DeviceBlasV2GeqrfTest, RowFragApply) {
 #pragma clang loop unroll(full)
             for (int k0 = 0; k0 < N; k0 += C) {
                 if (k0 + C <= j + 1 || k0 >= n) continue;
-                v2::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP + lane * SLD);
+                v2::frag_scale_to_row<C>(A::conj(vr), rA, k0, j + 1, n, sP, lane * SLD);
                 sycl::group_barrier(sg);
                 v2::colsum_colperlane<C, N>(lane, A::conj(p[N * N]), sP, SLD, j, sy);
                 sycl::group_barrier(sg);
