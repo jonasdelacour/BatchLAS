@@ -18,25 +18,9 @@
 
 namespace batchlas::geqrf_native {
 
-// PARTITION-wide XOR butterflies, ALL-reduces on purpose: a WORK-GROUP reduce_over_group would
-// re-open the 48 KB hole. evidence: docs/perf/qr.md#the-two-partition-butterflies
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_fmax(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value = sycl::fmax(value, permute_group_by_xor(part, value, mask));
-    }
-    return value;
-}
-
-template <int N, typename R, typename Part>
-inline R geqrf_tiny_reduce_sum(const Part& part, R value) {
-BATCHLAS_UNROLL_FULL
-    for (uint32_t mask = 1u; mask < static_cast<uint32_t>(N); mask <<= 1) {
-        value += permute_group_by_xor(part, value, mask);
-    }
-    return value;
-}
+// The tier's PARTITION-wide butterflies are v2::team_reduce_with<v2::alg::XorAsc>: ALL-reduces on
+// purpose, a WORK-GROUP reduction would re-open the 48 KB hole.
+// evidence: docs/perf/qr.md#the-two-partition-butterflies
 
 // THE ONE source of truth for the register count. Keyed on the DEVICE scalar D, never on T:
 // Cx<float> and double are 8 bytes each with very different bodies.
