@@ -11,6 +11,7 @@
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/sycl/kernel_attrs.hh>
 #include <src/util/batch_mask.hh>
 
 #include <batchlas/util/env.hh>
@@ -247,10 +248,12 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
         auto wcol_local = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(n)), h);
         auto vip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
         auto wip_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(ib)), h);
+        constexpr int kScr = v2::scratch_elements<v2::op::ReduceN<2>, v2::WorkGroup<WG>, T>();
+        auto scr_local  = sycl::local_accessor<T, 1>(sycl::range<1>(static_cast<size_t>(kScr)), h);
 
         batchlas::impl::parallel_for<LatrdLowerPanelKernelLegacy<T, WG, FuseTrailingUpdate>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * wg), sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {  // the packed dot_many exchange counts 32-lane teams
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before the first barrier
 
@@ -271,6 +274,7 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                 T* const wcol_ptr = util::get_raw_ptr(wcol_local);
                 const auto vfull = v2::vec<Mem::Local>(v_ptr, n);
                 const auto wfull = v2::vec<Mem::Local>(wcol_ptr, n);
+                const v2::Scratch<T, kScr> scr{util::get_raw_ptr(scr_local)};
 
                 for (int i = 0; i < ib; ++i) {
                     if (i >= n - 1) break;
@@ -368,7 +372,8 @@ Event latrd_lower_panel_batched_wg_legacy(Queue& q,
                     for (int p = 0; p < i; ++p) {
                         const auto vcol = v2::unit_head(A.col(p), p + 1).tail(i + 1);
                         const auto wcol = W.col(p).tail(i + 1);
-                        const auto gd = v2::dot_many<true, Scope::Group, Native>(ex, v, wcol, vcol);
+                        // gamma and delta from ONE packed exchange (algorithm change: other bits).
+                        const auto gd = v2::dot_many<true, Native>(ex, scr, v, wcol, vcol);
                         const T gamma = gd[0], delta = gd[1];
                         v2::map(ex, w, [&](T wr, T vrp, T wrp) { return wr - (vrp * gamma + wrp * delta); }, w, vcol, wcol);
                     }
