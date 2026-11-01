@@ -92,67 +92,64 @@ foreach(test ${BENCHMARK_TARGETS})
     batchlas_add_benchmark_target(${test})
 endforeach()
 
-function(batchlas_add_device_blas_vector_target target_name mode policy)
-    add_executable(${target_name} device_blas_level2_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_LEVEL2_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+# One device_blas benchmark binary: <source> built with the remaining arguments as PRIVATE compile
+# definitions, in the given order. No batchlas::verify link, unlike batchlas_add_benchmark_target.
+function(batchlas_add_device_blas_target target_name source)
+    add_executable(${target_name} ${source})
+    target_compile_definitions(${target_name} PRIVATE ${ARGN})
     batchlas_configure_binary_target(${target_name})
     batchlas_register_benchmark(${target_name})
 endfunction()
 
+function(batchlas_add_device_blas_vector_target target_name mode policy)
+    batchlas_add_device_blas_target(${target_name} device_blas_level2_benchmark.cc
+        DEVICE_BLAS_LEVEL2_MODE=${mode}
+        DEVICE_BLAS_POLICY=${policy}
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
+endfunction()
+
 # trans is the integer value of batchlas::Transpose (1 = Trans), which the source casts back.
 function(batchlas_add_device_blas_trmv_variant_target target_name policy uplo trans diag)
-    add_executable(${target_name} device_blas_level2_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE
+    batchlas_add_device_blas_target(${target_name} device_blas_level2_benchmark.cc
         DEVICE_BLAS_LEVEL2_MODE=3
         DEVICE_BLAS_POLICY=${policy}
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}"
         DEVICE_BLAS_LEVEL2_TRMV_UPLO=${uplo}
         DEVICE_BLAS_LEVEL2_TRANS=${trans}
         DEVICE_BLAS_LEVEL2_TRMV_DIAG=${diag})
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_matrix_target target_name mode policy)
-    add_executable(${target_name} device_blas_level3_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_MATRIX_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
+    batchlas_add_device_blas_target(${target_name} device_blas_level3_benchmark.cc
+        DEVICE_BLAS_MATRIX_MODE=${mode}
+        DEVICE_BLAS_POLICY=${policy}
+        DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
 endfunction()
 
 function(batchlas_add_device_blas_complex_matrix_target target_name mode policy)
-    add_executable(${target_name} device_blas_level3_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE
+    batchlas_add_device_blas_target(${target_name} device_blas_level3_benchmark.cc
         DEVICE_BLAS_MATRIX_MODE=${mode}
         DEVICE_BLAS_POLICY=${policy}
         DEVICE_BLAS_MATRIX_COMPLEX=1
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_rank2k_target target_name policy trans)
-    add_executable(${target_name} device_blas_level3_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE
+    batchlas_add_device_blas_target(${target_name} device_blas_level3_benchmark.cc
         DEVICE_BLAS_MATRIX_MODE=5
         DEVICE_BLAS_POLICY=${policy}
         DEVICE_BLAS_MATRIX_TRANS=${trans}
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
 endfunction()
 
 function(batchlas_add_device_blas_her2k_target target_name policy trans)
-    add_executable(${target_name} device_blas_level3_benchmark.cc)
-    target_compile_definitions(${target_name} PRIVATE
+    batchlas_add_device_blas_target(${target_name} device_blas_level3_benchmark.cc
         DEVICE_BLAS_MATRIX_MODE=5
         DEVICE_BLAS_POLICY=${policy}
         DEVICE_BLAS_MATRIX_TRANS=${trans}
         DEVICE_BLAS_MATRIX_COMPLEX=1
         DEVICE_BLAS_MATRIX_HERMITIAN=1
         DEVICE_BLAS_BENCHMARK_NAME="${target_name}")
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
 endfunction()
 
 if(BATCHLAS_BUILD_DEVICE_BLAS_BENCHMARKS)
