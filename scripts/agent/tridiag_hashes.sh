@@ -13,7 +13,8 @@
 #   SEED (1234), TYPES ("float double").
 # Output: <out.csv> holds rep,cell,batch,impl,n,dtype,items,w_hash,z_hash (one line per cell and
 # rep); per-sample CSVs go to <out.csv>.d/. The verdicts (run-to-run, batch-position) are
-# printed and written to <out.csv>.summary. Exit 1 on a nondeterministic cell, 2 on usage.
+# printed and written to <out.csv>.summary. Exit 1 on a failed run, an empty grid or a
+# nondeterministic cell; 2 on usage.
 set -euo pipefail
 
 [ "$#" -eq 3 ] || { sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -28,6 +29,7 @@ cond=${COND:-3} seed=${SEED:-1234} types=${TYPES:-float double}
 dir="$out.d"
 mkdir -p "$dir"
 echo "rep,cell,batch,impl,n,dtype,items,w_hash,z_hash" > "$out"
+failed=0
 
 # run REP CELL SAMPLES BATCH [env VAR=VALUE ...] -- [steqr_accuracy args ...]
 run() {
@@ -36,10 +38,11 @@ run() {
     local envs=()
     while [ "$1" != "--" ]; do envs+=("$1"); shift; done
     shift
-    local tag="r${rep}_${cell//[^A-Za-z0-9_.=-]/_}_b${b}"
+    local tag
+    tag=$(printf '%s' "r${rep}_${cell}_b${b}_${envs[*]+${envs[*]}}_$*" | tr -c 'A-Za-z0-9_.=-' '_')
     env "${envs[@]+"${envs[@]}"}" "$bench" --hash-only --vectors --samples "$s" --batch "$b" \
         --log10-cond-min "$cond" --log10-cond-max "$cond" --seed "$seed" --output "$dir/$tag.csv" "$@" \
-        > "$dir/$tag.out" 2>&1 || { echo "tridiag_hashes: FAILED $tag (see $dir/$tag.out)" >&2; return 0; }
+        > "$dir/$tag.out" 2>&1 || { echo "tridiag_hashes: FAILED $tag (see $dir/$tag.out)" >&2; failed=$((failed + 1)); return 0; }
     { grep '^hash_total,' "$dir/$tag.out" || true; } | sed "s/^hash_total,/$rep,$cell,$b,/" >> "$out"
 }
 
@@ -100,7 +103,7 @@ for rep in $(seq 1 "$reps"); do
     done
 done
 
-python3 -I - "$out" <<'PY' | tee "$out.summary"
+python3 -I - "$out" "$failed" <<'PY' | tee "$out.summary"
 import csv, sys
 from collections import defaultdict
 rows = list(csv.DictReader(open(sys.argv[1])))
@@ -109,6 +112,8 @@ by_rep = defaultdict(dict)
 for r in rows:
     by_rep[(key(r), r["batch"])][r["rep"]] = (r["items"], r["w_hash"], r["z_hash"])
 rr_bad = [k for k, v in by_rep.items() if len(set(v.values())) > 1]
+failed = int(sys.argv[2])
+print(f"failed runs: {failed}")
 print(f"run_to_run: {len(by_rep) - len(rr_bad)}/{len(by_rep)} cells equal across reps")
 for k in rr_bad: print("  NONDETERMINISTIC", *k)
 pos_bad, pos_n = [], 0
@@ -120,5 +125,5 @@ for (k, b), v in by_rep.items():
             if v["1"][1:] != v2["1"][1:]: pos_bad.append((k, b2))
 print(f"batch_position: {pos_n - len(pos_bad)}/{pos_n} cells equal at batch 1 and batch N")
 for k, b in pos_bad: print("  POSITION-DEPENDENT", *k, "batch", b)
-sys.exit(1 if rr_bad or pos_bad else 0)
+sys.exit(1 if rr_bad or pos_bad or failed or not by_rep else 0)
 PY
