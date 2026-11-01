@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <batchlas/blas/device/v2/ext/gesvd-ormbr.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
@@ -21,6 +22,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = ::batchlas::device::v2;
 
 inline char upper_ascii(char c) {
     return static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -104,13 +107,12 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t col = static_cast<int32_t>(rem / nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
 
-            AQ(row, col, b) = T(0);
-            if (col >= 1) {
-                const int32_t i = col - 1;
-                if (row >= col + 1 && row < nn) {
-                    AQ(row, col, b) = batchlas::device::detail::conj(A(i, row, b));
-                }
-            }
+            // AQ := 0, then AQ(1:, 1:) strictly lower := A(0:, 1:)^H: P's row reflectors as Q-form columns.
+            const v2::Elem2 ex{row, col};
+            const auto aq = v2::item(AQ, b, nn, nn);
+            v2::laset(ex, v2::Zero{}, v2::Zero{}, aq);
+            v2::lacpy_strict<Uplo::Lower, Transpose::ConjTrans>(ex.sub(1, 1), v2::shifted(v2::item(A, b, nn, nn), 0, 1, nn - 1, nn - 1),
+                                                                v2::shifted(aq, 1, 1, nn - 1, nn - 1));
         });
     });
 
@@ -126,12 +128,7 @@ Event ormbr_apply_p_cta(Queue& ctx,
             const int32_t b = static_cast<int32_t>(idx / nn);
             const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
             if (mask != nullptr && mask[b] == 0) return;  // I3
-
-            if (j == 0) {
-                TAUQ(j, b) = T(0);
-            } else {
-                TAUQ(j, b) = (j - 1 < (nn - 1)) ? TAU(j - 1, b) : T(0);
-            }
+            v2::downshift(v2::Elem{j}, v2::item(TAU, b, nn - 1), v2::item(TAUQ, b, nn));
         });
     });
 
@@ -183,15 +180,11 @@ sycl::event pack_p_panel_batched(Queue& q,
                                                 const int r = static_cast<int>(idx[1]);
                                                 const int c = static_cast<int>(idx[2]);
                                                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                                                T val = T(0);
-                                                if (r == c) {
-                                                    val = T(1);
-                                                } else if (r > c) {
-                                                    const int row = i0 + c;
-                                                    const int col = i0 + 1 + r;
-                                                    val = batchlas::device::detail::conj(a_ptr[static_cast<std::ptrdiff_t>(b) * stride_a + row + col * ld_a]);
-                                                }
-                                                v_out[static_cast<std::ptrdiff_t>(b) * stride_v_out + r + c * ld_v_out] = val;
+                                                // V := unit lower part of A(i0:, i0+1:)^H (row reflectors as columns).
+                                                const auto ap = v2::strided(a_ptr, static_cast<std::ptrdiff_t>(b) * stride_a, ld_a, ib, m);
+                                                const auto v = v2::strided(v_out, static_cast<std::ptrdiff_t>(b) * stride_v_out, ld_v_out, m, ib);
+                                                v2::trcopy<Uplo::Lower, Transpose::ConjTrans, Diag::Unit>(
+                                                    v2::Elem2{r, c}, v2::shifted(ap, i0, i0 + 1, ib, m), v);
                                             });
     });
 }
