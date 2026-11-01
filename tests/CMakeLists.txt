@@ -339,15 +339,7 @@ function(batchlas_add_test_target test_name)
                 GTest::gtest
                 GTest::gtest_main
         )
-    elseif(test_name STREQUAL "util_span_tests")
-        batchlas_configure_binary_target(${test_name}
-            NO_FACADE
-            LIBRARIES
-                GTest::gtest
-                GTest::gtest_main
-                batchlas_util
-        )
-    elseif(test_name STREQUAL "util_vector_tests")
+    elseif(test_name STREQUAL "util_span_tests" OR test_name STREQUAL "util_vector_tests")
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
             LIBRARIES
