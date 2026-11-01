@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <batchlas/blas/device/v2/ext/elementwise-glue.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/util/group-collectives.hh>
@@ -13,7 +14,7 @@
 
 namespace batchlas
 {
-    template <typename T, MatrixFormat MF> struct NormKernel;
+    template <typename T, MatrixFormat MF, NormType NT, int WG> struct NormKernel;
     template <Backend B, typename T> struct NormSpectralKernel;
 
     template <Backend B, typename T>
@@ -54,12 +55,8 @@ namespace batchlas
         ctx->parallel_for<NormSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
             const size_t b = idx[0];
             if (masked && !mk[b]) return;
-            const Real* eig = eigen_span.data() + b * n;
-            Real max_val = Real(0);
-            for (int i = 0; i < n; ++i) {
-                max_val = sycl::fmax(max_val, sycl::fabs(eig[i]));
-            }
-            norms[b] = max_val;
+            namespace v2 = ::batchlas::device::v2;
+            norms[b] = v2::absrange(v2::Thread{}, v2::vec(eigen_span.data() + b * n, n)).hi;  // max |lambda|
         });
 
         // A_copy, eigenvalues and the workspace lease die with this frame: finish before they do.
@@ -104,77 +101,44 @@ namespace batchlas
         #endif
     }
 
+    // One work-group per item; NT and WG are types, so each norm is its own lange body.
+    template <NormType NT, int WG, typename T, MatrixFormat MF>
+    void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
+        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
+        ctx -> submit([&](sycl::handler &cgh) {
+            auto [data, batch_size, rows, cols, ld, stride] =
+                std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
+            batchlas::impl::parallel_for<NormKernel<T, MF, NT, WG>>(cgh, sycl::nd_range<1>(size_t(batch_size) * WG, WG), [=](sycl::nd_item<1> item) {
+                namespace v2 = ::batchlas::device::v2;
+                const auto b = item.get_group_linear_id();
+                if (masked && !mk[b]) return;  // I1: uniform per work-group, before any barrier
+                const v2::WorkGroup<WG> ex{item};
+                const auto r = v2::lange<NT>(ex, v2::mat(data + b * stride, rows, cols, ld));
+                if (ex.leader()) norms[b] = r;
+            });
+        });
+    }
+
+    template <NormType NT, typename T, MatrixFormat MF>
+    void norm_launch(Queue &ctx, const MatrixView<T, MF> &A, const Span<float_t<T>> norms, const std::uint8_t* mk) {
+        const auto max_wg = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
+        if (static_cast<int64_t>(A.rows()) * A.cols() <= 1024 || max_wg < 256) norm_launch<NT, 32>(ctx, A, norms, mk);
+        else norm_launch<NT, 256>(ctx, A, norms, mk);
+    }
+
     template <typename T, MatrixFormat MF>
     Event norm_impl(Queue &ctx,
                    const MatrixView<T, MF> &A,
                    const NormType norm_type,
                    const Span<float_t<T>> norms){
         const std::uint8_t* mk = detail::mask_ptr(detail::call_mask("norm", A));
-        const bool masked = mk != nullptr;  // a captured null pointer can read as non-null on AdaptiveCpp Metal
-        //Zero extra memory allocation kernels
-        ctx -> submit([&](sycl::handler &cgh) {
-            // Get the data pointers and sizes
-            auto [data, batch_size, rows, cols, ld, stride] =
-                std::make_tuple(A.data_ptr(), A.batch_size(), A.rows(), A.cols(), A.ld(), A.stride());
-
-            auto wgs = std::min(size_t(rows * cols), get_kernel_max_wg_size<NormKernel<T, MF>>(ctx));
-            auto local_mem = sycl::local_accessor<float_t<T>>(  norm_type == NormType::One ? cols :
-                                                                norm_type == NormType::Inf ? rows : 0, cgh);
-            // Use a parallel_for to compute the norms
-            // All kernels assume that matrices are stored in column-major order
-            batchlas::impl::parallel_for<NormKernel<T, MF>>(cgh, sycl::nd_range<1>(batch_size * wgs, wgs), [=](sycl::nd_item<1> item) {
-                auto batch_idx = item.get_group_linear_id();
-                if (masked && !mk[batch_idx]) return;  // I1: uniform per work-group, before any barrier
-                auto local_idx = item.get_local_linear_id();
-                auto local_size = item.get_local_range()[0];
-                auto cta = item.get_group();
-                float_t<T> temp = 0;
-                float_t<T> result = 0;
-                auto data_span = Span<T>(data + batch_idx * stride, cols * ld);
-                if (norm_type == NormType::Frobenius) {
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        temp += detail::norm_squared(data_span[col * ld + row]);
-                    }
-                    result = sycl::sqrt(batchlas::portable::reduce_over_group(cta, temp, sycl::plus<float_t<T>>()));
-                } else if (norm_type == NormType::One) {
-                    // One item owns each column sum: atomics would make the order, and so the bits,
-                    // vary between calls (and Metal has no floating atomics on threadgroup memory).
-                    for (int k = local_idx; k < cols; k += local_size) {
-                        float_t<T> s = 0;
-                        for (int i = 0; i < rows; ++i) s += detail::abs(data_span[k * ld + i]);
-                        local_mem[k] = s;
-                    }
-                    sycl::group_barrier(cta);
-
-                    // Find the maximum column sum (the One norm)
-                    result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
-                } else if (norm_type == NormType::Inf) {
-                    // One item owns each row sum, as for One.
-                    for (int k = local_idx; k < rows; k += local_size) {
-                        float_t<T> s = 0;
-                        for (int i = 0; i < cols; ++i) s += detail::abs(data_span[i * ld + k]);
-                        local_mem[k] = s;
-                    }
-                    sycl::group_barrier(cta);
-
-                    // Find the maximum row sum (the Inf norm)
-                    result = batchlas::portable::joint_reduce(cta, &local_mem[0], &local_mem[0] + local_mem.size(), float_t<T>(0), sycl::maximum<float_t<T>>());
-                } else if (norm_type == NormType::Max) {
-                    // Find the maximum absolute value in the matrix
-                    for (int j = local_idx; j < rows * cols; j += local_size) {
-                        auto col = j / rows;
-                        auto row = j % rows;
-                        temp = std::max(detail::abs(data_span[col * ld + row]), temp);
-                    }
-                    result = batchlas::portable::reduce_over_group(cta, temp, sycl::maximum<float_t<T>>());
-                }
-
-                norms[batch_idx] = result;
-            });
-        });
-
+        switch (norm_type) {
+            case NormType::Frobenius: norm_launch<NormType::Frobenius>(ctx, A, norms, mk); break;
+            case NormType::One: norm_launch<NormType::One>(ctx, A, norms, mk); break;
+            case NormType::Inf: norm_launch<NormType::Inf>(ctx, A, norms, mk); break;
+            case NormType::Max: norm_launch<NormType::Max>(ctx, A, norms, mk); break;
+            case NormType::Spectral: throw batchlas::invalid_argument("norm: Spectral is not a lange norm");
+        }
         return ctx.get_event();
     }
 

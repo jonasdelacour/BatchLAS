@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MIT
+#include <batchlas/blas/device/v2/ext/elementwise-glue.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/util/sycl-local-accessor-helpers.hh>
 #include <src/queue.hh>
 #include <src/util/batch_mask.hh>
 
@@ -33,28 +35,17 @@ namespace batchlas {
                     sycl::range<3>(batch_size, grid_x * TILE, grid_y * TILE),
                     sycl::range<3>(1, TILE, TILE)),
                 [=](sycl::nd_item<3> item) {
-                    size_t b = item.get_group(0);
+                    namespace v2 = ::batchlas::device::v2;
+                    const v2::Grid2D<TILE, TILE, 1> ex{item};
+                    const int b = ex.batch();
                     if (mask && !mask[b]) return;  // uniform per work-group: before the barrier
-                    size_t tile_x = item.get_group(1) * TILE;
-                    size_t tile_y = item.get_group(2) * TILE;
-                    size_t local_x = item.get_local_id(1);
-                    size_t local_y = item.get_local_id(2);
-
-                    size_t row = tile_y + local_y;
-                    size_t col = tile_x + local_x;
-
-                    T val = 0;
-                    if (row < rows && col < cols) {
-                        val = src[b * stride_src + col * ld_src + row];
-                    }
-                    tile[local_y][local_x] = val;
-                    item.barrier(sycl::access::fence_space::local_space);
-
-                    row = tile_x + local_y;
-                    col = tile_y + local_x;
-                    if (row < cols && col < rows) {
-                        dst[b * stride_dst + col * ld_dst + row] = tile[local_x][local_y];
-                    }
+                    // B = A^T through a padded SLM tile that holds the A tile transposed.
+                    const auto t = v2::mat<v2::Mem::Local>(util::get_raw_ptr(tile), TILE, TILE, TILE + 1);
+                    v2::tile_load_trans<TILE>(ex, v2::mat(src + static_cast<size_t>(b) * stride_src, rows, cols, ld_src),
+                                              ex.row0(), ex.col0(), t);
+                    ex.barrier();
+                    v2::tile_store<TILE>(ex, t, v2::mat(dst + static_cast<size_t>(b) * stride_dst, cols, rows, ld_dst),
+                                         ex.col0(), ex.row0());
                 });
         });
         return ctx.get_event();

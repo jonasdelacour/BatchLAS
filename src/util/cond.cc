@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+#include <batchlas/blas/device/v2/ext/elementwise-glue.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
@@ -65,15 +66,9 @@ namespace batchlas
                         ctx->parallel_for<CondSpectralKernel<B, T>>(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> idx) {
                             const size_t b = idx[0];
                             if (masked && !mk[b]) return;
-                            const Real* ev = eig_span.data() + b * n;
-                            Real max_v = sycl::fabs(ev[0]);
-                            Real min_v = max_v;
-                            for (int i = 1; i < n; ++i) {
-                                const Real v = sycl::fabs(ev[i]);
-                                max_v = sycl::fmax(max_v, v);
-                                min_v = sycl::fmin(min_v, v);
-                            }
-                            const Real ratio = (min_v == Real(0)) ? std::numeric_limits<Real>::infinity() : (max_v / min_v);
+                            namespace v2 = ::batchlas::device::v2;
+                            const auto ev = v2::absrange(v2::Thread{}, v2::vec(eig_span.data() + b * n, n));  // {min, max} |lambda|
+                            const Real ratio = (ev.lo == Real(0)) ? std::numeric_limits<Real>::infinity() : (ev.hi / ev.lo);
                             conds[b] = static_cast<T>(ratio);
                         });
 
