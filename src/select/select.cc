@@ -614,9 +614,7 @@ std::optional<std::string> pin_text(std::string_view op, std::string* source) {
         *source = "ScopedPin";
     } else if (RoutingSettings::index_of(op) < RoutingSettings::ops.size()) {
         const char* raw = settings().routing.route(op).get();
-        *source = "BATCHLAS_";
-        for (const char c : op) *source += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        *source += "_ROUTE";
+        *source = RoutingSettings::env_name(op);
         if (!raw) return std::nullopt;
         text = raw;
     } else {
