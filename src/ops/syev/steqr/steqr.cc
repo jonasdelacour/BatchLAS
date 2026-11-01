@@ -9,23 +9,6 @@
 
 namespace batchlas {
 
-namespace {
-
-template <Backend B, typename T>
-inline bool should_use_cta(const Queue& ctx, int64_t n) {
-    // steqr_cta uses chunked sub-group operations that produce incorrect
-    // eigenvalues on AMD gfx1200. Disable the CTA path only for ROCm; syev's Cta and CtaFused
-    // can_run (src/ops/syev/syev.cc) carry the same exclusion.
-    if constexpr (B == Backend::ROCM) {
-        (void)ctx; (void)n;
-        return false;
-    }
-    // GPU only: the CTA kernels build without CPU targets (steqr_cta falls back alike).
-    return n > 0 && n <= 32 && ctx.device().type == DeviceType::GPU && ctx.device().supports_sub_group_size(32);
-}
-
-} // namespace
-
 template <Backend B, typename T>
 Event steqr_dispatch(Queue& ctx,
                      const VectorView<T>& d_in,
@@ -36,8 +19,8 @@ Event steqr_dispatch(Queue& ctx,
                      SteqrParams<T> params,
                      const MatrixView<T, MatrixFormat::Dense>& eigvects,
                      Span<int32_t> info) {
-    const int64_t n = d_in.size();
-    if (should_use_cta<B, T>(ctx, n)) {
+    // ROCm never takes the CTA kernels: they give wrong eigenvalues on gfx1200 (as in syev.cc).
+    if (B != Backend::ROCM && steqr_cta_can_run(select::device_of<B>(ctx), d_in.size())) {
         return steqr_cta<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
     }
     return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);

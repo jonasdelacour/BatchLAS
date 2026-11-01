@@ -14,7 +14,10 @@
 #include <src/sort.hh>
 #include <src/kernels/common/info_span.hh>
 #include <src/util/batch_mask.hh>
+#include <src/ops/syev/steqr/ql_chase.hh>
 #include <src/ops/syev/steqr/steqr_internal.hh>
+#include <src/ops/syev/tridiag/plane_rotation.hh>
+#include <src/ops/syev/tridiag/tridiag_math.hh>
 
 namespace batchlas {
 
@@ -24,15 +27,97 @@ template <typename T> struct SteqrWgFrancisKernel {};
 template <typename T> struct SteqrWgRotationKernel {};
 
 // The per-pass scratch steqr_wg_impl carves off the pool it is handed; steqr_wg_layout sizes it
-// through workspace_bytes.
-inline std::pair<Span<int32_t>, VectorView<std::array<int32_t, 2>>> steqr_wg_pass_layout(Queue& ctx, BumpAllocator& pool,
-                                                                                          int64_t n, int64_t batch_size) {
+// through workspace_bytes. `scan` counts each item's unreduced blocks, then holds their offsets;
+// `blocks` lists them. The list is dead once written out, so its storage then holds each block's
+// sweep count: blocks have len >= 2, so an item has at most n/2 of them.
+struct WgPassScratch {
+    Span<int32_t> scan;
+    VectorView<std::array<int32_t, 2>> blocks;
+    Span<int32_t> sweeps;
+};
+
+inline WgPassScratch steqr_wg_pass_layout(Queue& ctx, BumpAllocator& pool, int64_t n, int64_t batch_size) {
     auto scan = pool.allocate<int32_t>(ctx, batch_size);
     auto tdi = pool.allocate<std::array<int32_t, 2>>(
         ctx, VectorView<std::array<int32_t, 2>>::required_span_length(n / 2, 1, n / 2, batch_size));
-    return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2)};
+    return {scan, VectorView<std::array<int32_t, 2>>(tdi, n / 2, batch_size, 1, n / 2),
+            Span<int32_t>(reinterpret_cast<int32_t*>(tdi.data()), 2 * tdi.size())};
 }
 
+// max(|d|, |e|) over the block, in physical order.
+template <typename T>
+T block_norm(const OrientedBlock<T>& B) {
+    T anorm = std::abs(B.D(B.len - 1));
+    for (int32_t p = 0; p + 1 < B.len; ++p) {
+        anorm = std::fmax(anorm, std::fmax(std::abs(B.D(p)), std::abs(B.E(p))));
+    }
+    return anorm;
+}
+
+// The block needs a scale iff its norm leaves [ssfmin, ssfmax].
+template <typename T>
+bool outside_safe_range(T anorm) {
+    return anorm > detail::ssfmax<T>() || (anorm < detail::ssfmin<T>() && anorm != T(0));
+}
+
+// The undo of BlockScale::for_norm(anorm), as anorm / ssfmax (or / ssfmin), not 1 / factor.
+template <typename T>
+T unscale_factor(T anorm) {
+    return anorm > detail::ssfmax<T>() ? anorm / detail::ssfmax<T>() : anorm / detail::ssfmin<T>();
+}
+
+template <typename T>
+void scale_block(const OrientedBlock<T>& B, T alpha) {
+    for (int32_t p = 0; p < B.len; ++p) B.D(p) *= alpha;
+    for (int32_t p = 0; p + 1 < B.len; ++p) B.E(p) *= alpha;
+}
+
+// e_j := 0 wherever it is negligible against its neighbours; true if the block split.
+template <typename T>
+bool split_negligible(const OrientedBlock<T>& B) {
+    bool split = false;
+    for (int32_t j = 0; j + 1 < B.len; ++j) {
+        if (tridiag::negligible(B.E(j), B.D(j), B.D(j + 1))) {
+            B.E(j) = T(0);
+            split = true;
+        }
+    }
+    return split;
+}
+
+// Plane (k, k+1) of the chase. R annihilates (pivot, bulge); with R^T = [[c, s], [-s, c]]:
+// [[d_k, e_k], [e_k, d_k+1]] <- R A R^T, e_k-1 <- c pivot - s bulge = r, e_k+1 <- c e_k+1, and
+// the new bulge -s e_k+1 sits one plane down. Returns the next (pivot, bulge) = (e_k, bulge).
+template <typename T>
+tridiag::ChaseState<T> rotate_plane(const OrientedBlock<T>& B, int32_t k, tridiag::Givens<T> R,
+                                    tridiag::ChaseState<T> st) {
+    const tridiag::Givens<T> Rt = R.transpose();
+    const bool has_below = k + 2 < B.len;
+    const T e_below = has_below ? B.e(k + 1) : T(0);
+    const tridiag::Sym2x2<T> A = tridiag::Sym2x2<T>{B.d(k), B.e(k), B.d(k + 1)}.congruence(R);
+    B.d(k) = A.a;
+    B.d(k + 1) = A.c;
+    if (k > 0) B.e(k - 1) = st.pivot * Rt.c - st.bulge * Rt.s;
+    B.e(k) = A.b;
+    if (has_below) B.e(k + 1) = Rt.c * e_below;
+    return {A.b, -e_below * Rt.s};
+}
+
+// One implicit QR sweep with the given shift: the first rotation brings the shift in through
+// (pivot, bulge) = (d_0 - shift, e_0), and each plane down to (len-2, len-1) annihilates the
+// bulge the plane above it left. `store(k, R^T)` records rotation k for Z <- Z R^T.
+template <typename T, typename Store>
+void implicit_qr_sweep(const OrientedBlock<T>& B, T shift, const Store& store) {
+    tridiag::ChaseState<T> st{B.d(0) - shift, B.e(0)};
+    for (int32_t k = 0; k + 1 < B.len; ++k) {
+        const tridiag::Givens<T> R = tridiag::annihilate(st.pivot, st.bulge).R;
+        store(k, R.transpose());
+        st = rotate_plane(B, k, R, st);
+    }
+}
+
+// One pass: split every item into unreduced blocks, run up to max_sweeps sweeps on each block
+// until it splits, then replay each block's rotations on its columns of Q.
 template <typename T>
 Event steqr_wg_impl(Queue& ctx,
                     const VectorView<T>& d,
@@ -49,7 +134,7 @@ Event steqr_wg_impl(Queue& ctx,
     auto batch_size = d.batch_size();
     bool store_givens = jobz == JobType::EigenVectors;
     auto ncus = ctx.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS);
-    auto [scan_view, temp_deflation_indices] = steqr_wg_pass_layout(ctx, allocator, n, batch_size);
+    const auto [scan_view, temp_deflation_indices, sweeps] = steqr_wg_pass_layout(ctx, allocator, n, batch_size);
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_ranges");
@@ -109,133 +194,88 @@ Event steqr_wg_impl(Queue& ctx,
                 auto n_problems = scan_view[batch_size - 1];
 
                 for (int gid = i; gid < n_problems; gid += item.get_global_range(0)) {
-                    auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
+                    const auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
+                    const int32_t len = end_ix - start_ix;
+                    const VectorView<T> D = d.batch_item(batch_ix)(Slice(start_ix, end_ix));
+                    const VectorView<T> E = e.batch_item(batch_ix)(Slice(start_ix, end_ix - 1));
 
-                    auto dbid = d.batch_item(batch_ix);
-                    auto ebid = e.batch_item(batch_ix);
-                    auto d_ = dbid(Slice(start_ix, end_ix));
-                    auto e_ = ebid(Slice(start_ix, end_ix - 1));
-                    auto n_local = end_ix - start_ix;
-
-                    if (n_local == 1) continue;
-                    if (n_local == 2) {
+                    // Exact2x2: R A R^T = diag(rt1, rt2), Z <- Z R^T on (0, 1).
+                    if (len == 2) {
                         if (store_givens) {
-                            auto [rt1, rt2, c, s] = detail::laev2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
-                            rotations_view(0, 0, gid) = {c, -s};
+                            const auto [rt1, rt2, R] = tridiag::Sym2x2<T>{D(0), E(0), D(1)}.eig();
+                            D(0) = rt1;
+                            D(1) = rt2;
+                            E(0) = T(0);
+                            const tridiag::Givens<T> Rt = R.transpose();
+                            rotations_view(0, 0, gid) = {Rt.c, Rt.s};
                             order_view[gid] = ApplyOrder::Forward;
+                            sweeps[gid] = 1;
                         } else {
-                            auto [rt1, rt2] = detail::eigenvalues_2x2(d_(0), e_(0), d_(1));
-                            d_(0) = rt1;
-                            d_(1) = rt2;
-                            e_(0) = T(0);
+                            auto [rt1, rt2] = detail::eigenvalues_2x2(D(0), E(0), D(1));
+                            D(0) = rt1;
+                            D(1) = rt2;
+                            E(0) = T(0);
                         }
                         continue;
                     }
 
-                    // The sweep converges the end the shift is taken from (virtual index
-                    // n_local - 1), so orient that end at the SMALLER |d|, as dsteqr does.
-                    bool QR = std::abs(d_(n_local - 1)) < std::abs(d_(0));
-                    order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
+                    // dsteqr's rule: converge the smaller |d| end first. The sweep converges the
+                    // virtual end len-1, so a block whose small end is physically first is reversed.
+                    const bool qr = std::abs(D(len - 1)) < std::abs(D(0));
+                    const OrientedBlock<T> B{D, E, len, !qr};
+                    order_view[gid] = qr ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
-                        auto anorm = std::abs(d_(n_local - 1));
-                        for (size_t idx = 0; idx < n_local - 1; ++idx) {
-                            anorm = std::fmax(anorm, std::fmax(std::abs(d_(idx)), std::abs(e_(idx))));
-                        }
+                        const T anorm = block_norm(B);
+                        const bool scaled = outside_safe_range(anorm);
+                        if (scaled) scale_block(B, tridiag::BlockScale<T>::for_norm(anorm).factor);
 
-                        if (anorm > detail::ssfmax<T>()) {
-                            auto alpha = detail::ssfmax<T>() / anorm;
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = detail::ssfmin<T>() / anorm;
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        }
+                        const T shift = tridiag::wilkinson_shift(SteqrShiftStrategy::Wilkinson, B.d(len - 1), B.e(len - 2), B.d(len - 2));
+                        implicit_qr_sweep(B, shift, [&](int32_t j, tridiag::Givens<T> Rt) {
+                            if (store_givens) rotations_view(j, k, gid) = {Rt.c, Rt.s};
+                        });
+                        const bool split = split_negligible(B);
 
-                        auto d_get = [&](size_t idx) -> T {
-                            return QR ? d_(idx) : d_(n_local - 1 - idx);
-                        };
-                        auto e_get = [&](size_t idx) -> T {
-                            return QR ? e_(idx) : e_(n_local - 2 - idx);
-                        };
-
-                        const auto shift = detail::wilkinson_shift(d_get(n_local - 2),
-                                                           e_get(n_local - 2),
-                                                           d_get(n_local - 1));
-
-                        auto [c0, s0] = detail::givens_rotation(d_get(0) - shift, e_get(0));
-                        if (store_givens) {
-                            rotations_view(0, k, gid) = {c0, s0};
-                        }
-                        auto bulge = detail::apply_givens_rotation(d_, e_, T(0), 0, 1, {c0, s0}, QR);
-
-                        for (size_t j = 1; j < n_local - 1; ++j) {
-                            auto [cj, sj] = detail::givens_rotation(e_get(j - 1), bulge);
-                            if (store_givens) {
-                                rotations_view(j, k, gid) = {cj, sj};
-                            }
-                            bulge = detail::apply_givens_rotation(d_, e_, bulge, j, j + 1, {cj, sj}, QR);
-                        }
-
-                        bool deflatable = false;
-                        for (size_t j = 0; j < n_local - 1; ++j) {
-                            if (std::abs(e_(j)) * std::abs(e_(j)) <= detail::eps2<T>() * std::abs(d_(j)) * std::abs(d_(j + 1)) +
-                                                                   detail::safmin<T>()) {
-                                e_(j) = T(0);
-                                deflatable = true;
-                            }
-                        }
-
-                        if (anorm > detail::ssfmax<T>()) {
-                            auto alpha = anorm / detail::ssfmax<T>();
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        } else if (anorm < detail::ssfmin<T>() && anorm != T(0)) {
-                            auto alpha = anorm / detail::ssfmin<T>();
-                            for (size_t idx = 0; idx < n_local; ++idx) d_(idx) *= alpha;
-                            for (size_t idx = 0; idx < n_local - 1; ++idx) e_(idx) *= alpha;
-                        }
-
-                        if (deflatable) break;
+                        if (scaled) scale_block(B, unscale_factor(anorm));
+                        if (store_givens) sweeps[gid] = static_cast<int32_t>(k + 1);
+                        if (split) break;
                     }
                 }
             });
         });
 
-        ctx->submit([&](sycl::handler& cgh) {
-            auto Qview = Q.kernel_view();
-            auto rotations_view = givens_rotations.kernel_view();
-            batchlas::impl::parallel_for<SteqrWgRotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
-                auto bid = item.get_group(0);
-                auto k = item.get_local_linear_id();
-                auto n_problems = scan_view[batch_size - 1];
-                for (int gid = bid; gid < n_problems; gid += item.get_group_range(0)) {
-                    auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
-                    auto Q_ = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
-                    const int ncols = static_cast<int>(Q_.cols());
-                    bool forward = order_view[gid] == ApplyOrder::Forward;
-                    auto col_index = [&](int v) -> int {
-                        return forward ? v : (ncols - 1 - v);
-                    };
+        // Without vectors no rotation was stored and there is nothing to replay.
+        if (store_givens) {
+            ctx->submit([&](sycl::handler& cgh) {
+                auto Qview = Q.kernel_view();
+                auto rotations_view = givens_rotations.kernel_view();
+                batchlas::impl::parallel_for<SteqrWgRotationKernel<T>>(cgh, sycl::nd_range(sycl::range(Q.rows() * Q.batch_size() * 2), sycl::range(Q.rows())), [=](sycl::nd_item<1> item) {
+                    auto bid = item.get_group(0);
+                    auto row = item.get_local_linear_id();
+                    auto n_problems = scan_view[batch_size - 1];
+                    for (int gid = bid; gid < n_problems; gid += item.get_group_range(0)) {
+                        const auto [batch_ix, start_ix, end_ix] = deflation_indices[gid];
+                        auto Z = Qview.batch_item(batch_ix)(Slice(), Slice(start_ix, end_ix));
+                        const int len = static_cast<int>(Z.cols());
+                        const bool reversed = order_view[gid] != ApplyOrder::Forward;
+                        auto column = [&](int v) -> int { return reversed ? len - 1 - v : v; };
 
-                    for (int i = 0; i < rotations_view.cols(); ++i) {
-                        for (int j = 0; j < ncols - 1; ++j) {
-                            auto [c, s] = rotations_view(j, i, gid);
-                            int ix1 = col_index(j);
-                            int ix2 = col_index(j + 1);
+                        // The pass's sweeps in order, each Z <- Z R^T on the oriented columns (j, j+1).
+                        for (int sweep = 0; sweep < sweeps[gid]; ++sweep) {
+                            for (int j = 0; j < len - 1; ++j) {
+                                auto [c, s] = rotations_view(j, sweep, gid);
+                                const int lo = column(j);
+                                const int hi = column(j + 1);
 
-                            const T x = Q_(k, ix1);
-                            const T y = Q_(k, ix2);
-                            Q_(k, ix1) = c * x - s * y;
-                            Q_(k, ix2) = s * x + c * y;
+                                const T x = Z(row, lo);
+                                const T y = Z(row, hi);
+                                Z(row, lo) = c * x - s * y;
+                                Z(row, hi) = s * x + c * y;
+                            }
                         }
                     }
-                }
+                });
             });
-        });
+        }
     }
 
     return ctx.get_event();
@@ -317,10 +357,8 @@ Event steqr_wg(Queue& ctx,
     (void)VectorView<T>::copy(ctx, d, d_in);
     (void)VectorView<T>::copy(ctx, e, e_in);
 
+    // Each pass splits off at least one e_j per block, so n - 1 passes always suffice.
     for (int64_t i = 0; i < n - 1; ++i) {
-        if (jobz == JobType::EigenVectors) {
-            (void)givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
-        }
         (void)steqr_wg_impl(ctx,
                       d,
                       e,
@@ -384,6 +422,23 @@ size_t steqr_wg_buffer_size(Queue& ctx,
     });
 }
 
+template <typename T>
+size_t steqr_legacy_buffer_size(Queue& ctx,
+                                const VectorView<T>& d,
+                                const VectorView<T>& e,
+                                const VectorView<T>& eigenvalues,
+                                JobType jobz,
+                                SteqrParams<T> params) {
+    const int64_t n = d.size();
+    const int64_t batch_size = d.batch_size();
+    const size_t legacy_only = jobz != JobType::EigenVectors ? 0 : workspace_bytes([&](BumpAllocator& pool) {
+        const auto bs = static_cast<int64_t>(params.block_size);
+        (void)pool.allocate<T>(ctx, batch_size * bs * 2 * bs * 2 + batch_size * n * bs * 4);  // apply_Q_ws
+        return pool.allocate<int32_t>(ctx, batch_size * (n / 2 + 1));                       // sweep_counts
+    });
+    return steqr_wg_buffer_size<T>(ctx, d, e, eigenvalues, jobz, params) + legacy_only;
+}
+
 #define STEQR_WG_INSTANTIATE(back, fp) \
 template Event steqr_wg<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);
 
@@ -393,6 +448,13 @@ BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEQR_WG_INSTANTIATE)
 template size_t steqr_wg_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 
 BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_WG_BUFFER_SIZE_INSTANTIATE)
+
+#define STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE(fp) \
+template size_t steqr_legacy_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
+
+BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE)
+
+#undef STEQR_LEGACY_BUFFER_SIZE_INSTANTIATE
 
 #undef STEQR_WG_BUFFER_SIZE_INSTANTIATE
 #undef STEQR_WG_INSTANTIATE
