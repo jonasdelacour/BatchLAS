@@ -183,6 +183,7 @@ is present is not a kernel that runs.
 | `scripts/facade_symbol_check.sh` | public entry points are not defined in a vendor component | matches Itanium mangling; `nm -C` fails on concept-constrained templates |
 | `scripts/rocm_syntax_check.sh` | `-fsyntax-only` the three ROCm vendor TUs | only `sycl::get_native<ext_oneapi_hip>` errors are expected on a CUDA-only DPC++; anything else is real |
 | `scripts/register_probe.sh` | register and spill residency of the device link | gate on `0 bytes spill` and `resident::sm89_fits(regs, wg)` (\f$\lceil \mathrm{warps}/4\rceil \cdot 32 \cdot \mathrm{roundup}_8(\mathrm{regs}) \le 16384\f$), max over `<name>` and `<name>_with_offset`; a non-zero stack frame is normal |
+| `scripts/sass_parity.sh` | SASS parity of kernel pairs across two builds (or two kernels of one), for in-kernel LA migrations | `--mode strict` reproduces sass_lab Table 3 on `LatrdLowerPanelKernelLegacy` vs `LatrdLowerPanelKernel` and fails it; a kernel paired with itself passes |
 | `BATCHLAS_SELECT_TRACE=1` | print each decision, its table and the runner-up | one line per call, indented under its parent op |
 
 ## The vendor-free build {#vendor-free-status}
