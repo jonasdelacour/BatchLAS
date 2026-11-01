@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/gebrd.hh>
 
 #include <src/math-helpers.hh>
 #include <src/ops/gesvd/gebrd/larfg_real_beta.hh>
@@ -13,6 +15,8 @@
 namespace batchlas {
 
 namespace {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T>
 Event gebrd_unblocked_real(Queue& ctx,
@@ -41,81 +45,39 @@ Event gebrd_unblocked_real(Queue& ctx,
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
 
+            const v2::Thread th{};
+            const auto Ab = v2::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
             for (int32_t i = 0; i < k; ++i) {
-                // Left Householder: annihilate A(i+1:m-1, i)
-                Real sigma = Real(0);
-                for (int32_t r = i + 1; r < m; ++r) {
-                    sigma += A(r, i, b) * A(r, i, b);
+                // Left Householder H(i): annihilate A(i+1:m, i), then A(i:m, i+1:n) := H(i) A(i:m, i+1:n).
+                const auto xq = Ab.col(i).tail(i + 1);
+                const Real sigma = v2::dot(th, xq, xq);
+                const auto hl = detail::larfg(static_cast<Real>(Ab(i, i)), sycl::sqrt(sigma), m - i);
+                if (hl.tau != Real(0)) {
+                    Ab(i, i) = Real(1);
+                    v2::scal(th, hl.scale, xq);
+                    v2::larf<Side::Left>(th, hl.tau, v2::unit_head(Ab.col(i).tail(i), 0), Ab.sub(i, i + 1, m - i, n - i - 1));
                 }
-
-                const Real alpha = A(i, i, b);
-                const auto left_scalars = detail::larfg(alpha, sycl::sqrt(sigma), m - i);
-                const Real tau_l = left_scalars.tau;
-                const Real beta_l = left_scalars.beta;
-                if (tau_l != Real(0)) {
-                    const Real scale = left_scalars.scale;
-                    A(i, i, b) = Real(1);
-                    for (int32_t r = i + 1; r < m; ++r) {
-                        A(r, i, b) *= scale;
-                    }
-
-                    for (int32_t c = i + 1; c < n; ++c) {
-                        Real dot = Real(0);
-                        for (int32_t r = i; r < m; ++r) {
-                            const Real vr = (r == i) ? Real(1) : A(r, i, b);
-                            dot += batchlas::device::detail::conj(vr) * A(r, c, b);
-                        }
-                        dot *= tau_l;
-                        for (int32_t r = i; r < m; ++r) {
-                            const Real vr = (r == i) ? Real(1) : A(r, i, b);
-                            A(r, c, b) -= vr * dot;
-                        }
-                    }
-                }
-
-                A(i, i, b) = beta_l;
-                D(i, b) = beta_l;
-                TAUQ(i, b) = T(tau_l);
+                Ab(i, i) = hl.beta;
+                D(i, b) = hl.beta;
+                TAUQ(i, b) = T(hl.tau);
 
                 if (i >= n - 1) {
                     TAUP(i, b) = T(0);
                     continue;
                 }
 
-                // Right Householder: annihilate A(i, i+2:n-1)
-                Real sigma_r = Real(0);
-                for (int32_t c = i + 2; c < n; ++c) {
-                    sigma_r += A(i, c, b) * A(i, c, b);
+                // Right Householder G(i): annihilate A(i, i+2:n), then A(i+1:m, i+1:n) := A(i+1:m, i+1:n) G(i).
+                const auto xp = Ab.row(i).tail(i + 2);
+                const Real sigma_r = v2::dot(th, xp, xp);
+                const auto hr = detail::larfg(static_cast<Real>(Ab(i, i + 1)), sycl::sqrt(sigma_r), n - (i + 1));
+                if (hr.tau != Real(0)) {
+                    Ab(i, i + 1) = Real(1);
+                    v2::scal(th, hr.scale, xp);
+                    v2::larf<Side::Right>(th, hr.tau, v2::unit_head(Ab.row(i).tail(i + 1), 0), Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
                 }
-
-                const Real alpha_r = A(i, i + 1, b);
-                const auto right_scalars = detail::larfg(alpha_r, sycl::sqrt(sigma_r), n - (i + 1));
-                const Real tau_r = right_scalars.tau;
-                const Real beta_r = right_scalars.beta;
-                if (tau_r != Real(0)) {
-                    const Real scale_r = right_scalars.scale;
-                    A(i, i + 1, b) = Real(1);
-                    for (int32_t c = i + 2; c < n; ++c) {
-                        A(i, c, b) *= scale_r;
-                    }
-
-                    for (int32_t r = i + 1; r < m; ++r) {
-                        Real dot = Real(0);
-                        for (int32_t c = i + 1; c < n; ++c) {
-                            const Real vc = (c == i + 1) ? Real(1) : A(i, c, b);
-                            dot += A(r, c, b) * batchlas::device::detail::conj(vc);
-                        }
-                        dot *= tau_r;
-                        for (int32_t c = i + 1; c < n; ++c) {
-                            const Real vc = (c == i + 1) ? Real(1) : A(i, c, b);
-                            A(r, c, b) -= dot * vc;
-                        }
-                    }
-                }
-
-                A(i, i + 1, b) = beta_r;
-                E(i, b) = beta_r;
-                TAUP(i, b) = T(tau_r);
+                Ab(i, i + 1) = hr.beta;
+                E(i, b) = hr.beta;
+                TAUP(i, b) = T(hr.tau);
             }
 
             for (int32_t i = k; i < tauq.size(); ++i) {
@@ -154,43 +116,36 @@ Event gebrd_unblocked_complex(Queue& ctx,
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch)), [=](sycl::id<1> tid) {
             const int32_t b = static_cast<int32_t>(tid[0]);
             if (mask != nullptr && mask[b] == 0) return;  // I3: an inactive item is untouched
+            const v2::Thread th{};
+            const auto Ab = v2::mat(A.data() + static_cast<int64_t>(b) * A.stride(), m, n, A.ld());
+            const auto abs2_of = [](const auto& x) { return [x](int r) { return v2::abs2(x(r)); }; };
             for (int32_t i = 0; i < n; ++i) {
-                Real sigma = Real(0);
-                for (int32_t r = i + 1; r < m; ++r) sigma += detail::norm_squared(A(r, i, b));
-                const auto lq = gebrd_detail::larfg_real_beta(A(i, i, b), sycl::sqrt(sigma), m - i);
-                for (int32_t r = i + 1; r < m; ++r) A(r, i, b) *= lq.scale;
-                A(i, i, b) = T(1);
-                // A := H^H A, H^H = I - conj(tau) v v^H.
-                const T ctau = conj(lq.tau);
-                for (int32_t c = i + 1; c < n && lq.tau != T(0); ++c) {
-                    T dot = T(0);
-                    for (int32_t r = i; r < m; ++r) dot += conj(A(r, i, b)) * A(r, c, b);
-                    dot *= ctau;
-                    for (int32_t r = i; r < m; ++r) A(r, c, b) -= A(r, i, b) * dot;
-                }
+                // H(i) annihilates A(i+1:m, i) (v(0) = 1 stored); A := H^H A, H^H = I - conj(tau) v v^H.
+                const auto xq = Ab.col(i).tail(i + 1);
+                const Real sigma = v2::reduce(th, xq.size(), abs2_of(xq));
+                const auto lq = gebrd_detail::larfg_real_beta(Ab(i, i), sycl::sqrt(sigma), m - i);
+                v2::scal(th, lq.scale, xq);
+                Ab(i, i) = T(1);
+                v2::larf<Side::Left>(th, conj(lq.tau), Ab.col(i).tail(i), Ab.sub(i, i + 1, m - i, n - i - 1));
                 D(i, b) = detail::real_part(lq.beta);
-                A(i, i, b) = lq.beta;
+                Ab(i, i) = lq.beta;
                 TAUQ(i, b) = lq.tau;
                 if (i >= n - 1) {
                     TAUP(i, b) = T(0);
                     continue;
                 }
-                for (int32_t c = i + 1; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
-                Real sigma_r = Real(0);
-                for (int32_t c = i + 2; c < n; ++c) sigma_r += detail::norm_squared(A(i, c, b));
-                const auto rp = gebrd_detail::larfg_real_beta(A(i, i + 1, b), sycl::sqrt(sigma_r), n - (i + 1));
-                for (int32_t c = i + 2; c < n; ++c) A(i, c, b) *= rp.scale;
-                A(i, i + 1, b) = T(1);
-                // A := A G, G = I - tau u u^H.
-                for (int32_t r = i + 1; r < m && rp.tau != T(0); ++r) {
-                    T dot = T(0);
-                    for (int32_t c = i + 1; c < n; ++c) dot += A(r, c, b) * A(i, c, b);
-                    dot *= rp.tau;
-                    for (int32_t c = i + 1; c < n; ++c) A(r, c, b) -= dot * conj(A(i, c, b));
-                }
-                for (int32_t c = i + 2; c < n; ++c) A(i, c, b) = conj(A(i, c, b));
+                // Row i conjugated (lacgv); G(i) annihilates A(i, i+2:n) (u(0) = 1 stored); A := A G.
+                const auto row = Ab.row(i).tail(i + 1);
+                const auto xp = Ab.row(i).tail(i + 2);
+                v2::lacgv(th, row);
+                const Real sigma_r = v2::reduce(th, xp.size(), abs2_of(xp));
+                const auto rp = gebrd_detail::larfg_real_beta(Ab(i, i + 1), sycl::sqrt(sigma_r), n - (i + 1));
+                v2::scal(th, rp.scale, xp);
+                Ab(i, i + 1) = T(1);
+                v2::larf<Side::Right>(th, rp.tau, row, Ab.sub(i + 1, i + 1, m - i - 1, n - i - 1));
+                v2::lacgv(th, xp);
                 E(i, b) = detail::real_part(rp.beta);
-                A(i, i + 1, b) = rp.beta;
+                Ab(i, i + 1) = rp.beta;
                 TAUP(i, b) = rp.tau;
             }
         });
