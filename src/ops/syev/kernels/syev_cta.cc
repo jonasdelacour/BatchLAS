@@ -23,8 +23,12 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/tuning_params.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/syev-drivers-fused.hh>
 
 namespace batchlas {
+
+namespace v2 = device::v2;
 
 namespace {
 
@@ -144,19 +148,10 @@ Event syev_cta_part(Queue& ctx,
             const int64_t total = static_cast<int64_t>(nb) * nn * nn;
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
-                const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                const int32_t b = v2::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                const int32_t row = static_cast<int32_t>(rem % nn);
-                const int32_t col = static_cast<int32_t>(rem / nn);
-
-                if (row < col) {
-                    A(row, col, b) = batchlas::device::detail::conj(A(col, row, b));
-                } else if (row == col) {
-                    if constexpr (detail::is_complex<T>::value) {
-                        A(row, col, b) = T(A(row, col, b).real(), typename base_type<T>::type(0));
-                    }
-                }
+                const auto [row, col] = v2::batched_rc(idx, b, nn);
+                v2::mirror_at<Uplo::Lower, v2::diag::Real, v2::NativeArith<T>>(v2::item_mat(A, b), row, col);
             });
         });
     }
@@ -244,26 +239,10 @@ Event syev_cta_part(Queue& ctx,
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(nb)), [=](sycl::id<1> tid) {
                 const int32_t b = static_cast<int32_t>(tid[0]);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                // S(0) = 1
-                S(0, b) = T(1, Real(0));
-
-                for (int32_t i = 0; i < nn; ++i) {
-                    Dr(i, b) = D(i, b).real();
-                }
-
-                for (int32_t i = 0; i < nn - 1; ++i) {
-                    const T e = E(i, b);
-                    const Real abs_e = sycl::hypot(e.real(), e.imag());
-                    Er(i, b) = abs_e;
-
-                    if (abs_e == Real(0)) {
-                        S(i + 1, b) = S(i, b);
-                    } else {
-                        // We want the *subdiagonal* to become real.
-                        const T sub = (u == Uplo::Lower) ? e : T(e.real(), -e.imag());
-                        S(i + 1, b) = S(i, b) * (sub / abs_e);
-                    }
-                }
+                // The subdiagonal becomes real; S is always recorded here.
+                v2::phase_similarity<v2::NativeArith<T>>(v2::Thread{}, nn, v2::item_vec(D, b), v2::item_vec(E, b),
+                                                         v2::item_vec(Dr, b), v2::item_vec(Er, b), v2::item_vec(S, b), u,
+                                                         /*want_s=*/true);
             });
         });
         cta_debug_sync(ctx, "syev_cta: after complex phase transform");
@@ -302,12 +281,10 @@ Event syev_cta_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * nn * nn;
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    const int32_t b = v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                    const int32_t row = static_cast<int32_t>(rem % nn);
-                    const int32_t col = static_cast<int32_t>(rem / nn);
-                    ZC(row, col, b) = S(row, b) * T(Z(row, col, b), Real(0));
+                    const auto [row, col] = v2::batched_rc(idx, b, nn);
+                    v2::dgmm_left_at<v2::NativeArith<T>>(v2::item_vec(S, b), v2::item_mat(Z, b), v2::item_mat(ZC, b), row, col);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after lift Z and phase");
@@ -325,30 +302,10 @@ Event syev_cta_part(Queue& ctx,
                 const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
                 cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                     const int64_t idx = static_cast<int64_t>(tid[0]);
-                    const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                    const int32_t b = v2::batched_item(idx, nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
-                    const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                    const int32_t row = static_cast<int32_t>(rem % nn);
-                    const int32_t col = static_cast<int32_t>(rem / nn);
-
-                    AQ(row, col, b) = T(0);
-
-                    if (uplo_eff == Uplo::Lower) {
-                        if (col >= 1) {
-                            const int32_t i = col - 1;
-                            if (row >= (col + 1) && row < nn) {
-                                AQ(row, col, b) = A(row, i, b);
-                            }
-                        }
-                    } else {
-                        if (col <= nn - 2) {
-                            const int32_t p = col;
-                            const int32_t k = p + 1;
-                            if (row < p) {
-                                AQ(row, col, b) = A(row, k, b);
-                            }
-                        }
-                    }
+                    const auto [row, col] = v2::batched_rc(idx, b, nn);
+                    v2::sytrd_reflector_pack_at(v2::item_mat(A, b), v2::item_mat(AQ, b), uplo_eff, nn, row, col);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after pack AQ");
@@ -365,20 +322,7 @@ Event syev_cta_part(Queue& ctx,
                     const int32_t b = static_cast<int32_t>(idx / nn);
                     if (mask != nullptr && mask[b] == 0) return;  // I3
                     const int32_t j = static_cast<int32_t>(idx - static_cast<int64_t>(b) * nn);
-
-                    if (uplo_eff == Uplo::Lower) {
-                        if (j == 0) {
-                            TAUQ(j, b) = T(0);
-                        } else {
-                            TAUQ(j, b) = (j - 1 < (nn - 1)) ? TAU(j - 1, b) : T(0);
-                        }
-                    } else {
-                        if (j < (nn - 1)) {
-                            TAUQ(j, b) = TAU(j, b);
-                        } else {
-                            TAUQ(j, b) = T(0);
-                        }
-                    }
+                    v2::sytrd_tau_pack_at(v2::item_vec(TAU, b), v2::item_vec(TAUQ, b), uplo_eff, nn, j);
                 });
             });
             cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
@@ -482,50 +426,13 @@ Event syev_cta_part(Queue& ctx,
             const int64_t total = static_cast<int64_t>(nb) * static_cast<int64_t>(nn) * static_cast<int64_t>(nn);
             cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
                 const int64_t idx = static_cast<int64_t>(tid[0]);
-                const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(nn) * nn));
+                const int32_t b = v2::batched_item(idx, nn);
                 if (mask != nullptr && mask[b] == 0) return;  // I3
-                const int64_t rem = idx - static_cast<int64_t>(b) * nn * nn;
-                const int32_t row = static_cast<int32_t>(rem % nn);
-                const int32_t col = static_cast<int32_t>(rem / nn);
-
-                // Default: zero fill.
-                AQ(row, col, b) = T(0);
-
-                if (uplo_eff == Uplo::Lower) {
-                    // Fill below-diagonal tails for QR reflectors stored in columns 1..n-1.
-                    // Reflector i (0..n-2) from SYTRD column i maps to QR column (i+1).
-                    if (col >= 1) {
-                        const int32_t i = col - 1;
-                        // Tail starts at row (i+2) == col+1.
-                        if (row >= (col + 1) && row < nn) {
-                            AQ(row, col, b) = A(row, i, b);
-                        }
-                    }
-
-                    // Fold the TAUQ permutation into this kernel: one thread per
-                    // column already exists here, so the separate n*batch launch it
-                    // used to need is pure overhead.
-                    // tau_q[0] = 0, tau_q[j] = tau[j-1] for j>=1.
-                    if (row == 0) {
-                        TAUQ(col, b) = (col >= 1 && (col - 1) < (nn - 1)) ? TAU(col - 1, b) : T(0);
-                    }
-                } else {
-                    // Upper -> QL reflectors stored in columns 0..n-2.
-                    // Reflector with pivot p (0..n-2) comes from SYTRD column (p+1)
-                    // with entries in rows 0..p-1.
-                    if (col <= nn - 2) {
-                        const int32_t p = col;
-                        const int32_t k = p + 1;
-                        if (row < p) {
-                            AQ(row, col, b) = A(row, k, b);
-                        }
-                    }
-
-                    // tau_q[j] = tau[j] for j<=n-2, tau_q[n-1] = 0.
-                    if (row == 0) {
-                        TAUQ(col, b) = (col < (nn - 1)) ? TAU(col, b) : T(0);
-                    }
-                }
+                const auto [row, col] = v2::batched_rc(idx, b, nn);
+                // The TAUQ shift is folded in (row 0 writes it): one thread per column
+                // already exists here, so a separate n*batch launch would be pure overhead.
+                v2::sytrd_reflector_pack_at(v2::item_mat(A, b), v2::item_mat(AQ, b), uplo_eff, nn, row, col,
+                                            v2::item_vec(TAU, b), v2::item_vec(TAUQ, b));
             });
         });
         cta_debug_sync(ctx, "syev_cta: after pack AQ/TAUQ");
