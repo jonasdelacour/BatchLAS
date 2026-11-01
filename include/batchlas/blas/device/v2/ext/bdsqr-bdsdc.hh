@@ -135,8 +135,6 @@ template <class T, Mem M = Mem::Global> struct VMat : LazyLines<VMat<T, M>> {
     BATCHLAS_DLA_INLINE T& operator()(int i, int j) const { return p[static_cast<std::int64_t>(b) * stride + j * int(ld) + i]; }
     BATCHLAS_DLA_INLINE int rows() const { return int(m); }
     BATCHLAS_DLA_INLINE int cols() const { return int(n); }
-    // The leading r x c block (same addressing as the item).
-    BATCHLAS_DLA_INLINE VMat lead(int r, int c) const { return {{}, p, b, stride, Dyn{r}, Dyn{c}, ld}; }
 };
 template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE VVec<T, M> vec_item(const VectorView<T>& v, int b) {
     return {v.data_ptr(), b, v.stride(), Dyn{v.size()}, Dyn{v.inc()}};
@@ -144,29 +142,6 @@ template <Mem M = Mem::Global, class T> BATCHLAS_DLA_INLINE VVec<T, M> vec_item(
 template <Mem M = Mem::Global, class T>
 BATCHLAS_DLA_INLINE VMat<T, M> mat_item(const KernelMatrixView<T, MatrixFormat::Dense>& a, int b) {
     return {{}, a.data(), b, a.stride(), Dyn{a.rows()}, Dyn{a.cols()}, Dyn{a.ld()}};
-}
-
-// A^T without a copy: (i, j) = a(j, i).
-template <class Mx> struct Trans : LazyLines<Trans<Mx>> {
-    Mx a;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return a(j, i); }
-    BATCHLAS_DLA_INLINE int rows() const { return a.cols(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.rows(); }
-};
-template <class T, Mem M> BATCHLAS_DLA_INLINE Trans<VMat<T, M>> trans(const VMat<T, M>& a) { return {{}, a}; }
-
-// a where `first`, else b, chosen at every element (a runtime choice between two same-shape
-// operands, e.g. V = Vh^T or U, as the select the hand-written kernels make).
-template <class A, class B> struct Pick : LazyLines<Pick<A, B>> {
-    bool first;
-    A a;
-    B b;
-    BATCHLAS_DLA_INLINE decltype(auto) operator()(int i, int j) const { return first ? a(i, j) : b(i, j); }
-    BATCHLAS_DLA_INLINE int rows() const { return a.rows(); }
-    BATCHLAS_DLA_INLINE int cols() const { return a.cols(); }
-};
-template <class A, class B> BATCHLAS_DLA_INLINE Pick<A, B> pick(bool first, const A& a, const B& b) {
-    return {{}, first, a, b};
 }
 
 // ---- elementwise -------------------------------------------------------------------------
