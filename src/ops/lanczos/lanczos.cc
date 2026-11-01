@@ -15,8 +15,11 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include <src/sort.hh>
+#include <batchlas/blas/device/v2/ext/krylov-ortho-ritz.hh>
 
 namespace batchlas {
+    namespace dla = device::v2;
+
     template <Backend B, typename T, MatrixFormat MF>
     struct InitKernel {};
 
@@ -56,7 +59,6 @@ namespace batchlas {
         auto batch_size = A.batch_size();
         auto n = A.rows();
 
-        auto real_part = [](T value) { if constexpr (detail::is_complex<T>::value) return value.real(); else return value; };
         auto Vmem = pool.allocate<T>(ctx, (1+n)*n*batch_size);
         auto V_vectormem = pool.allocate<T>(ctx, n*2*batch_size);
         auto alphas = pool.allocate<T>(ctx, n*batch_size);
@@ -85,25 +87,15 @@ namespace batchlas {
         //Initial guess
         auto init = [&](){
             ctx -> submit([&](sycl::handler& h) {
-                auto reduce_mem = sycl::local_accessor<T>(n, h);
                 batchlas::impl::parallel_for<InitKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_init, wg_init), [=](sycl::nd_item<1> item) {
                     auto bid = item.get_group_linear_id();
                     if (masked && !mk[bid]) return;  // I1, before the group reduction
-                    auto tid = item.get_local_linear_id();
-                    auto bdim = item.get_local_range()[0];
-                    auto cta = item.get_group();
-
-                    auto localV = Vmem.subspan(bid*(n+1)*n, n);
-
+                    const dla::DynGroup ex{item};
+                    const auto v0 = dla::vec(Vmem.data() + bid*(n+1)*n, n);
                     // Same start vector for every item: keyed on the row only.
-                    for (int i = tid; i < n; i += bdim) {
-                        localV[i] = philox::uniform_unit<typename base_type<T>::type>(42, 0, static_cast<std::uint64_t>(i));
-                        reduce_mem[i] = localV[i] * localV[i];
-                    }
-                    auto norm = sycl::sqrt(real_part(batchlas::portable::joint_reduce(cta, &reduce_mem[0], &reduce_mem[0] + reduce_mem.size(), T(0), sycl::plus<T>())));
-                    for (int i = tid; i < n; i += bdim) {
-                        localV[i] /= norm; //Normalize the Ritz vector
-                    }
+                    dla::generate(ex, v0, [](int i) { return T(philox::uniform_unit<real_t>(42, 0, static_cast<std::uint64_t>(i))); });
+                    const real_t norm = sycl::sqrt(dla::sumsq<dla::alg::Unfused>(ex, v0));
+                    dla::scal_div(ex, norm, v0, v0);
                 });
             });
         };
@@ -135,55 +127,31 @@ namespace batchlas {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
                     auto v_current_ptr = Vmem.data() + it*n;
                     auto v_next_ptr = padded_output.data_ptr();
-                    auto dot_mem = sycl::local_accessor<T>(n, h);
                     batchlas::impl::parallel_for<LanczosKernel<B, T, MF>>(h, sycl::nd_range<1>(batch_size*wg_lanczos, wg_lanczos), [=](sycl::nd_item<1> item) {
                         auto bid = item.get_group_linear_id();
                         if (masked && !mk[bid]) return;
-                        auto tid = item.get_local_linear_id();
-                        auto wg = item.get_local_range()[0];
-                        auto cta = item.get_group();
+                        const dla::DynGroup ex{item};
+                        const auto v_prev = dla::vec(v_prev_ptr + bid*(n+1)*n, n);
+                        const auto v_cur = dla::vec(v_current_ptr + bid*(n+1)*n, n);
+                        const auto w = dla::vec(v_next_ptr + bid*2*n, n);  // A v_it on entry
+                        T* const alpha_b = alphas.data() + bid*n;
+                        T* const beta_b = betas.data() + bid*n;
 
-                        auto local_v_prev =     Span(v_prev_ptr +       bid*(n+1)*n,n);
-                        auto local_v_current =  Span(v_current_ptr +    bid*(n+1)*n,n);
-                        auto local_v_next =     Span(v_next_ptr +       bid*2*n,n);
-                        auto local_output =     Span(Vmem.data() + bid*(n+1)*n + (it+1)*n, n);
-
-                        auto localAlphas = alphas.subspan(bid*n, n);
-                        auto localBetas = betas.subspan(bid*n, n);
-
-                        for (int i = tid; i < n; i += wg) {
-                            dot_mem[i] = local_v_current[i] * local_v_next[i];
-                        }
-                        auto alpha = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>());
-                        localAlphas[it] = alpha;
+                        const T alpha = dla::dot_unfused(ex, v_cur, w);
+                        alpha_b[it] = alpha;
                         if (it > 0) {
                             // beta_{it-1} takes the sign of v_{it-1}^T A v_it, which reorthogonalization may flip.
-                            const T beta_prev = localBetas[it - 1];
-                            for (int i = tid; i < n; i += wg) {
-                                dot_mem[i] = local_v_prev[i] * local_v_next[i];
-                            }
-                            auto coupling = batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>());
-                            const T signed_beta = sycl::copysign(real_part(beta_prev), real_part(coupling));
-                            if (tid == 0) localBetas[it - 1] = signed_beta;
-                            for (int i = tid; i < n; i += wg) {
-                                local_v_next[i] -= signed_beta * local_v_prev[i] + alpha * local_v_current[i];
-                            }
+                            const T beta_prev = beta_b[it - 1];
+                            const T coupling = dla::dot_unfused(ex, v_prev, w);
+                            const T signed_beta = sycl::copysign(beta_prev, coupling);
+                            if (ex.leader()) beta_b[it - 1] = signed_beta;
+                            dla::axpy2(ex, -signed_beta, v_prev, -alpha, v_cur, w);  // w -= beta v_prev + alpha v_it
                         } else {
-                            for (int i = tid; i < n; i += wg) {
-                                local_v_next[i] -= alpha * local_v_current[i];
-                            }
+                            dla::axpy(ex, -alpha, v_cur, w);
                         }
-                        for (int i = tid; i < n; i += wg) {
-                            dot_mem[i] = local_v_next[i] * local_v_next[i];
-                        }
-                        auto beta = sycl::sqrt(real_part(batchlas::portable::joint_reduce(cta, &dot_mem[0], &dot_mem[0] + dot_mem.size(), T(0), sycl::plus<T>())));
-                        localBetas[it] = beta;
-
-                        if( it < iterations - 1) {
-                            for (size_t i = tid; i < n; i += wg) {
-                                local_output[i] = local_v_next[i] / beta; //Normalize the Ritz vector
-                            }
-                        }
+                        const T beta = sycl::sqrt(dla::sumsq<dla::alg::Unfused>(ex, w));
+                        beta_b[it] = beta;
+                        if (it < iterations - 1) dla::scal_div(ex, beta, w, dla::vec(Vmem.data() + bid*(n+1)*n + (it+1)*n, n));
                     });
                 });
             }
