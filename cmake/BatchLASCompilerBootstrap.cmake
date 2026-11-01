@@ -1,3 +1,15 @@
+# Sets out_var TRUE when `compiler --acpp-version` succeeds and names AdaptiveCpp.
+# Defined here because this file runs first; BatchLASOptions.cmake calls it too.
+function(batchlas_compiler_reports_acpp compiler out_var)
+    execute_process(COMMAND "${compiler}" --acpp-version
+        OUTPUT_VARIABLE _version ERROR_QUIET RESULT_VARIABLE _rc TIMEOUT 60)
+    if(_rc EQUAL 0 AND _version MATCHES "AdaptiveCpp")
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
 # This file runs before project(), so BATCHLAS_IS_TOP_LEVEL does not exist yet;
 # compare the directories directly. Picking a compiler is a whole-project
 # decision, and the set() below is a CACHE ... FORCE write - doing that from
@@ -20,11 +32,7 @@ elseif((NOT DEFINED CMAKE_CXX_COMPILER AND "$ENV{CXX}" MATCHES "(^|/)(acpp|syclc
     # CMake then drops the cache and reconfigures, and AUTO resolves to ACPP from the driver.
     set(_batchlas_cached_is_acpp FALSE)
     if(DEFINED CMAKE_CXX_COMPILER)
-        execute_process(COMMAND "${CMAKE_CXX_COMPILER}" --acpp-version
-            OUTPUT_VARIABLE _batchlas_acpp_version ERROR_QUIET RESULT_VARIABLE _batchlas_acpp_rc TIMEOUT 60)
-        if(_batchlas_acpp_rc EQUAL 0 AND _batchlas_acpp_version MATCHES "AdaptiveCpp")
-            set(_batchlas_cached_is_acpp TRUE)
-        endif()
+        batchlas_compiler_reports_acpp("${CMAKE_CXX_COMPILER}" _batchlas_cached_is_acpp)
     endif()
     if(_batchlas_cached_is_acpp)
         message(STATUS "Using user-specified compiler: ${CMAKE_CXX_COMPILER}")

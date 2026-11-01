@@ -15,27 +15,23 @@ ledger's distillate; for a cell's spread or race history, read the ledger itself
 import argparse
 import math
 import os
-import re
 import sys
 from collections import defaultdict
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+import sweep_to_table as stt  # noqa: E402
+
 NUMERIC_KEYS = {"m", "n", "k", "q", "nrhs", "order", "batch", "nnz", "rows", "cols"}
 
 
 def parse(path):
-    for line in open(path):
-        if line.startswith("#") or "|" not in line:
-            continue
-        body = line.split("#", 1)[0]
-        parts = [p.strip() for p in body.split("|")]
-        keys = dict(kv.split("=", 1) for kv in parts[0].split())
-        times = {}
-        for p in parts[1:]:
-            m = re.match(r"(\S+)\s+(\d[0-9.]*(?:[eE][+-]?\d+)?)$", p)
-            if m:
-                times[m.group(1)] = float(m.group(2))
-        yield keys, times
+    """Yield ({key: text} in '# keys:' order, {choice: ms}) per row; untimed '-' entries left out."""
+    with open(path) as f:
+        _, keyspec, rows = stt.parse_table(f.read())
+    names = [n for n, _, _ in keyspec]
+    for key, ranked in rows:
+        yield dict(zip(names, map(str, key))), {c: t for c, t in ranked if t is not None}
 
 
 def main():
