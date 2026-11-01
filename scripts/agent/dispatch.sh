@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
-# Run a headless Claude session on another box (or this one) in its own worktree, from the Mac.
+# Run an unattended Claude session on another box (or this one) in its own worktree, from the Mac.
 #
 #   scripts/agent/dispatch.sh hosts                          load, memory, GPUs, dispatches per box
 #   scripts/agent/dispatch.sh start HOST NAME BRIEF [--gpu N] [--base REF]
 #   scripts/agent/dispatch.sh list [HOST]                    dispatched sessions and their state
 #   scripts/agent/dispatch.sh logs HOST NAME [N]             last N assistant messages (default 8)
 #   scripts/agent/dispatch.sh report HOST NAME               the session's .dispatch/report.md
+#   scripts/agent/dispatch.sh attach HOST NAME               the session's terminal (screen; detach C-a d)
 #   scripts/agent/dispatch.sh stop HOST NAME
 #   scripts/agent/dispatch.sh rm HOST NAME                   remove the worktree and local branch
 #
 # HOST: jrhnbr (2x RTX 4090, shared), tr02 (threadripper02: CPU and build work only, its GPUs
 # are hidden and --gpu is refused, since GPU load has crashed it), mac (Apple M5 Max, Metal).
 # start: worktree ~/BatchLAS/.claude/worktrees/dispatch-NAME on branch dispatch/NAME from
-# origin/main, a seeded build tree, then `claude -p` under nohup (pid in .dispatch/pid) with the host rules
-# prepended to BRIEF. The session pushes dispatch/NAME and writes .dispatch/report.md.
+# origin/main, a seeded build tree, then an interactive `claude --remote-control dispatch-NAME` in
+# a detached screen session dispatch-NAME (pid in .dispatch/pid) with the host rules prepended to
+# BRIEF. It shows up as dispatch-NAME in claude.ai/code and the Claude app (Remote Control), where
+# you can follow and steer it. `-p` sessions cannot use Remote Control. The session pushes
+# dispatch/NAME, writes .dispatch/report.md and then stays idle until `stop`.
 set -u
 die() { echo "dispatch: $*" >&2; exit 2; }
 
@@ -29,7 +33,7 @@ ssh_of() {
 
 count_running() {
     local repo; repo=$(repo_of "$1")
-    echo "n=0; for p in $repo/.claude/worktrees/dispatch-*/.dispatch/pid; do [ -f \$p ] && kill -0 \$(cat \$p) 2>/dev/null && n=\$((n+1)); done; echo \$n"
+    echo "n=0; for p in $repo/.claude/worktrees/dispatch-*/.dispatch/pid; do [ -f \$p ] && [ ! -f \${p%pid}report.md ] && kill -0 \$(cat \$p) 2>/dev/null && n=\$((n+1)); done; echo \$n"
 }
 
 max_jobs() { case "$1" in tr02) echo 2 ;; jrhnbr) echo 2 ;; mac) echo 3 ;; esac; }
@@ -109,8 +113,9 @@ cmd_start() {
         die "worktree setup failed on $host"
 
     {
-        echo "You are a dispatched BatchLAS session started from the Mac Studio. Work autonomously;"
-        echo "nobody answers questions or permission prompts, so make reasonable assumptions and note them."
+        echo "You are a dispatched BatchLAS session started from the Mac Studio. Work autonomously:"
+        echo "the user may follow you over Remote Control and message you, but do not wait for answers;"
+        echo "make reasonable assumptions and note them."
         rules_of "$host"
         seeded="build tree seeded in ./build (.dispatch/seed.log)"
         echo "- Worktree $wt, branch dispatch/$name from $base, $seeded. LFS files are"
@@ -126,16 +131,18 @@ cmd_start() {
 
     on "$host" "cat > $wt/.dispatch/run.sh <<'EOF'
 cd \"\$(dirname \"\$0\")/..\"
+echo \$\$ > .dispatch/pid
 $env
 claude=\$(command -v claude || echo \$HOME/.local/bin/claude)
-\"\$claude\" -p \"\$(cat .dispatch/brief.md)\" -n dispatch-$name --permission-mode auto \\
-    --permission-prompts none --output-format stream-json --verbose \\
-    > .dispatch/log.jsonl 2> .dispatch/stderr.log
+\"\$claude\" --remote-control dispatch-$name -n dispatch-$name --permission-mode auto \\
+    \"\$(cat .dispatch/brief.md)\" 2> .dispatch/stderr.log
 echo \$? > .dispatch/exit
 EOF
-        nohup bash $wt/.dispatch/run.sh > /dev/null 2>&1 < /dev/null & echo \$! > $wt/.dispatch/pid" ||
+        command -v screen >/dev/null || { echo 'no screen on this host'; exit 1; }
+        screen -dmS dispatch-$name bash $wt/.dispatch/run.sh" ||
         die "launch failed on $host"
     echo "started $name on $host: $wt (branch dispatch/$name)"
+    echo "Remote Control: session 'dispatch-$name' in claude.ai/code; terminal: dispatch.sh attach $host $name"
 }
 
 cmd_list() {
@@ -146,7 +153,8 @@ cmd_list() {
         on "$h" "for d in $repo/.claude/worktrees/dispatch-*/; do
             [ -d \$d/.dispatch ] || continue
             n=\$(basename \$d); n=\${n#dispatch-}
-            if [ -f \$d/.dispatch/pid ] && kill -0 \$(cat \$d/.dispatch/pid) 2>/dev/null; then s=running
+            if [ -f \$d/.dispatch/pid ] && kill -0 \$(cat \$d/.dispatch/pid) 2>/dev/null; then
+                s=running; [ -f \$d/.dispatch/report.md ] && s=idle
             elif [ -f \$d/.dispatch/exit ]; then s=\"exit \$(cat \$d/.dispatch/exit)\"
             else s=dead; fi
             [ -f \$d/.dispatch/report.md ] && s=\"\$s, report\"
@@ -158,7 +166,9 @@ cmd_list() {
 cmd_logs() {
     [ "$#" -ge 2 ] || die "logs HOST NAME [N]"
     local repo; repo=$(repo_of "$1")
-    on "$1" "tail -n 400 $repo/.claude/worktrees/dispatch-$2/.dispatch/log.jsonl" |
+    on "$1" "w=$repo/.claude/worktrees/dispatch-$2
+        f=\$(ls -t \$HOME/.claude/projects/\$(echo \$w | sed 's/[^A-Za-z0-9]/-/g')/*.jsonl 2>/dev/null | head -1)
+        tail -n 400 \${f:-\$w/.dispatch/log.jsonl}" |
         python3 -c '
 import json, sys
 n = int(sys.argv[1]); out = []
@@ -199,11 +209,15 @@ case "$sub" in
     logs) cmd_logs "$@" ;;
     report) [ "$#" -ge 2 ] || die "report HOST NAME"
         on "$1" "cat $(repo_of "$1")/.claude/worktrees/dispatch-$2/.dispatch/report.md" ;;
+    attach) [ "$#" -ge 2 ] || die "attach HOST NAME"
+        if [ "$(ssh_of "$1")" = local ]; then exec screen -r "dispatch-$2"
+        else exec ssh -t "$(ssh_of "$1")" "screen -r dispatch-$2"; fi ;;
     stop) [ "$#" -ge 2 ] || die "stop HOST NAME"
-        on "$1" "pkill -P \$(cat $(repo_of "$1")/.claude/worktrees/dispatch-$2/.dispatch/pid)" ;;
+        on "$1" "screen -S dispatch-$2 -X quit 2>/dev/null ||
+            pkill -P \$(cat $(repo_of "$1")/.claude/worktrees/dispatch-$2/.dispatch/pid)" ;;
     rm) [ "$#" -ge 2 ] || die "rm HOST NAME"
         d="$(repo_of "$1")/.claude/worktrees/dispatch-$2"
         on "$1" "[ -f $d/.dispatch/pid ] && kill -0 \$(cat $d/.dispatch/pid) 2>/dev/null && { echo 'still running; stop it first'; exit 1; }
             cd $(repo_of "$1") && git worktree remove --force $d && git branch -D dispatch/$2" ;;
-    *) sed -n '3,17p' "$0"; exit 2 ;;
+    *) sed -n '3,21p' "$0"; exit 2 ;;
 esac

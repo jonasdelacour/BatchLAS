@@ -12,6 +12,7 @@ description: Brief, launch and integrate parallel subagents or a Workflow on Bat
   - A base that does not build here is the first work package. Do not hand it to N agents.
 - **Size it.** Give each agent one op or work package with a disjoint file set. Name the shared files (`tests/tune_tests.cc`, `tuned/`, `include/batchlas/tuning_params.hh`, `src/ops/CMakeLists.txt`) and give each one a single owner.
 - **Tier every agent** (`.claude/agents/`, table in `docs/developer/agent-core.md`): `subagent_type: "<tier>"` on the Agent tool, `agentType: '<tier>'` in a workflow `agent()`. scout for locating, mechanic for specified edits, engineer for work packages, verifier for refuting, architect only for design. `scripts/agent_tier_guard.py` blocks an untiered launch.
+- **Other boxes.** A work package for jrhnbr (CUDA GPU), tr02 (CPU/build only) or a separate Mac session goes through `scripts/agent/dispatch.sh start HOST NAME BRIEF` (`hosts` first to place it). Each dispatch is an interactive session with Remote Control on, listed as `dispatch-NAME` in claude.ai/code and the Claude app, so the user can follow and steer it. Track it with `list`/`logs`/`report`; `stop` it once its report is integrated, since an idle session stays up.
 - **Timebox.** Pick a check-in point (about 2-3 h of wall time). Tell the user the plan, the agent count and when you will report.
 
 ## Brief clauses (paste into every brief, after the task-specific part)
