@@ -21,6 +21,11 @@ template <class V> using elem_t = std::remove_cvref_t<decltype(std::declval<cons
 template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int n, F&& f) {
     for (int i = ex.lid(); i < n; i += Ex::size) f(i);
 }
+// f(i) for every i in [first, end) this item owns, in the parent's coordinates: the same items
+// own the same elements as an op on x.tail(first), so the two compose with no barrier.
+template <class Ex, class F> BATCHLAS_DLA_INLINE void for_each_owned(const Ex& ex, int first, int end, F&& f) {
+    for (int i = first + ex.lid(); i < end; i += Ex::size) f(i);
+}
 
 // out(i) = f(ins(i)...)
 template <class Ex, class Out, class F, class... In>
@@ -41,23 +46,31 @@ BATCHLAS_DLA_INLINE void axpby(const Ex& ex, A a_, const X& x, B b_, const Y& y)
 }
 
 // y := a x + y
-template <class Ex, class A, class X, class Y> BATCHLAS_DLA_INLINE void axpy(const Ex& ex, A a_, const X& x, const Y& y) {
+template <class Ops = arith::Explicit, class Ex, class A, class X, class Y>
+BATCHLAS_DLA_INLINE void axpy(const Ex& ex, A a_, const X& x, const Y& y) {
     using T = elem_t<Y>;
+    using Ar = arith_t<Ops, T>;
     using S = tag_t<A>;
     const S a = as_tag(a_);
     if constexpr (std::is_same_v<S, Zero>) return;
     for_each_owned(ex, y.size(), [&](int i) {
-        if constexpr (std::is_same_v<S, One>) y(i) = Arith<T>::add(y(i), x(i));
-        else if constexpr (std::is_same_v<S, NegOne>) y(i) = Arith<T>::sub(y(i), x(i));
-        else if constexpr (!std::is_same_v<S, Zero>) Arith<T>::mac(y(i), static_cast<T>(a.v), x(i));
+        if constexpr (std::is_same_v<S, One>) y(i) = Ar::add(y(i), x(i));
+        else if constexpr (std::is_same_v<S, NegOne>) y(i) = Ar::sub(y(i), x(i));
+        else if constexpr (!std::is_same_v<S, Zero>) Ar::mac(y(i), static_cast<T>(a.v), x(i));
     });
 }
 
-// x := a x
-template <class Ex, class A, class X> BATCHLAS_DLA_INLINE void scal(const Ex& ex, A a_, const X& x) {
+// x := a x (arith::Native with a value: x *= a, T's own in-place multiply)
+template <class Ops = arith::Explicit, class Ex, class A, class X> BATCHLAS_DLA_INLINE void scal(const Ex& ex, A a_, const X& x) {
     using T = elem_t<X>;
-    const auto a = as_tag(a_);
-    for_each_owned(ex, x.size(), [&](int i) { x(i) = tag_mul(a, static_cast<T>(x(i))); });
+    using S = tag_t<A>;
+    const S a = as_tag(a_);
+    constexpr bool native_value = std::is_same_v<Ops, arith::Native> && !std::is_same_v<S, One> &&
+                                  !std::is_same_v<S, Zero> && !std::is_same_v<S, NegOne>;
+    for_each_owned(ex, x.size(), [&](int i) {
+        if constexpr (native_value) x(i) *= static_cast<T>(a.v);
+        else x(i) = tag_mul(a, static_cast<T>(x(i)));
+    });
 }
 
 template <class Ex, class X, class Y> BATCHLAS_DLA_INLINE void copy(const Ex& ex, const X& x, const Y& y) {
@@ -136,24 +149,28 @@ BATCHLAS_DLA_INLINE T reduce(const Ex& ex, Scratch<T, Slots> scr, int n, F&& f) 
 }
 
 namespace detail {
-template <bool Conj, class Ex, class X, class Y> BATCHLAS_DLA_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
+template <bool Conj, class Ops = arith::Explicit, class Ex, class X, class Y>
+BATCHLAS_DLA_INLINE auto dot_partial(const Ex& ex, const X& x, const Y& y) {
     using T = elem_t<X>;
-    T acc = Arith<T>::zero();
+    using Ar = arith_t<Ops, T>;
+    T acc = Ar::zero();
     for_each_owned(ex, x.size(), [&](int i) {
-        if constexpr (Conj) Arith<T>::mac_conj(acc, x(i), y(i));
-        else Arith<T>::mac(acc, x(i), y(i));
+        if constexpr (Conj) Ar::mac_conj(acc, x(i), y(i));
+        else Ar::mac(acc, x(i), y(i));
     });
     return acc;
 }
 }  // namespace detail
 
 // x^T y (no conjugation)
-template <Scope S = Scope::Auto, class Ex, class X, class Y> BATCHLAS_DLA_INLINE auto dot(const Ex& ex, const X& x, const Y& y) {
-    return detail::scope_reduce<S>(ex, detail::dot_partial<false>(ex, x, y));
+template <Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class X, class Y>
+BATCHLAS_DLA_INLINE auto dot(const Ex& ex, const X& x, const Y& y) {
+    return detail::scope_reduce<S>(ex, detail::dot_partial<false, Ops>(ex, x, y));
 }
 // x^H y
-template <Scope S = Scope::Auto, class Ex, class X, class Y> BATCHLAS_DLA_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
-    return detail::scope_reduce<S>(ex, detail::dot_partial<true>(ex, x, y));
+template <Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class X, class Y>
+BATCHLAS_DLA_INLINE auto dotc(const Ex& ex, const X& x, const Y& y) {
+    return detail::scope_reduce<S>(ex, detail::dot_partial<true, Ops>(ex, x, y));
 }
 
 namespace detail {
@@ -179,20 +196,37 @@ template <int K, bool Conj = false, class Ex, class T, int Slots, class X, class
 BATCHLAS_DLA_INLINE std::array<T, K> dotN(const Ex& ex, Scratch<T, Slots> scr, const std::array<X, K>& xs, const Y& y) {
     return detail::packed_sum<K>(ex, scr, detail::dotn_partial<K, Conj>(ex, xs, y));
 }
-// {xs^T y...} (Conj: xs^H y) for operands of different types (e.g. a column and its
-// unit_head), one packed exchange: latrd's gamma/delta pair.
-template <bool Conj = false, class Ex, class T, int Slots, class Y, class... Xs>
-BATCHLAS_DLA_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<T, Slots> scr, const Y& y, const Xs&... xs) {
+namespace detail {
+template <bool Conj, class Ops, class Ex, class Y, class... Xs> BATCHLAS_DLA_INLINE auto dot_many_partial(const Ex& ex, const Y& y, const Xs&... xs) {
+    using T = elem_t<Y>;
+    using Ar = arith_t<Ops, T>;
     constexpr int K = sizeof...(Xs);
     std::array<T, K> acc;
 #pragma unroll
-    for (int k = 0; k < K; ++k) acc[k] = Arith<T>::zero();
+    for (int k = 0; k < K; ++k) acc[k] = Ar::zero();
     for_each_owned(ex, y.size(), [&](int i) {
         const T yi = y(i);
         int k = 0;
-        ((Conj ? Arith<T>::mac_conj(acc[k++], xs(i), yi) : Arith<T>::mac(acc[k++], xs(i), yi)), ...);
+        ((Conj ? Ar::mac_conj(acc[k++], xs(i), yi) : Ar::mac(acc[k++], xs(i), yi)), ...);
     });
-    return detail::packed_sum<K>(ex, scr, acc);
+    return acc;
+}
+}  // namespace detail
+
+// {xs^T y...} (Conj: xs^H y) for operands of different types (e.g. a column and its
+// unit_head), one loop over y and one packed exchange: latrd's gamma/delta pair.
+template <bool Conj = false, class Ops = arith::Explicit, class Ex, class T, int Slots, class Y, class... Xs>
+BATCHLAS_DLA_INLINE std::array<T, sizeof...(Xs)> dot_many(const Ex& ex, Scratch<T, Slots> scr, const Y& y, const Xs&... xs) {
+    return detail::packed_sum<sizeof...(Xs)>(ex, scr, detail::dot_many_partial<Conj, Ops>(ex, y, xs...));
+}
+// Without Scratch: one loop over y, then one scope-S reduction per x in argument order (on a
+// WorkGroup, portable::reduce_over_group each: the legacy kernels' trees, bit-identical).
+template <bool Conj = false, Scope S = Scope::Auto, class Ops = arith::Explicit, class Ex, class Y, class... Xs>
+BATCHLAS_DLA_INLINE auto dot_many(const Ex& ex, const Y& y, const Xs&... xs) {
+    auto acc = detail::dot_many_partial<Conj, Ops>(ex, y, xs...);
+#pragma unroll
+    for (int k = 0; k < int(sizeof...(Xs)); ++k) acc[k] = detail::scope_reduce<S>(ex, acc[k]);
+    return acc;
 }
 
 // Without Scratch: K independent reductions of scope S (on a sub-group or partition these are

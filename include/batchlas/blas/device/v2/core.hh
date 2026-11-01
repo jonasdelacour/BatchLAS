@@ -112,6 +112,69 @@ template <class R> struct Arith<std::complex<R>> {
 
 template <class T> using real_t = typename Arith<std::remove_cv_t<T>>::real_t;
 
+// The arithmetic an op's loop uses. arith::Explicit (default) is Arith<T>. arith::Native is
+// T's own operators (std::complex keeps its Annex-G multiply): setup code outside inner loops,
+// and strict ports whose SASS and rounding must not move (D6: explicit arithmetic everywhere
+// costs occupancy). arith::ExplicitInline is Arith<T> with mac/mac_conj as plain `inline`
+// calls, the hand kernels' helper form: LLVM applies `#pragma unroll 4` while the call is still
+// in the body, which leaves the loop open to runtime unrolling after inlining. The always_inline
+// form unrolls only by 4 (latrd symv: 47 vs 78 FFMA at f32 WG 128, hand = 78).
+namespace arith {
+struct Explicit {};
+struct Native {};
+struct ExplicitInline {};
+}  // namespace arith
+
+// Operands by reference and complex parts read one at a time, as in the hand helper: the loads
+// sit inside the call, and a by-value std::complex is one 8/16-byte load (other unrolling).
+template <class T> struct ArithInline : Arith<T> {
+    static inline void mac(T& acc, const T& a, const T& b) {
+        if constexpr (Arith<T>::is_complex) {
+            using R = typename Arith<T>::real_t;
+            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            const R pr = ar * br - ai * bi;
+            const R pi = ar * bi + ai * br;
+            acc = T(acc.real() + pr, acc.imag() + pi);
+        } else {
+            acc += a * b;
+        }
+    }
+    static inline void mac_conj(T& acc, const T& a, const T& b) {
+        if constexpr (Arith<T>::is_complex) {
+            using R = typename Arith<T>::real_t;
+            const R ar = a.real(), ai = a.imag(), br = b.real(), bi = b.imag();
+            const R pr = ar * br + ai * bi;
+            const R pi = ar * bi - ai * br;
+            acc = T(acc.real() + pr, acc.imag() + pi);
+        } else {
+            acc += a * b;
+        }
+    }
+};
+
+template <class T> struct NativeArith {
+    using real_t = typename Arith<T>::real_t;
+    static constexpr bool is_complex = Arith<T>::is_complex;
+    BATCHLAS_DLA_INLINE static T cj(T a) {
+        if constexpr (is_complex) return std::conj(a);
+        else return a;
+    }
+    BATCHLAS_DLA_INLINE static T mul(T a, T b) { return a * b; }
+    BATCHLAS_DLA_INLINE static void mac(T& acc, T a, T b) { acc += a * b; }
+    BATCHLAS_DLA_INLINE static void mac_conj(T& acc, T a, T b) { acc += cj(a) * b; }
+    BATCHLAS_DLA_INLINE static T conj(T a) { return cj(a); }
+    BATCHLAS_DLA_INLINE static T add(T a, T b) { return a + b; }
+    BATCHLAS_DLA_INLINE static T sub(T a, T b) { return a - b; }
+    BATCHLAS_DLA_INLINE static T neg(T a) { return -a; }
+    BATCHLAS_DLA_INLINE static T zero() { return T(0); }
+    BATCHLAS_DLA_INLINE static T one() { return T(1); }
+};
+
+template <class Ops, class T>
+using arith_t = std::conditional_t<std::is_same_v<Ops, arith::Native>, NativeArith<std::remove_cv_t<T>>,
+                                   std::conditional_t<std::is_same_v<Ops, arith::ExplicitInline>,
+                                                      ArithInline<std::remove_cv_t<T>>, Arith<std::remove_cv_t<T>>>>;
+
 // BLAS |re| + |im| (dcabs1): the key of asum, amax and iamax.
 template <class T> BATCHLAS_DLA_INLINE real_t<T> abs1(T a) {
     using A = Arith<std::remove_cv_t<T>>;
@@ -145,6 +208,7 @@ struct SgPerCol {};             // gemv T/C: one team (sub-group) per output col
 struct Serial {};               // Thread executor
 struct GroupReducePerOutput {}; // v1's generic algorithm: one group reduction per output; opt-in only
 struct RowOwnerSplit {};        // symv/hemv lower: the latrd split loop (row part, then column part)
+struct RowOwnerSplitStoredDiag {};  // hemv RowOwnerSplit reading A(r,r) as stored (caller: Im == 0)
 struct Cyclic {};               // ger: column loop outside, owned rows inside; no % or /
 struct Scaled {};               // nrm2: two-pass lassq, overflow-safe
 struct Unscaled {};             // nrm2: sqrt(dotc(x, x)); overflows past sqrt(max)
