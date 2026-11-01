@@ -15,11 +15,14 @@
 // itself, and a getenv here would tie geqrf's kernel choice to ormqr's variable.
 
 #include <batchlas/blas/device.hh>
+#include <batchlas/blas/device/v2/dla.hh>
+#include <batchlas/blas/device/v2/ext/larft-orgqr-ormqr.hh>
 #include <batchlas/util/group-collectives.hh>
 #include <batchlas/blas/matrix.hh>
 
 #include <src/math-helpers.hh>
 #include <src/queue.hh>
+#include <src/sycl/kernel_attrs.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -120,8 +123,10 @@ sycl::event larft_forward_columnwise_wg_legacy(Queue& q,
     });
 }
 
-// Device-BLAS implementation: uses device::fill / gemv / scal / trmv. Reached
-// only when the caller passes use_device = true (ormqr's BATCHLAS_ORMQR_IMPL).
+// Device LA v2 (algo port of the legacy kernel): zlarft's gemv^H and trmv per column, two
+// barriers in all. Y_j sits in T's strictly lower row j (scratch) so ONE barrier publishes every
+// Y; trmv's row owner reads back only the row it wrote, so the recurrence needs none. Reads V's
+// stored unit diagonal (pack_v writes it). Reached only with use_device = true.
 template <typename Tag, typename T, int WG>
 sycl::event larft_forward_columnwise_wg_device(Queue& q,
                                                T* t_data, int ld_t, int stride_t,
@@ -130,61 +135,40 @@ sycl::event larft_forward_columnwise_wg_device(Queue& q,
                                                const T* tau_data, int tau_stride,
                                                int tau_offset, int batch,
                                                const std::uint8_t* mask) {
-    static_assert(WG > 0, "WG must be positive");
+    static_assert(WG % 32 == 0, "WG must be a whole number of 32-wide sub-groups");
 
     return q->submit([&](sycl::handler& h) {
         batchlas::impl::parallel_for<LarftKernelName<Tag, T, WG, true>>(h,
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(batch) * static_cast<size_t>(WG)),
                               sycl::range<1>(static_cast<size_t>(WG))),
-            [=](sycl::nd_item<1> it) {
+            [=](sycl::nd_item<1> it) BATCHLAS_REQD_SG_SIZE(32) {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 if (b >= batch || (mask != nullptr && mask[b] == 0)) return;  // I1: before any barrier
 
-                T* t_b = t_data + static_cast<std::ptrdiff_t>(b) * stride_t;
-                const T* v_b = v_data + static_cast<std::ptrdiff_t>(b) * stride_v;
-                const T* tau_b = tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset;
+                namespace v2 = batchlas::device::v2;
+                const v2::WorkGroup<WG, 32> ex{it};
+                const auto V = v2::mat(v_data + static_cast<std::ptrdiff_t>(b) * stride_v, m, ib, ld_v);
+                const auto Tm = v2::mat(t_data + static_cast<std::ptrdiff_t>(b) * stride_t, ib, ib, ld_t);
+                const auto tau = v2::vec(tau_data + static_cast<std::ptrdiff_t>(b) * tau_stride + tau_offset, ib);
 
-                const sycl::group<1> g = it.get_group();
-                const int lid = static_cast<int>(it.get_local_linear_id());
-                auto t_mat =
-                    KernelMatrixView<T, MatrixFormat::Dense>(t_b, ib, ib, ld_t, ld_t * ib);
-                auto v_mat = KernelMatrixView<T, MatrixFormat::Dense>(
-                    const_cast<T*>(v_b), m, ib, ld_v, ld_v * ib);
-
-                batchlas::device::fill(g, t_mat, T(0));
-                sycl::group_barrier(g);
-
-                for (int j = 0; j < ib; ++j) {
-                    const T tauj = tau_b[j];
-                    if (tauj == T(0)) {
-                        if (lid == 0) {
-                            t_b[j + j * ld_t] = T(0);
-                        }
-                        sycl::group_barrier(g);
-                        continue;
-                    }
-
-                    if (j > 0) {
-                        auto t_col = t_mat(Slice(0, j), j);
-                        auto t_prev = t_mat(Slice(0, j), Slice(0, j));
-                        auto v_prev = v_mat(Slice(j, m), Slice(0, j));
-                        auto v_col = v_mat(Slice(j, m), j);
-
-                        batchlas::device::gemv<Transpose::ConjTrans>(
-                            g, v_prev, v_col, t_col, T(1), T(0), static_cast<T*>(nullptr));
-                        sycl::group_barrier(g);
-                        batchlas::device::scal(g, t_col, -tauj);
-                        sycl::group_barrier(g);
-                        batchlas::device::trmv<Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
-                            g, t_prev, t_col, t_col, T(1), T(0));
-                        sycl::group_barrier(g);
-                    }
-
-                    if (lid == 0) {
-                        t_b[j + j * ld_t] = tauj;
-                    }
-                    sycl::group_barrier(g);
+                for (int j = 1; j < ib; ++j) {  // T(j, 0:j) := Y_j = -tau_j V(j:m, 0:j)^H V(j:m, j)
+                    if (tau(j) == T(0)) continue;
+                    v2::gemv<Transpose::ConjTrans>(ex, -tau(j), V.sub(j, 0, m - j, j),
+                                                   v2::assume_published(V.col(j).tail(j)), v2::Zero{},
+                                                   Tm.row(j).head(j));
                 }
+                ex.barrier(v2::Mem::Global);
+
+                v2::copy(ex, tau, v2::vec(Tm.p, ib, ld_t + 1));  // T(j, j) := tau_j
+                for (int j = 1; j < ib; ++j) {  // T(0:j, j) := T(0:j, 0:j) Y_j, or 0 when tau_j == 0
+                    const auto t_col = Tm.col(j).head(j);
+                    if (tau(j) == T(0)) v2::map(ex, t_col, [] { return T(0); });
+                    else v2::trmv<Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>(
+                        ex, Tm.sub(0, 0, j, j), v2::assume_published(Tm.row(j).head(j)), t_col);
+                }
+                ex.barrier(v2::Mem::Global);
+
+                v2::laset<Uplo::Lower>(ex, v2::Zero{}, Tm);  // clear the Y scratch: T is upper
             });
     });
 }
@@ -203,15 +187,16 @@ sycl::event larft_forward_columnwise_batched_t(Queue& q,
                                                int tau_offset, int batch,
                                                const std::uint8_t* mask = nullptr) {
     const auto pick = [&]<int WG>(std::integral_constant<int, WG>) {
+        // v2's gemv needs 32-wide sub-groups: a launch-time choice, never an in-kernel test.
         if constexpr (UseDevice) {
-            return detail::larft_forward_columnwise_wg_device<Tag, T, WG>(
-                q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                tau_data, tau_stride, tau_offset, batch, mask);
-        } else {
-            return detail::larft_forward_columnwise_wg_legacy<Tag, T, WG>(
-                q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
-                tau_data, tau_stride, tau_offset, batch, mask);
+            if (q.device().supports_sub_group_size(32))
+                return detail::larft_forward_columnwise_wg_device<Tag, T, WG>(
+                    q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
+                    tau_data, tau_stride, tau_offset, batch, mask);
         }
+        return detail::larft_forward_columnwise_wg_legacy<Tag, T, WG>(
+            q, t_data, ld_t, stride_t, v_data, ld_v, stride_v, m, ib,
+            tau_data, tau_stride, tau_offset, batch, mask);
     };
 
     if (ib <= 8 && m <= 64)    return pick(std::integral_constant<int, 32>{});
