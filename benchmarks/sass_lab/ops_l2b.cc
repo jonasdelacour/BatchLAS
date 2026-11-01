@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // ger, symv (lower) and trmv (lower, non-unit) pairs; work-group of 64.
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 namespace lab {
 

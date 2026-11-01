@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // A latrd-style fused column step and a 32x32x32 gemm from local memory.
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 namespace lab {
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // SASS lab driver: correctness of every variant against the hand kernel, then A/B timing.
 // Usage: sass_lab [--batch=8192] [--warmup=3] [--iters=10] [--filter=op|prefix*] [--check-only]
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 #include <algorithm>
 #include <cmath>

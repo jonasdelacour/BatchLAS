@@ -4,7 +4,7 @@
 // as "<Op>@<WG>". The hand and lean bodies are the lab's (ops_*.cc), with WG a parameter.
 #pragma once
 
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 #include <batchlas/blas/device/v2/dla.hh>
 

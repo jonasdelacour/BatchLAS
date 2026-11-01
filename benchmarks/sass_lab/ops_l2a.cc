@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // gemv pairs: N and T, matrix from global memory or staged in local memory; work-group of 64.
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 namespace lab {
 

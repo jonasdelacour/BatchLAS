@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // v2 parity, level 1 and gemv: axpy(+scal), dot, nrm2, gemv N, gemv T (A, x in global memory).
-#include "v2lab.hh"
+#include <benchmarks/sass_lab/v2lab.hh>
 
 namespace lab {
 

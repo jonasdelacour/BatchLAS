@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // v2 parity: symv lower (x staged in local memory), ger (in place), latrd column step.
-#include "v2lab.hh"
+#include <benchmarks/sass_lab/v2lab.hh>
 
 namespace lab {
 

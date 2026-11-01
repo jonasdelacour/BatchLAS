@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Level-1 pairs: sub-group dot / nrm2, work-group axpy + scal over matrix columns.
-#include "lab.hh"
+#include <benchmarks/sass_lab/lab.hh>
 
 namespace lab {
 
