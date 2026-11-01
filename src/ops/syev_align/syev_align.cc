@@ -7,6 +7,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/syev_align.hh>
+#include <batchlas/blas/device/v2/ext/tridiag-stebz-stein.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <src/util/batch_mask.hh>
@@ -22,6 +23,8 @@
 
 namespace batchlas {
 namespace ops::syev_align {
+
+namespace v2 = ::batchlas::device::v2;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -74,21 +77,19 @@ template <class T>
 inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int p) {
     using Real = float_t<T>;
     const Real eps = std::numeric_limits<Real>::epsilon();
-    auto g = [&](int r, int c) -> T& { return G[c * ldg + r]; };
-    auto w = [&](int r, int c) -> T& { return W[c * ldw + r]; };
-    for (int c = 0; c < p; ++c)
-        for (int r = 0; r < p; ++r) w(r, c) = T(r == c ? 1 : 0);
+    const v2::Thread th{};
+    const auto g = v2::mat(G, p, p, int(ldg));
+    const auto w = v2::mat(W, p, p, int(ldw));
+    const auto f = v2::vec(flag, p);
+    v2::laset(th, v2::Zero{}, v2::One{}, w);
+    // One-sided Jacobi: rotate column pairs of B (and of W) until they are orthogonal.
     for (int sweep = 0; sweep < 64; ++sweep) {
         bool rotated = false;
         for (int i = 0; i + 1 < p; ++i) {
             for (int k = i + 1; k < p; ++k) {
-                Real a = 0, b = 0;
-                T gam = T(0);
-                for (int r = 0; r < p; ++r) {
-                    a += abs2_of(g(r, i));
-                    b += abs2_of(g(r, k));
-                    gam += conj_of(g(r, i)) * g(r, k);
-                }
+                const auto gr = v2::gram2(th, g.col(i), g.col(k));
+                const Real a = gr.xx, b = gr.yy;
+                const T gam = gr.xy;
                 const Real ag = sycl::sqrt(abs2_of(gam));
                 if (ag == Real(0) || ag <= eps * sycl::sqrt(a) * sycl::sqrt(b)) continue;
                 rotated = true;
@@ -98,22 +99,15 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
                 const Real t = (zeta >= Real(0) ? Real(1) : Real(-1)) /
                                (sycl::fabs(zeta) + sycl::sqrt(Real(1) + zeta * zeta));
                 const Real cs = Real(1) / sycl::sqrt(Real(1) + t * t), sn = cs * t;
-                for (int r = 0; r < p; ++r) {
-                    const T x = g(r, i), y = g(r, k) * ph;
-                    g(r, i) = cs * x - sn * y;
-                    g(r, k) = sn * x + cs * y;
-                    const T xw = w(r, i), yw = w(r, k) * ph;
-                    w(r, i) = cs * xw - sn * yw;
-                    w(r, k) = sn * xw + cs * yw;
-                }
+                v2::rot_phase(th, cs, sn, ph, g.col(i), g.col(k));
+                v2::rot_phase(th, cs, sn, ph, w.col(i), w.col(k));
             }
         }
         if (!rotated) break;
     }
     Real smax = 0;
     for (int c = 0; c < p; ++c) {
-        Real s2 = 0;
-        for (int r = 0; r < p; ++r) s2 += abs2_of(g(r, c));
+        const Real s2 = v2::sumsq(th, g.col(c));
         flag[c] = T(sycl::sqrt(s2));
         smax = sycl::fmax(smax, sycl::sqrt(s2));
     }
@@ -121,7 +115,7 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
     for (int c = 0; c < p; ++c) {
         const Real s = float_t<T>(sycl::sqrt(abs2_of(flag[c])));
         if (s > thresh) {
-            for (int r = 0; r < p; ++r) g(r, c) /= s;
+            v2::rscal_div(th, s, g.col(c));
             flag[c] = T(1);
         } else {
             flag[c] = T(0);
@@ -132,20 +126,18 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
     for (int c = 0; c < p; ++c) {
         if (flag[c] != T(0)) continue;
         for (int e = 0; e < p; ++e) {
-            for (int r = 0; r < p; ++r) g(r, c) = T(r == e ? 1 : 0);
+            v2::fill(th, v2::Zero{}, g.col(c));
+            g(e, c) = T(1);
             for (int pass = 0; pass < 2; ++pass) {
                 for (int q = 0; q < p; ++q) {
                     if (q == c || flag[q] == T(0)) continue;
-                    T dot = T(0);
-                    for (int r = 0; r < p; ++r) dot += conj_of(g(r, q)) * g(r, c);
-                    for (int r = 0; r < p; ++r) g(r, c) -= dot * g(r, q);
+                    const T dot = v2::dotc(th, g.col(q), g.col(c));
+                    v2::axpy(th, -dot, g.col(q), g.col(c));
                 }
             }
-            Real s2 = 0;
-            for (int r = 0; r < p; ++r) s2 += abs2_of(g(r, c));
+            const Real s2 = v2::sumsq(th, g.col(c));
             if (s2 * Real(2 * p) >= Real(1)) {
-                const Real s = sycl::sqrt(s2);
-                for (int r = 0; r < p; ++r) g(r, c) /= s;
+                v2::rscal_div(th, sycl::sqrt(s2), g.col(c));
                 flag[c] = T(1);
                 break;
             }
@@ -153,12 +145,8 @@ inline void procrustes_block(T* G, int64_t ldg, T* W, int64_t ldw, T* flag, int 
     }
     // R^H = U W^H, row by row in place over U: row i of the product reads only row i of U.
     for (int i = 0; i < p; ++i) {
-        for (int k = 0; k < p; ++k) flag[k] = g(i, k);
-        for (int j = 0; j < p; ++j) {
-            T acc = T(0);
-            for (int k = 0; k < p; ++k) acc += flag[k] * conj_of(w(j, k));
-            g(i, j) = acc;
-        }
+        v2::copy(th, g.row(i), f);
+        for (int j = 0; j < p; ++j) g(i, j) = v2::dotc(th, w.row(j), f);
     }
 }
 
@@ -208,11 +196,10 @@ Event launch(Queue& ctx, const MV<T>& V_old, Span<float_t<T>> eigenvalues, const
         if (mask != nullptr && mask[b] == 0) return;  // I3
         const int64_t i = e % n, j = e / n;
         const int64_t s = Sp[b * m + j], t = Ep[b * m + j];
-        const T* vc = Wp + b * n * m;
-        const T* rh = Mp + b * m * m;
-        T acc = T(0);
-        for (int64_t q = s; q < t; ++q) acc += vc[q * n + i] * conj_of(rh[q * m + j]);
-        Vp[b * sv + j * ldv + i] = acc;
+        // V(i, j) = Vc(i, s:t) R^H(j, s:t)^H: row i of the copy against row j of R^H.
+        const auto vc = v2::vec(Wp + b * n * m + s * n + i, int(t - s), int(n));
+        const auto rh = v2::vec(Mp + b * m * m + s * m + j, int(t - s), int(m));
+        Vp[b * sv + j * ldv + i] = v2::dotc(v2::Thread{}, rh, vc);
     });
     return ctx.get_event();
 }
