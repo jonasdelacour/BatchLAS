@@ -2,12 +2,14 @@
 #pragma once
 #include <cstddef>
 
-#include <src/ops/gemm/kernels/accessors.hh>
-#include <src/ops/gemm/kernels/epilogue_linear.hh>
+#include <batchlas/blas/device/v2/ext/gemm-components.hh>
+#include <src/ops/gemm/gemm_kernels.hh>
 
 #include <sycl/sycl.hpp>
 
 namespace batchlas::sycl_gemm {
+
+namespace v2 = batchlas::device::v2;
 
 template <typename T, int Tile, Transpose OpA, Transpose OpB>
 class GemmTiledGeneralKernel;
@@ -61,29 +63,27 @@ Event launch_tiled_general(Queue& ctx,
             const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
             const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
             T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-            constexpr int batch_a = 0, batch_b = 0, batch_c = 0;
+            const v2::WorkGroupNd<Tile * Tile> ex{item};
+            T* const sa = &tile_a[0];
+            T* const sb = &tile_b[0];
+            // This item's row of the A tile and column of the B tile.
+            const v2::Vec<T, v2::Ext<Tile>, v2::Unit, v2::Mem::Local> a_row{sa + local_row * Tile, {}};
+            const v2::Vec<T, v2::Ext<Tile>, v2::Ext<Tile>, v2::Mem::Local> b_col{sb + local_col, {}};
             T sum = T(0);
 
             for (int kk0 = 0; kk0 < k; kk0 += Tile) {
                 const int tile_col = kk0 + local_col;
                 const int tile_row = kk0 + local_row;
-                tile_a[local_row * Tile + local_col] = (row < m && tile_col < k)
-                    ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, row, tile_col)
-                    : T(0);
-                tile_b[local_row * Tile + local_col] = (col < n && tile_row < k)
-                    ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, tile_row, col)
-                    : T(0);
-
-                item.barrier(sycl::access::fence_space::local_space);
-                for (int t = 0; t < Tile && kk0 + t < k; ++t) {
-                    sum += tile_a[local_row * Tile + t] * tile_b[t * Tile + local_col];
-                }
-                item.barrier(sycl::access::fence_space::local_space);
+                sa[local_row * Tile + local_col] =
+                    (row < m && tile_col < k) ? v2::op_elem<OpA>(a_item, lda, row, tile_col) : T(0);
+                sb[local_row * Tile + local_col] =
+                    (col < n && tile_row < k) ? v2::op_elem<OpB>(b_item, ldb, tile_row, col) : T(0);
+                ex.barrier();
+                v2::dot_slab<Tile, v2::OpArith<T>>(sum, a_row, b_col, kk0, k);  // operator*: Annex G for complex, as tuned
+                ex.barrier();
             }
 
-            if (row < m && col < n) {
-                LinearEpilogue<T>::store(c_item + batch_c + col * ldc + row, alpha, beta, sum);
-            }
+            if (row < m && col < n) v2::epilogue_store(c_item + col * ldc + row, alpha, beta, sum);
         });
     });
 

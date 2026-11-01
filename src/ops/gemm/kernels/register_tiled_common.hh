@@ -10,10 +10,13 @@
 
 #include <src/linalg-impl.hh>
 
+#include <batchlas/blas/device/v2/ext/gemm-components.hh>
 #include <sycl/sycl.hpp>
 #include <utility>
 
 namespace batchlas::sycl_gemm {
+
+namespace v2 = batchlas::device::v2;
 
 template <int Count, typename Fn, std::size_t... I>
 inline void static_for_impl(Fn&& fn, std::index_sequence<I...>) {
@@ -192,353 +195,60 @@ Event launch_register_tiled(Queue& ctx,
                 const T* const a_item = a_ptr + static_cast<std::ptrdiff_t>(bid) * stride_a;
                 const T* const b_item = b_ptr + static_cast<std::ptrdiff_t>(bid) * stride_b;
                 T* const c_item = c_ptr + static_cast<std::ptrdiff_t>(bid) * stride_c;
-                constexpr int batch_a = 0, batch_b = 0;
                 const int group_row = static_cast<int>(item.get_group(1));
                 const int group_col = static_cast<int>(item.get_group(2));
+                const v2::WorkGroupNd<Policy::ThreadsPerGroup> ex{item};
                 T accum[ThreadTileRows][ThreadTileCols];
-                for (int i = 0; i < ThreadTileRows; ++i) {
-                    for (int j = 0; j < ThreadTileCols; ++j) {
-                        accum[i][j] = T(0);
-                    }
-                }
+                v2::frag_fill<v2::Unroll::Compiler>(accum, T(0));
 
+                // Stage op(A) (m x k; slot (r, c) at c * TileAStride + r) and op(B) (k x n; the
+                // swizzled b_slot) of k slab kk0 into local stage `stage`. Scalar staging (odd ld or
+                // base) walks the operand's contiguous index fastest; the shared layout is the same.
                 auto load_stage = [&](int kk0, int stage) {
                     T* tile_a_stage = &tile_a[stage * Policy::StageASize];
                     T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
-
-                    // Scalar staging (no packet: odd ld or base). The lane-fastest index is the
-                    // operand's contiguous one, k for a transposed A and n for a transposed B,
-                    // so a warp reads consecutive addresses; the shared layout is unchanged.
-                    auto stage_a_scalar = [&]() {
-                        for (int index = linear_tid; index < TileM * TileK; index += Policy::ThreadsPerGroup) {
-                            const int a_row = OpA == Transpose::NoTrans ? index % TileM : index / TileK;
-                            const int a_col = OpA == Transpose::NoTrans ? index / TileM : index % TileK;
-                            const int logical_a_row = group_row * TileM + a_row;
-                            const int logical_a_col = kk0 + a_col;
-                            tile_a_stage[a_col * Policy::TileAStride + a_row] = (logical_a_row < m && logical_a_col < k)
-                                ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, logical_a_row, logical_a_col)
-                                : T(0);
-                        }
-                    };
-                    auto stage_b_scalar = [&]() {
-                        for (int index = linear_tid; index < TileN * TileK; index += Policy::ThreadsPerGroup) {
-                            const int b_row = OpB == Transpose::NoTrans ? index % TileK : index / TileN;
-                            const int b_col = OpB == Transpose::NoTrans ? index / TileK : index % TileN;
-                            const int logical_b_row = kk0 + b_row;
-                            const int logical_b_col = group_col * TileN + b_col;
-                            tile_b_stage[Policy::b_slot(b_col, b_row)] = (logical_b_row < k && logical_b_col < n)
-                                ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, logical_b_col)
-                                : T(0);
-                        }
-                    };
-
+                    auto dst_a = [&](int r, int c) -> T& { return tile_a_stage[c * Policy::TileAStride + r]; };
+                    auto dst_b = [&](int r, int c) -> T& { return tile_b_stage[Policy::b_slot(c, r)]; };
+                    const int m0 = group_row * TileM, n0 = group_col * TileN;
+                    constexpr int Thr = Policy::ThreadsPerGroup;
                     if constexpr (AlignedFastPath && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans
                                   && supports_packet_v<T, VecA> && supports_packet_v<T, VecB>) {
-                        constexpr int APacketsPerCol = TileM / VecA;
-                        constexpr int APacketCount = APacketsPerCol * TileK;
-                        constexpr int APacketIterations = (APacketCount + Policy::ThreadsPerGroup - 1) / Policy::ThreadsPerGroup;
-                        static_for<APacketIterations>([&](auto iter) {
-                            constexpr int iteration = iter;
-                            const int packet = linear_tid + iteration * Policy::ThreadsPerGroup;
-                            if (packet < APacketCount) {
-                                const int a_row = (packet % APacketsPerCol) * VecA;
-                                const int a_col = packet / APacketsPerCol;
-                                const int logical_a_row = group_row * TileM + a_row;
-                                const int logical_a_col = kk0 + a_col;
-                                const int base = batch_a + logical_a_col * lda + logical_a_row;
-                                const auto packet_values = packet_load_aligned<T, VecA>(a_item, base);
-                                for (int lane = 0; lane < VecA; ++lane) {
-                                    tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = packet_values[lane];
-                                }
-                            }
-                        });
-
-                        constexpr int BPacketsPerCol = TileK / VecB;
-                        constexpr int BPacketCount = TileN * BPacketsPerCol;
-                        constexpr int BPacketIterations = (BPacketCount + Policy::ThreadsPerGroup - 1) / Policy::ThreadsPerGroup;
-                        static_for<BPacketIterations>([&](auto iter) {
-                            constexpr int iteration = iter;
-                            const int packet = linear_tid + iteration * Policy::ThreadsPerGroup;
-                            if (packet < BPacketCount) {
-                                const int b_row = (packet % BPacketsPerCol) * VecB;
-                                const int b_col = packet / BPacketsPerCol;
-                                const int logical_b_row = kk0 + b_row;
-                                const int logical_b_col = group_col * TileN + b_col;
-                                const int base = batch_b + logical_b_col * ldb + logical_b_row;
-                                const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
-                                for (int lane = 0; lane < VecB; ++lane) {
-                                    tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = packet_values[lane];
-                                }
-                            }
-                        });
+                        v2::stage_block_packet_aligned<TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, dst_a);
+                        v2::stage_block_packet_aligned<TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, dst_b);
                         return;
                     }
-
                     if constexpr (supports_packet_v<T, VecA> || supports_packet_v<T, VecB>) {
-                        if (packet_a) {
-                            if constexpr (OpA == Transpose::NoTrans) {
-                                constexpr int PacketsPerCol = TileM / VecA;
-                                constexpr int PacketCount = PacketsPerCol * TileK;
-                                #pragma unroll 4
-                                for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
-                                    const int a_row = (packet % PacketsPerCol) * VecA;
-                                    const int a_col = packet / PacketsPerCol;
-                                    const int logical_a_row = group_row * TileM + a_row;
-                                    const int logical_a_col = kk0 + a_col;
-                                    if (logical_a_row + (VecA - 1) < m && logical_a_col < k) {
-                                        const int base = batch_a + logical_a_col * lda + logical_a_row;
-                                        const auto packet_values = packet_load_aligned<T, VecA>(a_item, base);
-                                        for (int lane = 0; lane < VecA; ++lane) {
-                                            tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = packet_values[lane];
-                                        }
-                                    } else {
-                                        for (int lane = 0; lane < VecA; ++lane) {
-                                            const int row = logical_a_row + lane;
-                                            tile_a_stage[a_col * Policy::TileAStride + a_row + lane] = (row < m && logical_a_col < k)
-                                                ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, row, logical_a_col)
-                                                : T(0);
-                                        }
-                                    }
-                                }
-                            } else {
-                                constexpr int PacketsPerRow = TileK / VecA;
-                                constexpr int PacketCount = TileM * PacketsPerRow;
-                                #pragma unroll 4
-                                for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
-                                    const int a_row = packet / PacketsPerRow;
-                                    const int a_col = (packet % PacketsPerRow) * VecA;
-                                    const int logical_a_row = group_row * TileM + a_row;
-                                    const int logical_a_col = kk0 + a_col;
-                                    if (logical_a_row < m && logical_a_col + (VecA - 1) < k) {
-                                        const int base = batch_a + logical_a_row * lda + logical_a_col;
-                                        const auto packet_values = packet_load_aligned<T, VecA>(a_item, base);
-                                        for (int lane = 0; lane < VecA; ++lane) {
-                                            tile_a_stage[(a_col + lane) * Policy::TileAStride + a_row] = packet_values[lane];
-                                        }
-                                    } else {
-                                        for (int lane = 0; lane < VecA; ++lane) {
-                                            const int col = logical_a_col + lane;
-                                            tile_a_stage[(a_col + lane) * Policy::TileAStride + a_row] = (logical_a_row < m && col < k)
-                                                ? OperandAccessor<T, OpA>::load(a_item, lda, batch_a, logical_a_row, col)
-                                                : T(0);
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            stage_a_scalar();
-                        }
-
-                        if (packet_b) {
-                            if constexpr (OpB == Transpose::NoTrans) {
-                                constexpr int PacketsPerCol = TileK / VecB;
-                                constexpr int PacketCount = TileN * PacketsPerCol;
-                                #pragma unroll 4
-                                for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
-                                    const int b_row = (packet % PacketsPerCol) * VecB;
-                                    const int b_col = packet / PacketsPerCol;
-                                    const int logical_b_row = kk0 + b_row;
-                                    const int logical_b_col = group_col * TileN + b_col;
-                                    if (logical_b_row + (VecB - 1) < k && logical_b_col < n) {
-                                        const int base = batch_b + logical_b_col * ldb + logical_b_row;
-                                        const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
-                                        for (int lane = 0; lane < VecB; ++lane) {
-                                            tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = packet_values[lane];
-                                        }
-                                    } else {
-                                        for (int lane = 0; lane < VecB; ++lane) {
-                                            const int row = logical_b_row + lane;
-                                            tile_b_stage[Policy::b_slot(b_col, b_row + lane)] = (row < k && logical_b_col < n)
-                                                ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, row, logical_b_col)
-                                                : T(0);
-                                        }
-                                    }
-                                }
-                            } else {
-                                constexpr int PacketsPerRow = TileN / VecB;
-                                constexpr int PacketCount = TileK * PacketsPerRow;
-                                #pragma unroll 4
-                                for (int packet = linear_tid; packet < PacketCount; packet += Policy::ThreadsPerGroup) {
-                                    const int b_row = packet / PacketsPerRow;
-                                    const int b_col = (packet % PacketsPerRow) * VecB;
-                                    const int logical_b_row = kk0 + b_row;
-                                    const int logical_b_col = group_col * TileN + b_col;
-                                    if (logical_b_row < k && logical_b_col + (VecB - 1) < n) {
-                                        const int base = batch_b + logical_b_row * ldb + logical_b_col;
-                                        const auto packet_values = packet_load_aligned<T, VecB>(b_item, base);
-                                        for (int lane = 0; lane < VecB; ++lane) {
-                                            tile_b_stage[Policy::b_slot(b_col + lane, b_row)] = packet_values[lane];
-                                        }
-                                    } else {
-                                        for (int lane = 0; lane < VecB; ++lane) {
-                                            const int col = logical_b_col + lane;
-                                            tile_b_stage[Policy::b_slot(b_col + lane, b_row)] = (logical_b_row < k && col < n)
-                                                ? OperandAccessor<T, OpB>::load(b_item, ldb, batch_b, logical_b_row, col)
-                                                : T(0);
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            stage_b_scalar();
-                        }
+                        if (packet_a) v2::stage_block_packet<OpA, TileM, TileK, VecA, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                        else v2::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                        if (packet_b) v2::stage_block_packet<OpB, TileK, TileN, VecB, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
+                        else v2::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                     } else {
-                        stage_a_scalar();
-                        stage_b_scalar();
+                        v2::stage_block<OpA, TileM, TileK, Thr>(linear_tid, a_item, lda, m0, kk0, m, k, dst_a);
+                        v2::stage_block<OpB, TileK, TileN, Thr>(linear_tid, b_item, ldb, kk0, n0, k, n, dst_b);
                     }
                 };
 
-                auto accumulate_stage = [&](const T* tile_a_stage, const T* tile_b_stage, int kk0) {
-                    if constexpr (AlignedFastPath) {
-                        for (int t0 = 0; t0 < TileK; t0 += UnrollK) {
-                            for (int unroll = 0; unroll < UnrollK; ++unroll) {
-                                const int t = t0 + unroll;
-                                T a_frag[ThreadTileRows];
-                                T b_frag[ThreadTileCols];
-                                for (int i = 0; i < ThreadTileRows; ++i) {
-                                    a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
-                                }
-                                for (int j = 0; j < ThreadTileCols; ++j) {
-                                    b_frag[j] = tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)];
-                                }
-                                for (int i = 0; i < ThreadTileRows; ++i) {
-                                    for (int j = 0; j < ThreadTileCols; ++j) {
-                                        accum[i][j] += a_frag[i] * b_frag[j];
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        for (int t0 = 0; t0 < TileK && kk0 + t0 < k; t0 += UnrollK) {
-                            for (int unroll = 0; unroll < UnrollK && t0 + unroll < TileK && kk0 + t0 + unroll < k; ++unroll) {
-                                const int t = t0 + unroll;
-                                T a_frag[ThreadTileRows];
-                                T b_frag[ThreadTileCols];
-                                for (int i = 0; i < ThreadTileRows; ++i) {
-                                    a_frag[i] = tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i];
-                                }
-                                for (int j = 0; j < ThreadTileCols; ++j) {
-                                    b_frag[j] = tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)];
-                                }
-                                for (int i = 0; i < ThreadTileRows; ++i) {
-                                    for (int j = 0; j < ThreadTileCols; ++j) {
-                                        accum[i][j] += a_frag[i] * b_frag[j];
-                                    }
-                                }
-                            }
-                        }
-                    }
+                // accum += A(:, t) B(t, :) over the slab's k steps (all TileK when aligned).
+                auto accumulate_stage = [&](int stage, int kk0) {
+                    const T* tile_a_stage = &tile_a[stage * Policy::StageASize];
+                    const T* tile_b_stage = &tile_b[stage * Policy::StageBSize];
+                    v2::mma_slab<TileK, UnrollK, AlignedFastPath>(
+                        accum, kk0, k,
+                        [&](int t, int i) { return tile_a_stage[t * Policy::TileAStride + local_row * ThreadTileRows + i]; },
+                        [&](int t, int j) { return tile_b_stage[Policy::b_slot(local_col * ThreadTileCols + j, t)]; });
                 };
 
                 const int tile_count = AlignedFastPath ? (k / TileK) : register_ceil_div<T>(k, TileK);
-                if constexpr (Policy::Stages == 1) {
-                    for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
-                        const int kk0 = tile_idx * TileK;
-                        load_stage(kk0, 0);
-                        item.barrier(sycl::access::fence_space::local_space);
-                        accumulate_stage(&tile_a[0], &tile_b[0], kk0);
-                        item.barrier(sycl::access::fence_space::local_space);
-                    }
-                } else {
-                    if constexpr (AlignedFastPath) {
-                        if (tile_count > 0) {
-                            load_stage(0, 0);
-                            item.barrier(sycl::access::fence_space::local_space);
-
-                            for (int tile_idx = 0; tile_idx + 1 < tile_count; ++tile_idx) {
-                                const int current_stage = tile_idx & 1;
-                                const int next_stage = current_stage ^ 1;
-                                load_stage((tile_idx + 1) * TileK, next_stage);
-                                accumulate_stage(&tile_a[current_stage * Policy::StageASize],
-                                                 &tile_b[current_stage * Policy::StageBSize],
-                                                 tile_idx * TileK);
-                                item.barrier(sycl::access::fence_space::local_space);
-                            }
-
-                            const int final_stage = (tile_count - 1) & 1;
-                            accumulate_stage(&tile_a[final_stage * Policy::StageASize],
-                                             &tile_b[final_stage * Policy::StageBSize],
-                                             (tile_count - 1) * TileK);
-                            item.barrier(sycl::access::fence_space::local_space);
-                        }
-                    } else {
-                        load_stage(0, 0);
-                        item.barrier(sycl::access::fence_space::local_space);
-
-                        for (int tile_idx = 0; tile_idx < tile_count; ++tile_idx) {
-                            const int kk0 = tile_idx * TileK;
-                            const int current_stage = tile_idx & 1;
-                            const int next_tile_idx = tile_idx + 1;
-
-                            if (next_tile_idx < tile_count) {
-                                load_stage(next_tile_idx * TileK, current_stage ^ 1);
-                            }
-
-                            accumulate_stage(&tile_a[current_stage * Policy::StageASize],
-                                             &tile_b[current_stage * Policy::StageBSize],
-                                             kk0);
-                            item.barrier(sycl::access::fence_space::local_space);
-                        }
-                    }
-                }
+                v2::kloop<Policy::Stages, AlignedFastPath, TileK>(ex, tile_count, load_stage, accumulate_stage);
 
                 // C goes out through tile_a/tile_b, lane = consecutive row: lanes run along n here,
-                // so a direct store puts adjacent lanes ldc apart. Every mainloop path above ends on
-                // a barrier after its last read of both tiles; each chunk's first barrier orders the
-                // stage writes before the read-back, its second the read-back before the next chunk.
-                // The odd column stride spreads the TC-strided writes over the banks.
+                // so a direct store puts adjacent lanes ldc apart. kloop ends on a barrier after its
+                // last read of both tiles. The odd column stride spreads the TC-strided writes over the banks.
                 // evidence: docs/perf/gemm.md#gemm-wp-b-coalesced-c-epilogue-on-the-predicated-legs
-                constexpr int CS = TileM + 1;
-                constexpr int LoCols = Policy::Stages * Policy::StageASize / CS;
-                constexpr int HiCols = Policy::Stages * Policy::StageBSize / CS;
-                constexpr int CW = LoCols + HiCols;
-                constexpr int Passes = (TileN + CW - 1) / CW;
-                constexpr int Batch = 2;  // prior loads in flight per thread
-                static_assert(CW >= 1, "the stage must hold one C column");
-                T* const lo = &tile_a[0];
-                T* const hi = &tile_b[0];
-                auto slot = [&](int c, int r) -> T* { return c < LoCols ? lo + c * CS + r : hi + (c - LoCols) * CS + r; };
-                const int m0 = group_row * TileM, n0 = group_col * TileN;
-                const bool beta_zero = beta == T(0);
-#pragma unroll 1
-                for (int pass = 0; pass < Passes; ++pass) {
-                    const int c0 = pass * CW;
-                    const int cw = TileN - c0 < CW ? TileN - c0 : CW;
-#pragma unroll
-                    for (int j = 0; j < ThreadTileCols; ++j) {
-                        const int c = local_col * ThreadTileCols + j - c0;
-                        if (c < 0 || c >= cw) continue;
-#pragma unroll
-                        for (int i = 0; i < ThreadTileRows; ++i) *slot(c, local_row * ThreadTileRows + i) = accum[i][j];
-                    }
-                    item.barrier(sycl::access::fence_space::local_space);
-                    const int count = TileM * cw;
-                    auto at = [&](int e, bool& ok) {
-                        const int row = m0 + e % TileM, col = n0 + c0 + e / TileM;
-                        ok = e < count && row < m && col < n;
-                        return row + static_cast<std::ptrdiff_t>(col) * ldc;
-                    };
-#pragma unroll 1
-                    for (int e0 = linear_tid; e0 < count; e0 += Batch * Policy::ThreadsPerGroup) {
-                        T prior[Batch];
-#pragma unroll
-                        for (int b = 0; b < Batch; ++b) {
-                            bool ok;
-                            const std::ptrdiff_t off = at(e0 + b * Policy::ThreadsPerGroup, ok);
-                            prior[b] = (ok && !beta_zero) ? c_item[off] : T(0);
-                        }
-#pragma unroll
-                        for (int b = 0; b < Batch; ++b) {
-                            const int e = e0 + b * Policy::ThreadsPerGroup;
-                            bool ok;
-                            const std::ptrdiff_t off = at(e, ok);
-                            if (!ok) continue;
-                            const T v = *slot(e / TileM, e % TileM);
-                            c_item[off] = beta_zero ? alpha * v : LinearEpilogue<T>::apply(alpha, beta, v, prior[b]);
-                        }
-                    }
-                    if (pass + 1 < Passes) item.barrier(sycl::access::fence_space::local_space);
-                }
+                v2::store_tile_staged<TileM, TileN, ThreadTileRows, ThreadTileCols, Policy::ThreadsPerGroup,
+                                      Policy::Stages * Policy::StageASize, Policy::Stages * Policy::StageBSize>(
+                    ex, linear_tid, local_row, local_col, accum, &tile_a[0], &tile_b[0], c_item, ldc,
+                    group_row * TileM, group_col * TileN, m, n, alpha, beta);
             });
     });
 
