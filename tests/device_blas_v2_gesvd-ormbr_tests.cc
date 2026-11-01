@@ -420,13 +420,15 @@ TYPED_TEST(DeviceBlasV2GesvdOrmbrTest, SignScanAndAnyOf) {
             he[std::size_t(b) * (n - 1) + 4] = T(0);
             he[std::size_t(b) * (n - 1) + 5] = -std::fabs(he[std::size_t(b) * (n - 1) + 5]) - T(0.25);
         }
-        // Item b: s(0) is the tol scale; b % 3 == 0 puts s(k-1) exactly at tol (counts), == 1 one ulp above.
+        // Item b: s(0) is the tol scale; b % 3 == 0 puts s(k-1) exactly at tol (counts) and s(k-2)
+        // below it, == 1 puts s(k-1) one ulp above (does not count).
         std::vector<T> hs(std::size_t(kBatch) * k);
         const T s0 = T(4), tol = std::numeric_limits<T>::epsilon() * s0;
         for (int b = 0; b < kBatch; ++b) {
             for (int i = 0; i < k; ++i) hs[std::size_t(b) * k + i] = s0 / T(i + 1);
             const T last = (b % 3 == 0) ? tol : (b % 3 == 1 ? std::nextafter(tol, T(1)) : T(1));
             hs[std::size_t(b) * k + k - 1] = last;
+            if (b % 3 == 0) hs[std::size_t(b) * k + k - 2] = tol / T(2);  // two hits: a sum would give 2
         }
         T* e = this->dev.up(he);
         T* sg = this->dev.up(poisoned<T>(std::size_t(kBatch) * n));
